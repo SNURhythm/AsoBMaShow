@@ -1,4 +1,9 @@
 #include "scene/ResultPresentationModel.h"
+#include "scene/ResultPhotoExportPresentation.h"
+#include "scene/ResultSkinFailurePresentation.h"
+#include "scene/ResultSkinApplicationOverlays.h"
+#include "scene/ResultSkinLayering.h"
+#include "scene/ResultTouchControls.h"
 
 #include "rendering/UniformCache.h"
 #include "scene/ResultGaugeHistory.h"
@@ -1068,6 +1073,86 @@ void testDefaultSkinExplicitZerosAndMobileMetadataWrap() {
              textView(root.get(), "resultInfoLabel:gauge-type"),
          "remote metadata labels have deterministic semantic names");
 }
+
+void testResultTouchControlsHideAndRestorePresentation() {
+  const ResultTouchControlAvailability availability{
+      .back = true, .retry = true, .retrySame = true, .rankings = true,
+      .exportPhoto = true, .selectSection = true, .next = false};
+  const auto visible = makeResultTouchControlPresentation(
+      {.skinSelected = true, .hidden = false},
+      availability);
+  expect(visible.showsControls && !visible.capturesRestoreTouch &&
+             visible.actions == std::vector<ResultTouchControlAction>{
+                                    ResultTouchControlAction::Back,
+                                    ResultTouchControlAction::Retry,
+                                    ResultTouchControlAction::RetrySame,
+                                    ResultTouchControlAction::Rankings,
+                                    ResultTouchControlAction::ExportPhoto,
+                                    ResultTouchControlAction::SelectSection,
+                                    ResultTouchControlAction::Hide},
+         "selected touch result skins expose the built-in actions and Hide");
+
+  const auto hidden = makeResultTouchControlPresentation(
+      {.skinSelected = true, .hidden = true},
+      availability);
+  expect(!hidden.showsControls && hidden.capturesRestoreTouch &&
+             hidden.actions.empty(),
+         "hidden result touch controls consume one anywhere-touch to restore");
+
+  const auto withoutVirtualController = makeResultTouchControlPresentation(
+      {.skinSelected = true, .hidden = false}, availability);
+  expect(withoutVirtualController.showsControls &&
+             !withoutVirtualController.actions.empty(),
+         "selected result skins expose touch controls without a virtual controller");
+}
+
+void testSelectedResultSkinDefersRootOverlaysUntilAfterSkin() {
+  expect(!shouldRenderResultRootAfterSkin(false),
+         "built-in results render their root layout before scene rendering");
+  expect(shouldRenderResultRootAfterSkin(true),
+         "selected result skins render root overlays after the skin");
+}
+
+void testSelectedResultSkinKeepsRequiredApplicationOverlays() {
+  const auto selected = makeResultSkinApplicationOverlays(
+      {.selectedSkin = true,
+       .hasPersistenceResult = true,
+       .courseStage = true,
+       .savedResultBrowsing = false});
+  expect(selected.showsPersistenceRecovery &&
+             selected.buildsCourseExitConfirmation,
+         "selected result skins retain save recovery and unsaved-course exit");
+
+  const auto savedCourse = makeResultSkinApplicationOverlays(
+      {.selectedSkin = true,
+       .hasPersistenceResult = false,
+       .courseStage = true,
+       .savedResultBrowsing = true});
+  expect(!savedCourse.showsPersistenceRecovery &&
+             !savedCourse.buildsCourseExitConfirmation,
+         "saved course browsing does not add application recovery overlays");
+}
+
+void testResultPhotoExportLabelsDoNotRequireNativeButton() {
+  expect(resultPhotoExportLabel(ResultPhotoExportPresentation::Ready) ==
+             "Export Photo" &&
+             resultPhotoExportLabel(ResultPhotoExportPresentation::Saving) ==
+                 "Saving..." &&
+             resultPhotoExportLabel(ResultPhotoExportPresentation::Saved) ==
+                 "Saved" &&
+             resultPhotoExportLabel(ResultPhotoExportPresentation::Failed) ==
+                 "Export Failed",
+         "touch and native export controls share export status labels");
+}
+
+void testResultSkinFailureRestoresAUsableApplicationState() {
+  const auto failure = makeResultSkinFailurePresentation(true);
+  expect(failure.showNotice && failure.restoreTouchControls,
+         "a result skin render failure visibly restores application controls");
+  const auto noFailure = makeResultSkinFailurePresentation(false);
+  expect(!noFailure.showNotice && !noFailure.restoreTouchControls,
+         "a healthy result skin has no failure presentation");
+}
 } // namespace
 
 int main() {
@@ -1098,6 +1183,11 @@ int main() {
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();
   testDefaultSkinSummaryCardsFlexWithoutAbsentSpace();
   testDefaultSkinExplicitZerosAndMobileMetadataWrap();
+  testResultTouchControlsHideAndRestorePresentation();
+  testSelectedResultSkinDefersRootOverlaysUntilAfterSkin();
+  testSelectedResultSkinKeepsRequiredApplicationOverlays();
+  testResultPhotoExportLabelsDoNotRequireNativeButton();
+  testResultSkinFailureRestoresAUsableApplicationState();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

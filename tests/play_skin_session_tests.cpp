@@ -1,4 +1,5 @@
 #include "skin/beatoraja/PlaySkinSession.h"
+#include "skin/beatoraja/ResultSkinSession.h"
 
 #include "ArchiveFile.h"
 
@@ -481,6 +482,10 @@ public:
   bgfx::TextureHandle
   create(const image_decode::DecodedImageData &image) override {
     ++createCalls;
+    if (failNextCreate_) {
+      failNextCreate_ = false;
+      return BGFX_INVALID_HANDLE;
+    }
     CreatedImage created{.width = image.width, .height = image.height};
     if (image.rgba) {
       const std::size_t retained = std::min<std::size_t>(8, image.rgba->size());
@@ -520,6 +525,8 @@ public:
     stopSource = &source;
   }
 
+  void failNextCreate() noexcept { failNextCreate_ = true; }
+
   std::size_t createCalls = 0;
   std::size_t destroyCalls = 0;
   std::size_t wrongThreadOperations = 0;
@@ -537,6 +544,7 @@ private:
   std::optional<SkinRevisionWeakPin> observedRevision;
   std::optional<std::size_t> stopAfterCreateCalls;
   std::stop_source *stopSource = nullptr;
+  bool failNextCreate_ = false;
 };
 
 class SessionMovieDevice final : public SkinMovieDevice {
@@ -667,10 +675,20 @@ enum class MalformedPomyuNumeric {
 };
 
 struct ActivationFixtureOptions {
+  int skinType = 0;
+  int configuredSkinType = -1;
   bool resourceBearing = false;
   bool movieBearing = false;
   bool audioBearing = false;
   bool requireConfiguredState = false;
+  bool requireResultConfiguredState = false;
+  bool resultEventExec = false;
+  bool resultNestedEventExec = false;
+  bool resultIntervalEventExec = false;
+  bool resultRecursiveEventExec = false;
+  bool resultDuplicateEventExec = false;
+  bool resultDuplicateTimerExec = false;
+  bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
@@ -692,7 +710,10 @@ public:
                .privateCatalog = temp_.root() / "catalog",
                .profileOverlays = temp_.root() / "overlays"},
         package_(*normalizePackageId("ActivationContract").package),
-        entry_(*normalizeEntryPath(package_, "skin/main.luaskin").entry),
+        entry_(*normalizeEntryPath(
+            package_, options.staticResultCustomEvent ? "skin/main.json"
+                                                     : "skin/main.luaskin")
+                    .entry),
         profile_(*makeSkinProfileId(
             "66666666-6666-4666-8666-666666666666")),
         device_(std::make_shared<SessionTextureDevice>()),
@@ -860,6 +881,13 @@ if skin_config then
   end
 )lua";
     }
+    if (options.requireResultConfiguredState) {
+      script += R"lua(
+  if main_state.option(90) ~= false then
+    error("configured result state did not expose the result clear property")
+  end
+)lua";
+    }
     if (options.legacyInputBearing) {
       script += R"lua(
   local Gdx = luajava.bindClass("com.badlogic.gdx.Gdx")
@@ -922,9 +950,8 @@ if skin_config then
   }
 )lua";
     } else if (options.resourceBearing) {
-      script += R"lua(
-  return {
-    type = 0, w = 1280, h = 720,
+      script += "\n  return {\n    type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
     source = {{id = "fixture-image", path = "resources/fixture.png"}},
     font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
     image = {{id = "fixture-object", src = "fixture-image", x = 0, y = 0, w = 40, h = 20}},
@@ -972,19 +999,101 @@ if skin_config then
     }
   }
 )lua";
-    } else {
-      script += R"lua(
-  return { type = 0, w = 1280, h = 720 }
+    } else if (options.resultNestedEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {
+      {id = 1000, action = function()
+        assert(main_state.event_exec(1001))
+      end},
+      {id = 1001, action = function()
+        assert(main_state.event_exec(1002))
+      end},
+      {id = 1002, action = 210}
+    },
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
 )lua";
+    } else if (options.resultIntervalEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {{id = 1000, action = 210, condition = function()
+      return true
+    end, minInterval = 1000}},
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.resultRecursiveEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {{id = 1000, action = 1000}},
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.resultDuplicateEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {
+      {id = 1000, action = 210, condition = function() return true end},
+      {id = 1000, action = 999, condition = function() return true end}
+    },
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000))
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.resultDuplicateTimerExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customTimers = {
+      {id = 10000, timer = function()
+        assert(main_state.event_exec(210))
+        return 0
+      end},
+      {id = 10000, timer = function() return 0 end}
     }
-    script += R"lua(
-end
-if phase_count ~= 1 then
-  error("header phase did not begin in a fresh state")
-end
-return { type = 0, name = "activation shell", w = 1280, h = 720 }
+  }
 )lua";
+    } else if (options.resultEventExec) {
+      script += "\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {{id = 1000, action = 210}},
+    customTimers = {{id = 10000, timer = function()
+      assert(main_state.event_exec(1000, 17, 23))
+      return 0
+    end}}
+  }
+)lua";
+    } else {
+      const int configuredSkinType = options.configuredSkinType >= 0
+                                         ? options.configuredSkinType
+                                         : options.skinType;
+      script += "\n  return { type = " + std::to_string(configuredSkinType) +
+                ", w = 1280, h = 720 }\n";
+    }
+    script += "\nend\nif phase_count ~= 1 then\n"
+              "  error(\"header phase did not begin in a fresh state\")\n"
+              "end\nreturn { type = " + std::to_string(options.skinType) +
+              ", name = \"activation shell\", w = 1280, h = 720 }\n";
     writeText(source / "skin/main.luaskin", script);
+    if (options.staticResultCustomEvent) {
+      writeText(source / "skin/main.json", R"json({
+  "type": 7,
+  "w": 1280,
+  "h": 720,
+  "customEvents": [{"id": 1000, "action": 210, "condition": 50}]
+})json");
+    }
 
     // Runtime execution follows the installed, Files-visible package exactly
     // as Beatoraja follows its selected skin directory.  Keep the immutable
@@ -1012,10 +1121,10 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
     GameplaySkinValidator validator(resources_);
     validation_ = validator.validate(lease_->readView(), entry_, &desired_, {});
     expect(validation_.disposition ==
-               SkinValidationDisposition::Selectable7Key &&
+           SkinValidationDisposition::SelectableGameplay &&
                validation_.reconciledSettings.has_value() &&
                !validation_.configurationDigest.empty(),
-           "activation fixture validates a selectable 7-key skin");
+           "activation fixture validates a selectable skin");
   }
 
   bool ready() const noexcept {
@@ -1053,6 +1162,16 @@ return { type = 0, name = "activation shell", w = 1280, h = 720 }
             .liveResourceCounters = liveResourceCounters_,
             .configurationWrites = configurationWrites_,
             .stop = stop};
+  }
+
+  ResultSkinSessionContext resultContext(ResultSkinData initialData = {}) {
+    return {.profileId = profile_,
+            .storageRoots = roots_,
+            .resourcePreparation = resources_,
+            .initialData = std::move(initialData),
+            .textureDevice = device_,
+            .audioBackend = audioBackend_,
+            .liveResourceCounters = liveResourceCounters_};
   }
 
   const SkinEntryId &entry() const noexcept { return entry_; }
@@ -1099,6 +1218,147 @@ private:
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_ =
       std::make_shared<SkinLiveResourceCounters>();
   SkinConfigurationWriteQueue configurationWrites_;
+  std::optional<SkinRevisionLease> lease_;
+  SkinValidationResult validation_;
+};
+
+class ExternalResultSkinFixture final {
+public:
+  ExternalResultSkinFixture(const fs::path &source, std::string_view entryPath)
+      : roots_{.visiblePackages = temp_.root() / "visible",
+               .privateRevisions = temp_.root() / "revisions",
+               .privateCatalog = temp_.root() / "catalog",
+               .profileOverlays = temp_.root() / "overlays"},
+        package_(*normalizePackageId("ExternalResultSkin").package),
+        profile_(*makeSkinProfileId(
+            "77777777-7777-4777-8777-777777777777")),
+        state_(nullptr, false) {
+    // Real result state has at least one resolved judgement.  Several shipped
+    // Beatoraja skins derive graph dimensions from this distribution, where an
+    // all-zero synthetic state would instead manufacture NaN Lua numbers.
+    state_.judgeCount[PGreat] = meta_.TotalNotes;
+    state_.judgementFastSlowCount[PGreat].fast = 1;
+    const auto normalizedEntry = normalizeEntryPath(package_, entryPath);
+    expect(normalizedEntry.entry.has_value(),
+           "external result skin entry path is valid");
+    if (!normalizedEntry.entry) {
+      return;
+    }
+    entry_ = *normalizedEntry.entry;
+    const fs::path stagedSource = temp_.root() / "source";
+    if (!copyLuaSources(source, stagedSource)) {
+      return;
+    }
+    std::error_code error;
+    fs::create_directories(roots_.visiblePackages, error);
+    if (error || !copyLuaSources(stagedSource,
+                                 roots_.visiblePackages / package_.directoryName)) {
+      return;
+    }
+    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    auto snapshot = snapshotter.snapshot(stagedSource, package_, {}, {});
+    expect(snapshot.prepared.has_value(),
+           "external result skin immutable revision snapshots");
+    if (!snapshot.prepared) {
+      return;
+    }
+    std::string publishError;
+    lease_ = std::move(*snapshot.prepared).publish(publishError);
+    expect(lease_.has_value() && publishError.empty(),
+           "external result skin revision publishes");
+    if (!lease_) {
+      return;
+    }
+    GameplaySkinValidator validator(resources_);
+    validation_ = validator.validate(lease_->readView(), entry_, nullptr, {});
+    if (validation_.disposition != SkinValidationDisposition::SelectableGameplay) {
+      for (const auto &diagnostic : validation_.diagnostics) {
+        std::cerr << "external result validation diagnostic: "
+                  << diagnostic.code << ": " << diagnostic.message << '\n';
+      }
+    }
+    expect(validation_.disposition == SkinValidationDisposition::SelectableGameplay &&
+               validation_.reconciledSettings.has_value() &&
+               !validation_.configurationDigest.empty(),
+           "external result skin validates as selectable");
+  }
+
+  GameplaySkinDocumentLoadResult configure() {
+    if (!lease_ || !validation_.reconciledSettings ||
+        validation_.configurationDigest.empty()) {
+      return {};
+    }
+    const auto format = gameplaySkinSourceFormatForPath(entry_.packageRelativePath);
+    if (!format) {
+      return {};
+    }
+    const auto revision = lease_->readView();
+    auto document = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry_, .storageRoots = roots_,
+         .safetyPolicy = SkinSafetyPolicy{}});
+    auto lua = LuaSkinFileSystem::create(
+        {.revision = revision, .entry = entry_, .storageRoots = roots_,
+         .profileId = profile_, .allowDataWrites = true,
+         .safetyPolicy = SkinSafetyPolicy{}});
+    if (!document.fileSystem || !lua.fileSystem) {
+      return {};
+    }
+    ResultSkinData data{.state = &state_, .meta = &meta_, .context = nullptr};
+    GameplaySkinDocumentLoader loader;
+    return loader.load(
+        {.sourceFormat = *format,
+         .entry = entry_,
+         .documentFileSystem = *document.fileSystem,
+         .luaFileSystem = std::move(lua.fileSystem),
+         .desiredSettings = &*validation_.reconciledSettings,
+         .expectedConfigurationDigest = validation_.configurationDigest,
+         .luaPurpose = LuaRuntimePurpose::Gameplay,
+         .loadConfiguredLua = [&data](
+                                  LuaSkinRuntime &runtime,
+                                  const BeatorajaSkinConfiguration &configuration,
+                                  std::vector<SkinDiagnostic> &) {
+           ResultSkinStateBridge bridge(data, 1, 0);
+           runtime.setFrameState(&bridge);
+           auto loaded = runtime.loadConfigured(configuration);
+           runtime.setFrameState(nullptr);
+           return loaded;
+         }});
+  }
+
+private:
+  static bool copyLuaSources(const fs::path &source, const fs::path &target) {
+    std::error_code error;
+    for (fs::recursive_directory_iterator iterator(source, error), end;
+         !error && iterator != end; iterator.increment(error)) {
+      if (!iterator->is_regular_file(error)) {
+        continue;
+      }
+      const auto extension = iterator->path().extension();
+      if (extension != ".lua" && extension != ".luaskin") {
+        continue;
+      }
+      const fs::path destination =
+          target / iterator->path().lexically_relative(source);
+      fs::create_directories(destination.parent_path(), error);
+      if (error) {
+        break;
+      }
+      fs::copy_file(iterator->path(), destination,
+                    fs::copy_options::overwrite_existing, error);
+    }
+    expect(!error, "external result skin Lua sources copy into the fixture");
+    return !error;
+  }
+
+  TempDirectory temp_;
+  SkinStorageRoots roots_;
+  SkinPackageId package_;
+  SkinEntryId entry_;
+  SkinProfileId profile_;
+  AcceptFiles aliases_;
+  RhythmState state_;
+  bms_parser::ChartMeta meta_{.TotalNotes = 100, .Bpm = 120.0};
+  SkinResourcePreparationService resources_;
   std::optional<SkinRevisionLease> lease_;
   SkinValidationResult validation_;
 };
@@ -2483,6 +2743,18 @@ return {
   writer_a = function(value)
     captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
   end,
+  writer_drag = function(value)
+    _G.session_writer_drag_values =
+      (rawget(_G, "session_writer_drag_values") or "") ..
+      math.floor(value * 100 + 0.5) .. ","
+    captured_main_state.event_exec(900, math.floor(value * 100 + 0.5))
+  end,
+  writer_drag_value = function()
+    return 0.5
+  end,
+  writer_drag_values = function()
+    return rawget(_G, "session_writer_drag_values") or ""
+  end,
   writer_b = function(value)
     captured_main_state.event_exec(901, math.floor(value * 100 + 0.5))
   end,
@@ -2593,6 +2865,9 @@ return {
       return;
     }
     writerA_ = header.value->callbackNamed("writer_a");
+    writerDrag_ = header.value->callbackNamed("writer_drag");
+    writerDragValue_ = header.value->callbackNamed("writer_drag_value");
+    writerDragValues_ = header.value->callbackNamed("writer_drag_values");
     writerB_ = header.value->callbackNamed("writer_b");
     writerFail_ = header.value->callbackNamed("writer_fail");
     writerOnce_ = header.value->callbackNamed("writer_once");
@@ -2607,7 +2882,9 @@ return {
     interactionEvent_ = header.value->callbackNamed("interaction_event");
     interactionFloat_ = header.value->callbackNamed("interaction_float");
     interactionOrder_ = header.value->callbackNamed("interaction_order");
-    expect(writerA_ && writerB_ && writerFail_ && writerOnce_ &&
+    expect(writerA_ && writerDrag_ && writerDragValue_ && writerDragValues_ &&
+               writerB_ &&
+               writerFail_ && writerOnce_ &&
                writerOnceVerify_ && textWriterUtf8_ && textWriterFirst_ &&
                textWriterSecond_ && textWriterCancel_ && textCancelVerify_ &&
                textUtf8Count_ && interactionString_ && interactionEvent_ &&
@@ -2625,6 +2902,7 @@ return {
         {.id = SkinFloatWriterId{3}, .source = *writerFail_},
         {.id = SkinFloatWriterId{4}, .source = *writerOnce_},
         {.id = SkinFloatWriterId{5}, .source = *interactionFloat_},
+        {.id = SkinFloatWriterId{6}, .source = *writerDrag_},
     };
     model_.model.stringWriters = {
         {.id = SkinStringWriterId{1}, .source = *textWriterUtf8_},
@@ -2738,17 +3016,22 @@ return {
       std::optional<double> firstLaneSecondaryDestinationY = std::nullopt,
       double destinationX = 100.0) {
     resources_.addImage(80);
-    const SkinFloatPropertyId valueProperty{
-        writer == SkinFloatWriterId{4} ? 2U : 1U};
+    const bool dynamicValue = writer == SkinFloatWriterId{4} ||
+                              writer == SkinFloatWriterId{6};
+    const SkinFloatPropertyId valueProperty{dynamicValue ? 2U : 1U};
+    const std::variant<SkinBuiltinPropertySelector, LuaCallbackId> valueSource =
+        writer == SkinFloatWriterId{4}
+            ? std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
+                  *writerOnceVerify_}
+            : (writer == SkinFloatWriterId{6}
+                   ? std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
+                         *writerDragValue_}
+                   : std::variant<SkinBuiltinPropertySelector, LuaCallbackId>{
+                         SkinBuiltinPropertySelector{.value = 4}});
     model_.model.floatProperties.push_back(
         {.id = valueProperty,
          .domain = SkinFloatPropertyDomain::Rate,
-         .source = writer == SkinFloatWriterId{4}
-                       ? std::variant<SkinBuiltinPropertySelector,
-                                      LuaCallbackId>{*writerOnceVerify_}
-                       : std::variant<SkinBuiltinPropertySelector,
-                                      LuaCallbackId>{
-                             SkinBuiltinPropertySelector{.value = 4}},
+         .source = valueSource,
          .authoredOrdinal = 1});
     SkinSliderObject slider;
     slider.knob = {.resource = 80,
@@ -2950,6 +3233,21 @@ return {
     return std::nullopt;
   }
 
+  std::optional<std::string> writerDragValues(std::uint64_t frameSerial) {
+    const auto begun = runtime_->beginFrame(frameSerial);
+    if (!begun.ok) {
+      return std::nullopt;
+    }
+    const auto result = runtime_->invoke(*writerDragValues_, {});
+    if (result.failure || !result.value) {
+      return std::nullopt;
+    }
+    if (const auto *value = std::get_if<std::string>(&*result.value)) {
+      return *value;
+    }
+    return std::nullopt;
+  }
+
   std::optional<std::string> interactionOrder(std::uint64_t frameSerial) {
     const auto begun = runtime_->beginFrame(frameSerial);
     if (!begun.ok) {
@@ -2977,6 +3275,9 @@ private:
   std::optional<PreparedSkinRevision> prepared_;
   std::unique_ptr<LuaSkinRuntime> runtime_;
   std::optional<LuaCallbackId> writerA_;
+  std::optional<LuaCallbackId> writerDrag_;
+  std::optional<LuaCallbackId> writerDragValue_;
+  std::optional<LuaCallbackId> writerDragValues_;
   std::optional<LuaCallbackId> writerB_;
   std::optional<LuaCallbackId> writerFail_;
   std::optional<LuaCallbackId> writerOnce_;
@@ -4336,13 +4637,13 @@ void testEditableTextCancellationTeardownAndNoneditableRejection() {
          "session teardown cancels focused text without invoking its writer");
 }
 
-void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
+void testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag() {
   SessionFixture fixture;
   if (!fixture.ready()) {
     return;
   }
   fixture.addBgaMarker();
-  fixture.addTouchGeometry(SkinFloatWriterId{4});
+  fixture.addTouchGeometry(SkinFloatWriterId{6});
   expect(fixture.session().prepareFrame(stateAt(1), projectionAt(1)) ==
              PresentationFrameOutcome::Ready,
          "touch fixture prepares");
@@ -4355,39 +4656,40 @@ void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
   const auto hit = fixture.session().hitTestUiControl(point);
   const PresentationTouchEvent down{
       .pointerId = 1, .uiPoint = point, .eventMicros = 1'000, .hit = hit};
-  expect(hit.kind == PresentationUiControlKind::Slider && hit.writer &&
+  expect(hit.kind == PresentationUiControlKind::Slider && hit.writer,
+         "touch fixture exposes an authored slider hit");
+  expect(fixture.session().beginPresentationTouch(down) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
              fixture.session().beginPresentationTouch(down) ==
-                 PresentationTouchResult{.consumed = true,
-                                         .excludeFromGameplay = true} &&
-             fixture.session().beginPresentationTouch(down) ==
-                 PresentationTouchResult{} &&
-             fixture.session().updatePresentationTouch(
-                 {.pointerId = 1,
-                  .uiPoint = {.x = 180.0F, .y = 610.0F},
-                  .eventMicros = 1'001,
-                  .hit = hit}) ==
-                 PresentationTouchResult{.consumed = true,
-                                         .excludeFromGameplay = true} &&
-             fixture.session().endPresentationTouch(
-                 {.pointerId = 1,
-                  .uiPoint = point,
-                  .eventMicros = 1'002,
-                  .hit = hit},
-                 false) ==
-                 PresentationTouchResult{.consumed = true,
-                                         .excludeFromGameplay = true} &&
+                 PresentationTouchResult{},
+         "Down captures a slider exactly once");
+  expect(fixture.session().updatePresentationTouch(
+             {.pointerId = 1,
+              .uiPoint = {.x = 180.0F, .y = 610.0F},
+              .eventMicros = 1'001,
+              .hit = hit}) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true},
+         "a captured slider Move stays consumed");
+  expect(fixture.session().endPresentationTouch(
+             {.pointerId = 1,
+              .uiPoint = point,
+              .eventMicros = 1'002,
+              .hit = hit},
+             false) ==
+             PresentationTouchResult{.consumed = true,
+                                     .excludeFromGameplay = true} &&
              fixture.session().updatePresentationTouch(down) ==
                  PresentationTouchResult{},
-         "Down captures once, Move stays consumed without writing, and Up "
-         "clears the capture");
+         "Up clears the slider capture");
 
   expect(fixture.session().prepareFrame(stateAt(2), projectionAt(2)) ==
              PresentationFrameOutcome::Ready &&
              fixture.session().render(context, bgaFrame(92), bga).outcome ==
                  PresentationFrameOutcome::Ready,
-         "one valid Down queues exactly one writer for the next frame while "
-         "Move and Up queue none");
-
+         "a slider drag queues its Down and in-track Move values for the next "
+         "frame");
   auto stale = hit;
   ++stale.layoutRevision;
   auto forged = hit;
@@ -4474,6 +4776,10 @@ void testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown() {
                   .eventMicros = 55,
                   .hit = hit}) == PresentationTouchResult{},
          "a cancelled matching End consumes and releases without a writer");
+  expect(fixture.writerDragValues(3) ==
+             std::optional<std::string>{"50,80,"},
+         "dragging a captured gameplay slider invokes its writer at each "
+         "in-track pointer position");
 }
 
 void testImageActTouchQueuesPinnedEventOnDown() {
@@ -4829,6 +5135,792 @@ void testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin() {
          "legacy double begin is rejected deterministically");
 }
 
+void testResultLuaSessionBindsMainStateDuringConfiguredLoad() {
+  ActivationFixture fixture({.skinType = 7,
+                             .audioBearing = true,
+                             .requireResultConfiguredState = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  expect(created.session != nullptr && created.diagnostics.empty() &&
+             fixture.audioState()->loads.size() == 1 &&
+             fixture.audioState()->plays.size() == 3,
+         "result Lua session configures against the result main_state and "
+         "application audio backend");
+}
+
+void testResultLuaSessionRoutesOpenIrEvent() {
+  ActivationFixture fixture({.skinType = 7, .resultEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "result Lua main_state.event_exec resolves a custom event before "
+         "routing its open_ir action through ResultScene");
+}
+
+void testResultLuaSessionDefersNestedCustomEventsToTheNextFrame() {
+  ActivationFixture fixture({.skinType = 7, .resultNestedEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds().empty() &&
+             created.session->render(context, {}, 2, 1) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "nested result Lua custom events remain queued for the following frame");
+}
+
+void testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat() {
+  ActivationFixture fixture({.skinType = 7, .resultIntervalEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "manual result custom events advance the shared automatic interval clock");
+}
+
+void testResultLuaSessionRejectsRecursiveCustomEvents() {
+  ActivationFixture fixture({.skinType = 7, .resultRecursiveEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             !created.session->render(context, {}, 1, 0) &&
+             hasDiagnostic(created.session->takeLastDiagnostics(),
+                           "skin.result_session.custom_event_cycle"),
+         "recursive result custom events fail with a skin diagnostic instead of "
+         "recursing through the event dispatcher");
+}
+
+void testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition() {
+  ActivationFixture fixture({.skinType = 7, .resultDuplicateEventExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds().empty(),
+         "duplicate result custom events replace both automatic and manual "
+         "actions with the final Beatoraja definition");
+}
+
+void testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition() {
+  ActivationFixture fixture({.skinType = 7, .resultDuplicateTimerExec = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds().empty(),
+         "duplicate result custom timers replace the obsolete timer callback");
+}
+
+void testStaticResultSessionRunsCustomBuiltinEvent() {
+  ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  RenderContext context;
+  expect(created.session != nullptr &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() ==
+                 std::vector<int>{210},
+         "static result custom events evaluate built-in conditions and actions");
+}
+
+void testResultSkinInputAvailabilityMatchesResultTimer() {
+  expect(!resultSkinInputAvailable(1'000, 999'999) &&
+             resultSkinInputAvailable(1'000, 1'000'000) &&
+             resultSkinInputAvailable(-1, 0),
+         "result pointer input uses the same threshold as timer 1");
+}
+
+void testResultSessionRefreshesForAsynchronousRankingNames() {
+  ActivationFixture fixture(
+      {.skinType = 7, .resourceBearing = true, .audioBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto context = fixture.resultContext({.courseTitle = "Initial result"});
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+  const ResultSkinData rankedData{
+      .courseTitle = "Initial result",
+      .irRankingEntries = {{.rank = 1,
+                            .playerName = "\xE3\x83\x86\xE3\x82\xB9\xE3\x83\x88"}}};
+  expect(created.session != nullptr,
+         "result session accepts a result-typed resource skin");
+  expect(fixture.device()->createCalls == 2,
+         "result session uploads its image and runtime text atlas");
+  expect(fixture.liveCounters()->snapshot() ==
+             SkinLiveResourceSnapshot{.liveTextures = 2,
+                                      .liveResources = 1,
+                                      .liveAudioIdentities = 1},
+         "result session accounts for its result-typed resources");
+  if (!created.session) {
+    return;
+  }
+  const auto activeResources = fixture.liveCounters()->snapshot();
+  const auto initialTextureCreates = fixture.device()->createCalls;
+  const auto initialTextureDestroys = fixture.device()->destroyCalls;
+  fixture.device()->failNextCreate();
+  const bool refreshFailed =
+      !created.session->refreshRuntimeStrings(rankedData);
+  expect(refreshFailed &&
+             created.session->requiresRuntimeStringRefresh(rankedData) &&
+             fixture.device()->destroyCalls == initialTextureDestroys &&
+             fixture.liveCounters()->snapshot() == activeResources,
+         "a failed result text refresh retains the published resource catalog");
+  expect(created.session->refreshRuntimeStrings(rankedData) &&
+             !created.session->requiresRuntimeStringRefresh(rankedData) &&
+             fixture.device()->createCalls == initialTextureCreates + 3 &&
+             fixture.device()->destroyCalls == initialTextureDestroys + 2 &&
+             fixture.liveCounters()->snapshot() == activeResources &&
+             fixture.audioState()->loads.size() == 1,
+         "result sessions replace runtime glyph atlases without recreating "
+         "their configured Lua runtime");
+}
+
+void testResultSessionRefreshesForAllStringSelectors() {
+  ActivationFixture fixture({.skinType = 7, .resourceBearing = true});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           fixture.resultContext());
+  const ResultSkinData stringSelectorData{
+      .pacemaker = ResultPacemakerData{.label = "MAX -"},
+      .chartMd5 = "0123456789abcdef0123456789abcdef",
+      .chartSha256 =
+          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  };
+  expect(created.session != nullptr &&
+             created.session->requiresRuntimeStringRefresh(stringSelectorData),
+         "result font atlases refresh for pacemaker and chart-hash strings");
+  if (created.session == nullptr) {
+    return;
+  }
+  expect(created.session->refreshRuntimeStrings(stringSelectorData) &&
+             !created.session->requiresRuntimeStringRefresh(stringSelectorData),
+         "result font atlases retain every dynamically projected string");
+}
+
+void testResultSessionRejectsConfiguredModelForAnotherResultTarget() {
+  ActivationFixture fixture({.skinType = 7, .configuredSkinType = 15});
+  if (!fixture.ready()) {
+    return;
+  }
+  auto context = fixture.resultContext();
+  context.expectedSkinType = 7;
+  auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                           std::move(context));
+  expect(!created.session && hasDiagnostic(created.diagnostics,
+                                            "skin.result_session.type_mismatch"),
+         "result session rejects a configured model for another result target");
+}
+
+void testResultBridgeSupportsBeatorajaIrAvailabilityProperties() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto offline = bridge.booleanProperty({50});
+  const auto online = bridge.booleanProperty({51});
+  expect(offline.supported && offline.value && online.supported && !online.value,
+         "result bridge mirrors Beatoraja's offline IR properties when no IR "
+         "provider is active");
+}
+
+void testResultBridgeUsesPreparedArtworkAvailability() {
+  bms_parser::ChartMeta declared{
+      .StageFile = "missing-stage.png",
+      .Banner = "missing-banner.png",
+      .BackBmp = "missing-backbmp.png"};
+  ResultSkinStateBridge unavailable({.meta = &declared}, 1, 0);
+  ResultSkinStateBridge prepared({.meta = &declared,
+                                  .stageFileAvailable = true,
+                                  .bannerAvailable = true,
+                                  .backBmpAvailable = true},
+                                 1, 0);
+  const auto stageFallback = unavailable.booleanProperty({190});
+  const auto stageArtwork = unavailable.booleanProperty({191});
+  const auto bannerFallback = unavailable.booleanProperty({192});
+  const auto bannerArtwork = unavailable.booleanProperty({193});
+  const auto backBmpFallback = unavailable.booleanProperty({194});
+  const auto backBmpArtwork = unavailable.booleanProperty({195});
+  expect(stageFallback.supported && stageFallback.value &&
+             stageArtwork.supported && !stageArtwork.value &&
+             bannerFallback.supported && bannerFallback.value &&
+             bannerArtwork.supported && !bannerArtwork.value &&
+             backBmpFallback.supported && backBmpFallback.value &&
+             backBmpArtwork.supported && !backBmpArtwork.value &&
+             prepared.booleanProperty({190}).supported &&
+             !prepared.booleanProperty({190}).value &&
+             prepared.booleanProperty({191}).supported &&
+             prepared.booleanProperty({191}).value &&
+             prepared.booleanProperty({192}).supported &&
+             !prepared.booleanProperty({192}).value &&
+             prepared.booleanProperty({193}).supported &&
+             prepared.booleanProperty({193}).value &&
+             prepared.booleanProperty({194}).supported &&
+             !prepared.booleanProperty({194}).value &&
+             prepared.booleanProperty({195}).supported &&
+             prepared.booleanProperty({195}).value,
+         "result artwork selectors follow successfully prepared resources, not "
+         "unreadable chart declarations");
+}
+
+void testResultBridgeKeepsAutoplayOptionsOffOnResultScreens() {
+  ResultSkinStateBridge bridge({.autoPlayResult = true}, 1, 0);
+  const auto autoplayOff = bridge.booleanProperty({32});
+  const auto autoplayOn = bridge.booleanProperty({33});
+  const auto loaded = bridge.booleanProperty({81});
+  expect(autoplayOff.supported && !autoplayOff.value && autoplayOn.supported &&
+             !autoplayOn.value && loaded.supported && !loaded.value,
+         "Beatoraja exposes neither autoplay option from an AbstractResult");
+}
+
+void testResultBridgeRecognizesScratchLongNotes() {
+  bms_parser::ChartMeta meta{.TotalLongNotes = 0, .TotalBackSpinNotes = 1};
+  ResultSkinStateBridge bridge({.meta = &meta}, 1, 0);
+  const auto noLongNote = bridge.booleanProperty({172});
+  const auto longNote = bridge.booleanProperty({173});
+  expect(noLongNote.supported && !noLongNote.value && longNote.supported &&
+             longNote.value,
+         "result LN options count scratch long notes as long notes");
+}
+
+void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 10;
+  state.judgeCount[Bad] = 2;
+  state.judgeCount[Poor] = 3;
+  state.judgeCount[Kpoor] = 4;
+  state.judgementFastSlowCount[Great].fast = 5;
+  state.judgementFastSlowCount[Poor].slow = 6;
+  bms_parser::ChartMeta meta{.KeyMode = 0, .TotalNotes = 10};
+  state.maxCombo = 7;
+  ResultSkinStateBridge bridge({
+      .state = &state,
+      .meta = &meta,
+      .previousBest = ResultPreviousBestData{.score = 12,
+                                              .maxCombo = 6,
+                                              .badPoints = 9},
+      .pacemaker = ResultPacemakerData{.targetScore = 18},
+  }, 1, 0);
+
+  const auto rank = bridge.booleanProperty({220});
+  const auto lowerRank = bridge.booleanProperty({221});
+  const auto negatedRank = bridge.booleanProperty({-220});
+  const auto poor = bridge.integerProperty({114}, {});
+  const auto miss = bridge.integerProperty({420}, {});
+  const auto poorPlusMiss = bridge.integerProperty({426}, {});
+  const auto badPoorMiss = bridge.integerProperty({427}, {});
+  const auto scoreRate = bridge.integerProperty({102}, {});
+  const auto scoreRateAfterDot = bridge.integerProperty({103}, {});
+  const auto point = bridge.integerProperty({100}, {});
+  const auto bestRate = bridge.floatProperty({112}, {});
+  const auto targetRate = bridge.floatProperty({114}, {});
+  const auto pGreatRate = bridge.floatProperty({"rate_pgreat"}, {});
+  const auto comboRate = bridge.floatProperty({145}, {});
+  const auto exscoreRate = bridge.floatProperty({147}, {});
+  const auto timingAverageFloat = bridge.floatProperty({374}, {});
+  const auto imageFavorite = bridge.integerProperty(
+      {90}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto nowRank = bridge.booleanProperty({200});
+  const auto notNowRank = bridge.booleanProperty({207});
+  const auto resultRank = bridge.booleanProperty({300});
+  const auto updatedScore = bridge.booleanProperty({330});
+  const auto updatedCombo = bridge.booleanProperty({331});
+  const auto drawnMissCount = bridge.booleanProperty({1332});
+  const auto targetWin = bridge.booleanProperty({352});
+  const auto goodExists = bridge.booleanProperty({2243});
+  const auto missExists = bridge.booleanProperty({2246});
+  const auto targetMissCount = bridge.integerProperty({176}, {});
+  const auto differenceMissCount = bridge.integerProperty({178}, {});
+  expect(rank.supported && rank.value && lowerRank.supported && lowerRank.value &&
+             negatedRank.supported &&
+             !negatedRank.value && poor.supported && poor.value == 3 &&
+             miss.supported && miss.value == 4 && poorPlusMiss.supported &&
+             poorPlusMiss.value == 7 && badPoorMiss.supported &&
+             badPoorMiss.value == 9 && scoreRate.supported &&
+             scoreRate.value == 100 && scoreRateAfterDot.supported &&
+             scoreRateAfterDot.value == 0 && bestRate.supported &&
+             std::abs(bestRate.value - 0.6) < 0.000001 &&
+             targetRate.supported && std::abs(targetRate.value - 0.9) < 0.000001 &&
+             pGreatRate.supported && std::abs(pGreatRate.value - 1.0) < 0.000001 &&
+             comboRate.supported && std::abs(comboRate.value - 0.7) < 0.000001 &&
+             exscoreRate.supported && exscoreRate.value == 0.0 &&
+             timingAverageFloat.supported && timingAverageFloat.value == 0.15 &&
+             imageFavorite.supported && imageFavorite.value == 0,
+         "result bridge follows Beatoraja's negated options, score rate, and "
+         "Poor-versus-Miss result families");
+  expect(point.supported && point.value == 1'000'000 && nowRank.supported &&
+             nowRank.value && notNowRank.supported && !notNowRank.value &&
+             resultRank.supported && resultRank.value && updatedScore.supported &&
+             updatedScore.value && updatedCombo.supported && updatedCombo.value &&
+             drawnMissCount.supported && drawnMissCount.value && targetWin.supported &&
+             targetWin.value && goodExists.supported && !goodExists.value &&
+             missExists.supported && missExists.value &&
+             targetMissCount.supported && targetMissCount.value == 9 &&
+             differenceMissCount.supported && differenceMissCount.value == 0,
+         "result bridge matches Beatoraja result rank, update, and point properties");
+}
+
+void testResultBridgeUsesProjectedKeyModeForScorePoint() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 1;
+  state.judgeCount[Great] = 1;
+  state.combo = 0;
+  state.maxCombo = 1;
+  bms_parser::ChartMeta courseMeta{.KeyMode = 0, .TotalNotes = 2};
+  ResultSkinStateBridge bridge({.state = &state,
+                                 .meta = &courseMeta,
+                                 .keyModeOverride = 7},
+                                1, 0);
+  const auto point = bridge.integerProperty({100}, {});
+  expect(point.supported && point.value == 150'000,
+         "result score point uses the result's projected key mode and maximum combo");
+}
+
+void testResultBridgeMatchesResultAliasesAndTimerUnits() {
+  bms_parser::ChartMeta meta{.Title = "Title", .SubTitle = "Subtitle",
+                             .PlayLevel = 12.0F,
+                             .PlayLength = 125'000'000};
+  ResultSkinStateBridge bridge({.meta = &meta,
+                                 .playModeLabel = "7K",
+                                 .laneOrderLabel = "MIRROR",
+                                 .courseTitle = "Course title",
+                                 .courseTitles = {"First stage", "Second stage"},
+                                 .skinName = "Result skin",
+                                 .skinAuthor = "Skin author"},
+                                1, 125);
+  const auto level = bridge.integerProperty({45}, {});
+  const auto fullTitleProperty = bridge.stringProperty({12});
+  const auto fullTitle = std::string(fullTitleProperty.value);
+  const auto mode = std::string(bridge.stringProperty({60}).value);
+  const auto order = std::string(bridge.stringProperty({61}).value);
+  const auto namedTitle = std::string(bridge.stringProperty({std::string("title")}).value);
+  const auto firstCourseTitle = std::string(bridge.stringProperty({150}).value);
+  const auto namedCourseTitle =
+      std::string(bridge.stringProperty({std::string("coursetitle1")}).value);
+  const auto chartMinutes = bridge.integerProperty({1163}, {});
+  const auto chartSeconds = bridge.integerProperty({1164}, {});
+  const auto skinName = std::string(bridge.stringProperty({50}).value);
+  const auto skinAuthor = std::string(bridge.stringProperty({51}).value);
+  expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
+             fullTitle == "Course title" && mode == "7K" && order == "MIRROR" &&
+             namedTitle == "Course title" && firstCourseTitle == "First stage" &&
+             namedCourseTitle == "First stage" &&
+             chartMinutes.supported && chartMinutes.value == 2 &&
+             chartSeconds.supported && chartSeconds.value == 5 &&
+             skinName == "Result skin" && skinAuthor == "Skin author" &&
+             bridge.timerProperty({1}) == 0 &&
+             bridge.timerProperty({100}) == INT64_MIN,
+         "result aliases and timers match Beatoraja result properties");
+}
+
+void testResultBridgeUsesCapturedReplayImageIndexes() {
+  RhythmState state(nullptr, false);
+  state.gaugeType = GaugeType::Hard;
+  ResultSkinStateBridge bridge({.state = &state,
+                                 .replayRandomOption1P = 2,
+                                 .replayRandomOption2P = 9,
+                                 .replayDoublePlayOption = 1},
+                                1, 0);
+  const auto gauge = bridge.integerProperty(
+      {40}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto random1P = bridge.integerProperty(
+      {42}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto random2P = bridge.integerProperty(
+      {43}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto doublePlay = bridge.integerProperty(
+      {54}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(gauge.supported && gauge.value == gaugeTypeIndex(GaugeType::Hard) &&
+             random1P.supported && random1P.value == 2 &&
+             random2P.supported && random2P.value == 9 &&
+             doublePlay.supported && doublePlay.value == 1,
+         "result image indexes use the immutable played gauge and replay options");
+}
+
+void testResultBridgeFallsBackToFrameZeroForLegalImageIndexes() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto legal = bridge.integerProperty(
+      {10}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto outOfRange = bridge.integerProperty(
+      {65'536}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(legal.supported && legal.value == 0 && !outOfRange.supported,
+         "result image-index properties retain Beatoraja's legal frame-zero fallback");
+}
+
+void testResultBridgeProjectsLongNoteModeImageIndex() {
+  for (const auto [mode, expected] :
+       std::array<std::pair<int, std::int64_t>, 3>{{{1, 0}, {2, 1}, {3, 2}}}) {
+    bms_parser::ChartMeta meta{.LnMode = mode};
+    ResultSkinStateBridge bridge({.meta = &meta}, 1, 0);
+    const auto value = bridge.integerProperty(
+        {308}, SkinIntegerPropertyDomain::ImageIndex);
+    expect(value.supported && value.value == expected,
+           "result LN mode image index compacts LN/CN/HCN like Beatoraja");
+  }
+}
+
+void testResultBridgeMatchesBeatorajaTableFullString() {
+  ResultSkinStateBridge bridge({.tableName = "Insane Table",
+                                 .tableLevel = "★12"},
+                                1, 0);
+  const auto tableFull = bridge.stringProperty({1003});
+  expect(tableFull.supported && tableFull.value == "★12Insane Table",
+         "result tablefull preserves Beatoraja's level-first concatenation");
+}
+
+void testResultBridgeDoesNotInventRemoteGaugeImageIndex() {
+  ResultPresentationModel remote{.score = 100, .maxScore = 200};
+  ResultSkinStateBridge unknown({.presentation = &remote}, 1, 0);
+  const auto unavailable = unknown.integerProperty(
+      {40}, SkinIntegerPropertyDomain::ImageIndex);
+  ResultSkinStateBridge known({.presentation = &remote,
+                               .gaugeTypeOverride = GaugeType::Hard},
+                              1, 0);
+  const auto explicitGauge = known.integerProperty(
+      {40}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(!unavailable.supported && explicitGauge.supported &&
+             explicitGauge.value == gaugeTypeIndex(GaugeType::Hard),
+         "remote results do not substitute NORMAL when their gauge is absent");
+}
+
+void testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData() {
+  bms_parser::ChartMeta meta{.Rank = 2,
+                             .PlayLevel = 12.5,
+                             .PlayLevelText = "12.5",
+                             .TotalNotes = 100};
+  ResultSkinStateBridge firstPlay({.meta = &meta}, 1, 0);
+  const auto previousRank = firstPlay.booleanProperty({320});
+  const auto noPreviousRank = firstPlay.booleanProperty({-320});
+  const auto veryHard = firstPlay.booleanProperty({180});
+  const auto hardRank = firstPlay.booleanProperty({181});
+  const auto normalRank = firstPlay.booleanProperty({182});
+  const auto authoredLevel = firstPlay.integerProperty({96}, {});
+
+  RhythmState normalState(nullptr, false);
+  normalState.gaugeType = GaugeType::Normal;
+  ResultSkinStateBridge normal({.state = &normalState, .meta = &meta}, 1, 0);
+  RhythmState hardState(nullptr, false);
+  hardState.gaugeType = GaugeType::Hard;
+  ResultSkinStateBridge hardResult({.state = &hardState, .meta = &meta}, 1, 0);
+  const auto normalGauge = normal.booleanProperty({42});
+  const auto normalHardGauge = normal.booleanProperty({43});
+  const auto hardGauge = hardResult.booleanProperty({42});
+  const auto hardHardGauge = hardResult.booleanProperty({43});
+
+  ResultPresentationModel remote{.finalGauge = 72.0F,
+                                 .gaugeSeries = {{.points = {30.0F, 72.0F},
+                                                  .maximum = 100.0F}}};
+  ResultSkinStateBridge unknownRemoteGauge({.presentation = &remote}, 1, 0);
+  const auto remoteGauge = unknownRemoteGauge.gaugeState();
+  const auto remoteGraph = unknownRemoteGauge.gameplayGraphState();
+
+  expect(previousRank.supported && !previousRank.value &&
+             noPreviousRank.supported && noPreviousRank.value &&
+             veryHard.supported && !veryHard.value && hardRank.supported &&
+             !hardRank.value && normalRank.supported && normalRank.value &&
+             authoredLevel.supported && authoredLevel.value == 0 &&
+             normalGauge.supported && normalGauge.value &&
+             normalHardGauge.supported && !normalHardGauge.value &&
+             hardGauge.supported && !hardGauge.value &&
+             hardHardGauge.supported && hardHardGauge.value &&
+             !remoteGauge.supported && !remoteGraph.gaugeSupported,
+         "result bridge preserves Beatoraja result conditions and does not "
+         "invent metadata for unknown remote gauges");
+}
+
+void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
+  ResultSkinStateBridge bridge({
+      .currentClearRankOverride = kClearTypeFullComboRank,
+      .previousLampBest = ResultPreviousBestData{
+          .clearType = kClearTypeEasyClearRank},
+  }, 1, 0);
+  const auto current = bridge.integerProperty(
+      {370}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto previous = bridge.integerProperty(
+      {371}, SkinIntegerPropertyDomain::ImageIndex);
+  ResultSkinStateBridge failed({
+      .currentClearRankOverride = kClearTypeFailedRank,
+  }, 1, 0);
+  const auto failedCurrent = failed.integerProperty(
+      {370}, SkinIntegerPropertyDomain::ImageIndex);
+  ResultSkinStateBridge noPreviousScore({}, 1, 0);
+  const auto noPrevious = noPreviousScore.integerProperty(
+      {371}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(current.supported && current.value == 8 &&
+             previous.supported && previous.value == 4 &&
+             failedCurrent.supported && failedCurrent.value == 1 &&
+             noPrevious.supported && noPrevious.value == 0,
+         "result clear image indexes use Beatoraja ClearType IDs");
+}
+
+void testResultBridgeProjectsIrRankingRows() {
+  ResultSkinStateBridge bridge({
+      .irRankingEntries = {{.rank = 1,
+                            .playerName = "Top player",
+                            .score = 1998,
+                            .clearType = kClearTypeFullComboRank},
+                           {.rank = 2,
+                            .playerName = "Current player",
+                            .score = 1888,
+                            .clearType = kClearTypeHardClearRank,
+                            .currentUser = true}},
+  }, 1, 0);
+  const auto currentRank = bridge.integerProperty({179}, {});
+  const auto firstScore = bridge.integerProperty({380}, {});
+  const auto secondRank = bridge.integerProperty({391}, {});
+  const auto secondLamp = bridge.integerProperty(
+      {391}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto secondName = bridge.stringProperty({121});
+  expect(currentRank.supported && currentRank.value == 2 &&
+             firstScore.supported && firstScore.value == 1998 &&
+             secondRank.supported && secondRank.value == 2 &&
+             secondLamp.supported && secondLamp.value == 6 &&
+             secondName.supported && secondName.value == "Current player",
+         "result IR ranking properties use the active ranking snapshot");
+}
+
+void testResultBridgeProjectsReplayLaneAssignments() {
+  ResultSkinStateBridge bridge({
+      .replayRandomOption1P = 8,
+      .replayRandomOption2P = 2,
+      .replayKeyMode = 14,
+      .replayLaneShufflePattern1P = std::vector<int>{3, 0, 1, 2, 4, 5, 6, 7},
+      .replayLaneShufflePattern2P = std::vector<int>{9, 8, 10, 11, 12, 13, 14, 15},
+  }, 1, 0);
+  const auto firstKey = bridge.integerProperty(
+      {450}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto firstScratch = bridge.integerProperty(
+      {459}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto secondKey = bridge.integerProperty(
+      {460}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(firstKey.supported && firstKey.value == 4 &&
+             firstScratch.supported && firstScratch.value == 8 &&
+             secondKey.supported && secondKey.value == 3,
+         "result lane-assignment indexes retain Beatoraja replay patterns");
+}
+
+void testResultBridgeExposesPlayerHistoryProperties() {
+  ResultSkinStateBridge bridge({
+      .playerHistory = ResultPlayerHistoryData{
+          .playCount = 130,
+          .clearCount = 91,
+          .judgementCounts = {1000, 900, 80, 20, 10},
+          .playDurationSeconds = 3'661}},
+      1, 0);
+  const auto playCount = bridge.integerProperty({30}, {});
+  const auto failureCount = bridge.integerProperty({32}, {});
+  const auto great = bridge.integerProperty({34}, {});
+  const auto notes = bridge.integerProperty({333}, {});
+  const auto hours = bridge.integerProperty({17}, {});
+  const auto minutes = bridge.integerProperty({18}, {});
+  const auto seconds = bridge.integerProperty({19}, {});
+  expect(playCount.supported && playCount.value == 130 &&
+             failureCount.supported && failureCount.value == 39 &&
+             great.supported && great.value == 900 && notes.supported &&
+             notes.value == 2'000 && hours.supported && hours.value == 1 &&
+             minutes.supported && minutes.value == 1 && seconds.supported &&
+             seconds.value == 1,
+         "result bridge exposes Beatoraja PlayerData history properties");
+}
+
+void testResultBridgeExposesResultTimingDistributionStatistics() {
+  ResultSkinStateBridge bridge({.timingAverageMillis = -12.34,
+                                 .timingStandardDeviationMillis = 8.76,
+                                 .averageJudgeMicros = 1'234'560,
+                                 .timingDistribution = {0, 3, 7},
+                                 .timingDistributionCenter = 1},
+                                1, 0);
+  const auto duration = bridge.integerProperty({372}, {});
+  const auto durationFraction = bridge.integerProperty({373}, {});
+  const auto average = bridge.integerProperty({374}, {});
+  const auto averageFraction = bridge.integerProperty({375}, {});
+  const auto deviation = bridge.integerProperty({376}, {});
+  const auto deviationFraction = bridge.integerProperty({377}, {});
+  const auto floatDeviation = bridge.floatProperty({376}, {});
+  const auto graph = bridge.gameplayGraphState();
+  expect(duration.supported && duration.value == 1234 &&
+             durationFraction.supported && durationFraction.value == 56 &&
+             average.supported && average.value == -12 &&
+             averageFraction.supported && averageFraction.value == -34 &&
+             deviation.supported && deviation.value == 8 &&
+             deviationFraction.supported && deviationFraction.value == 76 &&
+             floatDeviation.supported &&
+             std::abs(floatDeviation.value - 8.76) < 0.000001 &&
+             graph.timingDistribution.size() == 3 &&
+             graph.timingDistributionCenter == 1 &&
+             graph.timingDistributionAverageMillis &&
+             std::abs(*graph.timingDistributionAverageMillis + 12.34) < 0.000001,
+         "result timing statistic properties use the completed timing distribution");
+}
+
+void testResultBridgeUsesRemotePresentationValues() {
+  ResultPresentationModel remote{
+      .score = 1400,
+      .maxScore = 2000,
+      .lampRank = 3,
+      .finalGauge = 79.96F,
+      .maxCombo = 720,
+      .judgements = {{.label = "P-GREAT", .total = 800},
+                     {.label = "GREAT", .total = 100, .early = 0, .late = 0},
+                     {.label = "GOOD", .total = 50},
+                     {.label = "BAD", .total = 20},
+                     {.label = "POOR", .total = 10}},
+      .fast = 12,
+      .slow = 8,
+      .gaugeSeries = {{.points = {20.0F, 50.0F, 79.96F},
+                       .maximum = 100.0F}},
+  };
+  ResultSkinStateBridge bridge({.presentation = &remote,
+                                 .playLevelOverride = 12.7F,
+                                 .difficultyLabel = "ANOTHER",
+                                 .chartMd5 = "remote-md5",
+                                 .chartSha256 = "remote-sha256",
+                                 .keyModeOverride = 7,
+                                 .gaugeTypeOverride = GaugeType::Normal},
+                                1, 0);
+  const auto poor = bridge.integerProperty({114}, {});
+  const auto finalGauge = bridge.integerProperty({107}, {});
+  const auto gaugeDecimal = bridge.integerProperty({407}, {});
+  const auto fastGreat = bridge.integerProperty({412}, {});
+  const auto totalFast = bridge.integerProperty({423}, {});
+  const auto graph = bridge.gameplayGraphState();
+  const auto gauge = bridge.gaugeState();
+  const auto level = bridge.integerProperty({45}, {});
+  const auto difficultyProperty = bridge.stringProperty({62});
+  const std::string difficulty(difficultyProperty.value);
+  const auto chartMd5Property = bridge.stringProperty({1030});
+  const std::string chartMd5(chartMd5Property.value);
+  expect(level.supported && level.value == 13,
+         "remote result level uses remote level number");
+  expect(difficultyProperty.supported && difficulty == "ANOTHER",
+         "remote result difficulty uses remote difficulty");
+  expect(chartMd5Property.supported && chartMd5 == "remote-md5",
+         "remote result chart hash uses remote metadata");
+  expect(bridge.booleanProperty({160}).supported &&
+             bridge.booleanProperty({160}).value,
+         "remote result key-mode options use the remote game type");
+  expect(bridge.booleanProperty({90}).supported &&
+             bridge.booleanProperty({90}).value && poor.supported &&
+             poor.value == 10 && finalGauge.supported &&
+             finalGauge.value == 79 && gaugeDecimal.supported &&
+             gaugeDecimal.value == 9 && fastGreat.supported &&
+             fastGreat.value == 0 && totalFast.supported &&
+             totalFast.value == 12 && graph.gaugeSupported &&
+             graph.gaugeHistory.size() == 3 && graph.gaugeRevision != 0 &&
+             gauge.supported && std::abs(gauge.value - 79.96) < 0.0001 &&
+             gauge.minimum == 2.0 && gauge.maximum == 100.0 &&
+             gauge.border == 80.0 &&
+             std::abs(bridge.floatProperty({1107}, {}).value - 79.96) < 0.0001 &&
+             bridge.judgeState(0).supported && bridge.judgeState(0).combo == 720 &&
+             level.supported && level.value == 13 && difficultyProperty.supported &&
+             difficulty == "ANOTHER" && chartMd5Property.supported &&
+             chartMd5 == "remote-md5",
+         "remote result properties project presentation scores, timing, and gauges");
+}
+
+void testResultBridgePreservesCompletedGameplayGraph() {
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->normalDistribution = {{{1, 2, 3, 4, 5, 6, 7}}};
+  chart->bpmSeries = {{.chartTimeMicros = 0, .bpm = 150.0,
+                       .bpmTimesScroll = 150.0, .graphSpeed = 150.0}};
+  chart->mainBpm = 150.0;
+  chart->minimumBpm = 120.0;
+  chart->maximumBpm = 180.0;
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->judgementDistribution = {{{1, 2, 3, 4, 5, 6}}};
+  dynamic->earlyLateDistribution = {{{6, 5, 4, 3, 2, 1, 0, 0, 0, 0}}};
+  dynamic->recentJudgeTimingsMillis[0] = 12;
+  dynamic->recentJudgeTimingIndex = 1;
+  dynamic->judgeWindows[0] = {.judgement = PGreat,
+                              .minimumTimingMillis = -20,
+                              .maximumTimingMillis = 20};
+  dynamic->gaugeHistories[gaugeTypeIndex(GaugeType::Normal)] = {20.0F, 80.0F};
+  dynamic->gaugeType = GaugeType::Normal;
+  dynamic->gaugeMinimum = 2.0F;
+  dynamic->gaugeMaximum = 100.0F;
+  dynamic->gaugeBorder = 80.0F;
+  dynamic->gaugeSupported = true;
+  dynamic->judgementRevision = 11;
+  dynamic->gaugeRevision = 12;
+
+  ResultSkinStateBridge bridge({.gameplayGraph = {.chart = std::move(chart),
+                                                   .dynamic = std::move(dynamic)}},
+                                1, 0);
+  const auto graph = bridge.gameplayGraphState();
+  expect(graph.normalDistribution.size() == 1 &&
+             graph.judgementDistribution.size() == 1 &&
+             graph.earlyLateDistribution.size() == 1 &&
+             graph.bpmSeries.size() == 1 && graph.judgeWindows.size() == 5 &&
+             graph.recentJudgeTimingsMillis.size() == kSkinRecentJudgeTimingCapacity &&
+             graph.recentJudgeTimingIndex == 1 && graph.gaugeHistory.size() == 2 &&
+             graph.judgementRevision == 11 && graph.gaugeRevision == 12,
+         "result bridge preserves the completed gameplay graph snapshot");
+}
+
+void testRequestedExternalResultSkinCreatesSession() {
+  const char *configuredRoot =
+      std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ROOT");
+  if (configuredRoot == nullptr || *configuredRoot == '\0') {
+    return;
+  }
+  const fs::path source(configuredRoot);
+  expect(fs::is_directory(source),
+         "requested external result skin root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+  const char *configuredEntry =
+      std::getenv("ASOBMASHOW_EXTERNAL_RESULT_SKIN_ENTRY");
+  const std::string entryPath =
+      configuredEntry != nullptr && *configuredEntry != '\0'
+          ? configuredEntry
+          : "result.luaskin";
+  ExternalResultSkinFixture fixture(source, entryPath);
+  auto configured = fixture.configure();
+  if (!configured.document) {
+    for (const auto &diagnostic : configured.diagnostics) {
+      std::cerr << "external result session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+  }
+  expect(configured.document.has_value(),
+         "requested external result skin configures its result document");
+}
+
 } // namespace
 
 int main() {
@@ -4893,13 +5985,46 @@ int main() {
   testEditableStringWriterDoesNotRunWhenSubmissionPreflightFails();
   testEditableTextBoundsFocusedAndQueuedUtf8();
   testEditableTextCancellationTeardownAndNoneditableRejection();
-  testTouchCaptureLifecycleFailsClosedAndQueuesOnlyDown();
+  testTouchCaptureLifecycleKeepsWritingCapturedSlidersDuringDrag();
   testImageActTouchQueuesPinnedEventOnDown();
   testViewportChangeCancelsCapturesAndInvalidatesPublishedGeometry();
   testViewportGeometryChangeCancelsOldInputAndPreservesSessionIdentity();
   testTouchLayoutNormalizesAgainstTheWholeWindowWithSafeOrigin();
   testSuccessfulGeometryChangesOnlyHitRevisionAndTeardownDiscardsState();
   testLegacyRendererAdapterBeginsInternallyAndRejectsDoubleBegin();
+  testResultLuaSessionBindsMainStateDuringConfiguredLoad();
+  testResultLuaSessionRoutesOpenIrEvent();
+  testResultLuaSessionDefersNestedCustomEventsToTheNextFrame();
+  testResultLuaSessionManualCustomEventSuppressesAutomaticRepeat();
+  testResultLuaSessionRejectsRecursiveCustomEvents();
+  testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
+  testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
+  testStaticResultSessionRunsCustomBuiltinEvent();
+  testResultSkinInputAvailabilityMatchesResultTimer();
+  testResultSessionRefreshesForAsynchronousRankingNames();
+  testResultSessionRefreshesForAllStringSelectors();
+  testResultSessionRejectsConfiguredModelForAnotherResultTarget();
+  testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
+  testResultBridgeUsesPreparedArtworkAvailability();
+  testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
+  testResultBridgeRecognizesScratchLongNotes();
+  testResultBridgeMatchesBeatorajaResultScoreFamilies();
+  testResultBridgeUsesProjectedKeyModeForScorePoint();
+  testResultBridgeMatchesResultAliasesAndTimerUnits();
+  testResultBridgeUsesCapturedReplayImageIndexes();
+  testResultBridgeFallsBackToFrameZeroForLegalImageIndexes();
+  testResultBridgeProjectsLongNoteModeImageIndex();
+  testResultBridgeMatchesBeatorajaTableFullString();
+  testResultBridgeDoesNotInventRemoteGaugeImageIndex();
+  testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData();
+  testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
+  testResultBridgeProjectsIrRankingRows();
+  testResultBridgeProjectsReplayLaneAssignments();
+  testResultBridgeExposesPlayerHistoryProperties();
+  testResultBridgeExposesResultTimingDistributionStatistics();
+  testResultBridgeUsesRemotePresentationValues();
+  testResultBridgePreservesCompletedGameplayGraph();
+  testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";
     return 1;

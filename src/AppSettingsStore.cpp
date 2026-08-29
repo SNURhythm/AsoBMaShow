@@ -2,7 +2,7 @@
 
 #include "VersionedJson.h"
 #include "scene/play/GameplayRuleset.h"
-#include "skin/GameplaySkinTraits.h"
+#include "skin/SkinTargetTraits.h"
 #include "skin/package/SkinPathPolicy.h"
 
 #include <algorithm>
@@ -227,12 +227,12 @@ json skinProfileSettingsToJson(const skin::SkinProfileSettings &skinSettings) {
              {"translateX", settings.viewport.translateX},
              {"translateY", settings.viewport.translateY}}}}}});
   }
-  json selectedGameplayEntries = json::object();
-  for (const auto &[skinType, entry] : skinSettings.selectedGameplayEntries) {
-    selectedGameplayEntries[std::to_string(skinType)] = skinEntryIdToJson(entry);
+  json selectedSkinEntries = json::object();
+  for (const auto &[skinType, entry] : skinSettings.selectedSkinEntries) {
+    selectedSkinEntries[std::to_string(skinType)] = skinEntryIdToJson(entry);
   }
   return {{"safetyLevel", static_cast<int>(skinSettings.safetyLevel)},
-          {"selectedGameplayEntries", std::move(selectedGameplayEntries)},
+          {"selectedSkinEntries", std::move(selectedSkinEntries)},
           {"entries", std::move(entries)}};
 }
 
@@ -329,32 +329,38 @@ void readSkinProfileSettings(const json &document,
     destination.selected7KeyEntry =
         readSkinEntryId(*selected, "skin.selected7KeyEntry", diagnostics);
   }
-  if (const auto selectedGameplayEntries =
-          found->find("selectedGameplayEntries");
-      selectedGameplayEntries != found->end()) {
-    if (!selectedGameplayEntries->is_object()) {
-      invalidValue("skin.selectedGameplayEntries", "expected object",
+  const auto selectedSkinEntries = found->find("selectedSkinEntries");
+  if (selectedSkinEntries != found->end()) {
+    destination.selected7KeyEntry.reset();
+    destination.gameplayCompatibilityEnabled = false;
+  }
+  const auto legacyGameplayEntries = found->find("selectedGameplayEntries");
+  if (const auto selectedEntries =
+          selectedSkinEntries != found->end() ? selectedSkinEntries
+                                              : legacyGameplayEntries;
+      selectedEntries != found->end()) {
+    if (!selectedEntries->is_object()) {
+      invalidValue("skin.selectedSkinEntries", "expected object",
                    diagnostics);
     } else {
       for (const auto &[rawSkinType, encodedEntry] :
-           selectedGameplayEntries->items()) {
+           selectedEntries->items()) {
         int skinType = -1;
         const auto parsed = std::from_chars(
             rawSkinType.data(), rawSkinType.data() + rawSkinType.size(),
             skinType);
         if (parsed.ec != std::errc{} || parsed.ptr != rawSkinType.data() + rawSkinType.size() ||
-            !skin::gameplaySkinTraitForSkinType(skinType)) {
-          invalidValue("skin.selectedGameplayEntries",
-                       "key is not a supported gameplay skin type",
+            !skin::skinTargetTraitForType(skinType)) {
+          invalidValue("skin.selectedSkinEntries",
+                       "key is not a supported skin type",
                        diagnostics);
           continue;
         }
         const auto entry = readSkinEntryId(
-            encodedEntry, "skin.selectedGameplayEntries." + rawSkinType,
+            encodedEntry, "skin.selectedSkinEntries." + rawSkinType,
             diagnostics);
         if (entry) {
-          destination.selectedGameplayEntries.insert_or_assign(skinType,
-                                                                *entry);
+          destination.selectedSkinEntries.insert_or_assign(skinType, *entry);
         }
       }
     }

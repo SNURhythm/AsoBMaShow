@@ -2,6 +2,7 @@
 
 #include "../LuaGameplaySkinFeature.h"
 #include "../GameplaySkinTraits.h"
+#include "../SkinTargetTraits.h"
 #include "LuaSkinTableDecoder.h"
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -69,11 +70,11 @@ SkinModelValidationResult SkinModelValidator::validate(
     BeatorajaSkinModel model,
     SkinBindingValidationContext bindingContext) const {
   SkinModelValidationResult result;
-  if (!gameplaySkinTraitForSkinType(model.header.type)) {
+  if (!skinTargetTraitForType(model.header.type)) {
     result.criticalFailure = true;
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_type_unsupported",
-        "Lua gameplay skins require a supported Beatoraja gameplay type"));
+        "Lua skin requires a supported Beatoraja screen type"));
     return result;
   }
   if (model.header.width <= 0 || model.header.height <= 0 ||

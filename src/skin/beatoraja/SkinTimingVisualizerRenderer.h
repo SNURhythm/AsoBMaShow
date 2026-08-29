@@ -31,4 +31,22 @@ using SkinTimingVisualizerRenderResult = SkinGeneratedTextureRasterResult;
 [[nodiscard]] SkinTimingVisualizerRenderResult
 renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request);
 
+struct SkinTimingDistributionGraphRenderRequest {
+  SkinObjectId sourceObject = 0;
+  std::uint32_t authoredOrdinal = 0;
+  const SkinTimingDistributionGraphObject &graph;
+  SkinGameplayGraphStateView state;
+  const AuthoredDestinationGeometry &geometry;
+  const PlaySkinViewport &viewport;
+  std::size_t maximumCommands = 0;
+  std::size_t maximumPrimitiveVertices = 0;
+  SkinGeneratedTextureCache *cache = nullptr;
+};
+
+using SkinTimingDistributionGraphRenderResult = SkinGeneratedTextureRasterResult;
+
+[[nodiscard]] SkinTimingDistributionGraphRenderResult
+renderSkinTimingDistributionGraph(
+    const SkinTimingDistributionGraphRenderRequest &request);
+
 } // namespace skin

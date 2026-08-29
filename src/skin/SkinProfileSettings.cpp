@@ -1,7 +1,7 @@
 #include "SkinProfileSettings.h"
 
 #include "../FileChecksum.h"
-#include "GameplaySkinTraits.h"
+#include "SkinTargetTraits.h"
 #include "package/SkinPathPolicy.h"
 
 #include <utf8proc.h>
@@ -212,15 +212,18 @@ void SkinProfileSettings::sanitize() {
   // A legacy profile represented one optional 7K selection plus a global
   // enable bit. Preserve its disabled state by only migrating when it was
   // enabled. Once a new-format map is present, it is wholly authoritative.
-  const bool hasAuthoritativeSelections = !selectedGameplayEntries.empty();
+  const bool hasAuthoritativeSelections = !selectedSkinEntries.empty();
   if (!hasAuthoritativeSelections && gameplayCompatibilityEnabled &&
       selected7KeyEntry) {
-    selectedGameplayEntries.try_emplace(0, *selected7KeyEntry);
+    selectedSkinEntries.try_emplace(0, *selected7KeyEntry);
+  }
+  for (const auto &[skinType, entry] : selectedGameplayEntries) {
+    selectedSkinEntries.try_emplace(skinType, entry);
   }
 
   std::map<int, std::string> selectedCollisionKeys;
-  for (const auto &[skinType, selectedEntry] : selectedGameplayEntries) {
-    if (!gameplaySkinTraitForSkinType(skinType)) {
+  for (const auto &[skinType, selectedEntry] : selectedSkinEntries) {
+    if (!skinTargetTraitForType(skinType)) {
       continue;
     }
     const auto selectedPackage =
@@ -259,23 +262,30 @@ void SkinProfileSettings::sanitize() {
   }
   entries = std::move(sanitized);
 
-  selectedGameplayEntries.clear();
+  selectedSkinEntries.clear();
   for (const auto &[skinType, selectedCollisionKey] : selectedCollisionKeys) {
     for (const auto &[entry, settings] : entries) {
       (void)settings;
       if (entry.collisionKey == selectedCollisionKey) {
-        selectedGameplayEntries.try_emplace(skinType, entry);
+        selectedSkinEntries.try_emplace(skinType, entry);
         break;
       }
     }
   }
 
   selected7KeyEntry.reset();
-  if (const auto legacySelection = selectedGameplayEntries.find(0);
-      legacySelection != selectedGameplayEntries.end()) {
+  if (const auto legacySelection = selectedSkinEntries.find(0);
+      legacySelection != selectedSkinEntries.end()) {
     selected7KeyEntry = legacySelection->second;
   }
-  gameplayCompatibilityEnabled = !selectedGameplayEntries.empty();
+  gameplayCompatibilityEnabled = !selectedSkinEntries.empty();
+  selectedGameplayEntries.clear();
+  for (const auto &[skinType, entry] : selectedSkinEntries) {
+    if (const auto trait = skinTargetTraitForType(skinType);
+        trait && trait->kind == SkinTargetKind::Gameplay) {
+      selectedGameplayEntries.try_emplace(skinType, entry);
+    }
+  }
 }
 
 } // namespace skin

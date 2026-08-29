@@ -1,11 +1,14 @@
 #pragma once
 
 #include "../bms_parser.hpp"
+#include "../scene/play/SkinGameplayGraphState.h"
 #include "../scene/play/RhythmState.h"
 #include "../context.h"
 
 #include <optional>
+#include <array>
 #include <string>
+#include <vector>
 
 class View;
 struct ResultPresentationModel;
@@ -15,6 +18,7 @@ struct ResultPreviousBestData {
   int maxScore = 0;
   int maxCombo = 0;
   int comboBreak = 0;
+  std::optional<int> badPoints;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
   std::string createdAt;
@@ -28,22 +32,80 @@ struct ResultPacemakerData {
   bool usesReplayProgression = false;
 };
 
+struct ResultPlayerHistoryData {
+  int playCount = 0;
+  int clearCount = 0;
+  std::array<int, 5> judgementCounts{};
+  std::int64_t playDurationSeconds = 0;
+};
+
+struct ResultIrRankingEntryData {
+  int rank = 0;
+  std::string playerName;
+  int score = 0;
+  int clearType = kClearTypeFailedRank;
+  bool currentUser = false;
+};
+
 struct ResultSkinData {
   const RhythmState *state;
   const bms_parser::ChartMeta *meta;
   ApplicationContext *context;
+  bool irOnline = false;
+  // Result artwork selectors describe textures that the selected skin can
+  // actually draw. A nonempty chart declaration alone is insufficient when
+  // the file cannot be read or decoded during result-resource preparation.
+  bool stageFileAvailable = false;
+  bool bannerAvailable = false;
+  bool backBmpAvailable = false;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
   bool showTimingAnalytics = false;
   bool showResultGraph = true;
+  std::string playerName;
+  std::string tableName;
+  std::string tableLevel;
   std::string playModeLabel;
   std::string laneOrderLabel;
   std::string difficultyLabel;
+  std::string courseTitle;
+  std::vector<std::string> courseTitles;
+  std::string skinName;
+  std::string skinAuthor;
+  std::optional<float> playLevelOverride;
+  std::optional<int> keyModeOverride;
+  std::optional<GaugeType> gaugeTypeOverride;
+  std::optional<int> difficultyOverride;
+  // Result image-index properties expose the choices captured with the
+  // completed replay, rather than the currently editable player settings.
+  std::optional<int> replayRandomOption1P;
+  std::optional<int> replayRandomOption2P;
+  std::optional<int> replayDoublePlayOption;
+  int replayKeyMode = 0;
+  std::optional<std::vector<int>> replayLaneShufflePattern1P;
+  std::optional<std::vector<int>> replayLaneShufflePattern2P;
+  std::vector<ResultIrRankingEntryData> irRankingEntries;
+  std::optional<int> irCurrentUserRank;
+  std::string chartMd5;
+  std::string chartSha256;
+  bool autoPlayResult = false;
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<ResultPreviousBestData> previousLampBest;
   std::optional<ResultPacemakerData> pacemaker;
+  std::optional<ResultPlayerHistoryData> playerHistory;
   const ResultPresentationModel *presentation = nullptr;
+  // AbstractResult's result-only timing distribution is computed from the
+  // completed replay in chart-time milliseconds, bounded to ±150 ms.
+  std::optional<double> timingAverageMillis;
+  std::optional<double> timingStandardDeviationMillis;
+  std::optional<long long> averageJudgeMicros;
+  std::vector<int> timingDistribution;
+  int timingDistributionCenter = 150;
+  // Captured at the gameplay-to-result boundary. The shared immutable graph
+  // snapshots keep every graph-capable Beatoraja result object on the same
+  // authoritative data that gameplay rendered on its final frame.
+  SkinGameplayGraphState gameplayGraph;
 };

@@ -11,6 +11,7 @@
 #include <algorithm>
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayAutoPlay.h"
+#include "../ReplayResultStateBuilder.h"
 #include "../ReplayVideoExporter.h"
 #include "../ModernResultRecallBuilder.h"
 #include "../PlayOptionUtils.h"
@@ -11531,6 +11532,27 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       }
 
       auto view = std::move(*recalled.value);
+      std::shared_ptr<CourseReplayData> resultBrowseReplayData;
+      std::vector<std::shared_ptr<bms_parser::Chart>> resultBrowseReplayCharts;
+      if (exact.record->replayFile) {
+        auto consumer =
+            replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
+        auto replay = consumer.load(*exact.record,
+                                    currentSelection->completedChartPaths,
+                                    *cancelled);
+        if (replay.ready() && replay.replayData != nullptr &&
+            replay.replayData->stages.size() == view.completedStages.size() &&
+            replay.charts.size() == view.completedStages.size()) {
+          resultBrowseReplayData = std::move(replay.replayData);
+          resultBrowseReplayCharts.reserve(replay.charts.size());
+          for (auto &chart : replay.charts) {
+            resultBrowseReplayCharts.emplace_back(std::move(chart));
+          }
+        }
+      }
+      if (cancelled->load()) {
+        return;
+      }
       auto session = std::make_shared<CoursePlaySession>();
       session->courseId = view.result.legacyCourseId;
       session->courseKey = view.result.courseKey;
@@ -11553,12 +11575,24 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       session->stageProvenance.resize(view.completedStages.size());
       session->completedResults.reserve(view.completedStages.size());
       session->ownedResultBrowseCharts.reserve(view.completedStages.size());
+      session->ownedResultBrowseReplayCharts =
+          std::move(resultBrowseReplayCharts);
+      session->resultBrowseReplayData = std::move(resultBrowseReplayData);
       session->modernCourseChartPaths.reserve(view.completedStages.size());
       for (std::size_t index = 0; index < view.completedStages.size();
            ++index) {
         auto &stage = view.completedStages[index];
         session->entries[index].meta = stage.chart->Meta;
-        session->completedResults.emplace_back(stage.chart->Meta, stage.state);
+        const ReplayData *stageReplay = session->resultBrowseStageReplay(index);
+        bms_parser::Chart *replayChart =
+            session->resultBrowseReplayChart(index);
+        session->completedResults.emplace_back(
+            stage.chart->Meta, stage.state,
+            stageReplay != nullptr && replayChart != nullptr
+                ? replay_result::BuildSkinGameplayGraphState(
+                      *replayChart, *stageReplay, stage.state)
+                : replay_result::BuildSkinGameplayChartGraphState(
+                      *stage.chart, stage.state));
         session->ownedResultBrowseCharts.push_back(stage.chart);
         session->stageProvenance[index] = stage.result.score.provenance;
         session->modernCourseChartPaths.push_back(stage.chart->Meta.BmsPath);
@@ -11591,16 +11625,25 @@ void MainMenuScene::startModernCourseReplayResultRecall(
         const auto &first = session->completedResults.front();
         const ScoreProvenance firstProvenance =
             *session->stageProvenance.front();
+        const ReplayData *firstReplay = session->resultBrowseStageReplay(0);
+        bms_parser::Chart *firstReplayChart =
+            session->resultBrowseReplayChart(0);
+        if (firstReplay != nullptr) {
+          session->applyReplayStagePlayOptions(*firstReplay);
+        }
         replayResultRecallInProgress = false;
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
-                context, first.meta, first.state, firstProvenance, nullptr,
+                context, first.meta, first.state, firstProvenance, firstReplay,
                 ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{},
                 false,
                 ResultCourseOptions{.mode = ResultCourseMode::Stage,
                                     .session = session,
-                                    .savedResultBrowsing = true}),
-            true);
+                                    .savedResultBrowsing = true},
+                profileSelections.pacemakerTarget,
+                std::unique_ptr<bms_parser::Chart>{}, firstReplayChart,
+                std::nullopt, firstReplay),
+                true);
       });
     } catch (...) {
       queueReplayLoadCompletion([this]() {

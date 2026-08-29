@@ -2,6 +2,7 @@
 
 #include "LongNoteModeUtils.h"
 #include "ReplayData.h"
+#include "scene/play/SkinGameplayGraphState.h"
 #include "bms_parser.hpp"
 #include "replay/CourseContinuation.h"
 #include "replay/CourseReplayCapture.h"
@@ -275,10 +276,17 @@ struct CoursePlayEntry {
 struct CoursePlayChartResult {
   bms_parser::ChartMeta meta;
   RhythmState state;
+  SkinGameplayGraphState gameplayGraph;
+  std::size_t skinTimingSampleCount = 0;
+  std::optional<double> skinTimingAverageMillis;
+  std::optional<double> skinTimingStandardDeviationMillis;
+  std::optional<long long> skinAverageJudgeMicros;
+  std::vector<int> skinTimingDistribution;
 
   CoursePlayChartResult(const bms_parser::ChartMeta &meta,
-                        const RhythmState &state)
-      : meta(meta), state(state) {}
+                        const RhythmState &state,
+                        SkinGameplayGraphState gameplayGraph = {})
+      : meta(meta), state(state), gameplayGraph(std::move(gameplayGraph)) {}
 };
 
 struct CoursePlaySession {
@@ -292,6 +300,13 @@ struct CoursePlaySession {
   std::vector<CoursePlayEntry> entries;
   std::vector<CoursePlayChartResult> completedResults;
   std::vector<std::shared_ptr<bms_parser::Chart>> ownedResultBrowseCharts;
+  // Saved modern-course browsing retains replay-prepared charts separately
+  // from the recalled chart metadata. They are result-only evidence for
+  // replay-derived graphs and timing statistics; they must not make the
+  // course replay action available on a result-record browser.
+  std::vector<std::shared_ptr<bms_parser::Chart>>
+      ownedResultBrowseReplayCharts;
+  std::shared_ptr<CourseReplayData> resultBrowseReplayData = nullptr;
   std::vector<std::unique_ptr<bms_parser::Chart>> preparedCourseCharts;
   std::vector<CourseReplayStageData> replayStages;
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
@@ -379,6 +394,27 @@ struct CoursePlaySession {
     return validCurrentIndex() ? &entries[currentIndex].meta : nullptr;
   }
 
+  [[nodiscard]] const ScoreProvenance *
+  currentOrLastCompletedStageProvenance() const {
+    const auto provenanceAt = [this](std::size_t index) {
+      return index < completedResults.size() && index < stageProvenance.size() &&
+                     stageProvenance[index].has_value()
+                 ? &*stageProvenance[index]
+                 : static_cast<const ScoreProvenance *>(nullptr);
+    };
+    if (const auto *current = provenanceAt(currentIndex); current != nullptr) {
+      return current;
+    }
+    const std::size_t completed =
+        std::min(completedResults.size(), stageProvenance.size());
+    for (std::size_t index = completed; index > 0; --index) {
+      if (const auto *last = provenanceAt(index - 1); last != nullptr) {
+        return last;
+      }
+    }
+    return nullptr;
+  }
+
   [[nodiscard]] bool hasCourseReplayStage(std::size_t index) const {
     return courseReplayData != nullptr &&
            index < courseReplayData->stages.size();
@@ -408,6 +444,22 @@ struct CoursePlaySession {
   courseReplayStage(std::size_t index) const {
     return hasCourseReplayStage(index) ? &courseReplayData->stages[index]
                                        : nullptr;
+  }
+
+  [[nodiscard]] const ReplayData *resultBrowseStageReplay(
+      std::size_t index) const {
+    return resultBrowseReplayData != nullptr &&
+                   index < resultBrowseReplayData->stages.size()
+               ? &resultBrowseReplayData->stages[index].replay
+               : nullptr;
+  }
+
+  [[nodiscard]] bms_parser::Chart *resultBrowseReplayChart(
+      std::size_t index) const {
+    return index < ownedResultBrowseReplayCharts.size() &&
+                   ownedResultBrowseReplayCharts[index] != nullptr
+               ? ownedResultBrowseReplayCharts[index].get()
+               : nullptr;
   }
 
   [[nodiscard]] std::shared_ptr<ReplayData>
@@ -470,10 +522,11 @@ struct CoursePlaySession {
     return 0;
   }
 
-  void recordResult(const bms_parser::ChartMeta &meta,
-                    const RhythmState &state) {
+  void recordResult(const bms_parser::ChartMeta &meta, const RhythmState &state,
+                    SkinGameplayGraphState gameplayGraph = {}) {
     if (completedResults.size() > currentIndex) {
-      completedResults[currentIndex] = CoursePlayChartResult(meta, state);
+      completedResults[currentIndex] =
+          CoursePlayChartResult(meta, state, std::move(gameplayGraph));
       completedResults.erase(completedResults.begin() +
                                  static_cast<std::ptrdiff_t>(currentIndex + 1),
                              completedResults.end());
@@ -483,7 +536,7 @@ struct CoursePlaySession {
       const auto &entry = entries[completedResults.size()];
       completedResults.emplace_back(entry.meta, RhythmState(nullptr, false));
     }
-    completedResults.emplace_back(meta, state);
+    completedResults.emplace_back(meta, state, std::move(gameplayGraph));
   }
 
   void recordReplayStage(const ReplayData &replay) {

@@ -2101,6 +2101,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/PlayfieldChartVisualModel.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
     )
     target_include_directories(replay_summary_list_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(replay_summary_list_tests PRIVATE cxx_std_23)
@@ -5000,6 +5002,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/path.cpp
             src/rendering/SkinQuadBatchRenderer.cpp
             src/rendering/UniformCache.cpp
+            src/scene/play/GameplayGaugeRules.cpp
             src/scene/play/PlayfieldChartVisualModel.cpp
             src/scene/play/PlayfieldProjection.cpp
             src/scene/play/SkinGameplayGraphState.cpp
@@ -5026,6 +5029,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinSession.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/ResultSkinSession.cpp
+            src/skin/beatoraja/ResultSkinStateBridge.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp

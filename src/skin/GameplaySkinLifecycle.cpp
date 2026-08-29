@@ -1,5 +1,7 @@
 #include "GameplaySkinLifecycle.h"
 
+#include "SkinTargetTraits.h"
+
 #include "GameplaySkinTraits.h"
 
 #include <algorithm>
@@ -58,7 +60,7 @@ bool sameIdentity(const PlaySkinSessionIdentity &left,
 bool selectsGameplayEntry(const SkinProfileSettings &settings,
                           const SkinEntryId &entry) {
   return std::ranges::any_of(
-      settings.selectedGameplayEntries,
+      settings.selectedSkinEntries,
       [&entry](const auto &selection) { return selection.second == entry; });
 }
 
@@ -610,7 +612,7 @@ struct GameplaySkinLifecycle::Impl {
         try {
           const auto base = deps.snapshotProfile(*activeProfile);
           for (const auto &[skinType, entry] :
-               base.settings.selectedGameplayEntries) {
+               base.settings.selectedSkinEntries) {
             (void)skinType;
             pendingRevalidations.push_back({.base = base, .entry = entry});
           }
@@ -1086,7 +1088,7 @@ void GameplaySkinLifecycle::startAfterProfileInitialization(
   try {
     const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
     for (const auto &[skinType, entry] :
-         snapshot.settings.selectedGameplayEntries) {
+         snapshot.settings.selectedSkinEntries) {
       (void)skinType;
       const auto configured = snapshot.settings.entries.find(entry);
       if (configured == snapshot.settings.entries.end()) {
@@ -1139,7 +1141,7 @@ void GameplaySkinLifecycle::profileChanged(SkinProfileId profile) {
   try {
     const auto snapshot = impl_->deps.snapshotProfile(*impl_->activeProfile);
     for (const auto &[skinType, entry] :
-         snapshot.settings.selectedGameplayEntries) {
+         snapshot.settings.selectedSkinEntries) {
       (void)skinType;
       impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
     }
@@ -1232,7 +1234,7 @@ void GameplaySkinLifecycle::poll() {
   if (impl_->deps.takeRevalidationRequests) {
     for (auto &snapshot : impl_->deps.takeRevalidationRequests()) {
       for (const auto &[skinType, entry] :
-           snapshot.settings.selectedGameplayEntries) {
+           snapshot.settings.selectedSkinEntries) {
         (void)skinType;
         impl_->pendingRevalidations.push_back({.base = snapshot, .entry = entry});
       }
@@ -1260,6 +1262,12 @@ GameplaySkinLifecycle::catalogSnapshot() const noexcept {
 
 GameplaySkinAcquisition
 GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
+  const auto trait = gameplaySkinTraitForKeyMode(keyMode);
+  return trait ? acquireForSkinType(trait->skinType) : GameplaySkinAcquisition{};
+}
+
+GameplaySkinAcquisition
+GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
   if (impl_->stopped || !impl_->initialized || !impl_->acquisitionReady ||
       !impl_->activeProfile ||
       !impl_->deps.snapshotProfile || !impl_->deps.acquireActivation) {
@@ -1269,22 +1277,24 @@ GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
                     "skin.lifecycle.acquisition_unavailable",
                     "The selected gameplay skin could not be acquired")}};
   }
-  // Every call is a chart boundary. A failed/disabled acquisition must not
-  // leave the preceding chart's identity eligible for writers or Reset Layout.
-  impl_->discardWriterChain();
-  impl_->currentIdentity.reset();
+  if (chartBoundary) {
+    // A gameplay chart boundary must not leave the preceding chart identity
+    // eligible for writers or Reset Layout. Result-skin discovery is
+    // read-only and must let that final writer chain drain instead.
+    impl_->discardWriterChain();
+    impl_->currentIdentity.reset();
+  }
   std::optional<SkinEntryId> requestedEntry;
   std::string requestedConfigurationDigest;
   try {
     auto base = impl_->deps.snapshotProfile(*impl_->activeProfile);
     base.settings.sanitize();
-    const auto trait = gameplaySkinTraitForKeyMode(keyMode);
-    if (!trait) {
+    if (!skinTargetTraitForType(skinType)) {
       return {};
     }
     const auto selectedTrait =
-        base.settings.selectedGameplayEntries.find(trait->skinType);
-    if (selectedTrait == base.settings.selectedGameplayEntries.end()) {
+        base.settings.selectedSkinEntries.find(skinType);
+    if (selectedTrait == base.settings.selectedSkinEntries.end()) {
       return {};
     }
     requestedEntry = selectedTrait->second;
@@ -1345,10 +1355,12 @@ GameplaySkinLifecycle::acquireForNextChart(int keyMode) {
         .revisionDigest =
             acquired.activation->revision.revision().lowercaseSha256,
         .configurationDigest = requestedConfigurationDigest};
-    const auto chainGeneration = ++impl_->nextChainGeneration;
-    impl_->writer.emplace(Impl::WriterChain{
-        .generation = chainGeneration, .identity = identity, .base = base});
-    impl_->currentIdentity = identity;
+    if (chartBoundary) {
+      const auto chainGeneration = ++impl_->nextChainGeneration;
+      impl_->writer.emplace(Impl::WriterChain{
+          .generation = chainGeneration, .identity = identity, .base = base});
+      impl_->currentIdentity = identity;
+    }
     return {.disposition = GameplaySkinAcquisitionDisposition::Ready,
             .request = GameplaySkinActivationRequest{
                 .sessionSerial = sessionSerial,

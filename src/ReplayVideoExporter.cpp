@@ -1123,6 +1123,7 @@ struct CourseReplayVideoStage {
   preparation::Plan preparationPlan;
   GaugeStateSnapshot initialGaugeState;
   RhythmState resultState;
+  SkinGameplayGraphState gameplayGraph;
   std::optional<PreparedReplayGameplayPresentation> gameplayPresentation;
   std::optional<skin::SkinGameplayTiming> selectedSkinTiming;
   std::optional<skin::RuntimeSkinConfigurationSelection> runtimeSkinSelection;
@@ -1137,6 +1138,7 @@ struct CourseReplayVideoStage {
                          preparation::Plan preparationPlan,
                          GaugeStateSnapshot initialGaugeState,
                          RhythmState resultState,
+                         SkinGameplayGraphState gameplayGraph,
                          std::optional<long long> failureMicros,
                          long long gameplayDurationMicros,
                          long long resultDurationMicros,
@@ -1145,7 +1147,8 @@ struct CourseReplayVideoStage {
         constraints(std::move(constraints)),
         preparationPlan(std::move(preparationPlan)),
         initialGaugeState(std::move(initialGaugeState)),
-        resultState(std::move(resultState)), failureMicros(failureMicros),
+        resultState(std::move(resultState)),
+        gameplayGraph(std::move(gameplayGraph)), failureMicros(failureMicros),
         gameplayDurationMicros(gameplayDurationMicros),
         resultDurationMicros(resultDurationMicros),
         audioDurationMicros(audioDurationMicros) {}
@@ -2800,6 +2803,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         result_presentation::difficultyLabelForChart(context.chartRepository,
                                                       chart.Meta);
     ResultSkinData resultSkinData = {&replayResultState, &chart.Meta, &context};
+    resultSkinData.gameplayGraph = replay_result::BuildSkinGameplayGraphState(
+        chart, resultReplay, replayResultState);
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
     const play_options::PlayModeDisplayLabel playModeDisplay =
@@ -3458,6 +3463,12 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         std::make_unique<View>(0, 0, rendering::window_width,
                                rendering::window_height);
     ResultSkinData data = {&courseState, &courseMeta, &context};
+    std::vector<SkinGameplayGraphState> stageGraphs;
+    stageGraphs.reserve(stages.size());
+    for (const auto &stage : stages) {
+      stageGraphs.push_back(stage.gameplayGraph);
+    }
+    data.gameplayGraph = combineSkinGameplayGraphStates(stageGraphs);
     data.outGraphPlaceholder = &courseResultGraphPlaceholder;
     data.showControls = false;
     const play_options::PlayModeDisplayLabel display =
@@ -3762,6 +3773,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           std::make_unique<View>(0, 0, rendering::window_width,
                                  rendering::window_height);
       ResultSkinData data = {&stage.resultState, &chart.Meta, &context};
+      data.gameplayGraph = stage.gameplayGraph;
       data.outGraphPlaceholder = &stageResultGraphPlaceholder;
       data.showControls = false;
       const play_options::PlayModeDisplayLabel display =
@@ -4443,6 +4455,9 @@ ReplayVideoExportResult exportCourseReplayImpl(
     RhythmState resultState = replay_result::BuildResultState(
         *chart, exportStageReplay, replay.gaugeProfile,
         carriedGaugeState);
+    SkinGameplayGraphState gameplayGraph =
+        replay_result::BuildSkinGameplayGraphState(*chart, exportStageReplay,
+                                                    resultState);
     const GaugeStateSnapshot renderedInitial =
         initialGaugeState.gaugeSnapshot();
     const GaugeStateSnapshot renderedFinal = resultState.gaugeSnapshot();
@@ -4464,6 +4479,7 @@ ReplayVideoExportResult exportCourseReplayImpl(
         courseConstraintSettings.rules,
         std::move(stagePreparationPlan),
         initialGaugeState.gaugeSnapshot(), std::move(resultState),
+        std::move(gameplayGraph),
         failureMicros, 0, resultDurationMicros, 0);
   }
 

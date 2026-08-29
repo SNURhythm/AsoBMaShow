@@ -347,6 +347,8 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   auto lineRequest = request;
   lineRequest.maximumCommands -=
       std::min(lineRequest.maximumCommands, result.commands.size());
+  lineRequest.maximumPrimitiveVertices -=
+      std::min(lineRequest.maximumPrimitiveVertices, result.primitiveVertices);
   PrimitiveBuilder builder(lineRequest, request.geometry, pixelWidth);
   const double judgeWidthRate =
       static_cast<double>(request.visualizer.width) /
@@ -386,11 +388,117 @@ renderSkinTimingVisualizer(const SkinTimingVisualizerRenderRequest &request) {
   }
   auto lines = builder.take();
   if (lines.failure) return lines;
-  result.primitiveVertices = lines.primitiveVertices;
+  result.primitiveVertices += lines.primitiveVertices;
   result.commands.insert(result.commands.end(),
                          std::make_move_iterator(lines.commands.begin()),
                          std::make_move_iterator(lines.commands.end()));
   return result;
+}
+
+SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
+    const SkinTimingDistributionGraphRenderRequest &request) {
+  if (request.geometry.rgba[3] <= 0.0F || request.geometry.rect.width == 0.0 ||
+      request.geometry.rect.height == 0.0 || request.state.timingDistribution.empty()) {
+    return {};
+  }
+  const int width = std::max(1, request.graph.width);
+  const int lineWidth = std::clamp(request.graph.lineWidth, 1, width);
+  const int graphWidth = std::max(1, width / lineWidth);
+  const int center = graphWidth / 2;
+  const auto scaledX = [center, lineWidth](int millis) {
+    return center + static_cast<int>(std::lround(
+                        static_cast<double>(millis) / lineWidth));
+  };
+  const int sourceCenter = request.state.timingDistributionCenter;
+  const auto aggregatedBucket = [&](int offset) {
+    int value = 0;
+    const int first = sourceCenter + offset * lineWidth;
+    for (int column = 0; column < lineWidth; ++column) {
+      const int source = first + column;
+      if (source >= 0 && static_cast<std::size_t>(source) <
+                             request.state.timingDistribution.size()) {
+        value += request.state.timingDistribution[static_cast<std::size_t>(source)];
+      }
+    }
+    return value;
+  };
+  int maximum = 10;
+  for (int offset = -center; offset < graphWidth - center; ++offset) {
+    const int value = aggregatedBucket(offset);
+    if (maximum < value) maximum = value / 10 * 10 + 10;
+  }
+  std::uint64_t revision = 1469598103934665603ULL;
+  for (const int value : request.state.timingDistribution) {
+    revision ^= static_cast<std::uint32_t>(value);
+    revision *= 1099511628211ULL;
+  }
+  revision ^= static_cast<std::uint64_t>(maximum);
+  SkinGeneratedTextureRaster raster(
+      {.sourceObject = request.sourceObject,
+       .authoredOrdinal = request.authoredOrdinal,
+       .layer = SkinGeneratedTextureLayer::Background,
+       .geometry = request.geometry,
+       .viewport = request.viewport,
+       .maximumCommands = request.maximumCommands,
+       .maximumPrimitiveVertices = request.maximumPrimitiveVertices,
+       .sourceWidth = graphWidth,
+       .sourceHeight = maximum,
+       .verticalFlip = false,
+       .diagnosticObject = "Timing distribution graph",
+       .cache = request.cache,
+       .contentRevision = revision == 0 ? 1 : revision});
+  if (!raster.drawable()) return raster.take();
+
+  raster.appendRectangle(center, 0, 1, maximum, request.graph.judgeRgba[0]);
+  int beforeLeft = center;
+  int beforeRight = center + 1;
+  for (std::size_t index = 0; index < request.graph.judgeRgba.size() &&
+                              index < request.state.judgeWindows.size();
+       ++index) {
+    const auto &window = request.state.judgeWindows[index];
+    const int left = std::clamp(scaledX(window.minimumTimingMillis), 0,
+                                graphWidth);
+    const int right = std::clamp(scaledX(window.maximumTimingMillis) + 1, 0,
+                                 graphWidth);
+    if (beforeLeft > left) {
+      raster.appendRectangle(left, 0, beforeLeft - left, maximum,
+                             request.graph.judgeRgba[index]);
+      beforeLeft = left;
+    }
+    if (right > beforeRight) {
+      raster.appendRectangle(beforeRight, 0, right - beforeRight, maximum,
+                             request.graph.judgeRgba[index]);
+      beforeRight = right;
+    }
+  }
+  constexpr std::uint32_t gridColor = 0x0000003fU;
+  for (int x = center % 10; x < graphWidth; x += 10) {
+    raster.appendLine(x, 0, x, 1, gridColor);
+  }
+  if (request.graph.drawAverage && request.state.timingDistributionAverageMillis) {
+    const int x = scaledX(static_cast<int>(std::lround(
+        *request.state.timingDistributionAverageMillis)));
+    raster.appendLine(x, 0, x, maximum, request.graph.averageRgba);
+  }
+  if (request.graph.drawDev && request.state.timingDistributionAverageMillis &&
+      request.state.timingDistributionStandardDeviationMillis) {
+    const int average = static_cast<int>(std::round(
+        *request.state.timingDistributionAverageMillis));
+    const int deviation = static_cast<int>(std::round(
+        *request.state.timingDistributionStandardDeviationMillis));
+    raster.appendLine(scaledX(average + deviation), 0,
+                      scaledX(average + deviation), maximum, request.graph.devRgba);
+    raster.appendLine(scaledX(average - deviation), 0,
+                      scaledX(average - deviation), maximum, request.graph.devRgba);
+  }
+  for (int offset = -center; offset < graphWidth - center; ++offset) {
+    const int value = aggregatedBucket(offset);
+    if (value > 0) {
+      raster.appendRectangle(center + offset, maximum - value, 1, value,
+                             request.graph.graphRgba);
+    }
+  }
+  return raster.take();
 }
 
 } // namespace skin

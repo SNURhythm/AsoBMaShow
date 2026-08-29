@@ -1,5 +1,7 @@
 #include "SkinPackageStore.h"
 
+#include "../SkinTargetTraits.h"
+
 #include "../../AtomicFile.h"
 #include "../../FileChecksum.h"
 #include "../../VersionedJson.h"
@@ -162,21 +164,21 @@ bool validatesGameplayTrait(const SkinValidationResult &validation,
   return validation.disposition ==
              SkinValidationDisposition::SelectableGameplay &&
          validation.metadata && validation.metadata->skinType == skinType &&
-         gameplaySkinTraitForSkinType(skinType).has_value();
+         skinTargetTraitForType(skinType).has_value();
 }
 
 std::vector<std::pair<int, SkinEntryId>>
 selectedGameplayEntriesInPackage(const SkinProfileSettings &settings,
                                  const SkinPackageId &package) {
   std::vector<std::pair<int, SkinEntryId>> result;
-  if (settings.selectedGameplayEntries.empty() && settings.selected7KeyEntry) {
+  if (settings.selectedSkinEntries.empty() && settings.selected7KeyEntry) {
     if (settings.selected7KeyEntry->package == package) {
       result.emplace_back(0, *settings.selected7KeyEntry);
     }
     return result;
   }
-  for (const auto &[skinType, entry] : settings.selectedGameplayEntries) {
-    if (entry.package == package && gameplaySkinTraitForSkinType(skinType)) {
+  for (const auto &[skinType, entry] : settings.selectedSkinEntries) {
+    if (entry.package == package && skinTargetTraitForType(skinType)) {
       result.emplace_back(skinType, entry);
     }
   }
@@ -4057,14 +4059,14 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
   }
   if (validation.disposition != SkinValidationDisposition::SelectableGameplay ||
       !validation.reconciledSettings || !validation.metadata ||
-      !gameplaySkinTraitForSkinType(validation.metadata->skinType) ||
+      !skinTargetTraitForType(validation.metadata->skinType) ||
       !lowercaseSha256(validation.configurationDigest)) {
     result.diagnostics.push_back(
         storeDiagnostic("skin_activation_configuration_invalid",
                         "the requested skin configuration is not selectable"));
     return result;
   }
-  candidateProfileSettings.selectedGameplayEntries.insert_or_assign(
+  candidateProfileSettings.selectedSkinEntries.insert_or_assign(
       validation.metadata->skinType, entry);
   candidateProfileSettings.entries.insert_or_assign(
       entry, *validation.reconciledSettings);

@@ -126,6 +126,14 @@ return {
     _G.custom_trace = (_G.custom_trace or "") .. "timer-low,"
     return 111
   end,
+  duplicate_timer_obsolete=function()
+    _G.custom_trace = (_G.custom_trace or "") .. "timer-obsolete,"
+    return 111
+  end,
+  duplicate_timer_final=function()
+    _G.custom_trace = (_G.custom_trace or "") .. "timer-final,"
+    return 222
+  end,
   custom_event=function()
     captured_main_state.event_exec(900, 10)
     _G.custom_trace = (_G.custom_trace or "") .. "event,"
@@ -134,6 +142,16 @@ return {
   custom_event_second=function()
     captured_main_state.event_exec(900, 20)
     _G.custom_trace = (_G.custom_trace or "") .. "event-second,"
+    return true
+  end,
+  duplicate_event_obsolete=function()
+    captured_main_state.event_exec(900, 10)
+    _G.custom_trace = (_G.custom_trace or "") .. "event-obsolete,"
+    return true
+  end,
+  duplicate_event_final=function()
+    captured_main_state.event_exec(900, 20)
+    _G.custom_trace = (_G.custom_trace or "") .. "event-final,"
     return true
   end,
   custom_manual=function(...)
@@ -209,9 +227,11 @@ private:
              "normalized_writer", "readonly_writer", "forbidden_writer",
              "unknown_writer", "excessive_arity_writer",
              "stage_then_fail_writer", "custom_timer_high",
-             "custom_timer_low", "custom_event", "custom_manual",
+             "custom_timer_low", "duplicate_timer_obsolete",
+             "duplicate_timer_final", "custom_event", "custom_manual",
              "custom_stage_then_fail", "custom_budget",
              "custom_stage", "custom_after_budget", "custom_event_second",
+             "duplicate_event_obsolete", "duplicate_event_final",
              "custom_trace"}) {
       if (const auto callback = value.callbackNamed(name)) {
         callbacks_.insert_or_assign(std::string{name}, *callback);
@@ -3331,6 +3351,77 @@ void testCustomTimersPrecedeAutomaticEventsInAuthoredOrder() {
          "later automatic callbacks retain earlier staged writes in authored order");
 }
 
+void testDuplicateCustomObjectsUseTheirLastDefinitions() {
+  RuntimeHarness runtime;
+  if (!runtime.ready()) {
+    return;
+  }
+  PlayfieldChartVisualModel chart;
+  ValidatedBeatorajaSkinModel model;
+  model.model.timerProperties = {
+      {.id = SkinTimerPropertyId{1},
+       .source = runtime.callback("duplicate_timer_obsolete")},
+      {.id = SkinTimerPropertyId{2},
+       .source = runtime.callback("duplicate_timer_final")},
+  };
+  model.model.booleanProperties = {
+      {.id = SkinBooleanPropertyId{1},
+       .source = SkinBuiltinPropertySelector{.value = 42}},
+  };
+  model.model.events = {
+      {.id = SkinEventBindingId{1},
+       .source = runtime.callback("duplicate_event_obsolete")},
+      {.id = SkinEventBindingId{2},
+       .source = runtime.callback("duplicate_event_final")},
+  };
+  model.model.customTimers = {
+      {.id = 10'010, .timer = SkinTimerPropertyId{1}},
+      {.id = 10'010, .timer = SkinTimerPropertyId{2}},
+  };
+  model.model.customEvents = {
+      {.id = 1'010,
+       .action = SkinEventBindingId{1},
+       .condition = SkinBooleanPropertyId{1}},
+      {.id = 1'010,
+       .action = SkinEventBindingId{2},
+       .condition = SkinBooleanPropertyId{1}},
+  };
+  auto pinned = makePinnedSkinEventMutationTableV1();
+  std::vector<SkinEventMutationRule> rules(pinned.rules().begin(),
+                                            pinned.rules().end());
+  rules.push_back({.builtInEventId = 900,
+                   .kind = SkinEventMutationKind::SessionPresentation,
+                   .maximumArguments = 2});
+  const SkinEventMutationTable mutations(std::move(rules));
+  BeatorajaSkinConfiguration configuration;
+  PlaySkinStateBridge bridge({.chartModel = chart,
+                              .model = &model,
+                              .configuration = configuration,
+                              .runtime = &runtime.runtime(),
+                              .mutationTable = mutations});
+  bridge.beginFrame(stateAt(112), projectionAt(112));
+  expect(runtime.runtime().beginFrame(112).ok,
+         "duplicate custom-object probe begins the owner frame once");
+  const auto update = bridge.updateCustomObjects();
+  const auto manual = bridge.executeEvent(1'010, {});
+  const auto trace = runtime.runtime().invoke(runtime.callback("custom_trace"), {});
+  const auto customTimer = bridge.timerProperty({10'010});
+  const auto committed = bridge.commitFrame();
+  expect(update.status == SkinHostCallStatus::Completed &&
+             update.callbacksInvoked == 2 &&
+             manual.status == SkinHostCallStatus::Completed && trace.value &&
+             std::get<std::string>(*trace.value) ==
+                 "timer-final,event-final,event-final," &&
+             customTimer == 222,
+         "duplicate custom timers and events replace obsolete callbacks");
+  expect(committed.orderedMutations.size() == 2 &&
+             std::get<SessionPresentationWrite>(committed.orderedMutations[0])
+                     .arguments[0] == 20 &&
+             std::get<SessionPresentationWrite>(committed.orderedMutations[1])
+                     .arguments[0] == 20,
+         "automatic and manual duplicate custom events use the final action");
+}
+
 void testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames() {
   RuntimeHarness runtime;
   if (!runtime.ready()) {
@@ -3683,6 +3774,7 @@ int main() {
   testSelectedScuroMappingsUseOnlyAuthoritativeState();
   testEmptyCustomObjectsStayZeroCost();
   testCustomTimersPrecedeAutomaticEventsInAuthoredOrder();
+  testDuplicateCustomObjectsUseTheirLastDefinitions();
   testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames();
   testAutomaticCustomEventUsesTheCapturedFrameClockForMinimumInterval();
   testCustomObjectBudgetStopsLaterEventsAndRollsBackWrites();

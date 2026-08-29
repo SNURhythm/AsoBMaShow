@@ -76,6 +76,10 @@ struct SkinProfileSettings {
   // This is the authoritative gameplay-skin selection. The key is the
   // Beatoraja gameplay SkinType value, constrained by GameplaySkinTraits.
   std::map<int, SkinEntryId> selectedGameplayEntries;
+  // Screen-target selection, keyed by the Beatoraja SkinType value. New
+  // settings writes use this map; selectedGameplayEntries remains readable
+  // while profiles migrate from gameplay-only selection.
+  std::map<int, SkinEntryId> selectedSkinEntries;
 
   // Transitional derived aliases. New settings files do not write these, but
   // readers accept them so existing profiles preserve their 7K selection.

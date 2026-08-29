@@ -2,6 +2,7 @@
 #include "../src/AtomicFile.h"
 #include "../src/VersionedJson.h"
 #include "../src/skin/GameplaySkinTraits.h"
+#include "../src/skin/SkinTargetTraits.h"
 #include "../src/skin/SkinProfileSettings.h"
 #include "../src/skin/package/SkinPathPolicy.h"
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -212,6 +213,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   expected.skin.gameplayCompatibilityEnabled = true;
   expected.skin.selected7KeyEntry = *entry.entry;
   expected.skin.selectedGameplayEntries.emplace(0, *entry.entry);
+  expected.skin.selectedSkinEntries.emplace(0, *entry.entry);
   expected.skin.entries[*entry.entry] = {
       .options = {{"Lane", 101}},
       .filePaths = {{"Judge", "parts/judge.png"}},
@@ -247,9 +249,9 @@ void testJsonRoundTripIncludesAudioAndVideo() {
          "saved JSON does not persist a competing green-number source value");
   expect(readFile(path).find("configurationDigest") == std::string::npos,
          "schema 5 does not persist a competing configuration digest map");
-  expect(readFile(path).find("\"selectedGameplayEntries\"") !=
+  expect(readFile(path).find("\"selectedSkinEntries\"") !=
              std::string::npos,
-         "new settings persist gameplay selection by skin trait");
+         "new settings persist selection by skin type");
   expect(readFile(path).find("\"selected7KeyEntry\"") ==
              std::string::npos &&
              readFile(path).find("\"gameplayCompatibilityEnabled\"") ==
@@ -505,31 +507,30 @@ void testPlayerConfigurationSkinStringsAreBounded() {
          "copying them into the runtime settings object");
 }
 
-void testGameplaySkinTraitSelectionsSurviveRestart() {
+void testSkinTargetSelectionsSurviveRestart() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
   AppSettings settings;
   std::map<int, skin::SkinEntryId> expectedSelections;
-  for (const auto &trait : skin::gameplaySkinTraits()) {
+  for (const auto &trait : skin::skinTargetTraits()) {
     const auto package = skin::normalizePackageId(
         "Trait" + std::to_string(trait.skinType) + "Skin");
     const auto entry = skin::normalizeEntryPath(
         *package.package,
-        "play/trait-" + std::to_string(trait.skinType) + ".luaskin");
-    settings.skin.selectedGameplayEntries.emplace(trait.skinType,
-                                                   *entry.entry);
+        "skin/trait-" + std::to_string(trait.skinType) + ".luaskin");
+    settings.skin.selectedSkinEntries.emplace(trait.skinType, *entry.entry);
     settings.skin.entries.emplace(*entry.entry, skin::EntryProfileSettings{});
     expectedSelections.emplace(trait.skinType, *entry.entry);
   }
 
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error),
-         "all gameplay trait selections save: " + error);
+         "all skin target selections save: " + error);
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
-         "all gameplay trait selections load after restart");
-  expect(loaded.settings.skin.selectedGameplayEntries == expectedSelections,
-         "restart preserves every selected gameplay skin trait, not only 7K");
+         "all skin target selections load after restart");
+  expect(loaded.settings.skin.selectedSkinEntries == expectedSelections,
+         "restart preserves every selected skin target, including results");
   expect(loaded.settings.skin.selected7KeyEntry == expectedSelections.at(0),
          "the legacy alias remains a derived projection of only the 7K trait");
 }
@@ -587,8 +588,8 @@ void testLegacy7KeySelectionMigratesToTraitSelection() {
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded,
          "legacy gameplay skin selection loads");
-  const auto selection = loaded.settings.skin.selectedGameplayEntries.find(0);
-  expect(selection != loaded.settings.skin.selectedGameplayEntries.end() &&
+  const auto selection = loaded.settings.skin.selectedSkinEntries.find(0);
+  expect(selection != loaded.settings.skin.selectedSkinEntries.end() &&
              loaded.settings.skin.selected7KeyEntry == selection->second &&
              loaded.settings.skin.gameplayCompatibilityEnabled,
          "enabled legacy 7K selection migrates to the 7K trait");
@@ -597,7 +598,7 @@ void testLegacy7KeySelectionMigratesToTraitSelection() {
   expect(AppSettingsStore::Save(path, loaded.settings, error),
          "migrated settings save: " + error);
   const auto persisted = readFile(path);
-  expect(persisted.find("\"selectedGameplayEntries\"") != std::string::npos &&
+  expect(persisted.find("\"selectedSkinEntries\"") != std::string::npos &&
              persisted.find("\"selected7KeyEntry\"") == std::string::npos,
          "migration rewrites the selection using the trait map only");
 }
@@ -1523,7 +1524,7 @@ int main() {
   testPlayerConfigurationSkinStringsRoundTrip();
   testConfiguredTargetListSkinStringsRoundTrip();
   testPlayerConfigurationSkinStringsAreBounded();
-  testGameplaySkinTraitSelectionsSurviveRestart();
+  testSkinTargetSelectionsSurviveRestart();
   testBpmGuideAssistOptionPersists();
   testSchemaThreeMigrationDisablesCompatibility();
   testLegacy7KeySelectionMigratesToTraitSelection();

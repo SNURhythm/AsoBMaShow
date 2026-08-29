@@ -9,6 +9,7 @@
 #include "LuaSkinTableDecoder.h"
 #include "SkinModelValidator.h"
 #include "../GameplaySkinTraits.h"
+#include "../SkinTargetTraits.h"
 
 #include <algorithm>
 #include <iterator>
@@ -289,7 +290,7 @@ DecodedGameplaySkinDocument decodeLr2(GameplaySkinDocumentRequest &request) {
   auto decodedHeader = headerDecoder.decode(rootParsed.commands);
   appendMoved(result.diagnostics, decodedHeader.diagnostics);
   result.header = std::move(decodedHeader.header);
-  if (!result.header || !gameplaySkinTraitForSkinType(result.header->type)) {
+  if (!result.header || !skinTargetTraitForType(result.header->type)) {
     return result;
   }
 
@@ -431,7 +432,7 @@ GameplaySkinDocumentLoadResult GameplaySkinDocumentLoader::load(
         hasErrors(decoded.diagnostics);
     if (!decoded.header || !decoded.configuration ||
         !decoded.reconciledSettings || !decoded.model ||
-        !gameplaySkinTraitForSkinType(decoded.header->type) ||
+        !skinTargetTraitForType(decoded.header->type) ||
         decoded.fatal || diagnosticsAreFatal) {
       result.diagnostics = std::move(decoded.diagnostics);
       if (result.diagnostics.empty()) {

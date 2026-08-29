@@ -934,6 +934,23 @@ void testCrossFormatGameplayOverlap() {
   }
 }
 
+void testResultHeadersAreNotRejectedAsGameplayOnly() {
+  for (const int type : {7, 15}) {
+    const std::string source = "{\"type\":" + std::to_string(type) +
+        ",\"name\":\"result\",\"author\":\"test\",\"w\":1280,\"h\":720,"
+        "\"source\":[],\"font\":[],\"image\":[],\"value\":[],"
+        "\"text\":[],\"destination\":[]}";
+    const auto bytes = std::as_bytes(std::span(source));
+    auto decoded = JsonGameplaySkinDecoder{}.decode(
+        bytes, staticEntry("ResultFixture", "result.json"), nullptr,
+        fixtureBuiltins());
+    expect(decoded.header.has_value() && decoded.header->type == type,
+           "result JSON header retains its Beatoraja result type");
+    expect(decoded.model.has_value(),
+           "result JSON model is not rejected by gameplay-only admission");
+  }
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -944,6 +961,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   testCrossFormatGameplayOverlap();
+  testResultHeadersAreNotRejectedAsGameplayOnly();
   if (failures == 0) {
     std::cout << "Beatoraja gameplay cross-format tests passed\n";
     return 0;

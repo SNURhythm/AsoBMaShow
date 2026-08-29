@@ -116,6 +116,11 @@ private:
   void initializeStartPositionState();
   void applyTimelineBpm(const bms_parser::TimeLine *timeline);
   void initializePlayfieldVisualNoteSources();
+  void resetSkinGameplayGraph();
+  void updateSkinGameplayGraph(long long gameplayTimeMicros);
+  void recordSkinGameplayGraphJudge(const bms_parser::Note *note,
+                                    const JudgeResult &judgeResult,
+                                    long long gameplayTimeMicros);
   void capturePlayfieldVisualState(long long gameplayTimeMicros,
                                    long long visualTimeMicros,
                                    bool startLaneIndicatorsVisible,
@@ -227,7 +232,8 @@ private:
                         long long songTimeMicros, long long judgeTimeMicros);
   void expireGimmickNote(bms_parser::Note *note, long long judgeTimeMicros);
   void onJudge(const JudgeResult &judgeResult, PlayfieldJudgeEventClock clock,
-               bool recordTimingSample = true);
+               bool recordTimingSample = true,
+               const bms_parser::Note *graphNote = nullptr);
   [[nodiscard]] PlayfieldJudgeEventClock
   judgeEventClock(long long songTimeMicros) const;
   void appendReplayEvent(ReplayEventAction action, int lane,
@@ -285,6 +291,9 @@ private:
   std::mutex bestReplayLoadMutex;
   std::shared_ptr<ReplayData> pendingBestReplay;
   PlayfieldChartVisualModel playfieldChartVisualModel;
+  SkinGameplayGraphAccumulator skinGameplayGraph;
+  std::unordered_map<const bms_parser::Note *, ChartVisualId>
+      skinGameplayGraphSourceIds;
   PlayfieldProjection playfieldProjection;
   std::unique_ptr<PlayfieldVisualStateStore> ownedPlayfieldVisualStateStore;
   PlayfieldVisualStateStore *playfieldVisualStateStore = nullptr;

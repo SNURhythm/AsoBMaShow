@@ -1,4 +1,6 @@
 #pragma once
+
+#include "ResultPhotoExportPresentation.h"
 #include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
@@ -15,6 +17,7 @@
 #include "play/RhythmState.h"
 #include "../bms_parser.hpp"
 #include "../skin/ISkin.h"
+#include "../skin/LuaGameplaySkinFeature.h"
 #include "../skin/SkinTypes.h"
 #include <algorithm>
 #include <cstddef>
@@ -25,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <variant>
 
 struct CoursePlaySession;
@@ -192,6 +196,7 @@ struct LocalResultSource {
   bms_parser::Chart *reusableRetryChart = nullptr;
   std::string pacemakerTarget;
   std::optional<ResultPacemakerData> pacemakerOverride;
+  std::optional<ResultPlayerHistoryData> playerHistory;
   std::optional<std::string> modernReplayAttemptId;
   std::string playModeLabel;
   std::string laneOrderLabel;
@@ -200,6 +205,13 @@ struct LocalResultSource {
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
   ResultPresentationModel presentation;
+  SkinGameplayGraphState gameplayGraph;
+  bool skinTimingStatisticsPrepared = false;
+  std::size_t skinTimingSampleCount = 0;
+  std::optional<double> skinTimingAverageMillis;
+  std::optional<double> skinTimingStandardDeviationMillis;
+  std::optional<long long> skinAverageJudgeMicros;
+  std::vector<int> skinTimingDistribution;
   bool replayResult = false;
   bool retrySameAllowed = true;
   bool autoPlayResult = false;
@@ -251,6 +263,7 @@ class Button;
 class BlockingOverlayView;
 class PracticeAnalyticsView;
 class OverlayPortal;
+namespace skin { class ResultSkinSession; }
 
 class ResultScene : public Scene {
 public:
@@ -267,18 +280,23 @@ public:
       std::optional<ResultPacemakerData> pacemakerOverride = std::nullopt,
       const ReplayData *analyticsSource = nullptr,
       std::optional<std::string> modernReplayAttemptId = std::nullopt,
-      bool retrySameAllowed = true, ResultTableContext tableContext = {});
+      bool retrySameAllowed = true, ResultTableContext tableContext = {},
+      SkinGameplayGraphState gameplayGraph = {});
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
-  ~ResultScene() override = default;
+  ~ResultScene() override;
 
   void init() override;
   void update(float dt) override;
+  EventHandleResult handleEvents(SDL_Event &event) override;
+  bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
 
 private:
+  bool startSelectedResultSkin();
   void loadDifficultyLabel();
   void loadPreviousBest();
+  void loadPlayerHistory();
   bool persistModernCourseResult();
   void addResultPersistenceStatus();
   void retryResultPersistence();
@@ -290,6 +308,7 @@ private:
   void retryIrResult();
   void openRankings();
   void refreshRankingsButton();
+  void requestSelectedResultSkinRankings();
   [[nodiscard]] bool rankingsAvailable() const;
   [[nodiscard]] ir::IrResultPresentation makeIrResultPresentation() const;
   void refreshResultSummary();
@@ -298,6 +317,13 @@ private:
   void addRemoteButtons();
   void addRemoteIrStatus();
   void addCourseButtons();
+  void buildResultTouchControls();
+  void setResultTouchControlsHidden(bool hidden);
+  void setResultPhotoExportPresentation(ResultPhotoExportPresentation);
+  void handleResultSkinRenderFailure();
+  void appendResultSkinRenderDiagnostics();
+  void consumeResultSkinBuiltinEvents();
+  [[nodiscard]] bool queueResultSkinPointerEvent(SDL_Event &event);
   void buildCourseExitConfirmation();
   void showCourseExitConfirmation();
   void hideCourseExitConfirmation();
@@ -338,6 +364,23 @@ private:
   std::variant<LocalResultSource, RemoteResultSource> source;
   View *rootLayout = nullptr;
   View *graphPlaceHolder = nullptr;
+  View *resultTouchControlsOverlay = nullptr;
+  View *resultTouchControlsPanel = nullptr;
+  Button *resultTouchControlsRestore = nullptr;
+  View *resultSkinFailureNotice = nullptr;
+  bool resultTouchControlsHidden = false;
+  bool resultTouchControlsDecisionRequired = false;
+  bool resultSkinActivationFailed = false;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  std::unique_ptr<skin::ResultSkinSession> resultSkinSession;
+  long long resultSkinStartedMicros = 0;
+  std::optional<long long> resultSkinFadeoutStartedMillis;
+  std::optional<PresentationUiHit> resultSkinMouseCapture;
+  std::unordered_map<SDL_FingerID, PresentationUiHit> resultSkinTouchCaptures;
+  skin::SkinEntryId resultSkinEntry;
+  std::string resultSkinRevisionDigest;
+  std::string resultSkinConfigurationDigest;
+#endif
   View *normalResultActions = nullptr;
   View *resultPersistenceStatus = nullptr;
   TextView *persistenceStatusMessage = nullptr;
@@ -359,6 +402,7 @@ private:
   View *courseExitConfirmation = nullptr;
   Button *exportPhotoButton = nullptr;
   TextView *exportPhotoButtonText = nullptr;
+  TextView *resultTouchExportPhotoText = nullptr;
   Button *practiceSectionButton = nullptr;
   TextView *practiceSectionButtonText = nullptr;
   std::unique_ptr<ISkin> skin;

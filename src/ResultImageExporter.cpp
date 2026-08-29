@@ -739,6 +739,7 @@ ResultImageExportResult renderResultImage(
     const std::optional<int> &currentClearRankOverride,
     const std::optional<std::string> &headerDifficultyLabelOverride,
     const std::optional<ResultPacemakerData> &pacemaker,
+    SkinGameplayGraphState gameplayGraph,
     const std::optional<practice::ResultModel> &analyticsModel,
     const std::filesystem::path &path) {
   const auto series = result_gauge_history::seriesFor(state);
@@ -758,8 +759,47 @@ ResultImageExportResult renderResultImage(
   resultSkinData.previousBest = previousBest;
   resultSkinData.previousLampBest = previousLampBest;
   resultSkinData.pacemaker = pacemaker;
+  resultSkinData.gameplayGraph = std::move(gameplayGraph);
   return renderResultImageWithSkinData(context, std::move(resultSkinData),
                                        gaugeGraph, analyticsModel, false, path);
+}
+
+ResultImageExportResult exportResultImage(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta,
+    const RhythmState &state, const std::string &playModeLabel,
+    const std::string &laneOrderLabel, const std::string &difficultyLabel,
+    const std::optional<ResultPreviousBestData> &previousBest,
+    const std::optional<ResultPreviousBestData> &previousLampBest,
+    const std::optional<std::string> &currentClearLabelOverride,
+    const std::optional<int> &currentClearRankOverride,
+    const std::optional<std::string> &headerDifficultyLabelOverride,
+    const std::optional<ResultPacemakerData> &pacemaker,
+    SkinGameplayGraphState gameplayGraph,
+    const std::optional<practice::ResultModel> &analyticsModel) {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+
+  const auto outputDir = Utils::GetDocumentsPath("result_exports");
+  if (const auto error = ensureExportDirectoryError(
+          outputDir, "Failed to create result export directory")) {
+    return {.success = false, .message = *error};
+  }
+
+  const auto outputPath =
+      outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
+                   ".png");
+  return renderResultImage(
+      context, meta, state, playModeLabel, laneOrderLabel, difficultyLabel,
+      previousBest, previousLampBest, currentClearLabelOverride,
+      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker,
+      std::move(gameplayGraph), analyticsModel, outputPath);
 }
 } // namespace
 
@@ -810,31 +850,11 @@ ResultImageExporter::Export(ApplicationContext &context,
                                 &pacemaker,
                             const std::optional<practice::ResultModel>
                                 &analyticsModel) {
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  std::string photosErrorMessage;
-  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
-    return {.success = false,
-            .message = photosErrorMessage.empty()
-                           ? "Photos permission was not granted"
-                           : photosErrorMessage};
-  }
-#endif
-
-  const auto outputDir = Utils::GetDocumentsPath("result_exports");
-  if (const auto error = ensureExportDirectoryError(
-          outputDir, "Failed to create result export directory")) {
-    return {.success = false, .message = *error};
-  }
-
-  const auto outputPath =
-      outputDir / (sanitizeFileNamePart(meta.Title) + "_" + makeTimestamp() +
-                   ".png");
-  return renderResultImage(context, meta, state, playModeLabel, laneOrderLabel,
-                           difficultyLabel, previousBest, previousLampBest,
-                           currentClearLabelOverride, currentClearRankOverride,
-                           headerDifficultyLabelOverride, pacemaker,
-                           analyticsModel,
-                           outputPath);
+  return exportResultImage(
+      context, meta, state, playModeLabel, laneOrderLabel, difficultyLabel,
+      previousBest, previousLampBest, currentClearLabelOverride,
+      currentClearRankOverride, headerDifficultyLabelOverride, pacemaker, {},
+      analyticsModel);
 }
 
 ResultImageExportResult
@@ -869,10 +889,12 @@ ResultImageExporter::ExportReplay(ApplicationContext &context,
   const std::span<const ReplayData> attempts(&replay, 1);
   const std::optional<practice::ResultModel> analyticsModel(
       std::in_place, chart, attempts, 0);
-  return Export(context, chart.Meta, state, display.mode, display.laneOrder,
-                difficultyLabel, previousBest, previousLampBest, std::nullopt,
-                std::nullopt,
-                std::nullopt, pacemaker, analyticsModel);
+  return exportResultImage(
+      context, chart.Meta, state, display.mode, display.laneOrder,
+      difficultyLabel, previousBest, previousLampBest, std::nullopt,
+      std::nullopt, std::nullopt, pacemaker,
+      replay_result::BuildSkinGameplayGraphState(chart, replay, state),
+      analyticsModel);
 }
 
 ResultImageExportResult
@@ -910,8 +932,10 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
 
   std::vector<std::unique_ptr<bms_parser::Chart>> charts;
   std::vector<RhythmState> stageStates;
+  std::vector<SkinGameplayGraphState> stageGraphs;
   charts.reserve(replay.stages.size());
   stageStates.reserve(replay.stages.size());
+  stageGraphs.reserve(replay.stages.size());
   for (size_t i = 0; i < replay.stages.size(); ++i) {
     const ReplayData &stageReplay = replay.stages[i].replay;
     std::atomic_bool parseCancelled = false;
@@ -925,6 +949,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
 
     RhythmState state = replay_result::BuildResultState(
         *chart, stageReplay, replay.gaugeProfile);
+    SkinGameplayGraphState gameplayGraph =
+        replay_result::BuildSkinGameplayGraphState(*chart, stageReplay, state);
     const play_options::PlayModeDisplayLabel display =
         play_options::formatPlayModeDisplayLabel(stageReplay);
     const std::string filename =
@@ -943,6 +969,7 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
             context.scoreRepository, chart->Meta, stageReplay),
         "NO PLAY", kNoClearTypeRank, std::nullopt,
         std::nullopt,
+        gameplayGraph,
         analyticsModel,
         outputDir / filename);
     if (!result.success) {
@@ -951,6 +978,7 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
 
     charts.push_back(std::move(chart));
     stageStates.push_back(std::move(state));
+    stageGraphs.push_back(std::move(gameplayGraph));
   }
 
   bms_parser::ChartMeta courseMeta = courseResultMetaForReplay(replay, charts);
@@ -971,7 +999,8 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
       "Course", std::nullopt, std::nullopt, clearLabelOverride,
-      clearRankOverride, "COURSE", std::nullopt, std::nullopt,
+      clearRankOverride, "COURSE", std::nullopt,
+      combineSkinGameplayGraphStates(stageGraphs), std::nullopt,
       outputDir / "course_result.png");
   if (!courseResult.success) {
     return courseResult;

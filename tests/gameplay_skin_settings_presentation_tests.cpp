@@ -76,7 +76,7 @@ skin::GameplaySkinSettingsSnapshot snapshotWithEntry() {
   snapshot.featureAvailable = true;
   snapshot.compatibilityEnabled = true;
   snapshot.selected7KeyEntry = entryId();
-  snapshot.selectedGameplayEntries.emplace(0, entryId());
+  snapshot.selectedSkinEntries.emplace(0, entryId());
   snapshot.entries = {entryRow()};
   snapshot.hasPackageProgress = true;
   snapshot.progress = {.phase = skin::SkinProgressPhase::Publishing,
@@ -219,7 +219,7 @@ void testActionDrivingChangesInvalidatePresentation() {
   requirePresentationChange(
       base,
       [](auto &value) {
-        value.selectedGameplayEntries.emplace(1, entryId("-5k"));
+        value.selectedSkinEntries.emplace(1, entryId("-5k"));
       },
       "trait-specific selection changes invalidate presentation");
 }
@@ -245,7 +245,7 @@ void testLayoutKeyIgnoresLiveOperationAndConfigurationValues() {
           "committed option values do not rebuild the gameplay skins tab");
 
   auto changedSelection = base;
-  changedSelection.selectedGameplayEntries.emplace(1, entryId("-5k"));
+  changedSelection.selectedSkinEntries.emplace(1, entryId("-5k"));
   require(skin::gameplaySkinSettingsLayoutKey(base) !=
               skin::gameplaySkinSettingsLayoutKey(changedSelection),
           "trait selection changes rebuild the gameplay skins tab");

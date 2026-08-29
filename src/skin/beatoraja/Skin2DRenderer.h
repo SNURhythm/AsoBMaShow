@@ -31,6 +31,7 @@ class SkinQuadBatchRenderer;
 namespace skin {
 
 class PlaySkinSession;
+class ResultSkinSession;
 class Skin2DRenderer;
 
 // Move-only proof that PlaySkinSession has already opened the matching Lua
@@ -56,6 +57,7 @@ private:
   bool consumed_ = false;
 
   friend class PlaySkinSession;
+  friend class ResultSkinSession;
   friend class Skin2DRenderer;
 };
 
@@ -373,6 +375,13 @@ public:
   [[nodiscard]] bool submit(const SkinCommandBuffer &,
                             const SkinResourceCatalog &, RenderContext &,
                             rendering::SkinQuadBatchRenderer &) const;
+  // Result skins can own movie objects but do not have gameplay BGA state.
+  // Preserve authored movie/quad order without requiring a BGA transaction.
+  [[nodiscard]] bool submit(const SkinCommandBuffer &,
+                            const SkinPreparedResourceView &, RenderContext &,
+                            rendering::SkinQuadBatchRenderer &,
+                            SkinMovieCatalog *, const PlaySkinViewport &) const
+      noexcept;
   // Optional application overlays use the same UI batch path as authored
   // skin commands, but are submitted after the skin's atomic BGA commit.
   [[nodiscard]] bool submitOverlay(

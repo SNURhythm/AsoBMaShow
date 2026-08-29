@@ -1,10 +1,13 @@
 #include "ResultScene.h"
 #include "../CourseConstraintUtils.h"
+#include "../ArchiveFile.h"
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
+#include "../ReplayResultStateBuilder.h"
 #include "../repositories/ReplayRepository.h"
 #include "../replay/CourseReplayConsumer.h"
+#include "../replay/ReplayOption.h"
 #include "../ResultImageExporter.h"
 #include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
@@ -26,6 +29,14 @@
 #include "PracticeAnalyticsView.h"
 #include "RemoteResultRecallController.h"
 #include "ResultGaugeHistory.h"
+#include "ResultSkinApplicationOverlays.h"
+#include "ResultSkinLayering.h"
+#include "ResultPhotoExportPresentation.h"
+#include "ResultSkinFailurePresentation.h"
+#include "ResultTouchControls.h"
+
+#include <cmath>
+#include <vector>
 
 #include "../rendering/Color.h"
 #include "../rendering/SimpleBatchRenderer.h"
@@ -33,6 +44,12 @@
 #include "bgfx/bgfx.h"
 #include "../skin/DefaultSkin.h"
 #include "../skin/SkinTypes.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "../skin/GameplaySkinLifecycle.h"
+#include "../skin/beatoraja/BgfxSkinTextureDevice.h"
+#include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
+#include "../skin/beatoraja/ResultSkinSession.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -42,6 +59,8 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace {
@@ -98,6 +117,224 @@ std::optional<int> rankingBadPoints(const RhythmState &state) {
     return it == state.judgeCount.end() ? 0 : it->second;
   };
   return ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+}
+
+void projectResultIrRanking(
+    ResultSkinData &data, const ApplicationContext &context,
+    std::string_view providerId, std::string_view serverOrigin,
+    const std::optional<ir::IrChartQuery> &chart) {
+  if (context.irRankingService == nullptr || !chart) return;
+  const ir::IrRankingSnapshot snapshot = context.irRankingService->snapshot();
+  if (snapshot.state != ir::IrRankingSnapshotState::Succeeded ||
+      !snapshot.request || !snapshot.ranking ||
+      snapshot.request->profileId != context.profileManager.activeProfile().id ||
+      snapshot.request->providerId != providerId ||
+      snapshot.request->serverOrigin != serverOrigin ||
+      snapshot.request->chart != *chart) {
+    return;
+  }
+  constexpr std::size_t visibleRows = 10;
+  const auto &entries = snapshot.ranking->entries;
+  data.irRankingEntries.reserve(std::min(entries.size(), visibleRows));
+  for (std::size_t index = 0; index < entries.size() && index < visibleRows;
+       ++index) {
+    const auto &entry = entries[index];
+    data.irRankingEntries.push_back({.rank = entry.rank,
+                                     .playerName = entry.playerName,
+                                     .score = entry.score,
+                                     .clearType = entry.clearType,
+                                     .currentUser = entry.currentUser});
+  }
+  for (const auto &entry : entries) {
+    if (entry.currentUser) {
+      data.irCurrentUserRank = entry.rank;
+      break;
+    }
+  }
+}
+
+std::optional<std::vector<int>> resultReplayLanePattern(
+    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
+    const std::optional<long long> &seed, int player) {
+  const auto optionIndex = option
+                               ? replay::projectedBeatorajaReplayOptionIndex(*option)
+                               : std::nullopt;
+  if (!optionIndex || (*optionIndex != 2 && *optionIndex != 3 &&
+                       *optionIndex != 8)) {
+    return std::nullopt;
+  }
+  const auto laneOrder = play_options::laneOrderForPlayOption(
+      meta, option, seed, player);
+  if (!laneOrder) return std::nullopt;
+  const auto destinations = meta.GetTotalLaneIndices();
+  if (destinations.size() != laneOrder->size()) return std::nullopt;
+  std::unordered_map<int, int> sourceByDestination;
+  for (std::size_t index = 0; index < destinations.size(); ++index) {
+    sourceByDestination.emplace(destinations[index], (*laneOrder)[index]);
+  }
+  const int keyCount = meta.KeyMode == 10 ? 5
+                       : meta.KeyMode == 14 ? 7
+                                            : meta.KeyMode;
+  const auto keys = meta.GetKeyLaneIndices();
+  const auto scratches = meta.GetScratchLaneIndices();
+  const std::size_t keyOffset = player == 0 ? 0 : static_cast<std::size_t>(keyCount);
+  if (keyCount <= 0 ||
+      keyOffset + static_cast<std::size_t>(keyCount) > keys.size()) {
+    return std::nullopt;
+  }
+  const int playerOffset = player == 1 ? keyCount : 0;
+  std::vector<int> sourceLanes;
+  sourceLanes.reserve(static_cast<std::size_t>(keyCount +
+      (static_cast<std::size_t>(player) < scratches.size() ? 1 : 0)));
+  for (int key = 0; key < keyCount; ++key) {
+    sourceLanes.push_back(keys[keyOffset + static_cast<std::size_t>(key)]);
+  }
+  if (static_cast<std::size_t>(player) < scratches.size()) {
+    sourceLanes.push_back(scratches[static_cast<std::size_t>(player)]);
+  }
+  std::vector<int> pattern;
+  pattern.reserve(sourceLanes.size());
+  const auto appendSourceOrdinal = [&](int sourceLane) {
+    const auto source = std::ranges::find(sourceLanes, sourceLane);
+    if (source == sourceLanes.end()) return false;
+    pattern.push_back(static_cast<int>(source - sourceLanes.begin()) +
+                      playerOffset);
+    return true;
+  };
+  for (int key = 0; key < keyCount; ++key) {
+    const auto found = sourceByDestination.find(
+        keys[keyOffset + static_cast<std::size_t>(key)]);
+    if (found == sourceByDestination.end()) return std::nullopt;
+    if (!appendSourceOrdinal(found->second)) return std::nullopt;
+  }
+  if (static_cast<std::size_t>(player) < scratches.size()) {
+    const auto scratch = sourceByDestination.find(
+        scratches[static_cast<std::size_t>(player)]);
+    if (scratch == sourceByDestination.end()) return std::nullopt;
+    if (!appendSourceOrdinal(scratch->second)) return std::nullopt;
+  }
+  return pattern;
+}
+
+struct ResultTimingStatistics {
+  bool hasTimingSamples = false;
+  std::size_t timingSampleCount = 0;
+  double averageMillis = 0.0;
+  double standardDeviationMillis = 0.0;
+  long long averageJudgeMicros = 0;
+  std::vector<int> distribution = std::vector<int>(301, 0);
+};
+
+std::optional<ResultTimingStatistics>
+resultTimingStatistics(const ReplayData *replay, int totalNotes,
+                       bms_parser::Chart *chart) {
+  if (replay == nullptr || totalNotes <= 0) return std::nullopt;
+  constexpr long long rangeMicros = 150'000;
+  std::unordered_map<std::string, bms_parser::Note *> notes;
+  std::unordered_set<const bms_parser::LongNote *> classicHeadsWithTailResult;
+  if (chart != nullptr) {
+    for (auto *measure : chart->Measures) {
+      if (measure == nullptr) continue;
+      for (auto *timeline : measure->TimeLines) {
+        if (timeline == nullptr) continue;
+        for (auto *note : timeline->Notes) {
+          if (note != nullptr) {
+            notes.emplace(replay_note::key(note->Lane, timeline->Timing), note);
+          }
+        }
+      }
+    }
+    for (const auto &event : replay->events) {
+      if (event.judgement == None ||
+          (event.action != ReplayEventAction::Release &&
+           event.action != ReplayEventAction::Miss)) {
+        continue;
+      }
+      const auto found = notes.find(
+          replay_note::key(event.lane, event.noteTimeMicros));
+      if (found == notes.end() || !found->second->IsLongNote()) continue;
+      const auto *tail =
+          static_cast<const bms_parser::LongNote *>(found->second);
+      if (tail->IsTail() && tail->Head != nullptr &&
+          !effectiveLongNoteIsCharge(tail, chart)) {
+        classicHeadsWithTailResult.insert(tail->Head);
+      }
+    }
+  }
+  const auto countsInResult = [&](const ReplayEvent &event) {
+    if (chart == nullptr || event.action != ReplayEventAction::Press) {
+      return true;
+    }
+    const auto found = notes.find(
+        replay_note::key(event.lane, event.noteTimeMicros));
+    if (found == notes.end() || !found->second->IsLongNote()) return true;
+    const auto *longNote =
+        static_cast<const bms_parser::LongNote *>(found->second);
+    const JudgeResult judge(event.judgement, event.diffMicros);
+    return longNote->IsTail() || !judge.isNotePlayed() ||
+           effectiveLongNoteIsCharge(longNote, chart) ||
+           (event.judgement == Bad &&
+            !classicHeadsWithTailResult.contains(longNote));
+  };
+  std::vector<long long> timings;
+  std::vector<int> distribution(301, 0);
+  timings.reserve(replay->events.size());
+  long long durationMicros = 0;
+  int playedNotes = 0;
+  for (const auto &event : replay->events) {
+    const bool scoreTimingEvent =
+        (event.action == ReplayEventAction::Press ||
+         event.action == ReplayEventAction::MultiBad ||
+         event.action == ReplayEventAction::Release) &&
+        (event.judgement == PGreat || event.judgement == Great ||
+         event.judgement == Good || event.judgement == Bad);
+    if (scoreTimingEvent && countsInResult(event) &&
+        playedNotes < totalNotes) {
+      durationMicros += std::llabs(event.diffMicros);
+      ++playedNotes;
+    }
+    const bool timingEvent =
+        (event.action == ReplayEventAction::Press ||
+         event.action == ReplayEventAction::MultiBad ||
+         event.action == ReplayEventAction::Release) &&
+        event.judgement != None && event.judgement != Kpoor &&
+        event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
+    // ReplayEvent stores input-minus-note, while AbstractResult's timing
+    // distribution uses Beatoraja's note-minus-input convention.
+    const long long beatorajaDiffMicros = -event.diffMicros;
+    if (timingEvent && countsInResult(event)) {
+      timings.push_back(beatorajaDiffMicros);
+    }
+    if (timingEvent && countsInResult(event)) {
+      const int millis = static_cast<int>(beatorajaDiffMicros / 1'000LL);
+      if (millis >= -150 && millis <= 150) {
+        ++distribution[static_cast<std::size_t>(millis + 150)];
+      }
+    }
+  }
+  long double mean = 0.0;
+  long double squared = 0.0;
+  if (!timings.empty()) {
+    long double sum = 0.0;
+    for (const auto timing : timings) sum += timing;
+    mean = sum / timings.size();
+    for (const auto timing : timings) {
+      const long double delta = timing - mean;
+      squared += delta * delta;
+    }
+  }
+  return ResultTimingStatistics{
+      .hasTimingSamples = !timings.empty(),
+      .timingSampleCount = timings.size(),
+      .averageMillis = static_cast<double>(mean / 1'000.0L),
+      .standardDeviationMillis = static_cast<double>(
+          timings.empty() ? 0.0L
+                          : std::sqrt(squared / timings.size()) / 1'000.0L),
+      .averageJudgeMicros =
+          (durationMicros + static_cast<long long>(totalNotes - playedNotes) *
+                                1'000'000LL) /
+          totalNotes,
+      .distribution = std::move(distribution)};
 }
 
 void drawResultGaugeGraphPrimitive(
@@ -222,6 +459,158 @@ int totalNotesForCourse(const CoursePlaySession &session) {
   return total;
 }
 
+SkinGameplayGraphState
+courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
+  const std::int64_t playLength = std::max(0LL, entry.meta.PlayLength);
+  const std::size_t judgementSeconds =
+      static_cast<std::size_t>(playLength / 1'000'000LL) + 1;
+  const int gaugeIndex = gaugeTypeIndex(gaugeType);
+  const int gaugeSamples =
+      std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
+
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->normalDistribution.assign(judgementSeconds + 1, {});
+  chart->judgementDistributionSeconds = judgementSeconds;
+
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->judgementDistribution.assign(judgementSeconds, {});
+  dynamic->earlyLateDistribution.assign(judgementSeconds, {});
+  dynamic->gaugeType = gaugeType;
+  if (gaugeIndex >= 0 &&
+      static_cast<std::size_t>(gaugeIndex) < dynamic->gaugeHistories.size()) {
+    dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)].assign(
+        static_cast<std::size_t>(gaugeSamples), 0.0F);
+  }
+  return {.chart = std::move(chart), .dynamic = std::move(dynamic)};
+}
+
+SkinGameplayGraphState courseGameplayGraphForSession(
+    const CoursePlaySession &session, const RhythmState &courseState) {
+  std::vector<SkinGameplayGraphState> stages;
+  stages.reserve(session.entries.size());
+  for (const auto &stage : session.completedResults) {
+    stages.push_back(stage.gameplayGraph);
+  }
+  for (std::size_t index = session.completedResults.size();
+       index < session.entries.size(); ++index) {
+    stages.push_back(
+        courseGraphPaddingForEntry(session.entries[index], session.gaugeType));
+  }
+
+  SkinGameplayGraphState combined = combineSkinGameplayGraphStates(stages);
+  if (combined.chart == nullptr || combined.dynamic == nullptr) {
+    return combined;
+  }
+
+  auto chart = std::make_shared<SkinGameplayChartGraphState>(*combined.chart);
+  const std::int64_t courseDurationMicros =
+      static_cast<std::int64_t>(chart->judgementDistributionSeconds) *
+      1'000'000LL;
+  const auto lastBpm = std::find_if(
+      chart->bpmSeries.rbegin(), chart->bpmSeries.rend(),
+      [](const SkinBpmGraphPoint &point) { return point.emitsGraphPoint; });
+  if (lastBpm != chart->bpmSeries.rend() &&
+      lastBpm->chartTimeMicros < courseDurationMicros) {
+    auto continuation = *lastBpm;
+    continuation.chartTimeMicros = courseDurationMicros;
+    continuation.emitsGraphPoint = true;
+    continuation.synthetic = true;
+    chart->bpmSeries.push_back(continuation);
+  }
+
+  auto dynamic =
+      std::make_shared<SkinGameplayDynamicGraphState>(*combined.dynamic);
+  const int gaugeType = gaugeTypeIndex(courseState.gaugeType);
+  if (gaugeType >= 0 &&
+      static_cast<std::size_t>(gaugeType) < dynamic->gaugeHistories.size()) {
+    const std::size_t gaugeIndex = static_cast<std::size_t>(gaugeType);
+    dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;
+  }
+  dynamic->gaugeType = courseState.gaugeType;
+  dynamic->gaugeSupported = false;
+  combined.chart = std::move(chart);
+  combined.dynamic = std::move(dynamic);
+  return combined;
+}
+
+std::optional<ResultTimingStatistics>
+courseTimingStatisticsForSession(const CoursePlaySession &session) {
+  ResultTimingStatistics result;
+  result.distribution.assign(301, 0);
+  long double sum = 0.0;
+  long double sumSquares = 0.0;
+  long double judgeDurationTotal = 0.0;
+  int judgeNoteTotal = 0;
+  for (std::size_t index = 0; index < session.completedResults.size();
+       ++index) {
+    const auto &stage = session.completedResults[index];
+    const auto replayTiming =
+        stage.skinTimingDistribution.empty()
+            ? resultTimingStatistics(session.resultBrowseStageReplay(index),
+                                     stage.meta.TotalNotes,
+                                     session.resultBrowseReplayChart(index))
+            : std::nullopt;
+    const auto averageJudgeMicros =
+        stage.skinAverageJudgeMicros
+            ? stage.skinAverageJudgeMicros
+            : (replayTiming
+                   ? std::optional<long long>(replayTiming->averageJudgeMicros)
+                   : std::nullopt);
+    if (averageJudgeMicros) {
+      const int notes = std::max(0, stage.meta.TotalNotes);
+      judgeDurationTotal += notes * *averageJudgeMicros;
+      judgeNoteTotal += notes;
+    }
+    const std::size_t sampleCount =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? replayTiming->timingSampleCount
+            : stage.skinTimingSampleCount;
+    const auto averageMillis =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? std::optional<double>(replayTiming->averageMillis)
+            : stage.skinTimingAverageMillis;
+    const auto standardDeviationMillis =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? std::optional<double>(replayTiming->standardDeviationMillis)
+            : stage.skinTimingStandardDeviationMillis;
+    const auto &distribution =
+        stage.skinTimingDistribution.empty() && replayTiming
+            ? replayTiming->distribution
+            : stage.skinTimingDistribution;
+    if (sampleCount == 0 || !averageMillis || !standardDeviationMillis) {
+      continue;
+    }
+    const long double count = sampleCount;
+    const long double mean = *averageMillis;
+    const long double deviation = *standardDeviationMillis;
+    result.timingSampleCount += sampleCount;
+    sum += count * mean;
+    sumSquares += count * (deviation * deviation + mean * mean);
+    for (std::size_t index = 0;
+         index < result.distribution.size() &&
+         index < distribution.size(); ++index) {
+      result.distribution[index] += distribution[index];
+    }
+  }
+  if (result.timingSampleCount == 0) {
+    if (judgeNoteTotal == 0) return std::nullopt;
+    result.averageJudgeMicros = static_cast<long long>(
+        judgeDurationTotal / judgeNoteTotal);
+    return result;
+  }
+  const long double count = result.timingSampleCount;
+  const long double mean = sum / count;
+  result.hasTimingSamples = true;
+  result.averageMillis = static_cast<double>(mean);
+  result.standardDeviationMillis = static_cast<double>(std::sqrt(
+      std::max(0.0L, sumSquares / count - mean * mean)));
+  if (judgeNoteTotal > 0) {
+    result.averageJudgeMicros = static_cast<long long>(
+        judgeDurationTotal / judgeNoteTotal);
+  }
+  return result;
+}
+
 long long totalPlayLengthForCourse(const CoursePlaySession &session) {
   long long total = 0;
   for (const auto &entry : session.entries) {
@@ -232,9 +621,31 @@ long long totalPlayLengthForCourse(const CoursePlaySession &session) {
 
 bms_parser::ChartMeta
 courseResultMetaForSession(const CoursePlaySession &session) {
-  return result_presentation::courseResultMeta(
+  auto meta = result_presentation::courseResultMeta(
       session.courseName, session.courseGroupName, session.entries.size(),
       totalNotesForCourse(session), totalPlayLengthForCourse(session));
+  meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
+  if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
+    meta.Rank = currentMeta->Rank;
+    meta.BmsPath = currentMeta->BmsPath;
+    meta.Folder = currentMeta->Folder;
+    meta.StageFile = currentMeta->StageFile;
+    meta.BackBmp = currentMeta->BackBmp;
+    meta.Banner = currentMeta->Banner;
+    meta.TotalLongNotes = currentMeta->TotalLongNotes;
+    meta.TotalBackSpinNotes = currentMeta->TotalBackSpinNotes;
+  } else if (!session.completedResults.empty()) {
+    const auto &lastMeta = session.completedResults.back().meta;
+    meta.Rank = lastMeta.Rank;
+    meta.BmsPath = lastMeta.BmsPath;
+    meta.Folder = lastMeta.Folder;
+    meta.StageFile = lastMeta.StageFile;
+    meta.BackBmp = lastMeta.BackBmp;
+    meta.Banner = lastMeta.Banner;
+    meta.TotalLongNotes = lastMeta.TotalLongNotes;
+    meta.TotalBackSpinNotes = lastMeta.TotalBackSpinNotes;
+  }
+  return meta;
 }
 
 void appendMissingCourseGaugeHistory(RhythmState &state,
@@ -372,7 +783,7 @@ ResultScene::ResultScene(
     std::optional<ResultPacemakerData> pacemakerOverride,
     const ReplayData *analyticsSource,
     std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
-    ResultTableContext tableContext)
+    ResultTableContext tableContext, SkinGameplayGraphState gameplayGraph)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -393,6 +804,7 @@ ResultScene::ResultScene(
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
           .tableContext = std::move(tableContext),
+          .gameplayGraph = std::move(gameplayGraph),
           .ownedReusableRetryChart = std::move(ownedReusableRetryChart),
           .pacemakerTarget = pacemaker::normalizeTargetId(
               pacemakerTarget.empty() ? context.settings.selectedPacemakerTarget
@@ -411,6 +823,12 @@ ResultScene::ResultScene(
   local.reusableRetryChart = local.ownedReusableRetryChart != nullptr
                                  ? local.ownedReusableRetryChart.get()
                                  : reusableRetryChart;
+  if ((local.gameplayGraph.chart == nullptr ||
+       local.gameplayGraph.dynamic == nullptr) &&
+      local.reusableRetryChart != nullptr && local.analyticsData.has_value()) {
+    local.gameplayGraph = replay_result::BuildSkinGameplayGraphState(
+        *local.reusableRetryChart, *local.analyticsData, local.resultState);
+  }
   const play_options::PlayModeDisplayLabel display =
       resultPlayModeDisplayLabel(local.meta, local.presentationReplay,
                                  local.retryData, local.practiceOptions);
@@ -454,6 +872,99 @@ ResultScene::ResultScene(ApplicationContext &context,
                          ResultRemoteOptions remote)
     : Scene(context), source(makeResultRemoteSource(std::move(remote))) {
   skin = std::make_unique<DefaultSkin>();
+}
+
+ResultScene::~ResultScene() = default;
+
+bool ResultScene::startSelectedResultSkin() {
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return false;
+#else
+  resultSkinActivationFailed = false;
+  const auto appendDiagnostic =
+      [this](const skin::SkinEntryId &entry, std::string revisionDigest,
+             std::string configurationDigest,
+             skin::SkinDiagnostic diagnostic) noexcept {
+        if (!context.skinDiagnosticHistory) {
+          return;
+        }
+        try {
+          const auto luaLine = diagnostic.source && diagnostic.source->line != 0
+                                   ? std::optional<std::uint32_t>(
+                                         diagnostic.source->line)
+                                   : std::nullopt;
+          context.skinDiagnosticHistory->append({
+              .entry = entry,
+              .revisionDigest = std::move(revisionDigest),
+              .configurationDigest = std::move(configurationDigest),
+              .phase = skin::SkinDiagnosticPhase::Session,
+              .diagnostic = std::move(diagnostic),
+              .luaLine = luaLine,
+              .frameSerial = std::nullopt,
+          });
+        } catch (...) {
+        }
+      };
+  if (!context.gameplaySkinLifecycle || !context.skinStorageRoots ||
+      !context.skinResourcePreparationService ||
+      !context.skinLiveResourceCounters) {
+    return false;
+  }
+  const auto profileId =
+      skin::makeSkinProfileId(context.profileManager.activeProfile().id);
+  if (!profileId) return false;
+  const int skinType = isCourseFinalResult() ? 15 : 7;
+  auto acquisition =
+      context.gameplaySkinLifecycle->acquireForSkinType(skinType, false);
+  if (acquisition.disposition !=
+          skin::GameplaySkinAcquisitionDisposition::Ready ||
+      !acquisition.request) {
+    if (acquisition.disposition ==
+            skin::GameplaySkinAcquisitionDisposition::Failed &&
+        acquisition.failure) {
+      resultSkinActivationFailed = true;
+      const auto &failure = *acquisition.failure;
+      appendDiagnostic(failure.entry.value_or(skin::SkinEntryId{}),
+                       failure.revisionDigest, failure.configurationDigest,
+                       failure.diagnostic);
+    }
+    return false;
+  }
+  const auto entry = acquisition.request->activation.entry;
+  const auto revisionDigest =
+      acquisition.request->activation.revision.revision().lowercaseSha256;
+  const auto configurationDigest =
+      acquisition.request->activation.configurationDigest;
+  auto created = skin::ResultSkinSession::create(
+      std::move(acquisition.request->activation),
+      {.profileId = *profileId,
+       .expectedSkinType = skinType,
+       .storageRoots = *context.skinStorageRoots,
+       .resourcePreparation = *context.skinResourcePreparationService,
+       .initialData = makeResultSkinData(),
+       .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+       .builtinImageReader = archive_file::readFileBounded,
+       .audioBackend = skin::createLuaSkinApplicationAudioBackend(
+           context.jukebox.audioRuntime(), [this] {
+             return context.settings.audioVideo.audio.masterVolume;
+           }, {}, context.skinLiveResourceCounters),
+       .liveResourceCounters = context.skinLiveResourceCounters,
+       .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
+  for (auto &diagnostic : created.diagnostics) {
+    appendDiagnostic(entry, revisionDigest, configurationDigest,
+                     std::move(diagnostic));
+  }
+  if (!created.session) {
+    resultSkinActivationFailed = true;
+    return false;
+  }
+  resultSkinSession = std::move(created.session);
+  resultSkinEntry = entry;
+  resultSkinRevisionDigest = revisionDigest;
+  resultSkinConfigurationDigest = configurationDigest;
+  if (resultSkinStartedMicros == 0) resultSkinStartedMicros = nowMicros();
+  return true;
+#endif
 }
 
 LocalResultSource *ResultScene::localSource() noexcept {
@@ -511,13 +1022,63 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       local == nullptr ? nullptr : &local->meta,
       &context,
   };
+  data.playerName = context.profileManager.activeProfile().displayName;
+  data.irOnline = !context.irAccountNameSnapshot().empty();
   if (remote != nullptr) {
     data.presentation = &remote->presentation;
+    data.playModeLabel = remote->presentation.playtype.value_or("");
+    data.difficultyLabel = remote->score.difficulty.value_or("");
+    data.playLevelOverride = remote->score.levelNumber
+                                 ? std::optional<float>(static_cast<float>(
+                                       *remote->score.levelNumber))
+                                 : std::nullopt;
+    if (remote->score.game == "bms-7k") {
+      data.keyModeOverride = 7;
+    } else if (remote->score.game == "bms-14k") {
+      data.keyModeOverride = 14;
+    }
+    if (remote->score.difficulty) {
+      if (*remote->score.difficulty == "BEGINNER") data.difficultyOverride = 1;
+      else if (*remote->score.difficulty == "NORMAL") data.difficultyOverride = 2;
+      else if (*remote->score.difficulty == "HYPER") data.difficultyOverride = 3;
+      else if (*remote->score.difficulty == "ANOTHER") data.difficultyOverride = 4;
+      else if (*remote->score.difficulty == "INSANE") data.difficultyOverride = 5;
+    }
+    if (remote->score.gauge) {
+      if (*remote->score.gauge == "ASSIST EASY") data.gaugeTypeOverride = GaugeType::AssistedEasy;
+      else if (*remote->score.gauge == "EASY") data.gaugeTypeOverride = GaugeType::Easy;
+      else if (*remote->score.gauge == "NORMAL") data.gaugeTypeOverride = GaugeType::Normal;
+      else if (*remote->score.gauge == "HARD") data.gaugeTypeOverride = GaugeType::Hard;
+      else if (*remote->score.gauge == "EX-HARD") data.gaugeTypeOverride = GaugeType::ExHard;
+      else if (*remote->score.gauge == "HAZARD") data.gaugeTypeOverride = GaugeType::Hazard;
+    }
+    if (remote->presentation.random) {
+      data.laneOrderLabel = *remote->presentation.random;
+      const std::size_t separator = data.laneOrderLabel.find(" / ");
+      const std::string_view player1(data.laneOrderLabel.data(),
+                                     separator == std::string::npos
+                                         ? data.laneOrderLabel.size()
+                                         : separator);
+      data.replayRandomOption1P =
+          replay::projectedBeatorajaReplayOptionIndex(player1);
+      if (separator != std::string::npos) {
+        const std::string_view player2(data.laneOrderLabel.data() + separator + 3,
+                                       data.laneOrderLabel.size() - separator - 3);
+        data.replayRandomOption2P =
+            replay::projectedBeatorajaReplayOptionIndex(player2);
+      }
+    }
+    data.chartMd5 = remote->score.chartMd5;
+    data.chartSha256 = remote->score.chartSha256;
+    projectResultIrRanking(data, context, remote->providerId,
+                           remote->serverOrigin, remote->rankingQuery);
     return data;
   }
   if (local == nullptr) {
     return data;
   }
+  data.tableName = local->tableContext.tableName;
+  data.tableLevel = local->tableContext.tableLevel;
   data.playModeLabel = local->playModeLabel;
   data.laneOrderLabel = local->laneOrderLabel;
   data.difficultyLabel = local->difficultyLabel;
@@ -529,10 +1090,152 @@ ResultSkinData ResultScene::makeResultSkinData() const {
     data.currentClearLabelOverride = local->currentClearLabelOverride;
   }
   data.currentClearRankOverride = local->currentClearRankOverride;
+  data.autoPlayResult = local->autoPlayResult;
+  if (local->courseOptions.session != nullptr) {
+    data.courseTitles = local->courseOptions.session->beatorajaSkinStageTitles();
+    if (isCourseFinalResult()) {
+      data.courseTitle = local->courseOptions.session->courseName;
+    }
+  }
   data.previousBest = local->previousBest;
   data.previousLampBest = local->previousLampBest;
   data.pacemaker = pacemakerDataForCurrentResult();
+  data.playerHistory = local->playerHistory;
   data.presentation = &local->presentation;
+  data.gameplayGraph = local->gameplayGraph;
+  const auto localRankingQuery = ir::makeBokutachiRankingQuery(local->meta);
+  const auto provider = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (localRankingQuery.value && provider != context.settings.irProviders.end()) {
+    projectResultIrRanking(data, context, ir::kTachiProviderId,
+                           provider->second.serverOrigin,
+                           localRankingQuery.value);
+  }
+  const ReplayData *timingReplay = local->analyticsData
+                                       ? &*local->analyticsData
+                                       : (local->presentationReplay
+                                              ? &*local->presentationReplay
+                                              : (local->retryData
+                                                     ? &*local->retryData
+                                                     : nullptr));
+  if (local->skinTimingStatisticsPrepared) {
+    data.timingAverageMillis = local->skinTimingAverageMillis;
+    data.timingStandardDeviationMillis =
+        local->skinTimingStandardDeviationMillis;
+    data.averageJudgeMicros = local->skinAverageJudgeMicros;
+    data.timingDistribution = local->skinTimingDistribution;
+  }
+  const ReplayData *setupReplay = local->presentationReplay
+                                      ? &*local->presentationReplay
+                                      : (local->retryData ? &*local->retryData
+                                                          : nullptr);
+  if (setupReplay != nullptr) {
+    data.replayKeyMode = setupReplay->chartMeta.KeyMode;
+    data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+        setupReplay->playOption.value_or("NORMAL"));
+    if (setupReplay->chartMeta.IsDP) {
+      data.replayRandomOption2P =
+          replay::projectedBeatorajaReplayOptionIndex(
+              setupReplay->playOption2.value_or("NORMAL"));
+    }
+    data.replayDoublePlayOption =
+        setupReplay->provenance.doublePlayFlip ? 1 : 0;
+    data.replayLaneShufflePattern1P = setupReplay->laneShufflePattern1P;
+    data.replayLaneShufflePattern2P = setupReplay->laneShufflePattern2P;
+    if (!data.replayLaneShufflePattern1P) {
+      data.replayLaneShufflePattern1P = resultReplayLanePattern(
+          setupReplay->chartMeta, setupReplay->playOption,
+          setupReplay->playOptionSeed, 0);
+    }
+    if (!data.replayLaneShufflePattern2P && setupReplay->chartMeta.IsDP) {
+      data.replayLaneShufflePattern2P = resultReplayLanePattern(
+          setupReplay->chartMeta, setupReplay->playOption2,
+          setupReplay->playOption2Seed, 1);
+    }
+  } else if (local->practiceOptions.enabled) {
+    const auto &practice = local->practiceOptions;
+    data.replayKeyMode = local->meta.KeyMode;
+    data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+        practice.playOption.value_or("NORMAL"));
+    if (local->meta.IsDP) {
+      data.replayRandomOption2P =
+          replay::projectedBeatorajaReplayOptionIndex(
+              practice.playOption2.value_or("NORMAL"));
+    }
+    data.replayDoublePlayOption =
+        local->attemptProvenance.doublePlayFlip ? 1 : 0;
+    data.replayLaneShufflePattern1P = resultReplayLanePattern(
+        local->meta, practice.playOption, practice.playOptionSeed, 0);
+    if (local->meta.IsDP) {
+      data.replayLaneShufflePattern2P = resultReplayLanePattern(
+          local->meta, practice.playOption2, practice.playOption2Seed, 1);
+    }
+  } else if (isCourseStageResult()) {
+    const auto &provenance = local->attemptProvenance;
+    const std::optional<std::string> player1Option{provenance.player1.option};
+    const std::optional<std::string> player2Option{provenance.player2.option};
+    data.replayKeyMode = local->meta.KeyMode;
+    data.replayRandomOption1P =
+        replay::projectedBeatorajaReplayOptionIndex(
+            local->attemptProvenance.player1.option);
+    if (local->meta.IsDP) {
+      data.replayRandomOption2P =
+          replay::projectedBeatorajaReplayOptionIndex(
+              local->attemptProvenance.player2.option);
+    }
+    data.replayDoublePlayOption = provenance.doublePlayFlip ? 1 : 0;
+    data.replayLaneShufflePattern1P = resultReplayLanePattern(
+        local->meta, player1Option, provenance.player1.seed, 0);
+    if (local->meta.IsDP) {
+      data.replayLaneShufflePattern2P = resultReplayLanePattern(
+          local->meta, player2Option, provenance.player2.seed, 1);
+    }
+  } else if (isCourseFinalResult() && local->courseOptions.session != nullptr) {
+    const auto &session = *local->courseOptions.session;
+    const bool hasReplayBackedSetup =
+        session.playOption.has_value() || session.playOptionSeed.has_value() ||
+        session.playOption2.has_value() || session.playOption2Seed.has_value();
+    const ScoreProvenance *stageProvenance =
+        hasReplayBackedSetup
+            ? nullptr
+            : session.currentOrLastCompletedStageProvenance();
+    const std::optional<std::string> player1Option =
+        stageProvenance == nullptr
+            ? session.playOption
+            : std::optional<std::string>{stageProvenance->player1.option};
+    const std::optional<long long> player1Seed =
+        stageProvenance == nullptr ? session.playOptionSeed
+                                   : stageProvenance->player1.seed;
+    const std::optional<std::string> player2Option =
+        stageProvenance == nullptr
+            ? session.playOption2
+            : std::optional<std::string>{stageProvenance->player2.option};
+    const std::optional<long long> player2Seed =
+        stageProvenance == nullptr ? session.playOption2Seed
+                                   : stageProvenance->player2.seed;
+    data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+        player1Option.value_or("NORMAL"));
+    data.replayDoublePlayOption =
+        (stageProvenance == nullptr ? local->attemptProvenance.doublePlayFlip
+                                    : stageProvenance->doublePlayFlip)
+            ? 1
+            : 0;
+    if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
+      data.replayKeyMode = currentMeta->KeyMode;
+      data.keyModeOverride = currentMeta->KeyMode;
+      if (currentMeta->IsDP) {
+        data.replayRandomOption2P =
+            replay::projectedBeatorajaReplayOptionIndex(
+                player2Option.value_or("NORMAL"));
+      }
+      data.replayLaneShufflePattern1P = resultReplayLanePattern(
+          *currentMeta, player1Option, player1Seed, 0);
+      if (currentMeta->IsDP) {
+        data.replayLaneShufflePattern2P = resultReplayLanePattern(
+            *currentMeta, player2Option, player2Seed, 1);
+      }
+    }
+  }
   return data;
 }
 
@@ -732,6 +1435,18 @@ void ResultScene::loadDifficultyLabel() {
   }
   local->difficultyLabel = result_presentation::difficultyLabelForChart(
       context.chartRepository, local->meta);
+}
+
+void ResultScene::loadPlayerHistory() {
+  auto *local = localSource();
+  if (local == nullptr || local->playerHistory.has_value()) return;
+  const PlayerScoreHistorySnapshot snapshot =
+      context.scoreRepository.LoadPlayerScoreHistory();
+  local->playerHistory = ResultPlayerHistoryData{
+      .playCount = snapshot.playCount,
+      .clearCount = snapshot.clearCount,
+      .judgementCounts = snapshot.judgementCounts,
+      .playDurationSeconds = snapshot.playDurationSeconds};
 }
 
 bool ResultScene::persistenceDecisionRequired() const {
@@ -1300,6 +2015,8 @@ void ResultScene::retryResultPersistence() {
           ->retryable()) {
     (void)persistModernCourseResult();
     loadPreviousBest();
+    local->playerHistory.reset();
+    loadPlayerHistory();
     rebuildLocalPresentation(makeTimingAnalyticsModel());
     defer(
         [this]() {
@@ -1336,6 +2053,10 @@ void ResultScene::retryResultPersistence() {
           persistenceOptions.outcome.diagnostic.c_str());
   local->previousBestLoaded = false;
   loadPreviousBest();
+  if (persistenceOptions.chartOutcome->durable()) {
+    local->playerHistory.reset();
+    loadPlayerHistory();
+  }
   rebuildLocalPresentation(makeTimingAnalyticsModel());
   defer(
       [this]() {
@@ -1362,6 +2083,16 @@ void ResultScene::updateResultPersistencePresentation() {
     return;
   }
   const bool decisionRequired = persistenceDecisionRequired();
+  if (resultTouchControlsOverlay != nullptr &&
+      resultTouchControlsDecisionRequired != decisionRequired) {
+    resultTouchControlsOverlay->setVisible(false);
+    resultTouchControlsOverlay->setDisplay(YGDisplayNone);
+    resultTouchControlsOverlay = nullptr;
+    resultTouchControlsPanel = nullptr;
+    resultTouchControlsRestore = nullptr;
+    resultTouchExportPhotoText = nullptr;
+    buildResultTouchControls();
+  }
   if (normalResultActions != nullptr) {
     normalResultActions->setVisible(!decisionRequired);
     normalResultActions->setDisplay(decisionRequired ? YGDisplayNone
@@ -1575,6 +2306,330 @@ void ResultScene::addRetryButtons() {
   actionHost->addView(retryRow);
 }
 
+void ResultScene::buildResultTouchControls() {
+  if (rootLayout == nullptr || resultTouchControlsOverlay != nullptr) {
+    return;
+  }
+  ResultTouchControlAvailability availability{.back = true};
+  const auto *local = localSource();
+  const auto *remote = remoteSource();
+  if (local != nullptr) {
+    if (isCourseStageResult()) {
+      availability.next = true;
+      availability.exportPhoto = !local->autoPlayResult;
+    } else if (isCourseFinalResult()) {
+      const auto &course = local->courseOptions;
+      availability.replay = course.session != nullptr &&
+                             course.session->courseReplayData != nullptr &&
+                             !course.session->courseReplayData->stages.empty();
+      availability.retrySame = course.session != nullptr &&
+                              course.session->modernCourseResultBrowsing &&
+                              course.session->modernCourseRetrySameAllowed;
+      availability.exportPhoto = !local->autoPlayResult;
+    } else {
+      availability.replay = local->replayResult;
+      availability.retry = !local->replayResult;
+      availability.retrySame = !local->replayResult &&
+                              local->retrySameAllowed &&
+                              (local->retryData.has_value()
+                                   ? play_options::hasSamePatternRandomization(
+                                         *local->retryData)
+                                   : play_options::hasSamePatternRandomization(
+                                         local->meta));
+      availability.rankings = true;
+      availability.exportPhoto = !local->autoPlayResult;
+      // A selected skin does not build the native timing-section picker.
+      // Do not expose an action that cannot produce a practice request.
+      availability.selectSection = false;
+    }
+  } else if (remote != nullptr) {
+    availability.rankings = remote->rankingQuery.has_value();
+    availability.exportPhoto = true;
+  }
+  if (persistenceDecisionRequired()) {
+    availability.retry = false;
+    availability.retrySame = false;
+    availability.replay = false;
+    availability.next = false;
+  }
+  resultTouchControlsDecisionRequired = persistenceDecisionRequired();
+
+  const auto presentation = makeResultTouchControlPresentation(
+      {.skinSelected = true,
+       .hidden = resultTouchControlsHidden},
+      availability);
+  if (!presentation.showsControls && !presentation.capturesRestoreTouch) {
+    return;
+  }
+
+  auto *overlay = new View();
+  overlay->setName("resultTouchControlsOverlay");
+  overlay->setPositionType(YGPositionTypeAbsolute);
+  overlay->setPosition(Edge::Left, 0);
+  overlay->setPosition(Edge::Top, 0);
+  overlay->setWidth(static_cast<float>(rendering::window_width));
+  overlay->setHeight(static_cast<float>(rendering::window_height));
+  overlay->setZIndex(1900);
+
+  auto *panel = new View();
+  panel->setName("resultTouchControlsPanel");
+  panel->setPositionType(YGPositionTypeAbsolute);
+  panel->setPosition(Edge::Left, 12.0F);
+  panel->setPosition(Edge::Right, 12.0F);
+  panel->setPosition(Edge::Bottom, 12.0F);
+  panel->setFlexDirection(FlexDirection::Row);
+  panel->setAlignItems(YGAlignCenter);
+  panel->setJustifyContent(YGJustifyCenter);
+  panel->setFlexWrap(YGWrapWrap);
+  panel->setGap(8.0F);
+  panel->setPadding(Edge::All, 8.0F);
+  panel->setCornerRadius(ui_theme::controlRadius());
+  panel->setBackgroundColor(Color(8, 16, 24, 96));
+
+  const auto addAction = [this, panel, local](
+                             ResultTouchControlAction action) {
+    std::string label;
+    Color accent = ui_theme::cyan();
+    std::function<void()> callback;
+    bool enabled = true;
+    switch (action) {
+    case ResultTouchControlAction::Back:
+      label = "Back";
+      callback = [this]() {
+        const auto *current = localSource();
+        if (current != nullptr && isCourseStageResult() &&
+            !current->courseOptions.savedResultBrowsing) {
+          showCourseExitConfirmation();
+        } else {
+          exitResult();
+        }
+      };
+      break;
+    case ResultTouchControlAction::Retry:
+      label = "Retry";
+      accent = ui_theme::primaryAction();
+      callback = [this, local]() {
+        if (local == nullptr) return;
+        const bool canRetrySame = local->retrySameAllowed &&
+                                  (local->retryData.has_value()
+                                       ? play_options::hasSamePatternRandomization(
+                                             *local->retryData)
+                                       : play_options::hasSamePatternRandomization(
+                                             local->meta));
+        startRetry(local->practiceOptions.enabled || !canRetrySame);
+      };
+      break;
+    case ResultTouchControlAction::RetrySame:
+      label = "Retry Same";
+      accent = ui_theme::successAction();
+      callback = [this]() {
+        if (isCourseFinalResult()) {
+          startModernCourseRetrySame();
+        } else {
+          startRetry(true);
+        }
+      };
+      break;
+    case ResultTouchControlAction::Replay:
+      label = "Replay";
+      accent = ui_theme::infoAction();
+      callback = [this]() {
+        if (isCourseFinalResult()) {
+          startCourseReplay();
+        } else {
+          startReplay();
+        }
+      };
+      break;
+    case ResultTouchControlAction::Rankings:
+      label = "Rankings";
+      accent = ui_theme::infoAction();
+      callback = [this]() { openRankings(); };
+      enabled = rankingsAvailable();
+      break;
+    case ResultTouchControlAction::ExportPhoto:
+      label = "Export";
+      accent = ui_theme::violetAction();
+      callback = [this]() { exportPhoto(); };
+      break;
+    case ResultTouchControlAction::SelectSection:
+      label = "Section";
+      accent = ui_theme::successAction();
+      callback = [this]() { practiceThisSection(); };
+      break;
+    case ResultTouchControlAction::Next:
+      label = "Next";
+      accent = ui_theme::successAction();
+      callback = [this]() { continueCourse(); };
+      break;
+    case ResultTouchControlAction::Hide:
+      label = "Hide";
+      accent = ui_theme::textSecondary();
+      callback = [this]() { setResultTouchControlsHidden(true); };
+      break;
+    }
+    auto *button = new Button();
+    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    text->setText(label);
+    text->setAlign(TextView::CENTER);
+    text->setVAlign(TextView::MIDDLE);
+    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    if (action == ResultTouchControlAction::ExportPhoto) {
+      resultTouchExportPhotoText = text;
+    }
+    button->setContentView(text);
+    button->setSize(142, 48);
+    button->setCornerRadius(ui_theme::controlRadius());
+    button->setBackgroundColors(ui_theme::withAlpha(accent, 76),
+                                ui_theme::withAlpha(accent, 112),
+                                ui_theme::withAlpha(accent, 152));
+    button->setBorderColors(ui_theme::withAlpha(accent, 140),
+                            ui_theme::withAlpha(accent, 190), accent);
+    button->setStyledBorderWidth(1);
+    button->setEnabled(enabled);
+    button->setOnClickListener(std::move(callback));
+    panel->addView(button);
+  };
+  for (const auto action : presentation.actions) {
+    addAction(action);
+  }
+  overlay->addView(panel);
+
+  auto *restore = new Button();
+  restore->setName("resultTouchControlsRestore");
+  restore->setPositionType(YGPositionTypeAbsolute);
+  restore->setPosition(Edge::Left, 0);
+  restore->setPosition(Edge::Top, 0);
+  restore->setWidth(static_cast<float>(rendering::window_width));
+  restore->setHeight(static_cast<float>(rendering::window_height));
+  restore->setBackgroundColors(Color(0, 0, 0, 0), Color(0, 0, 0, 0),
+                               Color(0, 0, 0, 0));
+  restore->setOnClickListener(
+      [this]() { setResultTouchControlsHidden(false); });
+  restore->setVisible(presentation.capturesRestoreTouch);
+  restore->setDisplay(presentation.capturesRestoreTouch ? YGDisplayFlex
+                                                         : YGDisplayNone);
+  overlay->addView(restore);
+
+  resultTouchControlsOverlay = overlay;
+  resultTouchControlsPanel = panel;
+  resultTouchControlsRestore = restore;
+  rootLayout->addView(overlay);
+}
+
+void ResultScene::setResultTouchControlsHidden(bool hidden) {
+  resultTouchControlsHidden = hidden;
+  if (resultTouchControlsPanel == nullptr || resultTouchControlsRestore == nullptr) {
+    return;
+  }
+  resultTouchControlsPanel->setVisible(!hidden);
+  resultTouchControlsPanel->setDisplay(hidden ? YGDisplayNone : YGDisplayFlex);
+  resultTouchControlsRestore->setVisible(hidden);
+  resultTouchControlsRestore->setDisplay(hidden ? YGDisplayFlex
+                                                : YGDisplayNone);
+  if (rootLayout != nullptr) {
+    rootLayout->applyYogaLayout();
+  }
+}
+
+void ResultScene::handleResultSkinRenderFailure() {
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return;
+#else
+  if (rootLayout == nullptr) {
+    return;
+  }
+  const bool renderFailed = resultSkinSession != nullptr;
+  SDL_Log(renderFailed ? "Result skin rendering failed; restoring application controls."
+                       : "Result skin could not start; showing application controls.");
+  resultSkinSession.reset();
+  resultSkinFadeoutStartedMillis.reset();
+  resultSkinMouseCapture.reset();
+  resultSkinTouchCaptures.clear();
+  const auto presentation = makeResultSkinFailurePresentation(true);
+  if (presentation.restoreTouchControls) {
+    setResultTouchControlsHidden(false);
+  }
+  if (!presentation.showNotice || resultSkinFailureNotice != nullptr) {
+    return;
+  }
+
+  auto *notice = new View();
+  notice->setName("resultSkinFailureNotice");
+  notice->setPositionType(YGPositionTypeAbsolute);
+  notice->setPosition(Edge::Left, 24.0F);
+  notice->setPosition(Edge::Right, 24.0F);
+  notice->setPosition(Edge::Top, 24.0F);
+  notice->setFlexDirection(FlexDirection::Row);
+  notice->setAlignItems(YGAlignCenter);
+  notice->setJustifyContent(YGJustifySpaceBetween);
+  notice->setPadding(Edge::All, 16.0F);
+  notice->setGap(16.0F);
+  notice->setCornerRadius(ui_theme::panelRadius());
+  notice->setBackgroundColor(ui_theme::resultPanelStrong());
+  notice->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 210));
+  notice->setBorderWidth(1);
+  notice->setZIndex(2300);
+
+  auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  message->setText(renderFailed
+                       ? "Result skin stopped rendering. Application controls are restored."
+                       : "Result skin could not start. Application controls are available.");
+  message->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  message->setWrap(true);
+  message->setFlexGrow(1.0F);
+  notice->addView(message);
+
+  auto *back = new Button();
+  auto *backText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  backText->setText("Back");
+  backText->setAlign(TextView::CENTER);
+  backText->setVAlign(TextView::MIDDLE);
+  backText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
+  back->setContentView(backText);
+  back->setSize(128, 48);
+  back->setCornerRadius(ui_theme::controlRadius());
+  back->setBackgroundColors(ui_theme::primaryAction(),
+                            ui_theme::primaryActionHover(),
+                            ui_theme::primaryActionPressed());
+  back->setOnClickListener([this]() {
+    const auto *current = localSource();
+    if (current != nullptr && isCourseStageResult() &&
+        !current->courseOptions.savedResultBrowsing) {
+      showCourseExitConfirmation();
+    } else {
+      exitResult();
+    }
+  });
+  notice->addView(back);
+
+  resultSkinFailureNotice = notice;
+  rootLayout->addView(notice);
+  rootLayout->applyYogaLayout();
+#endif
+}
+
+void ResultScene::appendResultSkinRenderDiagnostics() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (!resultSkinSession) return;
+  auto diagnostics = resultSkinSession->takeLastDiagnostics();
+  if (!context.skinDiagnosticHistory) return;
+  for (auto &diagnostic : diagnostics) {
+    try {
+      context.skinDiagnosticHistory->append({
+          .entry = resultSkinEntry,
+          .revisionDigest = resultSkinRevisionDigest,
+          .configurationDigest = resultSkinConfigurationDigest,
+          .phase = skin::SkinDiagnosticPhase::Session,
+          .diagnostic = std::move(diagnostic),
+          .luaLine = std::nullopt,
+          .frameSerial = context.currentFrame});
+    } catch (...) {
+    }
+  }
+#endif
+}
+
 void ResultScene::addRemoteButtons() {
   const auto *remote = remoteSource();
   if (remote == nullptr || rootLayout == nullptr) {
@@ -1739,6 +2794,30 @@ void ResultScene::refreshRankingsButton() {
   if (rankingsButton != nullptr) {
     rankingsButton->setEnabled(rankingsAvailable());
   }
+}
+
+void ResultScene::requestSelectedResultSkinRankings() {
+  if (!rankingsAvailable() || context.irRankingService == nullptr) return;
+  const auto *remote = remoteSource();
+  const auto *local = localSource();
+  if (remote != nullptr && remote->rankingQuery) {
+    (void)context.irRankingService->open(
+        {.profileId = context.profileManager.activeProfile().id,
+         .providerId = remote->providerId,
+         .serverOrigin = remote->serverOrigin,
+         .chart = *remote->rankingQuery});
+    return;
+  }
+  if (local == nullptr) return;
+  const auto query = ir::makeBokutachiRankingQuery(local->meta);
+  const auto settings = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  if (!query.value || settings == context.settings.irProviders.end()) return;
+  (void)context.irRankingService->open(
+      {.profileId = context.profileManager.activeProfile().id,
+       .providerId = std::string(ir::kTachiProviderId),
+       .serverOrigin = settings->second.serverOrigin,
+       .chart = *query.value});
 }
 
 void ResultScene::openRankings() {
@@ -2027,8 +3106,7 @@ bool ResultScene::recordCourseStageRestTime() {
 void ResultScene::exportPhoto() {
   const auto *local = localSource();
   const auto *remote = remoteSource();
-  if ((local != nullptr && local->autoPlayResult) ||
-      resultPhotoExportInProgress || exportPhotoButtonText == nullptr) {
+  if ((local != nullptr && local->autoPlayResult) || resultPhotoExportInProgress) {
     return;
   }
 
@@ -2037,7 +3115,7 @@ void ResultScene::exportPhoto() {
   }
 
   resultPhotoExportInProgress = true;
-  exportPhotoButtonText->setText("Saving...");
+  setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saving);
   ResultImageExportResult result;
   if (remote != nullptr) {
     result = ResultImageExporter::Export(context, remote->presentation);
@@ -2055,12 +3133,11 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = false;
 
   if (result.success) {
-    exportPhotoButtonText->setText(
-        result.message == "Saved to Photos" ? "Saved" : "Exported");
+    setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saved);
     SDL_Log("Result image exported: %s (%s)",
             fspath_to_utf8(result.outputPath).c_str(), result.message.c_str());
   } else {
-    exportPhotoButtonText->setText("Export Failed");
+    setResultPhotoExportPresentation(ResultPhotoExportPresentation::Failed);
     SDL_Log("Result image export failed: %s (%s)", result.message.c_str(),
             fspath_to_utf8(result.outputPath).c_str());
   }
@@ -2070,8 +3147,8 @@ void ResultScene::exportPhoto() {
 
   defer(
       [this]() {
-        if (!resultPhotoExportInProgress && exportPhotoButtonText != nullptr) {
-          exportPhotoButtonText->setText("Export Photo");
+        if (!resultPhotoExportInProgress) {
+          setResultPhotoExportPresentation(ResultPhotoExportPresentation::Ready);
           if (rootLayout != nullptr) {
             rootLayout->applyYogaLayout();
           }
@@ -2079,6 +3156,17 @@ void ResultScene::exportPhoto() {
         return true;
       },
       result.success ? 1800 : 1400, true);
+}
+
+void ResultScene::setResultPhotoExportPresentation(
+    ResultPhotoExportPresentation presentation) {
+  const std::string label(resultPhotoExportLabel(presentation));
+  if (exportPhotoButtonText != nullptr) {
+    exportPhotoButtonText->setText(label);
+  }
+  if (resultTouchExportPhotoText != nullptr) {
+    resultTouchExportPhotoText->setText(label);
+  }
 }
 
 void ResultScene::continueCourse() {
@@ -2226,6 +3314,8 @@ void ResultScene::showSavedCourseStage() {
     return;
   }
   const auto &result = session->completedResults[session->currentIndex];
+  const ReplayData *stageReplay = nullptr;
+  bms_parser::Chart *replayChart = nullptr;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
   if (session->modernCourseResultBrowsing) {
     if (session->currentIndex >= session->stageProvenance.size() ||
@@ -2234,6 +3324,11 @@ void ResultScene::showSavedCourseStage() {
       return;
     }
     provenance = *session->stageProvenance[session->currentIndex];
+    stageReplay = session->resultBrowseStageReplay(session->currentIndex);
+    replayChart = session->resultBrowseReplayChart(session->currentIndex);
+    if (stageReplay != nullptr) {
+      session->applyReplayStagePlayOptions(*stageReplay);
+    }
   } else {
     if (session->courseReplayData == nullptr ||
         session->currentIndex >= session->courseReplayData->stages.size()) {
@@ -2243,15 +3338,19 @@ void ResultScene::showSavedCourseStage() {
     const auto &replay =
         session->courseReplayData->stages[session->currentIndex].replay;
     session->applyReplayStagePlayOptions(replay);
+    stageReplay = &replay;
     provenance = replay.provenance;
   }
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
-          context, result.meta, result.state, provenance, nullptr,
+          context, result.meta, result.state, provenance, stageReplay,
           ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,
-                              .savedResultBrowsing = true}),
+                              .savedResultBrowsing = true},
+          std::string{}, std::unique_ptr<bms_parser::Chart>{}, replayChart,
+          std::nullopt, stageReplay, std::nullopt, true, ResultTableContext{},
+          result.gameplayGraph),
       false);
 }
 
@@ -2276,7 +3375,10 @@ void ResultScene::showCourseResult() {
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
                               .session = session,
                               .savedResultBrowsing =
-                                  local->courseOptions.savedResultBrowsing}),
+                                  local->courseOptions.savedResultBrowsing},
+          std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
+          std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
+          courseGameplayGraphForSession(*session, courseState)),
       false);
 }
 
@@ -2868,6 +3970,44 @@ void ResultScene::init() {
     if (isCourseFinalResult()) {
       (void)persistModernCourseResult();
     }
+    loadPlayerHistory();
+    const ReplayData *timingReplay = local->analyticsData
+                                         ? &*local->analyticsData
+                                         : (local->presentationReplay
+                                                ? &*local->presentationReplay
+                                                : (local->retryData
+                                                       ? &*local->retryData
+                                                       : nullptr));
+    const auto timing = isCourseFinalResult() &&
+                                local->courseOptions.session != nullptr
+                            ? courseTimingStatisticsForSession(
+                                  *local->courseOptions.session)
+                            : resultTimingStatistics(
+                                  timingReplay, local->meta.TotalNotes,
+                                  local->reusableRetryChart);
+    if (timing) {
+      if (timing->hasTimingSamples) {
+        local->skinTimingSampleCount = timing->timingSampleCount;
+        local->skinTimingAverageMillis = timing->averageMillis;
+        local->skinTimingStandardDeviationMillis =
+            timing->standardDeviationMillis;
+      }
+      local->skinAverageJudgeMicros = timing->averageJudgeMicros;
+      local->skinTimingDistribution = timing->distribution;
+    }
+    if (isCourseStageResult() && local->courseOptions.session != nullptr &&
+        local->courseOptions.session->currentIndex <
+            local->courseOptions.session->completedResults.size()) {
+      auto &stage = local->courseOptions.session->completedResults[
+          local->courseOptions.session->currentIndex];
+      stage.skinTimingSampleCount = local->skinTimingSampleCount;
+      stage.skinTimingAverageMillis = local->skinTimingAverageMillis;
+      stage.skinTimingStandardDeviationMillis =
+          local->skinTimingStandardDeviationMillis;
+      stage.skinAverageJudgeMicros = local->skinAverageJudgeMicros;
+      stage.skinTimingDistribution = local->skinTimingDistribution;
+    }
+    local->skinTimingStatisticsPrepared = true;
   }
 
   rootLayout =
@@ -2887,25 +4027,45 @@ void ResultScene::init() {
   ResultSkinData data = makeResultSkinData();
   data.showTimingAnalytics = analyticsModel.has_value();
   data.showResultGraph = !series.empty();
-  skin->buildLayout("Result", rootLayout, &data);
+  const bool selectedResultSkin = startSelectedResultSkin();
+  if (!selectedResultSkin) {
+    skin->buildLayout("Result", rootLayout, &data);
+    if (resultSkinActivationFailed) {
+      handleResultSkinRenderFailure();
+    }
+  }
   if (local != nullptr) {
-    addTimingAnalytics(std::move(analyticsModel));
-    addResultPersistenceStatus();
+    const bool hasPersistenceResult =
+        local->persistenceOptions.chartAttempt != nullptr ||
+        !local->persistenceOptions.outcome.userMessage.empty();
+    const auto applicationOverlays = makeResultSkinApplicationOverlays(
+        {.selectedSkin = selectedResultSkin,
+         .hasPersistenceResult = hasPersistenceResult,
+         .courseStage = isCourseStageResult(),
+         .savedResultBrowsing = local->courseOptions.savedResultBrowsing});
+    if (!selectedResultSkin) {
+      addTimingAnalytics(std::move(analyticsModel));
+    }
+    if (applicationOverlays.showsPersistenceRecovery) {
+      addResultPersistenceStatus();
+    }
     addIrResultStatus();
     if (isCourseStageResult() || isCourseFinalResult()) {
-      addCourseButtons();
-      if (!local->courseOptions.savedResultBrowsing) {
+      if (!selectedResultSkin) {
+        addCourseButtons();
+      }
+      if (applicationOverlays.buildsCourseExitConfirmation) {
         buildCourseExitConfirmation();
       }
-    } else {
+    } else if (!selectedResultSkin) {
       addRetryButtons();
     }
-  } else if (remote != nullptr) {
+  } else if (!selectedResultSkin && remote != nullptr) {
     addRemoteIrStatus();
     addRemoteButtons();
   }
 
-  if (!isCourseStageResult() && !isCourseFinalResult()) {
+  if (!selectedResultSkin && !isCourseStageResult() && !isCourseFinalResult()) {
     if (auto *backButton =
             dynamic_cast<Button *>(rootLayout->findViewByName("backButton"));
         backButton != nullptr) {
@@ -2921,12 +4081,17 @@ void ResultScene::init() {
   rankingOverlayPortal->setZIndex(2000);
   rootLayout->addView(rankingOverlayPortal);
 
+  if (selectedResultSkin) {
+    requestSelectedResultSkinRankings();
+    buildResultTouchControls();
+  }
+
   if (local != nullptr) {
     updateResultPersistencePresentation();
     updateIrResultPresentation(true);
   }
 
-  graphPlaceHolder = rootLayout->findViewByName("graph");
+  graphPlaceHolder = selectedResultSkin ? nullptr : rootLayout->findViewByName("graph");
   if (graphPlaceHolder != nullptr) {
     auto *graphView = new ResultGaugeGraphView(std::move(series));
     graphView->setWidthPercent(100.0F)->setFlex(1.0F);
@@ -3008,7 +4173,201 @@ void ResultScene::update(float dt) {
   }
 }
 
+bool ResultScene::queueResultSkinPointerEvent(SDL_Event &event) {
+#if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  (void)event;
+  return false;
+#else
+  if (!resultSkinSession) return false;
+  UiLogicalPoint point;
+  const long long eventMicros = resultSkinStartedMicros == 0
+                                    ? 0
+                                    : std::max(0LL, nowMicros() - resultSkinStartedMicros);
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN:
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID) {
+      return false;
+    }
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale,
+                          point.x, point.y);
+    break;
+  case SDL_MOUSEMOTION:
+    if (event.motion.which == SDL_TOUCH_MOUSEID || !resultSkinMouseCapture) {
+      return false;
+    }
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale,
+                          point.x, point.y);
+    (void)resultSkinSession->queuePointerMove(*resultSkinMouseCapture, point,
+                                              eventMicros);
+    consumeResultSkinBuiltinEvents();
+    return true;
+  case SDL_MOUSEBUTTONUP:
+    if (event.button.button != SDL_BUTTON_LEFT ||
+        event.button.which == SDL_TOUCH_MOUSEID || !resultSkinMouseCapture) {
+      return false;
+    }
+    resultSkinMouseCapture.reset();
+    return true;
+  case SDL_FINGERDOWN:
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                              point.y);
+    break;
+  case SDL_FINGERMOTION: {
+    const auto capture = resultSkinTouchCaptures.find(event.tfinger.fingerId);
+    if (capture == resultSkinTouchCaptures.end()) {
+      return false;
+    }
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                              point.y);
+    (void)resultSkinSession->queuePointerMove(capture->second, point,
+                                              eventMicros);
+    consumeResultSkinBuiltinEvents();
+    return true;
+  }
+  case SDL_FINGERUP:
+    if (resultSkinTouchCaptures.erase(event.tfinger.fingerId) == 0) {
+      return false;
+    }
+    return true;
+  default:
+    return false;
+  }
+  PresentationUiHit hit;
+  if (!resultSkinSession->queuePointerDown(point, eventMicros, &hit)) {
+    return false;
+  }
+  if (hit.kind == PresentationUiControlKind::Slider ||
+      hit.kind == PresentationUiControlKind::LaneCover) {
+    if (event.type == SDL_MOUSEBUTTONDOWN) {
+      resultSkinMouseCapture = hit;
+    } else {
+      resultSkinTouchCaptures.insert_or_assign(event.tfinger.fingerId, hit);
+    }
+  }
+  consumeResultSkinBuiltinEvents();
+  return true;
+#endif
+}
+
+void ResultScene::consumeResultSkinBuiltinEvents() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (!resultSkinSession) return;
+  bool audioSettingsChanged = false;
+  for (const auto &write : resultSkinSession->takeQueuedAudioVolumeWrites()) {
+    switch (write.selector) {
+    case 17:
+      audioSettingsChanged = audioSettingsChanged ||
+          context.settings.audioVideo.audio.masterVolume != write.value;
+      context.settings.audioVideo.audio.masterVolume = write.value;
+      break;
+    case 18:
+      audioSettingsChanged = audioSettingsChanged ||
+          context.settings.audioVideo.audio.keysoundVolume != write.value;
+      context.settings.audioVideo.audio.keysoundVolume = write.value;
+      break;
+    case 19:
+      audioSettingsChanged = audioSettingsChanged ||
+          context.settings.audioVideo.audio.bgmVolume != write.value;
+      context.settings.audioVideo.audio.bgmVolume = write.value;
+      break;
+    default:
+      break;
+    }
+  }
+  if (audioSettingsChanged) {
+    // FloatPropertyFactory's result-state writers mutate the application
+    // AudioConfig. Apply and persist the same three fields that gameplay does.
+    (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
+    if (!context.saveSettings()) {
+      SDL_Log("Failed to save result skin audio settings");
+    }
+  }
+  for (const int eventId : resultSkinSession->takeQueuedBuiltinEventIds()) {
+    if (eventId == 210) openRankings();
+  }
+#endif
+}
+
+EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (resultSkinFadeoutStartedMillis) {
+    return {};
+  }
+#endif
+  // Result overlays and touch controls are rendered above a selected skin and
+  // must receive the corresponding pointer event first.
+  const bool resultSkinPointerContinuation =
+      event.type == SDL_MOUSEMOTION || event.type == SDL_MOUSEBUTTONUP ||
+      event.type == SDL_FINGERMOTION || event.type == SDL_FINGERUP;
+  if (resultSkinPointerContinuation && queueResultSkinPointerEvent(event)) {
+    return {};
+  }
+  if (rootLayout != nullptr && !rootLayout->handleEvents(event)) return {};
+  if (queueResultSkinPointerEvent(event)) return {};
+  return {};
+}
+
+bool ResultScene::renderViewBeforeScene(const View *view) const {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return view != rootLayout ||
+         !shouldRenderResultRootAfterSkin(resultSkinSession != nullptr);
+#else
+  (void)view;
+  return true;
+#endif
+}
+
 void ResultScene::renderScene() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (resultSkinSession) {
+    RenderContext renderContext(context.uiBatchRenderer);
+    RenderContext::UiBatchScope uiBatchScope(renderContext);
+    ResultSkinData skinData = makeResultSkinData();
+    if (resultSkinSession->requiresRuntimeStringRefresh(skinData)) {
+      if (!resultSkinSession->refreshRuntimeStrings(skinData)) {
+        appendResultSkinRenderDiagnostics();
+        handleResultSkinRenderFailure();
+        return;
+      }
+    }
+    const long long elapsedMillis =
+        std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+    const auto *local = localSource();
+    const bool courseReplayRestOwnsTransition =
+        local != nullptr && isCourseStageResult() &&
+        local->courseOptions.session != nullptr &&
+        local->courseOptions.session->courseReplayPlayback;
+    if (persistenceDecisionRequired()) {
+      resultSkinFadeoutStartedMillis.reset();
+    } else if (!courseReplayRestOwnsTransition &&
+               elapsedMillis > resultSkinSession->sceneMillis()) {
+      if (!resultSkinFadeoutStartedMillis) {
+        resultSkinFadeoutStartedMillis = elapsedMillis;
+      } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >
+                 resultSkinSession->fadeoutMillis()) {
+        if (isCourseStageResult()) {
+          continueCourse();
+        } else {
+          exitResult();
+        }
+        return;
+      }
+    }
+    const bool rendered = resultSkinSession->render(
+        renderContext, skinData,
+        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
+    appendResultSkinRenderDiagnostics();
+    if (!rendered) {
+      handleResultSkinRenderFailure();
+    }
+    if (rendered) {
+      consumeResultSkinBuiltinEvents();
+    }
+  }
+#endif
   if (persistenceDetailsModalRoot != nullptr) {
     persistenceDetailsModalRoot->setSize(rendering::window_width,
                                          rendering::window_height);
@@ -3020,9 +4379,20 @@ void ResultScene::renderScene() {
 }
 
 void ResultScene::cleanupScene() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  resultSkinSession.reset();
+  resultSkinFadeoutStartedMillis.reset();
+  resultSkinMouseCapture.reset();
+  resultSkinTouchCaptures.clear();
+#endif
   rankingsModal.reset();
   rootLayout = nullptr;
   graphPlaceHolder = nullptr;
+  resultTouchControlsOverlay = nullptr;
+  resultTouchControlsPanel = nullptr;
+  resultTouchControlsRestore = nullptr;
+  resultSkinFailureNotice = nullptr;
+  resultTouchControlsHidden = false;
   normalResultActions = nullptr;
   resultPersistenceStatus = nullptr;
   persistenceStatusMessage = nullptr;

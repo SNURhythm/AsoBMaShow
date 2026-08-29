@@ -1,6 +1,7 @@
 #include "JsonGameplaySkinDecoder.h"
 
 #include "../GameplaySkinTraits.h"
+#include "../SkinTargetTraits.h"
 #include "NumericGlyphAtlas.h"
 #include "SkinCoverNormalization.h"
 #include "SkinGaugeNodeExpansion.h"
@@ -3198,9 +3199,9 @@ JsonGameplaySkinDecodeResult JsonGameplaySkinDecoder::decode(
     result.header = header;
     reconcileConfiguration(header, desired, result, context);
     if (result.cancelled) return result;
-    if (!gameplaySkinTraitForSkinType(header.type)) {
+    if (!skinTargetTraitForType(header.type)) {
       context.error("skin_json_model_type_unsupported",
-                    "JSON gameplay document does not declare a gameplay type");
+                    "JSON document does not declare a supported skin type");
       return result;
     }
     buildGameplayModel(root, header, context);

@@ -361,8 +361,8 @@ std::string gameplaySkinSettingsPresentationKey(
   encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.totalBytes);
   encoder.unsignedNumber(snapshot.rescanProgress.packageProgress.completedFiles);
 
-  encoder.unsignedNumber(snapshot.selectedGameplayEntries.size());
-  for (const auto &[skinType, entry] : snapshot.selectedGameplayEntries) {
+  encoder.unsignedNumber(snapshot.selectedSkinEntries.size());
+  for (const auto &[skinType, entry] : snapshot.selectedSkinEntries) {
     encoder.signedNumber(skinType);
     encodeEntry(encoder, entry);
   }
@@ -425,8 +425,8 @@ std::string gameplaySkinSettingsLayoutKey(
     encodeEnum(encoder, *snapshot.pendingSafetyLevel);
   }
 
-  encoder.unsignedNumber(snapshot.selectedGameplayEntries.size());
-  for (const auto &[skinType, entry] : snapshot.selectedGameplayEntries) {
+  encoder.unsignedNumber(snapshot.selectedSkinEntries.size());
+  for (const auto &[skinType, entry] : snapshot.selectedSkinEntries) {
     encoder.signedNumber(skinType);
     encodeEntry(encoder, entry);
   }

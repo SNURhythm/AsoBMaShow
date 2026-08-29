@@ -2747,6 +2747,18 @@ void setNilGlobal(lua_State *state, const char *name) {
   lua_setglobal(state, name);
 }
 
+void installTableCompatibility(lua_State *state) {
+  lua_getglobal(state, LUA_TABLIBNAME);
+  lua_getfield(state, -1, "unpack");
+  const bool hasTableUnpack = !lua_isnil(state, -1);
+  lua_pop(state, 1);
+  if (!hasTableUnpack) {
+    lua_getglobal(state, "unpack");
+    lua_setfield(state, -2, "unpack");
+  }
+  lua_pop(state, 1);
+}
+
 void installSafeOsLibrary(lua_State *state, bool allowProcessGlobalOperations) {
   openLibrary(state, LUA_OSLIBNAME, luaopen_os);
   if (allowProcessGlobalOperations) {
@@ -2836,6 +2848,7 @@ int installHost(lua_State *state) {
   openLibrary(state, "", luaopen_base);
   openLibrary(state, LUA_LOADLIBNAME, luaopen_package);
   openLibrary(state, LUA_TABLIBNAME, luaopen_table);
+  installTableCompatibility(state);
   openLibrary(state, LUA_STRLIBNAME, luaopen_string);
   openLibrary(state, LUA_MATHLIBNAME, luaopen_math);
   installSafeOsLibrary(state, impl->allowProcessGlobalOperations);

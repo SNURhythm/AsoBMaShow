@@ -572,9 +572,9 @@ void testAllCommandsDecodeToTypedCanonicalModel() {
         destinationFor(model, noteCharts.front()->id);
     expect(destination != nullptr &&
                !destination->presentation.frames.empty() &&
-               destination->presentation.frames.front().width == 222 &&
-               destination->presentation.frames.front().height == 77,
-           "graph destinations use the pinned loader's single shared source rectangle");
+               destination->presentation.frames.front().width == 300 &&
+               destination->presentation.frames.front().height == 100,
+           "NOTECHART retains its own source rectangle when later graphs load");
   }
   if (!bpmCharts.empty()) {
     const auto &chart = std::get<SkinBpmGraphObject>(bpmCharts.front()->payload);

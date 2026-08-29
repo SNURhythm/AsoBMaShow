@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace {
 void advanceRevision(std::uint64_t &value) noexcept {
@@ -42,6 +43,100 @@ skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
     view.gaugeRevision = state.dynamic->gaugeRevision;
   }
   return view;
+}
+
+SkinGameplayGraphState
+combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  std::vector<std::int64_t> recentJudgeTimings;
+  recentJudgeTimings.reserve(kSkinRecentJudgeTimingCapacity);
+  bool hasGraph = false;
+  std::int64_t chartTimeOffset = 0;
+  for (const auto &stage : stages) {
+    if (stage.chart == nullptr || stage.dynamic == nullptr) {
+      continue;
+    }
+    hasGraph = true;
+    const auto &stageChart = *stage.chart;
+    const auto &stageDynamic = *stage.dynamic;
+    if (!chart->normalDistribution.empty() &&
+        !stageChart.normalDistribution.empty()) {
+      chart->normalDistribution.pop_back();
+    }
+    chart->normalDistribution.insert(chart->normalDistribution.end(),
+                                     stageChart.normalDistribution.begin(),
+                                     stageChart.normalDistribution.end());
+    chart->judgementNotes.insert(chart->judgementNotes.end(),
+                                 stageChart.judgementNotes.begin(),
+                                 stageChart.judgementNotes.end());
+    for (auto point : stageChart.bpmSeries) {
+      point.chartTimeMicros += chartTimeOffset;
+      chart->bpmSeries.push_back(point);
+    }
+    chart->judgementDistributionSeconds +=
+        stageChart.judgementDistributionSeconds;
+    if (stageChart.mainBpm > 0.0) {
+      chart->mainBpm = stageChart.mainBpm;
+    }
+    if (stageChart.minimumBpm > 0.0) {
+      chart->minimumBpm = chart->minimumBpm == 0.0
+                              ? stageChart.minimumBpm
+                              : std::min(chart->minimumBpm,
+                                         stageChart.minimumBpm);
+    }
+    if (stageChart.maximumBpm > 0.0) {
+      chart->maximumBpm = std::max(chart->maximumBpm, stageChart.maximumBpm);
+    }
+    dynamic->judgementDistribution.insert(
+        dynamic->judgementDistribution.end(),
+        stageDynamic.judgementDistribution.begin(),
+        stageDynamic.judgementDistribution.end());
+    dynamic->earlyLateDistribution.insert(
+        dynamic->earlyLateDistribution.end(),
+        stageDynamic.earlyLateDistribution.begin(),
+        stageDynamic.earlyLateDistribution.end());
+    for (std::size_t index = 0; index < dynamic->gaugeHistories.size();
+         ++index) {
+      const auto &history = stageDynamic.gaugeHistories[index];
+      dynamic->gaugeHistories[index].insert(
+          dynamic->gaugeHistories[index].end(), history.begin(), history.end());
+    }
+    for (std::size_t offset = 1;
+         offset <= stageDynamic.recentJudgeTimingsMillis.size(); ++offset) {
+      const std::size_t index =
+          (stageDynamic.recentJudgeTimingIndex + offset) %
+          stageDynamic.recentJudgeTimingsMillis.size();
+      const std::int64_t timing = stageDynamic.recentJudgeTimingsMillis[index];
+      if (timing != kSkinEmptyJudgeTimingMillis) {
+        recentJudgeTimings.push_back(timing);
+      }
+    }
+    if (recentJudgeTimings.size() > kSkinRecentJudgeTimingCapacity) {
+      recentJudgeTimings.erase(
+          recentJudgeTimings.begin(),
+          recentJudgeTimings.end() - kSkinRecentJudgeTimingCapacity);
+    }
+    dynamic->judgeWindows = stageDynamic.judgeWindows;
+    dynamic->gaugeType = stageDynamic.gaugeType;
+    dynamic->gaugeMinimum = stageDynamic.gaugeMinimum;
+    dynamic->gaugeMaximum = stageDynamic.gaugeMaximum;
+    dynamic->gaugeBorder = stageDynamic.gaugeBorder;
+    dynamic->gaugeSupported = stageDynamic.gaugeSupported;
+    dynamic->judgementRevision += stageDynamic.judgementRevision;
+    dynamic->gaugeRevision += stageDynamic.gaugeRevision;
+    chartTimeOffset += static_cast<std::int64_t>(
+        stageChart.judgementDistributionSeconds) * 1'000'000LL;
+  }
+  for (const std::int64_t timing : recentJudgeTimings) {
+    dynamic->recentJudgeTimingIndex =
+        (dynamic->recentJudgeTimingIndex + 1) %
+        dynamic->recentJudgeTimingsMillis.size();
+    dynamic->recentJudgeTimingsMillis[dynamic->recentJudgeTimingIndex] = timing;
+  }
+  return hasGraph ? SkinGameplayGraphState{.chart = std::move(chart),
+                                            .dynamic = std::move(dynamic)}
+                  : SkinGameplayGraphState{};
 }
 
 SkinGameplayGraphAccumulator::SkinGameplayGraphAccumulator(

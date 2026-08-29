@@ -75,6 +75,16 @@ void requireContains(const std::string &source, const std::string &token,
   require(source.find(token) != std::string::npos, message);
 }
 
+void requireOrdered(const std::string &source, const std::string &first,
+                    const std::string &second, const char *message) {
+  const std::size_t firstPosition = source.find(first);
+  const std::size_t secondPosition = source.find(second);
+  require(firstPosition != std::string::npos &&
+              secondPosition != std::string::npos &&
+              firstPosition < secondPosition,
+          message);
+}
+
 void testRemoteSourceOwnsOnlyValidatedRemoteData() {
   static_assert(std::is_constructible_v<ResultScene, ApplicationContext &,
                                         ResultRemoteOptions>);
@@ -404,6 +414,223 @@ void testLocalRegressionContractsRemainPresent() {
   }
 }
 
+void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
+  const std::string result = readSource("src/scene/ResultScene.cpp");
+  const std::string gameplay =
+      readSource("src/scene/play/GamePlayScene.cpp");
+  const std::string mainMenu = readSource("src/scene/MainMenuScene.cpp");
+  const std::string session =
+      readSource("src/skin/beatoraja/ResultSkinSession.cpp");
+  const std::string bridge =
+      readSource("src/skin/beatoraja/ResultSkinStateBridge.cpp");
+
+  requireContains(result,
+                  "data.playModeLabel = remote->presentation.playtype.value_or(\"\");",
+                  "remote result skins project the remote play mode string");
+  requireOrdered(result, "const auto replayTiming =",
+                 "if (sampleCount == 0 || !averageMillis || !standardDeviationMillis)",
+                 "course timing falls back to retained replay data before "
+                 "discarding zero-sample stages");
+  requireContains(result,
+                  "if (result.timingSampleCount == 0) {\n"
+                  "    if (judgeNoteTotal == 0) return std::nullopt;",
+                  "all-miss courses retain their judge-duration result");
+  requireContains(session,
+                  "lastDiagnostics_.insert(lastDiagnostics_.end(),\n"
+                  "                          std::make_move_iterator(evaluated.diagnostics.begin()),\n"
+                  "                          std::make_move_iterator(evaluated.diagnostics.end()));\n"
+                  "  publishedInteractionLayout_",
+                  "successful result frames retain non-fatal diagnostics");
+  requireContains(result,
+                  "const bool rendered = resultSkinSession->render(\n"
+                  "        renderContext, skinData,\n"
+                  "        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);\n"
+                  "    appendResultSkinRenderDiagnostics();\n"
+                  "    if (!rendered) {",
+                  "ResultScene publishes diagnostics from successful result frames");
+  requireContains(result,
+                  "const int playerOffset = player == 1 ? keyCount : 0;",
+                  "generated 2P result patterns use replay-local lane ordinals");
+  requireContains(result,
+                  "session.currentOrLastCompletedStageProvenance();",
+                  "replay-less course results recover persisted stage setup");
+  requireContains(result,
+                  "*currentMeta, player1Option, player1Seed, 0);",
+                  "course result skins reconstruct the final stage's 1P lane pattern");
+  requireContains(result,
+                  "*currentMeta, player2Option, player2Seed, 1);",
+                  "course result skins reconstruct the final stage's 2P lane pattern");
+  requireContains(result,
+                  "} else if (local->practiceOptions.enabled) {",
+                  "practice result skins project their non-persisted replay setup");
+  requireContains(result,
+                  "data.replayLaneShufflePattern1P = resultReplayLanePattern(\n"
+                  "        local->meta, practice.playOption, practice.playOptionSeed, 0);",
+                  "practice result skins reconstruct the 1P lane pattern");
+  requireContains(result,
+                  "data.replayLaneShufflePattern2P = resultReplayLanePattern(\n"
+                  "          local->meta, practice.playOption2, practice.playOption2Seed, 1);",
+                  "practice result skins reconstruct the 2P lane pattern");
+  requireContains(result,
+                  "const ReplayData *stageReplay = nullptr;",
+                  "saved course stages retain the current replay setup");
+  requireContains(result,
+                  "context, result.meta, result.state, provenance, stageReplay,",
+                  "saved course stages project setup through the result scene");
+  requireContains(result,
+                  "stageReplay = session->resultBrowseStageReplay(session->currentIndex);",
+                  "saved course stage timing retains its replay source");
+  requireContains(result,
+                  "meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);",
+                  "course result metadata retains the selected long-note mode");
+  requireContains(result, "meta.Rank = currentMeta->Rank;",
+                  "course result metadata retains the current stage judge rank");
+  requireContains(result,
+                  "meta.BmsPath = currentMeta->BmsPath;\n"
+                  "    meta.Folder = currentMeta->Folder;\n"
+                  "    meta.StageFile = currentMeta->StageFile;\n"
+                  "    meta.BackBmp = currentMeta->BackBmp;\n"
+                  "    meta.Banner = currentMeta->Banner;\n"
+                  "    meta.TotalLongNotes = currentMeta->TotalLongNotes;\n"
+                  "    meta.TotalBackSpinNotes = currentMeta->TotalBackSpinNotes;",
+                  "course result metadata retains the current stage artwork");
+  requireContains(result,
+                  "meta.Banner = lastMeta.Banner;\n"
+                  "    meta.TotalLongNotes = lastMeta.TotalLongNotes;\n"
+                  "    meta.TotalBackSpinNotes = lastMeta.TotalBackSpinNotes;",
+                  "course result metadata retains completed-stage long-note counts");
+  requireContains(result, "courseGraphPaddingForEntry(",
+                  "course result graphs pad unplayed stages after an early failure");
+  requireContains(result,
+                  "dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;",
+                  "course result graph gauge history follows the padded aggregate state");
+  requireContains(mainMenu,
+                  "auto replay = consumer.load(*exact.record,",
+                  "saved course result recall loads its retained replay when available");
+  requireContains(mainMenu,
+                  "session->resultBrowseReplayData = std::move(resultBrowseReplayData);",
+                  "saved course result recall retains its replay for later result timing");
+  requireContains(mainMenu,
+                  "const ReplayData *firstReplay = session->resultBrowseStageReplay(0);",
+                  "the initially displayed saved course stage receives its retained replay");
+  requireContains(mainMenu,
+                  "*replayChart, *stageReplay, stage.state",
+                  "saved course graph reconstruction uses the replay-prepared chart");
+  requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
+                 "replay_result::BuildSkinGameplayGraphState(",
+                 "saved course graph reconstruction occurs before ResultScene uses it");
+  requireContains(result,
+                  "} else if (isCourseStageResult()) {",
+                  "saved modern course stages project durable setup provenance");
+  requireContains(result,
+                  "local->attemptProvenance.player1.option",
+                  "saved modern course stages retain the first-player option");
+  requireContains(result,
+                  "local->attemptProvenance.player2.option",
+                  "saved modern course stages retain the second-player option");
+  requireContains(result,
+                  "setupReplay->playOption.value_or(\"NORMAL\")",
+                  "replay-backed normal plays publish the 1P image index");
+  requireContains(result,
+                  "setupReplay->playOption2.value_or(\"NORMAL\")",
+                  "replay-backed normal double plays publish the 2P image index");
+  requireContains(result,
+                  "isCourseStageResult() &&\n"
+                  "        !current->courseOptions.savedResultBrowsing",
+                  "result skin failure back actions retain live-course confirmation");
+  requireContains(result,
+                  "if (isCourseStageResult()) {\n"
+                  "      availability.next = true;\n"
+                  "      availability.exportPhoto = !local->autoPlayResult;",
+                  "selected course-stage skins retain the native photo-export action");
+  requireContains(session,
+                  "data.pacemaker ? data.pacemaker->label : \"\"",
+                  "result font atlases include the pacemaker selector string");
+  requireContains(session, "data.chartMd5",
+                  "result font atlases include chart MD5 selector strings");
+  requireContains(session, "data.chartSha256",
+                  "result font atlases include chart SHA-256 selector strings");
+  requireContains(
+      session,
+      "LuaFrameStateBinding frameState(\n"
+      "      runtime_.get(), &bridge,\n"
+      "      {.context = this, .execute = &ResultSkinSession::executeHostEvent});",
+      "result Lua frames bind their supported ResultScene event executor");
+  requireContains(session, "runtime_->setEventExecutor(executor);",
+                  "result Lua frame binding installs its event executor");
+  requireContains(session, "runtime_->setEventExecutor({});",
+                  "result Lua frame teardown clears its event executor");
+  requireContains(result,
+                  "if (rendered) {\n"
+                  "      consumeResultSkinBuiltinEvents();\n"
+                  "    }",
+                  "successful result Lua frames dispatch queued built-in actions");
+  requireContains(result,
+                  "data.irOnline = !context.irAccountNameSnapshot().empty();",
+                  "result IR selector state requires an authenticated runtime account");
+  requireContains(result,
+                  "const long long beatorajaDiffMicros = -event.diffMicros;",
+                  "replay timing samples use Beatoraja's result-sign convention");
+  requireContains(mainMenu,
+                  "replay_result::BuildSkinGameplayChartGraphState(\n"
+                  "                      *stage.chart, stage.state)",
+                  "replay-less saved course stages preserve authored graph data without "
+                  "synthetic judgement samples");
+  requireContains(session, "writerInvocationFor(",
+                  "result sliders resolve their authored writer invocation");
+  requireContains(
+      gameplay,
+      "const long long finalGameplayTimeMicros =\n"
+      "      getGameplayTimeMicros(context.jukebox.getTimeMicros());\n"
+      "  updateSkinGameplayGraph(finalGameplayTimeMicros);\n\n"
+      "  SDL_Log(\"Active survival gauge failed\");",
+      "survival failure publishes the terminal gauge before result capture");
+  requireContains(session, "int ResultSkinSession::sceneMillis() const noexcept",
+                  "result skin sessions expose their authored scene duration");
+  requireContains(session,
+                  "int ResultSkinSession::fadeoutMillis() const noexcept",
+                  "result skin sessions expose their authored fadeout duration");
+  requireContains(
+      result,
+      "if (persistenceDecisionRequired()) {\n"
+      "      resultSkinFadeoutStartedMillis.reset();\n"
+      "    } else if (!courseReplayRestOwnsTransition &&\n"
+      "               elapsedMillis > resultSkinSession->sceneMillis()) {\n"
+      "      if (!resultSkinFadeoutStartedMillis) {\n"
+      "        resultSkinFadeoutStartedMillis = elapsedMillis;\n"
+      "      } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >\n"
+      "                 resultSkinSession->fadeoutMillis()) {\n"
+      "        if (isCourseStageResult()) {\n"
+      "          continueCourse();\n"
+      "        } else {\n"
+      "          exitResult();\n"
+      "        }\n"
+      "        return;\n"
+      "      }",
+      "finite result scenes wait for persistence and replay rest timing before transitions");
+  requireContains(result,
+                  "const bool courseReplayRestOwnsTransition =\n"
+                  "        local != nullptr && isCourseStageResult() &&\n"
+                  "        local->courseOptions.session != nullptr &&\n"
+                  "        local->courseOptions.session->courseReplayPlayback;",
+                  "course replay uses its recorded stage-rest timer as the transition authority");
+  requireOrdered(session,
+                 "auto queuedWriters = std::exchange(queuedWriterInvocations_, {});",
+                 "for (std::size_t timerIndex = 0;",
+                 "result Lua writers run before custom timer and event evaluation");
+  requireOrdered(result,
+                 "auto diagnostics = resultSkinSession->takeLastDiagnostics();",
+                 "if (!context.skinDiagnosticHistory) return;",
+                 "result render diagnostics are drained even without a history sink");
+  requireContains(bridge, "stringValue_ = data_.tableLevel + data_.tableName;",
+                  "result tablefull matches Beatoraja's level-first value");
+  requireContains(session,
+                  "appendRuntimeString(strings, data.tableLevel + data.tableName);",
+                  "result font atlases include the exact tablefull string");
+  requireContains(result, "takeQueuedAudioVolumeWrites()",
+                  "ResultScene applies result-skin audio volume writer output");
+}
+
 } // namespace
 
 int main() {
@@ -416,6 +643,7 @@ int main() {
   testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
   testResultTableContextRestoresRetryLaunchOptions();
   testLocalRegressionContractsRemainPresent();
+  testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent();
   std::cout << "remote result scene tests passed\n";
   return 0;
 }

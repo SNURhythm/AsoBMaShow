@@ -118,6 +118,10 @@ struct SkinGameplayGraphStateView {
   double minimumBpm = 0.0;
   double maximumBpm = 0.0;
   std::span<const SkinJudgeWindow> judgeWindows;
+  std::span<const int> timingDistribution;
+  int timingDistributionCenter = 150;
+  std::optional<double> timingDistributionAverageMillis;
+  std::optional<double> timingDistributionStandardDeviationMillis;
   std::span<const std::int64_t> recentJudgeTimingsMillis;
   std::size_t recentJudgeTimingIndex = 0;
   std::span<const float> gaugeHistory;
@@ -132,6 +136,12 @@ struct SkinGameplayGraphStateView {
 
 [[nodiscard]] SkinGameplayGraphStateView
 skinGameplayGraphStateView(const SkinGameplayGraphState &) noexcept;
+
+// Course result consumers concatenate completed chart snapshots. Keeping the
+// merge here lets interactive, saved, and exported results share the same
+// graph authority.
+[[nodiscard]] SkinGameplayGraphState combineSkinGameplayGraphStates(
+    std::span<const SkinGameplayGraphState> stages);
 
 class SkinGameplayGraphAccumulator {
 public:

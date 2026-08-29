@@ -253,6 +253,8 @@ private:
   std::vector<std::string> targetNeighbourNames_;
   std::string targetScorePlayerName_;
   PlaySkinFrameCommit staged_;
+  std::unordered_map<int, std::size_t> customTimerLastDefinitionIndexes_;
+  std::unordered_map<int, std::size_t> customEventLastDefinitionIndexes_;
   std::unordered_map<int, std::int64_t> customTimerValues_;
   std::unordered_map<int, std::int64_t> customEventLastExecutionMicros_;
   std::int64_t endOfNoteTimerStartMicros_ = kPlayfieldTimestampOff;
