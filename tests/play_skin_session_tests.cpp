@@ -6238,6 +6238,9 @@ void testResultBridgeMapsNamedResultAndRankingProperties() {
   const auto secondLamp = bridge.integerProperty(
       {.value = std::string{"cleartype_ranking+02"}},
       SkinIntegerPropertyDomain::ImageIndex);
+  const auto previousIrRank = bridge.integerProperty(
+      {.value = std::string{"ir_prevrank"}},
+      SkinIntegerPropertyDomain::IntegerValue);
   const auto catalog = gameplaySkinBuiltinCatalog();
   const SkinBindingType value{
       .kind = SkinBindingKind::IntegerProperty,
@@ -6249,7 +6252,8 @@ void testResultBridgeMapsNamedResultAndRankingProperties() {
              firstScore.value == 1998 && secondRank.supported &&
              secondRank.value == 2 && secondPlayer.supported &&
              secondPlayer.value == 1 && secondLamp.supported &&
-             secondLamp.value == 6 &&
+             secondLamp.value == 6 && previousIrRank.supported &&
+             previousIrRank.value == std::numeric_limits<int>::min() &&
              catalog.contains(value,
                               SkinBuiltinPropertySelector{"ranking_exscore+01"}) &&
              catalog.contains(image,

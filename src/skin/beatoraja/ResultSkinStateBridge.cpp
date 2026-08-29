@@ -1269,7 +1269,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 200:
     case 220:
       return std::numeric_limits<int>::min();
-    case 180: return std::numeric_limits<int>::min();
+    case 180:
+    case 182:
+      // The compact IR snapshot has no retained old rank.  Match
+      // AbstractResult's unavailable-ranking sentinel rather than
+      // substituting the current rank from visible rows.
+      return std::numeric_limits<int>::min();
     case 202: case 204: case 206: case 208: case 210: case 212:
     case 214: case 216: case 218: case 222: case 224:
     case 203: case 205: case 207: case 209: case 211: case 213:
