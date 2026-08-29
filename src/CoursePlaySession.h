@@ -324,6 +324,10 @@ struct CoursePlaySession {
   std::string modernCourseDiagnostic;
   std::vector<std::filesystem::path> modernCourseChartPaths;
   bool modernCourseResultBrowsing = false;
+  // A verified modern result stores one aggregate lamp for the entire course.
+  // Reconstructed stage gauges cannot recreate every lamp (notably full combo),
+  // so keep the authenticated browsing fact separate from live course state.
+  std::optional<int> recalledFinalClearType;
   bool modernCourseRetrySameAllowed = false;
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
@@ -353,6 +357,14 @@ struct CoursePlaySession {
 
   [[nodiscard]] bool validCurrentIndex() const {
     return currentIndex < entries.size();
+  }
+
+  void restoreFinalClearTypeForResult(int rank) {
+    recalledFinalClearType = rank;
+  }
+
+  [[nodiscard]] int finalClearTypeForPresentation(int derivedRank) const {
+    return recalledFinalClearType.value_or(derivedRank);
   }
 
   // SkinProperty exposes STRING_COURSE1_TITLE through

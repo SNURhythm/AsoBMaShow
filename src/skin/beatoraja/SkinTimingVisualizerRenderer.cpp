@@ -405,26 +405,22 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
   const int lineWidth = std::clamp(request.graph.lineWidth, 1, width);
   const int graphWidth = std::max(1, width / lineWidth);
   const int center = graphWidth / 2;
-  const auto scaledX = [center, lineWidth](int millis) {
-    return center + static_cast<int>(std::lround(
-                        static_cast<double>(millis) / lineWidth));
+  const auto scaledX = [center](int millis) {
+    return center + millis;
   };
   const int sourceCenter = request.state.timingDistributionCenter;
-  const auto aggregatedBucket = [&](int offset) {
-    int value = 0;
-    const int first = sourceCenter + offset * lineWidth;
-    for (int column = 0; column < lineWidth; ++column) {
-      const int source = first + column;
+  const auto bucket = [&](int offset) {
+    if (-sourceCenter < offset && offset < sourceCenter) {
+      const int source = sourceCenter + offset;
       if (source >= 0 && static_cast<std::size_t>(source) <
                              request.state.timingDistribution.size()) {
-        value += request.state.timingDistribution[static_cast<std::size_t>(source)];
+        return request.state.timingDistribution[static_cast<std::size_t>(source)];
       }
     }
-    return value;
+    return 0;
   };
   int maximum = 10;
-  for (int offset = -center; offset < graphWidth - center; ++offset) {
-    const int value = aggregatedBucket(offset);
+  for (const int value : request.state.timingDistribution) {
     if (maximum < value) maximum = value / 10 * 10 + 10;
   }
   std::uint64_t revision = 1469598103934665603ULL;
@@ -492,7 +488,7 @@ SkinTimingDistributionGraphRenderResult renderSkinTimingDistributionGraph(
                       scaledX(average - deviation), maximum, request.graph.devRgba);
   }
   for (int offset = -center; offset < graphWidth - center; ++offset) {
-    const int value = aggregatedBucket(offset);
+    const int value = bucket(offset);
     if (value > 0) {
       raster.appendRectangle(center + offset, maximum - value, 1, value,
                              request.graph.graphRgba);

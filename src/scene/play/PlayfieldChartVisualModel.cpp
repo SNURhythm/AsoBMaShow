@@ -902,6 +902,25 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
 
   auto &graph = result.skinGameplayGraph;
   graph.mainBpm = result.staticMetadata.mainBpm;
+  graph.normalKeyNotes = result.staticMetadata.normalKeyNotes;
+  graph.longKeyNotes = result.staticMetadata.longKeyNotes;
+  graph.normalScratchNotes = result.staticMetadata.normalScratchNotes;
+  graph.longScratchNotes = result.staticMetadata.longScratchNotes;
+  graph.selectedLongNoteMode = result.staticMetadata.selectedLongNoteMode;
+  graph.hasAnyLongNote = result.staticMetadata.hasAnyLongNote;
+  graph.hasUndefinedLongNote = result.staticMetadata.hasUndefinedLongNote;
+  graph.hasLongNote = result.staticMetadata.hasLongNote;
+  graph.hasChargeNote = result.staticMetadata.hasChargeNote;
+  graph.hasHellChargeNote = result.staticMetadata.hasHellChargeNote;
+  graph.hasBga = result.staticMetadata.hasBga;
+  graph.hasRandomSequence = result.staticMetadata.hasRandomSequence;
+  graph.hasBpmStop = result.staticMetadata.hasBpmStop;
+  if (const auto &information = result.staticMetadata.songInformation) {
+    graph.peakDensity = information->peakDensity;
+    graph.endDensity = information->endDensity;
+    graph.averageDensity = information->density;
+    graph.totalGauge = information->total;
+  }
   const std::size_t distributionSeconds =
       result.timelines.empty()
           ? 0

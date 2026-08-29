@@ -27,6 +27,21 @@ int graphY(float gauge, float maximum, float height) noexcept {
       gauge / maximum * (height - static_cast<float>(kLineWidth))));
 }
 
+std::uint64_t gaugeShapeRevision(
+    const SkinGameplayGraphStateView &state) noexcept {
+  // The published gauge revision covers the sampled values and gauge model.
+  // Course graphs also raster their cumulative stage offsets, so they must
+  // participate in the texture identity independently.
+  std::uint64_t revision = 1469598103934665603ULL;
+  revision ^= state.gaugeRevision;
+  revision *= 1099511628211ULL;
+  for (const std::size_t section : state.gaugeHistorySections) {
+    revision ^= static_cast<std::uint64_t>(section);
+    revision *= 1099511628211ULL;
+  }
+  return revision == 0 ? 1 : revision;
+}
+
 SkinGeneratedTextureRaster rasterFor(
     const SkinGaugeGraphRenderRequest &request, int revealMillis,
     std::size_t maximumCommands, std::size_t maximumPrimitiveVertices) {
@@ -52,7 +67,7 @@ SkinGeneratedTextureRaster rasterFor(
                               ? static_cast<std::uint64_t>(
                                     static_cast<std::uint32_t>(
                                         request.state.gaugeType) + 1U)
-                              : request.state.gaugeRevision + 1U});
+                              : gaugeShapeRevision(request.state)});
 }
 
 SkinGaugeGraphRenderResult combine(
@@ -136,6 +151,16 @@ renderSkinGaugeGraph(const SkinGaugeGraphRenderRequest &request) {
   int lastY = -1;
   for (std::size_t index = 1; index < request.state.gaugeHistory.size();
        ++index) {
+    if (std::find(request.state.gaugeHistorySections.begin(),
+                  request.state.gaugeHistorySections.end(), index) !=
+        request.state.gaugeHistorySections.end()) {
+      const int sectionX = graphX(index - 1, request.state.gaugeHistory.size(),
+                                  authoredWidth);
+      if (!shapeRaster.appendRectangle(sectionX, 0, 1, height,
+                                       0xffffffffU)) {
+        return combine(std::move(background), shapeRaster.take());
+      }
+    }
     const float currentGauge = request.state.gaugeHistory[index];
     const int x1 = graphX(index - 1, request.state.gaugeHistory.size(),
                           authoredWidth);

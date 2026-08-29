@@ -1,6 +1,7 @@
 #include "ModernResultRecallBuilder.h"
 
 #include "BmsMetadataText.h"
+#include "CoursePlaySession.h"
 #include "LongNoteModeUtils.h"
 #include "PlayOptionUtils.h"
 #include "replay/ReplayCapabilities.h"
@@ -225,7 +226,11 @@ void testChartRecallReappliesSavedRandomAndLongNoteSetup() {
 }
 
 void testChartRecallUsesOnlySavedFacts() {
-  const auto saved = chartResult();
+  auto saved = chartResult();
+  saved.score.maxCombo = saved.score.maxScore / 2;
+  saved.score.comboBreak = 0;
+  saved.score.clearType = kClearTypeFullComboRank;
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
   std::atomic_bool cancelled{false};
   int loads = 0;
   std::filesystem::path requestedPath;
@@ -267,6 +272,10 @@ void testChartRecallUsesOnlySavedFacts() {
              view.state.judgementFastSlowCount.at(PGreat).fast == 1 &&
              view.state.judgementFastSlowCount.at(Great).slow == 1,
          "recall restores adopted gauge and judgement timing presentation");
+  expect(view.state.getClearTypeRank() == saved.score.clearType &&
+             std::string_view(view.state.getClearTypeLabel()) == "FULL COMBO",
+         "recall preserves the persisted clear type instead of deriving a lamp "
+         "only from gauge state");
 
   const auto expectedFingerprint = view.result.resultFingerprint;
   const std::vector<replay::ReplayState> replayStates{
@@ -497,6 +506,31 @@ void testCourseRecallIsOrderedCompleteAndAtomic() {
          "malformed course ordering is rejected before any chart load");
 }
 
+void testCourseRecallPreservesPersistedAggregateClearType() {
+  auto saved = courseResult();
+  saved.clearType = kClearTypeFullComboRank;
+  saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+  std::atomic_bool cancelled{false};
+  const auto outcome = result_recall::BuildCourseResult(
+      result_persistence::ModernCourseResult(saved), cancelled,
+      [&](const std::filesystem::path &path,
+          std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
+        const std::size_t index =
+            path == saved.stages.front().score.chartPath ? 0 : 1;
+        return parsedChartFor(saved.stages[index].score);
+      });
+  expect(outcome.value.has_value(),
+         "a course result with an authenticated aggregate clear type recalls");
+  if (!outcome.value) return;
+
+  CoursePlaySession session;
+  session.restoreFinalClearTypeForResult(outcome.value->result.clearType);
+  expect(session.finalClearTypeForPresentation(kClearTypeFailedRank) ==
+             kClearTypeFullComboRank,
+         "saved course browsing preserves the aggregate clear type instead of "
+         "rederiving it from reconstructed stage gauges");
+}
+
 void testCourseRecallReappliesEachStageSetupBeforeAgreement() {
   auto saved = courseResult();
   std::vector<ScoreProvenance> stageProvenance;
@@ -572,6 +606,7 @@ int main() {
   testFreshProvenanceBackedResultRecallsFromParsedChart();
   testNoLongNoteScoreBucketRecallsWithActualSetupMode();
   testCourseRecallIsOrderedCompleteAndAtomic();
+  testCourseRecallPreservesPersistedAggregateClearType();
   testCourseRecallReappliesEachStageSetupBeforeAgreement();
   testMovedCourseRecallUsesCurrentOrderedLocations();
   if (failures != 0) {

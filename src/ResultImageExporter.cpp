@@ -15,6 +15,7 @@
 #include "scene/ResultGaugeHistory.h"
 #include "scene/ResultLayoutGeometry.h"
 #include "skin/DefaultSkin.h"
+#include "skin/ResultSkinConfiguration.h"
 #include "targets.h"
 #include "view/TextView.h"
 #include "view/UiTheme.h"
@@ -96,6 +97,20 @@ ensureExportDirectoryError(const std::filesystem::path &path,
 
   return std::string(failureMessage) + " (" +
          fspath_to_utf8(path) + "): " + error.message();
+}
+
+std::optional<int> resultImageSongReviewFavorite(
+    ApplicationContext &context, const bms_parser::ChartMeta &meta) {
+  if (meta.BmsPath.empty()) return std::nullopt;
+  if (auto session = context.chartRepository.OpenSession()) {
+    const std::array<std::filesystem::path, 1> paths{meta.BmsPath};
+    const auto records = session->SelectChartMetaByPaths(paths);
+    if (records.status == ChartMetaPathBatchReadStatus::Loaded &&
+        !records.records.empty()) {
+      return records.records.front().songReviewFavorite;
+    }
+  }
+  return std::nullopt;
 }
 
 class ScopedResultImageBgfxAccess {
@@ -741,10 +756,16 @@ ResultImageExportResult renderResultImage(
     const std::optional<ResultPacemakerData> &pacemaker,
     SkinGameplayGraphState gameplayGraph,
     const std::optional<practice::ResultModel> &analyticsModel,
-    const std::filesystem::path &path) {
+    const std::filesystem::path &path,
+    std::optional<int> songReviewFavorite = std::nullopt) {
   const auto series = result_gauge_history::seriesFor(state);
   const auto gaugeGraph = result_gauge_history::graphFor(series, 0);
   ResultSkinData resultSkinData = {&state, &meta, &context};
+  resultSkinData.configuration = makeResultSkinConfiguration(context.settings);
+  resultSkinData.configuration->irAccountName = context.irAccountNameSnapshot();
+  resultSkinData.songReviewFavorite = songReviewFavorite
+      ? songReviewFavorite
+      : resultImageSongReviewFavorite(context, meta);
   resultSkinData.showControls = false;
   resultSkinData.showResultGraph = !analyticsModel.has_value();
   if (series.empty()) {
@@ -823,6 +844,9 @@ ResultImageExportResult ResultImageExporter::Export(
       [&context](ResultSkinData skinData,
                  std::optional<result_gauge_history::ResultGaugeGraph> gauge,
                  const std::filesystem::path &outputPath) {
+        skinData.context = &context;
+        skinData.configuration = makeResultSkinConfiguration(context.settings);
+        skinData.configuration->irAccountName = context.irAccountNameSnapshot();
         return renderResultImageWithSkinData(
             context, std::move(skinData), gauge, std::nullopt, true,
             outputPath);
@@ -989,11 +1013,9 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
           : play_options::formatPlayModeDisplayLabel(replay.stages.back().replay);
   std::optional<std::string> clearLabelOverride;
   std::optional<int> clearRankOverride;
-  const bool fullCombo = result_presentation::isFullComboCourseResult(
-      replay.completedCharts, replay.totalCharts, replay.stages.size(),
-      courseState, courseMeta);
-  const int clearRank = clear_policy::fullComboRankForPlayback(
-      replay.clearType, fullCombo, replay.provenance.playback);
+  // The replay already stores the final course lamp. Do not recompute it
+  // from reconstructed stage state: that loses persisted FC/assist classes.
+  const int clearRank = replay.clearType;
   clearLabelOverride = clearTypeRankToLabel(clearRank);
   clearRankOverride = clearRank;
   const auto courseResult = renderResultImage(
@@ -1001,7 +1023,10 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
       "Course", std::nullopt, std::nullopt, clearLabelOverride,
       clearRankOverride, "COURSE", std::nullopt,
       combineSkinGameplayGraphStates(stageGraphs), std::nullopt,
-      outputDir / "course_result.png");
+      outputDir / "course_result.png",
+      charts.empty()
+          ? std::optional<int>{}
+          : resultImageSongReviewFavorite(context, charts.back()->Meta));
   if (!courseResult.success) {
     return courseResult;
   }

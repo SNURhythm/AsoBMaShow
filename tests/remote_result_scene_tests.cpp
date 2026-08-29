@@ -427,14 +427,32 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "data.playModeLabel = remote->presentation.playtype.value_or(\"\");",
                   "remote result skins project the remote play mode string");
-  requireOrdered(result, "const auto replayTiming =",
-                 "if (sampleCount == 0 || !averageMillis || !standardDeviationMillis)",
-                 "course timing falls back to retained replay data before "
-                 "discarding zero-sample stages");
+  requireContains(
+      result,
+      "const int clearRank = replay_clear_mark::effectiveClearRank(\n"
+      "        local.resultState.getClearTypeRank(), local.resultState.maxCombo,\n"
+      "        local.resultState.comboBreak,",
+      "View Result derives its persisted full-combo mark instead of reverting "
+      "to the reconstructed gauge clear");
+  requireContains(
+      result,
+      "} else {\n"
+      "    const int maximumScore =\n"
+      "        result_contract::maximumScoreForNotes(local.meta.TotalNotes).value_or(0);",
+      "persisted chart results derive Beatoraja's full-combo rank before "
+      "their modern record is recalled");
+  requireContains(
+      result,
+      "if (local->autoPlayResult) {\n"
+      "    data.currentClearLabelOverride = \"AUTO PLAY\";\n"
+      "  } else if (local->currentClearLabelOverride.has_value()) {",
+      "autoplay keeps its built-in label while result-skin clear selectors retain "
+      "Beatoraja's calculated clear rank");
   requireContains(result,
-                  "if (result.timingSampleCount == 0) {\n"
-                  "    if (judgeNoteTotal == 0) return std::nullopt;",
-                  "all-miss courses retain their judge-duration result");
+                  "const auto timing = isCourseFinalResult()\n"
+                  "                            ? std::optional<ResultTimingStatistics>{}",
+                  "course results retain Beatoraja's empty timing distribution "
+                  "instead of combining MusicResult replay timing data");
   requireContains(session,
                   "lastDiagnostics_.insert(lastDiagnostics_.end(),\n"
                   "                          std::make_move_iterator(evaluated.diagnostics.begin()),\n"
@@ -502,8 +520,14 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result, "courseGraphPaddingForEntry(",
                   "course result graphs pad unplayed stages after an early failure");
   requireContains(result,
-                  "dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;",
-                  "course result graph gauge history follows the padded aggregate state");
+                  "for (auto &history : dynamic->gaugeHistories) {\n"
+                  "    history.assign(static_cast<std::size_t>(gaugeSamples), 0.0F);\n"
+                  "  }",
+                  "course result graph padding reserves every source gauge type for "
+                  "an auto-shifted final gauge");
+  requireContains(result,
+                  "SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.",
+                  "course result graph retains the source-sampled stage gauge logs");
   requireContains(mainMenu,
                   "auto replay = consumer.load(*exact.record,",
                   "saved course result recall loads its retained replay when available");
@@ -514,14 +538,22 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "const ReplayData *firstReplay = session->resultBrowseStageReplay(0);",
                   "the initially displayed saved course stage receives its retained replay");
   requireContains(mainMenu,
+                  "ResultTableContext{}, first.gameplayGraph,",
+                  "the initially displayed replay-less saved course stage receives "
+                  "its prepared chart graph");
+  requireContains(mainMenu,
                   "*replayChart, *stageReplay, stage.state",
                   "saved course graph reconstruction uses the replay-prepared chart");
   requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
-                 "replay_result::BuildSkinGameplayGraphState(",
+                 "*replayChart, *stageReplay, stage.state",
                  "saved course graph reconstruction occurs before ResultScene uses it");
   requireContains(result,
                   "} else if (isCourseStageResult()) {",
                   "saved modern course stages project durable setup provenance");
+  requireContains(result,
+                  "local->currentScoreDateUnixSeconds =\n"
+                  "        session.modernCoursePlayedAtUnixMillis / 1'000;",
+                  "course persistence refreshes the immediate result score date");
   requireContains(result,
                   "local->attemptProvenance.player1.option",
                   "saved modern course stages retain the first-player option");
@@ -571,11 +603,26 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "const long long beatorajaDiffMicros = -event.diffMicros;",
                   "replay timing samples use Beatoraja's result-sign convention");
+  requireContains(
+      result,
+      "const int timingMillis = static_cast<int>(index) - 150;\n"
+      "    timingSampleCount += count;\n"
+      "    timingSum += static_cast<long long>(count) * timingMillis;",
+      "replay timing statistics use Beatoraja's integer-millisecond distribution");
   requireContains(mainMenu,
                   "replay_result::BuildSkinGameplayChartGraphState(\n"
                   "                      *stage.chart, stage.state)",
                   "replay-less saved course stages preserve authored graph data without "
                   "synthetic judgement samples");
+  requireContains(
+      mainMenu,
+      "const SkinGameplayGraphState gameplayGraph =\n"
+      "                completion->retryData != nullptr\n"
+      "                    ? replay_result::BuildSkinGameplayGraphState(\n"
+      "                          *chart, *completion->retryData, result.state)\n"
+      "                    : replay_result::BuildSkinGameplayChartGraphState(\n"
+      "                          *chart, result.state);",
+      "replay-less saved chart results retain prepared chart graph metadata");
   requireContains(session, "writerInvocationFor(",
                   "result sliders resolve their authored writer invocation");
   requireContains(

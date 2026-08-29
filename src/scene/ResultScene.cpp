@@ -4,6 +4,7 @@
 #include "../CourseIdentity.h"
 #include "../CoursePlaySession.h"
 #include "../PlayOptionUtils.h"
+#include "../ReplayClearMarkUtils.h"
 #include "../ReplayResultStateBuilder.h"
 #include "../repositories/ReplayRepository.h"
 #include "../replay/CourseReplayConsumer.h"
@@ -43,6 +44,7 @@
 #include "../rendering/common.h"
 #include "bgfx/bgfx.h"
 #include "../skin/DefaultSkin.h"
+#include "../skin/ResultSkinConfiguration.h"
 #include "../skin/SkinTypes.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../skin/GameplaySkinLifecycle.h"
@@ -276,9 +278,7 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes,
            (event.judgement == Bad &&
             !classicHeadsWithTailResult.contains(longNote));
   };
-  std::vector<long long> timings;
   std::vector<int> distribution(301, 0);
-  timings.reserve(replay->events.size());
   long long durationMicros = 0;
   int playedNotes = 0;
   for (const auto &event : replay->events) {
@@ -303,33 +303,38 @@ resultTimingStatistics(const ReplayData *replay, int totalNotes,
     // distribution uses Beatoraja's note-minus-input convention.
     const long long beatorajaDiffMicros = -event.diffMicros;
     if (timingEvent && countsInResult(event)) {
-      timings.push_back(beatorajaDiffMicros);
-    }
-    if (timingEvent && countsInResult(event)) {
       const int millis = static_cast<int>(beatorajaDiffMicros / 1'000LL);
       if (millis >= -150 && millis <= 150) {
         ++distribution[static_cast<std::size_t>(millis + 150)];
       }
     }
   }
-  long double mean = 0.0;
-  long double squared = 0.0;
-  if (!timings.empty()) {
-    long double sum = 0.0;
-    for (const auto timing : timings) sum += timing;
-    mean = sum / timings.size();
-    for (const auto timing : timings) {
-      const long double delta = timing - mean;
-      squared += delta * delta;
-    }
+  int timingSampleCount = 0;
+  long long timingSum = 0;
+  for (std::size_t index = 0; index < distribution.size(); ++index) {
+    const int count = distribution[index];
+    const int timingMillis = static_cast<int>(index) - 150;
+    timingSampleCount += count;
+    timingSum += static_cast<long long>(count) * timingMillis;
+  }
+  const float timingAverage = timingSampleCount > 0
+                                  ? static_cast<float>(timingSum) /
+                                        timingSampleCount
+                                  : 0.0F;
+  float timingVariance = 0.0F;
+  for (std::size_t index = 0; index < distribution.size(); ++index) {
+    const int timingMillis = static_cast<int>(index) - 150;
+    const float delta = timingMillis - timingAverage;
+    timingVariance += distribution[index] * delta * delta;
   }
   return ResultTimingStatistics{
-      .hasTimingSamples = !timings.empty(),
-      .timingSampleCount = timings.size(),
-      .averageMillis = static_cast<double>(mean / 1'000.0L),
+      .hasTimingSamples = timingSampleCount > 0,
+      .timingSampleCount = static_cast<std::size_t>(timingSampleCount),
+      .averageMillis = timingAverage,
       .standardDeviationMillis = static_cast<double>(
-          timings.empty() ? 0.0L
-                          : std::sqrt(squared / timings.size()) / 1'000.0L),
+          timingSampleCount == 0
+              ? 0.0F
+              : std::sqrt(timingVariance / timingSampleCount)),
       .averageJudgeMicros =
           (durationMicros + static_cast<long long>(totalNotes - playedNotes) *
                                 1'000'000LL) /
@@ -464,7 +469,6 @@ courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
   const std::int64_t playLength = std::max(0LL, entry.meta.PlayLength);
   const std::size_t judgementSeconds =
       static_cast<std::size_t>(playLength / 1'000'000LL) + 1;
-  const int gaugeIndex = gaugeTypeIndex(gaugeType);
   const int gaugeSamples =
       std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
 
@@ -476,10 +480,8 @@ courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
   dynamic->judgementDistribution.assign(judgementSeconds, {});
   dynamic->earlyLateDistribution.assign(judgementSeconds, {});
   dynamic->gaugeType = gaugeType;
-  if (gaugeIndex >= 0 &&
-      static_cast<std::size_t>(gaugeIndex) < dynamic->gaugeHistories.size()) {
-    dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)].assign(
-        static_cast<std::size_t>(gaugeSamples), 0.0F);
+  for (auto &history : dynamic->gaugeHistories) {
+    history.assign(static_cast<std::size_t>(gaugeSamples), 0.0F);
   }
   return {.chart = std::move(chart), .dynamic = std::move(dynamic)};
 }
@@ -524,91 +526,42 @@ SkinGameplayGraphState courseGameplayGraphForSession(
   if (gaugeType >= 0 &&
       static_cast<std::size_t>(gaugeType) < dynamic->gaugeHistories.size()) {
     const std::size_t gaugeIndex = static_cast<std::size_t>(gaugeType);
-    dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;
+    if (dynamic->gaugeHistories[gaugeIndex].empty() &&
+        !courseState.gaugeHistory.empty()) {
+      // A legacy/no-graph result has no source-equivalent 500 ms log. Keep
+      // the available state history, but do not attach stage offsets whose
+      // sample coordinates cannot match it.
+      dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;
+      dynamic->gaugeHistorySections.clear();
+    } else {
+      // SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.
+      // `combined` already has exactly those samples, including the source's
+      // zero-filled entries for unplayed stages; only add its cumulative
+      // stage offsets for the white separators.
+      dynamic->gaugeHistorySections.clear();
+      std::size_t sectionEnd = 0;
+      for (const auto &stage : stages) {
+        if (stage.dynamic != nullptr) {
+          sectionEnd += stage.dynamic->gaugeHistories[gaugeIndex].size();
+        }
+        dynamic->gaugeHistorySections.push_back(sectionEnd);
+      }
+    }
   }
   dynamic->gaugeType = courseState.gaugeType;
-  dynamic->gaugeSupported = false;
+  for (auto stage = stages.rbegin(); stage != stages.rend(); ++stage) {
+    if (stage->dynamic == nullptr || !stage->dynamic->gaugeSupported) {
+      continue;
+    }
+    dynamic->gaugeMinimum = stage->dynamic->gaugeMinimum;
+    dynamic->gaugeMaximum = stage->dynamic->gaugeMaximum;
+    dynamic->gaugeBorder = stage->dynamic->gaugeBorder;
+    dynamic->gaugeSupported = true;
+    break;
+  }
   combined.chart = std::move(chart);
   combined.dynamic = std::move(dynamic);
   return combined;
-}
-
-std::optional<ResultTimingStatistics>
-courseTimingStatisticsForSession(const CoursePlaySession &session) {
-  ResultTimingStatistics result;
-  result.distribution.assign(301, 0);
-  long double sum = 0.0;
-  long double sumSquares = 0.0;
-  long double judgeDurationTotal = 0.0;
-  int judgeNoteTotal = 0;
-  for (std::size_t index = 0; index < session.completedResults.size();
-       ++index) {
-    const auto &stage = session.completedResults[index];
-    const auto replayTiming =
-        stage.skinTimingDistribution.empty()
-            ? resultTimingStatistics(session.resultBrowseStageReplay(index),
-                                     stage.meta.TotalNotes,
-                                     session.resultBrowseReplayChart(index))
-            : std::nullopt;
-    const auto averageJudgeMicros =
-        stage.skinAverageJudgeMicros
-            ? stage.skinAverageJudgeMicros
-            : (replayTiming
-                   ? std::optional<long long>(replayTiming->averageJudgeMicros)
-                   : std::nullopt);
-    if (averageJudgeMicros) {
-      const int notes = std::max(0, stage.meta.TotalNotes);
-      judgeDurationTotal += notes * *averageJudgeMicros;
-      judgeNoteTotal += notes;
-    }
-    const std::size_t sampleCount =
-        stage.skinTimingDistribution.empty() && replayTiming
-            ? replayTiming->timingSampleCount
-            : stage.skinTimingSampleCount;
-    const auto averageMillis =
-        stage.skinTimingDistribution.empty() && replayTiming
-            ? std::optional<double>(replayTiming->averageMillis)
-            : stage.skinTimingAverageMillis;
-    const auto standardDeviationMillis =
-        stage.skinTimingDistribution.empty() && replayTiming
-            ? std::optional<double>(replayTiming->standardDeviationMillis)
-            : stage.skinTimingStandardDeviationMillis;
-    const auto &distribution =
-        stage.skinTimingDistribution.empty() && replayTiming
-            ? replayTiming->distribution
-            : stage.skinTimingDistribution;
-    if (sampleCount == 0 || !averageMillis || !standardDeviationMillis) {
-      continue;
-    }
-    const long double count = sampleCount;
-    const long double mean = *averageMillis;
-    const long double deviation = *standardDeviationMillis;
-    result.timingSampleCount += sampleCount;
-    sum += count * mean;
-    sumSquares += count * (deviation * deviation + mean * mean);
-    for (std::size_t index = 0;
-         index < result.distribution.size() &&
-         index < distribution.size(); ++index) {
-      result.distribution[index] += distribution[index];
-    }
-  }
-  if (result.timingSampleCount == 0) {
-    if (judgeNoteTotal == 0) return std::nullopt;
-    result.averageJudgeMicros = static_cast<long long>(
-        judgeDurationTotal / judgeNoteTotal);
-    return result;
-  }
-  const long double count = result.timingSampleCount;
-  const long double mean = sum / count;
-  result.hasTimingSamples = true;
-  result.averageMillis = static_cast<double>(mean);
-  result.standardDeviationMillis = static_cast<double>(std::sqrt(
-      std::max(0.0L, sumSquares / count - mean * mean)));
-  if (judgeNoteTotal > 0) {
-    result.averageJudgeMicros = static_cast<long long>(
-        judgeDurationTotal / judgeNoteTotal);
-  }
-  return result;
 }
 
 long long totalPlayLengthForCourse(const CoursePlaySession &session) {
@@ -711,8 +664,9 @@ int courseResultClearTypeForSession(const CoursePlaySession &session,
       static_cast<int>(session.completedResults.size()),
       static_cast<int>(session.entries.size()), session.entries.size(),
       resultState, courseMeta);
-  return clear_policy::fullComboRankForPlayback(resultState.getClearTypeRank(),
-                                                fullCombo, provenance.playback);
+  const int derivedRank = clear_policy::fullComboRankForPlayback(
+      resultState.getClearTypeRank(), fullCombo, provenance.playback);
+  return session.finalClearTypeForPresentation(derivedRank);
 }
 
 std::optional<CourseReplayData>
@@ -783,7 +737,8 @@ ResultScene::ResultScene(
     std::optional<ResultPacemakerData> pacemakerOverride,
     const ReplayData *analyticsSource,
     std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
-    ResultTableContext tableContext, SkinGameplayGraphState gameplayGraph)
+    ResultTableContext tableContext, SkinGameplayGraphState gameplayGraph,
+    std::optional<std::int64_t> currentScorePlayedAtUnixMillis)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -800,7 +755,7 @@ ResultScene::ResultScene(
           .analyticsData = analyticsSource != nullptr
                   ? std::optional<ReplayData>(*analyticsSource)
                   : std::nullopt,
-          .persistenceOptions = std::move(persistenceOptions),
+          .persistenceOptions = persistenceOptions,
           .practiceOptions = std::move(practiceOptions),
           .courseOptions = std::move(courseOptions),
           .tableContext = std::move(tableContext),
@@ -811,6 +766,19 @@ ResultScene::ResultScene(
                   : pacemakerTarget),
           .pacemakerOverride = std::move(pacemakerOverride),
           .modernReplayAttemptId = modernReplayAttemptId,
+          .currentScoreDateUnixSeconds =
+              currentScorePlayedAtUnixMillis &&
+                      *currentScorePlayedAtUnixMillis > 0
+                  ? std::optional<std::int64_t>(
+                        *currentScorePlayedAtUnixMillis / 1'000)
+                  : (persistenceOptions.chartAttempt != nullptr &&
+                             persistenceOptions.chartAttempt->result
+                                     .playedAtUnixMillis > 0
+                         ? std::optional<std::int64_t>(
+                               persistenceOptions.chartAttempt->result
+                                   .playedAtUnixMillis /
+                               1'000)
+                         : std::nullopt),
           .replayResult = replay == nullptr && retrySource != nullptr &&
                           !modernReplayAttemptId.has_value(),
           .retrySameAllowed = retrySameAllowed,
@@ -828,6 +796,15 @@ ResultScene::ResultScene(
       local.reusableRetryChart != nullptr && local.analyticsData.has_value()) {
     local.gameplayGraph = replay_result::BuildSkinGameplayGraphState(
         *local.reusableRetryChart, *local.analyticsData, local.resultState);
+  }
+  if (auto chartSession = context.chartRepository.OpenSession()) {
+    const std::array<std::filesystem::path, 1> paths{local.meta.BmsPath};
+    const auto records = chartSession->SelectChartMetaByPaths(paths);
+    if (records.status == ChartMetaPathBatchReadStatus::Loaded &&
+        !records.records.empty()) {
+      local.chartHasDocument = records.records.front().hasDocument;
+      local.songReviewFavorite = records.records.front().songReviewFavorite;
+    }
   }
   const play_options::PlayModeDisplayLabel display =
       resultPlayModeDisplayLabel(local.meta, local.presentationReplay,
@@ -850,16 +827,18 @@ ResultScene::ResultScene(
   } else if (isCourseFinalResult()) {
     local.headerDifficultyLabelOverride = "COURSE";
     const auto &session = *local.courseOptions.session;
-    const bms_parser::ChartMeta courseMeta =
-        courseResultMetaForSession(session);
-    const bool fullCombo = result_presentation::isFullComboCourseResult(
-        static_cast<int>(session.completedResults.size()),
-        static_cast<int>(session.entries.size()), session.entries.size(),
-        local.resultState, courseMeta);
-    if (fullCombo) {
-      const int clearRank = clear_policy::fullComboRankForPlayback(
-          local.resultState.getClearTypeRank(), true,
-          local.attemptProvenance.playback);
+    const int clearRank = courseResultClearTypeForSession(
+        session, local.resultState, local.attemptProvenance);
+    local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
+    local.currentClearRankOverride = clearRank;
+  } else {
+    const int maximumScore =
+        result_contract::maximumScoreForNotes(local.meta.TotalNotes).value_or(0);
+    const int clearRank = replay_clear_mark::effectiveClearRank(
+        local.resultState.getClearTypeRank(), local.resultState.maxCombo,
+        local.resultState.comboBreak, maximumScore,
+        local.attemptProvenance.playback);
+    if (clearRank != local.resultState.getClearTypeRank()) {
       local.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
       local.currentClearRankOverride = clearRank;
     }
@@ -1022,6 +1001,8 @@ ResultSkinData ResultScene::makeResultSkinData() const {
       local == nullptr ? nullptr : &local->meta,
       &context,
   };
+  data.configuration = makeResultSkinConfiguration(context.settings);
+  data.configuration->irAccountName = context.irAccountNameSnapshot();
   data.playerName = context.profileManager.activeProfile().displayName;
   data.irOnline = !context.irAccountNameSnapshot().empty();
   if (remote != nullptr) {
@@ -1085,12 +1066,13 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.headerDifficultyLabelOverride = local->headerDifficultyLabelOverride;
   if (local->autoPlayResult) {
     data.currentClearLabelOverride = "AUTO PLAY";
-  }
-  if (local->currentClearLabelOverride.has_value()) {
+  } else if (local->currentClearLabelOverride.has_value()) {
     data.currentClearLabelOverride = local->currentClearLabelOverride;
   }
   data.currentClearRankOverride = local->currentClearRankOverride;
+  data.currentScoreDateUnixSeconds = local->currentScoreDateUnixSeconds;
   data.autoPlayResult = local->autoPlayResult;
+  data.courseResult = isCourseFinalResult();
   if (local->courseOptions.session != nullptr) {
     data.courseTitles = local->courseOptions.session->beatorajaSkinStageTitles();
     if (isCourseFinalResult()) {
@@ -1103,6 +1085,8 @@ ResultSkinData ResultScene::makeResultSkinData() const {
   data.playerHistory = local->playerHistory;
   data.presentation = &local->presentation;
   data.gameplayGraph = local->gameplayGraph;
+  data.chartHasDocument = local->chartHasDocument;
+  data.songReviewFavorite = local->songReviewFavorite;
   const auto localRankingQuery = ir::makeBokutachiRankingQuery(local->meta);
   const auto provider = context.settings.irProviders.find(
       std::string(ir::kTachiProviderId));
@@ -1111,13 +1095,6 @@ ResultSkinData ResultScene::makeResultSkinData() const {
                            provider->second.serverOrigin,
                            localRankingQuery.value);
   }
-  const ReplayData *timingReplay = local->analyticsData
-                                       ? &*local->analyticsData
-                                       : (local->presentationReplay
-                                              ? &*local->presentationReplay
-                                              : (local->retryData
-                                                     ? &*local->retryData
-                                                     : nullptr));
   if (local->skinTimingStatisticsPrepared) {
     data.timingAverageMillis = local->skinTimingAverageMillis;
     data.timingStandardDeviationMillis =
@@ -1374,6 +1351,10 @@ bool ResultScene::persistModernCourseResult() {
   } else {
     session.modernCoursePersistenceOutcome =
         context.persistModernCourse(*session.modernCourseAttempt);
+  }
+  if (session.modernCoursePlayedAtUnixMillis > 0) {
+    local->currentScoreDateUnixSeconds =
+        session.modernCoursePlayedAtUnixMillis / 1'000;
   }
   const auto &outcome = *session.modernCoursePersistenceOutcome;
   applyModernCoursePersistencePresentation(session, local->persistenceOptions);
@@ -3350,7 +3331,7 @@ void ResultScene::showSavedCourseStage() {
                               .savedResultBrowsing = true},
           std::string{}, std::unique_ptr<bms_parser::Chart>{}, replayChart,
           std::nullopt, stageReplay, std::nullopt, true, ResultTableContext{},
-          result.gameplayGraph),
+          result.gameplayGraph, session->modernCoursePlayedAtUnixMillis),
       false);
 }
 
@@ -3378,7 +3359,8 @@ void ResultScene::showCourseResult() {
                                   local->courseOptions.savedResultBrowsing},
           std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
           std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
-          courseGameplayGraphForSession(*session, courseState)),
+          courseGameplayGraphForSession(*session, courseState),
+          session->modernCoursePlayedAtUnixMillis),
       false);
 }
 
@@ -3978,10 +3960,8 @@ void ResultScene::init() {
                                                 : (local->retryData
                                                        ? &*local->retryData
                                                        : nullptr));
-    const auto timing = isCourseFinalResult() &&
-                                local->courseOptions.session != nullptr
-                            ? courseTimingStatisticsForSession(
-                                  *local->courseOptions.session)
+    const auto timing = isCourseFinalResult()
+                            ? std::optional<ResultTimingStatistics>{}
                             : resultTimingStatistics(
                                   timingReplay, local->meta.TotalNotes,
                                   local->reusableRetryChart);

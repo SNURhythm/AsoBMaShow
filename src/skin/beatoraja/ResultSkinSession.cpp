@@ -1,5 +1,7 @@
 #include "ResultSkinSession.h"
 
+#include "BeatorajaTargetPropertyNames.h"
+
 #include "BgfxSkinTextureDevice.h"
 #include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
@@ -137,6 +139,21 @@ std::vector<std::string> resultRuntimeStrings(const ResultSkinData &data) {
   appendRuntimeString(strings, data.chartSha256);
   appendRuntimeString(strings, ASOBMASHOW_APPLICATION_VERSION);
   appendRuntimeString(strings, data.tableLevel + data.tableName);
+  if (data.configuration) {
+    for (const auto *value : {&data.configuration->modeFilterName,
+                              &data.configuration->sortId,
+                              &data.configuration->difficultyFilterName,
+                              &data.configuration->chartReplicationMode,
+                              &data.configuration->irName,
+                              &data.configuration->irAccountName}) {
+      appendRuntimeString(strings, *value);
+    }
+    for (const auto &name : beatorajaTargetNeighbourNames(
+             data.configuration->skinTargetId,
+             data.configuration->skinTargetList)) {
+      appendRuntimeString(strings, name);
+    }
+  }
   for (const auto &title : data.courseTitles) appendRuntimeString(strings, title);
   for (const auto &entry : data.irRankingEntries) {
     appendRuntimeString(strings, entry.playerName);

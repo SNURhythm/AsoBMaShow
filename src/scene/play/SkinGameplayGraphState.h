@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -61,6 +62,25 @@ struct SkinGameplayChartGraphState {
   double mainBpm = 0.0;
   double minimumBpm = 0.0;
   double maximumBpm = 0.0;
+  // Beatoraja's SongInformation-backed result properties. These belong to
+  // the prepared chart, rather than the mutable gameplay graph samples.
+  std::optional<int> normalKeyNotes;
+  std::optional<int> longKeyNotes;
+  std::optional<int> normalScratchNotes;
+  std::optional<int> longScratchNotes;
+  std::optional<double> peakDensity;
+  std::optional<double> endDensity;
+  std::optional<double> averageDensity;
+  std::optional<double> totalGauge;
+  std::optional<int> selectedLongNoteMode;
+  std::optional<bool> hasAnyLongNote;
+  std::optional<bool> hasUndefinedLongNote;
+  std::optional<bool> hasLongNote;
+  std::optional<bool> hasChargeNote;
+  std::optional<bool> hasHellChargeNote;
+  std::optional<bool> hasBga;
+  std::optional<bool> hasRandomSequence;
+  std::optional<bool> hasBpmStop;
 
   bool operator==(const SkinGameplayChartGraphState &) const = default;
 };
@@ -91,6 +111,9 @@ struct SkinGameplayDynamicGraphState {
   std::size_t recentJudgeTimingIndex = 0;
   std::array<SkinJudgeWindow, 5> judgeWindows{};
   SkinGaugeHistoryCollection gaugeHistories;
+  // Course-result gauge graphs separate each stage with a white line. The
+  // values are cumulative history lengths, matching SkinGaugeGraphObject.
+  std::vector<std::size_t> gaugeHistorySections;
   GaugeType gaugeType = GaugeType::Normal;
   float gaugeMinimum = 0.0F;
   float gaugeMaximum = 100.0F;
@@ -125,6 +148,7 @@ struct SkinGameplayGraphStateView {
   std::span<const std::int64_t> recentJudgeTimingsMillis;
   std::size_t recentJudgeTimingIndex = 0;
   std::span<const float> gaugeHistory;
+  std::span<const std::size_t> gaugeHistorySections;
   int gaugeType = 0;
   float gaugeMinimum = 0.0F;
   float gaugeMaximum = 100.0F;

@@ -6,6 +6,7 @@
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
 #include "skin/SkinStoragePaths.h"
+#include "skin/ResultSkinConfiguration.h"
 #include "skin/SkinConfigurationWriteQueue.h"
 #include "skin/beatoraja/GameplaySkinValidator.h"
 #include "skin/beatoraja/GameplaySkinBuiltinCatalog.h"
@@ -5354,9 +5355,113 @@ void testResultBridgeSupportsBeatorajaIrAvailabilityProperties() {
   ResultSkinStateBridge bridge({}, 1, 0);
   const auto offline = bridge.booleanProperty({50});
   const auto online = bridge.booleanProperty({51});
-  expect(offline.supported && offline.value && online.supported && !online.value,
+  const auto namedOffline =
+      bridge.booleanProperty({.value = std::string{"ir_offline"}});
+  const auto namedOnline =
+      bridge.booleanProperty({.value = std::string{"ir_online"}});
+  const auto inverseOffline =
+      bridge.booleanProperty({.value = std::string{"!ir_offline"}});
+  const auto inactiveNamedState =
+      bridge.booleanProperty({.value = std::string{"course_random"}});
+  expect(offline.supported && offline.value && online.supported && !online.value &&
+             namedOffline.supported && namedOffline.value &&
+             namedOnline.supported && !namedOnline.value &&
+             inverseOffline.supported && !inverseOffline.value &&
+             inactiveNamedState.supported && !inactiveNamedState.value,
          "result bridge mirrors Beatoraja's offline IR properties when no IR "
-         "provider is active");
+         "provider is active and resolves named BooleanPropertyFactory values");
+}
+
+void testResultBridgeUsesSourceDefaultScoreReferencesAndRateFallbacks() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 5;
+  bms_parser::ChartMeta meta{.TotalNotes = 10};
+  ResultSkinStateBridge bridge({.state = &state, .meta = &meta}, 1, 0);
+  const auto bestNow = bridge.floatProperty({112}, SkinFloatPropertyDomain::Rate);
+  const auto best = bridge.floatProperty({113}, SkinFloatPropertyDomain::Rate);
+  const auto targetNow = bridge.floatProperty({114}, SkinFloatPropertyDomain::Rate);
+  const auto target = bridge.floatProperty({115}, SkinFloatPropertyDomain::Rate);
+  const auto floatBest =
+      bridge.floatProperty({183}, SkinFloatPropertyDomain::FloatValue);
+  const auto floatTarget =
+      bridge.floatProperty({122}, SkinFloatPropertyDomain::FloatValue);
+  const auto rankingPosition =
+      bridge.floatProperty({8}, SkinFloatPropertyDomain::Rate);
+  const auto loadProgress =
+      bridge.floatProperty({102}, SkinFloatPropertyDomain::Rate);
+  const auto level = bridge.floatProperty({103}, SkinFloatPropertyDomain::Rate);
+  expect(bestNow.supported && bestNow.value == 0.0 && best.supported &&
+             best.value == 0.0 && targetNow.supported &&
+             targetNow.value == 0.0 && target.supported &&
+             target.value == 0.0 && floatBest.supported &&
+             floatBest.value == 0.0 && floatTarget.supported &&
+             floatTarget.value == 0.0 && rankingPosition.supported &&
+             rankingPosition.value == 0.0 && loadProgress.supported &&
+             loadProgress.value == 1.0 && level.supported && level.value == 0.0,
+         "result float properties preserve AbstractResult's default old and "
+         "target ScoreData plus its non-selection RateType fallbacks");
+}
+
+void testResultBridgeRetainsIrRatePropertyFallbacks() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto named = bridge.floatProperty(
+      {.value = std::string{"ir_player_failed_rate"}},
+      SkinFloatPropertyDomain::FloatValue);
+  const auto numeric = bridge.floatProperty({.value = 211},
+                                            SkinFloatPropertyDomain::FloatValue);
+  const auto total = bridge.floatProperty({.value = 227},
+                                          SkinFloatPropertyDomain::FloatValue);
+  const double minimum = static_cast<double>(std::numeric_limits<float>::min());
+  expect(named.supported && named.value == minimum && numeric.supported &&
+             numeric.value == minimum && total.supported && total.value == minimum,
+         "result IR-rate properties retain Float.MIN_VALUE when the ranking "
+         "snapshot has no source clear-count histogram");
+}
+
+void testResultBridgeRecognizesBeatorajaNamedIrIntegerProperties() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto clearCount = bridge.integerProperty(
+      {.value = std::string{"ir_player_failed"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto rate = bridge.integerProperty(
+      {.value = std::string{"ir_player_failed_rate"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto fraction = bridge.integerProperty(
+      {.value = std::string{"ir_player_failed_rate_afterdot"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto totalClear = bridge.integerProperty(
+      {.value = 226}, SkinIntegerPropertyDomain::IntegerValue);
+  const auto totalRate = bridge.integerProperty(
+      {.value = 227}, SkinIntegerPropertyDomain::IntegerValue);
+  const auto totalFraction = bridge.integerProperty(
+      {.value = 241}, SkinIntegerPropertyDomain::IntegerValue);
+  constexpr auto minimum =
+      static_cast<std::int64_t>(std::numeric_limits<int>::min());
+  expect(clearCount.supported && clearCount.value == minimum &&
+             rate.supported && rate.value == minimum &&
+             fraction.supported && fraction.value == minimum &&
+             totalClear.supported && totalClear.value == minimum &&
+             totalRate.supported && totalRate.value == minimum &&
+             totalFraction.supported && totalFraction.value == minimum,
+         "result bridge exposes every Beatoraja IR aggregate integer property "
+         "with its unavailable-ranking fallback");
+}
+
+void testResultBridgeKeepsMainStateGaugeHelpersGameplayOnly() {
+  RhythmState state(nullptr, false);
+  state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] = 82.0F;
+  ResultSkinStateBridge bridge({.state = &state}, 1, 2'500);
+  const auto gauge = bridge.floatProperty(
+      {.value = std::string{"lua_gauge"}}, SkinFloatPropertyDomain::Rate);
+  const auto gaugeType = bridge.integerProperty(
+      {.value = std::string{"lua_gauge_type"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto time = bridge.integerProperty({.value = std::string{"time"}},
+                                           SkinIntegerPropertyDomain::IntegerValue);
+  expect(gauge.supported && gauge.value == 0.0 && gaugeType.supported &&
+             gaugeType.value == 0 && time.supported && time.value == 2'500'000,
+         "main_state gauge helpers retain AbstractResult's zero fallback while "
+         "main_state.time uses the result timer");
 }
 
 void testResultBridgeUsesPreparedArtworkAvailability() {
@@ -5435,6 +5540,7 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
                                               .maxCombo = 6,
                                               .badPoints = 9},
       .pacemaker = ResultPacemakerData{.targetScore = 18},
+      .songReviewFavorite = 10,
   }, 1, 0);
 
   const auto rank = bridge.booleanProperty({220});
@@ -5480,7 +5586,7 @@ void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
              comboRate.supported && std::abs(comboRate.value - 0.7) < 0.000001 &&
              exscoreRate.supported && exscoreRate.value == 0.0 &&
              timingAverageFloat.supported && timingAverageFloat.value == 0.15 &&
-             imageFavorite.supported && imageFavorite.value == 0,
+             imageFavorite.supported && imageFavorite.value == 2,
          "result bridge follows Beatoraja's negated options, score rate, and "
          "Poor-versus-Miss result families");
   expect(point.supported && point.value == 1'000'000 && nowRank.supported &&
@@ -5515,9 +5621,12 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   bms_parser::ChartMeta meta{.Title = "Title", .SubTitle = "Subtitle",
                              .PlayLevel = 12.0F,
                              .PlayLength = 125'000'000};
+  ResultSkinConfigurationData configuration{
+      .modeFilterName = "ALL",
+      .sortId = "TITLE",
+  };
   ResultSkinStateBridge bridge({.meta = &meta,
-                                 .playModeLabel = "7K",
-                                 .laneOrderLabel = "MIRROR",
+                                 .configuration = configuration,
                                  .courseTitle = "Course title",
                                  .courseTitles = {"First stage", "Second stage"},
                                  .skinName = "Result skin",
@@ -5537,7 +5646,7 @@ void testResultBridgeMatchesResultAliasesAndTimerUnits() {
   const auto skinName = std::string(bridge.stringProperty({50}).value);
   const auto skinAuthor = std::string(bridge.stringProperty({51}).value);
   expect(level.supported && level.value == 12 && fullTitleProperty.supported &&
-             fullTitle == "Course title" && mode == "7K" && order == "MIRROR" &&
+             fullTitle == "Course title" && mode == "ALL" && order == "TITLE" &&
              namedTitle == "Course title" && firstCourseTitle == "First stage" &&
              namedCourseTitle == "First stage" &&
              chartMinutes.supported && chartMinutes.value == 2 &&
@@ -5571,14 +5680,284 @@ void testResultBridgeUsesCapturedReplayImageIndexes() {
          "result image indexes use the immutable played gauge and replay options");
 }
 
-void testResultBridgeFallsBackToFrameZeroForLegalImageIndexes() {
+void testResultBridgeUsesSourceImageIndexFactoryFallbacks() {
   ResultSkinStateBridge bridge({}, 1, 0);
-  const auto legal = bridge.integerProperty(
+  const auto difficulty = bridge.integerProperty(
       {10}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto targetOption = bridge.integerProperty(
+      {61}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto resultConstant = bridge.integerProperty(
+      {.value = std::string{"constant"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto unmapped = bridge.integerProperty(
+      {13}, SkinIntegerPropertyDomain::ImageIndex);
   const auto outOfRange = bridge.integerProperty(
       {65'536}, SkinIntegerPropertyDomain::ImageIndex);
-  expect(legal.supported && legal.value == 0 && !outOfRange.supported,
-         "result image-index properties retain Beatoraja's legal frame-zero fallback");
+  const auto skinSelect = bridge.integerProperty(
+      {177}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto shadowedSkinSelect = bridge.integerProperty(
+      {386}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto judge = bridge.integerProperty(
+      {500}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto extendedJudge = bridge.integerProperty(
+      {1699}, SkinIntegerPropertyDomain::ImageIndex);
+  constexpr auto minimum =
+      static_cast<std::int64_t>(std::numeric_limits<int>::min());
+  expect(difficulty.supported && difficulty.value == minimum &&
+             targetOption.supported && targetOption.value == minimum &&
+             resultConstant.supported && resultConstant.value == -1 &&
+             skinSelect.supported && skinSelect.value == minimum &&
+             shadowedSkinSelect.supported && shadowedSkinSelect.value == minimum &&
+             judge.supported && judge.value == 0 &&
+             extendedJudge.supported && extendedJudge.value == 0 &&
+             unmapped.supported && unmapped.value == 0 && !outOfRange.supported,
+         "result image-index properties preserve SkinImage's frame-zero "
+         "fallback when the numeric factory leaves its ref unset");
+}
+
+void testResultBridgeResolvesImageNamesBeforeValueAliases() {
+  ResultSkinStateBridge bridge({}, 1, 0);
+  const auto mode = bridge.integerProperty(
+      {.value = std::string{"mode"}}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto minimum = static_cast<std::int64_t>(std::numeric_limits<int>::min());
+  expect(mode.supported && mode.value == minimum,
+         "result image property names use IndexType before the conflicting "
+         "IntegerProperty ValueType aliases");
+}
+
+void testResultBridgeRetainsResultConfigurationProperties() {
+  ResultSkinConfigurationData configuration{
+      .gameplayHispeed = 2.75F,
+      .notesDisplayTimingMilliseconds = -18,
+      .visibleTimeDurationMilliseconds = 720,
+      .bgaEnabled = false,
+      .customJudge = true,
+      .showJudgeArea = true,
+      .markProcessedNotes = true,
+      .notesDisplayTimingAutoAdjust = true,
+      .autoSaveReplay = {4, 3, 2, 1},
+      .guideSoundEffects = true,
+      .extraNoteDepth = 6,
+      .mineMode = 2,
+      .scrollMode = 1,
+      .longNoteModifierMode = 3,
+      .sevenToNinePattern = 5,
+      .sevenToNineType = 4,
+      .laneCoverEnabled = false,
+      .liftEnabled = true,
+      .hiddenEnabled = true,
+      .hispeedAutoAdjust = true,
+      .judgeAlgorithmImageIndex = 1,
+      .gaugeAutoShiftImageIndex = 3,
+      .bottomShiftableGaugeImageIndex = 2,
+  };
+
+  ResultSkinStateBridge bridge({.configuration = configuration},
+                                1, 0);
+  const auto value = [&](int id) { return bridge.integerProperty({id}, {}); };
+  const auto image = [&](int id) {
+    return bridge.integerProperty({id}, SkinIntegerPropertyDomain::ImageIndex);
+  };
+  const auto floating = [&](int id) { return bridge.floatProperty({id}, {}); };
+  expect(value(10).supported && value(10).value == 275 &&
+             value(12).supported && value(12).value == -18 &&
+             value(165).supported && value(165).value == 100 &&
+             value(310).supported && value(310).value == 2 &&
+             value(311).supported && value(311).value == 75 &&
+             value(312).supported && value(312).value == 720 &&
+             value(313).supported && value(313).value == 432 &&
+             floating(310).supported &&
+             std::abs(floating(310).value - 2.75) < 0.000001 &&
+             image(72).supported && image(72).value == 2 &&
+             image(75).supported && image(75).value == 1 &&
+             image(78).supported && image(78).value == 3 &&
+             image(301).supported && image(301).value == 1 &&
+             image(302).supported && image(302).value == 1 &&
+             image(303).supported && image(303).value == 1 &&
+             image(304).supported && image(304).value == 0 &&
+             image(305).supported && image(305).value == 1 &&
+             image(307).supported && image(307).value == 0 &&
+             image(321).supported && image(321).value == 4 &&
+             image(324).supported && image(324).value == 1 &&
+             image(330).supported && image(330).value == 0 &&
+             image(331).supported && image(331).value == 1 &&
+             image(332).supported && image(332).value == 1 &&
+             image(340).supported && image(340).value == 1 &&
+             image(341).supported && image(341).value == 2 &&
+             image(342).supported && image(342).value == 1 &&
+             image(343).supported && image(343).value == 1 &&
+             image(350).supported && image(350).value == 6 &&
+             image(353).supported && image(353).value == 3 &&
+             image(360).supported && image(360).value == 5 &&
+             image(361).supported && image(361).value == 4,
+         "result properties retain Beatoraja's live player configuration in "
+         "their separate value and image-index namespaces");
+}
+
+void testResultBridgeRetainsResultIntegerFactoryFallbacks() {
+  bms_parser::ChartMeta meta{.TotalNotes = 10};
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 5;
+  state.judgeCount[Great] = 3;
+  state.judgeCount[Good] = 2;
+  ResultSkinStateBridge bridge({.state = &state, .meta = &meta}, 1, 0);
+  const auto value = [&](int id) { return bridge.integerProperty({id}, {}); };
+  const auto named = bridge.integerProperty(
+      {.value = std::string{"lanecover1"}}, {});
+  const auto minimum = std::numeric_limits<int>::min();
+  expect(value(80).supported && value(80).value == 5 &&
+             value(85).supported && value(85).value == 50 &&
+             value(14).supported && value(14).value == minimum &&
+             named.supported && named.value == minimum &&
+             value(161).supported && value(161).value == 0 &&
+             value(162).supported && value(162).value == 0 &&
+             value(163).supported && value(163).value == minimum &&
+             value(243).supported && value(243).value == minimum &&
+             value(280).supported && value(280).value == minimum &&
+             value(320).supported && value(320).value == minimum &&
+             value(1312).supported && value(1312).value == 0,
+         "result IntegerPropertyFactory values retain score-data ranges and "
+         "their AbstractResult fallback sentinels");
+}
+
+void testResultBridgeRetainsAuthenticatedScoreDate() {
+  ResultSkinStateBridge bridge({.currentScoreDateUnixSeconds = 1'700'000'001},
+                               1, 0);
+  const auto timestamp = bridge.integerProperty({243}, {});
+  expect(timestamp.supported && timestamp.value == 1'700'000'001,
+         "result lastplay timestamp uses the authenticated ScoreData date");
+}
+
+void testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces() {
+  AppSettings settings;
+  settings.gameplayHispeed = 2.75F;
+  settings.notesDisplayTimingMilliseconds = -18;
+  settings.visibleTimeDurationMilliseconds = 720;
+  settings.hispeedFixMode = AppSettings::HiSpeedFixMode::Max;
+  settings.bgaEnabled = false;
+  settings.customJudge = true;
+  settings.showJudgeArea = true;
+  settings.markProcessedNotes = true;
+  settings.notesDisplayTimingAutoAdjust = true;
+  settings.autoSaveReplay = {4, 3, 2, 1};
+  settings.guideSoundEffects = true;
+  settings.extraNoteDepth = 6;
+  settings.mineMode = 2;
+  settings.scrollMode = 1;
+  settings.longNoteModifierMode = 3;
+  settings.sevenToNinePattern = 5;
+  settings.sevenToNineType = 4;
+  settings.laneCoverEnabled = false;
+  settings.liftEnabled = true;
+  settings.hiddenEnabled = true;
+  settings.hispeedAutoAdjust = true;
+  settings.notePriorityMode = AppSettings::NotePriorityMode::Duration;
+  settings.selectedAssistOption = assist_options::kBpmGuide;
+  settings.selectedGaugeAutoShiftMode = "best_clear";
+  settings.selectedGaugeAutoShiftLowerBound = "normal";
+  settings.skinModeFilterName = "7 KEYS";
+  settings.skinSortId = "LAMPSCORE";
+  settings.skinDifficultyFilterName = "ANOTHER";
+  settings.skinChartReplicationMode = "NONE";
+  settings.skinTargetId = "RATE_A";
+  settings.skinTargetList = {"MAX", "RATE_A"};
+  settings.irProviders.clear();
+  settings.irProviders.emplace("IR Provider", ir::IrProviderSettings{});
+
+  const ResultSkinConfigurationData configuration =
+      makeResultSkinConfiguration(settings);
+  expect(configuration.gameplayHispeed == 2.75F &&
+             configuration.notesDisplayTimingMilliseconds == -18 &&
+             configuration.visibleTimeDurationMilliseconds == 720 &&
+             configuration.hispeedFixMode == 2 && !configuration.bgaEnabled &&
+             configuration.bpmGuideEnabled && configuration.customJudge &&
+             configuration.showJudgeArea && configuration.markProcessedNotes &&
+             configuration.notesDisplayTimingAutoAdjust &&
+             configuration.autoSaveReplay == std::array<int, 4>{4, 3, 2, 1} &&
+             configuration.guideSoundEffects &&
+             configuration.extraNoteDepth == 6 && configuration.mineMode == 2 &&
+             configuration.scrollMode == 1 &&
+             configuration.longNoteModifierMode == 3 &&
+             configuration.sevenToNinePattern == 5 &&
+             configuration.sevenToNineType == 4 &&
+             !configuration.laneCoverEnabled && configuration.liftEnabled &&
+             configuration.hiddenEnabled && configuration.hispeedAutoAdjust &&
+             configuration.judgeAlgorithmImageIndex == 1 &&
+             configuration.gaugeAutoShiftImageIndex == 3 &&
+             configuration.bottomShiftableGaugeImageIndex == 2 &&
+             configuration.modeFilterName == "7 KEYS" &&
+             configuration.sortId == "LAMPSCORE" &&
+             configuration.difficultyFilterName == "ANOTHER" &&
+             configuration.chartReplicationMode == "NONE" &&
+             configuration.irName == "IR Provider" &&
+             configuration.skinTargetId == "RATE_A" &&
+             configuration.skinTargetList == std::vector<std::string>{"MAX", "RATE_A"},
+         "every result rendering entry point can project PlayerConfig through "
+         "one shared source-compatible configuration snapshot");
+}
+
+void testResultSkinConfigurationClampsExtendedGaugeLowerBounds() {
+  const auto configuredLowerBound = [](const char *value) {
+    AppSettings settings;
+    settings.selectedGaugeAutoShiftLowerBound = value;
+    return makeResultSkinConfiguration(settings).bottomShiftableGaugeImageIndex;
+  };
+
+  expect(configuredLowerBound("hard") == 2 &&
+             configuredLowerBound("exhard") == 2 &&
+             configuredLowerBound("hazard") == 2,
+         "result bottom-shiftable gauge follows PlayerConfig's Normal upper "
+         "bound when Aso's extended lower-bound options are selected");
+}
+
+void testResultBridgeSharesSourceStringPropertyResolution() {
+  ResultSkinConfigurationData configuration{
+      .modeFilterName = "7 KEYS",
+      .sortId = "LAMPSCORE",
+      .difficultyFilterName = "ANOTHER",
+      .chartReplicationMode = "NONE",
+      .irName = "TACHI",
+      .irAccountName = "Skin Player",
+      .skinTargetId = "RATE_A",
+      .skinTargetList = {"MAX", "RATE_A", "RANK_NEXT"},
+  };
+  ResultSkinStateBridge bridge({
+      .configuration = configuration,
+      .irRankingEntries = {{.rank = 1, .playerName = "Top player"}},
+  }, 1, 0);
+  const auto read = [&](std::string name) {
+    const auto property = bridge.stringProperty({.value = std::move(name)});
+    return std::pair{property.supported, std::string(property.value)};
+  };
+  const auto [modeSupported, modeValue] = read("mode");
+  const auto [sortSupported, sortValue] = read("sort");
+  const auto [difficultySupported, difficultyValue] = read("difficulty");
+  const auto [replicationSupported, replicationValue] =
+      read("chartreplication");
+  const auto [irNameSupported, irNameValue] = read("irname");
+  const auto [irAccountSupported, irAccountValue] = read("irUserName");
+  const auto [searchSupported, searchValue] = read("searchword");
+  const auto [keyedSupported, keyedValue] = read("key+01");
+  const auto [rankingSupported, rankingValue] = read("rankingname+01");
+  const auto [previousTargetSupported, previousTargetValue] =
+      read("targetnamep1");
+  const auto [nextTargetSupported, nextTargetValue] = read("targetnamen1");
+  const auto catalog = gameplaySkinBuiltinCatalog();
+  const SkinBindingType string{.kind = SkinBindingKind::StringProperty};
+  expect(modeSupported && modeValue == "7 KEYS" && sortSupported &&
+             sortValue == "LAMPSCORE" && difficultySupported &&
+             difficultyValue == "ANOTHER" && replicationSupported &&
+             replicationValue == "NONE" && irNameSupported &&
+             irNameValue == "TACHI" && irAccountSupported &&
+             irAccountValue == "Skin Player" && searchSupported &&
+             searchValue.empty() && keyedSupported && keyedValue.empty() &&
+             rankingSupported && rankingValue == "Top player" &&
+             previousTargetSupported && previousTargetValue == "MAX" &&
+             nextTargetSupported && nextTargetValue == "NEXT RANK" &&
+             catalog.contains(string,
+                              SkinBuiltinPropertySelector{"rankingname+01"}),
+         "gameplay and result bridges share every StringPropertyFactory name "
+         "and Java-numbered pattern without repurposing its namespace");
 }
 
 void testResultBridgeProjectsLongNoteModeImageIndex() {
@@ -5632,12 +6011,24 @@ void testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData() {
 
   RhythmState normalState(nullptr, false);
   normalState.gaugeType = GaugeType::Normal;
+  normalState.judgeCount[PGreat] = 50;
+  normalState.maxCombo = 50;
   ResultSkinStateBridge normal({.state = &normalState, .meta = &meta}, 1, 0);
   RhythmState hardState(nullptr, false);
   hardState.gaugeType = GaugeType::Hard;
   ResultSkinStateBridge hardResult({.state = &hardState, .meta = &meta}, 1, 0);
   const auto normalGauge = normal.booleanProperty({42});
   const auto normalHardGauge = normal.booleanProperty({43});
+  const auto firstPlayHighScore = normal.integerProperty({150}, {});
+  const auto firstPlayTargetScore = normal.integerProperty({121}, {});
+  const auto firstPlayBestRate = normal.integerProperty({183}, {});
+  const auto firstPlayBestRank = normal.booleanProperty({327});
+  const auto firstPlayUpdatedScore = normal.booleanProperty({330});
+  const auto firstPlayUpdatedCombo = normal.booleanProperty({331});
+  const auto firstPlayUpdatedMiss = normal.booleanProperty({332});
+  const auto firstPlayUpdatedRank = normal.booleanProperty({335});
+  const auto firstPlayUpdatedTarget = normal.booleanProperty({336});
+  const auto firstPlayTargetWin = normal.booleanProperty({352});
   const auto hardGauge = hardResult.booleanProperty({42});
   const auto hardHardGauge = hardResult.booleanProperty({43});
 
@@ -5655,6 +6046,16 @@ void testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData() {
              authoredLevel.supported && authoredLevel.value == 0 &&
              normalGauge.supported && normalGauge.value &&
              normalHardGauge.supported && !normalHardGauge.value &&
+             firstPlayHighScore.supported && firstPlayHighScore.value == 0 &&
+             firstPlayTargetScore.supported && firstPlayTargetScore.value == 0 &&
+             firstPlayBestRate.supported && firstPlayBestRate.value == 0 &&
+             firstPlayBestRank.supported && firstPlayBestRank.value &&
+             firstPlayUpdatedScore.supported && firstPlayUpdatedScore.value &&
+             firstPlayUpdatedCombo.supported && firstPlayUpdatedCombo.value &&
+             firstPlayUpdatedMiss.supported && firstPlayUpdatedMiss.value &&
+             firstPlayUpdatedRank.supported && firstPlayUpdatedRank.value &&
+             firstPlayUpdatedTarget.supported && firstPlayUpdatedTarget.value &&
+             firstPlayTargetWin.supported && firstPlayTargetWin.value &&
              hardGauge.supported && !hardGauge.value &&
              hardHardGauge.supported && hardHardGauge.value &&
              !remoteGauge.supported && !remoteGraph.gaugeSupported,
@@ -5672,19 +6073,114 @@ void testResultBridgeConvertsClearRanksToBeatorajaImageIndexes() {
       {370}, SkinIntegerPropertyDomain::ImageIndex);
   const auto previous = bridge.integerProperty(
       {371}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto currentNumber = bridge.integerProperty({370}, {});
+  const auto previousNumber = bridge.integerProperty({371}, {});
   ResultSkinStateBridge failed({
       .currentClearRankOverride = kClearTypeFailedRank,
   }, 1, 0);
   const auto failedCurrent = failed.integerProperty(
       {370}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto failedCurrentNumber = failed.integerProperty({370}, {});
   ResultSkinStateBridge noPreviousScore({}, 1, 0);
   const auto noPrevious = noPreviousScore.integerProperty(
       {371}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto noPreviousNumber = noPreviousScore.integerProperty({371}, {});
   expect(current.supported && current.value == 8 &&
              previous.supported && previous.value == 4 &&
+             currentNumber.supported && currentNumber.value == 8 &&
+             previousNumber.supported && previousNumber.value == 4 &&
              failedCurrent.supported && failedCurrent.value == 1 &&
-             noPrevious.supported && noPrevious.value == 0,
-         "result clear image indexes use Beatoraja ClearType IDs");
+             failedCurrentNumber.supported && failedCurrentNumber.value == 1 &&
+             noPrevious.supported && noPrevious.value == 0 &&
+             noPreviousNumber.supported && noPreviousNumber.value == 0,
+         "result clear properties use Beatoraja ClearType IDs in every domain");
+}
+
+void testResultBridgeRetainsPreparedChartResultProperties() {
+  bms_parser::ChartMeta meta{.Rank = 2,
+                             .Bpm = 128.0,
+                             .MinBpm = 96.0,
+                             .MaxBpm = 196.0,
+                             .Total = 210.5,
+                             .HasTotal = true};
+  auto graph = std::make_shared<SkinGameplayChartGraphState>();
+  graph->mainBpm = 172.0;
+  graph->normalKeyNotes = 12;
+  graph->longKeyNotes = 13;
+  graph->normalScratchNotes = 14;
+  graph->longScratchNotes = 15;
+  graph->peakDensity = 23.45;
+  graph->endDensity = 16.78;
+  graph->averageDensity = 8.91;
+  graph->hasBpmStop = true;
+  graph->hasBga = true;
+  graph->hasRandomSequence = true;
+  graph->hasAnyLongNote = true;
+  graph->hasUndefinedLongNote = false;
+  graph->hasLongNote = false;
+  graph->hasChargeNote = true;
+  graph->hasHellChargeNote = false;
+  ResultSkinStateBridge bridge({.meta = &meta,
+                                 .chartHasDocument = true,
+                                 .gameplayGraph = {.chart = graph}},
+                                1, 0);
+  const auto mainBpm = bridge.integerProperty({92}, {});
+  const auto totalGauge = bridge.integerProperty({368}, {});
+  const auto totalGaugeFloat = bridge.floatProperty({368}, {});
+  const auto judgeRank = bridge.integerProperty({400}, {});
+  const auto judgeDuration = bridge.integerProperty({525}, {});
+  const auto normalKeys = bridge.integerProperty({350}, {});
+  const auto longKeys = bridge.integerProperty({351}, {});
+  const auto normalScratch = bridge.integerProperty({352}, {});
+  const auto longScratch = bridge.integerProperty({353}, {});
+  const auto peakDensity = bridge.integerProperty({360}, {});
+  const auto peakDensityFraction = bridge.integerProperty({361}, {});
+  const auto endDensity = bridge.integerProperty({362}, {});
+  const auto endDensityFraction = bridge.integerProperty({363}, {});
+  const auto averageDensity = bridge.integerProperty({364}, {});
+  const auto averageDensityFraction = bridge.integerProperty({365}, {});
+  const auto peakDensityFloat = bridge.floatProperty({360}, {});
+  const auto endDensityFloat = bridge.floatProperty({362}, {});
+  const auto averageDensityFloat = bridge.floatProperty({367}, {});
+  const auto hasBpmStop = bridge.booleanProperty({1177});
+  const auto noBga = bridge.booleanProperty({170});
+  const auto hasBga = bridge.booleanProperty({171});
+  const auto noRandomSequence = bridge.booleanProperty({178});
+  const auto hasRandomSequence = bridge.booleanProperty({179});
+  const auto noLongNote = bridge.booleanProperty({172});
+  const auto hasLongNote = bridge.booleanProperty({173});
+  const auto longNoteMode = bridge.integerProperty(
+      {308}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto noDocument = bridge.booleanProperty({174});
+  const auto hasDocument = bridge.booleanProperty({175});
+
+  expect(mainBpm.supported && mainBpm.value == 172 &&
+             totalGauge.supported && totalGauge.value == 210 &&
+             totalGaugeFloat.supported && totalGaugeFloat.value == 210.5 &&
+             judgeRank.supported && judgeRank.value == 2 &&
+             judgeDuration.supported && judgeDuration.value == 0 &&
+             normalKeys.supported && normalKeys.value == 12 &&
+             longKeys.supported && longKeys.value == 13 &&
+             normalScratch.supported && normalScratch.value == 14 &&
+             longScratch.supported && longScratch.value == 15 &&
+             peakDensity.supported && peakDensity.value == 23 &&
+             peakDensityFraction.supported && peakDensityFraction.value == 45 &&
+             endDensity.supported && endDensity.value == 16 &&
+             endDensityFraction.supported && endDensityFraction.value == 78 &&
+             averageDensity.supported && averageDensity.value == 8 &&
+             averageDensityFraction.supported && averageDensityFraction.value == 91 &&
+             peakDensityFloat.supported && peakDensityFloat.value == 23.45 &&
+             endDensityFloat.supported && endDensityFloat.value == 16.78 &&
+             averageDensityFloat.supported && averageDensityFloat.value == 8.91 &&
+             hasBpmStop.supported && hasBpmStop.value &&
+             noBga.supported && !noBga.value && hasBga.supported && hasBga.value &&
+             noRandomSequence.supported && !noRandomSequence.value &&
+             hasRandomSequence.supported && hasRandomSequence.value &&
+             noLongNote.supported && !noLongNote.value && hasLongNote.supported &&
+             hasLongNote.value && longNoteMode.supported && longNoteMode.value == 1 &&
+             noDocument.supported && !noDocument.value && hasDocument.supported &&
+             hasDocument.value,
+         "result bridge retains Beatoraja's prepared chart properties");
 }
 
 void testResultBridgeProjectsIrRankingRows() {
@@ -5711,6 +6207,155 @@ void testResultBridgeProjectsIrRankingRows() {
              secondLamp.supported && secondLamp.value == 6 &&
              secondName.supported && secondName.value == "Current player",
          "result IR ranking properties use the active ranking snapshot");
+}
+
+void testResultBridgeMapsNamedResultAndRankingProperties() {
+  ResultPresentationModel remote{.lampRank = kClearTypeHardClearRank};
+  ResultSkinStateBridge bridge({
+      .presentation = &remote,
+      .irRankingEntries = {{.rank = 1,
+                            .playerName = "Top player",
+                            .score = 1998,
+                            .clearType = kClearTypeFullComboRank},
+                           {.rank = 2,
+                            .playerName = "Current player",
+                            .score = 1888,
+                            .clearType = kClearTypeHardClearRank,
+                            .currentUser = true}},
+  }, 1, 0);
+  const auto clear = bridge.integerProperty(
+      {.value = std::string{"cleartype"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto firstScore = bridge.integerProperty(
+      {.value = std::string{"ranking_exscore+01"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto secondRank = bridge.integerProperty(
+      {.value = std::string{"ranking_index+02"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto secondPlayer = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking+02"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto secondLamp = bridge.integerProperty(
+      {.value = std::string{"cleartype_ranking+02"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto previousIrRank = bridge.integerProperty(
+      {.value = std::string{"ir_prevrank"}},
+      SkinIntegerPropertyDomain::IntegerValue);
+  const auto catalog = gameplaySkinBuiltinCatalog();
+  const SkinBindingType value{
+      .kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::IntegerValue};
+  const SkinBindingType image{
+      .kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::ImageIndex};
+  expect(clear.supported && clear.value == 6 && firstScore.supported &&
+             firstScore.value == 1998 && secondRank.supported &&
+             secondRank.value == 2 && secondPlayer.supported &&
+             secondPlayer.value == 1 && secondLamp.supported &&
+             secondLamp.value == 6 && previousIrRank.supported &&
+             previousIrRank.value == std::numeric_limits<int>::min() &&
+             catalog.contains(value,
+                              SkinBuiltinPropertySelector{"ranking_exscore+01"}) &&
+             catalog.contains(image,
+                              SkinBuiltinPropertySelector{"cleartype_ranking+02"}) &&
+             catalog.contains(value,
+                              SkinBuiltinPropertySelector{"ir_player_failed"}) &&
+             catalog.contains(
+                 value, SkinBuiltinPropertySelector{"ir_player_failed_rate"}) &&
+             catalog.contains(value, SkinBuiltinPropertySelector{
+                                         "ir_player_failed_rate_afterdot"}),
+         "result bridge retains source names and domains for result and "
+         "ranking properties");
+}
+
+void testResultBridgeKeepsNamedLateIrRankingPlayerTypes() {
+  ResultSkinData data;
+  for (int rank = 1; rank <= 9; ++rank) {
+    data.irRankingEntries.push_back({.rank = rank, .currentUser = rank == 7});
+  }
+  ResultSkinStateBridge bridge(std::move(data), 1, 0);
+  const auto seventh = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking7"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto eighth = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking8"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto ninth = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking9"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  expect(seventh.supported && seventh.value == 1 && eighth.supported &&
+             eighth.value == 0 && ninth.supported && ninth.value == 0,
+         "named ranking player types retain their pattern values through the "
+         "numeric 24-key selector collision");
+}
+
+void testResultBridgeMapsNamedIntegerScoreProperties() {
+  ResultPresentationModel result{
+      .score = 150,
+      .maxScore = 200,
+      .finalGauge = 82.5F,
+      .maxCombo = 70,
+      .comboBreak = 3,
+      .badPoints = 4};
+  ResultSkinStateBridge bridge({
+      .presentation = &result,
+      .previousBest = ResultPreviousBestData{.score = 125,
+                                              .maxCombo = 60,
+                                              .badPoints = 5},
+      .pacemaker = ResultPacemakerData{.targetScore = 160},
+  }, 1, 0);
+  const auto score = bridge.integerProperty({.value = std::string{"score"}}, {});
+  const auto maximum = bridge.integerProperty(
+      {.value = std::string{"maxscore"}}, {});
+  const auto rate = bridge.integerProperty(
+      {.value = std::string{"score_rate"}}, {});
+  const auto rateFraction = bridge.integerProperty(
+      {.value = std::string{"score_rate_afterdot"}}, {});
+  const auto gauge = bridge.integerProperty(
+      {.value = std::string{"groovegauge"}}, {});
+  const auto gaugeFraction = bridge.integerProperty(
+      {.value = std::string{"groovegauge_afterdot"}}, {});
+  const auto totalRate = bridge.integerProperty(
+      {.value = std::string{"total_rate"}}, {});
+  const auto target = bridge.integerProperty(
+      {.value = std::string{"target_score"}}, {});
+  const auto previous = bridge.integerProperty(
+      {.value = std::string{"highscore"}}, {});
+  const auto unsupportedCombo = bridge.integerProperty(
+      {.value = std::string{"combo"}}, {});
+  const auto catalog = gameplaySkinBuiltinCatalog();
+  const SkinBindingType integerValue{
+      .kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::IntegerValue};
+  const SkinBindingType imageIndex{
+      .kind = SkinBindingKind::IntegerProperty,
+      .integerDomain = SkinIntegerPropertyDomain::ImageIndex};
+  expect(score.supported && score.value == 150 && maximum.supported &&
+             maximum.value == 200 && rate.supported && rate.value == 75 &&
+             rateFraction.supported && rateFraction.value == 0 &&
+             gauge.supported && gauge.value == 82 && gaugeFraction.supported &&
+             gaugeFraction.value == 5 && totalRate.supported &&
+             totalRate.value == 75 && target.supported && target.value == 160 &&
+             previous.supported && previous.value == 125,
+         "result bridge resolves IntegerPropertyFactory score names in their "
+         "integer namespace");
+  expect(catalog.contains(integerValue,
+                          SkinBuiltinPropertySelector{std::string{"score"}}) &&
+             catalog.contains(
+                 integerValue,
+                 SkinBuiltinPropertySelector{std::string{"score_rate"}}) &&
+             catalog.contains(
+                 integerValue,
+                 SkinBuiltinPropertySelector{std::string{"groovegauge"}}),
+         "result skins admit IntegerPropertyFactory score names as built-ins");
+  expect(catalog.contains(imageIndex,
+                          SkinBuiltinPropertySelector{std::string{"cleartype"}}),
+         "result skins admit IndexType clear-lamp names in the image namespace");
+  expect(!unsupportedCombo.supported &&
+             !catalog.contains(integerValue,
+                               SkinBuiltinPropertySelector{std::string{"combo"}}),
+         "result skins do not invent a named IntegerProperty absent from "
+         "Beatoraja's factory");
 }
 
 void testResultBridgeProjectsReplayLaneAssignments() {
@@ -5787,6 +6432,46 @@ void testResultBridgeExposesResultTimingDistributionStatistics() {
          "result timing statistic properties use the completed timing distribution");
 }
 
+void testResultBridgeKeepsEmptyMusicResultTimingDefaults() {
+  RhythmState state(nullptr, false);
+  ResultSkinStateBridge bridge({.state = &state}, 1, 0);
+  const auto value = [&](int id) { return bridge.integerProperty({id}, {}); };
+  const auto standardDeviation = bridge.floatProperty({376}, {});
+  expect(value(372).supported && value(372).value == 0 &&
+             value(373).supported && value(373).value == 0 &&
+             value(374).supported &&
+             value(374).value == std::numeric_limits<int>::max() &&
+             value(375).supported && value(375).value == 47 &&
+             value(376).supported && value(376).value == -1 &&
+             value(377).supported && value(377).value == 0 &&
+             standardDeviation.supported && standardDeviation.value == -1.0,
+         "empty MusicResult timing data keeps Beatoraja's initialized "
+         "TimingDistribution defaults");
+}
+
+void testCourseResultBridgeDoesNotInventMusicResultTimingStatistics() {
+  ResultSkinStateBridge bridge({.courseResult = true,
+                                 .timingAverageMillis = -12.34,
+                                 .timingStandardDeviationMillis = 8.76,
+                                 .averageJudgeMicros = 1'234'560,
+                                 .timingDistribution = {0, 3, 7},
+                                 .timingDistributionCenter = 1},
+                                1, 0);
+  const auto duration = bridge.integerProperty({372}, {});
+  const auto average = bridge.integerProperty({374}, {});
+  const auto deviation = bridge.integerProperty({376}, {});
+  const auto floatDuration = bridge.floatProperty({372}, {});
+  const auto floatDeviation = bridge.floatProperty({376}, {});
+  const auto graph = bridge.gameplayGraphState();
+  expect(duration.supported && duration.value == 0 && average.supported &&
+             average.value == 0 && deviation.supported && deviation.value == 0 &&
+             floatDuration.supported && floatDuration.value == 0.0 &&
+             floatDeviation.supported && floatDeviation.value == 0.0 &&
+             graph.timingDistribution.empty(),
+         "course results retain AbstractResult's empty timing state instead "
+         "of projecting MusicResult replay statistics");
+}
+
 void testResultBridgeUsesRemotePresentationValues() {
   ResultPresentationModel remote{
       .score = 1400,
@@ -5806,7 +6491,8 @@ void testResultBridgeUsesRemotePresentationValues() {
   };
   ResultSkinStateBridge bridge({.presentation = &remote,
                                  .playLevelOverride = 12.7F,
-                                 .difficultyLabel = "ANOTHER",
+                                 .configuration = ResultSkinConfigurationData{
+                                     .difficultyFilterName = "ALL"},
                                  .chartMd5 = "remote-md5",
                                  .chartSha256 = "remote-sha256",
                                  .keyModeOverride = 7,
@@ -5826,8 +6512,8 @@ void testResultBridgeUsesRemotePresentationValues() {
   const std::string chartMd5(chartMd5Property.value);
   expect(level.supported && level.value == 13,
          "remote result level uses remote level number");
-  expect(difficultyProperty.supported && difficulty == "ANOTHER",
-         "remote result difficulty uses remote difficulty");
+  expect(difficultyProperty.supported && difficulty == "ALL",
+         "result StringProperty difficulty keeps PlayerConfig's filter value");
   expect(chartMd5Property.supported && chartMd5 == "remote-md5",
          "remote result chart hash uses remote metadata");
   expect(bridge.booleanProperty({160}).supported &&
@@ -5847,7 +6533,7 @@ void testResultBridgeUsesRemotePresentationValues() {
              std::abs(bridge.floatProperty({1107}, {}).value - 79.96) < 0.0001 &&
              bridge.judgeState(0).supported && bridge.judgeState(0).combo == 720 &&
              level.supported && level.value == 13 && difficultyProperty.supported &&
-             difficulty == "ANOTHER" && chartMd5Property.supported &&
+             difficulty == "ALL" && chartMd5Property.supported &&
              chartMd5 == "remote-md5",
          "remote result properties project presentation scores, timing, and gauges");
 }
@@ -5889,6 +6575,23 @@ void testResultBridgePreservesCompletedGameplayGraph() {
              graph.recentJudgeTimingIndex == 1 && graph.gaugeHistory.size() == 2 &&
              graph.judgementRevision == 11 && graph.gaugeRevision == 12,
          "result bridge preserves the completed gameplay graph snapshot");
+}
+
+void testResultBridgeUsesRawChartBpmForResultProperties() {
+  bms_parser::ChartMeta meta;
+  meta.MinBpm = 120.0;
+  meta.MaxBpm = 180.0;
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->minimumBpm = 60.0;
+  chart->maximumBpm = 360.0;
+  ResultSkinStateBridge bridge(
+      {.meta = &meta, .gameplayGraph = {.chart = std::move(chart)}}, 1, 0);
+  const auto maximum = bridge.integerProperty({90}, {});
+  const auto minimum = bridge.integerProperty({91}, {});
+  expect(maximum.supported && maximum.value == 180 && minimum.supported &&
+             minimum.value == 120,
+         "result BPM properties use raw chart BPM rather than graph scroll "
+         "speeds");
 }
 
 void testRequestedExternalResultSkinCreatesSession() {
@@ -6005,6 +6708,10 @@ int main() {
   testResultSessionRefreshesForAllStringSelectors();
   testResultSessionRejectsConfiguredModelForAnotherResultTarget();
   testResultBridgeSupportsBeatorajaIrAvailabilityProperties();
+  testResultBridgeUsesSourceDefaultScoreReferencesAndRateFallbacks();
+  testResultBridgeRetainsIrRatePropertyFallbacks();
+  testResultBridgeRecognizesBeatorajaNamedIrIntegerProperties();
+  testResultBridgeKeepsMainStateGaugeHelpersGameplayOnly();
   testResultBridgeUsesPreparedArtworkAvailability();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeRecognizesScratchLongNotes();
@@ -6012,18 +6719,32 @@ int main() {
   testResultBridgeUsesProjectedKeyModeForScorePoint();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
   testResultBridgeUsesCapturedReplayImageIndexes();
-  testResultBridgeFallsBackToFrameZeroForLegalImageIndexes();
+  testResultBridgeUsesSourceImageIndexFactoryFallbacks();
+  testResultBridgeResolvesImageNamesBeforeValueAliases();
+  testResultBridgeRetainsResultConfigurationProperties();
+  testResultBridgeRetainsResultIntegerFactoryFallbacks();
+  testResultBridgeRetainsAuthenticatedScoreDate();
+  testResultSkinConfigurationCarriesPlayerConfigAcrossResultSurfaces();
+  testResultSkinConfigurationClampsExtendedGaugeLowerBounds();
+  testResultBridgeSharesSourceStringPropertyResolution();
   testResultBridgeProjectsLongNoteModeImageIndex();
   testResultBridgeMatchesBeatorajaTableFullString();
   testResultBridgeDoesNotInventRemoteGaugeImageIndex();
   testResultBridgeKeepsResultPropertyContractsForAbsentAndStaticData();
   testResultBridgeConvertsClearRanksToBeatorajaImageIndexes();
+  testResultBridgeRetainsPreparedChartResultProperties();
   testResultBridgeProjectsIrRankingRows();
+  testResultBridgeMapsNamedResultAndRankingProperties();
+  testResultBridgeKeepsNamedLateIrRankingPlayerTypes();
+  testResultBridgeMapsNamedIntegerScoreProperties();
   testResultBridgeProjectsReplayLaneAssignments();
   testResultBridgeExposesPlayerHistoryProperties();
   testResultBridgeExposesResultTimingDistributionStatistics();
+  testResultBridgeKeepsEmptyMusicResultTimingDefaults();
+  testCourseResultBridgeDoesNotInventMusicResultTimingStatistics();
   testResultBridgeUsesRemotePresentationValues();
   testResultBridgePreservesCompletedGameplayGraph();
+  testResultBridgeUsesRawChartBpmForResultProperties();
   testRequestedExternalResultSkinCreatesSession();
   if (failures != 0) {
     std::cerr << failures << " play skin session test(s) failed\n";

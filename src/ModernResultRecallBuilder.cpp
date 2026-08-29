@@ -162,6 +162,7 @@ RhythmState resultStateFrom(
   state.setAssistClearMark(clear_policy::assistClearMarkRequired(
       assistOption, chart.Meta.MinBpm, chart.Meta.MaxBpm,
       score.provenance.playback));
+  state.restoreClearTypeRankForResult(score.clearType);
 
   state.resetJudgeCounts();
   state.judgeCount[PGreat] = score.pGreat;

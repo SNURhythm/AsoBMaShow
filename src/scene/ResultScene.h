@@ -204,8 +204,11 @@ struct LocalResultSource {
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
+  std::optional<std::int64_t> currentScoreDateUnixSeconds;
   ResultPresentationModel presentation;
   SkinGameplayGraphState gameplayGraph;
+  bool chartHasDocument = false;
+  std::optional<int> songReviewFavorite;
   bool skinTimingStatisticsPrepared = false;
   std::size_t skinTimingSampleCount = 0;
   std::optional<double> skinTimingAverageMillis;
@@ -281,7 +284,9 @@ public:
       const ReplayData *analyticsSource = nullptr,
       std::optional<std::string> modernReplayAttemptId = std::nullopt,
       bool retrySameAllowed = true, ResultTableContext tableContext = {},
-      SkinGameplayGraphState gameplayGraph = {});
+      SkinGameplayGraphState gameplayGraph = {},
+      std::optional<std::int64_t> currentScorePlayedAtUnixMillis =
+          std::nullopt);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override;
 

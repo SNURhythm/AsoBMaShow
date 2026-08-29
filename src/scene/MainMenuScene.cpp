@@ -11454,6 +11454,12 @@ void MainMenuScene::startModernReplayResultRecall(
             const bms_parser::ChartMeta meta = chart->Meta;
             const std::string attemptId = result.result.attemptId;
             const ScoreProvenance provenance = result.result.score.provenance;
+            const SkinGameplayGraphState gameplayGraph =
+                completion->retryData != nullptr
+                    ? replay_result::BuildSkinGameplayGraphState(
+                          *chart, *completion->retryData, result.state)
+                    : replay_result::BuildSkinGameplayChartGraphState(
+                          *chart, result.state);
             replayResultRecallInProgress = false;
             context.sceneManager->changeScene(
                 std::make_unique<ResultScene>(
@@ -11462,7 +11468,9 @@ void MainMenuScene::startModernReplayResultRecall(
                     ResultPracticeOptions{}, false, ResultCourseOptions{},
                     profileSelections.pacemakerTarget, std::move(chart),
                     nullptr, std::nullopt, completion->retryData.get(),
-                    attemptId, completion->retryData != nullptr),
+                    attemptId, completion->retryData != nullptr,
+                    ResultTableContext{}, gameplayGraph,
+                    result.result.playedAtUnixMillis),
                 true);
           });
         } catch (...) {
@@ -11600,6 +11608,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       session->modernCourseAttemptId = view.result.attemptId;
       session->modernCoursePlayedAtUnixMillis = view.result.playedAtUnixMillis;
       session->modernCourseResultBrowsing = true;
+      session->restoreFinalClearTypeForResult(view.result.clearType);
       session->modernCourseRetrySameAllowed =
           retrySameAllowed && currentSelection->completeCourse;
       session->gaugeType = view.result.initialGaugeType;
@@ -11642,7 +11651,9 @@ void MainMenuScene::startModernCourseReplayResultRecall(
                                     .savedResultBrowsing = true},
                 profileSelections.pacemakerTarget,
                 std::unique_ptr<bms_parser::Chart>{}, firstReplayChart,
-                std::nullopt, firstReplay),
+                std::nullopt, firstReplay, std::nullopt, true,
+                ResultTableContext{}, first.gameplayGraph,
+                session->modernCoursePlayedAtUnixMillis),
                 true);
       });
     } catch (...) {

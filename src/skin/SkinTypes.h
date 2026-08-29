@@ -7,6 +7,7 @@
 
 #include <optional>
 #include <array>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -47,10 +48,53 @@ struct ResultIrRankingEntryData {
   bool currentUser = false;
 };
 
+// Result property factories retain access to PlayerConfig and PlayConfig even
+// though a result has no live playfield. Keep only that source-facing state in
+// the result snapshot so skins do not resolve it through an unrelated numeric
+// property family.
+struct ResultSkinConfigurationData {
+  float gameplayHispeed = 1.0F;
+  int notesDisplayTimingMilliseconds = 0;
+  int visibleTimeDurationMilliseconds = 667;
+  int hispeedFixMode = 0;
+  bool bgaEnabled = true;
+  bool bpmGuideEnabled = false;
+  bool customJudge = false;
+  bool showJudgeArea = false;
+  bool markProcessedNotes = false;
+  bool notesDisplayTimingAutoAdjust = false;
+  std::array<int, 4> autoSaveReplay{};
+  bool guideSoundEffects = false;
+  int extraNoteDepth = 0;
+  int mineMode = 0;
+  int scrollMode = 0;
+  int longNoteModifierMode = 0;
+  int sevenToNinePattern = 0;
+  int sevenToNineType = 0;
+  bool laneCoverEnabled = true;
+  bool liftEnabled = false;
+  bool hiddenEnabled = false;
+  bool hispeedAutoAdjust = false;
+  int judgeAlgorithmImageIndex = std::numeric_limits<int>::min();
+  // These use PlayerConfig's numeric domain, which differs from Aso's
+  // GameplayGaugeTypes enum ordering for auto-shift modes.
+  int gaugeAutoShiftImageIndex = 0;
+  int bottomShiftableGaugeImageIndex = 0;
+  std::string modeFilterName = "ALL";
+  std::string sortId = "TITLE";
+  std::string difficultyFilterName = "ALL";
+  std::string chartReplicationMode = "RIVALCHART";
+  std::string irName;
+  std::string irAccountName;
+  std::string skinTargetId = "MAX";
+  std::vector<std::string> skinTargetList;
+};
+
 struct ResultSkinData {
   const RhythmState *state;
   const bms_parser::ChartMeta *meta;
   ApplicationContext *context;
+  std::optional<ResultSkinConfigurationData> configuration;
   bool irOnline = false;
   // Result artwork selectors describe textures that the selected skin can
   // actually draw. A nonempty chart declaration alone is insufficient when
@@ -58,6 +102,11 @@ struct ResultSkinData {
   bool stageFileAvailable = false;
   bool bannerAvailable = false;
   bool backBmpAvailable = false;
+  bool chartHasDocument = false;
+  // SongReview.favorite bitfield captured from the chart library. Result
+  // image selectors 89/90 project its song/chart favourite and invisible
+  // pairs just as IntegerPropertyFactory.IndexType does.
+  std::optional<int> songReviewFavorite;
   View **outGraphPlaceholder = nullptr;
   bool showControls = true;
   bool showTimingAnalytics = false;
@@ -89,9 +138,13 @@ struct ResultSkinData {
   std::string chartMd5;
   std::string chartSha256;
   bool autoPlayResult = false;
+  bool courseResult = false;
   std::optional<std::string> headerDifficultyLabelOverride;
   std::optional<std::string> currentClearLabelOverride;
   std::optional<int> currentClearRankOverride;
+  // ScoreData.date backing lastplay_* properties, in Unix seconds. It is
+  // captured only where the result lifecycle provides an authenticated date.
+  std::optional<std::int64_t> currentScoreDateUnixSeconds;
   std::optional<ResultPreviousBestData> previousBest;
   std::optional<ResultPreviousBestData> previousLampBest;
   std::optional<ResultPacemakerData> pacemaker;

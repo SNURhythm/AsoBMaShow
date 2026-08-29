@@ -1,5 +1,10 @@
 #include "PlaySkinStateBridge.h"
 
+#include "BeatorajaBooleanPropertyNames.h"
+#include "BeatorajaIntegerPropertyNames.h"
+#include "BeatorajaStringPropertyNames.h"
+#include "BeatorajaTargetPropertyNames.h"
+
 #include "GameplaySkinEndAnimation.h"
 #include "GameplaySkinBuiltinCatalog.h"
 #include "LuaSkinHostModules.h"
@@ -16,7 +21,6 @@
 #include <string>
 #include <system_error>
 #include <type_traits>
-#include <tuple>
 #include <utility>
 
 namespace {
@@ -218,216 +222,6 @@ beatorajaPlayerOneSkinLaneOffset(const PlayfieldChartVisualModel &chart,
   }
 }
 
-std::optional<int> decimalSuffix(std::string_view value, std::string_view prefix,
-                                 std::string_view suffix, int first,
-                                 int count, int authoredFirst = 1) {
-  if (!value.starts_with(prefix) || !value.ends_with(suffix) ||
-      value.size() <= prefix.size() + suffix.size()) {
-    return std::nullopt;
-  }
-  const std::string_view digits =
-      value.substr(prefix.size(), value.size() - prefix.size() - suffix.size());
-  int parsed = 0;
-  for (const char character : digits) {
-    if (character < '0' || character > '9' ||
-        parsed > (std::numeric_limits<int>::max() - 9) / 10) {
-      return std::nullopt;
-    }
-    parsed = parsed * 10 + (character - '0');
-  }
-  const int offset = parsed - authoredFirst;
-  return offset >= 0 && offset < count ? std::optional<int>(first + offset)
-                                        : std::nullopt;
-}
-
-std::optional<int> positiveTargetSuffix(std::string_view value,
-                                        std::string_view prefix) {
-  if (!value.starts_with(prefix) || value.size() == prefix.size()) {
-    return std::nullopt;
-  }
-  std::string_view digits = value.substr(prefix.size());
-  if (digits.starts_with('+')) {
-    digits.remove_prefix(1);
-  }
-  int parsed = 0;
-  const auto [end, error] =
-      std::from_chars(digits.data(), digits.data() + digits.size(), parsed);
-  if (error != std::errc{} || end != digits.data() + digits.size() ||
-      parsed <= 0) {
-    return std::nullopt;
-  }
-  return parsed;
-}
-
-std::string javaFloatTargetText(float value) {
-  // Float.toString uses the shortest round-tripping decimal but keeps a
-  // decimal fraction for integer-valued finite floats. Floating-point
-  // to_chars is unavailable for this app's iOS 14 deployment target, so find
-  // that shortest decimal with the portable C formatter instead.
-  char buffer[64];
-  std::string text;
-  for (int precision = 1;
-       precision <= std::numeric_limits<float>::max_digits10; ++precision) {
-    const int written = std::snprintf(buffer, sizeof(buffer), "%.*g", precision,
-                                      static_cast<double>(value));
-    if (written < 0 || static_cast<std::size_t>(written) >= sizeof(buffer)) {
-      return "0.0";
-    }
-    text.assign(buffer, static_cast<std::size_t>(written));
-    char *parseEnd = nullptr;
-    const float roundTrip = std::strtof(text.c_str(), &parseEnd);
-    if (parseEnd != text.c_str() && parseEnd != nullptr && *parseEnd == '\0' &&
-        roundTrip == value) {
-      break;
-    }
-  }
-  const float magnitude = std::fabs(value);
-  const bool scientific = magnitude != 0.0F &&
-                          (magnitude < 0.001F || magnitude >= 10'000'000.0F);
-  if (scientific && text.find_first_of("eE") == std::string::npos) {
-    const auto dot = text.find('.');
-    const std::size_t beforeDot = dot == std::string::npos ? text.size() : dot;
-    text.erase(std::remove(text.begin(), text.end(), '.'), text.end());
-    const auto firstDigit = text.find_first_not_of('0');
-    if (firstDigit == std::string::npos) {
-      return "0.0";
-    }
-    const int exponent = static_cast<int>(beforeDot) -
-                         static_cast<int>(firstDigit) - 1;
-    text.erase(0, firstDigit);
-    text.insert(1, 1, '.');
-    text += "E" + std::to_string(exponent);
-  }
-
-  const auto marker = text.find_first_of("eE");
-  if (marker == std::string::npos) {
-    if (text.find('.') == std::string::npos) {
-      text += ".0";
-    }
-    return text;
-  }
-
-  std::string mantissa = text.substr(0, marker);
-  std::string exponent = text.substr(marker + 1);
-  bool negativeExponent = false;
-  if (!exponent.empty() && (exponent.front() == '+' || exponent.front() == '-')) {
-    negativeExponent = exponent.front() == '-';
-    exponent.erase(exponent.begin());
-  }
-  const auto firstDigit = exponent.find_first_not_of('0');
-  exponent = firstDigit == std::string::npos ? "0" : exponent.substr(firstDigit);
-
-  if (scientific) {
-    if (mantissa.find('.') == std::string::npos) {
-      mantissa += ".0";
-    }
-    return mantissa + "E" + (negativeExponent ? "-" : "") + exponent;
-  }
-
-  int parsedExponent = 0;
-  const auto [parsedEnd, parsedError] = std::from_chars(
-      exponent.data(), exponent.data() + exponent.size(), parsedExponent);
-  if (parsedError != std::errc{} ||
-      parsedEnd != exponent.data() + exponent.size()) {
-    return mantissa;
-  }
-  if (negativeExponent) {
-    parsedExponent = -parsedExponent;
-  }
-  const auto dot = mantissa.find('.');
-  const std::size_t beforeDot = dot == std::string::npos ? mantissa.size() : dot;
-  mantissa.erase(std::remove(mantissa.begin(), mantissa.end(), '.'),
-                 mantissa.end());
-  const std::ptrdiff_t decimal =
-      static_cast<std::ptrdiff_t>(beforeDot) + parsedExponent;
-  if (decimal <= 0) {
-    return "0." + std::string(static_cast<std::size_t>(-decimal), '0') +
-           mantissa;
-  }
-  if (decimal >= static_cast<std::ptrdiff_t>(mantissa.size())) {
-    return mantissa +
-           std::string(static_cast<std::size_t>(decimal) - mantissa.size(), '0') +
-           ".0";
-  }
-  mantissa.insert(static_cast<std::size_t>(decimal), 1, '.');
-  return mantissa;
-}
-
-std::optional<std::string> beatorajaRateTargetName(std::string_view value) {
-  std::string source(value);
-  source.erase(source.begin(),
-               std::find_if(source.begin(), source.end(), [](unsigned char ch) {
-                 return ch > 0x20U;
-               }));
-  source.erase(
-      std::find_if(source.rbegin(), source.rend(), [](unsigned char ch) {
-        return ch > 0x20U;
-      }).base(),
-      source.end());
-  if (!source.empty() &&
-      (source.back() == 'f' || source.back() == 'F' || source.back() == 'd' ||
-       source.back() == 'D')) {
-    source.pop_back();
-  }
-  char *end = nullptr;
-  const float rate = std::strtof(source.c_str(), &end);
-  if (end == source.c_str() || end == nullptr || *end != '\0' ||
-      !std::isfinite(rate) || rate < 0.0F || rate > 100.0F) {
-    return std::nullopt;
-  }
-  return "SCORE RATE " + javaFloatTargetText(rate) + "%";
-}
-
-std::string beatorajaTargetPropertyName(std::string_view id) {
-  constexpr std::array<std::pair<std::string_view, std::string_view>, 11>
-      staticTargets = {{{"RATE_A-", "RANK A-"}, {"RATE_A", "RANK A"},
-                        {"RATE_A+", "RANK A+"}, {"RATE_AA-", "RANK AA-"},
-                        {"RATE_AA", "RANK AA"}, {"RATE_AA+", "RANK AA+"},
-                        {"RATE_AAA-", "RANK AAA-"},
-                        {"RATE_AAA", "RANK AAA"},
-                        {"RATE_AAA+", "RANK AAA+"},
-                        {"RATE_MAX-", "RANK MAX-"}, {"MAX", "MAX"}}};
-  for (const auto &[targetId, name] : staticTargets) {
-    if (id == targetId) {
-      return std::string(name);
-    }
-  }
-  if (id.starts_with("RATE_")) {
-    if (const auto name = beatorajaRateTargetName(id.substr(5))) {
-      return *name;
-    }
-  }
-  if (id == "RANK_NEXT") {
-    return "NEXT RANK";
-  }
-  if (const auto index = positiveTargetSuffix(id, "RIVAL_NEXT_")) {
-    return "RIVAL NEXT " + std::to_string(*index);
-  }
-  if (const auto index = positiveTargetSuffix(id, "RIVAL_RANK_")) {
-    return *index == 1 ? "RIVAL TOP"
-                       : "RIVAL RANK " + std::to_string(*index);
-  }
-  if (positiveTargetSuffix(id, "RIVAL_")) {
-    // Aso has no rival PlayerInformation authority. This is TargetProperty's
-    // exact absent-rival getName result, not a substitute account label.
-    return "NO RIVAL";
-  }
-  if (const auto index = positiveTargetSuffix(id, "IR_NEXT_")) {
-    return "IR NEXT " + std::to_string(*index) + "RANK";
-  }
-  if (const auto index = positiveTargetSuffix(id, "IR_RANKRATE_")) {
-    if (*index < 100) {
-      return "IR RANK TOP " + std::to_string(*index) + "%";
-    }
-  }
-  if (const auto index = positiveTargetSuffix(id, "IR_RANK_")) {
-    return "IR RANK " + std::to_string(*index);
-  }
-  // TargetProperty.getTargetProperty() falls back to StaticTargetProperty's
-  // MAX instance for every unrecognized configured ID.
-  return "MAX";
-}
-
 std::string
 beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
   // BMSPlayer's practice branch passes a null target ScoreData, so both
@@ -446,8 +240,9 @@ beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
     if (id == "RATE_A-" || id == "RATE_A" || id == "RATE_A+" ||
         id == "RATE_AA-" || id == "RATE_AA" || id == "RATE_AA+" ||
         id == "RATE_AAA-" || id == "RATE_AAA" || id == "RATE_AAA+" ||
-        id == "RATE_MAX-" || beatorajaRateTargetName(id.substr(5))) {
-      return beatorajaTargetPropertyName(id);
+        id == "RATE_MAX-" ||
+        skin::beatoraja_target_property_detail::rateName(id.substr(5))) {
+      return skin::beatorajaTargetPropertyName(id);
     }
   }
   if (id == "MAX") {
@@ -455,8 +250,10 @@ beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
   }
   if (id.starts_with("RIVAL_NEXT_") || id.starts_with("RIVAL_RANK_")) {
     const auto index = id.starts_with("RIVAL_NEXT_")
-                           ? positiveTargetSuffix(id, "RIVAL_NEXT_")
-                           : positiveTargetSuffix(id, "RIVAL_RANK_");
+                           ? skin::beatoraja_target_property_detail::positiveSuffix(
+                                 id, "RIVAL_NEXT_")
+                           : skin::beatoraja_target_property_detail::positiveSuffix(
+                                 id, "RIVAL_RANK_");
     if (index) {
       // Aso has no RivalDataAccessor entries. TargetProperty's score array
       // therefore contains only the local record when one exists; it assigns
@@ -464,96 +261,22 @@ beatorajaTargetScorePlayerName(const PlayfieldAuthorityUpdate &authority) {
       return authority.persistedScore ? std::string{} : "NO RIVAL";
     }
   }
-  if (positiveTargetSuffix(id, "RIVAL_")) {
+  if (skin::beatoraja_target_property_detail::positiveSuffix(id, "RIVAL_")) {
     // There is no configured Aso rival PlayerInformation/ScoreData cache, so
     // RivalTargetProperty's no-name/no-score branch is the source result.
     return "NO RIVAL";
   }
-  const auto irRankRate = positiveTargetSuffix(id, "IR_RANKRATE_");
-  if (positiveTargetSuffix(id, "IR_NEXT_") ||
-      positiveTargetSuffix(id, "IR_RANK_") ||
+  const auto irRankRate =
+      skin::beatoraja_target_property_detail::positiveSuffix(
+          id, "IR_RANKRATE_");
+  if (skin::beatoraja_target_property_detail::positiveSuffix(id, "IR_NEXT_") ||
+      skin::beatoraja_target_property_detail::positiveSuffix(id, "IR_RANK_") ||
       (irRankRate && *irRankRate < 100)) {
     // Aso does not create a gameplay RankingData instance. This exactly maps
     // InternetRankingTargetProperty's ranking == null branch.
     return "NO DATA";
   }
   return "MAX";
-}
-
-std::vector<std::string>
-beatorajaTargetNeighbourNames(const PlayfieldAuthorityUpdate &authority) {
-  std::vector<std::string> names(20);
-  const auto found = std::ranges::find(authority.skinTargetList,
-                                       authority.skinTargetId);
-  if (found == authority.skinTargetList.end() ||
-      authority.skinTargetList.empty()) {
-    return names;
-  }
-  const std::size_t selected =
-      static_cast<std::size_t>(found - authority.skinTargetList.begin());
-  const std::size_t count = authority.skinTargetList.size();
-  for (std::size_t index = 0; index < 10; ++index) {
-    const std::size_t previous =
-        (selected + count - (10 - index) % count) % count;
-    names[index] =
-        beatorajaTargetPropertyName(authority.skinTargetList[previous]);
-    const std::size_t next = (selected + index + 1) % count;
-    names[index + 10] =
-        beatorajaTargetPropertyName(authority.skinTargetList[next]);
-  }
-  return names;
-}
-
-std::optional<int> namedStringPropertySelector(std::string_view name) {
-  constexpr std::array<std::pair<std::string_view, int>, 26> direct = {{
-      {"rival", 1},          {"player", 2},
-      {"target", 3},         {"title", 10},
-      {"subtitle", 11},      {"fulltitle", 12},
-      {"genre", 13},         {"artist", 14},
-      {"subartist", 15},     {"fullartist", 16},
-      {"searchword", 30},    {"skinname", 50},
-      {"skinauthor", 51},    {"mode", 60},
-      {"sort", 61},          {"difficulty", 62},
-      {"chartreplication", 86}, {"directory", 1000},
-      {"tablename", 1001},   {"tablelevel", 1002},
-      {"tablefull", 1003},   {"version", 1010},
-      {"irname", 1020},      {"irUserName", 1021},
-      {"songhashmd5", 1030}, {"songhashsha256", 1031},
-  }};
-  for (const auto &[candidate, id] : direct) {
-    if (name == candidate) {
-      return id;
-    }
-  }
-  // StringPropertyFactory reverses the numeric order of targetnamep: its
-  // authored name 1 resolves to the closest previous target (numeric 209),
-  // while numeric 200 is the farthest one.  Preserve that source mapping
-  // rather than treating the name as a conventional ascending alias.
-  if (const auto previous = decimalSuffix(name, "targetnamep", "", 0, 10)) {
-    return 209 - *previous;
-  }
-  constexpr std::array<std::tuple<std::string_view, std::string_view, int,
-                                  int, int>,
-                       12>
-      patterns = {{{"key", "", 40, 10, 1},
-                   {"key", "", 240, 44, 11},
-                   {"skincategory", "", 100, 10, 1},
-                   {"skinitem", "", 110, 10, 1},
-                   {"rankingname", "", 120, 10, 1},
-                   {"coursetitle", "", 150, 10, 1},
-                   {"targetnamen", "", 210, 10, 1},
-                   {"practice_item", "", 1040, 16, 1},
-                   {"practice_item", "_label", 1060, 16, 1},
-                   {"practice_item", "_value", 1080, 16, 1},
-                   {"practice_item_label", "", 1060, 16, 1},
-                   {"practice_item_value", "", 1080, 16, 1}}};
-  for (const auto &[prefix, suffix, first, count, authoredFirst] : patterns) {
-    if (const auto id = decimalSuffix(name, prefix, suffix, first, count,
-                                      authoredFirst)) {
-      return id;
-    }
-  }
-  return std::nullopt;
 }
 
 std::optional<int> namedFloatPropertySelector(std::string_view name) {
@@ -1196,7 +919,8 @@ void PlaySkinStateBridge::beginFrame(
   }
 
   state_ = state;
-  targetNeighbourNames_ = beatorajaTargetNeighbourNames(state.authority);
+  targetNeighbourNames_ = skin::beatorajaTargetNeighbourNames(
+      state.authority.skinTargetId, state.authority.skinTargetList);
   targetScorePlayerName_ = beatorajaTargetScorePlayerName(state.authority);
   builtInTraversal_ = projection.builtInTraversal;
   projection_ = adaptPlayfieldProjectionForSkin(projection);
@@ -1938,7 +1662,11 @@ std::uint64_t PlaySkinStateBridge::frameSerial() const noexcept {
 SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
     const SkinBuiltinPropertySelector &selector) {
   const auto *snapshot = state();
-  const auto id = numericSelector(selector);
+  const auto id = [&]() -> std::optional<int> {
+    if (const auto *numeric = std::get_if<int>(&selector.value)) return *numeric;
+    return beatorajaBooleanPropertySelector(
+        std::get<std::string>(selector.value));
+  }();
   if (snapshot == nullptr || !id) {
     reportUnsupported("boolean", selector);
     return {};
@@ -2289,9 +2017,47 @@ SkinPropertyLookup<bool> PlaySkinStateBridge::booleanProperty(
 SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
     const SkinBuiltinPropertySelector &selector, SkinIntegerPropertyDomain domain) {
   const auto *snapshot = state();
+  if (domain == SkinIntegerPropertyDomain::IntegerValue && snapshot != nullptr) {
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      if (*name == "time") {
+        return {.value = snapshot->clock.visualTimeMicros, .supported = true};
+      }
+      if (*name == "lua_gauge_type") {
+        return {.value = gaugeTypeIndex(snapshot->authority.gaugeType),
+                .supported = true};
+      }
+      constexpr std::string_view judgePrefix = "judge:";
+      if (name->starts_with(judgePrefix)) {
+        int index = -1;
+        const std::string_view suffix(name->data() + judgePrefix.size(),
+                                      name->size() - judgePrefix.size());
+        const auto parsed = std::from_chars(
+            suffix.data(), suffix.data() + suffix.size(), index);
+        if (parsed.ec != std::errc{} ||
+            parsed.ptr != suffix.data() + suffix.size()) {
+          return {.value = 0, .supported = true};
+        }
+        const Judgement judgement = index == 0   ? PGreat
+                                   : index == 1 ? Great
+                                   : index == 2 ? Good
+                                   : index == 3 ? Bad
+                                   : index == 4 ? Poor
+                                   : index == 5 ? Kpoor
+                                                : None;
+        return {.value = judgement == None
+                             ? 0
+                             : capturedJudgeCount(*snapshot, judgement),
+                .supported = true};
+      }
+    }
+  }
   auto id = numericSelector(selector);
-  if (!id && selector.value == decltype(selector.value){std::string{"nowbpm"}}) {
-    id = 160;
+  if (!id) {
+    if (const auto *name = std::get_if<std::string>(&selector.value)) {
+      id = domain == SkinIntegerPropertyDomain::ImageIndex
+               ? beatorajaImageIndexPropertySelector(*name)
+               : beatorajaIntegerValuePropertySelector(*name);
+    }
   }
   if (snapshot == nullptr || !id) {
     reportUnsupported("integer", selector);
@@ -3057,6 +2823,12 @@ SkinPropertyLookup<std::int64_t> PlaySkinStateBridge::integerProperty(
 SkinPropertyLookup<double> PlaySkinStateBridge::floatProperty(
     const SkinBuiltinPropertySelector &selector, SkinFloatPropertyDomain domain) {
   const auto *snapshot = state();
+  if (snapshot != nullptr) {
+    if (const auto *name = std::get_if<std::string>(&selector.value);
+        name != nullptr && *name == "lua_gauge") {
+      return {.value = snapshot->authority.currentGauge, .supported = true};
+    }
+  }
   auto id = numericSelector(selector);
   if (!id) {
     if (const auto *name = std::get_if<std::string>(&selector.value)) {
@@ -3278,7 +3050,7 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   auto id = numericSelector(selector);
   if (!id) {
     if (const auto *name = std::get_if<std::string>(&selector.value)) {
-      id = namedStringPropertySelector(*name);
+      id = beatorajaStringPropertySelector(*name);
     }
   }
   if (!id) {
