@@ -538,6 +538,10 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "const ReplayData *firstReplay = session->resultBrowseStageReplay(0);",
                   "the initially displayed saved course stage receives its retained replay");
   requireContains(mainMenu,
+                  "ResultTableContext{}, first.gameplayGraph,",
+                  "the initially displayed replay-less saved course stage receives "
+                  "its prepared chart graph");
+  requireContains(mainMenu,
                   "*replayChart, *stageReplay, stage.state",
                   "saved course graph reconstruction uses the replay-prepared chart");
   requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",

@@ -1082,19 +1082,32 @@ void testTimingDistributionGraphSkipsCourseResult() {
   state.graphResult.timingDistributionCenter = 150;
   ValidatedBeatorajaSkinModel model;
   model.model.header.type = 15;
+  model.model.booleanProperties.push_back({
+      .id = SkinBooleanPropertyId{1},
+      .source = runtime.failCallback(),
+      .authoredOrdinal = 1,
+  });
+  model.model.timerProperties.push_back({
+      .id = SkinTimerPropertyId{1},
+      .source = runtime.forbiddenTimerCallback(),
+      .authoredOrdinal = 2,
+  });
   model.model.objects.push_back(
       {.id = 1,
        .authoredName = "timing-distribution",
        .payload = SkinTimingDistributionGraphObject{},
        .authoredOrdinal = 1,
        .critical = true});
-  model.model.destinations.push_back(destination(1, 1, 10.0));
+  auto presented = destination(1, 1, 10.0);
+  presented.presentation.conditions.push_back(SkinBooleanPropertyId{1});
+  presented.presentation.timer = SkinTimerPropertyId{1};
+  model.model.destinations.push_back(std::move(presented));
 
   const auto result = evaluate(renderer, runtime, model, resources, state);
   expect(result.submitReady && result.submitReady->commands.empty() &&
              result.diagnostics.empty(),
-         "timingdistributiongraph is MusicResult-only and stays hidden on a "
-         "course result");
+         "timingdistributiongraph is MusicResult-only and skips course-result "
+         "destination callbacks");
 }
 
 bool hasDiagnostic(const SkinFrameEvaluationResult &result,

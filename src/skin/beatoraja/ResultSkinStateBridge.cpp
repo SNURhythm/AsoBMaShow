@@ -693,6 +693,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
   }();
   if (!imageId) return unsupported<std::int64_t>();
   if (domain == SkinIntegerPropertyDomain::ImageIndex) {
+    const bool namedImageSelector =
+        std::holds_alternative<std::string>(selector.value);
     const auto *configuration = data_.configuration
                                     ? std::addressof(*data_.configuration)
                                     : nullptr;
@@ -704,12 +706,12 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return supported<std::int64_t>(0);
     }
     if ((*imageId >= 170 && *imageId <= 185) ||
-        (*imageId >= 386 && *imageId <= 388)) {
+        (!namedImageSelector && *imageId >= 386 && *imageId <= 388)) {
       // SkinPropertyMapper recognizes these as skin-selection controls.
       // They are valid image properties, but only SkinConfiguration can
       // evaluate them; an AbstractResult therefore receives MIN_VALUE.
-      // This deliberately precedes the 380-389 ranking pattern because
-      // Beatoraja's 24-key skin selectors shadow 386-388.
+      // Numeric 24-key skin selectors shadow 386-388, but the named
+      // playertype_ranking patterns resolve before IndexType in Beatoraja.
       return supported<std::int64_t>(std::numeric_limits<int>::min());
     }
     switch (*imageId) {
@@ -908,7 +910,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                           : 0);
     }
     case 380: case 381: case 382: case 383: case 384:
-    case 385: case 389: {
+    case 385: case 386: case 387: case 388: case 389: {
       const std::size_t index = static_cast<std::size_t>(*imageId - 380);
       // RankingData distinguishes only You, Rival, and None. The application
       // ranking snapshot retains current-user identity but no rival roster,

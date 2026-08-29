@@ -3663,8 +3663,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       }
       const auto *timingDistribution =
           std::get_if<SkinTimingDistributionGraphObject>(&object->payload);
-      if (timingDistribution && inputs.model.model.header.type != 7 &&
-          inputs.model.model.header.type != 15) {
+      // SkinTimingDistributionGraph.prepare accepts MusicResult only and
+      // returns before SkinObject.prepare for every other state. Reject it
+      // before evaluating destination callbacks, like TimingVisualizer.
+      if (timingDistribution && inputs.model.model.header.type != 7) {
         continue;
       }
       const auto *hitErrorVisualizer =

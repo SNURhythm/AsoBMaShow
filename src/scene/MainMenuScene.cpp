@@ -11652,7 +11652,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
                 profileSelections.pacemakerTarget,
                 std::unique_ptr<bms_parser::Chart>{}, firstReplayChart,
                 std::nullopt, firstReplay, std::nullopt, true,
-                ResultTableContext{}, SkinGameplayGraphState{},
+                ResultTableContext{}, first.gameplayGraph,
                 session->modernCoursePlayedAtUnixMillis),
                 true);
       });

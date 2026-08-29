@@ -6268,6 +6268,27 @@ void testResultBridgeMapsNamedResultAndRankingProperties() {
          "ranking properties");
 }
 
+void testResultBridgeKeepsNamedLateIrRankingPlayerTypes() {
+  ResultSkinData data;
+  for (int rank = 1; rank <= 9; ++rank) {
+    data.irRankingEntries.push_back({.rank = rank, .currentUser = rank == 7});
+  }
+  ResultSkinStateBridge bridge(std::move(data), 1, 0);
+  const auto seventh = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking7"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto eighth = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking8"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  const auto ninth = bridge.integerProperty(
+      {.value = std::string{"playertype_ranking9"}},
+      SkinIntegerPropertyDomain::ImageIndex);
+  expect(seventh.supported && seventh.value == 1 && eighth.supported &&
+             eighth.value == 0 && ninth.supported && ninth.value == 0,
+         "named ranking player types retain their pattern values through the "
+         "numeric 24-key selector collision");
+}
+
 void testResultBridgeMapsNamedIntegerScoreProperties() {
   ResultPresentationModel result{
       .score = 150,
@@ -6697,6 +6718,7 @@ int main() {
   testResultBridgeRetainsPreparedChartResultProperties();
   testResultBridgeProjectsIrRankingRows();
   testResultBridgeMapsNamedResultAndRankingProperties();
+  testResultBridgeKeepsNamedLateIrRankingPlayerTypes();
   testResultBridgeMapsNamedIntegerScoreProperties();
   testResultBridgeProjectsReplayLaneAssignments();
   testResultBridgeExposesPlayerHistoryProperties();
