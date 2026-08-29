@@ -627,6 +627,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
 
+    add_executable(curl_redirect_policy_tests
+        tests/curl_redirect_policy_tests.cpp
+    )
+    target_compile_features(curl_redirect_policy_tests PRIVATE cxx_std_23)
+
     if(APPLE AND NOT IOS)
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
@@ -6726,6 +6731,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endfunction()
 
     asobmashow_register_test(skin_package_store_tests)
+    asobmashow_register_test(curl_redirect_policy_tests)
 
     foreach(eligibility_target IN ITEMS
         chart_replay_context_tests

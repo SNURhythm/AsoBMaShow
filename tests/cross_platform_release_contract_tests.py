@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+import os
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,6 +34,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.main = read("src/main.cpp")
         cls.audio_decoder = read("src/audio/decoder.cpp")
         cls.replay_store = read("src/replay/ReplayFileStore.cpp")
+        cls.curl_raii = read("src/CurlRAII.h")
         cls.download_support = read("src/bms_search/DownloadSupport.cpp")
         cls.difficulty_importer = read("src/DifficultyTableImporter.cpp")
         cls.ios_natives = read("src/iOSNatives.mm")
@@ -55,15 +59,19 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertGreaterEqual(int(version_match.group(1)), 3_053_004)
 
     def test_download_redirects_cannot_downgrade_https_to_http(self):
+        self.assertIn("CurlRedirectProtocolsForInitialUrl", self.curl_raii)
         for source, expected_redirect_guards in (
             (self.download_support, 3),
             (self.difficulty_importer, 1),
         ):
-            self.assertNotIn(
-                'CURLOPT_REDIR_PROTOCOLS_STR, "http,https"', source
-            )
             self.assertEqual(
-                source.count('CURLOPT_REDIR_PROTOCOLS_STR, "https"'),
+                len(
+                    re.findall(
+                        r"CURLOPT_REDIR_PROTOCOLS_STR,\s*"
+                        r"CurlRedirectProtocolsForInitialUrl\(url\)",
+                        source,
+                    )
+                ),
                 expected_redirect_guards,
             )
         self.assertIn("AsoHttpsRedirectDelegate", self.ios_natives)
@@ -79,6 +87,21 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
                 next_function_name, 1
             )[0]
             self.assertNotIn("sharedSession", function)
+
+    def test_result_persistence_wrapper_ignores_inherited_cdpath(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            Path(temporary, "scripts").mkdir()
+            environment = os.environ.copy()
+            environment["CDPATH"] = temporary
+            result = subprocess.run(
+                ["/bin/sh", "scripts/check_result_persistence_flow.sh"],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_public_version_is_0_0_1_on_desktop_and_android(self):
         self.assertRegex(

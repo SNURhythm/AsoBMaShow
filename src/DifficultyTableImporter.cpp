@@ -136,7 +136,8 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
