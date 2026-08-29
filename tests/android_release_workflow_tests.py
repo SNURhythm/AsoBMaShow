@@ -126,6 +126,16 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                 {("file", "profiles")},
             )
 
+    def test_android_download_redirects_cannot_downgrade_https_to_http(self):
+        self.assertIn(
+            'requireHttps && !"https".equalsIgnoreCase(redirectUrl.getProtocol())',
+            self.activity,
+        )
+        self.assertIn(
+            'throw new IOException("HTTPS download redirected to insecure HTTP.")',
+            self.activity,
+        )
+
     def test_android_lint_is_fatal_and_runs_before_firebase_deploy(self):
         self.assertIn("abortOnError true", self.gradle)
         self.assertNotIn("abortOnError false", self.gradle)

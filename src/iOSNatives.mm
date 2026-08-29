@@ -2259,7 +2259,42 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
 }
 @end
 
-@interface AsoBinaryDownloadDelegate : NSObject <NSURLSessionDownloadDelegate> {
+@interface AsoHttpsRedirectDelegate : NSObject <NSURLSessionTaskDelegate> {
+ @public
+  BOOL requireHttps;
+  BOOL rejectedInsecureRedirect;
+  BOOL rejectedInvalidRedirect;
+}
+@end
+
+@implementation AsoHttpsRedirectDelegate
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response
+                    newRequest:(NSURLRequest *)request
+             completionHandler:
+                 (void (^)(NSURLRequest *_Nullable))completionHandler {
+  (void)session;
+  (void)task;
+  (void)response;
+  NSString *scheme = request.URL.scheme.lowercaseString;
+  if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+    rejectedInvalidRedirect = YES;
+    completionHandler(nil);
+    return;
+  }
+  if (requireHttps && ![scheme isEqualToString:@"https"]) {
+    rejectedInsecureRedirect = YES;
+    completionHandler(nil);
+    return;
+  }
+  requireHttps = requireHttps || [scheme isEqualToString:@"https"];
+  completionHandler(request);
+}
+@end
+
+@interface AsoBinaryDownloadDelegate
+    : AsoHttpsRedirectDelegate <NSURLSessionDownloadDelegate> {
  @public
   NSData *responseData;
   NSURLResponse *urlResponse;
@@ -4001,6 +4036,12 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
       errorMessage = "Invalid URL: " + url;
       return false;
     }
+    NSString *scheme = nsUrl.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] &&
+        ![scheme isEqualToString:@"https"]) {
+      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
+      return false;
+    }
 
     NSMutableURLRequest *request = [NSMutableURLRequest
          requestWithURL:nsUrl
@@ -4012,7 +4053,16 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     __block NSURLResponse *urlResponse = nil;
     __block NSError *requestError = nil;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+    AsoHttpsRedirectDelegate *delegate =
+        [[AsoHttpsRedirectDelegate alloc] init];
+    delegate->requireHttps = [scheme isEqualToString:@"https"];
+    NSURLSessionConfiguration *configuration =
+        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                          delegate:delegate
+                                                     delegateQueue:nil];
+    NSURLSessionDataTask *task = [session
         dataTaskWithRequest:request
           completionHandler:^(NSData *data, NSURLResponse *response,
                               NSError *error) {
@@ -4026,7 +4076,18 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
     if (waitResult != 0) {
       [task cancel];
+      [session invalidateAndCancel];
       errorMessage = "Timed out while downloading " + url;
+      return false;
+    }
+    [session finishTasksAndInvalidate];
+
+    if (delegate->rejectedInsecureRedirect) {
+      errorMessage = "HTTPS download redirected to insecure HTTP.";
+      return false;
+    }
+    if (delegate->rejectedInvalidRedirect) {
+      errorMessage = "Download redirected to a non-HTTP URL.";
       return false;
     }
 
@@ -4072,6 +4133,12 @@ bool PostURLTextIOS(const std::string &url, std::string &body,
       errorMessage = "Invalid URL: " + url;
       return false;
     }
+    NSString *scheme = nsUrl.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] &&
+        ![scheme isEqualToString:@"https"]) {
+      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
+      return false;
+    }
 
     NSMutableURLRequest *request = [NSMutableURLRequest
          requestWithURL:nsUrl
@@ -4084,7 +4151,16 @@ bool PostURLTextIOS(const std::string &url, std::string &body,
     __block NSURLResponse *urlResponse = nil;
     __block NSError *requestError = nil;
     dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    NSURLSessionDataTask *task = [[NSURLSession sharedSession]
+    AsoHttpsRedirectDelegate *delegate =
+        [[AsoHttpsRedirectDelegate alloc] init];
+    delegate->requireHttps = [scheme isEqualToString:@"https"];
+    NSURLSessionConfiguration *configuration =
+        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                          delegate:delegate
+                                                     delegateQueue:nil];
+    NSURLSessionDataTask *task = [session
         dataTaskWithRequest:request
           completionHandler:^(NSData *data, NSURLResponse *response,
                               NSError *error) {
@@ -4098,7 +4174,18 @@ bool PostURLTextIOS(const std::string &url, std::string &body,
         semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
     if (waitResult != 0) {
       [task cancel];
+      [session invalidateAndCancel];
       errorMessage = "Timed out while posting " + url;
+      return false;
+    }
+    [session finishTasksAndInvalidate];
+
+    if (delegate->rejectedInsecureRedirect) {
+      errorMessage = "HTTPS download redirected to insecure HTTP.";
+      return false;
+    }
+    if (delegate->rejectedInvalidRedirect) {
+      errorMessage = "Download redirected to a non-HTTP URL.";
       return false;
     }
 
@@ -4147,6 +4234,12 @@ bool DownloadURLBinaryIOS(const std::string &url,
       errorMessage = "Invalid URL: " + url;
       return false;
     }
+    NSString *scheme = nsUrl.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] &&
+        ![scheme isEqualToString:@"https"]) {
+      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
+      return false;
+    }
 
     NSMutableURLRequest *request = [NSMutableURLRequest
          requestWithURL:nsUrl
@@ -4160,6 +4253,7 @@ bool DownloadURLBinaryIOS(const std::string &url,
     delegate->semaphore = semaphore;
     delegate->progressCallback = progressCallback;
     delegate->progressContext = progressContext;
+    delegate->requireHttps = [scheme isEqualToString:@"https"];
     NSURLSessionConfiguration *configuration =
         [NSURLSessionConfiguration ephemeralSessionConfiguration];
     configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
@@ -4177,6 +4271,15 @@ bool DownloadURLBinaryIOS(const std::string &url,
       return false;
     }
     [session finishTasksAndInvalidate];
+
+    if (delegate->rejectedInsecureRedirect) {
+      errorMessage = "HTTPS download redirected to insecure HTTP.";
+      return false;
+    }
+    if (delegate->rejectedInvalidRedirect) {
+      errorMessage = "Download redirected to a non-HTTP URL.";
+      return false;
+    }
 
     if (delegate->requestError != nil) {
       errorMessage =

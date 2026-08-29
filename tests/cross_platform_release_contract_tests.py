@@ -31,6 +31,9 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.main = read("src/main.cpp")
         cls.audio_decoder = read("src/audio/decoder.cpp")
         cls.replay_store = read("src/replay/ReplayFileStore.cpp")
+        cls.download_support = read("src/bms_search/DownloadSupport.cpp")
+        cls.difficulty_importer = read("src/DifficultyTableImporter.cpp")
+        cls.ios_natives = read("src/iOSNatives.mm")
         cls.sqlite_header = read("src/sqlite3.h")
         cls.macos_triplet = read("vcpkg-triplets/arm64-osx-asobmashow.cmake")
         cls.play_skin_state_bridge = read(
@@ -50,6 +53,32 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(version_match)
         self.assertGreaterEqual(int(version_match.group(1)), 3_053_004)
+
+    def test_download_redirects_cannot_downgrade_https_to_http(self):
+        for source, expected_redirect_guards in (
+            (self.download_support, 3),
+            (self.difficulty_importer, 1),
+        ):
+            self.assertNotIn(
+                'CURLOPT_REDIR_PROTOCOLS_STR, "http,https"', source
+            )
+            self.assertEqual(
+                source.count('CURLOPT_REDIR_PROTOCOLS_STR, "https"'),
+                expected_redirect_guards,
+            )
+        self.assertIn("AsoHttpsRedirectDelegate", self.ios_natives)
+        self.assertIn("rejectedInsecureRedirect", self.ios_natives)
+        self.assertIn(
+            'HTTPS download redirected to insecure HTTP.', self.ios_natives
+        )
+        for function_name, next_function_name in (
+            ("bool DownloadURLTextIOS", "bool PostURLTextIOS"),
+            ("bool PostURLTextIOS", "bool DownloadURLBinaryIOS"),
+        ):
+            function = self.ios_natives.split(function_name, 1)[1].split(
+                next_function_name, 1
+            )[0]
+            self.assertNotIn("sharedSession", function)
 
     def test_public_version_is_0_0_1_on_desktop_and_android(self):
         self.assertRegex(

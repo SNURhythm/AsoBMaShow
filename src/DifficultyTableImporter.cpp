@@ -136,7 +136,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "https");
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
@@ -174,6 +174,9 @@ std::string trimUrlForBase(std::string url) {
 
 std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
   if (link.starts_with("http://") || link.starts_with("https://")) {
+    if (baseUrl.starts_with("https://") && link.starts_with("http://")) {
+      return "";
+    }
     return link;
   }
   const auto schemePos = baseUrl.find("://");
@@ -304,6 +307,9 @@ readDifficultyTableListEntries(const json &document, const std::string &url) {
       continue;
     }
     const std::string resolvedUrl = resolveUrl(url, tableUrl);
+    if (resolvedUrl.empty()) {
+      continue;
+    }
     if (seen.insert(resolvedUrl).second) {
       entries.push_back(
           {difficultyTableListItemName(item, resolvedUrl), resolvedUrl});
@@ -329,7 +335,9 @@ std::optional<std::string> findBmstableHeaderUrl(const std::string &html,
     }
     std::smatch match;
     if (std::regex_search(tag, match, contentPattern) && match.size() >= 3) {
-      return resolveUrl(pageUrl, match[2].str());
+      const std::string resolved = resolveUrl(pageUrl, match[2].str());
+      return resolved.empty() ? std::nullopt
+                              : std::optional<std::string>(resolved);
     }
   }
   return std::nullopt;
@@ -700,6 +708,11 @@ downloadDifficultyTable(const std::string &tableUrl,
   result.tableName = resolved->tableName;
   const std::string dataUrl =
       resolveUrl(resolved->headerUrl, resolved->dataUrl);
+  if (dataUrl.empty()) {
+    result.errorMessage =
+        "HTTPS difficulty tables cannot load data over HTTP";
+    return result;
+  }
   std::string dataError;
   const auto dataBody = fetchText(dataUrl, &dataError);
   if (!dataBody.has_value()) {
@@ -1023,6 +1036,12 @@ bool DifficultyTableImporter::ImportFromUrl(
 
   const std::string dataUrl =
       resolveUrl(resolved->headerUrl, resolved->dataUrl);
+  if (dataUrl.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "HTTPS difficulty tables cannot load data over HTTP";
+    }
+    return false;
+  }
   const auto dataBody = fetchText_(dataUrl, errorMessage);
   if (!dataBody.has_value()) {
     return false;
