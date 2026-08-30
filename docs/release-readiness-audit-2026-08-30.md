@@ -34,10 +34,12 @@ software is free of every defect or vulnerability.
 | Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made, with URL schemes compared case-insensitively. |
 | Medium | Fresh `develop` introduced an arm64 libc++ compile failure by mixing `optional<long long>` and `optional<int64_t>` in replay provenance selection. | Normalized the provenance branch to the replay seed type explicitly. Both Android product flavors now complete native compilation and packaging. |
 | Medium | Fresh `develop` split an LR2 graph rectangle that the pinned Beatoraja loader intentionally shares, changing compatibility behavior. | Restored the shared graph dimensions and verified them against the pinned Java oracle. |
+| Medium | The Java-pattern adapter used Java 19+ ASCII word-boundary behavior even though pinned Beatoraja requires Java 17, where boundaries treat Unicode letters as word characters by default. | Implemented Java 17 Unicode boundary semantics, pinned macOS CI to Zulu 17, and passed both native backends against the Java 17 oracle. |
 | Low | Split settings translation units emitted duplicate internal-linkage helper bodies and unused-function warnings; other first-party functions and locals were dead. | Converted header-defined helpers to ODR-safe `inline` functions and removed unused wrappers, locals, and the obsolete course replay builder. |
 | Low | Release scripts emitted actionable ShellCheck diagnostics and could inherit a hostile caller `CDPATH`. | Corrected the scripts, isolated directory changes from caller `CDPATH`, documented the one intentionally literal CocoaPods expression, and added a hostile-environment regression. ShellCheck is clean. |
 | Low | The resource-catalog test passed only after the desktop app had copied runtime assets into the build directory. | Made its runtime asset working directory explicit so the clean iOS release verifier is independent of target build order. |
 | Low | Four macOS Release tests assumed the Debug build directory or repository assets copied beside their binaries. | Injected the active target directory into the ledger contracts and made repository-asset working directories explicit. A clean Release CTest run now passes 282/282. |
+| Low | The committed gameplay-oracle verification also tried to regenerate its trace from an unowned sibling Beatoraja checkout, making clean CI fail after all repository-owned artifacts had passed. | The regeneration check now runs when the exact pinned external checkout is available and otherwise reports an explicit skip; committed trace, provenance, fixture, and native-differential checks remain mandatory. |
 | Low | FFmpeg and x264 license files shipped, but the top-level notice did not describe them or their GPL release obligations. | Added explicit FFmpeg/x264 notice and release-checklist sections. |
 
 Relevant policy and upstream references:
@@ -121,7 +123,7 @@ gitignored and were not added by this branch.
 | Security regression | SQL-injection-shaped playlist names and HTTPS mixed-content rejection passed. |
 | Undefined behavior | Six ownership/storage-focused UBSan targets passed; address/leak sanitizer limitation documented above. |
 | Allocator diagnostics | Six ownership/storage-focused targets passed with Apple malloc diagnostics enabled. |
-| Android policy tests | 11/11 release workflow tests and 25/25 cross-platform contract tests passed. A native Gradle configuration probe also confirmed that a standalone-style `ANDROID_NDK_HOME` is passed through as AGP's NDK path and CMake's Android NDK. |
+| Android policy tests | 11/11 release workflow tests and 27/27 cross-platform contract tests passed. A native Gradle configuration probe also confirmed that a standalone-style `ANDROID_NDK_HOME` is passed through as AGP's NDK path and CMake's Android NDK. |
 | Android builds | Play and Firebase debug unit tests, lint, assembly, and Java/native compilation passed after the rebase. Production signing material is not present in this worktree, so the signed release flavor remains an external gate. |
 | Android native ABI | APKs passed 16 KiB zip alignment and v2 signature verification; `libmain.so` has GNU RELRO, immediate binding, and a non-executable stack. The audit's full native-library ELF `LOAD` alignment check passed at 0x4000. |
 | iOS policy tests | 49/49 setup, 18/18 workflow, 16/16 artifact-audit, and 3/3 documentation tests passed. |
@@ -166,3 +168,7 @@ described above. The final review also found that macOS CI's older vcpkg tool
 checkout could not resolve the newer LuaJIT override; the workflow now fetches
 the pinned tool registry and manifest baseline explicitly, with a release
 contract guarding that relationship.
+The clean-runner verification then exposed two additional oracle assumptions:
+the native regex adapter now follows Beatoraja's required Java 17 Unicode word
+boundaries, and trace regeneration is optional when its separately maintained
+pinned Beatoraja checkout is absent.
