@@ -29,6 +29,7 @@ software is free of every defect or vulnerability.
 | High | Android targeted API 35 immediately before Google Play's 2026-08-31 API 36 deadline and lacked a repository-owned, checksum-pinned Gradle wrapper. | Moved to compile/target API 36, AGP 8.10.1, Gradle 8.11.1 with verified checksums, and NDK r28. Gradle and the deploy wrapper now validate the installed NDK revision from `source.properties`; AGP is explicitly bound to that validated path, including standalone NDK installations. The native libraries pass 16 KiB ELF alignment checks. |
 | High | Vendored SQLite 3.43.1 predates SQLite's 3.43.2 JSON-parser use-after-free fix and later memory-safety fixes. | Updated the exact upstream amalgamation to SQLite 3.53.4 and pinned a release-policy minimum. |
 | High | The iOS release bundle contained dependencies with current OSV advisories in ActiveSupport, concurrent-ruby, Excon, Faraday, JSON, and JWT. | Updated Fastlane and the affected dependency graph. OSV Scanner reports no known vulnerability in the resulting `Gemfile.lock`. |
+| High | The manifest's 2023 LuaJIT revision crashed in optimized Apple Silicon builds when Lua skins called core built-ins such as `rawget` and `type`. | Pinned LuaJIT 2026-07-11 without advancing the rest of the vcpkg baseline. Its Release interpreter smoke check and the complete optimized macOS test suite now pass. |
 | Medium | Android's private IR API-key file was eligible for cloud backup and device transfer. | Kept general user-data backup enabled but excluded the entire `profiles` subtree in both legacy and Android 12+ backup rule formats. |
 | Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made, with URL schemes compared case-insensitively. |
 | Medium | Fresh `develop` introduced an arm64 libc++ compile failure by mixing `optional<long long>` and `optional<int64_t>` in replay provenance selection. | Normalized the provenance branch to the replay seed type explicitly. Both Android product flavors now complete native compilation and packaging. |
@@ -36,6 +37,7 @@ software is free of every defect or vulnerability.
 | Low | Split settings translation units emitted duplicate internal-linkage helper bodies and unused-function warnings; other first-party functions and locals were dead. | Converted header-defined helpers to ODR-safe `inline` functions and removed unused wrappers, locals, and the obsolete course replay builder. |
 | Low | Release scripts emitted actionable ShellCheck diagnostics and could inherit a hostile caller `CDPATH`. | Corrected the scripts, isolated directory changes from caller `CDPATH`, documented the one intentionally literal CocoaPods expression, and added a hostile-environment regression. ShellCheck is clean. |
 | Low | The resource-catalog test passed only after the desktop app had copied runtime assets into the build directory. | Made its runtime asset working directory explicit so the clean iOS release verifier is independent of target build order. |
+| Low | Four macOS Release tests assumed the Debug build directory or repository assets copied beside their binaries. | Injected the active target directory into the ledger contracts and made repository-asset working directories explicit. A clean Release CTest run now passes 282/282. |
 | Low | FFmpeg and x264 license files shipped, but the top-level notice did not describe them or their GPL release obligations. | Added explicit FFmpeg/x264 notice and release-checklist sections. |
 
 Relevant policy and upstream references:
@@ -99,6 +101,8 @@ gitignored and were not added by this branch.
 
 - SQLite is 3.53.4, verified against the upstream archive SHA3-256 checksum.
 - OSV Scanner 2.5.1 reports no known vulnerability in the final iOS Ruby lock.
+- LuaJIT is pinned to the 2026-07-11 upstream revision; its optimized arm64
+  interpreter executes `rawget`, `type`, and `tonumber` successfully.
 - Direct vcpkg packages and shipped mobile libraries were reviewed against the
   pinned manifest/baseline. Findings in nested third-party development-only
   package metadata were excluded when that package manager is not used to
@@ -110,8 +114,8 @@ gitignored and were not added by this branch.
 
 | Area | Result |
 | --- | --- |
-| Desktop configure/build | Clean Debug configure and `main` build passed. |
-| Desktop tests | 282/282 CTest tests passed with six-way parallel scheduling; deadline-sensitive and exact fault-injection suites are explicitly isolated. |
+| Desktop configure/build | Clean Debug `main` build and a clean macOS Release app/test build passed. |
+| Desktop tests | Debug and clean optimized macOS Release runs each passed 282/282 CTest tests with six-way parallel scheduling; deadline-sensitive and exact fault-injection suites are explicitly isolated. |
 | Security regression | SQL-injection-shaped playlist names and HTTPS mixed-content rejection passed. |
 | Undefined behavior | Six ownership/storage-focused UBSan targets passed; address/leak sanitizer limitation documented above. |
 | Allocator diagnostics | Six ownership/storage-focused targets passed with Apple malloc diagnostics enabled. |
@@ -154,4 +158,6 @@ rather than inferred from its directory name, AGP uses the validated NDK path,
 and release scripts are insulated from caller `CDPATH`. The rebase also exposed
 and fixed the Android arm64 seed-type compile failure, the LR2 graph-rectangle
 compatibility regression, stale skin/lifecycle test contracts, callback-budget
-test coupling, and the clean-build runtime-font dependency described above.
+test coupling, the clean-build runtime-font dependency, the optimized arm64
+LuaJIT crash, and Release test assumptions about Debug paths and copied assets
+described above.
