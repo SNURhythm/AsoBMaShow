@@ -187,37 +187,50 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_android_skip_build_does_not_require_pinned_ndk_revision(self):
+    def test_android_artifact_upload_does_not_require_build_toolchains(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            android_home = root / "sdk"
-            android_home.mkdir()
-            vcpkg_root = root / "vcpkg"
-            vcpkg_root.mkdir()
-            ndk_root = root / "android-ndk-r27"
-            (ndk_root / "build/cmake").mkdir(parents=True)
-            (ndk_root / "build/cmake/android.toolchain.cmake").touch()
-            (ndk_root / "source.properties").write_text(
-                "Pkg.Desc = Android NDK\nPkg.Revision = 27.2.12479018\n",
+            apk = root / "app-firebase-debug.apk"
+            apk.write_bytes(b"fixture")
+            firebase = root / "firebase"
+            firebase.write_text(
+                "#!/bin/sh\nexit 0\n",
                 encoding="utf-8",
             )
+            firebase.chmod(0o755)
 
             environment = os.environ.copy()
+            for name in (
+                "ANDROID_HOME",
+                "ANDROID_SDK_ROOT",
+                "ANDROID_NDK_HOME",
+                "ANDROID_NDK_ROOT",
+                "VCPKG_ROOT",
+                "JAVA_HOME",
+            ):
+                environment.pop(name, None)
             environment.update(
                 {
-                    "ANDROID_HOME": str(android_home),
-                    "ANDROID_SDK_ROOT": str(android_home),
-                    "ANDROID_NDK_HOME": str(ndk_root),
-                    "VCPKG_ROOT": str(vcpkg_root),
+                    "ANDROID_HOME": str(root / "missing-sdk"),
+                    "ANDROID_SDK_ROOT": str(root / "missing-sdk"),
+                    "ANDROID_NDK_HOME": str(root / "missing-ndk"),
+                    "ANDROID_NDK_ROOT": str(root / "missing-ndk"),
+                    "VCPKG_ROOT": str(root / "missing-vcpkg"),
+                    "JAVA_HOME": str(root / "missing-java"),
+                    "FIREBASE_ANDROID_APP_ID": "1:1234567890:android:fixture",
+                    "FIREBASE_TOKEN": "fixture-token",
                 }
             )
             result = subprocess.run(
                 [
                     str(ROOT / "scripts/android_firebase_deploy.sh"),
-                    "--build-only",
                     "--skip-build",
+                    "--apk",
+                    str(apk),
                     "--variant",
                     "firebaseDebug",
+                    "--firebase-cli",
+                    str(firebase),
                 ],
                 cwd=ROOT,
                 env=environment,

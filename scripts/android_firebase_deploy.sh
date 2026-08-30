@@ -617,8 +617,10 @@ done
 
 apply_cli_overrides
 capture_version_fixed_flags
-setup_android_env
-setup_java_env
+if [ "${SKIP_BUILD}" -eq 0 ]; then
+  setup_android_env
+  setup_java_env
+fi
 setup_build_metadata
 setup_android_signing_env
 
