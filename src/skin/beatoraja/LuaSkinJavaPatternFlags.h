@@ -239,8 +239,6 @@ inline std::string wordBoundary(bool boundary, const JavaFlags &flags) {
     constexpr std::string_view directWord = "[\\p{L}\\p{Nd}_]";
     constexpr std::string_view markBase =
         "(?=[\\u0000-\\uFFFF])[\\p{L}\\p{Nd}]";
-    constexpr std::string_view bmpMark =
-        "(?=[\\u0000-\\uFFFF])\\p{Mn}";
     // File-list subjects are host paths bounded to 4096 characters. The
     // explicit maximum also makes the variable lookbehind safe to compile.
     constexpr std::string_view markRun = "\\p{Mn}{0,4095}";
@@ -249,8 +247,7 @@ inline std::string wordBoundary(bool boundary, const JavaFlags &flags) {
     leftWord = "(?:(?<=" + std::string(directWord) + ")|(?<!" +
                std::string(astralMarkRun) + ")(?<=" +
                std::string(markBase) + std::string(markRun) + "\\p{Mn}))";
-    rightWord = "(?:(?=" + std::string(directWord) + ")|(?=" +
-                std::string(bmpMark) + ")(?<!" +
+    rightWord = "(?:(?=" + std::string(directWord) + ")|(?=\\p{Mn})(?<!" +
                 std::string(astralMarkRun) + ")(?<=" +
                 std::string(markBase) + std::string(markRun) + "))";
   }

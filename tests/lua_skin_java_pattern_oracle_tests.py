@@ -57,6 +57,8 @@ CASES = (
     (r"(?U:\bfoo)", "áfoo"),
     (r"\bfoo", "a\U0001d167foo"),
     (r"(?U:\bfoo)", "a\U0001d167foo"),
+    (r"a\b𝅧", "a𝅧"),
+    (r"a\B𝅧", "a𝅧"),
     (r"\bfoo", "_́foo"),
     (r"\bfoo", "𐐀́foo"),
     (r"\bfoo", "²foo"),
