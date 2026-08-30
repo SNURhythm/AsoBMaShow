@@ -117,8 +117,8 @@ inline std::string asciiWordClass(bool negated) {
 
 inline std::string unicodeWordClass(bool negated) {
   return negated
-             ? "[^\\p{L}\\p{Nl}\\p{M}\\p{Nd}\\p{Pc}\\u200C\\u200D]"
-             : "[\\p{L}\\p{Nl}\\p{M}\\p{Nd}\\p{Pc}\\u200C\\u200D]";
+             ? "[^\\p{Alphabetic}\\p{M}\\p{Nd}\\p{Pc}\\u200C\\u200D]"
+             : "[\\p{Alphabetic}\\p{M}\\p{Nd}\\p{Pc}\\u200C\\u200D]";
 }
 
 inline std::string asciiDigitClass(bool negated) {
