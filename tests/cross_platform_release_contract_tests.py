@@ -97,14 +97,27 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
 
     def test_release_contract_targets_keep_transitive_dependencies_and_feature_guards(self):
         redirect_target = self.cmake.split(
-            "add_executable(curl_redirect_policy_tests", 1
-        )[1].split("if(APPLE AND NOT IOS)", 1)[0]
+            "if (NOT IOS)\n        add_executable(curl_redirect_policy_tests", 1
+        )[1].split("    endif()", 1)[0]
         self.assertIn(
             "target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)",
             redirect_target,
         )
-        self.assertIn("if (TARGET beatoraja_skin_model_tests)", self.cmake)
-        self.assertIn("if (TARGET json_gameplay_skin_decoder_tests)", self.cmake)
+        self.assertIn(
+            "if (TARGET curl_redirect_policy_tests)\n"
+            "        asobmashow_register_test(curl_redirect_policy_tests)",
+            self.cmake,
+        )
+        self.assertIn(
+            "if (TARGET beatoraja_skin_model_tests)\n"
+            "        add_test(NAME beatoraja_gameplay_skin_ledger",
+            self.cmake,
+        )
+        self.assertIn(
+            "if (TARGET json_gameplay_skin_decoder_tests)\n"
+            "        add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract",
+            self.cmake,
+        )
 
     def test_result_persistence_wrapper_ignores_inherited_cdpath(self):
         with tempfile.TemporaryDirectory() as temporary:

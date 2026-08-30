@@ -627,11 +627,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
 
-    add_executable(curl_redirect_policy_tests
-        tests/curl_redirect_policy_tests.cpp
-    )
-    target_compile_features(curl_redirect_policy_tests PRIVATE cxx_std_23)
-    target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)
+    if (NOT IOS)
+        add_executable(curl_redirect_policy_tests
+            tests/curl_redirect_policy_tests.cpp
+        )
+        target_compile_features(curl_redirect_policy_tests PRIVATE cxx_std_23)
+        target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)
+    endif()
 
     if(APPLE AND NOT IOS)
         add_executable(builtin_renderer_characterization_tests
@@ -1788,16 +1790,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_skin_reference_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME beatoraja_gameplay_skin_ledger
-        COMMAND ${Python3_EXECUTABLE}
-                tests/beatoraja_gameplay_skin_ledger_tests.py
-                --require-complete)
-    set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        RUN_SERIAL TRUE
-    )
     if (TARGET beatoraja_skin_model_tests)
+        add_test(NAME beatoraja_gameplay_skin_ledger
+            COMMAND ${Python3_EXECUTABLE}
+                    tests/beatoraja_gameplay_skin_ledger_tests.py
+                    --require-complete)
         set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RUN_SERIAL TRUE
             ENVIRONMENT
                 "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:beatoraja_skin_model_tests>"
         )
@@ -1809,16 +1809,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(gameplay_skin_loading_benchmark_script_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/beatoraja_gameplay_skin_ledger_evidence_tests.py -v)
-    set_tests_properties(beatoraja_gameplay_skin_ledger_evidence_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
     if (TARGET json_gameplay_skin_decoder_tests)
+        add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    -m unittest
+                    tests/beatoraja_gameplay_skin_ledger_evidence_tests.py -v)
         set_tests_properties(beatoraja_gameplay_skin_ledger_evidence_contract
-            PROPERTIES ENVIRONMENT
+            PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                ENVIRONMENT
                 "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:json_gameplay_skin_decoder_tests>"
         )
     endif()
@@ -6744,7 +6743,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endfunction()
 
     asobmashow_register_test(skin_package_store_tests)
-    asobmashow_register_test(curl_redirect_policy_tests)
+    if (TARGET curl_redirect_policy_tests)
+        asobmashow_register_test(curl_redirect_policy_tests)
+    endif()
 
     foreach(eligibility_target IN ITEMS
         chart_replay_context_tests
