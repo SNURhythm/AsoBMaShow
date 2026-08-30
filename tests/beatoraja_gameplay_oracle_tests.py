@@ -19,6 +19,9 @@ GENERATOR = ROOT / "scripts/generate_beatoraja_gameplay_skin_oracle.py"
 HARNESS = ROOT / "tests/fixtures/beatoraja_skin/oracle/GameplaySkinOracle.java"
 TRACE = ROOT / "tests/fixtures/beatoraja_skin/traces/gameplay_objects_pinned_v1.json"
 LEDGER = ROOT / "docs/skin-compat/beatoraja-gameplay-feature-ledger-v1.json"
+BEATORAJA_ROOT = Path(os.environ.get(
+    "ASOBMASHOW_BEATORAJA_ROOT", ROOT.parent / "beatoraja"
+))
 FIXTURES = (
     "tests/fixtures/beatoraja_skin/lua/model/all_v1_objects.luaskin",
     "tests/fixtures/beatoraja_skin/json/all_gameplay_fields.json",
@@ -168,8 +171,10 @@ class GameplaySkinOracleTests(unittest.TestCase):
         )
 
     def test_generator_check_is_byte_stable(self):
+        if not (BEATORAJA_ROOT / ".git").exists():
+            self.skipTest("pinned external Beatoraja checkout is not available")
         result = subprocess.run(
-            [sys.executable, str(GENERATOR), "--beatoraja-root", str(ROOT.parent / "beatoraja"), "--check"],
+            [sys.executable, str(GENERATOR), "--beatoraja-root", str(BEATORAJA_ROOT), "--check"],
             cwd=ROOT,
             text=True,
             stdout=subprocess.PIPE,

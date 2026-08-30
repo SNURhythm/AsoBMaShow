@@ -3,6 +3,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -358,6 +359,26 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("actions/setup-java@v4", self.macos_workflow)
         self.assertIn("distribution: zulu", self.macos_workflow)
         self.assertIn('java-version: "17"', self.macos_workflow)
+
+    def test_gameplay_oracle_check_skips_without_external_reference(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = os.environ.copy()
+            environment["ASOBMASHOW_BEATORAJA_ROOT"] = temporary
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "tests/beatoraja_gameplay_oracle_tests.py"),
+                    "GameplaySkinOracleTests.test_generator_check_is_byte_stable",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("skipped=1", result.stdout)
 
     def test_macos_ci_registry_resolves_the_manifest_luajit_override(self):
         workflow_scope = self.macos_workflow.split("jobs:", 1)[0]
