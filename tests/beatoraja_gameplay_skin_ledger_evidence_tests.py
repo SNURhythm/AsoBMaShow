@@ -2,6 +2,7 @@
 """Regression tests for runner-owned gameplay-ledger evidence."""
 
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -11,7 +12,12 @@ from tests import beatoraja_gameplay_skin_ledger_tests as ledger
 
 class GameplaySkinLedgerEvidenceTests(unittest.TestCase):
     def test_native_runner_emits_test_owned_assertion_ids(self):
-        executable = Path("cmake-build-debug/json_gameplay_skin_decoder_tests")
+        build_dir = Path(
+            os.environ.get(
+                "ASOBMASHOW_TEST_BUILD_DIR", ledger.ROOT / "cmake-build-debug"
+            )
+        )
+        executable = build_dir / "json_gameplay_skin_decoder_tests"
         self.assertTrue(executable.is_file())
         completed = subprocess.run(
             [str(executable), "--list-ledger-assertions"],

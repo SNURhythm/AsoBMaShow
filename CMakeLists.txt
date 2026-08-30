@@ -1793,6 +1793,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 --require-complete)
     set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT
+            "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:beatoraja_skin_model_tests>"
         RUN_SERIAL TRUE
     )
     add_test(NAME gameplay_skin_loading_benchmark_script_contract
@@ -1808,6 +1810,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/beatoraja_gameplay_skin_ledger_evidence_tests.py -v)
     set_tests_properties(beatoraja_gameplay_skin_ledger_evidence_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT
+            "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:json_gameplay_skin_decoder_tests>"
     )
     if (TARGET beatoraja_gameplay_cross_format_tests)
         add_test(NAME beatoraja_gameplay_oracle
@@ -6881,6 +6885,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    set_tests_properties(text_input_box_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
         # The platform-asset bridge resolves the same repository-relative
@@ -7050,6 +7056,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(TARGET replay_playfield_presentation_tests)
         asobmashow_register_test(replay_playfield_presentation_tests)
         set_tests_properties(replay_playfield_presentation_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
     endif()
