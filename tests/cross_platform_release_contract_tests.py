@@ -354,6 +354,11 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("--require-signature", self.macos_workflow)
         self.assertIn("--require-gatekeeper", self.macos_workflow)
 
+    def test_macos_ci_pins_the_beatoraja_java_runtime(self):
+        self.assertIn("actions/setup-java@v4", self.macos_workflow)
+        self.assertIn("distribution: zulu", self.macos_workflow)
+        self.assertIn('java-version: "17"', self.macos_workflow)
+
     def test_macos_ci_registry_resolves_the_manifest_luajit_override(self):
         workflow_scope = self.macos_workflow.split("jobs:", 1)[0]
         build_job = self.macos_workflow.split("jobs:", 1)[1]

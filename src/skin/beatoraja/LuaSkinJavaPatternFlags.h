@@ -224,13 +224,13 @@ javaPosixProperty(std::string_view name, const JavaFlags &flags) {
   return std::nullopt;
 }
 
-inline std::string wordBoundary(bool boundary, const JavaFlags &flags) {
-  const std::string word = flags.unicodeClasses
-                               ? unicodeWordClass(false)
-                               : asciiWordClass(false);
-  const std::string nonWord = flags.unicodeClasses
-                                  ? unicodeWordClass(true)
-                                  : asciiWordClass(true);
+inline std::string wordBoundary(bool boundary) {
+  // Beatoraja targets Java 17, where word boundaries use Unicode word
+  // characters even when UNICODE_CHARACTER_CLASS is disabled. This differs
+  // from the default ASCII-only Java \w class and from Java 19+ boundary
+  // behavior, so spell the boundary out instead of delegating to PCRE2.
+  const std::string word = unicodeWordClass(false);
+  const std::string nonWord = unicodeWordClass(true);
   if (boundary) {
     return "(?:(?:(?<=\\A)|(?<=" + nonWord + "))(?=" + word +
            ")|(?<=" + word + ")(?:(?=\\z)|(?=" + nonWord + ")))";
@@ -628,7 +628,7 @@ private:
     }
     if (escaped == 'b' || escaped == 'B') {
       cursor += 2;
-      return wordBoundary(escaped == 'b', flags);
+      return wordBoundary(escaped == 'b');
     }
     if (asciiCaseInsensitive(flags) && (escaped == 'x' || escaped == 'u')) {
       std::size_t first = cursor + 2;
