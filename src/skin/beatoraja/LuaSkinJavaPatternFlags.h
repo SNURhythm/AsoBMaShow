@@ -117,8 +117,8 @@ inline std::string asciiWordClass(bool negated) {
 
 inline std::string unicodeWordClass(bool negated) {
   return negated
-             ? "[^\\p{L}\\p{M}\\p{N}\\p{Pc}\\x{200C}\\x{200D}]"
-             : "[\\p{L}\\p{M}\\p{N}\\p{Pc}\\x{200C}\\x{200D}]";
+             ? "[^\\p{L}\\p{Nl}\\p{M}\\p{Nd}\\p{Pc}\\u200C\\u200D]"
+             : "[\\p{L}\\p{Nl}\\p{M}\\p{Nd}\\p{Pc}\\u200C\\u200D]";
 }
 
 inline std::string asciiDigitClass(bool negated) {
@@ -224,19 +224,37 @@ javaPosixProperty(std::string_view name, const JavaFlags &flags) {
   return std::nullopt;
 }
 
-inline std::string wordBoundary(bool boundary) {
-  // Beatoraja targets Java 17, where word boundaries use Unicode word
-  // characters even when UNICODE_CHARACTER_CLASS is disabled. This differs
-  // from the default ASCII-only Java \w class and from Java 19+ boundary
-  // behavior, so spell the boundary out instead of delegating to PCRE2.
-  const std::string word = unicodeWordClass(false);
-  const std::string nonWord = unicodeWordClass(true);
-  if (boundary) {
-    return "(?:(?:(?<=\\A)|(?<=" + nonWord + "))(?=" + word +
-           ")|(?<=" + word + ")(?:(?=\\z)|(?=" + nonWord + ")))";
+inline std::string wordBoundary(bool boundary, const JavaFlags &flags) {
+  std::string leftWord;
+  std::string rightWord;
+  if (flags.unicodeClasses) {
+    const std::string word = unicodeWordClass(false);
+    leftWord = "(?<=" + word + ")";
+    rightWord = "(?=" + word + ")";
+  } else {
+    // Beatoraja targets Java 17. Its legacy boundary predicate treats Unicode
+    // letters, decimal digits, and underscore as words. A non-spacing mark is
+    // a word only when a BMP letter/digit precedes its contiguous mark run;
+    // the BMP restriction preserves Java 17's UTF-16 index traversal.
+    constexpr std::string_view directWord = "[\\p{L}\\p{Nd}_]";
+    constexpr std::string_view markBase =
+        "(?=[\\u0000-\\uFFFF])[\\p{L}\\p{Nd}]";
+    // File-list subjects are host paths bounded to 4096 characters. The
+    // explicit maximum also makes the variable lookbehind safe to compile.
+    constexpr std::string_view markRun = "\\p{Mn}{0,4095}";
+    leftWord = "(?:(?<=" + std::string(directWord) + ")|(?<=" +
+               std::string(markBase) + std::string(markRun) + "\\p{Mn}))";
+    rightWord = "(?:(?=" + std::string(directWord) + ")|(?=\\p{Mn})(?<=" +
+                std::string(markBase) + std::string(markRun) + "))";
   }
-  return "(?:(?:(?<=\\A)|(?<=" + nonWord + "))(?:(?=\\z)|(?=" +
-         nonWord + "))|(?<=" + word + ")(?=" + word + "))";
+  const std::string notLeftWord = "(?!" + leftWord + ")";
+  const std::string notRightWord = "(?!" + rightWord + ")";
+  if (boundary) {
+    return "(?:" + leftWord + notRightWord + "|" + notLeftWord +
+           rightWord + ")";
+  }
+  return "(?:" + leftWord + rightWord + "|" + notLeftWord +
+         notRightWord + ")";
 }
 
 class JavaPatternAdapter {
@@ -628,7 +646,7 @@ private:
     }
     if (escaped == 'b' || escaped == 'B') {
       cursor += 2;
-      return wordBoundary(escaped == 'b');
+      return wordBoundary(escaped == 'b', flags);
     }
     if (asciiCaseInsensitive(flags) && (escaped == 'x' || escaped == 'u')) {
       std::size_t first = cursor + 2;
