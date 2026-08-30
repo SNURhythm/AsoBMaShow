@@ -82,6 +82,10 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn(
             'HTTPS download redirected to insecure HTTP.', self.ios_natives
         )
+        self.assertNotIn(
+            "requireHttps = requireHttps || [scheme isEqualToString:@\"https\"]",
+            self.ios_natives,
+        )
         for function_name, next_function_name in (
             ("bool DownloadURLTextIOS", "bool PostURLTextIOS"),
             ("bool PostURLTextIOS", "bool DownloadURLBinaryIOS"),
@@ -90,6 +94,17 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
                 next_function_name, 1
             )[0]
             self.assertNotIn("sharedSession", function)
+
+    def test_release_contract_targets_keep_transitive_dependencies_and_feature_guards(self):
+        redirect_target = self.cmake.split(
+            "add_executable(curl_redirect_policy_tests", 1
+        )[1].split("if(APPLE AND NOT IOS)", 1)[0]
+        self.assertIn(
+            "target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)",
+            redirect_target,
+        )
+        self.assertIn("if (TARGET beatoraja_skin_model_tests)", self.cmake)
+        self.assertIn("if (TARGET json_gameplay_skin_decoder_tests)", self.cmake)
 
     def test_result_persistence_wrapper_ignores_inherited_cdpath(self):
         with tempfile.TemporaryDirectory() as temporary:
