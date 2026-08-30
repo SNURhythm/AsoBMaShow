@@ -1390,7 +1390,6 @@ public class AsoBMaShowActivity extends SDLActivity {
             if (requireHttps && !"https".equalsIgnoreCase(redirectUrl.getProtocol())) {
                 throw new IOException("HTTPS download redirected to insecure HTTP.");
             }
-            requireHttps = requireHttps || "https".equalsIgnoreCase(redirectProtocol);
             currentUrl = redirectUrl.toString();
             if (statusCode != 307 && statusCode != 308) {
                 currentMethod = "GET";

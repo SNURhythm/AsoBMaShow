@@ -2288,7 +2288,6 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
     completionHandler(nil);
     return;
   }
-  requireHttps = requireHttps || [scheme isEqualToString:@"https"];
   completionHandler(request);
 }
 @end
