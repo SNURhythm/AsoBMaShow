@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import re
 import subprocess
@@ -40,6 +41,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.ios_natives = read("src/iOSNatives.mm")
         cls.sqlite_header = read("src/sqlite3.h")
         cls.macos_triplet = read("vcpkg-triplets/arm64-osx-asobmashow.cmake")
+        cls.vcpkg_manifest = json.loads(read("vcpkg.json"))
         cls.play_skin_state_bridge = read(
             "src/skin/beatoraja/PlaySkinStateBridge.cpp"
         )
@@ -351,6 +353,55 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("xcrun stapler staple", self.macos_workflow)
         self.assertIn("--require-signature", self.macos_workflow)
         self.assertIn("--require-gatekeeper", self.macos_workflow)
+
+    def test_macos_ci_registry_resolves_the_manifest_luajit_override(self):
+        workflow_scope = self.macos_workflow.split("jobs:", 1)[0]
+        build_job = self.macos_workflow.split("jobs:", 1)[1]
+        tool_commit_match = re.search(
+            r"VCPKG_TOOL_COMMIT:\s*([0-9a-f]{40})", workflow_scope
+        )
+        self.assertIsNotNone(tool_commit_match)
+        tool_commit = tool_commit_match.group(1)
+        manifest_baseline = self.vcpkg_manifest["builtin-baseline"]
+        workflow_baseline_match = re.search(
+            r"VCPKG_MANIFEST_BASELINE:\s*([0-9a-f]{40})", workflow_scope
+        )
+        self.assertIsNotNone(workflow_baseline_match)
+        workflow_baseline = workflow_baseline_match.group(1)
+        self.assertEqual(manifest_baseline, workflow_baseline)
+        self.assertIn(
+            'fetch origin "$VCPKG_TOOL_COMMIT" "$VCPKG_MANIFEST_BASELINE" --depth=1',
+            build_job,
+        )
+
+        luajit_override = next(
+            override
+            for override in self.vcpkg_manifest["overrides"]
+            if override["name"] == "luajit"
+        )
+        vcpkg_root = Path(os.environ.get("VCPKG_ROOT", "/Users/xf/vcpkg"))
+        if not (vcpkg_root / ".git").is_dir():
+            self.skipTest("a vcpkg Git checkout is required for registry validation")
+        versions = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(vcpkg_root),
+                "show",
+                f"{tool_commit}:versions/l-/luajit.json",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, versions.returncode, versions.stderr)
+        available = json.loads(versions.stdout)["versions"]
+        self.assertTrue(
+            any(
+                entry.get("version-date") == luajit_override["version-date"]
+                for entry in available
+            )
+        )
 
     def test_firebase_android_lane_remains_fast_iteration(self):
         android_job = self.mobile_workflow.split("  android-firebase:", 1)[1]

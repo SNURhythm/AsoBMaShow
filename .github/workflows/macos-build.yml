@@ -13,7 +13,8 @@ on:
 
 env:
   ASOBMASHOW_MACOS_DEPLOYMENT_TARGET: "13.0"
-  VCPKG_TOOL_COMMIT: 75a2e14262fc23c1f03bac18e135c4866dd25b51
+  VCPKG_TOOL_COMMIT: 39344dff01c5a5a0134caf2624cdd492f05d30ea
+  VCPKG_MANIFEST_BASELINE: 75a2e14262fc23c1f03bac18e135c4866dd25b51
 
 jobs:
   build:
@@ -52,7 +53,7 @@ jobs:
           if [ ! -d "$VCPKG_CHECKOUT/.git" ]; then
             git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$VCPKG_CHECKOUT"
           fi
-          git -C "$VCPKG_CHECKOUT" fetch origin "$VCPKG_TOOL_COMMIT" --depth=1
+          git -C "$VCPKG_CHECKOUT" fetch origin "$VCPKG_TOOL_COMMIT" "$VCPKG_MANIFEST_BASELINE" --depth=1
           git -C "$VCPKG_CHECKOUT" checkout --detach "$VCPKG_TOOL_COMMIT"
           "$VCPKG_CHECKOUT/bootstrap-vcpkg.sh" -disableMetrics
           echo "VCPKG_ROOT=$VCPKG_CHECKOUT" >> "$GITHUB_ENV"
