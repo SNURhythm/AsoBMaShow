@@ -29,7 +29,7 @@ software is free of every defect or vulnerability.
 | High | Android targeted API 35 immediately before Google Play's 2026-08-31 API 36 deadline and lacked a repository-owned, checksum-pinned Gradle wrapper. | Moved to compile/target API 36, AGP 8.10.1, Gradle 8.11.1 with verified checksums, and NDK r28. Gradle and the deploy wrapper now validate the installed NDK revision from `source.properties`; AGP is explicitly bound to that validated path, including standalone NDK installations. The native libraries pass 16 KiB ELF alignment checks. |
 | High | Vendored SQLite 3.43.1 predates SQLite's 3.43.2 JSON-parser use-after-free fix and later memory-safety fixes. | Updated the exact upstream amalgamation to SQLite 3.53.4 and pinned a release-policy minimum. |
 | High | The iOS release bundle contained dependencies with current OSV advisories in ActiveSupport, concurrent-ruby, Excon, Faraday, JSON, and JWT. | Updated Fastlane and the affected dependency graph. OSV Scanner reports no known vulnerability in the resulting `Gemfile.lock`. |
-| High | The manifest's 2023 LuaJIT revision crashed in optimized Apple Silicon builds when Lua skins called core built-ins such as `rawget` and `type`. | Pinned LuaJIT 2026-07-11 without advancing the rest of the vcpkg baseline. Its Release interpreter smoke check and the complete optimized macOS test suite now pass. |
+| High | The manifest's 2023 LuaJIT revision crashed in optimized Apple Silicon builds when Lua skins called core built-ins such as `rawget` and `type`. | Pinned LuaJIT 2026-07-11 without advancing the rest of the vcpkg baseline. The macOS workflow now pins a registry commit containing that version while fetching the manifest baseline separately. Its Release interpreter smoke check and the complete optimized macOS test suite now pass. |
 | Medium | Android's private IR API-key file was eligible for cloud backup and device transfer. | Kept general user-data backup enabled but excluded the entire `profiles` subtree in both legacy and Android 12+ backup rule formats. |
 | Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made, with URL schemes compared case-insensitively. |
 | Medium | Fresh `develop` introduced an arm64 libc++ compile failure by mixing `optional<long long>` and `optional<int64_t>` in replay provenance selection. | Normalized the provenance branch to the replay seed type explicitly. Both Android product flavors now complete native compilation and packaging. |
@@ -102,7 +102,9 @@ gitignored and were not added by this branch.
 - SQLite is 3.53.4, verified against the upstream archive SHA3-256 checksum.
 - OSV Scanner 2.5.1 reports no known vulnerability in the final iOS Ruby lock.
 - LuaJIT is pinned to the 2026-07-11 upstream revision; its optimized arm64
-  interpreter executes `rawget`, `type`, and `tonumber` successfully.
+  interpreter executes `rawget`, `type`, and `tonumber` successfully. A clean
+  workflow-style vcpkg checkout resolved both its registry version and the
+  historical manifest baseline.
 - Direct vcpkg packages and shipped mobile libraries were reviewed against the
   pinned manifest/baseline. Findings in nested third-party development-only
   package metadata were excluded when that package manager is not used to
@@ -119,7 +121,7 @@ gitignored and were not added by this branch.
 | Security regression | SQL-injection-shaped playlist names and HTTPS mixed-content rejection passed. |
 | Undefined behavior | Six ownership/storage-focused UBSan targets passed; address/leak sanitizer limitation documented above. |
 | Allocator diagnostics | Six ownership/storage-focused targets passed with Apple malloc diagnostics enabled. |
-| Android policy tests | 11/11 release workflow tests and 24/24 cross-platform contract tests passed. A native Gradle configuration probe also confirmed that a standalone-style `ANDROID_NDK_HOME` is passed through as AGP's NDK path and CMake's Android NDK. |
+| Android policy tests | 11/11 release workflow tests and 25/25 cross-platform contract tests passed. A native Gradle configuration probe also confirmed that a standalone-style `ANDROID_NDK_HOME` is passed through as AGP's NDK path and CMake's Android NDK. |
 | Android builds | Play and Firebase debug unit tests, lint, assembly, and Java/native compilation passed after the rebase. Production signing material is not present in this worktree, so the signed release flavor remains an external gate. |
 | Android native ABI | APKs passed 16 KiB zip alignment and v2 signature verification; `libmain.so` has GNU RELRO, immediate binding, and a non-executable stack. The audit's full native-library ELF `LOAD` alignment check passed at 0x4000. |
 | iOS policy tests | 49/49 setup, 18/18 workflow, 16/16 artifact-audit, and 3/3 documentation tests passed. |
@@ -160,4 +162,7 @@ and fixed the Android arm64 seed-type compile failure, the LR2 graph-rectangle
 compatibility regression, stale skin/lifecycle test contracts, callback-budget
 test coupling, the clean-build runtime-font dependency, the optimized arm64
 LuaJIT crash, and Release test assumptions about Debug paths and copied assets
-described above.
+described above. The final review also found that macOS CI's older vcpkg tool
+checkout could not resolve the newer LuaJIT override; the workflow now fetches
+the pinned tool registry and manifest baseline explicitly, with a release
+contract guarding that relationship.
