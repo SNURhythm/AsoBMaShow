@@ -367,10 +367,12 @@ setup_android_env() {
     echo "ANDROID_NDK_HOME does not contain build/cmake/android.toolchain.cmake: ${ANDROID_NDK_HOME}" >&2
     exit 1
   fi
-  installed_ndk_version="$(android_ndk_revision "${ANDROID_NDK_HOME}" || true)"
-  if [ "${installed_ndk_version}" != "${REQUIRED_ANDROID_NDK_VERSION}" ]; then
-    echo "Android NDK ${REQUIRED_ANDROID_NDK_VERSION} is required; found '${installed_ndk_version:-unknown}' in ${ANDROID_NDK_HOME}." >&2
-    exit 1
+  if [ "${SKIP_BUILD}" -eq 0 ]; then
+    installed_ndk_version="$(android_ndk_revision "${ANDROID_NDK_HOME}" || true)"
+    if [ "${installed_ndk_version}" != "${REQUIRED_ANDROID_NDK_VERSION}" ]; then
+      echo "Android NDK ${REQUIRED_ANDROID_NDK_VERSION} is required; found '${installed_ndk_version:-unknown}' in ${ANDROID_NDK_HOME}." >&2
+      exit 1
+    fi
   fi
 }
 

@@ -142,6 +142,10 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             'throw new IOException("HTTPS download redirected to insecure HTTP.")',
             self.activity,
         )
+        self.assertNotIn(
+            'requireHttps = requireHttps || "https".equalsIgnoreCase(redirectProtocol)',
+            self.activity,
+        )
 
     def test_android_deploy_accepts_standalone_ndk_directory_name(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -155,6 +159,46 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             (ndk_root / "build/cmake/android.toolchain.cmake").touch()
             (ndk_root / "source.properties").write_text(
                 "Pkg.Desc = Android NDK\nPkg.Revision = 28.2.13676358\n",
+                encoding="utf-8",
+            )
+
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "ANDROID_HOME": str(android_home),
+                    "ANDROID_SDK_ROOT": str(android_home),
+                    "ANDROID_NDK_HOME": str(ndk_root),
+                    "VCPKG_ROOT": str(vcpkg_root),
+                }
+            )
+            result = subprocess.run(
+                [
+                    str(ROOT / "scripts/android_firebase_deploy.sh"),
+                    "--build-only",
+                    "--skip-build",
+                    "--variant",
+                    "firebaseDebug",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_android_skip_build_does_not_require_pinned_ndk_revision(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            android_home = root / "sdk"
+            android_home.mkdir()
+            vcpkg_root = root / "vcpkg"
+            vcpkg_root.mkdir()
+            ndk_root = root / "android-ndk-r27"
+            (ndk_root / "build/cmake").mkdir(parents=True)
+            (ndk_root / "build/cmake/android.toolchain.cmake").touch()
+            (ndk_root / "source.properties").write_text(
+                "Pkg.Desc = Android NDK\nPkg.Revision = 27.2.12479018\n",
                 encoding="utf-8",
             )
 
