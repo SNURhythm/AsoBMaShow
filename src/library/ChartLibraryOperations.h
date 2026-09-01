@@ -39,6 +39,9 @@ private:
   TaskRunResult runRefresh(const TaskRequest &, const std::stop_token &,
                            const TaskProgressCallback &,
                            const TaskPauseCallback &);
+  TaskRunResult runPathRefresh(const TaskRequest &, const std::stop_token &,
+                               const TaskProgressCallback &,
+                               const TaskPauseCallback &);
   TaskRunResult runDownloadedIndex(const TaskRequest &,
                                    const std::stop_token &,
                                    const TaskProgressCallback &,

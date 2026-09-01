@@ -2,6 +2,7 @@
 #include "library/ChartLibraryPlatform.h"
 #include "bms_parser.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -47,9 +48,11 @@ private:
   std::filesystem::path path_;
 };
 
-std::filesystem::path writeChart(const std::filesystem::path &root) {
+std::filesystem::path writeChart(
+    const std::filesystem::path &root,
+    const std::filesystem::path &filename = "operation.bms") {
   std::filesystem::create_directories(root);
-  const auto chartPath = root / "operation.bms";
+  const auto chartPath = root / filename;
   std::ofstream chart(chartPath);
   chart << "#PLAYER 1\n"
            "#GENRE Test\n"
@@ -156,6 +159,71 @@ void testRefreshScansThroughTheRealRepository() {
          "refresh advances the repository library revision");
   expect(!progress.empty(), "refresh publishes scanner progress");
   expect(reloadRequested, "completed refresh requests selector reload");
+}
+
+void testPathRefreshReconcilesOnlyTheRequestedSubtree() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  const auto targetRoot = libraryRoot / "target";
+  const auto untouchedRoot = libraryRoot / "untouched";
+  const auto staleTargetChart = writeChart(targetRoot);
+  const auto untouchedChart = writeChart(untouchedRoot);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "targeted refresh repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+
+  const auto initial = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library",
+       .folderToAdd = libraryRoot},
+      std::stop_token{},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  expect(initial.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "initial full refresh completes");
+
+  std::filesystem::remove(staleTargetChart);
+  std::filesystem::remove(untouchedChart);
+  const auto replacementChart = writeChart(targetRoot, "replacement.bms");
+  reloadRequested = false;
+  const auto targeted = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshPath,
+       .title = "Update Folder",
+       .refreshPath = targetRoot},
+      std::stop_token{},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+
+  expect(targeted.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "targeted path refresh completes");
+  auto session = repository.OpenSession();
+  std::vector<bms_parser::ChartMeta> charts;
+  if (session.has_value()) {
+    session->SelectAllChartMeta(charts);
+  }
+  const auto hasPath = [&](const std::filesystem::path &path) {
+    return std::ranges::any_of(charts, [&](const auto &chart) {
+      return chart.BmsPath.lexically_normal() == path.lexically_normal();
+    });
+  };
+  expect(charts.size() == 2,
+         "targeted refresh keeps records outside the requested subtree");
+  expect(!hasPath(staleTargetChart),
+         "targeted refresh removes a stale chart inside its subtree");
+  expect(hasPath(replacementChart),
+         "targeted refresh indexes a replacement chart inside its subtree");
+  expect(hasPath(untouchedChart),
+         "targeted refresh does not reconcile an unvisited sibling subtree");
+  const auto entries =
+      session.has_value() ? session->SelectAllEntries()
+                          : std::vector<ChartEntry>{};
+  expect(entries.size() == 1 &&
+             std::filesystem::path(entries.front().path).lexically_normal() ==
+                 libraryRoot.lexically_normal(),
+         "targeted refresh does not register its subtree as a library root");
+  expect(reloadRequested, "targeted refresh requests selector reload");
 }
 
 void testDownloadedPathIndexesAndReturnsTheSelectionHandoff() {
@@ -267,6 +335,7 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 int main() {
   testRefreshStopsAtTheExistingPauseCheckpoint();
   testRefreshScansThroughTheRealRepository();
+  testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
   testDesktopLibraryEntryResolutionPreservesTheStoredPath();

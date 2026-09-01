@@ -53,12 +53,56 @@ TaskRunResult ChartLibraryOperations::run(
   switch (request.kind) {
   case TaskKind::RefreshLibrary:
     return runRefresh(request, stopToken, progress, waitForResume);
+  case TaskKind::RefreshPath:
+    return runPathRefresh(request, stopToken, progress, waitForResume);
   case TaskKind::IndexDownloadedPath:
     return runDownloadedIndex(request, stopToken, progress, waitForResume);
   case TaskKind::AndroidImport:
     return runAndroidImport(request, stopToken, progress, waitForResume);
   }
   throw std::runtime_error("Unknown library task");
+}
+
+TaskRunResult ChartLibraryOperations::runPathRefresh(
+    const TaskRequest &request, const std::stop_token &stopToken,
+    const TaskProgressCallback &progress,
+    const TaskPauseCallback &waitForResume) {
+  if (!waitForResume() || stopToken.stop_requested()) {
+    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+  }
+
+  auto session = dependencies_.repository.OpenSession();
+  if (!session.has_value()) {
+    throw std::runtime_error("Failed to open chart database");
+  }
+  session->EnsureSchema();
+
+  bool checkpointPaused = false;
+  auto checkpoint = [&] {
+    const bool resumed = waitForResume();
+    checkpointPaused = checkpointPaused || !resumed;
+    return resumed;
+  };
+  auto publishScanProgress = [&](const ChartScanProgress &value) {
+    progress(value, progressStageText(value.stage));
+  };
+  ChartLibraryScanner scanner;
+  const auto result = scanner.ScanScopedWithResult(
+      *session, {request.refreshPath}, &stopToken, publishScanProgress,
+      checkpoint, dependencies_.pendingScanFlushRequest,
+      dependencies_.completeScanFlush);
+  SDL_Log("Chart folder refresh changed %d entries", result.changedCount);
+
+  if (stopToken.stop_requested() || checkpointPaused) {
+    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+  }
+  if (!result.completed) {
+    throw std::runtime_error("Failed to refresh chart folder");
+  }
+  if (dependencies_.requestReload) {
+    dependencies_.requestReload(true);
+  }
+  return {.detail = "Complete"};
 }
 
 TaskRunResult ChartLibraryOperations::runRefresh(

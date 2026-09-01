@@ -13,7 +13,12 @@ namespace chart_library_tasks {
 
 enum class TaskStatus { Queued, Running, Complete, Failed, Paused };
 
-enum class TaskKind { RefreshLibrary, IndexDownloadedPath, AndroidImport };
+enum class TaskKind {
+  RefreshLibrary,
+  RefreshPath,
+  IndexDownloadedPath,
+  AndroidImport
+};
 
 struct TaskRequest {
   std::uint64_t id = 0;
@@ -21,6 +26,7 @@ struct TaskRequest {
   std::string title;
   std::filesystem::path folderToAdd;
   std::string iosBookmark;
+  std::filesystem::path refreshPath;
   std::filesystem::path downloadedPath;
   std::vector<std::filesystem::path> downloadedRemovedPaths;
   main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;

@@ -357,6 +357,25 @@ archiveBatchSourcePreference(const std::filesystem::path &archivePath,
   };
 }
 
+bool pathAtOrInsideRoot(const std::filesystem::path &path,
+                        const std::filesystem::path &root) {
+  if (path.empty() || root.empty()) {
+    return false;
+  }
+  const auto normalizedPath = path.lexically_normal();
+  const auto normalizedRoot = root.lexically_normal();
+  if (normalizedPath == normalizedRoot) {
+    return true;
+  }
+  const auto relative = normalizedPath.lexically_relative(normalizedRoot);
+  if (relative.empty() || relative.is_absolute()) {
+    return false;
+  }
+  const auto first = relative.begin();
+  return first != relative.end() && *first != std::filesystem::path("..") &&
+         *first != std::filesystem::path(".");
+}
+
 } // namespace
 
 int ChartLibraryScanner::Scan(
@@ -398,8 +417,9 @@ ChartScanResult ChartLibraryScanner::ScanWithResult(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
-  return ScanImpl(session, roots, true, stopToken, std::move(progressCallback),
-                  std::move(pauseCallback), std::move(flushRequestCallback),
+  return ScanImpl(session, roots, ReconcileMode::Full, stopToken,
+                  std::move(progressCallback), std::move(pauseCallback),
+                  std::move(flushRequestCallback),
                   std::move(flushCompleteCallback));
 }
 
@@ -411,14 +431,30 @@ ChartScanResult ChartLibraryScanner::ScanAddedWithResult(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
-  return ScanImpl(session, roots, false, stopToken, std::move(progressCallback),
-                  std::move(pauseCallback), std::move(flushRequestCallback),
+  return ScanImpl(session, roots, ReconcileMode::None, stopToken,
+                  std::move(progressCallback), std::move(pauseCallback),
+                  std::move(flushRequestCallback),
+                  std::move(flushCompleteCallback));
+}
+
+ChartScanResult ChartLibraryScanner::ScanScopedWithResult(
+    ChartRepository::Session &session,
+    const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return ScanImpl(session, roots, ReconcileMode::Scoped, stopToken,
+                  std::move(progressCallback), std::move(pauseCallback),
+                  std::move(flushRequestCallback),
                   std::move(flushCompleteCallback));
 }
 
 ChartScanResult ChartLibraryScanner::ScanImpl(
     ChartRepository::Session &session,
-    const std::vector<std::filesystem::path> &roots, bool reconcileExisting,
+    const std::vector<std::filesystem::path> &roots,
+    ReconcileMode reconcileMode,
     const std::stop_token *stopToken,
     ChartScanProgressCallback progressCallback,
     ChartScanPauseCallback pauseCallback,
@@ -427,6 +463,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   if (stopRequested(stopToken)) {
     return {};
   }
+  const bool reconcileExisting = reconcileMode != ReconcileMode::None;
   std::atomic_bool interrupted{false};
   auto pauseIfNeeded = [&]() {
     return pauseCallback == nullptr || pauseCallback();
@@ -462,6 +499,22 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
       reconcileExisting ? ChartScanSnapshotLoad::Full
                         : ChartScanSnapshotLoad::CheckpointOnly);
+  if (reconcileMode == ReconcileMode::Scoped) {
+    const auto pathOutsideScope = [&](const std::filesystem::path &path) {
+      return std::ranges::none_of(roots, [&](const auto &root) {
+        return pathAtOrInsideRoot(path, root);
+      });
+    };
+    std::erase_if(scanSnapshot.charts, [&](const auto &chart) {
+      return pathOutsideScope(chart.BmsPath);
+    });
+    std::erase_if(scanSnapshot.solidArchives, [&](const auto &archive) {
+      return pathOutsideScope(archive.path);
+    });
+    std::erase_if(scanSnapshot.archiveCache, [&](const auto &archive) {
+      return pathOutsideScope(archive.path);
+    });
+  }
   const ChartScanCheckpoint checkpoint =
       scanSnapshot.checkpoint.value_or(ChartScanCheckpoint{});
   std::vector<bms_parser::ChartMeta> chartMetas =
@@ -1654,7 +1707,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       traversalHealthy = false;
     }
     bool finalized = traversalHealthy && session.ClearScanCheckpoint();
-    if (finalized && reconcileExisting) {
+    if (finalized && reconcileMode == ReconcileMode::Full) {
       finalized = session.ClearChartMetadataRebuildRequired();
     }
     return ChartScanResult{.completed = finalized};
@@ -2958,7 +3011,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   bool committed = storageHealthy && traversalHealthy && commitSucceeded;
   if (!stopRequested(stopToken) && committed) {
     bool finalized = session.ClearScanCheckpoint();
-    if (finalized && reconcileExisting) {
+    if (finalized && reconcileMode == ReconcileMode::Full) {
       finalized = session.ClearChartMetadataRebuildRequired();
     }
     committed = finalized;
