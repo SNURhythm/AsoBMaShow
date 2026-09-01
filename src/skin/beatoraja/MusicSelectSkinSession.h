@@ -16,6 +16,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <set>
 #include <stop_token>
 #include <unordered_map>
 #include <vector>
@@ -154,6 +155,8 @@ private:
   std::vector<SkinDiagnostic> diagnostics_;
   std::map<int, std::size_t> customEventLastDefinitionIndexes_;
   std::map<int, std::size_t> customTimerLastDefinitionIndexes_;
+  std::map<int, std::int64_t> customTimerValues_;
+  std::set<int> activeCustomTimerIds_;
   std::map<int, std::int64_t> customEventLastExecutionMicros_;
   std::vector<std::string> preparedRuntimeStrings_;
   std::map<int, std::filesystem::path> preparedBuiltinImagePaths_;

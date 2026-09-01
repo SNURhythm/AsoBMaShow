@@ -137,6 +137,9 @@ MusicSelectSkinSession::MusicSelectSkinSession(
        ++index) {
     customTimerLastDefinitionIndexes_.insert_or_assign(
         model_.model.customTimers[index].id, index);
+    if (model_.model.customTimers[index].timer) {
+      activeCustomTimerIds_.insert(model_.model.customTimers[index].id);
+    }
   }
 }
 
@@ -345,7 +348,8 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
     return success;
   };
 
-  MusicSelectSkinStateBridge bridge(frame);
+  MusicSelectSkinStateBridge bridge(frame, customTimerValues_,
+                                    activeCustomTimerIds_);
   LuaFrameStateBinding frameState(
       runtime_.get(), &bridge,
       {.context = this,
@@ -376,7 +380,7 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
 
   for (const auto &[id, index] : customTimerLastDefinitionIndexes_) {
     const auto &timer = model_.model.customTimers[index];
-    std::int64_t value = std::numeric_limits<std::int64_t>::min();
+    std::int64_t value = bridge.timerProperty({.value = id});
     if (timer.timer) {
       const auto binding = std::ranges::find_if(
           model_.model.timerProperties,

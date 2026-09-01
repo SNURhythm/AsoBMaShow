@@ -63,6 +63,14 @@ MusicSelectSkinStateBridge::MusicSelectSkinStateBridge(
     const MusicSelectSkinFrame &frame)
     : frame_(&frame) {}
 
+MusicSelectSkinStateBridge::MusicSelectSkinStateBridge(
+    const MusicSelectSkinFrame &frame,
+    std::map<int, std::int64_t> &persistentCustomTimerValues,
+    const std::set<int> &activeCustomTimerIds)
+    : frame_(&frame),
+      persistentCustomTimerValues_(&persistentCustomTimerValues),
+      activeCustomTimerIds_(&activeCustomTimerIds) {}
+
 std::uint64_t MusicSelectSkinStateBridge::frameSerial() const noexcept {
   return frame_->serial;
 }
@@ -183,6 +191,12 @@ MusicSelectSkinStateBridge::offsetProperty(int id) {
 std::int64_t MusicSelectSkinStateBridge::timerProperty(
     const SkinBuiltinPropertySelector &selector) {
   if (const auto *id = std::get_if<int>(&selector.value)) {
+    if (persistentCustomTimerValues_ != nullptr) {
+      if (const auto custom = persistentCustomTimerValues_->find(*id);
+          custom != persistentCustomTimerValues_->end()) {
+        return custom->second;
+      }
+    }
     if (const auto custom = customTimerValues_.find(*id);
         custom != customTimerValues_.end()) {
       return custom->second;
@@ -201,8 +215,27 @@ std::int64_t MusicSelectSkinStateBridge::timerProperty(
   return std::numeric_limits<std::int64_t>::min();
 }
 
+bool MusicSelectSkinStateBridge::setTimerProperty(int id,
+                                                  std::int64_t value) {
+  if (id < 10'000 || id > 19'999) return false;
+  if (activeCustomTimerIds_ != nullptr &&
+      activeCustomTimerIds_->contains(id)) {
+    return true;
+  }
+  if (persistentCustomTimerValues_ != nullptr) {
+    persistentCustomTimerValues_->insert_or_assign(id, value);
+  } else {
+    customTimerValues_.insert_or_assign(id, value);
+  }
+  return true;
+}
+
 void MusicSelectSkinStateBridge::setCustomTimer(int id, std::int64_t value) {
-  customTimerValues_.insert_or_assign(id, value);
+  if (persistentCustomTimerValues_ != nullptr) {
+    persistentCustomTimerValues_->insert_or_assign(id, value);
+  } else {
+    customTimerValues_.insert_or_assign(id, value);
+  }
 }
 
 std::span<const SkinProjectedNoteView>

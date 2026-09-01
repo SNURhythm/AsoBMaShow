@@ -3,6 +3,8 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <map>
+#include <set>
 #include <string_view>
 
 namespace {
@@ -106,12 +108,37 @@ void testCustomTimerValuesOverrideTheFrameSnapshot() {
           "the once-per-frame custom-timer update overrides the snapshot");
 }
 
+void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
+  MusicSelectSkinFrame frame;
+  MusicSelectSkinStateBridge local(frame);
+
+  require(!local.setTimerProperty(9'999, 1) &&
+              !local.setTimerProperty(20'000, 1),
+          "skin timer writes reject IDs outside Beatoraja's custom range");
+  require(local.setTimerProperty(10'000, 123) &&
+              local.timerProperty({.value = 10'000}) == 123,
+          "passive custom timers are created by skin writes");
+
+  std::map<int, std::int64_t> persistent{{10'001, 50}};
+  const std::set<int> active{10'001};
+  MusicSelectSkinStateBridge first(frame, persistent, active);
+  require(first.setTimerProperty(10'001, 75) && persistent.at(10'001) == 50,
+          "writes to callback-backed custom timers are accepted and ignored");
+  require(first.setTimerProperty(10'002, 84) && persistent.at(10'002) == 84,
+          "writes create persistent passive custom timers");
+
+  MusicSelectSkinStateBridge next(frame, persistent, active);
+  require(next.timerProperty({.value = 10'002}) == 84,
+          "passive custom timer values survive music-select frames");
+}
+
 } // namespace
 
 int main() {
   testExactPropertyNamespacesAndAbsentValues();
   testUnknownPropertiesRemainUnsupported();
   testCustomTimerValuesOverrideTheFrameSnapshot();
+  testSkinTimerWritesUseBeatorajaCustomTimerRules();
   if (failures != 0) {
     std::cerr << failures << " music-select state bridge test(s) failed\n";
     return 1;

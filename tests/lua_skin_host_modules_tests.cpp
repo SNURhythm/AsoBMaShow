@@ -394,7 +394,7 @@ if not skin_config then
 end
 for _, name in ipairs({
   "event_index", "exscore", "float_number", "gauge", "gauge_type",
-  "judge", "number", "option", "rate", "text", "time", "timer",
+  "judge", "number", "option", "rate", "set_timer", "text", "time", "timer",
   "volume_bg", "volume_key", "volume_sys"
 }) do
   assert(type(state[name]) == "function", "missing main_state." .. name)
@@ -413,6 +413,9 @@ assert(state.time() == 123456)
 assert(state.volume_bg() == 0.3)
 assert(state.volume_key() == 0.4)
 assert(state.volume_sys() == 0.5)
+assert(state.set_timer(10000, 789) == true)
+assert(state.timer(10000) == 789)
+assert(not pcall(function() state.set_timer(9999, 1) end))
 return {}
 )lua");
     writeText(source / "skin/io_lines.luaskin", R"lua(
@@ -992,7 +995,12 @@ public:
     return {};
   }
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override {
-    return std::numeric_limits<std::int64_t>::min();
+    return customTimer_;
+  }
+  bool setTimerProperty(int id, std::int64_t value) override {
+    if (id < 10'000 || id > 19'999) return false;
+    customTimer_ = value;
+    return true;
   }
   std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override { return {}; }
@@ -1007,6 +1015,9 @@ public:
   SkinNoteExpansionStateView noteExpansionState() const noexcept override {
     return {};
   }
+
+private:
+  std::int64_t customTimer_ = std::numeric_limits<std::int64_t>::min();
 };
 
 void testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates() {

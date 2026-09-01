@@ -200,6 +200,7 @@ public:
     return {};
   }
   virtual std::int64_t timerProperty(const SkinBuiltinPropertySelector &) = 0;
+  virtual bool setTimerProperty(int, std::int64_t) { return false; }
   virtual std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept = 0;
   virtual std::span<const SkinProjectedLongNoteView>

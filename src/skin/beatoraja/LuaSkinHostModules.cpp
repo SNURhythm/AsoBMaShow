@@ -636,6 +636,18 @@ int mainStateTimer(lua_State *state) {
   return 1;
 }
 
+int mainStateSetTimer(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const auto value = static_cast<std::int64_t>(lua_tointeger(state, 2));
+  if (current == nullptr || !current->setTimerProperty(id, value)) {
+    return luaL_error(state,
+                      "the timer cannot be changed by the selected skin");
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
 int mainStateEventExec(lua_State *state) {
   auto *impl = host(state);
   const int count = lua_gettop(state);
@@ -1112,6 +1124,8 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "offset");
   installClosure(state, impl, mainStateTimer);
   lua_setfield(state, -2, "timer");
+  installClosure(state, impl, mainStateSetTimer);
+  lua_setfield(state, -2, "set_timer");
   lua_pushnumber(
       state, static_cast<lua_Number>(std::numeric_limits<std::int64_t>::min()));
   lua_setfield(state, -2, "timer_off_value");

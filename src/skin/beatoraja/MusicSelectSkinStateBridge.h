@@ -6,6 +6,7 @@
 #include <functional>
 #include <filesystem>
 #include <map>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -48,6 +49,9 @@ struct MusicSelectSkinActionSink {
 class MusicSelectSkinStateBridge final : public ISkinFrameState {
 public:
   explicit MusicSelectSkinStateBridge(const MusicSelectSkinFrame &);
+  MusicSelectSkinStateBridge(const MusicSelectSkinFrame &,
+                             std::map<int, std::int64_t> &,
+                             const std::set<int> &);
 
   std::uint64_t frameSerial() const noexcept override;
   SkinPropertyLookup<bool>
@@ -62,6 +66,7 @@ public:
   stringProperty(const SkinBuiltinPropertySelector &) override;
   SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
+  bool setTimerProperty(int, std::int64_t) override;
   void setCustomTimer(int, std::int64_t);
   std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
@@ -76,6 +81,8 @@ public:
 private:
   const MusicSelectSkinFrame *frame_ = nullptr;
   std::map<int, std::int64_t> customTimerValues_;
+  std::map<int, std::int64_t> *persistentCustomTimerValues_ = nullptr;
+  const std::set<int> *activeCustomTimerIds_ = nullptr;
 };
 
 } // namespace skin
