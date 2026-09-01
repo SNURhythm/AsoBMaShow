@@ -51,6 +51,28 @@ inline constexpr int MusicSelectFeatureLongNote = 8;
 inline constexpr int MusicSelectFeatureChargeNote = 16;
 inline constexpr int MusicSelectFeatureHellChargeNote = 32;
 
+enum class MusicSelectCourseConstraint : std::uint8_t {
+  Class,
+  Mirror,
+  Random,
+  NoSpeed,
+  NoGood,
+  NoGreat,
+  GaugeLr2,
+  Gauge5Keys,
+  Gauge7Keys,
+  Gauge9Keys,
+  Gauge24Keys,
+  Ln,
+  Cn,
+  Hcn,
+};
+
+struct MusicSelectCourseStage {
+  std::optional<std::string> title;
+  bool hasPath = false;
+};
+
 struct MusicSelectBarFrame {
   MusicSelectBarKind kind = MusicSelectBarKind::Song;
   std::string title;
@@ -94,6 +116,9 @@ struct MusicSelectBar {
   std::optional<ScoreBestSnapshot> score;
   std::optional<ScoreBestSnapshot> rivalScore;
   std::array<bool, 4> replayExists{};
+  std::vector<skin::MusicSelectCourseStage> courseStages;
+  std::vector<skin::MusicSelectCourseConstraint> courseConstraints;
+  int courseTotalNotes = 0;
   std::vector<MusicSelectBarId> children;
   skin::MusicSelectBarFrame presentation;
   bool selectable = false;

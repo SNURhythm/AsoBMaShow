@@ -53,6 +53,9 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
   song.score = ScoreBestSnapshot{.score = 800,
                                  .maxScore = 1000,
                                  .judgementCounts = {250, 100, 50, 25, 10},
+                                 .playCount = 9,
+                                 .clearCount = 7,
+                                 .lastPlayedUnixSeconds = 1'700'000'000,
                                  .maxCombo = 321,
                                  .comboBreak = 12,
                                  .clearType = kClearTypeExHardClearRank};
@@ -176,6 +179,9 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.integers.at(74) == 500 &&
               values.integers.at(75) == 321 &&
               values.integers.at(76) == 12 &&
+              values.integers.at(77) == 9 &&
+              values.integers.at(78) == 7 &&
+              values.integers.at(79) == 2 &&
               values.integers.at(90) == 180 &&
               values.integers.at(91) == 120 &&
               values.integers.at(92) == 150 &&
@@ -223,6 +229,36 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.rates.at(18) == 0.5 &&
               values.rates.at(19) == 0.25,
           "FloatPropertyFactory rates retain their source domains");
+}
+
+void testProjectsCourseContract() {
+  AppSettings settings;
+  MusicSelectBar course;
+  course.kind = skin::MusicSelectBarKind::Grade;
+  course.title = "Course";
+  course.presentation = {.kind = skin::MusicSelectBarKind::Grade,
+                         .exists = true};
+  course.courseStages = {
+      {.title = "One", .hasPath = true},
+      {.title = std::nullopt, .hasPath = false},
+  };
+  course.courseConstraints = {
+      skin::MusicSelectCourseConstraint::Class,
+      skin::MusicSelectCourseConstraint::NoGood,
+      skin::MusicSelectCourseConstraint::Gauge7Keys,
+      skin::MusicSelectCourseConstraint::Hcn,
+  };
+  MusicSelectBarManagerSnapshot bars;
+  bars.rows.push_back(std::move(course));
+  const auto values = projectMusicSelectProperties(
+      settings, bars, MusicSelectPropertyRuntimeSnapshot{});
+  require(values.strings.at(150) == "One" &&
+              values.strings.at(151) == "(no song) ----",
+          "GradeBar course titles preserve missing-song source text");
+  require(values.booleans.at(1002) && values.booleans.at(1006) &&
+              values.booleans.at(1012) && values.booleans.at(1017) &&
+              !values.booleans.at(1003) && !values.booleans.at(1015),
+          "GradeBar constraints project the exact CourseData enum options");
 }
 
 void testProjectsExactBarClassConditions() {
@@ -318,6 +354,7 @@ int main() {
   testProjectsSelectedSongAndPlayerConfiguration();
   testProjectsDirectoryAndFinishedRanking();
   testProjectsExactBarClassConditions();
+  testProjectsCourseContract();
   if (failures != 0) return 1;
   std::cout << "music-select property projection tests passed\n";
   return 0;

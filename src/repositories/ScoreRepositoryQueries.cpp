@@ -619,10 +619,24 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
       "SELECT b.chart_sha256, b.ln_mode, b.score, b.max_score, b.max_combo, "
       "b.combo_break, b.final_gauge, b.clear_rank, b.created_at, "
       "COALESCE(s.pgreat, 0), COALESCE(s.great, 0), COALESCE(s.good, 0), "
-      "COALESCE(s.bad, 0), COALESCE(s.poor, 0), COALESCE(s.score_source, 0) "
+      "COALESCE(s.bad, 0), COALESCE(s.poor, 0), COALESCE(s.score_source, 0), "
+      "COALESCE(h.play_count, 0), COALESCE(h.clear_count, 0), "
+      "h.last_played "
       "FROM " + qualifiedScoreTable(schema, "score_sha256_best_score_cache") +
       " b LEFT JOIN " + qualifiedScoreTable(schema, "scores") +
-      " s ON s.id = b.score_id";
+      " s ON s.id = b.score_id LEFT JOIN (SELECT lower(trim(p.chart_sha256)) "
+      "AS chart_sha256, modes.ln_mode, COUNT(*) AS play_count, "
+      "SUM(CASE WHEN p.clear_type >= " +
+      std::to_string(kClearTypeAssistedEasyClearRank) +
+      " THEN 1 ELSE 0 END) AS clear_count, "
+      "CAST(strftime('%s', MAX(p.created_at)) AS INTEGER) AS last_played "
+      "FROM " + qualifiedScoreTable(schema, "scores") + " p JOIN " +
+      score_cache_queries::detail::playableLongNoteModesSql() +
+      " modes ON p.ln_mode = -1 OR p.ln_mode = modes.ln_mode WHERE "
+      "p.score_source = " +
+      std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
+      " GROUP BY lower(trim(p.chart_sha256)), modes.ln_mode) h ON "
+      "h.chart_sha256 = b.chart_sha256 AND h.ln_mode = b.ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "loading score best scores", logSqlErrorText)) {
@@ -649,6 +663,12 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
                               static_cast<int>(ScoreStorageSource::ImportedIr)
                           ? ScoreBestSource::ImportedIr
                           : ScoreBestSource::Local;
+    snapshot.playCount = sqlite3_column_int(stmt.get(), 15);
+    snapshot.clearCount = sqlite3_column_int(stmt.get(), 16);
+    if (sqlite3_column_type(stmt.get(), 17) == SQLITE_INTEGER) {
+      snapshot.lastPlayedUnixSeconds =
+          static_cast<std::int64_t>(sqlite3_column_int64(stmt.get(), 17));
+    }
     storeBestScore(cache.scoreBySha256, sha256, lnMode, snapshot);
   }
 }

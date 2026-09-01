@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <ctime>
+#include <limits>
 #include <numeric>
 #include <string_view>
 
@@ -126,6 +128,65 @@ bool isPlayableBar(const MusicSelectBar &bar) {
     return false;
   }
   return false;
+}
+
+bool hasCourseConstraint(const MusicSelectBar &bar,
+                         skin::MusicSelectCourseConstraint constraint) {
+  return std::ranges::find(bar.courseConstraints, constraint) !=
+         bar.courseConstraints.end();
+}
+
+void projectCourse(Properties &out, const MusicSelectBar &bar) {
+  using Constraint = skin::MusicSelectCourseConstraint;
+  constexpr std::array<std::pair<Constraint, int>, 14>
+      constraints{{
+          {Constraint::Class, 1002},
+          {Constraint::Mirror, 1003},
+          {Constraint::Random, 1004},
+          {Constraint::NoSpeed, 1005},
+          {Constraint::NoGood, 1006},
+          {Constraint::NoGreat, 1007},
+          {Constraint::GaugeLr2, 1010},
+          {Constraint::Gauge5Keys, 1011},
+          {Constraint::Gauge7Keys, 1012},
+          {Constraint::Gauge9Keys, 1013},
+          {Constraint::Gauge24Keys, 1014},
+          {Constraint::Ln, 1015},
+          {Constraint::Cn, 1016},
+          {Constraint::Hcn, 1017},
+      }};
+  for (const auto &[constraint, id] : constraints) {
+    out.booleans[id] = hasCourseConstraint(bar, constraint);
+  }
+  const std::size_t count = std::min<std::size_t>(10, bar.courseStages.size());
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto &stage = bar.courseStages[index];
+    const std::string title = stage.title.value_or("----");
+    out.strings[150 + static_cast<int>(index)] =
+        bar.kind == skin::MusicSelectBarKind::Grade && !stage.hasPath
+            ? "(no song) " + title
+            : title;
+  }
+}
+
+void projectLastPlayed(Properties &out, std::int64_t unixSeconds) {
+  if (unixSeconds <= 0) return;
+  if (unixSeconds <= std::numeric_limits<int>::max()) {
+    out.integers[243] = unixSeconds;
+  }
+  const std::time_t value = static_cast<std::time_t>(unixSeconds);
+  std::tm local{};
+#if defined(_WIN32)
+  localtime_s(&local, &value);
+#else
+  localtime_r(&value, &local);
+#endif
+  out.integers[244] = local.tm_year + 1900;
+  out.integers[245] = local.tm_mon + 1;
+  out.integers[246] = local.tm_mday;
+  out.integers[247] = local.tm_hour;
+  out.integers[248] = local.tm_min;
+  out.integers[249] = local.tm_sec;
 }
 
 int favoriteIndex(int flags, int favorite, int invisible) {
@@ -273,6 +334,10 @@ void projectSelectedBar(Properties &out,
   out.strings[10] = selected->title;
   out.strings[12] = selected->title;
 
+  if (course || selected->kind == skin::MusicSelectBarKind::RandomCourse) {
+    projectCourse(out, *selected);
+  }
+
   const int clear = std::clamp(selected->presentation.lamp, 0, 10);
   constexpr std::array<int, 11> clearIds{
       100, 101, 1100, 1101, 102, 103, 104, 1102, 105, 1103, 1104};
@@ -300,6 +365,10 @@ void projectSelectedBar(Properties &out,
           counts[static_cast<std::size_t>(clearType)];
     }
     return;
+  }
+  if (selected->rivalScore) {
+    out.imageIndexes[371] =
+        std::clamp(selected->presentation.rivalLamp, 0, 10);
   }
   if (!selected->chart) return;
 
@@ -378,6 +447,12 @@ void projectSelectedBar(Properties &out,
   out.integers[75] = score.maxCombo.value_or(0);
   out.integers[76] = score.badPoints.value_or(
       score.comboBreak.value_or(0));
+  out.integers[77] = score.playCount;
+  out.integers[78] = score.clearCount;
+  out.integers[79] = score.playCount - score.clearCount;
+  if (score.lastPlayedUnixSeconds) {
+    projectLastPlayed(out, *score.lastPlayedUnixSeconds);
+  }
   out.integers[101] = score.score;
   out.integers[102] = integerRate(score.score, maximum);
   out.integers[103] = integerRateAfterDot(score.score, maximum);
@@ -424,8 +499,6 @@ void projectSelectedBar(Properties &out,
     out.integers[157] = out.integers[122];
     out.integers[158] = out.integers[123];
     out.integers[271] = rival.score;
-    out.imageIndexes[371] =
-        std::clamp(selected->presentation.rivalLamp, 0, 10);
     out.rates[114] = 0.0;
     out.rates[115] = rivalRate;
     out.floats[122] = rivalRate;
