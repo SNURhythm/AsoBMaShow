@@ -4310,7 +4310,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   if (retrySetup == nullptr) {
     nextOptions.startPosition = 0;
     nextOptions.autoKeySound = session->autoKeySound;
-    nextOptions.autoPlay = false;
+    nextOptions.autoPlay = session->autoPlay;
     nextOptions.gaugeType = session->gaugeType;
     nextOptions.gaugeProfile = session->gaugeProfile;
     nextOptions.gaugeAutoShift = session->gaugeAutoShift;

@@ -16,6 +16,7 @@ struct MusicSelectBarManagerSnapshot {
   std::vector<MusicSelectBar> rows;
   std::size_t selectedIndex = 0;
   std::vector<MusicSelectBarId> directory;
+  std::vector<MusicSelectBar> directoryBars;
   std::string directoryText;
   int movementDirection = 0;
   std::int64_t movementEndMillis = 0;
@@ -42,6 +43,8 @@ public:
   void move(bool increase, int movementDirection,
             std::int64_t movementEndMillis);
   [[nodiscard]] bool select(const MusicSelectBarId &);
+  [[nodiscard]] std::vector<MusicSelectBar>
+  childrenOf(const MusicSelectBarId &) const;
   void setSelectedPosition(float);
   void configure(MusicSelectBarManagerConfig);
   void refresh(MusicSelectProjection);

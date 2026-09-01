@@ -57,6 +57,8 @@ private:
   void stopInputListening();
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
+  void launchCourse(const MusicSelectBar &, bool autoplay);
+  void launchSelectedDirectoryAutoplay();
   void launchSelectedReplay(int slot);
   void changeSelectedFavorite(bool song, int direction);
   void openSelected();

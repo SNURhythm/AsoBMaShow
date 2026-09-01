@@ -347,6 +347,7 @@ struct CoursePlaySession {
   std::optional<long long> playOption2Seed;
   std::string assistOption = assist_options::kOff;
   bool autoKeySound = false;
+  bool autoPlay = false;
   bool courseReplayPlayback = false;
   bool courseReplaySaved = false;
   int savedCourseReplayId = 0;

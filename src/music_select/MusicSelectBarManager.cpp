@@ -384,6 +384,18 @@ bool MusicSelectBarManager::select(const MusicSelectBarId &id) {
   return true;
 }
 
+std::vector<MusicSelectBar>
+MusicSelectBarManager::childrenOf(const MusicSelectBarId &id) const {
+  std::vector<MusicSelectBar> result;
+  const auto *directory = projection_.find(id);
+  if (directory == nullptr) return result;
+  result.reserve(directory->children.size());
+  for (const auto &child : directory->children) {
+    if (const auto *bar = projection_.find(child)) result.push_back(*bar);
+  }
+  return result;
+}
+
 void MusicSelectBarManager::setSelectedPosition(float value) {
   if (rows_.empty()) return;
   if (value >= 0.0F && value < 1.0F) {
@@ -415,14 +427,17 @@ void MusicSelectBarManager::refresh(MusicSelectProjection projection) {
 
 MusicSelectBarManagerSnapshot MusicSelectBarManager::snapshot() const {
   std::string directoryText;
+  std::vector<MusicSelectBar> directoryBars;
   for (const auto &id : directory_) {
     if (const auto *bar = projection_.find(id)) {
       directoryText += bar->title + " > ";
+      directoryBars.push_back(*bar);
     }
   }
   return {.rows = rows_,
           .selectedIndex = selectedIndex_,
           .directory = directory_,
+          .directoryBars = std::move(directoryBars),
           .directoryText = std::move(directoryText),
           .movementDirection = movementDirection_,
           .movementEndMillis = movementEndMillis_,

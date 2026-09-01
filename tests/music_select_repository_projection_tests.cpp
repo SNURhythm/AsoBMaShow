@@ -203,6 +203,11 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
           "HashBar keeps table element order including unavailable songs");
   require(grade && grade->kind == skin::MusicSelectBarKind::Grade &&
               grade->courseId == 73 && grade->courseKey == "course-key" &&
+              grade->courseGroupName == "GRADE" &&
+              grade->courseConstraintJson ==
+                  R"(["grade_mirror","no_speed"])" &&
+              grade->courseCharts.size() == 2 &&
+              grade->courseCharts[0].meta.Title == "Course One" &&
               grade->courseStages.size() == 2 &&
               grade->courseTotalNotes == 1000 &&
               !grade->presentation.exists && grade->presentation.lamp == 6 &&

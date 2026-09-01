@@ -390,6 +390,9 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
             .tableId = tableSource.info.id,
             .courseId = courseSource.info.id,
             .courseKey = courseSource.info.courseKey,
+            .courseGroupName = courseSource.info.groupName,
+            .courseConstraintJson = courseSource.info.constraintJson,
+            .courseCharts = courseSource.stages,
             .presentation = {.kind = skin::MusicSelectBarKind::Grade,
                              .title = courseSource.info.name,
                              .exists = std::ranges::all_of(

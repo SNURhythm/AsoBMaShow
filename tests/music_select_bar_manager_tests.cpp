@@ -52,8 +52,13 @@ void testWrapOpenCloseAndPositionSemantics() {
               manager.snapshot().movementEndMillis == 350,
           "decrement wraps and publishes the signed source scroll window");
   require(manager.openSelected() && manager.snapshot().rows.size() == 1 &&
-              manager.snapshot().directoryText == "B > ",
+              manager.snapshot().directoryText == "B > " &&
+              manager.snapshot().directoryBars.size() == 1 &&
+              manager.snapshot().directoryBars.front().id.value == "folder:b",
           "opening a DirectoryBar replaces rows and appends directory text");
+  const auto children = manager.childrenOf({"folder:b"});
+  require(children.size() == 1 && children.front().id.value == "song:3",
+          "directory children are returned as value-owned bars");
   require(manager.close() && manager.snapshot().selectedIndex == 1,
           "closing restores the directory bar that was opened");
   manager.setSelectedPosition(0.0F);

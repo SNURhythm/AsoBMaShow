@@ -1,6 +1,7 @@
 target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
     ChartViewerScene.cpp
+    CourseGameplaySessionBuilder.cpp
     FindBmsDialogPolicy.cpp
     FindBmsProgressPresentation.cpp
     IrUploadsController.cpp

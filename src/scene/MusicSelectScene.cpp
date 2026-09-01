@@ -7,6 +7,7 @@
 #include "MusicPlayerScene.h"
 #include "SceneManager.h"
 #include "SettingsScene.h"
+#include "CourseGameplaySessionBuilder.h"
 #include "../ArchiveFile.h"
 #include "../AssistOptionUtils.h"
 #include "../CoursePlaySession.h"
@@ -493,6 +494,7 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   propertyRuntime.targetName = context.settings.skinTargetId == "MAX"
                                    ? "MAX"
                                    : std::string{};
+  propertyRuntime.version = ASOBMASHOW_APPLICATION_VERSION;
   propertyRuntime.irName = context.settings.irProviders.empty()
                                ? std::string{}
                                : context.settings.irProviders.begin()->first;
@@ -803,11 +805,15 @@ void MusicSelectScene::closeDirectory() {
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   if (launching_) return;
   const auto snapshot = bars_.snapshot();
-  if (snapshot.selectedIndex >= snapshot.rows.size() ||
-      !snapshot.rows[snapshot.selectedIndex].chart) {
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind == skin::MusicSelectBarKind::Grade ||
+      selected.kind == skin::MusicSelectBarKind::RandomCourse) {
+    launchCourse(selected, autoplay);
     return;
   }
-  const auto record = *snapshot.rows[snapshot.selectedIndex].chart;
+  if (!selected.chart) return;
+  const auto record = *selected.chart;
   if (record.unavailable || record.solidArchive ||
       record.meta.BmsPath.empty()) {
     return;
@@ -872,6 +878,92 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       std::make_unique<GamePlayScene>(context, std::move(chart),
                                       std::move(options)),
       true);
+}
+
+void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
+                                    bool autoplay) {
+  if (launching_ || bar.courseCharts.empty()) return;
+  auto session = buildCourseGameplaySession(
+      {.courseId = bar.courseId,
+       .courseKey = bar.courseKey,
+       .courseName = bar.courseGroupName.empty()
+                         ? bar.title
+                         : bar.courseGroupName + " " + bar.title,
+       .courseGroupName = bar.courseGroupName,
+       .constraintJson = bar.courseConstraintJson,
+       .records = bar.courseCharts,
+       .selections =
+           main_menu_profile::Selections::fromSettings(context.settings),
+       .inputKeysoundEnabled = context.settings.inputKeysoundEnabled});
+  session->autoPlay = autoplay;
+  const auto *firstMeta = session->currentMeta();
+  if (firstMeta == nullptr || firstMeta->BmsPath.empty()) return;
+
+  launching_ = true;
+  std::atomic_bool cancelled = false;
+  auto chart = play_options::parseChart(firstMeta->BmsPath, cancelled,
+                                        "music-select course");
+  if (!chart || cancelled) {
+    launching_ = false;
+    return;
+  }
+  applyCourseConstraintsToChart(*chart, session->constraints);
+  const auto playInfo = play_options::applySelectedPlayOptions(
+      *chart, session->requestedPlayOption);
+  applyEffectiveLongNoteModeToChart(*chart, session->longNoteMode);
+  session->playOption = playInfo.option;
+  session->playOptionSeed = playInfo.seed;
+  session->playOption2 = playInfo.option2;
+  session->playOption2Seed = playInfo.seed2;
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*chart, true, cancelled);
+  if (cancelled) {
+    launching_ = false;
+    return;
+  }
+  StartOptions options{
+      .startPosition = 0,
+      .autoKeySound = session->autoKeySound,
+      .autoPlay = autoplay,
+      .gaugeType = session->gaugeType,
+      .gaugeProfile = session->gaugeProfile,
+      .gaugeAutoShift = session->gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound,
+      .playOption = playInfo.option,
+      .playOptionSeed = playInfo.seed,
+      .playOption2 = playInfo.option2,
+      .playOption2Seed = playInfo.seed2,
+      .longNoteMode = session->longNoteMode,
+      .assistOption = session->assistOption,
+      .playback = course_rules::kRequiredPlaybackRate,
+      .clubMode = context.settings.gameplayClubModeEnabled,
+      .courseSession = session,
+      .courseConstraints = session->constraints,
+      .ruleset = session->ruleset,
+      .requiredRulesetDescriptor = session->rulesetDescriptor,
+      .ownsChart = true,
+  };
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(chart),
+                                      std::move(options)),
+      true);
+}
+
+void MusicSelectScene::launchSelectedDirectoryAutoplay() {
+  if (launching_) return;
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &directory = snapshot.rows[snapshot.selectedIndex];
+  MusicSelectBar playlist;
+  playlist.title = directory.title;
+  for (const auto &child : bars_.childrenOf(directory.id)) {
+    if (child.kind == skin::MusicSelectBarKind::Song && child.chart &&
+        !child.chart->meta.BmsPath.empty()) {
+      playlist.courseCharts.push_back(*child.chart);
+    }
+  }
+  launchCourse(playlist, true);
 }
 
 void MusicSelectScene::launchSelectedReplay(int slot) {
@@ -1099,6 +1191,9 @@ void MusicSelectScene::applyInputAction(
     break;
   case MusicSelectInputActionKind::Autoplay:
     launchSelected(true, false);
+    break;
+  case MusicSelectInputActionKind::AutoplayFolder:
+    launchSelectedDirectoryAutoplay();
     break;
   case MusicSelectInputActionKind::Replay:
     launchSelectedReplay(action.value);

@@ -119,6 +119,9 @@ struct MusicSelectBar {
   std::string tableLevel;
   int courseId = 0;
   std::string courseKey;
+  std::string courseGroupName;
+  std::string courseConstraintJson;
+  std::vector<ChartMetaRecord> courseCharts;
   std::optional<ChartMetaRecord> chart;
   std::optional<ScoreBestSnapshot> score;
   std::optional<ScoreBestSnapshot> rivalScore;

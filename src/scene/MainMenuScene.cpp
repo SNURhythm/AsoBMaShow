@@ -42,6 +42,7 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
+#include "CourseGameplaySessionBuilder.h"
 #include "FindBmsDialogPolicy.h"
 #include "FindBmsProgressPresentation.h"
 #include "IrUploadsScene.h"
@@ -4333,42 +4334,18 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  auto session = std::make_shared<CoursePlaySession>();
-  session->courseId = activeFolder.courseId;
-  session->courseKey = activeFolder.courseKey;
-  session->courseName =
-      activeFolder.courseGroupName.empty()
-          ? activeFolder.label
-          : activeFolder.courseGroupName + " " + activeFolder.label;
-  session->courseGroupName = activeFolder.courseGroupName;
-  session->constraintJson = activeFolder.courseConstraintJson;
-  session->entries.reserve(records.size());
-  for (const auto &record : records) {
-    session->entries.push_back(CoursePlayEntry{.meta = record.meta});
-  }
-  const CourseConstraintSettings constraintSettings =
-      courseConstraintSettingsFromJson(activeFolder.courseConstraintJson);
-  int courseLongNoteMode =
-      long_note_mode::valueFromId(profileSelections.longNoteMode);
-  if (constraintSettings.rules.longNoteMode !=
-      CourseLongNoteMode::Unspecified) {
-    courseLongNoteMode = courseLongNoteModeToChartMetaValue(
-        constraintSettings.rules.longNoteMode);
-  }
-  session->currentIndex = 0;
-  session->ruleset = profileSelections.ruleset;
-  session->rulesetDescriptor = RulesetDescriptor::For(session->ruleset);
-  session->gaugeType = profileSelections.gaugeType;
-  session->gaugeProfile = constraintSettings.gaugeProfile;
-  session->gaugeAutoShift = profileSelections.gaugeAutoShift;
-  session->gaugeAutoShiftLowerBound =
-      profileSelections.gaugeAutoShiftLowerBound;
-  session->longNoteMode = courseLongNoteMode;
-  session->constraints = constraintSettings.rules;
-  session->requestedPlayOption = coursePlayOptionForConstraints(
-      profileSelections.playOption, constraintSettings);
-  session->assistOption = assist_options::kOff;
-  session->autoKeySound = !context.settings.inputKeysoundEnabled;
+  auto session = buildCourseGameplaySession(
+      {.courseId = activeFolder.courseId,
+       .courseKey = activeFolder.courseKey,
+       .courseName = activeFolder.courseGroupName.empty()
+                         ? activeFolder.label
+                         : activeFolder.courseGroupName + " " +
+                               activeFolder.label,
+       .courseGroupName = activeFolder.courseGroupName,
+       .constraintJson = activeFolder.courseConstraintJson,
+       .records = records,
+       .selections = profileSelections,
+       .inputKeysoundEnabled = context.settings.inputKeysoundEnabled});
   startCourseDirect(std::move(session));
 }
 
