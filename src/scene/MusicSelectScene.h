@@ -3,6 +3,8 @@
 #include "MusicSelectToolbarView.h"
 #include "Scene.h"
 #include "../music_select/MusicSelectBarManager.h"
+#include "../music_select/MusicSelectInputBindingAdapter.h"
+#include "../music_select/MusicSelectInputProcessor.h"
 #include "../repositories/ScoreRepositoryModels.h"
 #include "../skin/GameplaySkinActivationRequest.h"
 
@@ -20,6 +22,7 @@ public:
                    skin::GameplaySkinActivationRequest);
 
   void init() override;
+  void onPause() override;
   void onResume() override;
   EventHandleResult handleEvents(SDL_Event &) override;
   void update(float) override;
@@ -33,6 +36,10 @@ private:
   void reloadLibrary();
   skin::MusicSelectSkinFrame makeFrame() const;
   void consumeActions();
+  void consumeLogicalInput();
+  void applyInputAction(const MusicSelectInputAction &);
+  void startInputListening();
+  void stopInputListening();
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
   void openSelected();
@@ -50,6 +57,10 @@ private:
   ScoreBestCache scoreCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   MusicSelectBarManager bars_;
+  MusicSelectInputProcessor inputProcessor_{{}};
+  std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
+  std::uint64_t inputSubscription_ = 0;
+  std::uint64_t inputDeviceSubscription_ = 0;
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t frameSerial_ = 0;
   int sortIndex_ = 0;

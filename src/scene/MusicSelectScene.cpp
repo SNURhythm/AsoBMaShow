@@ -6,6 +6,7 @@
 #include "SceneManager.h"
 #include "SettingsScene.h"
 #include "../ArchiveFile.h"
+#include "../AssistOptionUtils.h"
 #include "../CoursePlaySession.h"
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
@@ -30,6 +31,7 @@
 #include <cmath>
 #include <ctime>
 #include <memory>
+#include <ranges>
 #include <string_view>
 #include <utility>
 
@@ -120,6 +122,45 @@ MusicSelectClockFields localClockFields(std::time_t value) {
           .minute = local.tm_min,
           .second = local.tm_sec};
 }
+
+std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
+  switch (key) {
+  case SDLK_0: return MusicSelectControlKey::Num0;
+  case SDLK_1: return MusicSelectControlKey::Num1;
+  case SDLK_2: return MusicSelectControlKey::Num2;
+  case SDLK_3: return MusicSelectControlKey::Num3;
+  case SDLK_4: return MusicSelectControlKey::Num4;
+  case SDLK_5: return MusicSelectControlKey::Num5;
+  case SDLK_7: return MusicSelectControlKey::Num7;
+  case SDLK_8: return MusicSelectControlKey::Num8;
+  case SDLK_9: return MusicSelectControlKey::Num9;
+  case SDLK_UP: return MusicSelectControlKey::Up;
+  case SDLK_DOWN: return MusicSelectControlKey::Down;
+  case SDLK_LEFT: return MusicSelectControlKey::Left;
+  case SDLK_RIGHT: return MusicSelectControlKey::Right;
+  case SDLK_RETURN:
+  case SDLK_KP_ENTER: return MusicSelectControlKey::Enter;
+  case SDLK_ESCAPE: return MusicSelectControlKey::Escape;
+  default: return std::nullopt;
+  }
+}
+
+std::optional<MusicSelectCommandKey> commandKey(const SDL_KeyboardEvent &key) {
+  const bool control = (key.keysym.mod & KMOD_CTRL) != 0;
+  const bool shift = (key.keysym.mod & KMOD_SHIFT) != 0;
+  switch (key.keysym.sym) {
+  case SDLK_F2: return MusicSelectCommandKey::UpdateFolder;
+  case SDLK_F3:
+    if (control && shift) return MusicSelectCommandKey::CopySha256;
+    if (control) return MusicSelectCommandKey::CopyMd5;
+    return MusicSelectCommandKey::OpenExplorer;
+  case SDLK_F8: return MusicSelectCommandKey::AddFavoriteSong;
+  case SDLK_F9: return MusicSelectCommandKey::AddFavoriteChart;
+  case SDLK_F10: return MusicSelectCommandKey::AutoplayFolder;
+  case SDLK_F11: return MusicSelectCommandKey::OpenIr;
+  default: return std::nullopt;
+  }
+}
 } // namespace
 
 MusicSelectScene::MusicSelectScene(
@@ -130,6 +171,15 @@ MusicSelectScene::MusicSelectScene(
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
   sortIndex_ = sourceSortIndex(context.settings.skinSortId);
+  inputProcessor_ = MusicSelectInputProcessor(
+      {.layout = musicSelectKeyLayoutForConfig(
+           context.settings.skinMusicSelectInput),
+       .scrollDurationLowMillis =
+           context.settings.skinMusicSelectScrollDurationLow,
+       .scrollDurationHighMillis =
+           context.settings.skinMusicSelectScrollDurationHigh,
+       .analogTicksPerScroll =
+           context.settings.skinMusicSelectAnalogTicksPerScroll});
   chartSession_ = context.chartRepository.OpenSession(&context.scoreRepository);
   reloadLibrary();
 
@@ -182,9 +232,15 @@ void MusicSelectScene::init() {
     toolbar_ = toolbar.get();
     addView(toolbar.release());
   }
+  startInputListening();
 }
 
-void MusicSelectScene::onResume() { reloadLibrary(); }
+void MusicSelectScene::onPause() { stopInputListening(); }
+
+void MusicSelectScene::onResume() {
+  reloadLibrary();
+  if (!failed_) startInputListening();
+}
 
 void MusicSelectScene::reloadLibrary() {
   if (!chartSession_) return;
@@ -262,39 +318,30 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (failed_) return Scene::handleEvents(event);
   if (toolbar_ != nullptr && !toolbar_->handleEvents(event)) return {};
 
-  const auto now = unixMillis();
-  if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
-    switch (event.key.keysym.sym) {
-    case SDLK_ESCAPE:
-      context.quitFlag.store(true);
-      return {.quit = true};
-    case SDLK_DOWN:
-      bars_.move(true, now, kBarMoveMillis);
-      return {};
-    case SDLK_UP:
-      bars_.move(false, now, kBarMoveMillis);
-      return {};
-    case SDLK_LEFT:
-      closeDirectory();
-      return {};
-    case SDLK_RIGHT:
-    case SDLK_RETURN:
-    case SDLK_KP_ENTER:
-      openSelected();
-      return {};
-    default:
-      break;
+  if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
+      event.key.repeat == 0) {
+    const bool down = event.type == SDL_KEYDOWN;
+    if (inputBindingAdapter_) {
+      auto &logicalInput = inputBindingAdapter_->state();
+      if (const auto key = controlKey(event.key.keysym.sym)) {
+        if (down) {
+          logicalInput.controlPressed.insert(*key);
+          logicalInput.controlHeld.insert(*key);
+        } else {
+          logicalInput.controlHeld.erase(*key);
+        }
+      }
+      if (down) {
+        if (const auto command = commandKey(event.key)) {
+          logicalInput.commands.insert(*command);
+        }
+      }
     }
+    return {};
   }
   if (event.type == SDL_MOUSEWHEEL) {
-    int movement = -event.wheel.y;
-    while (movement > 0) {
-      bars_.move(true, now, kBarMoveMillis);
-      --movement;
-    }
-    while (movement < 0) {
-      bars_.move(false, now, kBarMoveMillis);
-      ++movement;
+    if (inputBindingAdapter_) {
+      inputBindingAdapter_->state().wheel += event.wheel.y;
     }
     return {};
   }
@@ -421,6 +468,135 @@ void MusicSelectScene::consumeActions() {
 #endif
 }
 
+void MusicSelectScene::consumeLogicalInput() {
+  if (!inputBindingAdapter_) return;
+  auto &logicalInput = inputBindingAdapter_->state();
+  const auto snapshot = bars_.snapshot();
+  logicalInput.currentBar = MusicSelectInputBarKind::Other;
+  if (snapshot.selectedIndex < snapshot.rows.size()) {
+    const auto &selected = snapshot.rows[snapshot.selectedIndex];
+    logicalInput.currentBar = !selected.children.empty()
+                                   ? MusicSelectInputBarKind::Directory
+                                   : selected.selectable
+                                         ? MusicSelectInputBarKind::Selectable
+                                         : MusicSelectInputBarKind::Other;
+  }
+  logicalInput.selectedReplay = selectedReplay_;
+  for (const auto &action :
+       inputProcessor_.process(logicalInput, unixMillis())) {
+    applyInputAction(action);
+  }
+  inputBindingAdapter_->clearFrameEdges();
+}
+
+void MusicSelectScene::startInputListening() {
+  if (inputSubscription_ != 0 || inputDeviceSubscription_ != 0) return;
+  const auto layout =
+      musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput);
+  inputProcessor_.setLayout(layout);
+  inputBindingAdapter_ = std::make_unique<MusicSelectInputBindingAdapter>(
+      context.inputProfile, layout);
+  inputSubscription_ = context.inputDeviceRegistry.subscribeInput(
+      [this](const input::PhysicalInputEvent &event) {
+        if (inputBindingAdapter_) inputBindingAdapter_->consume(event);
+      });
+  inputDeviceSubscription_ = context.inputDeviceRegistry.subscribeDevices(
+      [this](const input::InputDeviceSnapshot &device) {
+        if (!device.connected && inputBindingAdapter_) {
+          inputBindingAdapter_->disconnectDevice(device.stableId);
+        }
+      });
+}
+
+void MusicSelectScene::stopInputListening() {
+  if (inputSubscription_ != 0) {
+    context.inputDeviceRegistry.unsubscribe(inputSubscription_);
+    inputSubscription_ = 0;
+  }
+  if (inputDeviceSubscription_ != 0) {
+    context.inputDeviceRegistry.unsubscribe(inputDeviceSubscription_);
+    inputDeviceSubscription_ = 0;
+  }
+  if (inputBindingAdapter_) inputBindingAdapter_->reset();
+  inputBindingAdapter_.reset();
+}
+
+void MusicSelectScene::applyInputAction(
+    const MusicSelectInputAction &action) {
+  bool saveSettings = false;
+  switch (action.kind) {
+  case MusicSelectInputActionKind::Event:
+    executeEvent({.kind = skin::MusicSelectSkinActionKind::Event,
+                  .selector = {.value = action.value},
+                  .arguments = {action.argument1, action.argument2}});
+    break;
+  case MusicSelectInputActionKind::SetPanel:
+    panelState_ = action.value;
+    break;
+  case MusicSelectInputActionKind::MoveNext:
+    bars_.move(true, unixMillis(), kBarMoveMillis);
+    break;
+  case MusicSelectInputActionKind::MovePrevious:
+    bars_.move(false, unixMillis(), kBarMoveMillis);
+    break;
+  case MusicSelectInputActionKind::Play:
+    launchSelected();
+    break;
+  case MusicSelectInputActionKind::Practice:
+    launchSelected(false, true);
+    break;
+  case MusicSelectInputActionKind::Autoplay:
+    launchSelected(true, false);
+    break;
+  case MusicSelectInputActionKind::OpenFolder:
+    (void)bars_.openSelected();
+    break;
+  case MusicSelectInputActionKind::CloseFolder:
+    closeDirectory();
+    break;
+  case MusicSelectInputActionKind::ToggleCustomJudge:
+    context.settings.customJudge = !context.settings.customJudge;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ToggleConstant:
+    context.settings.scrollMode = context.settings.scrollMode == 1 ? 0 : 1;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ToggleShowJudgeArea:
+    context.settings.showJudgeArea = !context.settings.showJudgeArea;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ToggleLegacyNote:
+    context.settings.longNoteModifierMode =
+        context.settings.longNoteModifierMode == 1 ? 0 : 1;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ToggleMarkProcessedNote:
+    context.settings.markProcessedNotes = !context.settings.markProcessedNotes;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ToggleBpmGuide:
+    context.settings.selectedAssistOption =
+        assist_options::isBpmGuide(context.settings.selectedAssistOption)
+            ? assist_options::kOff
+            : assist_options::kBpmGuide;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ToggleNoMine:
+    context.settings.mineMode = context.settings.mineMode == 1 ? 0 : 1;
+    saveSettings = true;
+    break;
+  case MusicSelectInputActionKind::ExitApplication:
+    context.quitFlag.store(true);
+    break;
+  default:
+    break;
+  }
+  if (saveSettings && !context.saveSettings()) {
+    SDL_Log("Unable to save music-select input option change");
+  }
+}
+
 void MusicSelectScene::executeEvent(
     const skin::MusicSelectSkinAction &action) {
   const auto id = numericSelector(action.selector);
@@ -446,6 +622,7 @@ void MusicSelectScene::update(float) {
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_) {
     reloadLibrary();
   }
+  consumeLogicalInput();
   consumeActions();
 }
 
@@ -471,6 +648,7 @@ void MusicSelectScene::enterError(
     std::vector<skin::SkinDiagnostic> diagnostics) {
   if (failed_) return;
   failed_ = true;
+  stopInputListening();
   diagnostics_ = std::move(diagnostics);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
@@ -565,6 +743,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  stopInputListening();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
 #endif

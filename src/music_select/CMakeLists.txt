@@ -3,4 +3,6 @@ target_sources(main PRIVATE
     MusicSelectRepositoryProjection.cpp
     MusicSelectBarManager.cpp
     MusicSelectPropertyProjection.cpp
+    MusicSelectInputProcessor.cpp
+    MusicSelectInputBindingAdapter.cpp
 )
