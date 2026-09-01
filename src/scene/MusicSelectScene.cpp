@@ -45,6 +45,8 @@
 
 namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr std::int64_t kRankingDurationMillis = 5'000;
+constexpr std::int64_t kRankingReloadDurationMillis = 10 * 60 * 1'000;
 
 std::int64_t unixMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -329,6 +331,114 @@ void MusicSelectScene::selectedBarMoved() {
                 &snapshot.rows[snapshot.selectedIndex])
           : -1;
   songBarChangeMicros_ = elapsedMicros();
+
+  if (rankingGeneration_ != 0 && context.irRankingService) {
+    context.irRankingService->close(rankingGeneration_);
+  }
+  rankingGeneration_ = 0;
+  rankingRevision_ = 0;
+  rankingRequest_.reset();
+  rankingCacheKey_.clear();
+  rankingLoadAtMicros_ = -1;
+  setRanking({});
+
+  irAccountEvidenceRevision_ =
+      context.irAccountEvidenceRevision.load(std::memory_order_acquire);
+  if (!context.irRankingService || context.irAccountNameSnapshot().empty() ||
+      snapshot.selectedIndex >= snapshot.rows.size()) {
+    return;
+  }
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+
+  const auto provider = std::ranges::find_if(
+      context.settings.irProviders, [&](const auto &entry) {
+        return entry.second.enabled && context.irDrivers.find(entry.first);
+      });
+  if (provider == context.settings.irProviders.end()) return;
+
+  const auto &meta = selected.chart->meta;
+  rankingRequest_ = ir::IrRankingRequest{
+      .profileId = context.profileManager.activeProfile().id,
+      .providerId = provider->first,
+      .serverOrigin = provider->second.serverOrigin,
+      .chart = {.keyMode = meta.KeyMode,
+                .chartMd5 = meta.MD5,
+                .chartSha256 = meta.SHA256,
+                .totalNotes = meta.TotalNotes},
+  };
+  rankingCacheKey_ = rankingRequest_->profileId + "\n" +
+                     rankingRequest_->providerId + "\n" +
+                     rankingRequest_->serverOrigin + "\n" +
+                     std::to_string(meta.KeyMode) + "\n" + meta.SHA256 +
+                     "\n" + std::to_string(meta.TotalNotes);
+
+  std::int64_t delayMillis = kRankingDurationMillis;
+  if (const auto cached = rankingCache_.find(rankingCacheKey_);
+      cached != rankingCache_.end()) {
+    setRanking(cached->second.snapshot);
+    delayMillis += std::max<std::int64_t>(
+        kRankingReloadDurationMillis -
+            (unixMillis() - cached->second.updatedUnixMillis),
+        0);
+  }
+  rankingLoadAtMicros_ =
+      songBarChangeMicros_ + delayMillis * 1'000;
+}
+
+void MusicSelectScene::setRanking(MusicSelectRankingSnapshot next) {
+  if (ranking_.state != next.state) {
+    rankingTimerMicros_.fill(std::nullopt);
+    int timer = -1;
+    switch (next.state) {
+    case MusicSelectRankingState::Access: timer = 0; break;
+    case MusicSelectRankingState::Finish: timer = 1; break;
+    case MusicSelectRankingState::Fail: timer = 2; break;
+    case MusicSelectRankingState::None: break;
+    }
+    if (timer >= 0) {
+      rankingTimerMicros_[static_cast<std::size_t>(timer)] = elapsedMicros();
+    }
+  }
+  ranking_ = std::move(next);
+}
+
+void MusicSelectScene::updateRanking() {
+  if (!context.irRankingService || !rankingRequest_) return;
+  const auto now = elapsedMicros();
+  if (rankingLoadAtMicros_ != -1 && now > rankingLoadAtMicros_) {
+    rankingLoadAtMicros_ = -1;
+    rankingGeneration_ = context.irRankingService->open(*rankingRequest_);
+    rankingRevision_ = 0;
+  }
+  if (rankingGeneration_ == 0) return;
+
+  auto service = context.irRankingService->snapshot();
+  if (service.generation != rankingGeneration_ ||
+      service.revision == rankingRevision_) {
+    return;
+  }
+  rankingRevision_ = service.revision;
+  if (service.state == ir::IrRankingSnapshotState::Succeeded &&
+      service.ranking && service.ranking->nextPageToken &&
+      !service.loadingNextPage && !service.paginationBlocked) {
+    if (context.irRankingService->loadNextPage(rankingGeneration_)) {
+      service = context.irRankingService->snapshot();
+      rankingRevision_ = service.revision;
+    }
+  }
+
+  auto projected = projectMusicSelectRanking(service, rankingOffset_);
+  projected.pendingDurationMillis = -1;
+  setRanking(std::move(projected));
+  if (ranking_.state == MusicSelectRankingState::Finish ||
+      ranking_.state == MusicSelectRankingState::Fail) {
+    rankingCache_[rankingCacheKey_] = {
+        .snapshot = ranking_, .updatedUnixMillis = unixMillis()};
+  }
 }
 
 void MusicSelectScene::setPanelState(int next) {
@@ -383,6 +493,18 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   propertyRuntime.targetName = context.settings.skinTargetId == "MAX"
                                    ? "MAX"
                                    : std::string{};
+  propertyRuntime.irName = context.settings.irProviders.empty()
+                               ? std::string{}
+                               : context.settings.irProviders.begin()->first;
+  propertyRuntime.irUserName = context.irAccountNameSnapshot();
+  propertyRuntime.irOnline = !propertyRuntime.irUserName.empty();
+  propertyRuntime.ranking = ranking_;
+  if (rankingLoadAtMicros_ != -1) {
+    propertyRuntime.ranking.pendingDurationMillis =
+        (rankingLoadAtMicros_ - elapsedMicros()) / 1'000;
+  } else {
+    propertyRuntime.ranking.pendingDurationMillis = -1;
+  }
   propertyRuntime.playerHistory = playerHistory_;
   frame.properties =
       projectMusicSelectProperties(context.settings, snapshot, propertyRuntime);
@@ -396,6 +518,12 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
     if (panelOffMicros_[index]) {
       frame.properties.timers[31 + static_cast<int>(index)] =
           *panelOffMicros_[index];
+    }
+  }
+  for (std::size_t index = 0; index < rankingTimerMicros_.size(); ++index) {
+    if (rankingTimerMicros_[index]) {
+      frame.properties.timers[172 + static_cast<int>(index)] =
+          *rankingTimerMicros_[index];
     }
   }
 
@@ -868,8 +996,13 @@ void MusicSelectScene::consumeActions() {
       const auto id = numericSelector(action.selector);
       const auto name = selectorName(action.selector);
       if ((id && *id == 1) || name == "musicselect_position") {
-        selectedBarMoved();
         bars_.setSelectedPosition(static_cast<float>(action.floatValue));
+        selectedBarMoved();
+      } else if (((id && *id == 8) || name == "ranking_position") &&
+                 action.floatValue >= 0.0 && action.floatValue < 1.0) {
+        rankingOffset_ = static_cast<int>(
+            std::max(1, ranking_.totalPlayers) * action.floatValue);
+        ranking_.offset = rankingOffset_;
       }
       break;
     }
@@ -1255,6 +1388,11 @@ void MusicSelectScene::update(float) {
     reloadLibrary();
     selectedBarMoved();
   }
+  const auto irEvidenceRevision =
+      context.irAccountEvidenceRevision.load(std::memory_order_acquire);
+  if (irEvidenceRevision != irAccountEvidenceRevision_) {
+    selectedBarMoved();
+  }
   if (!startInputMicros_) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     const int inputMillis = skinSession_ ? skinSession_->inputDelayMillis() : 0;
@@ -1268,6 +1406,7 @@ void MusicSelectScene::update(float) {
   }
   consumeLogicalInput();
   consumeActions();
+  updateRanking();
 }
 
 void MusicSelectScene::renderScene() {
@@ -1391,6 +1530,10 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 void MusicSelectScene::cleanupScene() {
   if (searchInput_ != nullptr) searchInput_->endEditing();
   stopInputListening();
+  if (rankingGeneration_ != 0 && context.irRankingService) {
+    context.irRankingService->close(rankingGeneration_);
+  }
+  rankingGeneration_ = 0;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
 #endif

@@ -327,7 +327,11 @@ void testProjectsDirectoryAndFinishedRanking() {
   runtime.ranking.state = MusicSelectRankingState::Finish;
   runtime.ranking.rank = 12;
   runtime.ranking.totalPlayers = 34;
+  runtime.ranking.offset = 1;
+  runtime.ranking.pendingDurationMillis = 4'200;
   runtime.ranking.clearCounts = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
+  runtime.ranking.entries.push_back(
+      {.name = "Hidden", .score = 1, .rank = 2});
   runtime.ranking.entries.push_back(
       {.name = "Top", .score = 999, .rank = 1});
 
@@ -342,10 +346,13 @@ void testProjectsDirectoryAndFinishedRanking() {
               !values.booleans.at(603) && !values.booleans.at(604) &&
               values.integers.at(179) == 12 &&
               values.integers.at(180) == 34 &&
+              values.integers.at(220) == 5 &&
               values.integers.at(380) == 999 &&
               values.integers.at(390) == 1 &&
               values.strings.at(120) == "Top",
           "finished RankingData projects selector IR state and first row");
+  require(values.rates.at(8) == 1.0 / 34.0,
+          "ranking position divides the offset by the remote total player count");
 }
 
 } // namespace

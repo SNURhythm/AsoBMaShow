@@ -62,6 +62,7 @@ struct IrChartRankingEntry {
 struct IrChartRanking {
   std::string providerId;
   IrChartQuery chart;
+  int totalPlayers = 0;
   std::vector<IrChartRankingEntry> entries;
   std::optional<std::string> nextPageToken;
   std::int64_t fetchedAtUnixMillis = 0;

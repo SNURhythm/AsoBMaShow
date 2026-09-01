@@ -6,6 +6,7 @@ target_sources(main PRIVATE
     MusicSelectSearchHistory.cpp
     MusicSelectBarManager.cpp
     MusicSelectPropertyProjection.cpp
+    MusicSelectRanking.cpp
     MusicSelectInputProcessor.cpp
     MusicSelectInputBindingAdapter.cpp
     MusicSelectEventController.cpp

@@ -332,10 +332,10 @@ void testFetchCacheExpiryAndRefresh() {
          "fresh cache is reused by normalized origin with the new comparison "
          "snapshot");
 
-  harness.nowMillis += 5 * 60 * 1000 - 1;
+  harness.nowMillis += 10 * 60 * 1000 - 1;
   harness.openAndWait(request());
   expect(driver->calls().size() == 1,
-         "ranking cache remains fresh until five minutes");
+         "ranking cache remains fresh until ten minutes");
 
   harness.nowMillis += 1;
   driver->push({.outcome = FakeRankingDriver::success("fake", request().chart,
@@ -344,7 +344,7 @@ void testFetchCacheExpiryAndRefresh() {
   expect(driver->calls().size() == 2 &&
              harness.service->snapshot().ranking->entries.front().playerName ==
                  "expired",
-         "five-minute expiry performs another fetch");
+         "ten-minute expiry performs another fetch");
 
   driver->push({.outcome = FakeRankingDriver::success("fake", request().chart,
                                                       "refreshed")});
@@ -778,7 +778,7 @@ void testPauseRejectsStalePagination() {
 } // namespace
 
 int main() {
-  static_assert(ir::kIrRankingCacheTtl == std::chrono::minutes(5));
+  static_assert(ir::kIrRankingCacheTtl == std::chrono::minutes(10));
   testFetchCacheExpiryAndRefresh();
   testFailuresAreNotCachedAndMissingCredentialCallsDriver();
   testLatestRequestCloseAndLateCompletion();

@@ -542,7 +542,8 @@ fetchNativeRankingPage(const IrChartQuery &query, std::string_view origin,
     }
     return {.status = ChartRankingStatus::Succeeded,
             .ranking = IrChartRanking{.providerId = std::string(kProviderId),
-                                      .chart = query}};
+                                      .chart = query,
+                                      .totalPlayers = 0}};
   }
   if (page.page->entries.front().rank < startRanking ||
       (expectedOutOf && page.page->outOf != *expectedOutOf)) {
@@ -558,6 +559,7 @@ fetchNativeRankingPage(const IrChartQuery &query, std::string_view origin,
 
   IrChartRanking ranking{.providerId = std::string(kProviderId),
                          .chart = query,
+                         .totalPlayers = page.page->outOf,
                          .entries = std::move(page.page->entries)};
   if (newLoadedEntries < page.page->outOf) {
     const int nextStart = ranking.entries.back().rank + 1;

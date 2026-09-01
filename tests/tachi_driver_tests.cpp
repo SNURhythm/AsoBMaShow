@@ -1304,6 +1304,7 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
   auto result =
       driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->totalPlayers == 3 &&
              result.ranking->entries.size() == 2 &&
              result.ranking->nextPageToken.has_value(),
          "native ranking returns the first page and a continuation cursor");
@@ -1325,6 +1326,7 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
   result = driver.fetchChartRankingPage(rankingQuery(), cursor, runtimeConfig(),
                                         http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->totalPlayers == 3 &&
              result.ranking->entries.size() == 1 &&
              !result.ranking->nextPageToken.has_value(),
          "the final native page clears the continuation cursor");

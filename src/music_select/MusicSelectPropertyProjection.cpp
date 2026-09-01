@@ -258,6 +258,10 @@ void projectRanking(Properties &out,
   // BooleanPropertyFactory.ir_busy uses FAIL in the pinned source as written.
   out.booleans[608] = ranking.state == MusicSelectRankingState::Fail;
   out.booleans[606] = ranking.state == MusicSelectRankingState::None;
+  if (ranking.pendingDurationMillis > 0) {
+    out.integers[220] =
+        static_cast<int>(ranking.pendingDurationMillis / 1'000 + 1);
+  }
 
   if (ranking.state != MusicSelectRankingState::Finish) return;
   out.integers[179] = ranking.rank;
@@ -517,10 +521,8 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
                      ? 0.0
                      : static_cast<double>(bars.selectedIndex) /
                            static_cast<double>(bars.rows.size());
-  out.rates[8] = runtime.ranking.entries.empty()
-                     ? 0.0
-                     : static_cast<double>(runtime.ranking.offset) /
-                           static_cast<double>(runtime.ranking.entries.size());
+  out.rates[8] = static_cast<double>(runtime.ranking.offset) /
+                 std::max(1, runtime.ranking.totalPlayers);
   out.strings[1] = runtime.rivalName;
   out.strings[2] = runtime.playerName;
   out.strings[3] = runtime.targetName;

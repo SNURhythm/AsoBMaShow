@@ -6,7 +6,9 @@
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
+#include "../music_select/MusicSelectRanking.h"
 #include "../music_select/MusicSelectSearchHistory.h"
+#include "../ir/IrRankingModels.h"
 #include "../repositories/ScoreRepositoryModels.h"
 #include "../skin/GameplaySkinActivationRequest.h"
 
@@ -16,6 +18,7 @@
 
 #include <chrono>
 #include <array>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -43,6 +46,8 @@ private:
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
   void selectedBarMoved();
+  void updateRanking();
+  void setRanking(MusicSelectRankingSnapshot);
   void setPanelState(int);
   skin::MusicSelectSkinFrame makeFrame() const;
   void consumeActions();
@@ -88,6 +93,20 @@ private:
   int selectedReplay_ = -1;
   int currentRivalIndex_ = -1;
   std::int64_t songBarChangeMicros_ = 0;
+  struct CachedRanking {
+    MusicSelectRankingSnapshot snapshot;
+    std::int64_t updatedUnixMillis = 0;
+  };
+  MusicSelectRankingSnapshot ranking_;
+  std::optional<ir::IrRankingRequest> rankingRequest_;
+  std::map<std::string, CachedRanking, std::less<>> rankingCache_;
+  std::string rankingCacheKey_;
+  std::uint64_t rankingGeneration_ = 0;
+  std::uint64_t rankingRevision_ = 0;
+  std::uint64_t irAccountEvidenceRevision_ = 0;
+  std::int64_t rankingLoadAtMicros_ = -1;
+  int rankingOffset_ = 0;
+  std::array<std::optional<std::int64_t>, 3> rankingTimerMicros_{};
   std::optional<std::int64_t> startInputMicros_;
   std::array<std::optional<std::int64_t>, 6> panelOnMicros_{};
   std::array<std::optional<std::int64_t>, 6> panelOffMicros_{};
