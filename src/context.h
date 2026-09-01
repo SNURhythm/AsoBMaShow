@@ -21,6 +21,7 @@
 #include <SDL2/SDL.h>
 #include "AppSettings.h"
 #include "AppSettingsStore.h"
+#include "ApplicationUiStateStore.h"
 #include "PlatformDocumentHandoff.h"
 #include "PlayerProfileManager.h"
 #include "ProfileSettingsPersistenceCoordinator.h"
@@ -155,6 +156,9 @@ public:
   std::atomic<std::int64_t> applicationUptimeMillis{0};
   std::atomic<int> currentFramesPerSecond{0};
   std::filesystem::path applicationDataRoot;
+  ApplicationUiStateLoadResult applicationUiStateLoadResult;
+  ApplicationUiState applicationUiState;
+  std::mutex applicationUiStateMutex;
   ir::PendingIrCredentialCleanup pendingIrCredentialCleanup;
   PlayerProfileManager profileManager;
   ProfileResult profileInitializationResult;
@@ -525,6 +529,9 @@ public:
 
   ApplicationContext()
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
+        applicationUiStateLoadResult(ApplicationUiStateStore::Load(
+            applicationUiStatePath(applicationDataRoot))),
+        applicationUiState(applicationUiStateLoadResult.state),
         pendingIrCredentialCleanup(applicationDataRoot),
         profileManager(applicationDataRoot),
         profileInitializationResult(profileManager.Initialize()),
@@ -1370,6 +1377,17 @@ public:
       *errorMessage = std::move(error);
     }
     return false;
+  }
+
+  bool saveApplicationUiState(std::string *diagnostic = nullptr) {
+    std::lock_guard lock(applicationUiStateMutex);
+    std::string error;
+    const bool saved = ApplicationUiStateStore::SaveAtomic(
+        applicationUiStatePath(applicationDataRoot), applicationUiState, error);
+    if (diagnostic != nullptr) {
+      *diagnostic = std::move(error);
+    }
+    return saved;
   }
 
   bool saveSettingsCandidate(AppSettings candidate, std::string &error) {

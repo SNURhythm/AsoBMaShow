@@ -4747,6 +4747,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     target_link_libraries(app_settings_store_tests PRIVATE utf8proc::utf8proc)
 
+    add_executable(application_ui_state_store_tests
+        tests/application_ui_state_store_tests.cpp
+        src/ApplicationUiState.cpp
+        src/ApplicationUiStateStore.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(application_ui_state_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(application_ui_state_store_tests PRIVATE cxx_std_23)
+
     add_executable(profile_settings_persistence_tests
         tests/profile_settings_persistence_tests.cpp
         src/CourseIdentity.cpp
