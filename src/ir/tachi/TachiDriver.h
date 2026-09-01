@@ -48,6 +48,10 @@ public:
   fetchAuthenticatedAccount(const IrProviderRuntimeConfig &config,
                             IrHttpClient &http,
                             std::stop_token stopToken) const override;
+  [[nodiscard]] std::optional<std::string>
+  chartExternalUrl(const IrChartExternalUrlRequest &request,
+                   const IrProviderRuntimeConfig &config, IrHttpClient &http,
+                   std::stop_token stopToken) const override;
   [[nodiscard]] IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(const IrProviderRuntimeConfig &config,
                          IrHttpClient &http, std::stop_token stopToken,

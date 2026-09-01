@@ -1164,6 +1164,51 @@ void MusicSelectScene::executeEvent(
         }
       }
       break;
+    case MusicSelectEventEffectKind::OpenIr:
+      if (selected != nullptr && context.irHttpClient) {
+        const std::string profileId = context.profileManager.activeProfile().id;
+        for (const auto &[providerId, provider] :
+             context.settings.irProviders) {
+          if (!provider.enabled) continue;
+          const std::string apiKey =
+              context.lookupActiveIrCredential(profileId, providerId);
+          if (apiKey.empty()) continue;
+          const ir::IrProviderRuntimeConfig runtime{
+              .profileId = profileId,
+              .serverOrigin = provider.serverOrigin,
+              .apiKey = apiKey,
+          };
+          const auto account = context.irDrivers.fetchAuthenticatedAccount(
+              providerId, runtime, *context.irHttpClient, {});
+          if (account.status != ir::IrAuthenticatedAccountStatus::Succeeded ||
+              !account.account) {
+            continue;
+          }
+          std::optional<std::string> url;
+          if (selected->kind == skin::MusicSelectBarKind::Song &&
+              selected->chart) {
+            const auto &meta = selected->chart->meta;
+            url = context.irDrivers.chartExternalUrl(
+                providerId,
+                {.keyMode = meta.KeyMode,
+                 .isDoublePlay = meta.IsDP,
+                 .chartSha256 = meta.SHA256},
+                runtime, *context.irHttpClient, {});
+          } else if (selected->kind == skin::MusicSelectBarKind::Grade) {
+            url = context.irDrivers.courseExternalUrl(
+                providerId, {}, runtime, *context.irHttpClient, {});
+          }
+          if (url) {
+            std::string error;
+            if (!platform_open::openExternalUrl(*url, error)) {
+              SDL_Log("Failed to open selector IR URL %s: %s", url->c_str(),
+                      error.c_str());
+            }
+          }
+          break;
+        }
+      }
+      break;
     case MusicSelectEventEffectKind::UpdateFolder: {
       std::filesystem::path path;
       if (selected != nullptr &&
