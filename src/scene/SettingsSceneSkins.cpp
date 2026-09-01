@@ -890,6 +890,36 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                                        : std::string{},
       metrics.smallTextSize, ui_theme::textSecondary());
   overview->addView(gameplaySkinUiMessageText);
+  MusicSelectToolbarMode toolbarMode;
+  {
+    std::lock_guard lock(context.applicationUiStateMutex);
+    toolbarMode = context.applicationUiState.musicSelectToolbar.mode;
+  }
+  const auto setToolbarHidden = [this](bool hidden) {
+    {
+      std::lock_guard lock(context.applicationUiStateMutex);
+      context.applicationUiState.musicSelectToolbar.mode =
+          hidden ? MusicSelectToolbarMode::Hidden
+                 : MusicSelectToolbarMode::Expanded;
+    }
+    std::string diagnostic;
+    if (!context.saveApplicationUiState(&diagnostic)) {
+      gameplaySkinUiMessage = diagnostic.empty()
+                                  ? "Toolbar visibility could not be saved."
+                                  : diagnostic;
+      if (gameplaySkinUiMessageText != nullptr) {
+        gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+      }
+    }
+  };
+  overview->addView(makeGameplaySkinChoiceRow(
+      metrics, "Music Select toolbar", true,
+      {{.label = "Visible",
+        .selected = toolbarMode != MusicSelectToolbarMode::Hidden,
+        .action = [setToolbarHidden] { setToolbarHidden(false); }},
+       {.label = "Hidden",
+        .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
+        .action = [setToolbarHidden] { setToolbarHidden(true); }}}));
   auto *safetyRow = new View();
   safetyRow->setFlexDirection(FlexDirection::Row);
   safetyRow->setFlexWrap(YGWrapWrap);

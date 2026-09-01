@@ -5,6 +5,7 @@ target_sources(main PRIVATE
     FindBmsProgressPresentation.cpp
     IrUploadsController.cpp
     IrUploadsScene.cpp
+    LibraryTasksScene.cpp
     PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuScene.cpp
