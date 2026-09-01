@@ -141,7 +141,8 @@ def _java_major(java):
         text=True,
     )
     version = re.search(
-        r'version "(?:1\.)?(\d+)', result.stderr + result.stdout
+        r'(?:version "|javac\s+)(?:1\.)?(\d+)',
+        result.stderr + result.stdout,
     )
     return int(version.group(1)) if version else None
 
@@ -186,8 +187,14 @@ def _java_17_tools():
         javac = home / "bin" / f"javac{executable_suffix}"
         if not java.is_file() or not javac.is_file():
             continue
-        if _java_major(java) == TARGET_JAVA_MAJOR:
-            return java, javac
+        try:
+            if (
+                _java_major(java) == TARGET_JAVA_MAJOR
+                and _java_major(javac) == TARGET_JAVA_MAJOR
+            ):
+                return java, javac
+        except (OSError, subprocess.CalledProcessError):
+            continue
     raise RuntimeError(
         "Java 17 is required for the Beatoraja Pattern oracle; set "
         "ASOBMASHOW_JAVA_17_HOME to a JDK 17 installation"
@@ -222,6 +229,11 @@ public final class LuaSkinJavaPatternOracle {
 
 
 class LuaSkinJavaPatternOracleTests(unittest.TestCase):
+    def test_java_oracle_uses_a_consistent_java_17_toolchain(self):
+        java, javac = _java_17_tools()
+        self.assertEqual(_java_major(java), TARGET_JAVA_MAJOR)
+        self.assertEqual(_java_major(javac), TARGET_JAVA_MAJOR)
+
     def test_native_matcher_bounds_group_depth_before_adaptation(self):
         if NATIVE_EXECUTABLE is None:
             self.fail("native matcher executable argument is required")
