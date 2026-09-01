@@ -235,7 +235,7 @@ struct MusicSelectInputAction {
 };
 ```
 
-- [ ] **Step 1: Write exhaustive key-matrix and priority tests**
+- [x] **Step 1: Write exhaustive key-matrix and priority tests**
 
 Copy the three assignment matrices from `MusicSelectKeyProperty` as literal
 fixtures. Cover non-analog versus analog reads, reset-state consumption,
@@ -244,26 +244,26 @@ wheel/analog accumulation, duration acceleration after 50 repeats, ordinary
 bar input, play/practice/autoplay/replay, folder open/close, all `KeyCommand`
 branches, NUM0-9 branches, post-selection timer ordering, and ESC app exit.
 
-- [ ] **Step 2: Run and observe the missing processor failure**
+- [x] **Step 2: Run and observe the missing processor failure**
 
 Run: `cmake --build cmake-build-debug --target music_select_input_processor_tests -j 6`
 
 Expected: compilation fails because the processor is absent.
 
-- [ ] **Step 3: Implement the pinned processor in source order**
+- [x] **Step 3: Implement the pinned processor in source order**
 
 Evaluate branches in the same order as `MusicSelectInputProcessor.input` and
 emit actions in that order. Route SDL/controller/touch state through the
 existing logical input layer before this class. ESC emits `ExitApplication`;
 it never emits an Intro or native-selector transition.
 
-- [ ] **Step 4: Prove stateful repeat behavior**
+- [x] **Step 4: Prove stateful repeat behavior**
 
 Use a fake monotonic clock and consecutive snapshots to assert `duration`,
 `angle`, analog remainder, option pressed/released state, and duration-change
 counter transitions. No wall-clock sleeps are allowed in the tests.
 
-- [ ] **Step 5: Run and commit input behavior**
+- [x] **Step 5: Run and commit input behavior**
 
 Run: `cmake --build cmake-build-debug --target music_select_input_processor_tests -j 6 && ./cmake-build-debug/music_select_input_processor_tests`
 

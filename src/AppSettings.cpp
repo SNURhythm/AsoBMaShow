@@ -576,6 +576,13 @@ void AppSettings::sanitize() {
   boundedSkinString(skinDifficultyFilterName, "ALL");
   boundedSkinString(skinChartReplicationMode, "RIVALCHART");
   boundedSkinString(skinTargetId, "MAX");
+  skinMusicSelectInput = std::clamp(skinMusicSelectInput, 0, 2);
+  skinMusicSelectScrollDurationLow =
+      std::clamp(skinMusicSelectScrollDurationLow, 2, 1000);
+  skinMusicSelectScrollDurationHigh =
+      std::clamp(skinMusicSelectScrollDurationHigh, 1, 1000);
+  skinMusicSelectAnalogTicksPerScroll =
+      std::clamp(skinMusicSelectAnalogTicksPerScroll, 1, 1000);
   std::vector<std::string> boundedTargetList;
   boundedTargetList.reserve(
       std::min(skinTargetList.size(), kMaximumSkinTargetListEntries));

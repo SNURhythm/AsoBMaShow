@@ -12,6 +12,8 @@ from tests import beatoraja_music_select_skin_ledger_tests as ledger
 
 TEST_RUNNERS = {
     "tests/gameplay_skin_traits_tests.cpp": "gameplay_skin_traits_tests",
+    "tests/music_select_input_processor_tests.cpp":
+        "music_select_input_processor_tests",
 }
 
 

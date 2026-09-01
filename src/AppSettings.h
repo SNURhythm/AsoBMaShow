@@ -250,6 +250,13 @@ public:
   std::string skinSortId = "TITLE";
   std::string skinDifficultyFilterName = "ALL";
   std::string skinChartReplicationMode = "RIVALCHART";
+  // PlayerConfig.musicselectinput and Config's selector-scroll fields from
+  // the pinned Beatoraja source. The input layout is independent of the
+  // highlighted chart's mode.
+  int skinMusicSelectInput = 0;
+  int skinMusicSelectScrollDurationLow = 300;
+  int skinMusicSelectScrollDurationHigh = 50;
+  int skinMusicSelectAnalogTicksPerScroll = 3;
   // Raw PlayerConfig.targetid and targetlist. TargetProperty performs target
   // lookup only when StringPropertyFactory asks for a neighbouring label, so
   // these remain independent from Aso's selectable pacemaker targets.

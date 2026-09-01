@@ -594,6 +594,13 @@ json settingsToJson(const AppSettings &settings) {
       {"skinSortId", settings.skinSortId},
       {"skinDifficultyFilterName", settings.skinDifficultyFilterName},
       {"skinChartReplicationMode", settings.skinChartReplicationMode},
+      {"skinMusicSelectInput", settings.skinMusicSelectInput},
+      {"skinMusicSelectScrollDurationLow",
+       settings.skinMusicSelectScrollDurationLow},
+      {"skinMusicSelectScrollDurationHigh",
+       settings.skinMusicSelectScrollDurationHigh},
+      {"skinMusicSelectAnalogTicksPerScroll",
+       settings.skinMusicSelectAnalogTicksPerScroll},
       {"skinTargetId", settings.skinTargetId},
       {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
@@ -792,6 +799,14 @@ AppSettings settingsFromJson(const json &document,
                         settings.skinDifficultyFilterName, diagnostics);
   readBoundedSkinString(document, "skinChartReplicationMode",
                         settings.skinChartReplicationMode, diagnostics);
+  readValue(document, "skinMusicSelectInput", settings.skinMusicSelectInput,
+            diagnostics);
+  readValue(document, "skinMusicSelectScrollDurationLow",
+            settings.skinMusicSelectScrollDurationLow, diagnostics);
+  readValue(document, "skinMusicSelectScrollDurationHigh",
+            settings.skinMusicSelectScrollDurationHigh, diagnostics);
+  readValue(document, "skinMusicSelectAnalogTicksPerScroll",
+            settings.skinMusicSelectAnalogTicksPerScroll, diagnostics);
   readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,
                         diagnostics);
   readBoundedSkinTargetList(document, settings.skinTargetList, diagnostics);

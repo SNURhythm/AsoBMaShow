@@ -423,6 +423,57 @@ void testPlayerConfigurationSkinStringsRoundTrip() {
          "PlayerConfig string values survive settings persistence verbatim");
 }
 
+void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "music-select-input.json";
+  AppSettings defaults;
+  expect(defaults.skinMusicSelectInput == 0 &&
+             defaults.skinMusicSelectScrollDurationLow == 300 &&
+             defaults.skinMusicSelectScrollDurationHigh == 50 &&
+             defaults.skinMusicSelectAnalogTicksPerScroll == 3,
+         "music-select input configuration uses Beatoraja defaults");
+
+  AppSettings configured;
+  configured.skinMusicSelectInput = 2;
+  configured.skinMusicSelectScrollDurationLow = 875;
+  configured.skinMusicSelectScrollDurationHigh = 125;
+  configured.skinMusicSelectAnalogTicksPerScroll = 19;
+  std::string error;
+  expect(AppSettingsStore::Save(path, configured, error),
+         "music-select input configuration saves: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinMusicSelectInput == 2 &&
+             loaded.settings.skinMusicSelectScrollDurationLow == 875 &&
+             loaded.settings.skinMusicSelectScrollDurationHigh == 125 &&
+             loaded.settings.skinMusicSelectAnalogTicksPerScroll == 19,
+         "music-select input configuration survives persistence");
+
+  AppSettings lower;
+  lower.skinMusicSelectInput = -1;
+  lower.skinMusicSelectScrollDurationLow = 1;
+  lower.skinMusicSelectScrollDurationHigh = 0;
+  lower.skinMusicSelectAnalogTicksPerScroll = 0;
+  lower.sanitize();
+  expect(lower.skinMusicSelectInput == 0 &&
+             lower.skinMusicSelectScrollDurationLow == 2 &&
+             lower.skinMusicSelectScrollDurationHigh == 1 &&
+             lower.skinMusicSelectAnalogTicksPerScroll == 1,
+         "music-select input configuration uses Beatoraja lower bounds");
+
+  AppSettings upper;
+  upper.skinMusicSelectInput = 3;
+  upper.skinMusicSelectScrollDurationLow = 1001;
+  upper.skinMusicSelectScrollDurationHigh = 1001;
+  upper.skinMusicSelectAnalogTicksPerScroll = 1001;
+  upper.sanitize();
+  expect(upper.skinMusicSelectInput == 2 &&
+             upper.skinMusicSelectScrollDurationLow == 1000 &&
+             upper.skinMusicSelectScrollDurationHigh == 1000 &&
+             upper.skinMusicSelectAnalogTicksPerScroll == 1000,
+         "music-select input configuration uses Beatoraja upper bounds");
+}
+
 void testConfiguredTargetListSkinStringsRoundTrip() {
   // The bridge must keep PlayerConfig.targetid and targetlist raw: source
   // TargetProperty performs lookup and fallback only when a skin asks.
@@ -1522,6 +1573,7 @@ int main() {
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
+  testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds();
   testConfiguredTargetListSkinStringsRoundTrip();
   testPlayerConfigurationSkinStringsAreBounded();
   testSkinTargetSelectionsSurviveRestart();

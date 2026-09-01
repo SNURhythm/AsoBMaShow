@@ -1353,6 +1353,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(music_select_input_processor_tests PRIVATE cxx_std_23)
 
+        add_executable(music_select_input_binding_adapter_tests
+            tests/music_select_input_binding_adapter_tests.cpp
+            src/music_select/MusicSelectInputBindingAdapter.cpp
+            src/input/InputBindingResolver.cpp
+        )
+        target_include_directories(music_select_input_binding_adapter_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_input_binding_adapter_tests PRIVATE cxx_std_23)
+
         if(APPLE)
             target_sources(lua_music_select_skin_decoder_tests PRIVATE
                 src/skin/package/SkinAliasDetectorApple.mm
@@ -7237,6 +7247,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_input_processor_tests)
         asobmashow_register_test(music_select_input_processor_tests)
+    endif()
+    if (TARGET music_select_input_binding_adapter_tests)
+        asobmashow_register_test(music_select_input_binding_adapter_tests)
     endif()
     if (TARGET lua_skin_gauge_live_integration_tests)
         asobmashow_register_test(lua_skin_gauge_live_integration_tests)

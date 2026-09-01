@@ -4432,9 +4432,12 @@
     },
     {
       "id": "select.behavior.music-select-input-processor.input-0",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-type5-compatibility-core.md",
-      "task": "Task 5: Music-select state bridge and session"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.behavior.music-select-input-processor.input-1",
@@ -4444,21 +4447,30 @@
     },
     {
       "id": "select.behavior.music-select-key-property.get-analog-change-2",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-type5-compatibility-core.md",
-      "task": "Task 5: Music-select state bridge and session"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.behavior.music-select-key-property.is-non-analog-pressed-3",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-type5-compatibility-core.md",
-      "task": "Task 5: Music-select state bridge and session"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.behavior.music-select-key-property.is-pressed-3",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-type5-compatibility-core.md",
-      "task": "Task 5: Music-select state bridge and session"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.behavior.music-select-skin.get-center-bar-0",
@@ -4894,9 +4906,12 @@
     },
     {
       "id": "select.constant.music-select-key-property.values",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-type5-compatibility-core.md",
-      "task": "Task 5: Music-select state bridge and session"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.constant.music-selector.all-mode",
@@ -4954,255 +4969,381 @@
     },
     {
       "id": "select.input.music-select-input-processor",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key-property.beat-14-k",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key-property.beat-7-k",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key-property.popn-9-k",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.auto",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.bga-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.bga-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.bpmguide",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.constant",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.duration-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.duration-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.folder-close",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.folder-open",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.gauge-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.gauge-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.gaugeautoshift-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.gaugeautoshift-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.hsfix-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.hsfix-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.judgearea",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.judgewindow-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.judgewindow-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.legacynote",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.marknote",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.next-replay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.nomine",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.notesdisplaytiming-autoadjust",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.notesdisplaytiming-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.notesdisplaytiming-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.option1-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.option1-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.option2-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.option2-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.optiondp-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.optiondp-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.play",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.practice",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.replay",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.target-down",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.target-up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.input.music-select-key.up",
-      "status": "missing",
-      "plan": "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md",
-      "task": "Task 3: Music-select input processor"
+      "status": "implemented",
+      "implementation": "src/music_select/MusicSelectInputProcessor.cpp; src/music_select/MusicSelectInputBindingAdapter.cpp",
+      "tests": "tests/music_select_input_processor_tests.cpp",
+      "assertion": {
+        "runner": "music_select_input_processor_tests"
+      }
     },
     {
       "id": "select.loader.json-select.get-skin-1",
