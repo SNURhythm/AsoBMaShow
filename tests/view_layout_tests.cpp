@@ -869,6 +869,8 @@ void testInputBindingEditorStaysInsidePaddedActionGroup() {
     expectNear(editor->getWidth(), layout.bindingEditorWidth,
                "binding editor inner width");
     for (const auto *control : editor->getChildren()) {
+      assert(YGNodeLayoutGetLeft(control->getNode()) + control->getWidth() <=
+             editor->getWidth() + 0.01F);
       assert(control->getX() + control->getWidth() <=
              editor->getX() + editor->getWidth() + 0.01F);
     }
