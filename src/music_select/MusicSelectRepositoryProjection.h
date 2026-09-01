@@ -44,6 +44,7 @@ struct MusicSelectRepositoryProjectionInput {
   std::function<int(std::string_view, int, int)> courseRankFor;
   const MusicSelectRepositoryMetadata *metadata = nullptr;
   std::span<const MusicSelectSearchSource> searches;
+  const RecentScoreImprovements *recentScoreImprovements = nullptr;
   std::string_view modeFilter = "ALL";
   int selectedLongNoteMode = 0;
   std::uint64_t repositoryRevision = 0;

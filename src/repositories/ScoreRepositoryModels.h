@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct TransparentStringHash {
@@ -87,6 +88,11 @@ struct PlayerScoreHistorySnapshot {
   int clearCount = 0;
   std::array<int, 5> judgementCounts{};
   std::int64_t playDurationSeconds = 0;
+};
+
+struct RecentScoreImprovements {
+  std::array<std::unordered_set<std::string>, 30> lamp;
+  std::array<std::unordered_set<std::string>, 30> score;
 };
 
 [[nodiscard]] inline bool scoreBestSnapshotIsBetter(

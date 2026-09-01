@@ -2509,6 +2509,39 @@ void testMusicSelectActivationCreatesAConfiguredOwningSession() {
          "plan, and owning music-select session");
 }
 
+void testMusicSelectPreparesEveryCurrentDirectoryTitle() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 95,
+  };
+  auto context = fixture.musicSelectContext();
+  for (int index = 0; index < 80; ++index) {
+    context.initialFrame.songList.bars.push_back(
+        {.title = "Directory title " + std::to_string(index)});
+  }
+  context.initialFrame.properties.strings[10] = "Directory title 0";
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  if (!created.session) {
+    expect(false, "music-select title prewarm fixture creates a session");
+    return;
+  }
+  MusicSelectSkinFrame moved;
+  moved.serial = 2;
+  for (int index = 0; index < 80; ++index) {
+    moved.songList.bars.push_back(
+        {.title = "Directory title " + std::to_string(index)});
+  }
+  moved.songList.selectedIndex = 70;
+  moved.properties.strings[10] = "Directory title 70";
+  expect(!created.session->requiresResourceRefresh(moved),
+         "moving beyond the visible song-list window reuses the atlas "
+         "prepared for every title in the current directory");
+}
+
 void testMusicSelectLuaSessionRejectsRecursiveCustomEvents() {
   ActivationFixture fixture(
       {.skinType = 5, .resultRecursiveEventExec = true});
@@ -6709,6 +6742,7 @@ int main(int argc, char **argv) {
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
+  testMusicSelectPreparesEveryCurrentDirectoryTitle();
   testMusicSelectLuaSessionRejectsRecursiveCustomEvents();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();

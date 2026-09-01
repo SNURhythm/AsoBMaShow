@@ -1,5 +1,6 @@
 #include "MusicSelectRepositoryProjection.h"
 
+#include "../BmsMetadataText.h"
 #include "../CourseConstraintUtils.h"
 #include "../path.h"
 #include "../scene/play/GameplayGaugeTypes.h"
@@ -212,21 +213,39 @@ struct ProjectionBuilder {
           .selectable = true,
           .sortable = true,
       };
+      const bool lamp = std::string_view(prefix) == "lamp-update";
       for (int day = 0; day < 30; ++day) {
         const std::string dayTitle =
             day == 0 ? "TODAY" : std::to_string(day) + "DAYS AGO";
         const MusicSelectBarId childId{
             std::string("command:") + prefix + ":" + std::to_string(day)};
         container.children.push_back(childId);
-        result.bars.push_back(
-            {.id = childId,
-             .kind = skin::MusicSelectBarKind::Command,
-             .title = dayTitle,
-             .presentation = {.kind = skin::MusicSelectBarKind::Command,
-                              .title = dayTitle,
-                              .exists = true},
-             .selectable = true,
-             .sortable = true});
+        MusicSelectBar child{
+            .id = childId,
+            .kind = skin::MusicSelectBarKind::Command,
+            .title = dayTitle,
+            .presentation = {.kind = skin::MusicSelectBarKind::Command,
+                             .title = dayTitle,
+                             .exists = true},
+            .selectable = true,
+            .sortable = true};
+        if (input.recentScoreImprovements != nullptr) {
+          const auto &hashes = lamp
+                                   ? input.recentScoreImprovements->lamp[day]
+                                   : input.recentScoreImprovements->score[day];
+          std::vector<ChartMetaRecord> records;
+          for (const auto &record : input.records) {
+            if (hashes.contains(
+                    asobmshow::bms_metadata::normalizedHash(
+                        record.meta.SHA256))) {
+              records.push_back(record);
+            }
+          }
+          child.children =
+              addElementSongs(records, child.id.value);
+          aggregate(child, records);
+        }
+        result.bars.push_back(std::move(child));
       }
       result.root.push_back(container.id);
       result.bars.push_back(std::move(container));

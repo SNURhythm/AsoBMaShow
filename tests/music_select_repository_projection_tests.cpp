@@ -268,6 +268,27 @@ void testProjectsSearchHistoryAfterCommands() {
           "SearchWordBar uses physical SongBar deduplication and reversal");
 }
 
+void testProjectsRecentScoreImprovementCommandChildren() {
+  std::vector<ChartMetaRecord> records{
+      chart("/songs/a.bms", "first", "First", "", "/songs"),
+      chart("/songs/b.bms", "second", "Second", "", "/songs")};
+  RecentScoreImprovements updates;
+  updates.lamp[0].insert("first");
+  updates.score[1].insert("second");
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = records, .recentScoreImprovements = &updates});
+  const auto *lamp = projection.find({"container:lamp-update"});
+  const auto *score = projection.find({"container:score-update"});
+  const auto *today = child(projection, lamp, 0);
+  const auto *yesterday = child(projection, score, 1);
+  require(today && today->children.size() == 1 &&
+              child(projection, today, 0)->title == "First" &&
+              yesterday && yesterday->children.size() == 1 &&
+              child(projection, yesterday, 0)->title == "Second",
+          "update CommandBars expose the charts whose lamp or score first "
+          "improved during the exact UTC day");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -275,6 +296,7 @@ int main(int argc, char **argv) {
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
   testProjectionOwnsItsRepositoryValues();
   testProjectsSearchHistoryAfterCommands();
+  testProjectsRecentScoreImprovementCommandChildren();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_repository_projection_tests", failures,
       "music-select repository projection assertion(s) failed",

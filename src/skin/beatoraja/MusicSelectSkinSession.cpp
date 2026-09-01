@@ -11,9 +11,12 @@
 #include "../../rendering/common.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <ranges>
+#include <set>
 #include <utility>
+#include <utf8proc.h>
 
 namespace skin {
 namespace {
@@ -39,9 +42,8 @@ void appendRuntimeString(std::vector<std::string> &strings,
   }
 }
 
-std::vector<std::string> musicSelectRuntimeStrings(
-    const ValidatedBeatorajaSkinModel &model,
-    const MusicSelectSkinFrame &frame) {
+std::vector<std::string>
+musicSelectRuntimeStrings(const MusicSelectSkinFrame &frame) {
   std::vector<std::string> strings;
   for (const auto &[_, value] : frame.properties.strings) {
     appendRuntimeString(strings, value);
@@ -49,21 +51,66 @@ std::vector<std::string> musicSelectRuntimeStrings(
   for (const auto &[_, value] : frame.properties.namedStrings) {
     appendRuntimeString(strings, value);
   }
-  const auto songList = std::ranges::find_if(
-      model.model.objects, [](const SkinObjectDefinition &object) {
-        return std::holds_alternative<SkinSongListObject>(object.payload);
-      });
-  if (songList != model.model.objects.end()) {
-    const auto plan = MusicSelectBarRenderer{}.plan(
-        std::get<SkinSongListObject>(songList->payload), frame.songList);
-    for (const auto &row : plan.rows) {
-      if (row.barIndex < frame.songList.bars.size()) {
-        appendRuntimeString(strings,
-                            frame.songList.bars[row.barIndex].title);
-      }
-    }
+  for (const auto &bar : frame.songList.bars) {
+    appendRuntimeString(strings, bar.title);
   }
   return strings;
+}
+
+std::vector<std::string>
+musicSelectRuntimeAtlasStrings(const MusicSelectSkinFrame &frame) {
+  constexpr std::size_t maximumBytes =
+      SkinResourcePolicy::maximumRuntimeStringBytes;
+  std::string corpus;
+  std::set<utf8proc_int32_t> codepoints;
+  bool exactCorpusFits = true;
+  const auto append = [&](std::string_view value) {
+    for (std::size_t offset = 0; offset < value.size();) {
+      utf8proc_int32_t codepoint = 0;
+      const auto consumed = utf8proc_iterate(
+          reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
+          static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
+      if (consumed <= 0) {
+        codepoint = 0xfffd;
+        ++offset;
+      } else {
+        offset += static_cast<std::size_t>(consumed);
+      }
+      if (codepoint != '\r' && codepoint != '\n') {
+        codepoints.insert(codepoint);
+      }
+    }
+    if (!exactCorpusFits || value.size() >= maximumBytes - corpus.size()) {
+      exactCorpusFits = false;
+      return;
+    }
+    corpus.append(value);
+    corpus.push_back('\n');
+  };
+  for (const auto &[_, value] : frame.properties.strings) {
+    append(value);
+  }
+  for (const auto &[_, value] : frame.properties.namedStrings) {
+    append(value);
+  }
+  for (const auto &bar : frame.songList.bars) {
+    append(bar.title);
+  }
+  if (exactCorpusFits) return corpus.empty() ? std::vector<std::string>{}
+                                             : std::vector{std::move(corpus)};
+
+  std::string compact;
+  compact.reserve(codepoints.size() * 2U);
+  for (const auto codepoint : codepoints) {
+    std::array<utf8proc_uint8_t, 4> encoded{};
+    const auto size = utf8proc_encode_char(codepoint, encoded.data());
+    if (size > 0) {
+      compact.append(reinterpret_cast<const char *>(encoded.data()),
+                     static_cast<std::size_t>(size));
+    }
+  }
+  return compact.empty() ? std::vector<std::string>{}
+                         : std::vector{std::move(compact)};
 }
 
 std::map<int, std::filesystem::path>
@@ -147,6 +194,14 @@ MusicSelectSkinSession::~MusicSelectSkinSession() = default;
 
 int MusicSelectSkinSession::inputDelayMillis() const noexcept {
   return model_.model.timing.inputMillis;
+}
+
+void MusicSelectSkinSession::suspendAudio() noexcept {
+  if (runtime_) runtime_->suspendAudio();
+}
+
+void MusicSelectSkinSession::resumeAudio() noexcept {
+  if (runtime_) runtime_->resumeAudio();
 }
 
 MusicSelectSkinSessionCreateResult MusicSelectSkinSession::create(
@@ -238,8 +293,9 @@ MusicSelectSkinSessionCreateResult MusicSelectSkinSession::create(
       return result;
     }
 
-    auto runtimeStrings =
-        musicSelectRuntimeStrings(document.model, context.initialFrame);
+    auto runtimeStrings = musicSelectRuntimeStrings(context.initialFrame);
+    auto runtimeAtlasStrings =
+        musicSelectRuntimeAtlasStrings(context.initialFrame);
     auto builtinImagePaths =
         musicSelectBuiltinImagePaths(context.initialFrame);
     auto planned = context.resourcePreparation.decodeAndPlan(
@@ -248,7 +304,7 @@ MusicSelectSkinSessionCreateResult MusicSelectSkinSession::create(
          .fileSystem = *resourceFiles.fileSystem,
          .model = document.model,
          .configuration = document.configuration,
-         .requiredRuntimeStrings = runtimeStrings,
+         .requiredRuntimeStrings = runtimeAtlasStrings,
          .builtinImagePaths = builtinImagePaths,
          .builtinImageReader = context.builtinImageReader,
          .safetyPolicy = context.safetyPolicy,
@@ -511,7 +567,7 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
 
 bool MusicSelectSkinSession::requiresResourceRefresh(
     const MusicSelectSkinFrame &frame) const {
-  const auto strings = musicSelectRuntimeStrings(model_, frame);
+  const auto strings = musicSelectRuntimeStrings(frame);
   return musicSelectBuiltinImagePaths(frame) != preparedBuiltinImagePaths_ ||
          std::ranges::any_of(strings, [this](const std::string &value) {
            return std::ranges::find(preparedRuntimeStrings_, value) ==
@@ -537,7 +593,8 @@ bool MusicSelectSkinSession::refreshResources(
               : "Music-select refresh filesystem could not be created."));
       return false;
     }
-    auto runtimeStrings = musicSelectRuntimeStrings(model_, frame);
+    auto runtimeStrings = musicSelectRuntimeStrings(frame);
+    auto runtimeAtlasStrings = musicSelectRuntimeAtlasStrings(frame);
     auto builtinImagePaths = musicSelectBuiltinImagePaths(frame);
     auto planned = resourcePreparation_->decodeAndPlan(
         {.revision = revision_.clone(),
@@ -545,7 +602,7 @@ bool MusicSelectSkinSession::refreshResources(
          .fileSystem = *resourceFiles.fileSystem,
          .model = model_,
          .configuration = configuration_,
-         .requiredRuntimeStrings = runtimeStrings,
+         .requiredRuntimeStrings = runtimeAtlasStrings,
          .builtinImagePaths = builtinImagePaths,
          .builtinImageReader = builtinImageReader_,
          .safetyPolicy = safetyPolicy_,

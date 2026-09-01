@@ -230,6 +230,25 @@ std::string musicSelectSelectedHash(const MusicSelectBar *bar, bool sha256) {
   return sha256 ? bar->chart->meta.SHA256 : bar->chart->meta.MD5;
 }
 
+MusicSelectTableContext musicSelectTableContextForLaunch(
+    const MusicSelectBarManagerSnapshot &snapshot) {
+  MusicSelectTableContext result;
+  bool importedTable = false;
+  for (const auto &bar : snapshot.directoryBars) {
+    if (bar.kind == skin::MusicSelectBarKind::Table) {
+      importedTable = bar.tableId > 0;
+      result.name = importedTable ? bar.title : std::string{};
+      result.level.clear();
+    } else if (importedTable &&
+               bar.kind == skin::MusicSelectBarKind::Hash) {
+      result.level = bar.title;
+      break;
+    }
+  }
+  result.fullName = result.level + result.name;
+  return result;
+}
+
 MusicSelectBarManager::MusicSelectBarManager(MusicSelectProjection projection,
                                              MusicSelectBarManagerConfig config)
     : projection_(std::move(projection)), config_(std::move(config)) {

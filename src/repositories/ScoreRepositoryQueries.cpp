@@ -1417,6 +1417,63 @@ PlayerScoreHistorySnapshot ScoreRepository::LoadPlayerScoreHistory() {
       impl_->sessionDatabase, impl_->chartDatabasePath);
 }
 
+RecentScoreImprovements
+ScoreRepository::LoadRecentScoreImprovements(std::int64_t nowUnixSeconds) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  RecentScoreImprovements result;
+  if (!EnsureSessionDatabaseLocked()) return result;
+
+  const auto clearRank =
+      score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
+  const std::string query =
+      "WITH attempts AS (SELECT s.id, lower(trim(s.chart_sha256)) AS hash, "
+      "s.ln_mode, s.score, " +
+      clearRank +
+      " AS clear_rank, CAST(strftime('%s', s.created_at) AS INTEGER) AS "
+      "played_at FROM scores s WHERE s.score_source=" +
+      std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
+      " AND " +
+      score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
+      "), improvements AS (SELECT hash, played_at, score, clear_rank, "
+      "COALESCE(MAX(score) OVER (PARTITION BY hash, ln_mode ORDER BY "
+      "played_at, id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) "
+      "AS old_score, COALESCE(MAX(clear_rank) OVER (PARTITION BY hash, "
+      "ln_mode ORDER BY played_at, id ROWS BETWEEN UNBOUNDED PRECEDING AND "
+      "1 PRECEDING), 0) AS old_clear FROM attempts) SELECT hash, played_at, "
+      "score > old_score, clear_rank > old_clear FROM improvements WHERE "
+      "played_at >= ? AND played_at < ? AND (score > old_score OR "
+      "clear_rank > old_clear)";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->sessionDatabase, query, statement,
+          "loading recent score improvements", logSqlErrorText)) {
+    return result;
+  }
+  const std::int64_t today = nowUnixSeconds / 86'400 * 86'400;
+  const std::int64_t firstDay = today - 29 * 86'400;
+  if (sqlite3_bind_int64(statement.get(), 1, firstDay) != SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 2, today + 86'400) != SQLITE_OK) {
+    logSqlErrorText("binding recent score improvement range",
+                    sqlite3_errmsg(impl_->sessionDatabase));
+    return result;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    const std::string hash = sqliteColumnString(statement.get(), 0);
+    const auto playedAt = sqlite3_column_int64(statement.get(), 1);
+    const auto day = static_cast<std::size_t>(today / 86'400 -
+                                              playedAt / 86'400);
+    if (day >= result.score.size()) continue;
+    if (sqlite3_column_int(statement.get(), 2) != 0) {
+      result.score[day].insert(hash);
+    }
+    if (sqlite3_column_int(statement.get(), 3) != 0) {
+      result.lamp[day].insert(hash);
+    }
+  }
+  return result;
+}
+
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestClearScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,

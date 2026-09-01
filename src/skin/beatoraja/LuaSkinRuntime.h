@@ -253,6 +253,8 @@ public:
   LuaValueResult
   loadConfigured(const BeatorajaSkinConfiguration &configuration);
   LuaOperationResult enterRenderPhase();
+  void suspendAudio() noexcept;
+  void resumeAudio() noexcept;
   [[nodiscard]] SkinFileActivityCounters
   fileActivityCounters() const noexcept;
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)

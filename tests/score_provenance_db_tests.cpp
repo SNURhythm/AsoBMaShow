@@ -1116,6 +1116,46 @@ void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
   assert(best->attemptId == pending.attemptId);
 }
 
+void testRecentScoreImprovementsMatchScoreLogDayFolders(
+    const std::filesystem::path &root) {
+  const auto path = root / "recent-score-improvements" / "score.db";
+  ScoreRepository helper(path);
+  auto save = [&](std::string_view chart, char hashDigit, int suffix,
+                  std::string timestamp, int score, int clearType) {
+    auto pending = samplePendingScore(root, std::string(chart), suffix,
+                                      std::move(timestamp));
+    pending.score.chartSha256.assign(64, hashDigit);
+    pending.score.score = score;
+    pending.score.clearType = clearType;
+    assert(helper.SaveProjectedScore(pending).status ==
+           result_persistence::ProjectionStatus::Inserted);
+  };
+  save("update-a", 'c', 310, "2026-07-13 23:00:00", 100,
+       kClearTypeFailedRank);
+  save("update-a", 'c', 311, "2026-07-14 01:00:00", 150,
+       kClearTypeFailedRank);
+  save("update-a", 'c', 312, "2026-07-14 02:00:00", 140,
+       kClearTypeNormalClearRank);
+  save("update-a", 'c', 313, "2026-07-15 03:00:00", 140,
+       kClearTypeNormalClearRank);
+  save("update-b", 'd', 314, "2026-07-15 04:00:00", 20,
+       kClearTypeEasyClearRank);
+
+  auto db = openDatabase(path);
+  const auto now = static_cast<std::int64_t>(queryInt(
+      db.get(), "SELECT CAST(strftime('%s', '2026-07-15 12:00:00') AS INTEGER)"));
+  db.reset();
+  const auto updates = helper.LoadRecentScoreImprovements(now);
+  const std::string updateAHash(64, 'c');
+  const std::string updateBHash(64, 'd');
+  assert(updates.score[1].contains(updateAHash));
+  assert(!updates.score[0].contains(updateAHash));
+  assert(updates.lamp[1].contains(updateAHash));
+  assert(!updates.lamp[0].contains(updateAHash));
+  assert(updates.score[0].contains(updateBHash) &&
+         updates.lamp[0].contains(updateBHash));
+}
+
 void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
     const std::filesystem::path &root) {
   const auto path = root / "chart-score-history" / "score.db";
@@ -3187,6 +3227,7 @@ int main() {
   testProjectedScoreIsIdempotent(root);
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
+  testRecentScoreImprovementsMatchScoreLogDayFolders(root);
   testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(root);
   testPlayerHistoryUsesPinnedLastPlayableNoteDuration(root);
   testVersion12BackfillsLocalPlayDurationFromChartMetadata(root);

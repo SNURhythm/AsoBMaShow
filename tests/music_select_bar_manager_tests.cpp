@@ -159,6 +159,30 @@ void testReplayAndHashCommandsUseSelectableSongState() {
           "non-SongBar hashes are inert");
 }
 
+void testTableContextUsesOpenedTableAndHashTitles() {
+  MusicSelectBarManagerSnapshot snapshot;
+  snapshot.directoryBars = {
+      {.kind = skin::MusicSelectBarKind::Table,
+       .title = "Satellite",
+       .tableId = 42},
+      {.kind = skin::MusicSelectBarKind::Hash,
+       .title = "sl12",
+       .tableId = 42,
+       .tableLevel = "12"},
+  };
+  const auto context = musicSelectTableContextForLaunch(snapshot);
+  require(context.name == "Satellite" && context.level == "sl12" &&
+              context.fullName == "sl12Satellite",
+          "table properties use the opened TableBar and HashBar titles in "
+          "PlayerResource level-before-name order");
+
+  snapshot.directoryBars.front().tableId = 0;
+  const auto local = musicSelectTableContextForLaunch(snapshot);
+  require(local.name.empty() && local.level.empty() &&
+              local.fullName.empty(),
+          "the local COURSE table does not publish imported-table context");
+}
+
 void testTransientDirectoryRestoresItsSourceBar() {
   MusicSelectBarManager manager(fixture());
   require(manager.openSelected(), "transient fixture opens its root folder");
@@ -322,6 +346,7 @@ int main(int argc, char **argv) {
   testBarClassPredicatesDoNotDependOnChildren();
   testRefreshRebindsStableSelection();
   testReplayAndHashCommandsUseSelectableSongState();
+  testTableContextUsesOpenedTableAndHashTitles();
   testTransientDirectoryRestoresItsSourceBar();
   testPinnedFilterFallbackAndSort();
   return music_select_runtime_ledger_assertions::finish(

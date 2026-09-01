@@ -1313,6 +1313,14 @@ LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
   return {.ok = true};
 }
 
+void LuaSkinRuntime::suspendAudio() noexcept {
+  if (impl_ && impl_->audioHost) impl_->audioHost->suspend();
+}
+
+void LuaSkinRuntime::resumeAudio() noexcept {
+  if (impl_ && impl_->audioHost) impl_->audioHost->resume();
+}
+
 SkinFileActivityCounters LuaSkinRuntime::fileActivityCounters() const noexcept {
   return impl_ && impl_->fileSystem ? impl_->fileSystem->activityCounters()
                                    : SkinFileActivityCounters{};

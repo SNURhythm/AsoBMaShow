@@ -82,6 +82,8 @@ public:
   [[nodiscard]] bool
   requiresResourceRefresh(const MusicSelectSkinFrame &) const;
   [[nodiscard]] bool refreshResources(const MusicSelectSkinFrame &);
+  void suspendAudio() noexcept;
+  void resumeAudio() noexcept;
   [[nodiscard]] MusicSelectSkinPointerResult
   queuePointerDown(UiLogicalPoint, int button, long long eventMicros);
   [[nodiscard]] bool queuePointerMove(const PresentationUiHit &,

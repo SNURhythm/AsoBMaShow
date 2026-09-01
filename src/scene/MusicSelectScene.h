@@ -91,6 +91,7 @@ private:
   ScoreBestCache scoreCache_;
   ScoreClearRankCache clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
+  RecentScoreImprovements recentScoreImprovements_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
   MusicSelectPreviewController previewController_;
@@ -105,6 +106,7 @@ private:
   int panelState_ = 0;
   int selectedReplay_ = -1;
   int currentRivalIndex_ = -1;
+  MusicSelectTableContext tableContext_;
   std::int64_t songBarChangeMicros_ = 0;
   struct CachedRanking {
     MusicSelectRankingSnapshot snapshot;

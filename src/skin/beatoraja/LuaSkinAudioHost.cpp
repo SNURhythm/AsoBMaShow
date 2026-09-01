@@ -91,10 +91,17 @@ LuaSkinAudioHost::load(std::string_view authored,
 LuaSkinAudioOperationResult
 LuaSkinAudioHost::play(std::string_view path, float volume,
                        bool loop) noexcept {
+  std::filesystem::path resolved;
   LuaSkinAudioOperationResult result;
+  result = resolve(path, resolved);
+  if (!result.ok()) return result;
   LoadedIdentity *identity = load(path, result);
-  if (identity != nullptr && *identity && backend_) {
-    backend_->play(**identity, backend_->systemVolume() * volume, loop);
+  if (identity != nullptr && *identity) {
+    active_.insert_or_assign(std::move(resolved),
+                             ActivePlayback{.volume = volume, .loop = loop});
+    if (backend_ && !suspended_) {
+      backend_->play(**identity, backend_->systemVolume() * volume, loop);
+    }
   }
   return result;
 }
@@ -116,6 +123,7 @@ LuaSkinAudioHost::stop(std::string_view authored) noexcept {
   if (!result.ok()) {
     return result;
   }
+  active_.erase(resolved);
   const auto found = loaded_.find(resolved);
   if (found != loaded_.end() && found->second && backend_) {
     backend_->stop(*found->second);
@@ -130,6 +138,7 @@ LuaSkinAudioHost::dispose(std::string_view authored) noexcept {
   if (!result.ok()) {
     return result;
   }
+  active_.erase(resolved);
   const auto found = loaded_.find(resolved);
   if (found == loaded_.end() || !found->second) {
     return result;
@@ -140,6 +149,33 @@ LuaSkinAudioHost::dispose(std::string_view authored) noexcept {
   }
   loaded_.erase(found);
   return result;
+}
+
+void LuaSkinAudioHost::suspend() noexcept {
+  if (suspended_) return;
+  suspended_ = true;
+  if (!backend_) return;
+  for (const auto &[path, playback] : active_) {
+    (void)playback;
+    const auto found = loaded_.find(path);
+    if (found != loaded_.end() && found->second) {
+      backend_->stop(*found->second);
+    }
+  }
+}
+
+void LuaSkinAudioHost::resume() noexcept {
+  if (!suspended_) return;
+  suspended_ = false;
+  if (!backend_) return;
+  for (const auto &[path, playback] : active_) {
+    const auto found = loaded_.find(path);
+    if (found != loaded_.end() && found->second) {
+      backend_->play(*found->second,
+                     backend_->systemVolume() * playback.volume,
+                     playback.loop);
+    }
+  }
 }
 
 } // namespace skin

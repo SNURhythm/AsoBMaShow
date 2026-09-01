@@ -315,6 +315,9 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinSession_) skinSession_->suspendAudio();
+#endif
   stopInputListening();
   previewController_.reset();
   if (previewAudio_) previewAudio_->switchTo(std::nullopt);
@@ -331,6 +334,7 @@ void MusicSelectScene::onResume() {
     reactivateSkinOnResume_ = false;
     if (!reactivateSkinAfterSettings()) return;
   }
+  if (skinSession_) skinSession_->resumeAudio();
 #endif
   syncToolbar();
   reloadLibrary();
@@ -352,6 +356,8 @@ void MusicSelectScene::reloadLibrary() {
   scoreCache_ = context.scoreRepository.LoadBestScores();
   clearRankCache_ = context.scoreRepository.LoadBestClearRanks();
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
+  recentScoreImprovements_ = context.scoreRepository.LoadRecentScoreImprovements(
+      unixMillis() / 1'000);
   libraryRevision_ = loadedRevision;
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
@@ -385,6 +391,7 @@ void MusicSelectScene::reloadLibrary() {
        },
        .metadata = &metadata,
        .searches = searches,
+       .recentScoreImprovements = &recentScoreImprovements_,
        .modeFilter = context.settings.skinModeFilterName,
        .selectedLongNoteMode = query.selectedLongNoteMode,
        .repositoryRevision = libraryRevision_}));
@@ -414,6 +421,8 @@ std::int64_t MusicSelectScene::elapsedMicros() const {
 
 void MusicSelectScene::selectedBarMoved() {
   const auto snapshot = bars_.snapshot();
+  // Pinned MusicSelector retains rankingOffset across bar changes; only its
+  // ranking-position writer mutates that field.
   selectedReplay_ =
       snapshot.selectedIndex < snapshot.rows.size()
           ? musicSelectFirstExistingReplay(
@@ -589,6 +598,11 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   propertyRuntime.targetName = context.settings.skinTargetId == "MAX"
                                    ? "MAX"
                                    : std::string{};
+  // Beatoraja property 30 is setter-only and always reads as an empty string.
+  propertyRuntime.searchWord.clear();
+  propertyRuntime.tableName = tableContext_.name;
+  propertyRuntime.tableLevel = tableContext_.level;
+  propertyRuntime.tableFullName = tableContext_.fullName;
   propertyRuntime.version = ASOBMASHOW_APPLICATION_VERSION;
   propertyRuntime.irName = context.settings.irProviders.empty()
                                ? std::string{}
@@ -954,6 +968,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     launching_ = false;
     return;
   }
+  tableContext_ = musicSelectTableContextForLaunch(snapshot);
   StartOptions options{
       .startPosition = 0,
       .autoKeySound = !context.settings.inputKeysoundEnabled,
@@ -969,6 +984,8 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       .longNoteMode = lnMode,
       .assistOption = selections.assistOption,
       .pacemakerTarget = selections.pacemakerTarget,
+      .tableName = tableContext_.name,
+      .tableLevel = tableContext_.level,
       .practiceMode = practice,
       .playback = {.percent = context.settings.selectedPlaybackRatePercent,
                    .mode = context.settings.selectedPlaybackMode},
@@ -1030,6 +1047,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
     launching_ = false;
     return;
   }
+  tableContext_ = musicSelectTableContextForLaunch(bars_.snapshot());
   StartOptions options{
       .startPosition = 0,
       .autoKeySound = session->autoKeySound,
@@ -1045,6 +1063,8 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
       .doublePlayFlip = session->doublePlayFlip,
       .longNoteMode = session->longNoteMode,
       .assistOption = session->assistOption,
+      .tableName = tableContext_.name,
+      .tableLevel = tableContext_.level,
       .playback = course_rules::kRequiredPlaybackRate,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .courseSession = session,
@@ -1130,6 +1150,7 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
     launching_ = false;
     return;
   }
+  tableContext_ = musicSelectTableContextForLaunch(snapshot);
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   StartOptions options{
@@ -1140,6 +1161,8 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
       .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
       .replayData = loaded.replayData,
       .pacemakerTarget = selections.pacemakerTarget,
+      .tableName = tableContext_.name,
+      .tableLevel = tableContext_.level,
       .returnScene = this,
   };
   applyReplayProvenanceToStartOptions(options, *loaded.replayData);

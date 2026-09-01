@@ -24,12 +24,20 @@ struct MusicSelectBarManagerSnapshot {
   std::string resolvedDifficultyFilter = "ALL";
 };
 
+struct MusicSelectTableContext {
+  std::string name;
+  std::string level;
+  std::string fullName;
+};
+
 [[nodiscard]] int
 musicSelectFirstExistingReplay(const MusicSelectBar *bar) noexcept;
 [[nodiscard]] int musicSelectNextExistingReplay(const MusicSelectBar *bar,
                                                 int selected) noexcept;
 [[nodiscard]] std::string
 musicSelectSelectedHash(const MusicSelectBar *bar, bool sha256);
+[[nodiscard]] MusicSelectTableContext musicSelectTableContextForLaunch(
+    const MusicSelectBarManagerSnapshot &);
 
 class MusicSelectBarManager final {
 public:
