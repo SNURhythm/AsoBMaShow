@@ -79,6 +79,7 @@ private:
   void persistToolbar(MusicSelectToolbarState);
 
   skin::GameplaySkinActivationRequest activationRequest_;
+  std::string selectedSkinPath_;
   std::optional<ChartRepository::Session> chartSession_;
   ScoreBestCache scoreCache_;
   ScoreClearRankCache clearRankCache_;

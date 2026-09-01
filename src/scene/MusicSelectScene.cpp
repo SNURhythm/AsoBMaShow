@@ -18,6 +18,7 @@
 #include "../music_select/MusicSelectReplaySlots.h"
 #include "../music_select/MusicSelectFavorites.h"
 #include "../music_select/MusicSelectExternalActions.h"
+#include "../music_select/MusicSelectLaunchPolicy.h"
 #include "../music_select/MusicSelectPropertyProjection.h"
 #include "../replay/ChartReplayConsumer.h"
 #include "../rendering/common.h"
@@ -193,7 +194,9 @@ std::optional<MusicSelectCommandKey> commandKey(const SDL_KeyboardEvent &key) {
 MusicSelectScene::MusicSelectScene(
     ApplicationContext &context,
     skin::GameplaySkinActivationRequest activationRequest)
-    : Scene(context), activationRequest_(std::move(activationRequest)) {}
+    : Scene(context), activationRequest_(std::move(activationRequest)),
+      selectedSkinPath_(
+          musicSelectSkinEntryPath(activationRequest_.activation.entry)) {}
 
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
@@ -1577,6 +1580,12 @@ void MusicSelectScene::enterError(
   if (searchInput_ != nullptr) searchInput_->endEditing();
   if (searchOverlay_ != nullptr) searchOverlay_->setVisible(false);
   diagnostics_ = std::move(diagnostics);
+  if (diagnostics_.empty()) {
+    diagnostics_.push_back(skin::SkinDiagnostic{
+        .code = "skin.music_select.failure_without_diagnostic",
+        .message =
+            "The music-select skin failed without reporting a diagnostic."});
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
 #endif
@@ -1598,6 +1607,12 @@ void MusicSelectScene::buildErrorView() {
   auto *title = makeText("Music-select skin failed", 38, ui_theme::coral);
   title->setHeight(58);
   root->addView(title);
+  if (!selectedSkinPath_.empty()) {
+    auto *path = makeText("Selected skin: " + selectedSkinPath_, 20,
+                          ui_theme::textSecondary);
+    path->setHeight(44);
+    root->addView(path);
+  }
   if (diagnostics_.empty()) {
     auto *reason = makeText("No diagnostic was reported.", 20,
                             ui_theme::textSecondary);
@@ -1606,10 +1621,8 @@ void MusicSelectScene::buildErrorView() {
   } else {
     for (std::size_t index = 0; index < diagnostics_.size(); ++index) {
       const auto &diagnostic = diagnostics_[index];
-      std::string reason = std::to_string(index + 1) + ". ";
-      if (!diagnostic.code.empty()) reason += diagnostic.code + ": ";
-      reason += diagnostic.message;
-      auto *reasonView = makeText(std::move(reason), 19,
+      auto *reasonView = makeText(
+          musicSelectSkinFailureReason(index, diagnostic), 19,
                                   ui_theme::textPrimary);
       reasonView->setMinHeight(42);
       root->addView(reasonView);

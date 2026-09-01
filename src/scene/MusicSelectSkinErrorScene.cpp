@@ -2,6 +2,7 @@
 
 #include "SceneManager.h"
 #include "SettingsScene.h"
+#include "../music_select/MusicSelectLaunchPolicy.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
@@ -41,8 +42,10 @@ Button *makeButton(std::string label) {
 } // namespace
 
 MusicSelectSkinErrorScene::MusicSelectSkinErrorScene(
-    ApplicationContext &context, std::vector<skin::SkinDiagnostic> diagnostics)
-    : Scene(context), diagnostics_(std::move(diagnostics)) {}
+    ApplicationContext &context, std::string selectedSkinPath,
+    std::vector<skin::SkinDiagnostic> diagnostics)
+    : Scene(context), selectedSkinPath_(std::move(selectedSkinPath)),
+      diagnostics_(std::move(diagnostics)) {}
 
 void MusicSelectSkinErrorScene::init() {
   rootLayout_ =
@@ -58,6 +61,12 @@ void MusicSelectSkinErrorScene::init() {
   auto *title = makeText("Music-select skin failed", 38, ui_theme::coral);
   title->setHeight(58);
   rootLayout_->addView(title);
+  if (!selectedSkinPath_.empty()) {
+    auto *path = makeText("Selected skin: " + selectedSkinPath_, 20,
+                          ui_theme::textSecondary);
+    path->setHeight(44);
+    rootLayout_->addView(path);
+  }
   if (diagnostics_.empty()) {
     auto *reason = makeText("No diagnostic was reported.", 20,
                             ui_theme::textSecondary);
@@ -66,19 +75,8 @@ void MusicSelectSkinErrorScene::init() {
   } else {
     for (std::size_t index = 0; index < diagnostics_.size(); ++index) {
       const auto &diagnostic = diagnostics_[index];
-      std::string reason = std::to_string(index + 1) + ". ";
-      if (!diagnostic.code.empty()) reason += diagnostic.code + ": ";
-      reason += diagnostic.message;
-      if (diagnostic.source && !diagnostic.source->virtualPath.empty()) {
-        reason += " (" + diagnostic.source->virtualPath;
-        if (diagnostic.source->line != 0) {
-          reason += ":" + std::to_string(diagnostic.source->line);
-        }
-        reason += ")";
-      } else if (!diagnostic.virtualPath.empty()) {
-        reason += " (" + diagnostic.virtualPath + ")";
-      }
-      auto *reasonView = makeText(std::move(reason), 19,
+      auto *reasonView = makeText(
+          musicSelectSkinFailureReason(index, diagnostic), 19,
                                   ui_theme::textPrimary);
       reasonView->setMinHeight(42);
       rootLayout_->addView(reasonView);

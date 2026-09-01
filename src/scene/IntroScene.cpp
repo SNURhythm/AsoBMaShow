@@ -93,7 +93,8 @@ void IntroScene::start() {
   if (decision.kind == MusicSelectLaunchKind::Error) {
     context.sceneManager->changeScene(
         std::make_unique<MusicSelectSkinErrorScene>(
-            context, std::move(decision.diagnostics)));
+            context, std::move(decision.selectedSkinPath),
+            std::move(decision.diagnostics)));
     return;
   }
 #endif
