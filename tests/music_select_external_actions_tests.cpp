@@ -117,11 +117,35 @@ void testFolderAndDownloadSiteBranches() {
          std::vector<std::string>({"https://example.test/archive.zip"}));
 }
 
+void testRefreshPathUsesThePhysicalArchive() {
+  const auto splitArchive = [](const std::filesystem::path &path,
+                               std::filesystem::path &archive,
+                               std::filesystem::path &inner) {
+    if (path != "/charts/package.zip/nested/chart.bms") return false;
+    archive = "/charts/package.zip";
+    inner = "nested/chart.bms";
+    return true;
+  };
+  MusicSelectBar folder{.kind = skin::MusicSelectBarKind::Folder,
+                        .directoryPath = "/charts/folder"};
+  assert(musicSelectRefreshPath(folder, splitArchive) ==
+         std::filesystem::path("/charts/folder"));
+
+  auto ordinary = song("/charts/folder/chart.bms", true);
+  assert(musicSelectRefreshPath(ordinary, splitArchive) ==
+         std::filesystem::path("/charts/folder"));
+
+  auto archived = song("/charts/package.zip/nested/chart.bms", true);
+  assert(musicSelectRefreshPath(archived, splitArchive) ==
+         std::filesystem::path("/charts/package.zip"));
+}
+
 } // namespace
 
 int main() {
   testDocumentSelectionMatchesFilesListFilter();
   testExplorerBranchPriority();
   testFolderAndDownloadSiteBranches();
+  testRefreshPathUsesThePhysicalArchive();
   return 0;
 }

@@ -1,9 +1,13 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -36,6 +40,7 @@
 #include "library/ChartLibraryTaskService.h"
 #include "path.h"
 #include "targets.h"
+#include "tinyfiledialogs.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -80,6 +85,35 @@
 #endif
 
 namespace application_context_detail {
+inline const char *homeDirectoryEnvValue() {
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return home;
+  }
+#ifdef _WIN32
+  if (const char *profile = std::getenv("USERPROFILE");
+      profile != nullptr && profile[0] != '\0') {
+    return profile;
+  }
+#endif
+  return nullptr;
+}
+
+inline bool expandCurrentUserHomeShortcut(std::string &path) {
+  if (path.empty() || path.front() != '~') {
+    return true;
+  }
+  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+    return true;
+  }
+  const char *home = homeDirectoryEnvValue();
+  if (home == nullptr) {
+    return false;
+  }
+  path.replace(0, 1, home);
+  return true;
+}
+
 inline std::string firstDiagnostic(const std::vector<std::string> &diagnostics,
                                    std::string fallback) {
   return diagnostics.empty() ? std::move(fallback) : diagnostics.front();
@@ -604,7 +638,41 @@ public:
                     }
                     return path;
                   }
-                  return std::nullopt;
+                  char *selected =
+                      tinyfd_selectFolderDialog("Select Folder", nullptr);
+                  std::string folder;
+                  if (selected == nullptr) {
+                    std::cerr << "tinyfd_selectFolderDialog error: "
+                              << std::strerror(errno) << std::endl;
+                    std::cout << "Failed to open folder select dialog.\n";
+                    while (folder.empty()) {
+                      std::cout << "Enter bms folder path: ";
+                      std::cin >> folder;
+                      if (std::cin.eof() || std::cin.fail()) {
+                        break;
+                      }
+                      if (folder.empty()) {
+                        continue;
+                      }
+                      if (!application_context_detail::
+                              expandCurrentUserHomeShortcut(folder)) {
+                        std::cout << "Could not expand ~ because no home "
+                                     "directory is set.\n";
+                        folder.clear();
+                        continue;
+                      }
+                      std::ifstream test(folder);
+                      if (!test) {
+                        folder.clear();
+                      }
+                    }
+                    if (folder.empty()) {
+                      return std::nullopt;
+                    }
+                  } else {
+                    folder = selected;
+                  }
+                  return std::filesystem::path(folder);
                 },
                 .pendingScanFlushRequest = [this] {
                   const std::uint64_t requested =

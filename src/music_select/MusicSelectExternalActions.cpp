@@ -83,6 +83,27 @@ musicSelectExplorerPath(const MusicSelectBar &bar,
   return firstParent(lookups.textPaths(query));
 }
 
+std::optional<std::filesystem::path>
+musicSelectRefreshPath(const MusicSelectBar &bar,
+                       const MusicSelectArchivePathSplitter &splitArchive) {
+  if (bar.kind == skin::MusicSelectBarKind::Folder) {
+    return bar.directoryPath.empty()
+               ? std::nullopt
+               : std::optional<std::filesystem::path>(bar.directoryPath);
+  }
+  if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart ||
+      bar.chart->meta.BmsPath.empty()) {
+    return std::nullopt;
+  }
+  std::filesystem::path archive;
+  std::filesystem::path inner;
+  if (splitArchive &&
+      splitArchive(bar.chart->meta.BmsPath, archive, inner)) {
+    return archive;
+  }
+  return bar.chart->meta.BmsPath.parent_path();
+}
+
 std::vector<std::string> musicSelectDownloadUrls(const MusicSelectBar &bar) {
   std::vector<std::string> urls;
   if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart) return urls;

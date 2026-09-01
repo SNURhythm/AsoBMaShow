@@ -1416,7 +1416,7 @@ void MusicSelectScene::executeEvent(
       }
       break;
     case MusicSelectEventEffectKind::OpenDownloadSite:
-      if (selected != nullptr && platform_open::desktopOpenSupported()) {
+      if (selected != nullptr) {
         for (const auto &url : musicSelectDownloadUrls(*selected)) {
           std::string error;
           if (!platform_open::openExternalUrl(url, error)) {
@@ -1482,21 +1482,15 @@ void MusicSelectScene::executeEvent(
         });
         break;
       }
-      std::filesystem::path path;
-      if (selected != nullptr &&
-          selected->kind == skin::MusicSelectBarKind::Folder) {
-        path = selected->directoryPath;
-      } else if (selected != nullptr &&
-                 selected->kind == skin::MusicSelectBarKind::Song &&
-                 selected->chart &&
-                 !selected->chart->meta.BmsPath.empty()) {
-        path = selected->chart->meta.BmsPath.parent_path();
-      }
-      if (!path.empty() && context.chartLibraryTasks) {
+      const auto path = selected != nullptr
+                            ? musicSelectRefreshPath(
+                                  *selected, archive_file::splitVirtualPath)
+                            : std::nullopt;
+      if (path && context.chartLibraryTasks) {
         context.chartLibraryTasks->enqueue({
             .kind = chart_library_tasks::TaskKind::RefreshPath,
             .title = "Update Folder",
-            .refreshPath = std::move(path),
+            .refreshPath = *path,
         });
       }
       break;

@@ -18,6 +18,10 @@ struct MusicSelectExplorerLookups {
       textPaths;
 };
 
+using MusicSelectArchivePathSplitter = std::function<bool(
+    const std::filesystem::path &, std::filesystem::path &,
+    std::filesystem::path &)>;
+
 [[nodiscard]] std::vector<std::filesystem::path>
 musicSelectDocumentPaths(const MusicSelectBar &);
 
@@ -27,6 +31,10 @@ musicSelectExplorerTitleQuery(std::string_view title);
 [[nodiscard]] std::optional<std::filesystem::path>
 musicSelectExplorerPath(const MusicSelectBar &,
                         const MusicSelectExplorerLookups &);
+
+[[nodiscard]] std::optional<std::filesystem::path>
+musicSelectRefreshPath(const MusicSelectBar &,
+                       const MusicSelectArchivePathSplitter &);
 
 [[nodiscard]] std::vector<std::string>
 musicSelectDownloadUrls(const MusicSelectBar &);
