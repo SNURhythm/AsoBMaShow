@@ -6,6 +6,7 @@
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
+#include "../music_select/MusicSelectSearchHistory.h"
 #include "../repositories/ScoreRepositoryModels.h"
 #include "../skin/GameplaySkinActivationRequest.h"
 
@@ -17,6 +18,9 @@
 #include <array>
 #include <optional>
 #include <vector>
+
+class BlockingOverlayView;
+class TextInputBox;
 
 class MusicSelectScene final : public Scene {
 public:
@@ -52,6 +56,10 @@ private:
   void openSameFolder();
   void copySelectedHash(bool sha256);
   void closeDirectory();
+  void buildSearchPrompt();
+  void showSearchPrompt();
+  void hideSearchPrompt();
+  void search(std::string text);
   void enterError(std::vector<skin::SkinDiagnostic>);
   void buildErrorView();
   void openMusicPlayer();
@@ -67,6 +75,7 @@ private:
   PlayerScoreHistorySnapshot playerHistory_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
+  MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;
   std::uint64_t inputDeviceSubscription_ = 0;
@@ -83,6 +92,8 @@ private:
   std::chrono::steady_clock::time_point started_;
   std::vector<skin::SkinDiagnostic> diagnostics_;
   MusicSelectToolbarView *toolbar_ = nullptr;
+  BlockingOverlayView *searchOverlay_ = nullptr;
+  TextInputBox *searchInput_ = nullptr;
   bool failed_ = false;
   bool launching_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

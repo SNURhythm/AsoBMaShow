@@ -1316,6 +1316,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(music_select_repository_projection_tests PRIVATE cxx_std_23)
 
+        add_executable(music_select_search_history_tests
+            tests/music_select_search_history_tests.cpp
+            src/music_select/MusicSelectSearchHistory.cpp
+        )
+        target_include_directories(music_select_search_history_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_search_history_tests PRIVATE cxx_std_23)
+        target_link_libraries(music_select_search_history_tests PRIVATE utf8proc::utf8proc)
+
         add_executable(music_select_bar_manager_tests
             tests/music_select_bar_manager_tests.cpp
             src/music_select/MusicSelectBarManager.cpp
@@ -7247,6 +7257,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_repository_projection_tests)
         asobmashow_register_test(music_select_repository_projection_tests)
+    endif()
+    if (TARGET music_select_search_history_tests)
+        asobmashow_register_test(music_select_search_history_tests)
     endif()
     if (TARGET music_select_bar_manager_tests)
         asobmashow_register_test(music_select_bar_manager_tests)

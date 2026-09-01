@@ -41,6 +41,7 @@ public:
   [[nodiscard]] bool close();
   void move(bool increase, int movementDirection,
             std::int64_t movementEndMillis);
+  [[nodiscard]] bool select(const MusicSelectBarId &);
   void setSelectedPosition(float);
   void configure(MusicSelectBarManagerConfig);
   void refresh(MusicSelectProjection);

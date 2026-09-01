@@ -377,6 +377,13 @@ void MusicSelectBarManager::move(bool increase, int movementDirection,
   movementEndMillis_ = movementEndMillis;
 }
 
+bool MusicSelectBarManager::select(const MusicSelectBarId &id) {
+  const auto found = std::ranges::find(rows_, id, &MusicSelectBar::id);
+  if (found == rows_.end()) return false;
+  selectedIndex_ = static_cast<std::size_t>(found - rows_.begin());
+  return true;
+}
+
 void MusicSelectBarManager::setSelectedPosition(float value) {
   if (rows_.empty()) return;
   if (value >= 0.0F && value < 1.0F) {

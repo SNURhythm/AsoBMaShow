@@ -62,6 +62,10 @@ void testWrapOpenCloseAndPositionSemantics() {
   manager.setSelectedPosition(1.0F);
   require(manager.snapshot().selectedIndex == 0,
           "the source ignores a selected position of exactly one");
+  require(manager.select({"folder:b"}) &&
+              manager.snapshot().selectedIndex == 1 &&
+              !manager.select({"missing"}),
+          "direct source selection finds only a current row");
 }
 
 void testRefreshRebindsStableSelection() {

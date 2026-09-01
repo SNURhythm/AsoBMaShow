@@ -424,5 +424,25 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
   }
 
   builder.addCommands();
+  for (const auto &searchSource : input.searches) {
+    const std::string title = "Search : '" + searchSource.text + "'";
+    MusicSelectBar search{
+        .id = {"search:" + searchSource.text},
+        .kind = skin::MusicSelectBarKind::SearchWord,
+        .title = title,
+        .presentation = {.kind = skin::MusicSelectBarKind::SearchWord,
+                         .title = title,
+                         .exists = true},
+        .selectable = true,
+        .sortable = true,
+    };
+    std::vector<const ChartMetaRecord *> records;
+    records.reserve(searchSource.records.size());
+    for (const auto &record : searchSource.records) records.push_back(&record);
+    search.children = builder.addPhysicalSongs(records, search.id.value);
+    builder.aggregate(search, searchSource.records);
+    builder.result.root.push_back(search.id);
+    builder.result.bars.push_back(std::move(search));
+  }
   return std::move(builder.result);
 }

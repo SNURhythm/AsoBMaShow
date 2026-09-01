@@ -30,12 +30,18 @@ struct MusicSelectRepositoryMetadata {
   std::vector<MusicSelectDifficultyTableSource> tables;
 };
 
+struct MusicSelectSearchSource {
+  std::string text;
+  std::vector<ChartMetaRecord> records;
+};
+
 struct MusicSelectRepositoryProjectionInput {
   std::span<const ChartMetaRecord> records;
   std::function<std::optional<ScoreBestSnapshot>(const bms_parser::ChartMeta &,
                                                  int)> scoreFor;
   std::function<int(std::string_view, int, int)> courseRankFor;
   const MusicSelectRepositoryMetadata *metadata = nullptr;
+  std::span<const MusicSelectSearchSource> searches;
   std::string_view modeFilter = "ALL";
   int selectedLongNoteMode = 0;
   std::uint64_t repositoryRevision = 0;

@@ -139,6 +139,18 @@ TextInputBox::~TextInputBox() {
 
 std::string TextInputBox::getText() const { return displayedText(); }
 
+void TextInputBox::beginEditing() {
+  if (isSelected) return;
+  onSelected();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  showNativeTextEditor();
+#else
+  SDL_StartTextInput();
+#endif
+}
+
+void TextInputBox::endEditing() { finishEditing(); }
+
 void TextInputBox::setClearable(bool value) {
   clearable = value;
   if (clearable && clearButton == nullptr) {

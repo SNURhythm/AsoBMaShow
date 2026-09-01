@@ -257,6 +257,7 @@ public:
   int skinMusicSelectScrollDurationLow = 300;
   int skinMusicSelectScrollDurationHigh = 50;
   int skinMusicSelectAnalogTicksPerScroll = 3;
+  int skinMusicSelectMaxSearchBarCount = 10;
   // Remaining selector-owned Config/PlayerConfig values. These retain the
   // pinned source's integer domains because the native settings model cannot
   // losslessly represent BGA AUTO or every DP option.

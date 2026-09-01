@@ -235,12 +235,32 @@ void testProjectionOwnsItsRepositoryValues() {
           "projection never retains repository row references");
 }
 
+void testProjectsSearchHistoryAfterCommands() {
+  auto first = chart("/songs/a.bms", "first", "First", "", "/songs");
+  auto second = chart("/songs/b.bms", "second", "Second", "", "/songs");
+  auto duplicate = chart("/songs/c.bms", "first", "Duplicate", "", "/songs");
+  std::vector<MusicSelectSearchSource> searches{
+      {.text = "needle", .records = {first, second, duplicate}}};
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = {}, .searches = searches});
+  require(projection.root.size() == 4,
+          "search history follows COURSE and both update containers");
+  const auto *search = projection.find(projection.root.back());
+  require(search && search->kind == skin::MusicSelectBarKind::SearchWord &&
+              search->title == "Search : 'needle'" &&
+              search->children.size() == 2 &&
+              child(projection, search, 0)->title == "Second" &&
+              child(projection, search, 1)->title == "First",
+          "SearchWordBar uses physical SongBar deduplication and reversal");
+}
+
 } // namespace
 
 int main() {
   testProjectsFoldersSongsScoresAndSourceFlags();
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
   testProjectionOwnsItsRepositoryValues();
+  testProjectsSearchHistoryAfterCommands();
   if (failures != 0) return 1;
   std::cout << "music-select repository projection tests passed\n";
   return 0;

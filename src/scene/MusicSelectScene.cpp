@@ -15,6 +15,8 @@
 #include "../music_select/MusicSelectPropertyProjection.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
+#include "../view/BlockingOverlayView.h"
+#include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 #include "play/GamePlayScene.h"
@@ -232,6 +234,7 @@ void MusicSelectScene::init() {
     toolbar_ = toolbar.get();
     addView(toolbar.release());
   }
+  buildSearchPrompt();
   startInputListening();
 }
 
@@ -259,6 +262,16 @@ void MusicSelectScene::reloadLibrary() {
                    .sortId = context.settings.skinSortId});
   const auto metadata = MusicSelectRepositoryProjection::loadMetadata(
       *chartSession_, query.selectedLongNoteMode);
+  std::vector<MusicSelectSearchSource> searches;
+  searches.reserve(searchHistory_.entries().size());
+  for (const auto &text : searchHistory_.entries()) {
+    ChartMetaQuery searchQuery;
+    searchQuery.keyword = text;
+    searchQuery.selectedLongNoteMode = query.selectedLongNoteMode;
+    MusicSelectSearchSource source{.text = text};
+    chartSession_->QueryChartMeta(searchQuery, source.records);
+    searches.push_back(std::move(source));
+  }
   bars_.refresh(MusicSelectRepositoryProjection{}.project(
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
@@ -269,6 +282,7 @@ void MusicSelectScene::reloadLibrary() {
          return clearRankCache_.bestCourseRankFor(courseKey, courseId, mode);
        },
        .metadata = &metadata,
+       .searches = searches,
        .modeFilter = context.settings.skinModeFilterName,
        .selectedLongNoteMode = query.selectedLongNoteMode,
        .repositoryRevision = libraryRevision_}));
@@ -389,6 +403,15 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (failed_) return Scene::handleEvents(event);
+  if (searchOverlay_ != nullptr && searchOverlay_->getVisible()) {
+    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+        event.key.keysym.sym == SDLK_ESCAPE) {
+      hideSearchPrompt();
+      return {};
+    }
+    (void)searchOverlay_->handleEvents(event);
+    return {};
+  }
   if (toolbar_ != nullptr && !toolbar_->handleEvents(event)) return {};
 
   if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
@@ -524,6 +547,109 @@ void MusicSelectScene::copySelectedHash(bool sha256) {
   }
 }
 
+void MusicSelectScene::buildSearchPrompt() {
+  searchOverlay_ = new BlockingOverlayView(
+      0, 0, rendering::window_width, rendering::window_height);
+  searchOverlay_->setPositionType(YGPositionTypeAbsolute);
+  searchOverlay_->setPosition(Edge::Left, 0);
+  searchOverlay_->setPosition(Edge::Top, 0);
+  searchOverlay_->setZIndex(3000);
+  searchOverlay_->setVisible(false);
+  searchOverlay_->setFlexDirection(FlexDirection::Column);
+  searchOverlay_->setAlignItems(YGAlignCenter);
+  searchOverlay_->setJustifyContent(YGJustifyCenter);
+  searchOverlay_->setThemedBackgroundColor(ui_theme::scrim);
+
+  auto *panel = new View();
+  panel->setWidth(600)
+      ->setHeight(250)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
+      ->setGap(16)
+      ->setPadding(Edge::All, 24)
+      ->setThemedBackgroundColor(ui_theme::panelStrong)
+      ->setCornerRadius(ui_theme::panelRadius())
+      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBorderColor(ui_theme::hairlineStrong)
+      ->setBorderWidth(1);
+
+  auto *title = makeText("Search", 28, ui_theme::textPrimary);
+  title->setHeight(40);
+  panel->addView(title);
+
+  searchInput_ = new TextInputBox(kFontPath, 22);
+  searchInput_->setHeight(58);
+  searchInput_->setClearable(true);
+  searchInput_->setThemedBackgroundColor(ui_theme::insetSurface);
+  searchInput_->setThemedBorderColor(ui_theme::hairlineStrong);
+  searchInput_->setBorderWidth(1);
+  searchInput_->setCornerRadius(ui_theme::controlRadius());
+  searchInput_->setThemedColor(ui_theme::textPrimary);
+  searchInput_->setVAlign(TextView::MIDDLE);
+  searchInput_->onSubmit([this](const std::string &text) {
+    hideSearchPrompt();
+    search(text);
+  });
+  panel->addView(searchInput_);
+
+  auto *actions = new View();
+  actions->setHeight(58)
+      ->setFlexDirection(FlexDirection::Row)
+      ->setJustifyContent(YGJustifyFlexEnd)
+      ->setGap(12);
+  auto *cancel = makeButton("Cancel");
+  cancel->setOnClickListener([this] { hideSearchPrompt(); });
+  actions->addView(cancel);
+  auto *submit = makeButton("Search");
+  submit->setOnClickListener([this] {
+    const std::string text = searchInput_ ? searchInput_->getText() : "";
+    hideSearchPrompt();
+    search(text);
+  });
+  actions->addView(submit);
+  panel->addView(actions);
+
+  searchOverlay_->addView(panel);
+  addView(searchOverlay_);
+}
+
+void MusicSelectScene::showSearchPrompt() {
+  if (searchOverlay_ == nullptr || searchInput_ == nullptr) return;
+  stopInputListening();
+  searchInput_->setEditingText("");
+  searchOverlay_->setSize(rendering::window_width, rendering::window_height);
+  searchOverlay_->setVisible(true);
+  searchOverlay_->applyYogaLayout();
+  searchInput_->beginEditing();
+}
+
+void MusicSelectScene::hideSearchPrompt() {
+  if (searchOverlay_ == nullptr || !searchOverlay_->getVisible()) return;
+  if (searchInput_ != nullptr) searchInput_->endEditing();
+  searchOverlay_->setVisible(false);
+  if (!failed_) startInputListening();
+}
+
+void MusicSelectScene::search(std::string text) {
+  if (!chartSession_ || !MusicSelectSearchHistory::acceptsText(text)) return;
+  ChartMetaQuery query;
+  query.keyword = text;
+  query.selectedLongNoteMode =
+      long_note_mode::valueFromId(context.settings.selectedLnMode);
+  std::vector<ChartMetaRecord> records;
+  chartSession_->QueryChartMeta(query, records);
+  if (!searchHistory_.remember(
+          std::move(text), !records.empty(),
+          static_cast<std::size_t>(
+              context.settings.skinMusicSelectMaxSearchBarCount))) {
+    return;
+  }
+  const auto &selectedText = searchHistory_.entries().back();
+  reloadLibrary();
+  (void)bars_.select({"search:" + selectedText});
+  selectedBarMoved();
+}
+
 void MusicSelectScene::closeDirectory() {
   if (bars_.close()) {
     syncResolvedFilters();
@@ -626,8 +752,13 @@ void MusicSelectScene::consumeActions() {
       }
       break;
     }
-    case skin::MusicSelectSkinActionKind::StringWriter:
+    case skin::MusicSelectSkinActionKind::StringWriter: {
+      const auto id = numericSelector(action.selector);
+      if ((id && *id == 30) || selectorName(action.selector) == "searchword") {
+        search(action.stringValue);
+      }
       break;
+    }
     }
   }
 #endif
@@ -651,7 +782,7 @@ void MusicSelectScene::consumeLogicalInput() {
        inputProcessor_.process(logicalInput, unixMillis())) {
     applyInputAction(action);
   }
-  inputBindingAdapter_->clearFrameEdges();
+  if (inputBindingAdapter_) inputBindingAdapter_->clearFrameEdges();
 }
 
 void MusicSelectScene::startInputListening() {
@@ -740,6 +871,9 @@ void MusicSelectScene::applyInputAction(
     break;
   case MusicSelectInputActionKind::CopySha256:
     copySelectedHash(true);
+    break;
+  case MusicSelectInputActionKind::SearchPrompt:
+    showSearchPrompt();
     break;
   case MusicSelectInputActionKind::SelectedBarMoved:
     selectedBarMoved();
@@ -878,6 +1012,10 @@ void MusicSelectScene::update(float) {
     toolbar_->setViewportSize(rendering::window_width,
                               rendering::window_height);
   }
+  if (searchOverlay_ != nullptr && searchOverlay_->getVisible()) {
+    searchOverlay_->setSize(rendering::window_width,
+                            rendering::window_height);
+  }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_) {
     reloadLibrary();
     selectedBarMoved();
@@ -920,6 +1058,8 @@ void MusicSelectScene::enterError(
   if (failed_) return;
   failed_ = true;
   stopInputListening();
+  if (searchInput_ != nullptr) searchInput_->endEditing();
+  if (searchOverlay_ != nullptr) searchOverlay_->setVisible(false);
   diagnostics_ = std::move(diagnostics);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
@@ -1014,11 +1154,14 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  if (searchInput_ != nullptr) searchInput_->endEditing();
   stopInputListening();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
 #endif
   chartSession_.reset();
   toolbar_ = nullptr;
+  searchOverlay_ = nullptr;
+  searchInput_ = nullptr;
   diagnostics_.clear();
 }

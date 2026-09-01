@@ -430,7 +430,8 @@ void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
   expect(defaults.skinMusicSelectInput == 0 &&
              defaults.skinMusicSelectScrollDurationLow == 300 &&
              defaults.skinMusicSelectScrollDurationHigh == 50 &&
-             defaults.skinMusicSelectAnalogTicksPerScroll == 3,
+             defaults.skinMusicSelectAnalogTicksPerScroll == 3 &&
+             defaults.skinMusicSelectMaxSearchBarCount == 10,
          "music-select input configuration uses Beatoraja defaults");
 
   AppSettings configured;
@@ -438,6 +439,7 @@ void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
   configured.skinMusicSelectScrollDurationLow = 875;
   configured.skinMusicSelectScrollDurationHigh = 125;
   configured.skinMusicSelectAnalogTicksPerScroll = 19;
+  configured.skinMusicSelectMaxSearchBarCount = 37;
   std::string error;
   expect(AppSettingsStore::Save(path, configured, error),
          "music-select input configuration saves: " + error);
@@ -446,7 +448,8 @@ void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
              loaded.settings.skinMusicSelectInput == 2 &&
              loaded.settings.skinMusicSelectScrollDurationLow == 875 &&
              loaded.settings.skinMusicSelectScrollDurationHigh == 125 &&
-             loaded.settings.skinMusicSelectAnalogTicksPerScroll == 19,
+             loaded.settings.skinMusicSelectAnalogTicksPerScroll == 19 &&
+             loaded.settings.skinMusicSelectMaxSearchBarCount == 37,
          "music-select input configuration survives persistence");
 
   AppSettings lower;
@@ -454,11 +457,13 @@ void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
   lower.skinMusicSelectScrollDurationLow = 1;
   lower.skinMusicSelectScrollDurationHigh = 0;
   lower.skinMusicSelectAnalogTicksPerScroll = 0;
+  lower.skinMusicSelectMaxSearchBarCount = 0;
   lower.sanitize();
   expect(lower.skinMusicSelectInput == 0 &&
              lower.skinMusicSelectScrollDurationLow == 2 &&
              lower.skinMusicSelectScrollDurationHigh == 1 &&
-             lower.skinMusicSelectAnalogTicksPerScroll == 1,
+             lower.skinMusicSelectAnalogTicksPerScroll == 1 &&
+             lower.skinMusicSelectMaxSearchBarCount == 1,
          "music-select input configuration uses Beatoraja lower bounds");
 
   AppSettings upper;
@@ -466,11 +471,13 @@ void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
   upper.skinMusicSelectScrollDurationLow = 1001;
   upper.skinMusicSelectScrollDurationHigh = 1001;
   upper.skinMusicSelectAnalogTicksPerScroll = 1001;
+  upper.skinMusicSelectMaxSearchBarCount = 101;
   upper.sanitize();
   expect(upper.skinMusicSelectInput == 2 &&
              upper.skinMusicSelectScrollDurationLow == 1000 &&
              upper.skinMusicSelectScrollDurationHigh == 1000 &&
-             upper.skinMusicSelectAnalogTicksPerScroll == 1000,
+             upper.skinMusicSelectAnalogTicksPerScroll == 1000 &&
+             upper.skinMusicSelectMaxSearchBarCount == 100,
          "music-select input configuration uses Beatoraja upper bounds");
 }
 

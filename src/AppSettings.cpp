@@ -583,6 +583,8 @@ void AppSettings::sanitize() {
       std::clamp(skinMusicSelectScrollDurationHigh, 1, 1000);
   skinMusicSelectAnalogTicksPerScroll =
       std::clamp(skinMusicSelectAnalogTicksPerScroll, 1, 1000);
+  skinMusicSelectMaxSearchBarCount =
+      std::clamp(skinMusicSelectMaxSearchBarCount, 1, 100);
   skinPlayer2RandomOption = std::clamp(skinPlayer2RandomOption, 0, 9);
   skinDoublePlayOption = std::clamp(skinDoublePlayOption, 0, 3);
   skinBgaMode = std::clamp(skinBgaMode, 0, 2);
