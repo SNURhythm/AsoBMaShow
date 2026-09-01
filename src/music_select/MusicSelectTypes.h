@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <string>
@@ -112,6 +113,7 @@ struct MusicSelectBar {
   MusicSelectBarId id;
   skin::MusicSelectBarKind kind = skin::MusicSelectBarKind::Song;
   std::string title;
+  std::filesystem::path directoryPath;
   std::optional<ChartMetaRecord> chart;
   std::optional<ScoreBestSnapshot> score;
   std::optional<ScoreBestSnapshot> rivalScore;

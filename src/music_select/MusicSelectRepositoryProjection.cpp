@@ -94,6 +94,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
            .title = folderPath.filename().empty()
                         ? fspath_to_utf8(folderPath)
                         : fspath_to_utf8(folderPath.filename()),
+           .directoryPath = folderPath,
            .presentation = {.kind = skin::MusicSelectBarKind::Folder,
                             .title = folderPath.filename().empty()
                                          ? fspath_to_utf8(folderPath)

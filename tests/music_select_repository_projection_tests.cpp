@@ -54,8 +54,9 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
           "physical folders retain first-seen root order");
   const auto *folder = projection.find(projection.root.front());
   require(folder && folder->kind == skin::MusicSelectBarKind::Folder &&
-              folder->children.size() == 1 && folder->selectable,
-          "each physical folder projects a selectable directory bar");
+              folder->children.size() == 1 && folder->selectable &&
+              folder->directoryPath == "/songs/a",
+          "each physical folder projects its exact selectable directory");
   const auto *song = folder ? projection.find(folder->children.front()) : nullptr;
   require(song && song->kind == skin::MusicSelectBarKind::Song &&
               song->title == "Alpha Another" && song->chart &&

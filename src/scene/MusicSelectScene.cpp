@@ -833,6 +833,26 @@ void MusicSelectScene::executeEvent(
     case MusicSelectEventEffectKind::Replay:
       selectedReplay_ = effect.value;
       break;
+    case MusicSelectEventEffectKind::UpdateFolder: {
+      std::filesystem::path path;
+      if (selected != nullptr &&
+          selected->kind == skin::MusicSelectBarKind::Folder) {
+        path = selected->directoryPath;
+      } else if (selected != nullptr &&
+                 selected->kind == skin::MusicSelectBarKind::Song &&
+                 selected->chart &&
+                 !selected->chart->meta.BmsPath.empty()) {
+        path = selected->chart->meta.BmsPath.parent_path();
+      }
+      if (!path.empty() && context.chartLibraryTasks) {
+        context.chartLibraryTasks->enqueue({
+            .kind = chart_library_tasks::TaskKind::RefreshPath,
+            .title = "Update Folder",
+            .refreshPath = std::move(path),
+        });
+      }
+      break;
+    }
     default:
       break;
     }
