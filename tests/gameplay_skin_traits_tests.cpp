@@ -41,10 +41,19 @@ void testResultTargetsAreFirstClassTraits() {
           "Beatoraja course-result type maps to Course Result target");
 }
 
+void testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn() {
+  const auto target = skin::skinTargetTraitForType(5);
+  require(target.has_value() &&
+              target->kind == skin::SkinTargetKind::MusicSelect &&
+              target->keyMode == 0 && target->label == "Music Select",
+          "Beatoraja type 5 maps to the Music Select target");
+}
+
 } // namespace
 
 int main() {
   testPinnedBeatorajaGameplayTraitMapping();
   testResultTargetsAreFirstClassTraits();
+  testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn();
   return 0;
 }

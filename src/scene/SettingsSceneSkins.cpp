@@ -1087,9 +1087,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
 
   std::vector<const skin::GameplaySkinEntryRow *> selectableRows;
   for (const auto &candidate : snapshot.entries) {
-    if (candidate.validation ==
-            skin::SkinValidationDisposition::SelectableGameplay &&
-        candidate.metadata.skinType == gameplaySkinActiveTraitSkinType) {
+    if (skin::gameplaySkinEntrySelectableForTarget(candidate, *activeTrait)) {
       selectableRows.push_back(&candidate);
     }
   }

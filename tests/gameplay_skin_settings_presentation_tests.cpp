@@ -411,6 +411,27 @@ void testCatalogItemsFollowBeatorajaCategoryAndOtherOrder() {
   }
 }
 
+void testMusicSelectChoicesExposeOnlyLuaEntries() {
+  const auto trait = skin::skinTargetTraitForType(5);
+  require(trait.has_value(), "music-select target exists for choice filtering");
+  if (!trait) {
+    return;
+  }
+  auto lua = entryRow();
+  lua.metadata.skinType = 5;
+  lua.entry.packageRelativePath = "select/main.luaskin";
+  auto json = lua;
+  json.entry.packageRelativePath = "select/select.json";
+  auto lr2 = lua;
+  lr2.entry.packageRelativePath = "select/select.lr2skin";
+
+  require(skin::gameplaySkinEntrySelectableForTarget(lua, *trait),
+          "type-5 Lua entry is exposed in Music Select choices");
+  require(!skin::gameplaySkinEntrySelectableForTarget(json, *trait) &&
+              !skin::gameplaySkinEntrySelectableForTarget(lr2, *trait),
+          "type-5 JSON and LR2 entries stay installed but are not exposed");
+}
+
 void testNonSelectableEntriesRemainInManagementProjection() {
   auto snapshot = snapshotWithEntry();
   auto invalid = entryRow();
@@ -510,6 +531,7 @@ int main() {
   testPresentationEncodingHasNoDelimiterOrOptionalAmbiguity();
   testCachedControllerPresentationKeyAvoidsReencodingStaticCatalogRows();
   testCatalogItemsFollowBeatorajaCategoryAndOtherOrder();
+  testMusicSelectChoicesExposeOnlyLuaEntries();
   testNonSelectableEntriesRemainInManagementProjection();
   testSkinPackageProgressUsesMeasuredWork();
   testSkinRescanProgressAvoidsInventedWorkTotals();

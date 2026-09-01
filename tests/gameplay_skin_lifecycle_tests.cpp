@@ -947,6 +947,29 @@ void testNextChartAcquisitionUsesTheMatchingKeymodeTrait() {
           "chart keymode");
 }
 
+void testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure() {
+  LifecycleFake fake;
+  fake.setSelectedSkinEntries({});
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+
+  require(lifecycle.acquireForSkinType(5, false).disposition ==
+              GameplaySkinAcquisitionDisposition::BuiltIn,
+          "missing type-5 selection acquires Built-in");
+  fake.selectSkinEntry(5, fake.entry);
+  const auto ready = lifecycle.acquireForSkinType(5, false);
+  require(ready.disposition == GameplaySkinAcquisitionDisposition::Ready &&
+              ready.request && ready.request->activation.entry == fake.entry,
+          "ready selected type-5 activation is acquired");
+
+  fake.activatedEntries.clear();
+  const auto failed = lifecycle.acquireForSkinType(5, false);
+  require(failed.disposition == GameplaySkinAcquisitionDisposition::Failed &&
+              failed.failure && failed.failure->entry == fake.entry &&
+              !failed.failure->diagnostic.message.empty(),
+          "selected type-5 activation failure retains its entry and reason");
+}
+
 void testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -1260,6 +1283,7 @@ int main() {
   testWriterIngressIsBoundedPerSession();
   testDisabledNextChartClearsThePreviousSessionIdentity();
   testNextChartAcquisitionUsesTheMatchingKeymodeTrait();
+  testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure();
   testWriterWaitsForViewportCommitAndRebasesOntoItsSuccessor();
   testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest();
   testViewportResetRejectsEachStaleIdentityField();

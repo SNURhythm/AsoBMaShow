@@ -1275,7 +1275,7 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
             .failure = GameplaySkinAcquisitionFailure{
                 .diagnostic = lifecycleDiagnostic(
                     "skin.lifecycle.acquisition_unavailable",
-                    "The selected gameplay skin could not be acquired")}};
+                    "The selected skin could not be acquired")}};
   }
   if (chartBoundary) {
     // A gameplay chart boundary must not leave the preceding chart identity
@@ -1305,7 +1305,7 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
                   .entry = std::move(requestedEntry),
                   .diagnostic = lifecycleDiagnostic(
                       "skin.lifecycle.selected_entry_missing",
-                      "The selected gameplay skin configuration is missing")}};
+                      "The selected skin configuration is missing")}};
     }
     requestedConfigurationDigest = skinConfigurationDigest(selected->second);
     auto acquired = impl_->deps.acquireActivation(
@@ -1330,14 +1330,14 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
                   .diagnostic = acquisitionFailure.value_or(
                       lifecycleDiagnostic(
                           "skin.lifecycle.activation_unavailable",
-                          "The selected gameplay skin is not ready for this "
+                          "The selected skin is not ready for this "
                           "configuration"))}};
     }
     const auto sessionSerial = allocateSessionSerial();
     if (sessionSerial == 0) {
       auto diagnostic = lifecycleDiagnostic(
           "skin.lifecycle.session_serial_exhausted",
-          "Gameplay skin session serials are exhausted");
+          "Skin session serials are exhausted");
       impl_->append(diagnostic, SkinDiagnosticPhase::Session);
       return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
               .failure = GameplaySkinAcquisitionFailure{
@@ -1371,7 +1371,7 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
   } catch (...) {
     auto diagnostic = lifecycleDiagnostic(
         "skin.lifecycle.acquire_failed",
-        "The next-chart gameplay skin activation could not be acquired");
+        "The selected skin activation could not be acquired");
     impl_->append(diagnostic, SkinDiagnosticPhase::Validation);
     return {.disposition = GameplaySkinAcquisitionDisposition::Failed,
             .failure = GameplaySkinAcquisitionFailure{

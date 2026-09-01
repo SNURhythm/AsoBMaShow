@@ -6377,6 +6377,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_skin_settings_presentation_tests
         tests/gameplay_skin_settings_presentation_tests.cpp
         src/scene/GameplaySkinSettingsPresentation.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
     )
     target_include_directories(gameplay_skin_settings_presentation_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src

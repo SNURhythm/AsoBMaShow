@@ -1,6 +1,7 @@
 #pragma once
 
 #include "GameplaySkinSettingsController.h"
+#include "../skin/SkinTargetTraits.h"
 
 #include <cstddef>
 #include <string>
@@ -41,6 +42,10 @@ gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata);
 // must remain reachable for revalidation and removal.
 [[nodiscard]] std::vector<const GameplaySkinEntryRow *>
 gameplaySkinManagementEntries(const GameplaySkinSettingsSnapshot &snapshot);
+
+[[nodiscard]] bool gameplaySkinEntrySelectableForTarget(
+    const GameplaySkinEntryRow &entry,
+    const SkinTargetTrait &target) noexcept;
 
 [[nodiscard]] GameplaySkinSettingsActionAvailability
 gameplaySkinSettingsActionAvailability(
