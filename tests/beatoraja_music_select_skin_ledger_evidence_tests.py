@@ -17,12 +17,33 @@ TEST_RUNNERS = {
         "json_gameplay_skin_decoder_tests",
     "tests/lua_skin_file_system_tests.cpp": "lua_skin_file_system_tests",
     "tests/lua_skin_host_modules_tests.cpp": "lua_skin_host_modules_tests",
+    "tests/lua_skin_runtime_tests.cpp": "lua_skin_runtime_tests",
     "tests/lua_music_select_skin_decoder_tests.cpp":
         "lua_music_select_skin_decoder_tests",
     "tests/lua_skin_text_graph_live_integration_tests.cpp":
         "lua_skin_text_graph_live_integration_tests",
     "tests/music_select_input_processor_tests.cpp":
         "music_select_input_processor_tests",
+    "tests/music_select_bar_manager_tests.cpp":
+        "music_select_bar_manager_tests",
+    "tests/music_select_bar_renderer_tests.cpp":
+        "music_select_bar_renderer_tests",
+    "tests/music_select_event_controller_tests.cpp":
+        "music_select_event_controller_tests",
+    "tests/music_select_preview_tests.cpp": "music_select_preview_tests",
+    "tests/music_select_property_projection_tests.cpp":
+        "music_select_property_projection_tests",
+    "tests/music_select_ranking_tests.cpp": "music_select_ranking_tests",
+    "tests/music_select_repository_projection_tests.cpp":
+        "music_select_repository_projection_tests",
+    "tests/music_select_search_history_tests.cpp":
+        "music_select_search_history_tests",
+    "tests/music_select_skin_model_tests.cpp":
+        "music_select_skin_model_tests",
+    "tests/music_select_skin_state_bridge_tests.cpp":
+        "music_select_skin_state_bridge_tests",
+    "tests/play_skin_session_tests.cpp": "play_skin_session_tests",
+    "tests/skin_draw_command_tests.cpp": "skin_draw_command_tests",
 }
 
 

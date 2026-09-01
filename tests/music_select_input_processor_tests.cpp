@@ -1,5 +1,5 @@
 #include "music_select/MusicSelectInputProcessor.h"
-#include "music_select_skin_ledger_evidence.h"
+#include "music_select_runtime_ledger_assertions.h"
 
 #include <algorithm>
 #include <array>
@@ -449,7 +449,7 @@ void testControlsCommandsPostActionsAndExitOrder() {
 }
 
 std::vector<std::string> ledgerIds() {
-  return {
+  std::vector<std::string> identifiers{
       "select.behavior.music-select-input-processor.input-0",
       "select.behavior.music-select-key-property.get-analog-change-2",
       "select.behavior.music-select-key-property.is-non-analog-pressed-3",
@@ -498,6 +498,9 @@ std::vector<std::string> ledgerIds() {
       "select.input.music-select-key.target-up",
       "select.input.music-select-key.up",
   };
+  music_select_runtime_ledger_assertions::appendForRunner(
+      "music_select_input_processor_tests", identifiers);
+  return identifiers;
 }
 
 } // namespace

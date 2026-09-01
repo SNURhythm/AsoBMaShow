@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectBarManager.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <iostream>
 #include <string_view>
 
@@ -296,7 +298,7 @@ void testPinnedFilterFallbackAndSort() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testWrapOpenCloseAndPositionSemantics();
   testClickedDirectoryOpensWithoutMovingTheCenterSelection();
   testBarClassPredicatesDoNotDependOnChildren();
@@ -304,7 +306,8 @@ int main() {
   testReplayAndHashCommandsUseSelectableSongState();
   testTransientDirectoryRestoresItsSourceBar();
   testPinnedFilterFallbackAndSort();
-  if (failures != 0) return 1;
-  std::cout << "music-select bar manager tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_bar_manager_tests", failures,
+      "music-select bar manager assertion(s) failed",
+      "music-select bar manager tests passed");
 }

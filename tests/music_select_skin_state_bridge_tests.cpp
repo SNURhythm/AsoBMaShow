@@ -1,5 +1,7 @@
 #include "skin/beatoraja/MusicSelectSkinStateBridge.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <cmath>
 #include <iostream>
 #include <limits>
@@ -134,15 +136,13 @@ void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testExactPropertyNamespacesAndAbsentValues();
   testUnknownPropertiesRemainUnsupported();
   testCustomTimerValuesOverrideTheFrameSnapshot();
   testSkinTimerWritesUseBeatorajaCustomTimerRules();
-  if (failures != 0) {
-    std::cerr << failures << " music-select state bridge test(s) failed\n";
-    return 1;
-  }
-  std::cout << "music-select state bridge tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_skin_state_bridge_tests", failures,
+      "music-select state bridge test(s) failed",
+      "music-select state bridge tests passed");
 }

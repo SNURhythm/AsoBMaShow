@@ -1,5 +1,7 @@
 #include "skin/beatoraja/LuaSkinRuntime.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include "skin/SkinProfileSettings.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -1249,7 +1251,7 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testRuntimeContractsUseSourceAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testCatalogEntrySourceIsBoundedBeforeHostAllocation();
@@ -1267,10 +1269,7 @@ int main() {
   testFreshPurposesDoNotShareLuaState();
   testLanguageSurfaceBit32AndTextOnlyLoading();
   testLoadfileUsesBeatorajaRestrictedIoRoot();
-  if (failures != 0) {
-    std::cerr << failures << " lua skin runtime test(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin runtime tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "lua_skin_runtime_tests", failures,
+      "lua skin runtime test(s) failed", "lua skin runtime tests passed");
 }

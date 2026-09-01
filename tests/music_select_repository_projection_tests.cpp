@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectRepositoryProjection.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include "path.h"
 #include "scene/play/GameplayGaugeTypes.h"
 
@@ -268,12 +270,13 @@ void testProjectsSearchHistoryAfterCommands() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testProjectsFoldersSongsScoresAndSourceFlags();
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
   testProjectionOwnsItsRepositoryValues();
   testProjectsSearchHistoryAfterCommands();
-  if (failures != 0) return 1;
-  std::cout << "music-select repository projection tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_repository_projection_tests", failures,
+      "music-select repository projection assertion(s) failed",
+      "music-select repository projection tests passed");
 }

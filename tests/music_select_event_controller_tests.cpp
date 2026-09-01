@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectEventController.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <algorithm>
 #include <iostream>
 #include <string_view>
@@ -302,16 +304,14 @@ void testRivalAndNameResolution() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testFilterAndSortEventsUseLiteralSourceOrders();
   testLaunchAndExternalEventsEmitSourceActions();
   testPlayerAndApplicationOptionsUseExactDomains();
   testSelectedPlayConfigGuardsAndRemainingModifiers();
   testRivalAndNameResolution();
-  if (failures != 0) {
-    std::cerr << failures << " music-select event assertion(s) failed\n";
-    return 1;
-  }
-  std::cout << "music-select event controller tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_event_controller_tests", failures,
+      "music-select event assertion(s) failed",
+      "music-select event controller tests passed");
 }

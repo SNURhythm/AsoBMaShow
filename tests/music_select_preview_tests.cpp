@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectPreview.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <iostream>
 #include <string_view>
 
@@ -74,10 +76,11 @@ void testFloatWriterObservesThePostWriteSelection() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testExactSelectionDelayAndFolderTransition();
   testFloatWriterObservesThePostWriteSelection();
-  if (failures != 0) return 1;
-  std::cout << "music-select preview tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_preview_tests", failures,
+      "music-select preview assertion(s) failed",
+      "music-select preview tests passed");
 }

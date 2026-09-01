@@ -1,4 +1,5 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "music_select_runtime_ledger_assertions.h"
 #include "skin/beatoraja/SkinBpmGraphRenderer.h"
 #include "skin/beatoraja/SkinGaugeGraphRenderer.h"
 #include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
@@ -609,6 +610,124 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
                hit->authoredOrdinal == 7,
            "position one leaves pointer geometry at the authored bar region");
   }
+}
+
+void testMusicSelectDistributionGraphLowersDescendingSourceSegments() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+
+  SkinImageObject barImage;
+  barImage.definitionKind = SkinImageDefinitionKind::ImageSet;
+  for (int value = 0; value < 7; ++value) {
+    const SkinResourceId resource = static_cast<SkinResourceId>(100 + value);
+    resources.addImage(resource, {.x = 0, .y = 0, .w = 10, .h = 10});
+    barImage.orderedStates.push_back(
+        {.resource = resource,
+         .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}});
+  }
+
+  std::vector<SkinSourceRect> graphFrames;
+  for (int stateIndex = 0; stateIndex < 11; ++stateIndex) {
+    graphFrames.push_back(
+        {.x = stateIndex, .y = 0, .w = 1, .h = 1});
+  }
+  resources.addImageAtlas(300, graphFrames, 11, 1);
+  SkinSelectDistributionGraphObject graph;
+  graph.sprite = {.resource = 300, .frames = std::move(graphFrames)};
+
+  SkinSongListObject songList{
+      .center = 0,
+      .listOn = {{.object = 2,
+                  .destination = destination(2, 1, 100.0).presentation}},
+      .graph = SkinSongListPresentation{
+          .object = 4,
+          .destination = destination(4, 2, 5.0).presentation},
+  };
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 5;
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "song-list",
+       .payload = std::move(songList),
+       .authoredOrdinal = 7,
+       .critical = true},
+      {.id = 2,
+       .authoredName = "bar-image",
+       .payload = std::move(barImage),
+       .authoredOrdinal = 1},
+      {.id = 4,
+       .authoredName = "folder-graph",
+       .payload = std::move(graph),
+       .authoredOrdinal = 2},
+  };
+  model.model.destinations = {destination(1, 7, 0.0)};
+
+  MusicSelectSongListFrame frame;
+  MusicSelectBarFrame folder{.kind = MusicSelectBarKind::Folder,
+                             .title = "folder"};
+  folder.folderLampCounts[10] = 1;
+  folder.folderLampCounts[5] = 3;
+  frame.bars = {std::move(folder)};
+  const auto evaluated = evaluate(renderer, runtime, model, resources, state,
+                                  1, 0, nullptr, std::nullopt, nullptr, 1,
+                                  false, nullptr, nullptr, &frame);
+  expect(evaluated.submitReady.has_value() &&
+             evaluated.submitReady->commands.size() == 3,
+         "folder graph lowers its bar followed by two non-empty segments");
+  if (!evaluated.submitReady || evaluated.submitReady->commands.size() != 3) {
+    return;
+  }
+  const auto *high = std::get_if<SkinTexturedQuadCommand>(
+      &evaluated.submitReady->commands[1].payload);
+  const auto *low = std::get_if<SkinTexturedQuadCommand>(
+      &evaluated.submitReady->commands[2].payload);
+  expect(high != nullptr && low != nullptr && high->resource == 300 &&
+             low->resource == 300 && high->vertices[0].x == 105.0F &&
+             high->vertices[2].x == 115.0F &&
+             low->vertices[0].x == 115.0F &&
+             low->vertices[2].x == 145.0F,
+         "distribution segments draw from index 10 down with proportional "
+         "destination widths");
+  expect(high != nullptr && low != nullptr && high->vertices[0].u >
+                                                  low->vertices[0].u,
+         "descending graph segments retain their distinct source states");
+
+  std::vector<SkinSourceRect> judgeFrames;
+  for (int stateIndex = 0; stateIndex < 28; ++stateIndex) {
+    judgeFrames.push_back(
+        {.x = stateIndex, .y = 0, .w = 1, .h = 1});
+  }
+  resources.addImageAtlas(301, judgeFrames, 28, 1);
+  auto &judge = std::get<SkinSelectDistributionGraphObject>(
+      model.model.objects[2].payload);
+  judge.type = SkinSelectDistributionGraphType::Judge;
+  judge.sprite = {.resource = 301, .frames = std::move(judgeFrames)};
+  frame.bars[0].folderLampCounts = {};
+  frame.bars[0].folderRankCounts[27] = 1;
+  frame.bars[0].folderRankCounts[0] = 3;
+  const auto judged = evaluate(renderer, runtime, model, resources, state, 2,
+                               0, nullptr, std::nullopt, nullptr, 1, false,
+                               nullptr, nullptr, &frame);
+  expect(judged.submitReady.has_value() &&
+             judged.submitReady->commands.size() == 3,
+         "judge distribution uses all twenty-eight source rank states");
+  if (!judged.submitReady || judged.submitReady->commands.size() != 3) {
+    return;
+  }
+  const auto *highestRank = std::get_if<SkinTexturedQuadCommand>(
+      &judged.submitReady->commands[1].payload);
+  const auto *lowestRank = std::get_if<SkinTexturedQuadCommand>(
+      &judged.submitReady->commands[2].payload);
+  expect(highestRank != nullptr && lowestRank != nullptr &&
+             highestRank->resource == 301 && lowestRank->resource == 301 &&
+             highestRank->vertices[0].x == 105.0F &&
+             highestRank->vertices[2].x == 115.0F &&
+             lowestRank->vertices[0].x == 115.0F &&
+             lowestRank->vertices[2].x == 145.0F &&
+             highestRank->vertices[0].u > lowestRank->vertices[0].u,
+         "judge segments also draw descending with proportional widths");
 }
 
 void testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers() {
@@ -6410,8 +6529,9 @@ void testDesktopAndIpadFitCommandFixtures() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testMusicSelectSongListLowersSelectedBarStateAndPublishesHit();
+  testMusicSelectDistributionGraphLowersDescendingSourceSegments();
   testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers();
   testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering();
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();
@@ -6506,5 +6626,8 @@ int main() {
   testTimingDistributionKeepsOneMillisecondPerSourcePixel();
   testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts();
   testDesktopAndIpadFitCommandFixtures();
-  return failures == 0 ? 0 : 1;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "skin_draw_command_tests", failures,
+      "skin draw command assertion(s) failed",
+      "skin draw command tests passed");
 }

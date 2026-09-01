@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectSearchHistory.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <iostream>
 #include <string_view>
 
@@ -48,10 +50,11 @@ void testDuplicateMovesToEndAndMaximumEvictsOldest() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testBlankAndEmptyResultsDoNothing();
   testDuplicateMovesToEndAndMaximumEvictsOldest();
-  if (failures != 0) return 1;
-  std::cout << "music-select search history tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_search_history_tests", failures,
+      "music-select search history assertion(s) failed",
+      "music-select search history tests passed");
 }

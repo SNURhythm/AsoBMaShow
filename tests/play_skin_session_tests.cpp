@@ -3,6 +3,7 @@
 #include "skin/beatoraja/ResultSkinSession.h"
 
 #include "ArchiveFile.h"
+#include "music_select_runtime_ledger_assertions.h"
 
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
@@ -6662,7 +6663,7 @@ void testRequestedExternalResultSkinCreatesSession() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
@@ -6783,10 +6784,7 @@ int main() {
   testResultBridgePreservesCompletedGameplayGraph();
   testResultBridgeUsesRawChartBpmForResultProperties();
   testRequestedExternalResultSkinCreatesSession();
-  if (failures != 0) {
-    std::cerr << failures << " play skin session test(s) failed\n";
-    return 1;
-  }
-  std::cout << "play skin session tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "play_skin_session_tests", failures,
+      "play skin session test(s) failed", "play skin session tests passed");
 }

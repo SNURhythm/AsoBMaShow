@@ -1,5 +1,7 @@
 #include "skin/beatoraja/MusicSelectSkinModelResolver.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <iostream>
 #include <string_view>
 
@@ -144,14 +146,12 @@ void testEveryNegativeGraphOtherThanMinusOneKeepsJudgeShape() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testPinnedSongListResolutionUsesTypeSpecificFirstMatches();
   testMissingAndExcessEntriesRemainRepresented();
   testEveryNegativeGraphOtherThanMinusOneKeepsJudgeShape();
-  if (failures != 0) {
-    std::cerr << failures << " music-select skin model test(s) failed\n";
-    return 1;
-  }
-  std::cout << "music-select skin model tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_skin_model_tests", failures,
+      "music-select skin model test(s) failed",
+      "music-select skin model tests passed");
 }

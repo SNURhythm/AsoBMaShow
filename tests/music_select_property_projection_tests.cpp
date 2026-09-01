@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectPropertyProjection.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include "AssistOptionUtils.h"
 
 #include <iostream>
@@ -357,12 +359,13 @@ void testProjectsDirectoryAndFinishedRanking() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testProjectsSelectedSongAndPlayerConfiguration();
   testProjectsDirectoryAndFinishedRanking();
   testProjectsExactBarClassConditions();
   testProjectsCourseContract();
-  if (failures != 0) return 1;
-  std::cout << "music-select property projection tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_property_projection_tests", failures,
+      "music-select property projection assertion(s) failed",
+      "music-select property projection tests passed");
 }

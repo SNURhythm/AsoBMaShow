@@ -1,5 +1,7 @@
 #include "music_select/MusicSelectRanking.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include <iostream>
 #include <memory>
 #include <string_view>
@@ -82,9 +84,10 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testProjectsServiceStateIntoBeatorajaRankingData();
-  if (failures != 0) return 1;
-  std::cout << "music-select ranking tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "music_select_ranking_tests", failures,
+      "music-select ranking assertion(s) failed",
+      "music-select ranking tests passed");
 }
