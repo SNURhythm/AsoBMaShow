@@ -5,4 +5,5 @@ target_sources(main PRIVATE
     MusicSelectPropertyProjection.cpp
     MusicSelectInputProcessor.cpp
     MusicSelectInputBindingAdapter.cpp
+    MusicSelectEventController.cpp
 )

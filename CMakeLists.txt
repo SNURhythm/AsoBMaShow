@@ -1353,6 +1353,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(music_select_input_processor_tests PRIVATE cxx_std_23)
 
+        add_executable(music_select_event_controller_tests
+            tests/music_select_event_controller_tests.cpp
+            src/music_select/MusicSelectEventController.cpp
+            src/settings/AudioVideoSettings.cpp
+        )
+        target_include_directories(music_select_event_controller_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_event_controller_tests PRIVATE cxx_std_23)
+
         add_executable(music_select_input_binding_adapter_tests
             tests/music_select_input_binding_adapter_tests.cpp
             src/music_select/MusicSelectInputBindingAdapter.cpp
@@ -7247,6 +7257,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_input_processor_tests)
         asobmashow_register_test(music_select_input_processor_tests)
+    endif()
+    if (TARGET music_select_event_controller_tests)
+        asobmashow_register_test(music_select_event_controller_tests)
     endif()
     if (TARGET music_select_input_binding_adapter_tests)
         asobmashow_register_test(music_select_input_binding_adapter_tests)
