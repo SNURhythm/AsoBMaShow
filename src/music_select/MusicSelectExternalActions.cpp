@@ -34,11 +34,18 @@ firstParent(const std::vector<std::filesystem::path> &paths) {
 } // namespace
 
 std::vector<std::filesystem::path>
-musicSelectDocumentPaths(const MusicSelectBar &bar) {
+musicSelectDocumentPaths(
+    const MusicSelectBar &bar,
+    const MusicSelectArchiveDocumentResolver &archiveDocuments) {
   std::vector<std::filesystem::path> result;
   if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart ||
       !bar.presentation.exists) {
     return result;
+  }
+  if (archiveDocuments) {
+    if (auto documents = archiveDocuments(bar.chart->meta.BmsPath)) {
+      return std::move(*documents);
+    }
   }
   try {
     const auto parent = bar.chart->meta.BmsPath.parent_path();

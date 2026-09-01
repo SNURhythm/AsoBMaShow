@@ -2,6 +2,10 @@
 
 #include "../PlatformOpen.h"
 
+#if defined(__ANDROID__)
+#include "../AndroidNatives.h"
+#endif
+
 #include "IrUploadsScene.h"
 #include "LibraryTasksScene.h"
 #include "MusicPlayerScene.h"
@@ -38,6 +42,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cmath>
 #include <ctime>
 #include <memory>
@@ -135,20 +140,66 @@ MusicSelectClockFields localClockFields(std::time_t value) {
 }
 
 std::optional<MusicSelectPreviewSelection>
-previewSelection(const MusicSelectBarManagerSnapshot &snapshot) {
+previewSelection(const MusicSelectBarManagerSnapshot &snapshot,
+                 bool archivePreviewEnabled) {
   if (snapshot.selectedIndex >= snapshot.rows.size()) return std::nullopt;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart) {
     return std::nullopt;
   }
   const auto &meta = selected.chart->meta;
+  bool archiveVirtualPath = archive_file::isVirtualPath(meta.BmsPath);
+#if TARGET_OS_ANDROID
+  if (archiveVirtualPath && IsAndroidTreePath(meta.BmsPath)) {
+    archiveVirtualPath = false;
+  }
+#endif
+  const bool suppressArchivePreview =
+      archiveVirtualPath && !archivePreviewEnabled;
   return MusicSelectPreviewSelection{
       .id = selected.id.value,
       .folder = meta.BmsPath.parent_path(),
-      .previewPath = meta.Preview.empty()
+      .previewPath = meta.Preview.empty() || suppressArchivePreview
                          ? std::filesystem::path{}
                          : meta.BmsPath.parent_path() / meta.Preview,
   };
+}
+
+std::optional<std::vector<std::filesystem::path>>
+materializedArchiveDocuments(const std::filesystem::path &chartPath) {
+  std::filesystem::path archivePath;
+  std::filesystem::path chartInnerPath;
+  if (!archive_file::splitVirtualPath(chartPath, archivePath,
+                                      chartInnerPath)) {
+    return std::nullopt;
+  }
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  if (!archive_file::listEntries(archivePath, entries, &error)) {
+    SDL_Log("Failed to enumerate selector archive documents: %s",
+            error.c_str());
+    return std::vector<std::filesystem::path>{};
+  }
+  std::vector<std::filesystem::path> documents;
+  const auto folder = chartInnerPath.parent_path();
+  for (const auto &entry : entries) {
+    if (entry.directory || entry.path.parent_path() != folder) continue;
+    std::string extension = entry.path.extension().string();
+    std::ranges::transform(extension, extension.begin(),
+                           [](unsigned char value) {
+                             return static_cast<char>(std::tolower(value));
+                           });
+    if (extension != ".txt") continue;
+    const auto virtualPath =
+        archive_file::makeVirtualPath(archivePath, entry.path);
+    if (auto materialized = archive_file::materializeFile(virtualPath, &error)) {
+      documents.push_back(std::move(*materialized));
+    } else {
+      SDL_Log("Failed to materialize selector archive document: %s",
+              error.c_str());
+    }
+  }
+  return documents;
 }
 
 std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
@@ -216,34 +267,46 @@ void MusicSelectScene::init() {
   reloadLibrary();
   selectedBarMoved();
 
+  if (context.irHttpClient) {
+    auto *application = &context;
+    irExternalUrlService_ = std::make_unique<ir::IrExternalUrlService>(
+        [application](const ir::IrExternalUrlRequest &request,
+                      std::stop_token stopToken) {
+          return ir::resolveFirstEnabledIrExternalUrl(
+              request, stopToken,
+              [application](std::string_view profileId,
+                            std::string_view providerId) {
+                return application->lookupActiveIrCredential(profileId,
+                                                             providerId);
+              },
+              [application](std::string_view providerId,
+                            const ir::IrProviderRuntimeConfig &runtime,
+                            std::stop_token requestStop) {
+                return application->irDrivers.fetchAuthenticatedAccount(
+                    providerId, runtime, *application->irHttpClient,
+                    requestStop);
+              },
+              [application](std::string_view providerId,
+                            const ir::IrChartExternalUrlRequest &chart,
+                            const ir::IrProviderRuntimeConfig &runtime,
+                            std::stop_token requestStop) {
+                return application->irDrivers.chartExternalUrl(
+                    providerId, chart, runtime, *application->irHttpClient,
+                    requestStop);
+              },
+              [application](std::string_view providerId,
+                            const ir::IrCourseExternalUrlRequest &course,
+                            const ir::IrProviderRuntimeConfig &runtime,
+                            std::stop_token requestStop) {
+                return application->irDrivers.courseExternalUrl(
+                    providerId, course, runtime, *application->irHttpClient,
+                    requestStop);
+              });
+        });
+  }
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (!context.skinStorageRoots || !context.skinResourcePreparationService ||
-      !context.skinLiveResourceCounters) {
-    enterError({skin::SkinDiagnostic{
-        .code = "skin.music_select.session_services_unavailable",
-        .message = "Music-select skin session services are unavailable."}});
-    return;
-  }
-  auto initialFrame = makeFrame();
-  const auto safetyLevel = activationRequest_.safetyLevel;
-  auto created = skin::MusicSelectSkinSession::create(
-      std::move(activationRequest_),
-      {.storageRoots = *context.skinStorageRoots,
-       .resourcePreparation = *context.skinResourcePreparationService,
-       .initialFrame = std::move(initialFrame),
-       .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
-       .builtinImageReader = archive_file::readFileBounded,
-       .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-           context.jukebox.audioRuntime(),
-           [this] { return context.settings.audioVideo.audio.masterVolume; },
-           {}, context.skinLiveResourceCounters),
-       .liveResourceCounters = context.skinLiveResourceCounters,
-       .safetyPolicy = skin::SkinSafetyPolicy(safetyLevel)});
-  if (!created.session) {
-    enterError(std::move(created.diagnostics));
-    return;
-  }
-  skinSession_ = std::move(created.session);
+  if (!activateSkin(std::move(activationRequest_))) return;
 #endif
 
   MusicSelectToolbarState toolbarState;
@@ -273,9 +336,19 @@ void MusicSelectScene::onPause() {
   stopInputListening();
   previewController_.reset();
   if (previewAudio_) previewAudio_->switchTo(std::nullopt);
+  if (irExternalUrlGeneration_ != 0 && irExternalUrlService_) {
+    irExternalUrlService_->close(irExternalUrlGeneration_);
+  }
+  irExternalUrlGeneration_ = 0;
 }
 
 void MusicSelectScene::onResume() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (reactivateSkinOnResume_) {
+    reactivateSkinOnResume_ = false;
+    if (!reactivateSkinAfterSettings()) return;
+  }
+#endif
   reloadLibrary();
   if (!failed_) {
     selectedBarMoved();
@@ -285,6 +358,8 @@ void MusicSelectScene::onResume() {
 
 void MusicSelectScene::reloadLibrary() {
   if (!chartSession_) return;
+  const std::uint64_t loadedRevision =
+      context.chartRepository.GetLibraryRevision();
   std::vector<ChartMetaRecord> records;
   ChartMetaQuery query;
   query.selectedLongNoteMode =
@@ -293,7 +368,7 @@ void MusicSelectScene::reloadLibrary() {
   scoreCache_ = context.scoreRepository.LoadBestScores();
   clearRankCache_ = context.scoreRepository.LoadBestClearRanks();
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
-  libraryRevision_ = context.chartRepository.GetLibraryRevision();
+  libraryRevision_ = loadedRevision;
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
                        context.settings.skinDifficultyFilterName,
@@ -363,7 +438,8 @@ void MusicSelectScene::selectedBarMoved() {
   songBarChangeMicros_ = elapsedMicros();
 
   const auto previewMove = previewController_.selectedBarMoved(
-      previewSelection(snapshot), songBarChangeMicros_);
+      previewSelection(snapshot, context.settings.archiveChartPreviewEnabled),
+      songBarChangeMicros_);
   if (previewMove.stopAudio && previewAudio_) {
     previewAudio_->switchTo(std::nullopt);
   }
@@ -637,6 +713,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
           syncResolvedFilters();
           selectedBarMoved();
         } else {
+          (void)bars_.select(clicked.id);
+          selectedBarMoved();
           launchSelected();
         }
       }
@@ -683,6 +761,11 @@ void MusicSelectScene::openSameFolder() {
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
          return scoreCache_.bestFor(meta, mode);
+       },
+       .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
+         return musicSelectExistingChartReplaySlots(
+             record, mode,
+             context.replayRepository.GetResolvedProfileRoot());
        },
        .selectedLongNoteMode = query.selectedLongNoteMode,
        .repositoryRevision = libraryRevision_});
@@ -916,7 +999,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
 
 void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
                                     bool autoplay) {
-  if (launching_ || bar.courseCharts.empty()) return;
+  if (launching_ || bar.courseCharts.empty() || !bar.presentation.exists) {
+    return;
+  }
   auto session = buildCourseGameplaySession(
       {.courseId = bar.courseId,
        .courseKey = bar.courseKey,
@@ -1130,8 +1215,8 @@ void MusicSelectScene::consumeActions() {
       const auto id = numericSelector(action.selector);
       const auto name = selectorName(action.selector);
       if ((id && *id == 1) || name == "musicselect_position") {
-        selectedBarMoved();
         bars_.setSelectedPosition(static_cast<float>(action.floatValue));
+        selectedBarMoved();
       } else if (((id && *id == 8) || name == "ranking_position") &&
                  action.floatValue >= 0.0 && action.floatValue < 1.0) {
         rankingOffset_ = static_cast<int>(
@@ -1378,7 +1463,8 @@ void MusicSelectScene::executeEvent(
       return;
     case MusicSelectEventEffectKind::OpenDocument:
       if (selected != nullptr && platform_open::desktopOpenSupported()) {
-        for (const auto &path : musicSelectDocumentPaths(*selected)) {
+        for (const auto &path : musicSelectDocumentPaths(
+                 *selected, materializedArchiveDocuments)) {
           std::string error;
           if (!platform_open::openPath(path, error)) {
             SDL_Log("Failed to open chart document %s: %s",
@@ -1436,48 +1522,23 @@ void MusicSelectScene::executeEvent(
       }
       break;
     case MusicSelectEventEffectKind::OpenIr:
-      if (selected != nullptr && context.irHttpClient) {
-        const std::string profileId = context.profileManager.activeProfile().id;
-        for (const auto &[providerId, provider] :
-             context.settings.irProviders) {
-          if (!provider.enabled) continue;
-          const std::string apiKey =
-              context.lookupActiveIrCredential(profileId, providerId);
-          if (apiKey.empty()) continue;
-          const ir::IrProviderRuntimeConfig runtime{
-              .profileId = profileId,
-              .serverOrigin = provider.serverOrigin,
-              .apiKey = apiKey,
-          };
-          const auto account = context.irDrivers.fetchAuthenticatedAccount(
-              providerId, runtime, *context.irHttpClient, {});
-          if (account.status != ir::IrAuthenticatedAccountStatus::Succeeded ||
-              !account.account) {
-            continue;
-          }
-          std::optional<std::string> url;
-          if (selected->kind == skin::MusicSelectBarKind::Song &&
-              selected->chart) {
-            const auto &meta = selected->chart->meta;
-            url = context.irDrivers.chartExternalUrl(
-                providerId,
-                {.keyMode = meta.KeyMode,
-                 .isDoublePlay = meta.IsDP,
-                 .chartSha256 = meta.SHA256},
-                runtime, *context.irHttpClient, {});
-          } else if (selected->kind == skin::MusicSelectBarKind::Grade) {
-            url = context.irDrivers.courseExternalUrl(
-                providerId, {}, runtime, *context.irHttpClient, {});
-          }
-          if (url) {
-            std::string error;
-            if (!platform_open::openExternalUrl(*url, error)) {
-              SDL_Log("Failed to open selector IR URL %s: %s", url->c_str(),
-                      error.c_str());
-            }
-          }
-          break;
+      if (selected != nullptr && irExternalUrlService_) {
+        ir::IrExternalUrlRequest request;
+        request.profile.profileId = context.profileManager.activeProfile().id;
+        request.profile.providers.insert(context.settings.irProviders.begin(),
+                                         context.settings.irProviders.end());
+        if (selected->kind == skin::MusicSelectBarKind::Song &&
+            selected->chart) {
+          const auto &meta = selected->chart->meta;
+          request.target = ir::IrExternalUrlTarget::Chart;
+          request.chart = {.keyMode = meta.KeyMode,
+                           .isDoublePlay = meta.IsDP,
+                           .chartSha256 = meta.SHA256};
+        } else if (selected->kind == skin::MusicSelectBarKind::Grade) {
+          request.target = ir::IrExternalUrlTarget::Course;
         }
+        irExternalUrlGeneration_ =
+            irExternalUrlService_->open(std::move(request));
       }
       break;
     case MusicSelectEventEffectKind::UpdateFolder: {
@@ -1518,6 +1579,21 @@ void MusicSelectScene::executeEvent(
 
 void MusicSelectScene::update(float) {
   if (failed_) return;
+  if (irExternalUrlGeneration_ != 0 && irExternalUrlService_) {
+    const auto snapshot = irExternalUrlService_->snapshot();
+    if (snapshot.generation == irExternalUrlGeneration_ &&
+        snapshot.finished) {
+      irExternalUrlService_->close(irExternalUrlGeneration_);
+      irExternalUrlGeneration_ = 0;
+      if (snapshot.url) {
+        std::string error;
+        if (!platform_open::openExternalUrl(*snapshot.url, error)) {
+          SDL_Log("Failed to open selector IR URL %s: %s",
+                  snapshot.url->c_str(), error.c_str());
+        }
+      }
+    }
+  }
   if (toolbar_) {
     toolbar_->setViewportSize(rendering::window_width,
                               rendering::window_height);
@@ -1548,8 +1624,10 @@ void MusicSelectScene::update(float) {
   }
   consumeLogicalInput();
   consumeActions();
-  previewController_.observeSelection(previewSelection(bars_.snapshot()),
-                                      songBarChangeMicros_);
+  previewController_.observeSelection(
+      previewSelection(bars_.snapshot(),
+                       context.settings.archiveChartPreviewEnabled),
+      songBarChangeMicros_);
   if (auto preview = previewController_.update(elapsedMicros(), launching_);
       preview && previewAudio_) {
     previewAudio_->switchTo(std::move(preview->path));
@@ -1580,6 +1658,8 @@ void MusicSelectScene::enterError(
   if (failed_) return;
   failed_ = true;
   stopInputListening();
+  previewController_.reset();
+  if (previewAudio_) previewAudio_->switchTo(std::nullopt);
   if (searchInput_ != nullptr) searchInput_->endEditing();
   if (searchOverlay_ != nullptr) searchOverlay_->setVisible(false);
   diagnostics_ = std::move(diagnostics);
@@ -1668,10 +1748,73 @@ void MusicSelectScene::openIrUploads() {
 }
 
 void MusicSelectScene::openSettings() {
+  reactivateSkinOnResume_ = true;
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
       SceneReturnTarget::Retained(this)), true);
 }
+
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+bool MusicSelectScene::activateSkin(
+    skin::GameplaySkinActivationRequest request) {
+  selectedSkinPath_ = musicSelectSkinEntryPath(request.activation.entry);
+  if (!context.skinStorageRoots || !context.skinResourcePreparationService ||
+      !context.skinLiveResourceCounters) {
+    enterError({skin::SkinDiagnostic{
+        .code = "skin.music_select.session_services_unavailable",
+        .message = "Music-select skin session services are unavailable."}});
+    return false;
+  }
+  auto initialFrame = makeFrame();
+  const auto safetyLevel = request.safetyLevel;
+  auto created = skin::MusicSelectSkinSession::create(
+      std::move(request),
+      {.storageRoots = *context.skinStorageRoots,
+       .resourcePreparation = *context.skinResourcePreparationService,
+       .initialFrame = std::move(initialFrame),
+       .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+       .builtinImageReader = archive_file::readFileBounded,
+       .audioBackend = skin::createLuaSkinApplicationAudioBackend(
+           context.jukebox.audioRuntime(),
+           [this] { return context.settings.audioVideo.audio.masterVolume; },
+           {}, context.skinLiveResourceCounters),
+       .liveResourceCounters = context.skinLiveResourceCounters,
+       .safetyPolicy = skin::SkinSafetyPolicy(safetyLevel)});
+  if (!created.session) {
+    enterError(std::move(created.diagnostics));
+    return false;
+  }
+  skinSession_ = std::move(created.session);
+  return true;
+}
+
+bool MusicSelectScene::reactivateSkinAfterSettings() {
+  skin::GameplaySkinAcquisition acquisition;
+  if (context.gameplaySkinLifecycle) {
+    acquisition =
+        context.gameplaySkinLifecycle->acquireForSkinType(5, false);
+  } else if (context.settings.skin.selectedSkinEntries.contains(5)) {
+    acquisition.disposition =
+        skin::GameplaySkinAcquisitionDisposition::Failed;
+    acquisition.failure = skin::GameplaySkinAcquisitionFailure{
+        .diagnostic = skin::SkinDiagnostic{
+            .code = "skin.music_select.lifecycle_unavailable",
+            .message =
+                "The selected music-select skin service is unavailable."}};
+  }
+  auto decision = decideMusicSelectLaunch(std::move(acquisition));
+  if (decision.kind == MusicSelectLaunchKind::BuiltIn) {
+    context.sceneManager->changeScene("MainMenu");
+    return false;
+  }
+  if (decision.kind == MusicSelectLaunchKind::Error) {
+    selectedSkinPath_ = std::move(decision.selectedSkinPath);
+    enterError(std::move(decision.diagnostics));
+    return false;
+  }
+  return decision.request && activateSkin(std::move(*decision.request));
+}
+#endif
 
 void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
   {
@@ -1692,6 +1835,11 @@ void MusicSelectScene::cleanupScene() {
     context.irRankingService->close(rankingGeneration_);
   }
   rankingGeneration_ = 0;
+  if (irExternalUrlService_) {
+    irExternalUrlService_->stop();
+  }
+  irExternalUrlService_.reset();
+  irExternalUrlGeneration_ = 0;
   previewController_.reset();
   previewAudio_.reset();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

@@ -10,6 +10,7 @@
 #include "../music_select/MusicSelectRanking.h"
 #include "../music_select/MusicSelectSearchHistory.h"
 #include "../ir/IrRankingModels.h"
+#include "../ir/IrExternalUrlService.h"
 #include "../repositories/ScoreRepositoryModels.h"
 #include "../skin/GameplaySkinActivationRequest.h"
 
@@ -77,6 +78,11 @@ private:
   void openIrUploads();
   void openSettings();
   void persistToolbar(MusicSelectToolbarState);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  [[nodiscard]] bool
+  activateSkin(skin::GameplaySkinActivationRequest);
+  [[nodiscard]] bool reactivateSkinAfterSettings();
+#endif
 
   skin::GameplaySkinActivationRequest activationRequest_;
   std::string selectedSkinPath_;
@@ -108,6 +114,8 @@ private:
   std::map<std::string, CachedRanking, std::less<>> rankingCache_;
   std::string rankingCacheKey_;
   std::uint64_t rankingGeneration_ = 0;
+  std::unique_ptr<ir::IrExternalUrlService> irExternalUrlService_;
+  std::uint64_t irExternalUrlGeneration_ = 0;
   std::uint64_t rankingRevision_ = 0;
   std::uint64_t irAccountEvidenceRevision_ = 0;
   std::int64_t rankingLoadAtMicros_ = -1;
@@ -123,6 +131,7 @@ private:
   TextInputBox *searchInput_ = nullptr;
   bool failed_ = false;
   bool launching_ = false;
+  bool reactivateSkinOnResume_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
 #endif

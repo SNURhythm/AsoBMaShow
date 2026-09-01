@@ -135,8 +135,8 @@ int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
     if (!left.score && !right.score) return 0;
     if (!left.score) return 1;
     if (!right.score) return -1;
-    return left.score->badPoints.value_or(left.score->comboBreak.value_or(0)) -
-           right.score->badPoints.value_or(right.score->comboBreak.value_or(0));
+    return left.score->badPoints.value_or(0) -
+           right.score->badPoints.value_or(0);
   }
   if (sortId == "DURATION") {
     const bool leftHasDuration =

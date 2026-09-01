@@ -257,6 +257,24 @@ void testPinnedFilterFallbackAndSort() {
               snapshot.rows.back().id.value == "song:2",
           "missing DURATION values compare equal and retain source order");
 
+  first->score->comboBreak = 99;
+  second->score->comboBreak = 1;
+  manager.refresh(projection);
+  manager.configure({.modeFilter = "ALL",
+                     .difficultyFilter = "ALL",
+                     .sortId = "MISSCOUNT"});
+  snapshot = manager.snapshot();
+  require(snapshot.rows.front().id.value == "song:1" &&
+              snapshot.rows.back().id.value == "song:2",
+          "missing BP compares as zero without substituting combo breaks");
+  first->score->badPoints = 2;
+  second->score->badPoints = 1;
+  manager.refresh(projection);
+  snapshot = manager.snapshot();
+  require(snapshot.rows.front().id.value == "song:2" &&
+              snapshot.rows.back().id.value == "song:1",
+          "MISSCOUNT uses the source minimum-BP ordering");
+
   first->chart->hasBpmStop = true;
   second->chart->hasScrollChange = true;
   MusicSelectBarManager speedManager(

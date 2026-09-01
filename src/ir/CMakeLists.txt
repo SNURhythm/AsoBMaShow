@@ -1,5 +1,6 @@
 target_sources(main PRIVATE
     IrDriver.cpp
+    IrExternalUrlService.cpp
     IrHttpClient.cpp
     IrCredentialStore.cpp
     IrCredentialBackend.cpp

@@ -4,6 +4,7 @@
 
 #include "AssistOptionUtils.h"
 
+#include <cmath>
 #include <iostream>
 #include <string_view>
 
@@ -60,6 +61,7 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
                                  .lastPlayedUnixSeconds = 1'700'000'000,
                                  .maxCombo = 321,
                                  .comboBreak = 12,
+                                 .badPoints = 8,
                                  .clearType = kClearTypeExHardClearRank};
   song.rivalScore = ScoreBestSnapshot{.score = 750,
                                       .maxScore = 1000,
@@ -180,7 +182,7 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.integers.at(72) == 1000 &&
               values.integers.at(74) == 500 &&
               values.integers.at(75) == 321 &&
-              values.integers.at(76) == 12 &&
+              values.integers.at(76) == 8 &&
               values.integers.at(77) == 9 &&
               values.integers.at(78) == 7 &&
               values.integers.at(79) == 2 &&
@@ -261,6 +263,35 @@ void testProjectsCourseContract() {
               values.booleans.at(1012) && values.booleans.at(1017) &&
               !values.booleans.at(1003) && !values.booleans.at(1015),
           "GradeBar constraints project the exact CourseData enum options");
+}
+
+void testUnavailableSongRatesStayZeroWithoutNotes() {
+  AppSettings settings;
+  MusicSelectBar song;
+  song.kind = skin::MusicSelectBarKind::Song;
+  song.presentation = {.kind = skin::MusicSelectBarKind::Song,
+                       .exists = false};
+  song.chart.emplace();
+  song.chart->meta.TotalNotes = 0;
+  song.score = ScoreBestSnapshot{.score = 10,
+                                 .maxScore = 20,
+                                 .judgementCounts = {1, 2, 3, 4, 5},
+                                 .maxCombo = 6,
+                                 .comboBreak = 7};
+  MusicSelectBarManagerSnapshot bars;
+  bars.rows.push_back(std::move(song));
+
+  const auto values = projectMusicSelectProperties(
+      settings, bars, MusicSelectPropertyRuntimeSnapshot{});
+  for (int id = 140; id <= 145; ++id) {
+    require(std::isfinite(values.rates.at(id)) && values.rates.at(id) == 0.0,
+            "zero-note judgement and combo rates remain source-default zero");
+  }
+  require(std::isfinite(values.rates.at(147)) &&
+              values.rates.at(147) == 0.0 &&
+              values.integers.at(76) == 0 &&
+              values.integers.at(177) == 0,
+          "zero-note score rate and unavailable BP remain zero");
 }
 
 void testProjectsExactBarClassConditions() {
@@ -364,6 +395,7 @@ int main(int argc, char **argv) {
   testProjectsDirectoryAndFinishedRanking();
   testProjectsExactBarClassConditions();
   testProjectsCourseContract();
+  testUnavailableSongRatesStayZeroWithoutNotes();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_property_projection_tests", failures,
       "music-select property projection assertion(s) failed",

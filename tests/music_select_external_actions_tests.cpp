@@ -51,6 +51,23 @@ void testDocumentSelectionMatchesFilesListFilter() {
   assert(musicSelectDocumentPaths(bar).empty());
 }
 
+void testArchivedDocumentsUseMaterializedResolverPaths() {
+  const auto bar = song("/charts/package.zip/folder/chart.bms", true);
+  int calls = 0;
+  const auto paths = musicSelectDocumentPaths(
+      bar, [&](const std::filesystem::path &path)
+               -> std::optional<std::vector<std::filesystem::path>> {
+        ++calls;
+        assert(path == bar.chart->meta.BmsPath);
+        return std::vector<std::filesystem::path>{
+            "/cache/package/readme.txt", "/cache/package/details.TXT"};
+      });
+  assert(calls == 1);
+  assert(paths == std::vector<std::filesystem::path>(
+                      {"/cache/package/readme.txt",
+                       "/cache/package/details.TXT"}));
+}
+
 void testExplorerBranchPriority() {
   TempDirectory temporary;
   const auto existingPath = temporary.path / "installed" / "chart.bms";
@@ -144,6 +161,7 @@ void testRefreshPathUsesThePhysicalArchive() {
 
 int main() {
   testDocumentSelectionMatchesFilesListFilter();
+  testArchivedDocumentsUseMaterializedResolverPaths();
   testExplorerBranchPriority();
   testFolderAndDownloadSiteBranches();
   testRefreshPathUsesThePhysicalArchive();

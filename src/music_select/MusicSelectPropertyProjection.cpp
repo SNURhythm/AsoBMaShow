@@ -423,8 +423,7 @@ void projectSelectedBar(Properties &out,
   out.integers[71] = score.score;
   out.integers[72] = maximum;
   out.integers[75] = score.maxCombo.value_or(0);
-  out.integers[76] = score.badPoints.value_or(
-      score.comboBreak.value_or(0));
+  out.integers[76] = score.badPoints.value_or(0);
   out.integers[77] = score.playCount;
   out.integers[78] = score.clearCount;
   out.integers[79] = score.playCount - score.clearCount;
@@ -439,7 +438,7 @@ void projectSelectedBar(Properties &out,
   out.integers[170] = 0;
   out.integers[171] = score.score;
   out.integers[174] = score.maxCombo.value_or(0);
-  out.integers[177] = score.badPoints.value_or(score.comboBreak.value_or(0));
+  out.integers[177] = score.badPoints.value_or(0);
   out.integers[183] = 0;
   out.integers[184] = 0;
   out.imageIndexes[370] = clear;
@@ -449,21 +448,22 @@ void projectSelectedBar(Properties &out,
   out.rates[111] = selectedRate;
   out.rates[112] = 0.0;
   out.rates[113] = 0.0;
-  out.rates[147] = selectedRate;
   out.floats[1102] = selectedRate;
   out.floats[1115] = selectedRate;
   out.floats[155] = selectedRate;
   out.floats[183] = 0.0;
-  for (int judgeIndex = 0; judgeIndex < 5; ++judgeIndex) {
-    out.rates[140 + judgeIndex] =
-        static_cast<double>(score.judgementCounts[
-            static_cast<std::size_t>(judgeIndex)]) /
-        meta.TotalNotes;
+  if (meta.TotalNotes > 0) {
+    for (int judgeIndex = 0; judgeIndex < 5; ++judgeIndex) {
+      out.rates[140 + judgeIndex] =
+          static_cast<double>(score.judgementCounts[
+              static_cast<std::size_t>(judgeIndex)]) /
+          meta.TotalNotes;
+    }
+    out.rates[145] =
+        static_cast<double>(score.maxCombo.value_or(0)) / meta.TotalNotes;
+    out.rates[147] =
+        static_cast<double>(score.score) / meta.TotalNotes / 2.0;
   }
-  out.rates[145] =
-      static_cast<double>(score.maxCombo.value_or(0)) / meta.TotalNotes;
-  out.rates[147] =
-      static_cast<double>(score.score) / meta.TotalNotes / 2.0;
 
   if (selected->rivalScore) {
     const auto &rival = *selected->rivalScore;
