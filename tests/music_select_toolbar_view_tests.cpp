@@ -151,6 +151,27 @@ void testActionsModesAndDragPersist() {
   expect(toolbar->state().mode == MusicSelectToolbarMode::Hidden,
          "hide persists hidden state for owner removal");
 }
+
+void testPersistedSettingsStateAppliesToAnExistingToolbar() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  auto toolbar = MusicSelectToolbarView::Create(
+      {.mode = MusicSelectToolbarMode::Collapsed}, callbacks(actions, saved),
+      500, 300);
+  toolbar->applyState({.mode = MusicSelectToolbarMode::Hidden});
+  expect(!toolbar->getVisible() && toolbar->controls().empty() && saved.empty(),
+         "returning from Settings hides the retained toolbar without saving "
+         "the already-persisted choice again");
+
+  toolbar->applyState({.mode = MusicSelectToolbarMode::Expanded,
+                       .x = 80.0F,
+                       .y = 60.0F,
+                       .hasPosition = true});
+  expect(toolbar->getVisible() && toolbar->controls().size() == 7 &&
+             toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
+         "returning from Settings rebuilds and places the retained toolbar "
+         "from persisted state");
+}
 } // namespace
 
 int main() {
@@ -165,6 +186,7 @@ int main() {
   testExpandedUsesOnlyExactFontAwesomeControls();
   testCollapsedAndHiddenShapes();
   testActionsModesAndDragPersist();
+  testPersistedSettingsStateAppliesToAnExistingToolbar();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   if (failures != 0) {

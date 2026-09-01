@@ -86,6 +86,15 @@ MusicSelectToolbarView::MusicSelectToolbarView(
         state_.hasPosition ? state_.y : kDefaultPosition);
 }
 
+void MusicSelectToolbarView::applyState(MusicSelectToolbarState state) {
+  state_ = state;
+  rebuild();
+  if (state_.mode != MusicSelectToolbarMode::Hidden) {
+    place(state_.hasPosition ? state_.x : kDefaultPosition,
+          state_.hasPosition ? state_.y : kDefaultPosition);
+  }
+}
+
 void MusicSelectToolbarView::rebuild() {
   clearChildren();
   controls_.clear();

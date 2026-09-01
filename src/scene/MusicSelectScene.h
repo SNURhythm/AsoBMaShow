@@ -77,6 +77,7 @@ private:
   void openTasks();
   void openIrUploads();
   void openSettings();
+  void syncToolbar();
   void persistToolbar(MusicSelectToolbarState);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   [[nodiscard]] bool

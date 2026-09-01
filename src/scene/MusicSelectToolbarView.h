@@ -48,6 +48,7 @@ public:
     return controls_;
   }
 
+  void applyState(MusicSelectToolbarState state);
   void activateControl(MusicSelectToolbarControl control);
   void setViewportSize(int width, int height);
 

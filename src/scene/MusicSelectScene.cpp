@@ -309,25 +309,7 @@ void MusicSelectScene::init() {
   if (!activateSkin(std::move(activationRequest_))) return;
 #endif
 
-  MusicSelectToolbarState toolbarState;
-  {
-    std::lock_guard lock(context.applicationUiStateMutex);
-    toolbarState = context.applicationUiState.musicSelectToolbar;
-  }
-  auto toolbar = MusicSelectToolbarView::Create(
-      toolbarState,
-      {.openMusicPlayer = [this] { openMusicPlayer(); },
-       .openTasks = [this] { openTasks(); },
-       .openIrUploads = [this] { openIrUploads(); },
-       .openSettings = [this] { openSettings(); },
-       .persist = [this](MusicSelectToolbarState state) {
-         persistToolbar(state);
-       }},
-      rendering::window_width, rendering::window_height);
-  if (toolbar) {
-    toolbar_ = toolbar.get();
-    addView(toolbar.release());
-  }
+  syncToolbar();
   buildSearchPrompt();
   startInputListening();
 }
@@ -343,12 +325,14 @@ void MusicSelectScene::onPause() {
 }
 
 void MusicSelectScene::onResume() {
+  launching_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (reactivateSkinOnResume_) {
     reactivateSkinOnResume_ = false;
     if (!reactivateSkinAfterSettings()) return;
   }
 #endif
+  syncToolbar();
   reloadLibrary();
   if (!failed_) {
     selectedBarMoved();
@@ -1089,6 +1073,7 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
       playlist.courseCharts.push_back(*child.chart);
     }
   }
+  playlist.presentation.exists = !playlist.courseCharts.empty();
   launchCourse(playlist, true);
 }
 
@@ -1752,6 +1737,32 @@ void MusicSelectScene::openSettings() {
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
       SceneReturnTarget::Retained(this)), true);
+}
+
+void MusicSelectScene::syncToolbar() {
+  MusicSelectToolbarState state;
+  {
+    std::lock_guard lock(context.applicationUiStateMutex);
+    state = context.applicationUiState.musicSelectToolbar;
+  }
+  if (toolbar_ != nullptr) {
+    toolbar_->applyState(state);
+    return;
+  }
+  auto toolbar = MusicSelectToolbarView::Create(
+      state,
+      {.openMusicPlayer = [this] { openMusicPlayer(); },
+       .openTasks = [this] { openTasks(); },
+       .openIrUploads = [this] { openIrUploads(); },
+       .openSettings = [this] { openSettings(); },
+       .persist = [this](MusicSelectToolbarState updated) {
+         persistToolbar(updated);
+       }},
+      rendering::window_width, rendering::window_height);
+  if (toolbar) {
+    toolbar_ = toolbar.get();
+    addView(toolbar.release());
+  }
 }
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

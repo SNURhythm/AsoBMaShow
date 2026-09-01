@@ -119,11 +119,13 @@ private:
 
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
-  [[nodiscard]] bool queueEvent(int, std::span<const int>);
+  [[nodiscard]] bool queueEvent(int, std::span<const int>,
+                                std::span<const int> resolutionPath = {});
   [[nodiscard]] bool queueBuiltinEvent(SkinBuiltinPropertySelector,
                                        std::span<const int>);
   [[nodiscard]] bool queueEventBinding(SkinEventBindingId,
-                                       std::span<const int>);
+                                       std::span<const int>,
+                                       std::span<const int> resolutionPath = {});
   [[nodiscard]] bool queueFloatWriter(const SkinWriterInvocation &);
   [[nodiscard]] bool executeQueuedCallbacks(MusicSelectSkinStateBridge &);
 

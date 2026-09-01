@@ -2509,6 +2509,28 @@ void testMusicSelectActivationCreatesAConfiguredOwningSession() {
          "plan, and owning music-select session");
 }
 
+void testMusicSelectLuaSessionRejectsRecursiveCustomEvents() {
+  ActivationFixture fixture(
+      {.skinType = 5, .resultRecursiveEventExec = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 94,
+  };
+  auto created = MusicSelectSkinSession::create(
+      std::move(request), fixture.musicSelectContext());
+  RenderContext context;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  expect(created.session != nullptr &&
+             !created.session->render(context, frame) &&
+             hasDiagnostic(created.session->takeLastDiagnostics(),
+                           "skin.music_select_session.custom_event_cycle"),
+         "recursive music-select custom events fail with a skin diagnostic "
+         "instead of exhausting the native stack");
+}
+
 void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
   ActivationFixture fixture({.resourceBearing = true});
   if (!fixture.ready()) {
@@ -6687,6 +6709,7 @@ int main(int argc, char **argv) {
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
+  testMusicSelectLuaSessionRejectsRecursiveCustomEvents();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
   testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();

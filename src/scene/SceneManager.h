@@ -2,9 +2,11 @@
 
 #include <SDL2/SDL.h>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <string>
+#include <utility>
 class Scene;
 class EventHandleResult;
 class ApplicationContext;
@@ -14,6 +16,8 @@ private:
   bool isRegisteredScene(const Scene *scene) const;
   void cleanupSceneInstance(Scene *scene);
   void updateBackgroundTaskPauseState();
+  bool resumingScene_ = false;
+  std::optional<std::pair<std::string, bool>> pendingRegisteredSceneChange_;
 
 public:
   Scene* currentScene = nullptr;

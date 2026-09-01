@@ -662,13 +662,26 @@ const SkinEntryId &MusicSelectSkinSession::entry() const noexcept {
   return entry_;
 }
 
-bool MusicSelectSkinSession::queueEvent(int eventId,
-                                        std::span<const int> arguments) {
+bool MusicSelectSkinSession::queueEvent(
+    int eventId, std::span<const int> arguments,
+    std::span<const int> resolutionPath) {
   if (eventId >= 1'000 && eventId <= 1'999) {
     const auto custom = customEventLastDefinitionIndexes_.find(eventId);
     if (custom == customEventLastDefinitionIndexes_.end()) return true;
     const auto &event = model_.model.customEvents[custom->second];
-    if (!queueEventBinding(event.action, arguments)) return false;
+    if (std::ranges::find(resolutionPath, eventId) != resolutionPath.end()) {
+      diagnostics_.push_back(failure(
+          "skin.music_select_session.custom_event_cycle",
+          "Music-select skin custom event action references itself "
+          "recursively."));
+      return false;
+    }
+    std::vector<int> nestedResolutionPath(resolutionPath.begin(),
+                                          resolutionPath.end());
+    nestedResolutionPath.push_back(eventId);
+    if (!queueEventBinding(event.action, arguments, nestedResolutionPath)) {
+      return false;
+    }
     customEventLastExecutionMicros_.insert_or_assign(eventId,
                                                      currentEventMicros_);
     return true;
@@ -687,7 +700,8 @@ bool MusicSelectSkinSession::queueBuiltinEvent(
 }
 
 bool MusicSelectSkinSession::queueEventBinding(
-    SkinEventBindingId id, std::span<const int> arguments) {
+    SkinEventBindingId id, std::span<const int> arguments,
+    std::span<const int> resolutionPath) {
   const auto binding = std::ranges::find_if(
       model_.model.events,
       [id](const SkinEventBinding &candidate) { return candidate.id == id; });
@@ -700,7 +714,7 @@ bool MusicSelectSkinSession::queueEventBinding(
   if (const auto *builtin =
           std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
     if (const auto *numeric = std::get_if<int>(&builtin->value)) {
-      return queueEvent(*numeric, arguments);
+      return queueEvent(*numeric, arguments, resolutionPath);
     }
     return queueBuiltinEvent(*builtin, arguments);
   }
