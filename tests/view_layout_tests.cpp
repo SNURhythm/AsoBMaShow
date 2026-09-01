@@ -731,16 +731,17 @@ void testInputSettingsLayoutPolicy() {
   const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
   assert(!wide.stackSelectors);
   assert(!wide.stackBindingEditor);
+  assert(wide.actionGroupPadding == 16);
   assert(wide.selectorWidth > 0 &&
          wide.selectorWidth * 3 + wide.selectorGap * 2 <= 1200);
-  assert(wide.numericControlWidth > 0 &&
-         wide.numericControlWidth * 5 + wide.selectorGap * 4 <= 1200);
+  assert(wide.bindingEditorWidth == 1168);
 
   const auto compact = settings_scene::resolveInputSettingsLayout(520, true);
   assert(compact.stackSelectors);
   assert(compact.stackBindingEditor);
+  assert(compact.actionGroupPadding == 12);
   assert(compact.selectorWidth == 520);
-  assert(compact.numericControlWidth > 0 && compact.numericControlWidth <= 520);
+  assert(compact.bindingEditorWidth == 496);
 
   const auto narrow = settings_scene::resolveInputSettingsLayout(640, false);
   assert(narrow.stackSelectors);
@@ -749,7 +750,7 @@ void testInputSettingsLayoutPolicy() {
 
   const auto empty = settings_scene::resolveInputSettingsLayout(-50, true);
   assert(empty.selectorWidth == 0);
-  assert(empty.numericControlWidth == 0);
+  assert(empty.bindingEditorWidth == 0);
 }
 
 void testInputBindingEditorCapabilitiesMatchControlSemantics() {
@@ -761,7 +762,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
   const auto wideLayout =
       settings_scene::resolveInputSettingsLayout(1200, false);
   assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
-                                                               key) == 1200);
+                                                               key) == 1168);
 
   const auto axis = settings_scene::inputBindingEditorCapabilities(
       input::ControlKind::Axis);
@@ -769,7 +770,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
          axis.inversion);
   assert(settings_scene::inputBindingEditorControlCount(axis) == 5);
   assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
-                                                               axis) == 230);
+                                                               axis) == 224);
 
   const auto midiNote = settings_scene::inputBindingEditorCapabilities(
       input::ControlKind::MidiNote);
@@ -778,7 +779,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
   assert(settings_scene::inputBindingEditorControlCount(midiNote) == 2);
   assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
                                                                midiNote) ==
-         594);
+         578);
 
   const auto midiControl = settings_scene::inputBindingEditorCapabilities(
       input::ControlKind::MidiControl);
@@ -789,7 +790,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
   const auto compactLayout =
       settings_scene::resolveInputSettingsLayout(520, true);
   assert(settings_scene::resolveInputBindingEditorControlWidth(compactLayout,
-                                                               axis) == 520);
+                                                               axis) == 496);
 
   for (const auto kind : {input::ControlKind::Button,
                           input::ControlKind::Hat,
@@ -799,6 +800,55 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
     assert(!digital.deadZone && !digital.activationThreshold &&
            !digital.releaseThreshold && !digital.inversion);
   }
+
+  const auto unknown = settings_scene::inputBindingEditorCapabilities(
+      static_cast<input::ControlKind>(255));
+  assert(settings_scene::inputBindingEditorControlCount(unknown) == 1);
+}
+
+void testInputBindingEditorStaysInsidePaddedActionGroup() {
+  const auto verify = [](int bodyWidth, bool compact,
+                         settings_scene::InputBindingEditorCapabilities
+                             capabilities) {
+    const auto layout =
+        settings_scene::resolveInputSettingsLayout(bodyWidth, compact);
+    View actionGroup(0, 0, bodyWidth, compact ? 360 : 100);
+    actionGroup.setFlexDirection(FlexDirection::Column);
+    actionGroup.setAlignItems(YGAlignStretch);
+    actionGroup.setPadding(Edge::All,
+                           static_cast<float>(layout.actionGroupPadding));
+
+    auto *editor = new View();
+    editor->setFlexDirection(layout.stackBindingEditor
+                                 ? FlexDirection::Column
+                                 : FlexDirection::Row);
+    editor->setGap(static_cast<float>(layout.selectorGap));
+    editor->setAlignItems(YGAlignStretch);
+    const int controlWidth =
+        settings_scene::resolveInputBindingEditorControlWidth(layout,
+                                                               capabilities);
+    for (int index = 0;
+         index < settings_scene::inputBindingEditorControlCount(capabilities);
+         ++index) {
+      auto *control = new View();
+      control->setSize(controlWidth, 40);
+      editor->addView(control);
+    }
+    actionGroup.addView(editor);
+    actionGroup.applyYogaLayout();
+
+    expectNear(editor->getWidth(), layout.bindingEditorWidth,
+               "binding editor inner width");
+    for (const auto *control : editor->getChildren()) {
+      assert(control->getX() + control->getWidth() <=
+             editor->getX() + editor->getWidth() + 0.01F);
+    }
+  };
+
+  verify(1200, false, settings_scene::inputBindingEditorCapabilities(
+                          input::ControlKind::Axis));
+  verify(520, true, settings_scene::inputBindingEditorCapabilities(
+                        input::ControlKind::Key));
 }
 
 void testLegacyDigitalScratchBindingsRemainManageable() {
@@ -968,6 +1018,7 @@ int main() {
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
   testInputBindingEditorCapabilitiesMatchControlSemantics();
+  testInputBindingEditorStaysInsidePaddedActionGroup();
   testLegacyDigitalScratchBindingsRemainManageable();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();

@@ -749,7 +749,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     actionGroup->setFlexDirection(FlexDirection::Column);
     actionGroup->setGap(metrics.compact ? 8.0F : 10.0F);
     actionGroup->setPadding(Edge::All,
-                            static_cast<float>(metrics.compact ? 12 : 16));
+                            static_cast<float>(layout.actionGroupPadding));
     actionGroup->setThemedBackgroundColor(ui_theme::panelSubtle);
     actionGroup->setThemedBorderColor(ui_theme::hairlineSubtle);
     actionGroup->setBorderWidth(1);

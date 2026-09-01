@@ -27,9 +27,9 @@ struct InputSettingsLayout {
   bool stackSelectors = false;
   bool stackBindingEditor = false;
   int selectorGap = 12;
+  int actionGroupPadding = 16;
   int selectorWidth = 0;
   int bindingEditorWidth = 0;
-  int numericControlWidth = 0;
 };
 
 struct InputBindingEditorCapabilities {
@@ -75,16 +75,14 @@ constexpr InputSettingsLayout resolveInputSettingsLayout(int availableWidth,
   InputSettingsLayout result;
   const int width = std::max(0, availableWidth);
   result.selectorGap = compact ? 8 : 12;
+  result.actionGroupPadding = compact ? 12 : 16;
   result.stackSelectors = compact || width < 720;
   result.stackBindingEditor = compact || width < 900;
   result.selectorWidth =
       result.stackSelectors ? width
                             : std::max(0, (width - result.selectorGap * 2) / 3);
-  result.bindingEditorWidth = width;
-  result.numericControlWidth =
-      result.stackBindingEditor
-          ? width
-          : std::max(0, (width - result.selectorGap * 4) / 5);
+  result.bindingEditorWidth =
+      std::max(0, width - result.actionGroupPadding * 2);
   return result;
 }
 
