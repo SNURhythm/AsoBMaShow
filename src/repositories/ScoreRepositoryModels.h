@@ -58,6 +58,7 @@ struct ScoreBestSnapshot {
   std::optional<int> maxCombo;
   std::optional<int> comboBreak;
   std::optional<int> badPoints;
+  std::optional<std::int64_t> averageJudgeMicros;
   std::optional<float> finalGauge;
   int clearType = kClearTypeFailedRank;
   std::optional<std::string> createdAt;

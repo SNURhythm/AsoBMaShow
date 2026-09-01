@@ -519,6 +519,10 @@ void MusicSelectScene::closeDirectory() {
   if (bars_.close()) {
     syncResolvedFilters();
     selectedBarMoved();
+  } else {
+    executeEvent({.kind = skin::MusicSelectSkinActionKind::Event,
+                  .selector = {.value = 12},
+                  .arguments = {0, 0}});
   }
 }
 

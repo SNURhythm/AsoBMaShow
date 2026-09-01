@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cmath>
 #include <compare>
@@ -136,6 +137,19 @@ int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
     if (!right.score) return -1;
     return left.score->badPoints.value_or(left.score->comboBreak.value_or(0)) -
            right.score->badPoints.value_or(right.score->comboBreak.value_or(0));
+  }
+  if (sortId == "DURATION") {
+    const bool leftHasDuration =
+        left.score && left.score->averageJudgeMicros.has_value();
+    const bool rightHasDuration =
+        right.score && right.score->averageJudgeMicros.has_value();
+    if (!leftHasDuration && !rightHasDuration) return 0;
+    if (!leftHasDuration) return 1;
+    if (!rightHasDuration) return -1;
+    const std::uint32_t narrowed = static_cast<std::uint32_t>(
+        static_cast<std::uint64_t>(*left.score->averageJudgeMicros) -
+        static_cast<std::uint64_t>(*right.score->averageJudgeMicros));
+    return std::bit_cast<std::int32_t>(narrowed);
   }
   if (sortId == "LASTUPDATE") {
     if (!left.score && !right.score) return 0;

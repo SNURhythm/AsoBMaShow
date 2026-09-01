@@ -177,6 +177,27 @@ void testPinnedFilterFallbackAndSort() {
               snapshot.rows.back().id.value == "song:1",
           "sortable directories use the selected BarSorter");
 
+  first->score->averageJudgeMicros = 200;
+  second->score->averageJudgeMicros = 100;
+  manager.refresh(projection);
+  manager.configure({.modeFilter = "ALL",
+                     .difficultyFilter = "ALL",
+                     .sortId = "DURATION"});
+  snapshot = manager.snapshot();
+  require(snapshot.rows.front().id.value == "song:2" &&
+              snapshot.rows.back().id.value == "song:1",
+          "DURATION uses the source average-judge ordering");
+  first->score->averageJudgeMicros.reset();
+  second->score->averageJudgeMicros.reset();
+  manager.refresh(projection);
+  manager.configure({.modeFilter = "ALL",
+                     .difficultyFilter = "ALL",
+                     .sortId = "DURATION"});
+  snapshot = manager.snapshot();
+  require(snapshot.rows.front().id.value == "song:1" &&
+              snapshot.rows.back().id.value == "song:2",
+          "missing DURATION values compare equal and retain source order");
+
   first->chart->hasBpmStop = true;
   second->chart->hasScrollChange = true;
   MusicSelectBarManager speedManager(
