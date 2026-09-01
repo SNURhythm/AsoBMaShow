@@ -3721,6 +3721,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(main_menu_library_tests PRIVATE SDL2)
     endif()
 
+    add_executable(chart_library_task_service_tests
+        tests/chart_library_task_service_tests.cpp
+        src/library/ChartLibraryTaskService.cpp
+    )
+    target_include_directories(chart_library_task_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_library_task_service_tests PRIVATE cxx_std_23)
+
     add_executable(chart_meta_index_order_tests
         tests/chart_meta_index_order_tests.cpp
         src/sqlite3.c
@@ -6876,6 +6885,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         result_persistence_model_tests
         chart_record_filters_tests
         main_menu_library_tests
+        chart_library_task_service_tests
         chart_meta_index_order_tests
         score_cache_query_tests
         app_database_initializer_tests
