@@ -219,6 +219,22 @@ void testPinnedFilterFallbackAndSort() {
   require(hidden.openSelected(), "invisible fallback fixture opens");
   require(hidden.snapshot().rows.size() == 2,
           "if every trial removes every SongBar, source leaves rows unfiltered");
+
+  auto visible = fixture();
+  auto *visibleFolder =
+      const_cast<MusicSelectBar *>(visible.find({"folder:a"}));
+  auto *visibleHidden =
+      const_cast<MusicSelectBar *>(visible.find({"song:1"}));
+  auto *visibleNormal =
+      const_cast<MusicSelectBar *>(visible.find({"song:2"}));
+  visibleFolder->showInvisibleCharts = true;
+  visibleHidden->chart.emplace();
+  visibleNormal->chart.emplace();
+  visibleHidden->chart->songReviewFavorite = 4;
+  MusicSelectBarManager showInvisible(std::move(visible));
+  require(showInvisible.openSelected() &&
+              showInvisible.snapshot().rows.size() == 2,
+          "DirectoryBar showInvisibleChart bypasses only invisible-bit removal");
 }
 
 } // namespace

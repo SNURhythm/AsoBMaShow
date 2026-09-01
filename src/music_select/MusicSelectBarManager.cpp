@@ -244,9 +244,13 @@ void MusicSelectBarManager::rebuildRows(
     std::optional<MusicSelectBarId> preferred) {
   rows_.clear();
   const std::vector<MusicSelectBarId> *ids = &projection_.root;
+  bool showInvisibleCharts = false;
   if (!directory_.empty()) {
     const auto *directory = projection_.find(directory_.back());
-    if (directory != nullptr) ids = &directory->children;
+    if (directory != nullptr) {
+      ids = &directory->children;
+      showInvisibleCharts = directory->showInvisibleCharts;
+    }
   }
   rows_.reserve(ids->size());
   for (const auto &id : *ids) {
@@ -270,7 +274,8 @@ void MusicSelectBarManager::rebuildRows(
         rows_.clear();
         for (const auto &bar : original) {
           if (!bar.chart ||
-              (((bar.chart->songReviewFavorite & (4 | 8)) == 0) &&
+              ((showInvisibleCharts ||
+                (bar.chart->songReviewFavorite & (4 | 8)) == 0) &&
                modeMatches(mode, songMode(bar.chart->meta)) &&
                difficultyMatches(difficulty, *bar.chart))) {
             rows_.push_back(bar);

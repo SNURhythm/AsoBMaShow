@@ -250,17 +250,26 @@ void MusicSelectScene::reloadLibrary() {
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   chartSession_->QueryChartMeta(query, records);
   scoreCache_ = context.scoreRepository.LoadBestScores();
+  clearRankCache_ = context.scoreRepository.LoadBestClearRanks();
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
   libraryRevision_ = context.chartRepository.GetLibraryRevision();
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
                        context.settings.skinDifficultyFilterName,
                    .sortId = context.settings.skinSortId});
+  const auto metadata = MusicSelectRepositoryProjection::loadMetadata(
+      *chartSession_, query.selectedLongNoteMode);
   bars_.refresh(MusicSelectRepositoryProjection{}.project(
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
          return scoreCache_.bestFor(meta, mode);
        },
+       .courseRankFor = [this](std::string_view courseKey, int courseId,
+                               int mode) {
+         return clearRankCache_.bestCourseRankFor(courseKey, courseId, mode);
+       },
+       .metadata = &metadata,
+       .modeFilter = context.settings.skinModeFilterName,
        .selectedLongNoteMode = query.selectedLongNoteMode,
        .repositoryRevision = libraryRevision_}));
   syncResolvedFilters();

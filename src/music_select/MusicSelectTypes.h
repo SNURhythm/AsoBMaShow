@@ -114,6 +114,11 @@ struct MusicSelectBar {
   skin::MusicSelectBarKind kind = skin::MusicSelectBarKind::Song;
   std::string title;
   std::filesystem::path directoryPath;
+  int tableId = 0;
+  std::string tableUrl;
+  std::string tableLevel;
+  int courseId = 0;
+  std::string courseKey;
   std::optional<ChartMetaRecord> chart;
   std::optional<ScoreBestSnapshot> score;
   std::optional<ScoreBestSnapshot> rivalScore;
@@ -125,6 +130,7 @@ struct MusicSelectBar {
   skin::MusicSelectBarFrame presentation;
   bool selectable = false;
   bool sortable = false;
+  bool showInvisibleCharts = false;
 };
 
 struct MusicSelectProjection {

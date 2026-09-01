@@ -63,6 +63,7 @@ private:
   skin::GameplaySkinActivationRequest activationRequest_;
   std::optional<ChartRepository::Session> chartSession_;
   ScoreBestCache scoreCache_;
+  ScoreClearRankCache clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
