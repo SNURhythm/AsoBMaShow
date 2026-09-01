@@ -6,6 +6,7 @@
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
+#include "../music_select/MusicSelectPreview.h"
 #include "../music_select/MusicSelectRanking.h"
 #include "../music_select/MusicSelectSearchHistory.h"
 #include "../ir/IrRankingModels.h"
@@ -84,6 +85,8 @@ private:
   PlayerScoreHistorySnapshot playerHistory_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
+  MusicSelectPreviewController previewController_;
+  std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
   MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;

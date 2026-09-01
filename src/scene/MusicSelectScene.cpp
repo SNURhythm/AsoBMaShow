@@ -180,6 +180,8 @@ MusicSelectScene::MusicSelectScene(
 
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
+  previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
+      context.jukebox.audioRuntime());
   sortIndex_ = sourceSortIndex(context.settings.skinSortId);
   inputProcessor_ = MusicSelectInputProcessor(
       {.layout = musicSelectKeyLayoutForConfig(
@@ -247,11 +249,18 @@ void MusicSelectScene::init() {
   startInputListening();
 }
 
-void MusicSelectScene::onPause() { stopInputListening(); }
+void MusicSelectScene::onPause() {
+  stopInputListening();
+  previewController_.reset();
+  if (previewAudio_) previewAudio_->switchTo(std::nullopt);
+}
 
 void MusicSelectScene::onResume() {
   reloadLibrary();
-  if (!failed_) startInputListening();
+  if (!failed_) {
+    selectedBarMoved();
+    startInputListening();
+  }
 }
 
 void MusicSelectScene::reloadLibrary() {
@@ -332,6 +341,26 @@ void MusicSelectScene::selectedBarMoved() {
                 &snapshot.rows[snapshot.selectedIndex])
           : -1;
   songBarChangeMicros_ = elapsedMicros();
+
+  std::optional<MusicSelectPreviewSelection> previewSelection;
+  if (snapshot.selectedIndex < snapshot.rows.size()) {
+    const auto &selected = snapshot.rows[snapshot.selectedIndex];
+    if (selected.kind == skin::MusicSelectBarKind::Song && selected.chart) {
+      const auto &meta = selected.chart->meta;
+      previewSelection = MusicSelectPreviewSelection{
+          .id = selected.id.value,
+          .folder = meta.BmsPath.parent_path(),
+          .previewPath = meta.Preview.empty()
+                             ? std::filesystem::path{}
+                             : meta.BmsPath.parent_path() / meta.Preview,
+      };
+    }
+  }
+  const auto previewMove = previewController_.selectedBarMoved(
+      std::move(previewSelection), songBarChangeMicros_);
+  if (previewMove.stopAudio && previewAudio_) {
+    previewAudio_->switchTo(std::nullopt);
+  }
 
   if (rankingGeneration_ != 0 && context.irRankingService) {
     context.irRankingService->close(rankingGeneration_);
@@ -1501,6 +1530,10 @@ void MusicSelectScene::update(float) {
   }
   consumeLogicalInput();
   consumeActions();
+  if (auto preview = previewController_.update(elapsedMicros(), launching_);
+      preview && previewAudio_) {
+    previewAudio_->switchTo(std::move(preview->path));
+  }
   updateRanking();
 }
 
@@ -1629,6 +1662,8 @@ void MusicSelectScene::cleanupScene() {
     context.irRankingService->close(rankingGeneration_);
   }
   rankingGeneration_ = 0;
+  previewController_.reset();
+  previewAudio_.reset();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
 #endif
