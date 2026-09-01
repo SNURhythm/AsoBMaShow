@@ -30,7 +30,7 @@ software is free of every defect or vulnerability.
 | High | Vendored SQLite 3.43.1 predates SQLite's 3.43.2 JSON-parser use-after-free fix and later memory-safety fixes. | Updated the exact upstream amalgamation to SQLite 3.53.4 and pinned a release-policy minimum. |
 | High | The iOS release bundle contained dependencies with current OSV advisories in ActiveSupport, concurrent-ruby, Excon, Faraday, JSON, and JWT. | Updated Fastlane and the affected dependency graph. OSV Scanner reports no known vulnerability in the resulting `Gemfile.lock`. |
 | High | The manifest's 2023 LuaJIT revision crashed in optimized Apple Silicon builds when Lua skins called core built-ins such as `rawget` and `type`. | Pinned LuaJIT 2026-07-11 without advancing the rest of the vcpkg baseline. The macOS workflow now pins a registry commit containing that version while fetching the manifest baseline separately. Its Release interpreter smoke check and the complete optimized macOS test suite now pass. |
-| Medium | Android's private IR API-key file was eligible for cloud backup and device transfer, including credentials left in the legacy app-specific external location. | Kept general user-data backup enabled but excluded the internal and app-specific external `profiles` subtrees in both legacy and Android 12+ backup rule formats. |
+| Medium | Android's private IR API-key file was eligible for cloud backup and device transfer, including credentials left in the legacy app-specific external location. | Kept general user-data backup enabled, excluded the current internal credential tree in both backup-rule formats, and added a backup agent that preserves external profile data while filtering legacy credential files and their atomic-write artifacts from backup and restore. |
 | Medium | Desktop/iOS downloads could follow an HTTPS response to HTTP; HTTPS difficulty-table metadata could also load an HTTP data document. | Redirect policy is now derived from the initial URL across curl, `NSURLSession`, and Android: HTTPS origins reject HTTP and non-HTTP downgrades, while direct legacy HTTP origins retain HTTP/HTTPS compatibility. Mixed-content difficulty-table references are rejected before a request is made, with URL schemes compared case-insensitively. |
 | Medium | Fresh `develop` introduced an arm64 libc++ compile failure by mixing `optional<long long>` and `optional<int64_t>` in replay provenance selection. | Normalized the provenance branch to the replay seed type explicitly. Both Android product flavors now complete native compilation and packaging. |
 | Medium | Fresh `develop` split an LR2 graph rectangle that the pinned Beatoraja loader intentionally shares, changing compatibility behavior. | Restored the shared graph dimensions and verified them against the pinned Java oracle. |
@@ -69,9 +69,10 @@ Relevant policy and upstream references:
   rejects traversal/system entries, bounds extraction, and stages downloads
   before publishing them into the library.
 - Authenticated IR requests do not follow redirects. API keys were not found in
-  logging statements, and Android credentials in both the current internal and
-  legacy app-specific external locations have backup/transfer exclusions; iOS
-  uses Keychain storage.
+  logging statements. Android's current internal credential tree remains
+  excluded by both rule formats, while its backup agent preserves non-secret
+  external profile data and filters legacy credential artifacts from backup and
+  restore; iOS uses Keychain storage.
 
 ### Secrets
 
@@ -181,6 +182,9 @@ supplementary-mark boundary behavior, proved that existing-APK uploads bypass
 all Android build-toolchain setup, and removed iOS/Lua-disabled CMake test
 registrations whose native dependencies do not exist.
 The final Android security review identified the legacy app-specific external
-credential location as a separate backup domain. Both backup-rule formats now
-exclude that domain alongside internal profile data, and the release policy
-test requires the complete exclusion set for cloud backup and device transfer.
+credential location as a separate backup domain. A follow-up review caught that
+excluding that complete domain also removed settings, scores, replays, and
+practice data from cloud backup and device transfer. The broad external
+exclusion was replaced with a manifest backup agent whose tested file selector
+keeps profile data while rejecting the legacy credential file and every
+atomic-write artifact. Restore applies the same credential filter.

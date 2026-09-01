@@ -108,6 +108,10 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             application.get(f"{{{android_namespace}}}dataExtractionRules"),
             "@xml/data_extraction_rules",
         )
+        self.assertEqual(
+            application.get(f"{{{android_namespace}}}backupAgent"),
+            ".AsoBMaShowBackupAgent",
+        )
 
         legacy_rules = ET.parse(
             ROOT / "android/app/src/main/res/xml/backup_rules.xml"
@@ -115,7 +119,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(legacy_rules.tag, "full-backup-content")
         self.assertEqual(
             {(node.get("domain"), node.get("path")) for node in legacy_rules},
-            {("file", "profiles"), ("external", "profiles")},
+            {("file", "profiles")},
         )
 
         extraction_rules = ET.parse(
@@ -130,7 +134,7 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                     (node.get("domain"), node.get("path"))
                     for node in section.findall("exclude")
                 },
-                {("file", "profiles"), ("external", "profiles")},
+                {("file", "profiles")},
             )
 
     def test_android_download_redirects_cannot_downgrade_https_to_http(self):
