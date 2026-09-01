@@ -16,6 +16,8 @@ main_menu_path = root / "src/scene/MainMenuScene.cpp"
 download_support_path = root / "src/bms_search/DownloadSupport.cpp"
 horie_path = root / "src/bms_search/HorieYuukaDriver.cpp"
 package_sources_path = root / "src/bms_search/PackageSourceDrivers.cpp"
+library_operations_path = root / "src/library/ChartLibraryOperations.cpp"
+library_task_types_path = root / "src/library/ChartLibraryTaskTypes.h"
 
 for path in (
     settings_path,
@@ -24,6 +26,8 @@ for path in (
     download_support_path,
     horie_path,
     package_sources_path,
+    library_operations_path,
+    library_task_types_path,
 ):
     if not path.is_file():
         print(f"FAIL: missing {path.relative_to(root)}", file=sys.stderr)
@@ -35,6 +39,8 @@ main_menu_source = main_menu_path.read_text(encoding="utf-8")
 download_support_source = download_support_path.read_text(encoding="utf-8")
 horie_source = horie_path.read_text(encoding="utf-8")
 package_sources_source = package_sources_path.read_text(encoding="utf-8")
+library_operations_source = library_operations_path.read_text(encoding="utf-8")
+library_task_types_source = library_task_types_path.read_text(encoding="utf-8")
 failures: list[str] = []
 
 
@@ -125,18 +131,19 @@ require(
 require(
     "IndexDownloadedPath" in main_menu_source
     and "IndexDownloadedPath"
-    in (root / "src/scene/MainMenuScene.h").read_text(encoding="utf-8"),
+    in library_task_types_source,
     "Find BMS downloads must use a dedicated incremental library task",
 )
 require(
-    "scanner.ScanAddedWithResult" in main_menu_source
-    and "scanResult.completed" in main_menu_source
-    and "scanResult.committed" in main_menu_source,
+    "scanner.ScanAddedWithResult" in library_operations_source
+    and "scanResult.completed" in library_operations_source
+    and "scanResult.committed" in library_operations_source,
     "downloaded-path tasks must require a completed, committed additions-only scan",
 )
 require(
-    "findBmsIndexTaskSucceeded(" in main_menu_source
-    and "Downloaded BMS target was not parsed and indexed" in main_menu_source,
+    "findBmsIndexTaskSucceeded(" in library_operations_source
+    and "Downloaded BMS target was not parsed and indexed"
+    in library_operations_source,
     "validated Find BMS tasks must fail without their committed target upsert",
 )
 require(
@@ -155,17 +162,17 @@ require(
     "findBmsResult.removedPaths" in apply_find_bms,
     "Find BMS results must pass removed package variants to indexing",
 )
-download_task_start = main_menu_source.find(
-    "void MainMenuScene::runDownloadedPathIndexTask("
+download_task_start = library_operations_source.find(
+    "TaskRunResult ChartLibraryOperations::runDownloadedIndex("
 )
-download_task_end = main_menu_source.find(
-    "bool MainMenuScene::insertChartFolderEntryImmediately(",
+download_task_end = library_operations_source.find(
+    "TaskRunResult ChartLibraryOperations::runAndroidImport(",
     download_task_start,
 )
-download_task = main_menu_source[download_task_start:download_task_end]
-removed_paths_index = download_task.find("task.downloadedRemovedPaths")
+download_task = library_operations_source[download_task_start:download_task_end]
+removed_paths_index = download_task.find("request.downloadedRemovedPaths")
 targeted_delete_index = download_task.find("DeleteChartMetaInDirectory")
-incremental_scan_index = download_task.find("LoadCharts(")
+incremental_scan_index = download_task.find("ScanAddedWithResult(")
 require(
     removed_paths_index >= 0
     and targeted_delete_index >= 0
@@ -181,10 +188,10 @@ require(
     "automatic and candidate downloads must capture chart selection generation",
 )
 require(
-    "downloadedTargetIdentity" in main_menu_source
-    and "downloadedSelectionGeneration" in main_menu_source
-    and "SelectChartMetaByHash" in main_menu_source
-    and "scanResult.upsertedChartPaths" in main_menu_source
+    "request.downloadedTargetIdentity" in library_operations_source
+    and "request.downloadedSelectionGeneration" in library_operations_source
+    and "SelectChartMetaByHash" in library_operations_source
+    and "scanResult.upsertedChartPaths" in library_operations_source
     and "pendingFindBmsSelectionHandoff" in main_menu_source,
     "downloaded-path parsing must publish only a chart upserted by that scan",
 )

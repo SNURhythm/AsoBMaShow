@@ -12,6 +12,7 @@ root = (
 ).resolve()
 main_menu_path = root / "src/scene/MainMenuScene.cpp"
 uploads_scene_path = root / "src/scene/IrUploadsScene.cpp"
+music_select_path = root / "src/scene/MusicSelectScene.cpp"
 
 main_menu = (
     main_menu_path.read_text(encoding="utf-8") if main_menu_path.is_file() else ""
@@ -19,6 +20,11 @@ main_menu = (
 uploads_scene = (
     uploads_scene_path.read_text(encoding="utf-8")
     if uploads_scene_path.is_file()
+    else ""
+)
+music_select = (
+    music_select_path.read_text(encoding="utf-8")
+    if music_select_path.is_file()
     else ""
 )
 failures: list[str] = []
@@ -34,9 +40,31 @@ def reject(condition: bool, message: str) -> None:
         failures.append(message)
 
 
+main_menu_handler_start = main_menu.find(
+    "irUploadsButton->setOnClickListener"
+)
+main_menu_handler_end = main_menu.find(
+    "styleThemedActionButton(irUploadsButton", main_menu_handler_start
+)
+main_menu_handler = main_menu[main_menu_handler_start:main_menu_handler_end]
 require(
-    "make_unique<IrUploadsScene>(context)" in main_menu,
-    "Song Select opens the dedicated scene",
+    "std::make_unique<IrUploadsScene>" in main_menu_handler
+    and "SceneReturnTarget::Retained(this)" in main_menu_handler,
+    "built-in Song Select opens the dedicated scene with retained return",
+)
+music_select_handler_start = music_select.find(
+    "void MusicSelectScene::openIrUploads()"
+)
+music_select_handler_end = music_select.find(
+    "void MusicSelectScene::openSettings()", music_select_handler_start
+)
+music_select_handler = music_select[
+    music_select_handler_start:music_select_handler_end
+]
+require(
+    "std::make_unique<IrUploadsScene>" in music_select_handler
+    and "SceneReturnTarget::Retained(this)" in music_select_handler,
+    "skinned Song Select toolbar opens the same retained IR Uploads scene",
 )
 require(
     "enqueueManualBatch" in uploads_scene,
