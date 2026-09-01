@@ -10,6 +10,14 @@ inline constexpr const char *kFontAwesomeSolidPath =
 inline constexpr uint32_t kXmark = 0xf00d;
 inline constexpr uint32_t kSquare = 0xf0c8;
 inline constexpr uint32_t kSquareCheck = 0xf14a;
+inline constexpr uint32_t kDrag = 0xf58e;
+inline constexpr uint32_t kMusic = 0xf001;
+inline constexpr uint32_t kTasks = 0xf0ae;
+inline constexpr uint32_t kIrUploads = 0xf0ee;
+inline constexpr uint32_t kSettings = 0xf013;
+inline constexpr uint32_t kCollapse = 0xf077;
+inline constexpr uint32_t kExpand = 0xf078;
+inline constexpr uint32_t kHide = 0xf070;
 
 inline std::string textForCodepoint(uint32_t codepoint) {
   std::string result;

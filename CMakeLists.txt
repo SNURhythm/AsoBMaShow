@@ -4760,6 +4760,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(application_ui_state_store_tests PRIVATE cxx_std_23)
 
+    add_executable(music_select_toolbar_view_tests
+        tests/music_select_toolbar_view_tests.cpp
+        src/scene/MusicSelectToolbarView.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+    )
+    target_include_directories(music_select_toolbar_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(music_select_toolbar_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(music_select_toolbar_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(profile_settings_persistence_tests
         tests/profile_settings_persistence_tests.cpp
         src/CourseIdentity.cpp

@@ -9,6 +9,7 @@ target_sources(main PRIVATE
     MainMenuLibrary.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
+    MusicSelectToolbarView.cpp
     PracticeAnalyticsPresentation.cpp
     PracticeAnalyticsView.cpp
     ProfileSettingsController.cpp
