@@ -1276,6 +1276,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_definitions(music_select_skin_model_tests PRIVATE
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
         )
+
+        add_executable(music_select_bar_renderer_tests
+            tests/music_select_bar_renderer_tests.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
+        )
+        target_include_directories(music_select_bar_renderer_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_bar_renderer_tests PRIVATE cxx_std_23)
+        target_compile_definitions(music_select_bar_renderer_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+        )
         if(APPLE)
             target_sources(lua_music_select_skin_decoder_tests PRIVATE
                 src/skin/package/SkinAliasDetectorApple.mm
@@ -7093,6 +7105,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_skin_model_tests)
         asobmashow_register_test(music_select_skin_model_tests)
+    endif()
+    if (TARGET music_select_bar_renderer_tests)
+        asobmashow_register_test(music_select_bar_renderer_tests)
     endif()
     if (TARGET lua_skin_gauge_live_integration_tests)
         asobmashow_register_test(lua_skin_gauge_live_integration_tests)
