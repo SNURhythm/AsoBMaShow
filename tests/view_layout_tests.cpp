@@ -3,6 +3,7 @@
 #include "../src/view/View.h"
 #include "scene/ResultLayoutGeometry.h"
 #include "ir/IrRankingModal.h"
+#include "scene/SettingsSceneInputActions.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
@@ -751,6 +752,42 @@ void testInputSettingsLayoutPolicy() {
   assert(empty.numericControlWidth == 0);
 }
 
+void testLegacyDigitalScratchBindingsRemainManageable() {
+  const input::InputBinding playerOneLegacy{
+      .id = "legacy-p1-scratch",
+      .scope = {1, 7},
+      .action = {input::LogicalActionKind::Lane, 7},
+  };
+  const auto playerOneActions = settings_scene::inputActionsForScope(
+      {1, 7}, std::span<const input::InputBinding>(&playerOneLegacy, 1));
+  const auto playerOneRow = std::ranges::find_if(
+      playerOneActions, [&](const auto &definition) {
+        return definition.action == playerOneLegacy.action;
+      });
+  assert(playerOneRow != playerOneActions.end());
+  assert(playerOneRow->label == "Scratch (legacy digital)");
+  assert(!playerOneRow->bindable);
+
+  const input::InputBinding playerTwoLegacy{
+      .id = "legacy-p2-scratch",
+      .scope = {2, 14},
+      .action = {input::LogicalActionKind::Lane, 15},
+  };
+  const auto playerTwoActions = settings_scene::inputActionsForScope(
+      {2, 14}, std::span<const input::InputBinding>(&playerTwoLegacy, 1));
+  assert(std::ranges::any_of(playerTwoActions, [&](const auto &definition) {
+    return definition.action == playerTwoLegacy.action &&
+           definition.label == "Scratch (legacy digital)" &&
+           !definition.bindable;
+  }));
+
+  const auto newProfileActions = settings_scene::inputActionsForScope(
+      {1, 7}, std::span<const input::InputBinding>{});
+  assert(std::ranges::none_of(newProfileActions, [](const auto &definition) {
+    return definition.label == "Scratch (legacy digital)";
+  }));
+}
+
 void testGyroscopeSettingsLayoutAndPresentation() {
   const auto wide = settings_scene::resolveGyroscopeSettingsLayout(900, false);
   assert(!wide.stackEditors);
@@ -881,6 +918,7 @@ int main() {
   testRankingDetailLampShrinksInsideCompactMetricCard();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
+  testLegacyDigitalScratchBindingsRemainManageable();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

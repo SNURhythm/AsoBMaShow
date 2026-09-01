@@ -1,7 +1,7 @@
 #include "SettingsSceneShared.h"
 
+#include "SettingsSceneInputActions.h"
 #include "SettingsSceneInputLayout.h"
-#include "../input/ChartLaneBinding.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
@@ -29,57 +29,12 @@ namespace {
 constexpr std::array<int, 7> kInputKeyModes = {4, 5, 6, 7, 8, 10, 14};
 constexpr std::string_view kBlankStableIdFilter = "\x1fmissing-stable-id";
 
-struct ActionDefinition {
-  input::LogicalAction action;
-  std::string label;
-};
-
 View *makeInputCardsColumn(const LayoutMetrics &metrics) {
   auto *column = new View();
   column->setFlexDirection(FlexDirection::Column);
   column->setGap(static_cast<float>(metrics.secondaryGap));
   column->setWidth(static_cast<float>(metrics.cardsWidth));
   return column;
-}
-
-std::vector<ActionDefinition> actionsForScope(input::InputScope scope) {
-  std::vector<ActionDefinition> result;
-  int firstLane = 0;
-  int noteLanes = scope.keyMode;
-  if (scope.keyMode == 10 || scope.keyMode == 14) {
-    noteLanes = scope.keyMode / 2;
-    firstLane = scope.player == 1 ? 0 : 8;
-  }
-  for (int localLane = 0; localLane < noteLanes; ++localLane) {
-    int physicalLane = firstLane + localLane;
-    if (scope.player == 1) {
-      physicalLane = input_profile::chartLaneForKeyPosition(
-                         scope.keyMode, localLane)
-                         .value_or(physicalLane);
-    }
-    result.push_back(
-        {.action = {input::LogicalActionKind::Lane, physicalLane},
-         .label = "Lane " + std::to_string(localLane + 1)});
-  }
-
-  result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
-                    .label = "Scratch clockwise"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
-       .label = "Scratch counter-clockwise"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Start, 0}, .label = "Start"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Select, 0}, .label = "Select"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Pause, 0}, .label = "Pause"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Retry, 0}, .label = "Retry"});
-  result.push_back({.action = {input::LogicalActionKind::LaneCoverIncrease, 0},
-                    .label = "Lane cover increase"});
-  result.push_back({.action = {input::LogicalActionKind::LaneCoverDecrease, 0},
-                    .label = "Lane cover decrease"});
-  return result;
 }
 
 std::string directionLabel(input::ControlDirection direction) {
@@ -788,7 +743,8 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     return result;
   }();
 
-  for (const auto &definition : actionsForScope(scope)) {
+  for (const auto &definition :
+       inputActionsForScope(scope, context.inputProfile.bindings)) {
     auto *actionGroup = new View();
     actionGroup->setFlexDirection(FlexDirection::Column);
     actionGroup->setGap(metrics.compact ? 8.0F : 10.0F);
@@ -807,24 +763,26 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     actionHeader->setGap(static_cast<float>(layout.selectorGap));
     actionHeader->addView(makeWrappedText(
         definition.label, metrics.bodyTextSize + 2, ui_theme::textPrimary()));
-    const bool listeningForAction =
-        inputCaptureController->state() ==
-            InputCaptureController::State::Listening &&
-        inputCaptureAction.has_value() &&
-        *inputCaptureAction == definition.action;
-    auto *bindButton = makeAccentButton(
-        metrics.compact ? 150 : 190, metrics.actionButtonHeight,
-        makeText(listeningForAction ? "Listening..." : "Bind",
-                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE),
-        listeningForAction ? ui_theme::amber() : ui_theme::cyan());
-    bindButton->setOnClickListener([this, action = definition.action]() {
-      inputCaptureAction = action;
-      inputCaptureController->begin({inputSelectedPlayer, inputSelectedKeyMode},
-                                    action);
-      requestInputViewRebuild();
-    });
-    actionHeader->addView(bindButton);
+    if (definition.bindable) {
+      const bool listeningForAction =
+          inputCaptureController->state() ==
+              InputCaptureController::State::Listening &&
+          inputCaptureAction.has_value() &&
+          *inputCaptureAction == definition.action;
+      auto *bindButton = makeAccentButton(
+          metrics.compact ? 150 : 190, metrics.actionButtonHeight,
+          makeText(listeningForAction ? "Listening..." : "Bind",
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE),
+          listeningForAction ? ui_theme::amber() : ui_theme::cyan());
+      bindButton->setOnClickListener([this, action = definition.action]() {
+        inputCaptureAction = action;
+        inputCaptureController->begin(
+            {inputSelectedPlayer, inputSelectedKeyMode}, action);
+        requestInputViewRebuild();
+      });
+      actionHeader->addView(bindButton);
+    }
     actionGroup->addView(actionHeader);
 
     std::vector<input::InputBinding> visibleBindings;

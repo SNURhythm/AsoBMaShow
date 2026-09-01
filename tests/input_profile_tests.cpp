@@ -325,6 +325,34 @@ int main() {
     std::filesystem::remove_all(testRoot);
     std::filesystem::create_directories(testRoot);
 
+    const input::InputBinding legacyDigitalScratch{
+        .id = "pre-directional-default-scratch",
+        .scope = {1, 7},
+        .action = {input::LogicalActionKind::Lane, 7},
+        .control = {.deviceId = "keyboard",
+                    .deviceClass = input::DeviceClass::Keyboard,
+                    .kind = input::ControlKind::Key,
+                    .index = SDL_SCANCODE_LSHIFT,
+                    .direction = input::ControlDirection::Any},
+    };
+    const auto legacyDigitalScratchPath =
+        testRoot / "schema-7-digital-scratch.json";
+    std::string legacySaveError;
+    require(InputProfileStore::saveAtomic(
+                legacyDigitalScratchPath,
+                InputProfile{.bindings = {legacyDigitalScratch}},
+                legacySaveError),
+            "a pre-directional schema-seven profile fixture saves");
+    const auto loadedLegacyDigitalScratch =
+        InputProfileStore::load(legacyDigitalScratchPath);
+    require(loadedLegacyDigitalScratch.status ==
+                    InputProfileLoadStatus::Loaded &&
+                loadedLegacyDigitalScratch.profile.bindings.size() == 1 &&
+                sameBinding(loadedLegacyDigitalScratch.profile.bindings.front(),
+                            legacyDigitalScratch),
+            "schema-seven digital scratch bindings load without destructive "
+            "migration");
+
     const auto repairedIdsPath = testRoot / "repaired-ids.json";
     writeFile(repairedIdsPath, R"json({
   "schemaVersion": 1,
