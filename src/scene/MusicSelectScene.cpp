@@ -13,6 +13,7 @@
 #include "../audio/Jukebox.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
 #include "../music_select/MusicSelectReplaySlots.h"
+#include "../music_select/MusicSelectFavorites.h"
 #include "../music_select/MusicSelectPropertyProjection.h"
 #include "../replay/ChartReplayConsumer.h"
 #include "../rendering/common.h"
@@ -813,6 +814,45 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
       true);
 }
 
+void MusicSelectScene::changeSelectedFavorite(bool song, int direction) {
+  if (!chartSession_) return;
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (!selected.chart || selected.chart->meta.BmsPath.empty()) return;
+
+  const MusicSelectFavoriteBits bits =
+      song ? MusicSelectFavoriteBits{.favorite = 1, .invisible = 4}
+           : MusicSelectFavoriteBits{.favorite = 2, .invisible = 8};
+  const auto state = musicSelectNextFavoriteState(
+      selected.chart->songReviewFavorite, bits, direction);
+  if (!song) {
+    const int flags = musicSelectApplyFavoriteState(
+        selected.chart->songReviewFavorite, bits, state);
+    const bool favorite = (flags & bits.favorite) != 0;
+    if (!chartSession_->SetFavorite(selected.chart->meta, favorite) ||
+        !chartSession_->SetSongReviewFavorite(selected.chart->meta.SHA256,
+                                              flags)) {
+      SDL_Log("Unable to update selected chart favorite state");
+    }
+    return;
+  }
+
+  ChartMetaQuery query;
+  query.exactFolder = !selected.chart->meta.Folder.empty()
+                          ? selected.chart->meta.Folder
+                          : selected.chart->meta.BmsPath.parent_path();
+  std::vector<ChartMetaRecord> records;
+  chartSession_->QueryChartMeta(query, records);
+  for (const auto &record : records) {
+    const int flags = musicSelectApplyFavoriteState(
+        record.songReviewFavorite, bits, state);
+    if (!chartSession_->SetSongReviewFavorite(record.meta.SHA256, flags)) {
+      SDL_Log("Unable to update song favorite state");
+    }
+  }
+}
+
 void MusicSelectScene::consumeActions() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!skinSession_) return;
@@ -1082,6 +1122,12 @@ void MusicSelectScene::executeEvent(
       }
       break;
     }
+    case MusicSelectEventEffectKind::ChangeFavoriteSong:
+      changeSelectedFavorite(true, effect.value);
+      break;
+    case MusicSelectEventEffectKind::ChangeFavoriteChart:
+      changeSelectedFavorite(false, effect.value);
+      break;
     default:
       break;
     }

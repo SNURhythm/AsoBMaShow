@@ -9,4 +9,5 @@ target_sources(main PRIVATE
     MusicSelectInputProcessor.cpp
     MusicSelectInputBindingAdapter.cpp
     MusicSelectEventController.cpp
+    MusicSelectFavorites.cpp
 )

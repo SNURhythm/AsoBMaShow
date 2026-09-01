@@ -1230,6 +1230,8 @@ void selectFavoriteMusicTracks(sqlite3 *database,
 int countFavoriteCharts(sqlite3 *database);
 bool setFavorite(sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
                  bool favorite);
+bool setSongReviewFavorite(sqlite3 *database, std::string_view sha256,
+                           int favorite);
 int countAllChartMeta(sqlite3 *database);
 int countSolidArchives(sqlite3 *database);
 void queryChartMeta(sqlite3 *database, const ChartMetaQuery &query,
@@ -1274,6 +1276,11 @@ int ChartRepository::Session::CountFavoriteCharts() {
 bool ChartRepository::Session::SetFavorite(
     const bms_parser::ChartMeta &chartMeta, bool favorite) {
   return setFavorite(impl_->database(), chartMeta, favorite);
+}
+
+bool ChartRepository::Session::SetSongReviewFavorite(
+    std::string_view sha256, int favorite) {
+  return setSongReviewFavorite(impl_->database(), sha256, favorite);
 }
 
 void ChartRepository::Session::QueryChartMeta(
@@ -1506,6 +1513,29 @@ bool setFavorite(sqlite3 *db,
   if (chartFavoriteChanged || reviewChanged) {
     bumpLibraryRevision();
   }
+  return true;
+}
+
+bool setSongReviewFavorite(sqlite3 *db, std::string_view sha256,
+                           int favorite) {
+  if (db == nullptr) return false;
+  if (sha256.empty()) return true;
+  const char *query =
+      "INSERT INTO review(sha256, favorite) VALUES(?1, ?2) "
+      "ON CONFLICT(sha256) DO UPDATE SET favorite=excluded.favorite";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(db, query, statement,
+                                    "preparing SongReview favorite update",
+                                    logSqlErrorText) ||
+      !bindSqliteText(statement.get(), 1, std::string(sha256)) ||
+      sqlite3_bind_int(statement.get(), 2, favorite) != SQLITE_OK) {
+    return false;
+  }
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("updating SongReview favorite", db);
+    return false;
+  }
+  if (sqlite3_changes(db) > 0) bumpLibraryRevision();
   return true;
 }
 

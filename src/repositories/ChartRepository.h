@@ -228,6 +228,7 @@ public:
     void SelectFavoriteMusicTracks(std::vector<MusicTrackRecord> &tracks);
     int CountFavoriteCharts();
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);
+    bool SetSongReviewFavorite(std::string_view sha256, int favorite);
     void QueryChartMeta(const ChartMetaQuery &query,
                         std::vector<ChartMetaRecord> &chartMetas);
     ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(

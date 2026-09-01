@@ -1336,6 +1336,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(music_select_replay_slot_tests PRIVATE cxx_std_23)
 
+        add_executable(music_select_favorite_tests
+            tests/music_select_favorite_tests.cpp
+            src/music_select/MusicSelectFavorites.cpp
+        )
+        target_include_directories(music_select_favorite_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_favorite_tests PRIVATE cxx_std_23)
+
         add_executable(music_select_bar_manager_tests
             tests/music_select_bar_manager_tests.cpp
             src/music_select/MusicSelectBarManager.cpp
@@ -7273,6 +7282,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_replay_slot_tests)
         asobmashow_register_test(music_select_replay_slot_tests)
+    endif()
+    if (TARGET music_select_favorite_tests)
+        asobmashow_register_test(music_select_favorite_tests)
     endif()
     if (TARGET music_select_bar_manager_tests)
         asobmashow_register_test(music_select_bar_manager_tests)

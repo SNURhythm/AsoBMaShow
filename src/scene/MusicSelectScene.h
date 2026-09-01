@@ -53,6 +53,7 @@ private:
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
   void launchSelectedReplay(int slot);
+  void changeSelectedFavorite(bool song, int direction);
   void openSelected();
   void openSameFolder();
   void copySelectedHash(bool sha256);

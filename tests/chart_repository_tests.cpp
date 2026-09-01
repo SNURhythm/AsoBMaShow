@@ -513,6 +513,28 @@ void testFavoriteToggleMaintainsSongReviewChartBit() {
   assert(loaded.records.front().songReviewFavorite == 13);
 }
 
+void testSongReviewFavoritePersistsExactSourceBitfield() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto meta = chartMeta(temporary.path());
+  assert(session->InsertChartMeta(meta));
+  assert(session->SetSongReviewFavorite(meta.SHA256, 13));
+  const std::array paths{meta.BmsPath};
+  auto loaded = session->SelectChartMetaByPaths(paths);
+  assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(loaded.records.size() == 1);
+  assert(loaded.records.front().songReviewFavorite == 13);
+
+  assert(session->SetSongReviewFavorite(meta.SHA256, 2));
+  loaded = session->SelectChartMetaByPaths(paths);
+  assert(loaded.records.front().songReviewFavorite == 2);
+  assert(session->SetSongReviewFavorite({}, 15));
+}
+
 void testSelectChartMetaByHashUsesDurableIndexedIdentity() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -1266,6 +1288,7 @@ int main() {
   testSessionRoundTripAndReadinessCost();
   testSelectChartMetaByPathsHydratesInInputOrder();
   testFavoriteToggleMaintainsSongReviewChartBit();
+  testSongReviewFavoritePersistsExactSourceBitfield();
   testSelectChartMetaByHashUsesDurableIndexedIdentity();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
