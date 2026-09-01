@@ -9,6 +9,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 
 CASES = (
@@ -195,9 +196,9 @@ def _java_17_tools():
                 return java, javac
         except (OSError, subprocess.CalledProcessError):
             continue
-    raise RuntimeError(
-        "Java 17 is required for the Beatoraja Pattern oracle; set "
-        "ASOBMASHOW_JAVA_17_HOME to a JDK 17 installation"
+    raise unittest.SkipTest(
+        "Java 17 is unavailable for the optional Beatoraja Pattern oracle; "
+        "set ASOBMASHOW_JAVA_17_HOME to a JDK 17 installation to run it"
     )
 
 
@@ -229,6 +230,13 @@ public final class LuaSkinJavaPatternOracle {
 
 
 class LuaSkinJavaPatternOracleTests(unittest.TestCase):
+    def test_missing_java_17_skips_optional_oracle(self):
+        with mock.patch(
+            f"{__name__}._java_home_candidates", return_value=()
+        ):
+            with self.assertRaises(unittest.SkipTest):
+                _java_17_tools()
+
     def test_java_oracle_uses_a_consistent_java_17_toolchain(self):
         java, javac = _java_17_tools()
         self.assertEqual(_java_major(java), TARGET_JAVA_MAJOR)
