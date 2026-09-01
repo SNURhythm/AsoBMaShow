@@ -13,23 +13,6 @@
 
 namespace skin {
 
-struct MusicSelectPropertyValues {
-  std::map<int, bool> booleans;
-  std::map<int, std::int64_t> integers;
-  std::map<int, std::int64_t> imageIndexes;
-  std::map<int, double> rates;
-  std::map<int, double> floats;
-  std::map<int, std::string> strings;
-  std::map<int, std::int64_t> timers;
-  std::map<std::string, bool, std::less<>> namedBooleans;
-  std::map<std::string, std::int64_t, std::less<>> namedIntegers;
-  std::map<std::string, std::int64_t, std::less<>> namedImageIndexes;
-  std::map<std::string, double, std::less<>> namedRates;
-  std::map<std::string, double, std::less<>> namedFloats;
-  std::map<std::string, std::string, std::less<>> namedStrings;
-  std::map<std::string, std::int64_t, std::less<>> namedTimers;
-};
-
 struct MusicSelectSkinFrame {
   std::uint64_t serial = 0;
   std::int64_t elapsedMillis = 0;

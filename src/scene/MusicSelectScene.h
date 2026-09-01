@@ -48,9 +48,13 @@ private:
   skin::GameplaySkinActivationRequest activationRequest_;
   std::optional<ChartRepository::Session> chartSession_;
   ScoreBestCache scoreCache_;
+  PlayerScoreHistorySnapshot playerHistory_;
   MusicSelectBarManager bars_;
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t frameSerial_ = 0;
+  int sortIndex_ = 0;
+  int panelState_ = 0;
+  int selectedReplay_ = -1;
   std::chrono::steady_clock::time_point started_;
   std::vector<skin::SkinDiagnostic> diagnostics_;
   MusicSelectToolbarView *toolbar_ = nullptr;

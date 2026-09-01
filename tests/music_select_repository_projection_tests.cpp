@@ -63,6 +63,7 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
               song->presentation.difficulty == 4,
           "SongBar values use SongData full-title and chart fields");
   require(song && song->presentation.lamp == 7 &&
+              song->score && song->score->score == 1000 &&
               (song->presentation.featureFlags &
                skin::MusicSelectFeatureChargeNote) != 0 &&
               (song->presentation.featureFlags &

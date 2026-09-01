@@ -105,8 +105,9 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
     }
 
     int lamp = 0;
+    std::optional<ScoreBestSnapshot> score;
     if (input.scoreFor) {
-      const auto score = input.scoreFor(record.meta, input.selectedLongNoteMode);
+      score = input.scoreFor(record.meta, input.selectedLongNoteMode);
       if (score) lamp = beatorajaClearType(score->clearType);
     }
     const MusicSelectBarId songId{chartIdentity(record)};
@@ -116,6 +117,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
          .kind = skin::MusicSelectBarKind::Song,
          .title = title,
          .chart = record,
+         .score = std::move(score),
          .presentation = {.kind = skin::MusicSelectBarKind::Song,
                           .title = title,
                           .exists = !record.unavailable &&

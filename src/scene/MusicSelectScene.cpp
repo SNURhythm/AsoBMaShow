@@ -11,6 +11,7 @@
 #include "../PlayOptionUtils.h"
 #include "../audio/Jukebox.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
+#include "../music_select/MusicSelectPropertyProjection.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
@@ -24,10 +25,12 @@
 #endif
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <ctime>
 #include <memory>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -91,6 +94,32 @@ std::filesystem::path resolveChartAsset(const ChartMetaRecord &record,
   if (asset.empty() || asset.is_absolute()) return asset;
   return record.meta.BmsPath.parent_path() / asset;
 }
+
+int sourceSortIndex(std::string_view id) {
+  // BarSorter.defaultSorter in the pinned source.
+  constexpr std::array<std::string_view, 8> values{
+      "TITLE", "ARTIST", "BPM", "LENGTH",
+      "LEVEL", "CLEAR", "SCORE", "MISSCOUNT"};
+  const auto found = std::ranges::find(values, id);
+  return found == values.end()
+             ? 0
+             : static_cast<int>(std::distance(values.begin(), found));
+}
+
+MusicSelectClockFields localClockFields(std::time_t value) {
+  std::tm local{};
+#if defined(_WIN32)
+  localtime_s(&local, &value);
+#else
+  localtime_r(&value, &local);
+#endif
+  return {.year = local.tm_year + 1900,
+          .month = local.tm_mon + 1,
+          .day = local.tm_mday,
+          .hour = local.tm_hour,
+          .minute = local.tm_min,
+          .second = local.tm_sec};
+}
 } // namespace
 
 MusicSelectScene::MusicSelectScene(
@@ -100,6 +129,7 @@ MusicSelectScene::MusicSelectScene(
 
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
+  sortIndex_ = sourceSortIndex(context.settings.skinSortId);
   chartSession_ = context.chartRepository.OpenSession(&context.scoreRepository);
   reloadLibrary();
 
@@ -164,6 +194,7 @@ void MusicSelectScene::reloadLibrary() {
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   chartSession_->QueryChartMeta(query, records);
   scoreCache_ = context.scoreRepository.LoadBestScores();
+  playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
   libraryRevision_ = context.chartRepository.GetLibraryRevision();
   bars_.refresh(MusicSelectRepositoryProjection{}.project(
       {.records = records,
@@ -195,56 +226,30 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
     frame.songList.bars.push_back(row.presentation);
   }
 
-  frame.properties.rates[1] = snapshot.rows.empty()
-                                  ? 0.0
-                                  : static_cast<double>(snapshot.selectedIndex) /
-                                        snapshot.rows.size();
-  frame.properties.rates[8] = 0.0;
-  frame.properties.strings[30] = "";
-  frame.properties.strings[60] = context.settings.skinModeFilterName;
-  frame.properties.strings[61] = context.settings.skinSortId;
-  frame.properties.strings[62] = context.settings.skinDifficultyFilterName;
-  frame.properties.strings[86] = context.settings.skinChartReplicationMode;
-  frame.properties.strings[1000] = snapshot.directoryText;
-  frame.properties.booleans[21] = false;
-  frame.properties.booleans[22] = false;
-  frame.properties.booleans[23] = false;
+  const std::time_t wallSeconds = static_cast<std::time_t>(wall / 1000);
+  MusicSelectPropertyRuntimeSnapshot propertyRuntime;
+  propertyRuntime.wallClock = localClockFields(wallSeconds);
+  propertyRuntime.applicationUptimeMillis =
+      context.applicationUptimeMillis.load(std::memory_order_acquire);
+  propertyRuntime.framesPerSecond =
+      context.currentFramesPerSecond.load(std::memory_order_acquire);
+  propertyRuntime.panelState = panelState_;
+  propertyRuntime.selectedReplay = selectedReplay_;
+  propertyRuntime.sortIndex = sortIndex_;
+  propertyRuntime.playerName =
+      context.profileManager.activeProfile().displayName;
+  propertyRuntime.targetName = context.settings.skinTargetId == "MAX"
+                                   ? "MAX"
+                                   : std::string{};
+  propertyRuntime.playerHistory = playerHistory_;
+  frame.properties =
+      projectMusicSelectProperties(context.settings, snapshot, propertyRuntime);
 
   if (snapshot.selectedIndex < snapshot.rows.size()) {
     const auto &selected = snapshot.rows[snapshot.selectedIndex];
-    frame.properties.booleans[1] =
-        selected.kind == skin::MusicSelectBarKind::Folder;
-    frame.properties.booleans[2] =
-        selected.kind == skin::MusicSelectBarKind::Song;
-    frame.properties.booleans[3] =
-        selected.kind == skin::MusicSelectBarKind::Grade;
-    frame.properties.booleans[5] = selected.selectable;
-    const auto lamp = std::clamp(selected.presentation.lamp, 0, 10);
-    frame.properties.booleans[100] = lamp == 0;
-    frame.properties.booleans[101] = lamp == 1;
-    frame.properties.booleans[1100] = lamp == 2;
-    frame.properties.booleans[1101] = lamp == 3;
-    frame.properties.booleans[102] = lamp == 4;
-    frame.properties.booleans[103] = lamp == 5;
-    frame.properties.booleans[104] = lamp == 6;
-    frame.properties.booleans[1102] = lamp == 7;
-    frame.properties.booleans[105] = lamp == 8;
-    frame.properties.strings[10] = selected.title;
-    frame.properties.strings[12] = selected.title;
     if (selected.chart) {
       const auto &record = *selected.chart;
       const auto &meta = record.meta;
-      frame.properties.strings[10] = meta.Title;
-      frame.properties.strings[11] = meta.SubTitle;
-      frame.properties.strings[12] = selected.title;
-      frame.properties.strings[13] = meta.Genre;
-      frame.properties.strings[14] = meta.Artist;
-      frame.properties.strings[15] = meta.SubArtist;
-      frame.properties.strings[16] =
-          meta.SubArtist.empty() ? meta.Artist
-                                 : meta.Artist + " " + meta.SubArtist;
-      frame.properties.strings[1030] = meta.MD5;
-      frame.properties.strings[1031] = meta.SHA256;
       frame.stageFile = resolveChartAsset(record, meta.StageFile);
       frame.backBmp = resolveChartAsset(record, meta.BackBmp);
       frame.banner = resolveChartAsset(record, meta.Banner);
