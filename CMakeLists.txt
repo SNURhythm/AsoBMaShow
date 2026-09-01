@@ -4781,6 +4781,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(scene_return_target_tests
+        tests/scene_return_target_tests.cpp
+    )
+    target_include_directories(scene_return_target_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
+
     add_executable(profile_settings_persistence_tests
         tests/profile_settings_persistence_tests.cpp
         src/CourseIdentity.cpp

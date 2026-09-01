@@ -46,6 +46,14 @@ void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene>
   registeredScenes[name] = std::move(scene);
 }
 
+bool SceneManager::hasRegisteredScene(const std::string &name) const {
+  return registeredScenes.contains(name);
+}
+
+bool SceneManager::hasBackgroundScene(const Scene *scene) const {
+  return scene != nullptr && backgroundScenes.contains(const_cast<Scene *>(scene));
+}
+
 void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
                                bool keepBackground) {
   if (newScene == nullptr) {

@@ -8,6 +8,7 @@
 #include "SettingsAudioVideoModel.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
+#include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
 #include <atomic>
@@ -74,7 +75,9 @@ class SettingsScene : public Scene, public IRhythmControl {
 public:
   explicit SettingsScene(
       ApplicationContext &context,
-      SettingsDestination destination = SettingsDestination::Profile);
+      SettingsDestination destination = SettingsDestination::Profile,
+      SceneReturnTarget returnTarget =
+          SceneReturnTarget::Registered("MainMenu"));
   ~SettingsScene() override;
 
   void init() override;
@@ -89,6 +92,7 @@ public:
                                 bool isBackSpin = false) override;
 
 private:
+  SceneReturnTarget returnTarget_;
   enum class SettingsTab {
     Profile,
     Timing,

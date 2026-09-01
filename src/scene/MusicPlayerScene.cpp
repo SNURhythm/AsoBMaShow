@@ -4737,6 +4737,6 @@ void MusicPlayerScene::goBack() {
     return;
   }
   if (context.sceneManager != nullptr) {
-    context.sceneManager->changeScene("MainMenu", false);
+    (void)returnToScene(*context.sceneManager, returnTarget_);
   }
 }

@@ -30,6 +30,8 @@ public:
   
   // Scene registration
   void registerScene(const std::string& name, std::unique_ptr<Scene> scene);
+  [[nodiscard]] bool hasRegisteredScene(const std::string &name) const;
+  [[nodiscard]] bool hasBackgroundScene(const Scene *scene) const;
   
   // Scene changing
   void changeScene(std::unique_ptr<Scene> newScene,

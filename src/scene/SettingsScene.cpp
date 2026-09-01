@@ -63,8 +63,9 @@ formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
 } // namespace
 
 SettingsScene::SettingsScene(ApplicationContext &context,
-                             SettingsDestination destination)
-    : Scene(context),
+                             SettingsDestination destination,
+                             SceneReturnTarget returnTarget)
+    : Scene(context), returnTarget_(std::move(returnTarget)),
       activeTab(destination == SettingsDestination::Ir ? SettingsTab::Ir
                                                        : SettingsTab::Profile),
       lastLaidOutTab(activeTab) {}

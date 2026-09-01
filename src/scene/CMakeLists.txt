@@ -18,6 +18,7 @@ target_sources(main PRIVATE
     RemoteResultRecallController.cpp
     ResultPresentationModel.cpp
     SceneManager.cpp
+    SceneReturnTarget.cpp
     ResultGaugeHistory.cpp
     ResultScene.cpp
     SettingsScene.cpp

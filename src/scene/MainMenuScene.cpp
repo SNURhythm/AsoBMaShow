@@ -47,6 +47,7 @@
 #include "MusicPlayerScene.h"
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
+#include "SettingsScene.h"
 #include "play/GamePlayScene.h"
 #include "play/GameplayGaugeRules.h"
 #include "play/Pacemaker.h"
@@ -2212,7 +2213,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (context.sceneManager != nullptr) {
       cancelPreviewLoading(true);
       context.sceneManager->changeScene(
-          std::make_unique<MusicPlayerScene>(context), true);
+          std::make_unique<MusicPlayerScene>(
+              context, SceneReturnTarget::Retained(this)),
+          true);
     }
   });
   styleThemedActionButton(musicButton, musicButtonText, true, ui_theme::control,
@@ -2228,7 +2231,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (context.sceneManager != nullptr) {
       cancelPreviewLoading(true);
       context.sceneManager->changeScene(
-          std::make_unique<IrUploadsScene>(context), true);
+          std::make_unique<IrUploadsScene>(
+              context, SceneReturnTarget::Retained(this)),
+          true);
     }
   });
   styleThemedActionButton(irUploadsButton, irUploadsButtonText, true,
@@ -2656,7 +2661,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
     cancelPreviewLoading(true);
-    context.sceneManager->changeScene("Settings", true);
+    context.sceneManager->changeScene(
+        std::make_unique<SettingsScene>(
+            context, SettingsDestination::Profile,
+            SceneReturnTarget::Retained(this)),
+        true);
   });
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
