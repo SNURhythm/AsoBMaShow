@@ -1,4 +1,5 @@
 #include "skin/beatoraja/LuaSkinTableDecoder.h"
+#include "music_select_skin_ledger_evidence.h"
 
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -342,13 +343,40 @@ void testInstalledAcceptanceSkinsDecodeWhenRequested() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testConfiguredType5SongListPreservesEveryAuthoredValue();
   testInstalledAcceptanceSkinsDecodeWhenRequested();
-  if (failures != 0) {
-    std::cerr << failures << " Lua music-select decoder test(s) failed\n";
-    return 1;
-  }
-  std::cout << "Lua music-select decoder tests passed\n";
-  return 0;
+  return music_select_skin_ledger_evidence::finish(
+      argc, argv, "lua_music_select_skin_decoder_tests", failures,
+      {
+          "json.field.song-list-center",
+          "json.field.song-list-clickable",
+          "json.field.song-list-graph",
+          "json.field.song-list-id",
+          "json.field.song-list-label",
+          "json.field.song-list-lamp",
+          "json.field.song-list-level",
+          "json.field.song-list-listoff",
+          "json.field.song-list-liston",
+          "json.field.song-list-playerlamp",
+          "json.field.song-list-rivallamp",
+          "json.field.song-list-text",
+          "json.field.song-list-trophy",
+          "lua.object-field.skin-songlist",
+          "lua.object-field.song-list-center",
+          "lua.object-field.song-list-clickable",
+          "lua.object-field.song-list-graph",
+          "lua.object-field.song-list-id",
+          "lua.object-field.song-list-label",
+          "lua.object-field.song-list-lamp",
+          "lua.object-field.song-list-level",
+          "lua.object-field.song-list-listoff",
+          "lua.object-field.song-list-liston",
+          "lua.object-field.song-list-playerlamp",
+          "lua.object-field.song-list-rivallamp",
+          "lua.object-field.song-list-text",
+          "lua.object-field.song-list-trophy",
+      },
+      "Lua music-select decoder test(s) failed",
+      "Lua music-select decoder tests passed");
 }
