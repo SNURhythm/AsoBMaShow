@@ -249,8 +249,7 @@ The toolbar has three persisted modes:
 
 Every toolbar control uses an icon from the bundled Font Awesome 6 Free Solid
 font at `assets/fonts/fa-solid-900.ttf`, through the existing `ui_icons`
-helpers. The visible controls do not use text labels; their action names remain
-available as accessibility labels.
+helpers. The visible controls do not use text labels.
 
 Mode and position are application/device settings, not profile settings. Hide
 has no gesture, edge tab, keyboard shortcut, or in-selector escape hatch. The
@@ -313,7 +312,7 @@ ledger row. The suite includes:
 - explicit Built-in, successful selected skin, startup failure, and runtime
   failure paths, proving zero automatic fallback;
 - expanded, collapsed, hidden, drag, persistence, and restart recovery toolbar
-  behavior, including the Font Awesome icon and accessibility-label contract;
+  behavior, including the Font Awesome icon contract;
 - one application-owned library worker, with continuous progress on native and
   skinned selection screens, gameplay-only pause, and checkpoint resume;
 - regression coverage for native MainMenu automatic scanning and task UI.
