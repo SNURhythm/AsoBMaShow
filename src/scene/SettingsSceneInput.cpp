@@ -834,19 +834,23 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       editor->setFlexWrap(YGWrapWrap);
       editor->setGap(static_cast<float>(layout.selectorGap));
       editor->setAlignItems(YGAlignStretch);
+      const auto editorCapabilities =
+          settings_scene::inputBindingEditorCapabilities(binding.control.kind);
+      const int editorControlWidth =
+          settings_scene::resolveInputBindingEditorControlWidth(
+              layout, editorCapabilities);
 
       auto makeThresholdField = [&](std::string label, float value,
                                     auto onCommit) {
         auto *field = new View();
         field->setFlexDirection(FlexDirection::Column);
         field->setGap(4.0F);
-        field->setWidth(static_cast<float>(layout.numericControlWidth));
-        field->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
+        field->setWidth(static_cast<float>(editorControlWidth));
         field->addView(
             makeText(label, metrics.smallTextSize, ui_theme::textMuted()));
         auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
         input->setEditingText(formatThreshold(value));
-        input->setSize(layout.numericControlWidth, metrics.actionButtonHeight);
+        input->setSize(editorControlWidth, metrics.actionButtonHeight);
         input->setThemedBackgroundColor(ui_theme::control);
         input->setThemedBorderColor(ui_theme::hairline);
         input->setBorderWidth(1);
@@ -862,44 +866,50 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         return field;
       };
 
-      editor->addView(
-          makeThresholdField("Dead zone", binding.deadZone,
-                             [this, bindingId = binding.id](float value) {
-                               inputCaptureController->updateBinding(
-                                   bindingId, {.deadZone = value});
-                               requestInputViewRebuild();
-                             }));
-      editor->addView(
-          makeThresholdField("Activate", binding.activationThreshold,
-                             [this, bindingId = binding.id](float value) {
-                               inputCaptureController->updateBinding(
-                                   bindingId, {.activationThreshold = value});
-                               requestInputViewRebuild();
-                             }));
-      editor->addView(
-          makeThresholdField("Release", binding.releaseThreshold,
-                             [this, bindingId = binding.id](float value) {
-                               inputCaptureController->updateBinding(
-                                   bindingId, {.releaseThreshold = value});
-                               requestInputViewRebuild();
-                             }));
-      auto *invertButton = makeControlButton(
-          std::max(0, layout.numericControlWidth), metrics.actionButtonHeight,
-          makeText(binding.inverted ? "Inverted: On" : "Inverted: Off",
-                   metrics.smallTextSize, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      invertButton->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
-      invertButton->setOnClickListener([this, bindingId = binding.id]() {
-        inputCaptureController->toggleBindingInversion(bindingId);
-        requestInputViewRebuild();
-      });
-      editor->addView(invertButton);
+      if (editorCapabilities.deadZone) {
+        editor->addView(
+            makeThresholdField("Dead zone", binding.deadZone,
+                               [this, bindingId = binding.id](float value) {
+                                 inputCaptureController->updateBinding(
+                                     bindingId, {.deadZone = value});
+                                 requestInputViewRebuild();
+                               }));
+      }
+      if (editorCapabilities.activationThreshold) {
+        editor->addView(makeThresholdField(
+            "Activate", binding.activationThreshold,
+            [this, bindingId = binding.id](float value) {
+              inputCaptureController->updateBinding(
+                  bindingId, {.activationThreshold = value});
+              requestInputViewRebuild();
+            }));
+      }
+      if (editorCapabilities.releaseThreshold) {
+        editor->addView(
+            makeThresholdField("Release", binding.releaseThreshold,
+                               [this, bindingId = binding.id](float value) {
+                                 inputCaptureController->updateBinding(
+                                     bindingId, {.releaseThreshold = value});
+                                 requestInputViewRebuild();
+                               }));
+      }
+      if (editorCapabilities.inversion) {
+        auto *invertButton = makeControlButton(
+            editorControlWidth, metrics.actionButtonHeight,
+            makeText(binding.inverted ? "Inverted: On" : "Inverted: Off",
+                     metrics.smallTextSize, ui_theme::textPrimary(),
+                     TextView::CENTER, TextView::MIDDLE));
+        invertButton->setOnClickListener([this, bindingId = binding.id]() {
+          inputCaptureController->toggleBindingInversion(bindingId);
+          requestInputViewRebuild();
+        });
+        editor->addView(invertButton);
+      }
       auto *unbindButton = makeAccentButton(
-          std::max(0, layout.numericControlWidth), metrics.actionButtonHeight,
+          editorControlWidth, metrics.actionButtonHeight,
           makeText("Unbind", metrics.smallTextSize, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
           ui_theme::coral());
-      unbindButton->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
       unbindButton->setOnClickListener([this, bindingId = binding.id]() {
         inputCaptureController->cancel();
         inputCaptureAction.reset();

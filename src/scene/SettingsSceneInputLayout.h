@@ -28,8 +28,47 @@ struct InputSettingsLayout {
   bool stackBindingEditor = false;
   int selectorGap = 12;
   int selectorWidth = 0;
+  int bindingEditorWidth = 0;
   int numericControlWidth = 0;
 };
+
+struct InputBindingEditorCapabilities {
+  bool deadZone = false;
+  bool activationThreshold = false;
+  bool releaseThreshold = false;
+  bool inversion = false;
+};
+
+constexpr int inputBindingEditorControlCount(
+    InputBindingEditorCapabilities capabilities) {
+  return 1 + static_cast<int>(capabilities.deadZone) +
+         static_cast<int>(capabilities.activationThreshold) +
+         static_cast<int>(capabilities.releaseThreshold) +
+         static_cast<int>(capabilities.inversion);
+}
+
+constexpr InputBindingEditorCapabilities
+inputBindingEditorCapabilities(input::ControlKind kind) {
+  switch (kind) {
+  case input::ControlKind::Axis:
+    return {.deadZone = true,
+            .activationThreshold = true,
+            .releaseThreshold = true,
+            .inversion = true};
+  case input::ControlKind::MidiNote:
+    return {.activationThreshold = true};
+  case input::ControlKind::MidiControl:
+    return {.deadZone = true,
+            .activationThreshold = true,
+            .releaseThreshold = true};
+  case input::ControlKind::Key:
+  case input::ControlKind::Button:
+  case input::ControlKind::Hat:
+  case input::ControlKind::TouchRegion:
+    return {};
+  }
+  return {};
+}
 
 constexpr InputSettingsLayout resolveInputSettingsLayout(int availableWidth,
                                                          bool compact) {
@@ -41,11 +80,23 @@ constexpr InputSettingsLayout resolveInputSettingsLayout(int availableWidth,
   result.selectorWidth =
       result.stackSelectors ? width
                             : std::max(0, (width - result.selectorGap * 2) / 3);
+  result.bindingEditorWidth = width;
   result.numericControlWidth =
       result.stackBindingEditor
           ? width
           : std::max(0, (width - result.selectorGap * 4) / 5);
   return result;
+}
+
+constexpr int resolveInputBindingEditorControlWidth(
+    InputSettingsLayout layout, InputBindingEditorCapabilities capabilities) {
+  if (layout.stackBindingEditor) {
+    return layout.bindingEditorWidth;
+  }
+  const int controlCount = inputBindingEditorControlCount(capabilities);
+  return std::max(
+      0, (layout.bindingEditorWidth - layout.selectorGap * (controlCount - 1)) /
+             controlCount);
 }
 
 struct GyroscopeSettingsLayout {

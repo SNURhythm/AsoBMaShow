@@ -752,6 +752,55 @@ void testInputSettingsLayoutPolicy() {
   assert(empty.numericControlWidth == 0);
 }
 
+void testInputBindingEditorCapabilitiesMatchControlSemantics() {
+  const auto key = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::Key);
+  assert(!key.deadZone && !key.activationThreshold &&
+         !key.releaseThreshold && !key.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(key) == 1);
+  const auto wideLayout =
+      settings_scene::resolveInputSettingsLayout(1200, false);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
+                                                               key) == 1200);
+
+  const auto axis = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::Axis);
+  assert(axis.deadZone && axis.activationThreshold && axis.releaseThreshold &&
+         axis.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(axis) == 5);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
+                                                               axis) == 230);
+
+  const auto midiNote = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::MidiNote);
+  assert(!midiNote.deadZone && midiNote.activationThreshold &&
+         !midiNote.releaseThreshold && !midiNote.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(midiNote) == 2);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
+                                                               midiNote) ==
+         594);
+
+  const auto midiControl = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::MidiControl);
+  assert(midiControl.deadZone && midiControl.activationThreshold &&
+         midiControl.releaseThreshold && !midiControl.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(midiControl) == 4);
+
+  const auto compactLayout =
+      settings_scene::resolveInputSettingsLayout(520, true);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(compactLayout,
+                                                               axis) == 520);
+
+  for (const auto kind : {input::ControlKind::Button,
+                          input::ControlKind::Hat,
+                          input::ControlKind::TouchRegion}) {
+    const auto digital =
+        settings_scene::inputBindingEditorCapabilities(kind);
+    assert(!digital.deadZone && !digital.activationThreshold &&
+           !digital.releaseThreshold && !digital.inversion);
+  }
+}
+
 void testLegacyDigitalScratchBindingsRemainManageable() {
   const input::InputBinding playerOneLegacy{
       .id = "legacy-p1-scratch",
@@ -918,6 +967,7 @@ int main() {
   testRankingDetailLampShrinksInsideCompactMetricCard();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
+  testInputBindingEditorCapabilitiesMatchControlSemantics();
   testLegacyDigitalScratchBindingsRemainManageable();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
