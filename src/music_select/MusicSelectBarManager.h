@@ -30,8 +30,8 @@ public:
 
   [[nodiscard]] bool openSelected();
   [[nodiscard]] bool close();
-  void move(bool increase, std::int64_t nowMillis,
-            std::int64_t durationMillis);
+  void move(bool increase, int movementDirection,
+            std::int64_t movementEndMillis);
   void setSelectedPosition(float);
   void configure(MusicSelectBarManagerConfig);
   void refresh(MusicSelectProjection);

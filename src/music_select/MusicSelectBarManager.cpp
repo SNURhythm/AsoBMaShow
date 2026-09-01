@@ -276,17 +276,16 @@ bool MusicSelectBarManager::close() {
   return true;
 }
 
-void MusicSelectBarManager::move(bool increase, std::int64_t nowMillis,
-                                 std::int64_t durationMillis) {
+void MusicSelectBarManager::move(bool increase, int movementDirection,
+                                 std::int64_t movementEndMillis) {
   if (rows_.empty()) return;
   if (increase) {
     selectedIndex_ = (selectedIndex_ + 1) % rows_.size();
-    movementDirection_ = 1;
   } else {
     selectedIndex_ = (selectedIndex_ + rows_.size() - 1) % rows_.size();
-    movementDirection_ = -1;
   }
-  movementEndMillis_ = nowMillis + durationMillis;
+  movementDirection_ = movementDirection;
+  movementEndMillis_ = movementEndMillis;
 }
 
 void MusicSelectBarManager::setSelectedPosition(float value) {

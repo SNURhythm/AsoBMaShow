@@ -140,6 +140,7 @@ struct MusicSelectInputAction {
   int value = 0;
   int argument1 = 0;
   int argument2 = 0;
+  std::int64_t deadlineMillis = 0;
 };
 
 struct MusicSelectInputProcessorConfig {

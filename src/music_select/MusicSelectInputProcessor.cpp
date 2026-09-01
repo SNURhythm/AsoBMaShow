@@ -120,6 +120,13 @@ void emit(std::vector<MusicSelectInputAction> &out,
   out.push_back({.kind = kind, .value = value});
 }
 
+void emitMove(std::vector<MusicSelectInputAction> &out,
+              MusicSelectInputActionKind kind, int angle,
+              std::int64_t deadlineMillis) {
+  out.push_back(
+      {.kind = kind, .value = angle, .deadlineMillis = deadlineMillis});
+}
+
 } // namespace
 
 MusicSelectInputProcessor::MusicSelectInputProcessor(
@@ -339,12 +346,13 @@ std::vector<MusicSelectInputAction> MusicSelectInputProcessor::process(
       duration_ = 0;
     }
     while (movement > 0) {
-      emit(out, MusicSelectInputActionKind::MoveNext);
+      emitMove(out, MusicSelectInputActionKind::MoveNext, angle_, duration_);
       emit(out, MusicSelectInputActionKind::ScratchSound);
       --movement;
     }
     while (movement < 0) {
-      emit(out, MusicSelectInputActionKind::MovePrevious);
+      emitMove(out, MusicSelectInputActionKind::MovePrevious, angle_,
+               duration_);
       emit(out, MusicSelectInputActionKind::ScratchSound);
       ++movement;
     }

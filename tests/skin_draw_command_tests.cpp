@@ -540,13 +540,18 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
         {.resource = resource,
          .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}});
   }
+  resources.addImage(200, {.x = 0, .y = 0, .w = 10, .h = 10});
   SkinSongListPresentation barPresentation{
       .object = 2,
       .destination = destination(2, 1, 100.0).presentation};
+  SkinSongListPresentation labelPresentation{
+      .object = 3,
+      .destination = destination(3, 2, 5.0).presentation};
   SkinSongListObject songList{
-      .center = 0,
-      .clickable = {0},
-      .listOn = {barPresentation},
+      .center = 1,
+      .clickable = {1},
+      .listOn = {{}, barPresentation},
+      .label = {{}, labelPresentation},
   };
   ValidatedBeatorajaSkinModel model;
   model.model.header.type = 5;
@@ -560,22 +565,33 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
        .authoredName = "bar-image",
        .payload = std::move(barImage),
        .authoredOrdinal = 1},
+      imageObject(3, 200, false),
   };
   model.model.destinations = {destination(1, 7, 0.0)};
   MusicSelectSongListFrame frame;
-  frame.bars = {{.kind = MusicSelectBarKind::SearchWord,
-                 .title = "query"}};
+  frame.bars = {{.kind = MusicSelectBarKind::Song,
+                 .title = "query",
+                 .exists = true,
+                 .featureFlags = MusicSelectFeatureRandom}};
   const auto evaluated = evaluate(renderer, runtime, model, resources, state,
                                   1, 0, nullptr, std::nullopt, nullptr, 1,
                                   false, nullptr, nullptr, &frame);
   expect(evaluated.submitReady.has_value() &&
-             evaluated.submitReady->commands.size() == 1,
+             evaluated.submitReady->commands.size() == 2,
          "SkinBar lowers the source-selected image-set state");
-  if (evaluated.submitReady && !evaluated.submitReady->commands.empty()) {
-    const auto *quad = std::get_if<SkinTexturedQuadCommand>(
-        &evaluated.submitReady->commands.front().payload);
-    expect(quad != nullptr && quad->resource == 106,
-           "SearchWordBar maps to image-set state six");
+  if (evaluated.submitReady && evaluated.submitReady->commands.size() == 2) {
+    const auto *bar = std::get_if<SkinTexturedQuadCommand>(
+        &evaluated.submitReady->commands[0].payload);
+    const auto *label = std::get_if<SkinTexturedQuadCommand>(
+        &evaluated.submitReady->commands[1].payload);
+    expect(bar != nullptr && bar->resource == 100,
+           "SongBar maps to image-set state zero");
+    expect(bar != nullptr && label != nullptr &&
+               bar->vertices[0].x == 100.0F &&
+               label->vertices[0].x == 105.0F &&
+               label->vertices[0].y == bar->vertices[0].y - 50.0F,
+           "position one offsets relative children by the bar height without "
+           "moving the bar image");
   }
   expect(evaluated.interactionLayout.has_value(),
          "SkinBar publishes its immutable pointer layout");
@@ -588,11 +604,10 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
         .y = static_cast<float>(playViewport.authoredToUi.m10 * 110.0 +
                                 playViewport.authoredToUi.m11 * 30.0 +
                                 playViewport.authoredToUi.ty)};
-    const auto hit = evaluated.interactionLayout->musicSelectBarAt(
-        point);
-    expect(hit && hit->row == 0 && hit->barIndex == 0 &&
+    const auto hit = evaluated.interactionLayout->musicSelectBarAt(point);
+    expect(hit && hit->row == 1 && hit->barIndex == 0 &&
                hit->authoredOrdinal == 7,
-           "SkinBar hit testing keeps clickable order and wrapped index");
+           "position one leaves pointer geometry at the authored bar region");
   }
 }
 

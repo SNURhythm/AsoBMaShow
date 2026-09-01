@@ -159,6 +159,7 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
     const MusicSelectSongListFrame &frame) const {
   MusicSelectBarRenderPlan result;
   result.rows.resize(barCount);
+  std::array<double, barCount> barHeights{};
   for (std::size_t rowIndex = 0; rowIndex < barCount; ++rowIndex) {
     auto &row = result.rows[rowIndex];
     row.row = rowIndex;
@@ -181,6 +182,7 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
     }
     row.x = destination->x;
     row.y = destination->y;
+    barHeights[rowIndex] = destination->height;
     row.textSlot = textSlot(songList, frame.bars[*barIndex], row.value,
                             frame.wallClockSeconds);
   }
@@ -210,6 +212,15 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
       row.x += (next.x - row.x) * std::clamp(lerp, -1.0, 1.0);
       row.y += (next.y - row.y) * lerp;
     }
+  }
+
+  for (auto &row : result.rows) {
+    if (row.value == -1) {
+      continue;
+    }
+    row.x = static_cast<double>(static_cast<int>(row.x));
+    row.y = static_cast<double>(static_cast<int>(
+        row.y + (songList.center == 1 ? barHeights[row.row] : 0.0)));
   }
 
   const auto forEachDrawnRow = [&](auto &&action) {

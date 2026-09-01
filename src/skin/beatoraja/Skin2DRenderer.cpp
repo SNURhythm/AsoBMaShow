@@ -3277,6 +3277,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
     std::size_t barIndex = 0;
     double preparedX = 0.0;
     double preparedY = 0.0;
+    double barHeight = 0.0;
     double x = 0.0;
     double y = 0.0;
     AuthoredRect pointerRegion;
@@ -3299,6 +3300,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
     row.barIndex = logical.barIndex;
     row.preparedX = found->second.geometry->rect.x;
     row.preparedY = found->second.geometry->rect.y;
+    row.barHeight = found->second.geometry->rect.height;
     row.x = row.preparedX;
     row.y = row.preparedY;
     row.pointerRegion = found->second.geometry->rect;
@@ -3328,18 +3330,16 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
         continue;
       }
       const auto &next = stationary[static_cast<std::size_t>(adjacent)];
-      row.x = static_cast<double>(truncatingJavaInt(
-          row.x + (next.x - row.x) *
-                      std::clamp(interpolation, -1.0, 1.0)));
-      row.y = static_cast<double>(truncatingJavaInt(
-          row.y + (next.y - row.y) * interpolation));
+      row.x += (next.x - row.x) *
+               std::clamp(interpolation, -1.0, 1.0);
+      row.y += (next.y - row.y) * interpolation;
     }
-  } else {
-    for (auto &row : rows) {
-      if (row.drawable) {
-        row.x = static_cast<double>(truncatingJavaInt(row.x));
-        row.y = static_cast<double>(truncatingJavaInt(row.y));
-      }
+  }
+  for (auto &row : rows) {
+    if (row.drawable) {
+      row.x = static_cast<double>(truncatingJavaInt(row.x));
+      row.y = static_cast<double>(truncatingJavaInt(
+          row.y + (songList.center == 1 ? row.barHeight : 0.0)));
     }
   }
 
@@ -3431,7 +3431,13 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
       }
       translateMusicSelectGeometry(*dynamic.geometry,
                                    row.x - row.preparedX,
-                                   row.y - row.preparedY);
+                                   row.y - row.preparedY -
+                                       (command.family ==
+                                                    MusicSelectBarDrawFamily::
+                                                        BarImage &&
+                                                songList.center == 1
+                                            ? row.barHeight
+                                            : 0.0));
       if (image && dynamic.sprite && dynamic.spriteFrame) {
         auto lowered = lowerSpriteQuad(
             inputs, initial.object->id,

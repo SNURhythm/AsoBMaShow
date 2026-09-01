@@ -320,6 +320,19 @@ void testWheelAnalogAndRepeatState() {
           }),
           "negative analog differences are discarded by getAnalogDiffAndReset");
 
+  MusicSelectInputProcessor wheel(
+      {.scrollDurationLowMillis = 100,
+       .scrollDurationHighMillis = 30,
+       .analogTicksPerScroll = 4});
+  auto wheelInput = emptyInput();
+  wheelInput.wheel = -2;
+  const auto wheelActions = wheel.process(wheelInput, 2'000);
+  require(std::ranges::count_if(wheelActions, [](const auto &action) {
+            return action.kind == MusicSelectInputActionKind::MoveNext &&
+                   action.value == 15 && action.deadlineMillis == 2'030;
+          }) == 2,
+          "wheel acceleration preserves BarRenderer angle and deadline");
+
   MusicSelectInputProcessor repeat(
       {.scrollDurationLowMillis = 100,
        .scrollDurationHighMillis = 30,
@@ -331,7 +344,11 @@ void testWheelAnalogAndRepeatState() {
   require(std::ranges::none_of(before, [](const auto &action) {
             return action.kind == MusicSelectInputActionKind::MoveNext;
           }) &&
-              has(after, MusicSelectInputActionKind::MoveNext),
+              std::ranges::any_of(after, [](const auto &action) {
+                return action.kind == MusicSelectInputActionKind::MoveNext &&
+                       action.value == 30 &&
+                       action.deadlineMillis == 1'131;
+              }),
           "ordinary non-analog repeat waits for durationlow then durationhigh");
 
   MusicSelectInputProcessor interrupted(

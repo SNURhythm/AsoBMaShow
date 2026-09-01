@@ -46,11 +46,11 @@ void testWrapOpenCloseAndPositionSemantics() {
   require(manager.snapshot().rows.size() == 2 &&
               manager.snapshot().selectedIndex == 0,
           "manager starts on the root's first bar");
-  manager.move(false, 100, 250);
+  manager.move(false, -250, 350);
   require(manager.snapshot().selectedIndex == 1 &&
-              manager.snapshot().movementDirection == -1 &&
+              manager.snapshot().movementDirection == -250 &&
               manager.snapshot().movementEndMillis == 350,
-          "decrement wraps and publishes the source scroll window");
+          "decrement wraps and publishes the signed source scroll window");
   require(manager.openSelected() && manager.snapshot().rows.size() == 1 &&
               manager.snapshot().directoryText == "B > ",
           "opening a DirectoryBar replaces rows and appends directory text");

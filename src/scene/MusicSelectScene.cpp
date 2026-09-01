@@ -37,7 +37,6 @@
 
 namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
-constexpr std::int64_t kBarMoveMillis = 120;
 
 std::int64_t unixMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -621,11 +620,11 @@ void MusicSelectScene::applyInputAction(
     setPanelState(action.value);
     break;
   case MusicSelectInputActionKind::MoveNext:
-    bars_.move(true, unixMillis(), kBarMoveMillis);
+    bars_.move(true, action.value, action.deadlineMillis);
     selectedBarMoved();
     break;
   case MusicSelectInputActionKind::MovePrevious:
-    bars_.move(false, unixMillis(), kBarMoveMillis);
+    bars_.move(false, action.value, action.deadlineMillis);
     selectedBarMoved();
     break;
   case MusicSelectInputActionKind::Play:

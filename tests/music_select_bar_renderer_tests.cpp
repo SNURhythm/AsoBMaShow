@@ -98,6 +98,8 @@ void testPinnedDrawOrderSlotsAndClassValues() {
           "bar classes map to pinned values and SameFolder remains no-draw");
   require(plan.rows[1].textSlot == 3,
           "exactly addDate plus 24 hours is still new");
+  require(plan.rows[1].y == 120.0,
+          "SkinBar position one anchors relative children above the bar");
 
   const auto phase = [](MusicSelectBarDrawFamily family) {
     switch (family) {
@@ -169,7 +171,7 @@ void testClickableUsesAuthoredOrderAndInclusiveDestination() {
       songList, frame, {.button = 0, .x = 15, .y = 110});
   require(selected.consumed && selected.selectIndex == 0 &&
               !selected.closeDirectory,
-          "primary pointer selects the wrapped row using the first clickable");
+          "position one does not move the authored pointer hitbox");
   const auto closed = MusicSelectBarRenderer{}.pointer(
       songList, frame, {.button = 2, .x = 10, .y = 100});
   require(closed.consumed && !closed.selectIndex && closed.closeDirectory,
