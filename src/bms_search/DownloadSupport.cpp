@@ -218,7 +218,8 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
@@ -270,7 +271,8 @@ std::optional<std::string> postUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
@@ -392,7 +394,8 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());

@@ -12,20 +12,26 @@ if (vcpkgRoot == null || vcpkgRoot.trim().isEmpty()) {
     throw new GradleException('VCPKG_ROOT must point to a vcpkg checkout for Android native dependencies.')
 }
 def androidSdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+def requiredAndroidNdkVersion = '28.2.13676358'
 def androidNdkRoot = System.getenv('ANDROID_NDK_HOME')
 if ((androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) && androidSdkRoot != null) {
-    def ndkDir = file("${androidSdkRoot}/ndk")
-    if (ndkDir.isDirectory()) {
-        def installedNdks = ndkDir.listFiles()
-                .findAll { it.isDirectory() && file("${it}/build/cmake/android.toolchain.cmake").isFile() }
-                .sort { a, b -> b.name <=> a.name }
-        if (!installedNdks.isEmpty()) {
-            androidNdkRoot = installedNdks.first().absolutePath
-        }
-    }
+    androidNdkRoot = file("${androidSdkRoot}/ndk/${requiredAndroidNdkVersion}").absolutePath
 }
-if (androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) {
-    throw new GradleException('ANDROID_NDK_HOME must point to an installed Android NDK, or ANDROID_HOME/ANDROID_SDK_ROOT must contain an ndk/ directory.')
+def androidNdkProperties = new Properties()
+def androidNdkPropertiesFile = androidNdkRoot == null
+        ? null
+        : file("${androidNdkRoot}/source.properties")
+if (androidNdkPropertiesFile != null && androidNdkPropertiesFile.isFile()) {
+    androidNdkPropertiesFile.withInputStream { androidNdkProperties.load(it) }
+}
+def installedAndroidNdkVersion = androidNdkProperties.getProperty('Pkg.Revision', '').trim()
+if (androidNdkRoot == null || androidNdkRoot.trim().isEmpty() ||
+        installedAndroidNdkVersion != requiredAndroidNdkVersion ||
+        !file("${androidNdkRoot}/build/cmake/android.toolchain.cmake").isFile()) {
+    throw new GradleException(
+            "Android NDK ${requiredAndroidNdkVersion} is required; found '${installedAndroidNdkVersion ?: 'unknown'}'. " +
+                    "Set ANDROID_NDK_HOME to that installation or install it under ANDROID_HOME/ndk."
+    )
 }
 
 def generatedAssetsDir = layout.buildDirectory.dir('generated/assets/asobmashow')
@@ -77,7 +83,8 @@ tasks.register('syncNativeAssets', Sync) {
 
 android {
     namespace 'com.snurhythm.asobmashow'
-    compileSdk 35
+    compileSdk 36
+    ndkPath androidNdkRoot
 
     buildFeatures {
         buildConfig true
@@ -86,8 +93,8 @@ android {
     defaultConfig {
         applicationId 'com.snurhythm.asobmashow'
         minSdk 28
-        targetSdk 35
-        ndkVersion file(androidNdkRoot).name
+        targetSdk 36
+        ndkVersion requiredAndroidNdkVersion
         versionCode androidVersionCodeText.toInteger()
         versionName androidVersionNameText.toString()
 

@@ -365,6 +365,38 @@ void writeHeaderShapedCorruptDatabase(const std::filesystem::path &path) {
   assert(output);
 }
 
+void testPlaylistNamesAreBoundAsData() {
+  TempDirectory temporary;
+  const auto playlistPath = temporary.path() / "music_playlist.db";
+  const auto chartPath = temporary.path() / "chart.db";
+  createChartDatabase(chartPath);
+
+  MusicPlaylistRepository repository(playlistPath, chartPath);
+  assert(repository.EnsureReady());
+
+  const std::string createPayload =
+      "Robert'); DROP TABLE music_playlists; --";
+  const int playlistId = repository.EnsurePlaylist(createPayload);
+  assert(playlistId > 0);
+
+  auto playlists = repository.SelectPlaylists();
+  assert(playlists.size() == 1);
+  assert(playlists.front().name == createPayload);
+
+  const std::string renamePayload =
+      "' UNION SELECT 1, 'injected', 999; --";
+  assert(repository.RenamePlaylist(playlistId, renamePayload));
+  playlists = repository.SelectPlaylists();
+  assert(playlists.size() == 1);
+  assert(playlists.front().id == playlistId);
+  assert(playlists.front().name == renamePayload);
+
+  repository.Shutdown();
+  auto database = openDatabase(playlistPath);
+  assert(queryInt(database.get(), "SELECT COUNT(*) FROM music_playlists") ==
+         1);
+}
+
 void testInvalidInputsDoNotMutatePlaylistFamily() {
   TempDirectory temporary;
   const auto chartPath = temporary.path() / "chart.db";
@@ -408,6 +440,7 @@ void testInvalidInputsDoNotMutatePlaylistFamily() {
 int main() {
   testRoundTripAndConnectionReuse();
   testVersionZeroMigration();
+  testPlaylistNamesAreBoundAsData();
   testInvalidInputsDoNotMutatePlaylistFamily();
   return 0;
 }

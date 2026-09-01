@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
+import json
+import os
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -31,7 +36,13 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.main = read("src/main.cpp")
         cls.audio_decoder = read("src/audio/decoder.cpp")
         cls.replay_store = read("src/replay/ReplayFileStore.cpp")
+        cls.curl_raii = read("src/CurlRAII.h")
+        cls.download_support = read("src/bms_search/DownloadSupport.cpp")
+        cls.difficulty_importer = read("src/DifficultyTableImporter.cpp")
+        cls.ios_natives = read("src/iOSNatives.mm")
+        cls.sqlite_header = read("src/sqlite3.h")
         cls.macos_triplet = read("vcpkg-triplets/arm64-osx-asobmashow.cmake")
+        cls.vcpkg_manifest = json.loads(read("vcpkg.json"))
         cls.play_skin_state_bridge = read(
             "src/skin/beatoraja/PlaySkinStateBridge.cpp"
         )
@@ -40,6 +51,88 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             "src/skin/beatoraja/SkinDestinationEvaluator.cpp"
         )
         cls.msvc_test_diagnostics = read("tests/support/MsvcTestDiagnostics.cpp")
+
+    def test_vendored_sqlite_includes_audited_memory_safety_fixes(self):
+        version_match = re.search(
+            r"^#define SQLITE_VERSION_NUMBER\s+(\d+)$",
+            self.sqlite_header,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(version_match)
+        self.assertGreaterEqual(int(version_match.group(1)), 3_053_004)
+
+    def test_download_redirects_cannot_downgrade_https_to_http(self):
+        self.assertIn("CurlRedirectProtocolsForInitialUrl", self.curl_raii)
+        for source, expected_redirect_guards in (
+            (self.download_support, 3),
+            (self.difficulty_importer, 1),
+        ):
+            self.assertEqual(
+                len(
+                    re.findall(
+                        r"CURLOPT_REDIR_PROTOCOLS_STR,\s*"
+                        r"CurlRedirectProtocolsForInitialUrl\(url\)",
+                        source,
+                    )
+                ),
+                expected_redirect_guards,
+            )
+        self.assertIn("AsoHttpsRedirectDelegate", self.ios_natives)
+        self.assertIn("rejectedInsecureRedirect", self.ios_natives)
+        self.assertIn(
+            'HTTPS download redirected to insecure HTTP.', self.ios_natives
+        )
+        self.assertNotIn(
+            "requireHttps = requireHttps || [scheme isEqualToString:@\"https\"]",
+            self.ios_natives,
+        )
+        for function_name, next_function_name in (
+            ("bool DownloadURLTextIOS", "bool PostURLTextIOS"),
+            ("bool PostURLTextIOS", "bool DownloadURLBinaryIOS"),
+        ):
+            function = self.ios_natives.split(function_name, 1)[1].split(
+                next_function_name, 1
+            )[0]
+            self.assertNotIn("sharedSession", function)
+
+    def test_release_contract_targets_keep_transitive_dependencies_and_feature_guards(self):
+        redirect_target = self.cmake.split(
+            "if (NOT IOS)\n        add_executable(curl_redirect_policy_tests", 1
+        )[1].split("    endif()", 1)[0]
+        self.assertIn(
+            "target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)",
+            redirect_target,
+        )
+        self.assertIn(
+            "if (TARGET curl_redirect_policy_tests)\n"
+            "        asobmashow_register_test(curl_redirect_policy_tests)",
+            self.cmake,
+        )
+        self.assertIn(
+            "if (TARGET beatoraja_skin_model_tests)\n"
+            "        add_test(NAME beatoraja_gameplay_skin_ledger",
+            self.cmake,
+        )
+        self.assertIn(
+            "if (TARGET json_gameplay_skin_decoder_tests)\n"
+            "        add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract",
+            self.cmake,
+        )
+
+    def test_result_persistence_wrapper_ignores_inherited_cdpath(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            Path(temporary, "scripts").mkdir()
+            environment = os.environ.copy()
+            environment["CDPATH"] = temporary
+            result = subprocess.run(
+                ["/bin/sh", "scripts/check_result_persistence_flow.sh"],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                capture_output=True,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_public_version_is_0_0_1_on_desktop_and_android(self):
         self.assertRegex(
@@ -289,6 +382,80 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         self.assertIn("xcrun stapler staple", self.macos_workflow)
         self.assertIn("--require-signature", self.macos_workflow)
         self.assertIn("--require-gatekeeper", self.macos_workflow)
+
+    def test_macos_ci_pins_the_beatoraja_java_runtime(self):
+        self.assertIn("actions/setup-java@v4", self.macos_workflow)
+        self.assertIn("distribution: zulu", self.macos_workflow)
+        self.assertIn('java-version: "17"', self.macos_workflow)
+
+    def test_gameplay_oracle_check_skips_without_external_reference(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            environment = os.environ.copy()
+            environment["ASOBMASHOW_BEATORAJA_ROOT"] = temporary
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "tests/beatoraja_gameplay_oracle_tests.py"),
+                    "GameplaySkinOracleTests.test_generator_check_is_byte_stable",
+                ],
+                cwd=ROOT,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("skipped=1", result.stdout)
+
+    def test_macos_ci_registry_resolves_the_manifest_luajit_override(self):
+        workflow_scope = self.macos_workflow.split("jobs:", 1)[0]
+        build_job = self.macos_workflow.split("jobs:", 1)[1]
+        tool_commit_match = re.search(
+            r"VCPKG_TOOL_COMMIT:\s*([0-9a-f]{40})", workflow_scope
+        )
+        self.assertIsNotNone(tool_commit_match)
+        tool_commit = tool_commit_match.group(1)
+        manifest_baseline = self.vcpkg_manifest["builtin-baseline"]
+        workflow_baseline_match = re.search(
+            r"VCPKG_MANIFEST_BASELINE:\s*([0-9a-f]{40})", workflow_scope
+        )
+        self.assertIsNotNone(workflow_baseline_match)
+        workflow_baseline = workflow_baseline_match.group(1)
+        self.assertEqual(manifest_baseline, workflow_baseline)
+        self.assertIn(
+            'fetch origin "$VCPKG_TOOL_COMMIT" "$VCPKG_MANIFEST_BASELINE" --depth=1',
+            build_job,
+        )
+
+        luajit_override = next(
+            override
+            for override in self.vcpkg_manifest["overrides"]
+            if override["name"] == "luajit"
+        )
+        vcpkg_root = Path(os.environ.get("VCPKG_ROOT", "/Users/xf/vcpkg"))
+        if not (vcpkg_root / ".git").is_dir():
+            self.skipTest("a vcpkg Git checkout is required for registry validation")
+        versions = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(vcpkg_root),
+                "show",
+                f"{tool_commit}:versions/l-/luajit.json",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(0, versions.returncode, versions.stderr)
+        available = json.loads(versions.stdout)["versions"]
+        self.assertTrue(
+            any(
+                entry.get("version-date") == luajit_override["version-date"]
+                for entry in available
+            )
+        )
 
     def test_firebase_android_lane_remains_fast_iteration(self):
         android_job = self.mobile_workflow.split("  android-firebase:", 1)[1]

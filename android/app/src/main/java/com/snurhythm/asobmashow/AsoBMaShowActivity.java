@@ -1348,6 +1348,13 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                  int maxRedirects) throws IOException {
         String currentUrl = urlText;
         String currentMethod = method;
+        URL initialUrl = new URL(urlText);
+        String initialProtocol = initialUrl.getProtocol();
+        if (!"http".equalsIgnoreCase(initialProtocol) &&
+                !"https".equalsIgnoreCase(initialProtocol)) {
+            throw new IOException("Network URL must use HTTP or HTTPS.");
+        }
+        boolean requireHttps = "https".equalsIgnoreCase(initialProtocol);
         for (int i = 0; i <= maxRedirects; i++) {
             URL url = new URL(currentUrl);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
@@ -1374,7 +1381,16 @@ public class AsoBMaShowActivity extends SDLActivity {
             if (location == null || location.isEmpty()) {
                 throw new IOException("Redirect did not include a Location header.");
             }
-            currentUrl = new URL(url, location).toString();
+            URL redirectUrl = new URL(url, location);
+            String redirectProtocol = redirectUrl.getProtocol();
+            if (!"http".equalsIgnoreCase(redirectProtocol) &&
+                    !"https".equalsIgnoreCase(redirectProtocol)) {
+                throw new IOException("Redirect URL must use HTTP or HTTPS.");
+            }
+            if (requireHttps && !"https".equalsIgnoreCase(redirectUrl.getProtocol())) {
+                throw new IOException("HTTPS download redirected to insecure HTTP.");
+            }
+            currentUrl = redirectUrl.toString();
             if (statusCode != 307 && statusCode != 308) {
                 currentMethod = "GET";
             }

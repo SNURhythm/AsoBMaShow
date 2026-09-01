@@ -1674,7 +1674,7 @@ private:
     const auto values = commandValues(command);
     if (command.name == "SRC_GAUGECHART_1P") {
       gaugeChart_ = addObject(SkinGaugeGraphObject{}, command);
-      gaugeChartSize_ = {values[11], values[12]};
+      graphSize_ = {values[11], values[12]};
       return;
     }
     if (command.name == "SRC_NOTECHART_1P") {
@@ -1690,7 +1690,7 @@ private:
               .noGap = values[18] == 1,
               .noHorizontalGap = values[19] == 1},
           command);
-      noteChartSize_ = {values[11], values[12]};
+      graphSize_ = {values[11], values[12]};
       return;
     }
     if (command.name == "SRC_BPMCHART") {
@@ -1708,7 +1708,7 @@ private:
               .transitionRgba =
                   bpmColor(requiredField(command, 10), 0x7f7f7fffU)},
           command);
-      bpmChartSize_ = {values[1], values[2]};
+      graphSize_ = {values[1], values[2]};
       return;
     }
     if (command.name == "SRC_TIMING_1P") {
@@ -1728,7 +1728,7 @@ private:
           .transparent = values[15] == 1,
           .drawDecay = values[16] == 1};
       timingVisualizer_ = addObject(std::move(visualizer), command);
-      timingVisualizerSize_ = {values[4], values[5]};
+      graphSize_ = {values[4], values[5]};
       return;
     }
     if (command.name == "SRC_TIMINGCHART_1P") {
@@ -1744,7 +1744,7 @@ private:
                         timingColor(requiredField(command, 14))},
           .drawAverage = values[15] == 1, .drawDev = values[16] == 1};
       timingDistributionChart_ = addObject(std::move(graph), command);
-      timingDistributionChartSize_ = {values[4], values[5]};
+      graphSize_ = {values[4], values[5]};
     }
   }
 
@@ -2113,20 +2113,20 @@ private:
       return sourceGraphObject(command);
     }
     if (command.name == "DST_GAUGECHART_1P") {
-      return destinationGraphObject(command, gaugeChart_, gaugeChartSize_);
+      return destinationGraphObject(command, gaugeChart_, graphSize_);
     }
     if (command.name == "DST_NOTECHART_1P") {
-      return destinationGraphObject(command, noteChart_, noteChartSize_);
+      return destinationGraphObject(command, noteChart_, graphSize_);
     }
     if (command.name == "DST_BPMCHART") {
-      return destinationGraphObject(command, bpmChart_, bpmChartSize_);
+      return destinationGraphObject(command, bpmChart_, graphSize_);
     }
     if (command.name == "DST_TIMING_1P") {
-      return destinationGraphObject(command, timingVisualizer_, timingVisualizerSize_);
+      return destinationGraphObject(command, timingVisualizer_, graphSize_);
     }
     if (command.name == "DST_TIMINGCHART_1P") {
       return destinationGraphObject(command, timingDistributionChart_,
-                                    timingDistributionChartSize_);
+                                    graphSize_);
     }
     if (command.name == "SRC_HIDDEN") {
       return sourceCover(command, SkinCoverKind::Hidden);
@@ -2314,11 +2314,10 @@ private:
   std::optional<SkinObjectId> bpmChart_;
   std::optional<SkinObjectId> timingVisualizer_;
   std::optional<SkinObjectId> timingDistributionChart_;
-  std::array<int, 2> gaugeChartSize_{};
-  std::array<int, 2> noteChartSize_{};
-  std::array<int, 2> bpmChartSize_{};
-  std::array<int, 2> timingVisualizerSize_{};
-  std::array<int, 2> timingDistributionChartSize_{};
+  // The pinned LR2 loader reuses one Rectangle for every result graph source.
+  // Preserve its authored command-order behavior when sources and destinations
+  // are interleaved.
+  std::array<int, 2> graphSize_{};
 };
 
 } // namespace

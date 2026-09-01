@@ -136,7 +136,8 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
-  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+  curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
+                   CurlRedirectProtocolsForInitialUrl(url));
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
@@ -172,8 +173,33 @@ std::string trimUrlForBase(std::string url) {
   return url;
 }
 
+constexpr char asciiLower(char value) noexcept {
+  return value >= 'A' && value <= 'Z' ? static_cast<char>(value + ('a' - 'A'))
+                                      : value;
+}
+
+bool startsWithAsciiCaseInsensitive(std::string_view value,
+                                    std::string_view prefix) noexcept {
+  if (value.size() < prefix.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < prefix.size(); ++index) {
+    if (asciiLower(value[index]) != asciiLower(prefix[index])) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
-  if (link.starts_with("http://") || link.starts_with("https://")) {
+  const bool linkUsesHttp =
+      startsWithAsciiCaseInsensitive(link, "http://");
+  const bool linkUsesHttps =
+      startsWithAsciiCaseInsensitive(link, "https://");
+  if (linkUsesHttp || linkUsesHttps) {
+    if (startsWithAsciiCaseInsensitive(baseUrl, "https://") && linkUsesHttp) {
+      return "";
+    }
     return link;
   }
   const auto schemePos = baseUrl.find("://");
@@ -225,7 +251,8 @@ std::string resolveUrl(const std::string &baseUrl, const std::string &link) {
 
 std::string jsonUrlAt(const json &object, const char *key) {
   const std::string value = trimCopy(jsonStringAt(object, key));
-  if (value.starts_with("http://") || value.starts_with("https://") ||
+  if (startsWithAsciiCaseInsensitive(value, "http://") ||
+      startsWithAsciiCaseInsensitive(value, "https://") ||
       value.starts_with("//") || value.starts_with("/")) {
     return value;
   }
@@ -240,7 +267,8 @@ std::string jsonUrlAt(const json &object, const char *key) {
 bool looksLikeDifficultyTableListItem(const json &item) {
   if (item.is_string()) {
     const std::string url = trimCopy(item.get<std::string>());
-    return url.starts_with("http://") || url.starts_with("https://") ||
+    return startsWithAsciiCaseInsensitive(url, "http://") ||
+           startsWithAsciiCaseInsensitive(url, "https://") ||
            url.starts_with("//") || url.starts_with("/");
   }
   if (!item.is_object() || item.contains("md5") || item.contains("sha256")) {
@@ -304,6 +332,9 @@ readDifficultyTableListEntries(const json &document, const std::string &url) {
       continue;
     }
     const std::string resolvedUrl = resolveUrl(url, tableUrl);
+    if (resolvedUrl.empty()) {
+      continue;
+    }
     if (seen.insert(resolvedUrl).second) {
       entries.push_back(
           {difficultyTableListItemName(item, resolvedUrl), resolvedUrl});
@@ -329,7 +360,9 @@ std::optional<std::string> findBmstableHeaderUrl(const std::string &html,
     }
     std::smatch match;
     if (std::regex_search(tag, match, contentPattern) && match.size() >= 3) {
-      return resolveUrl(pageUrl, match[2].str());
+      const std::string resolved = resolveUrl(pageUrl, match[2].str());
+      return resolved.empty() ? std::nullopt
+                              : std::optional<std::string>(resolved);
     }
   }
   return std::nullopt;
@@ -700,6 +733,11 @@ downloadDifficultyTable(const std::string &tableUrl,
   result.tableName = resolved->tableName;
   const std::string dataUrl =
       resolveUrl(resolved->headerUrl, resolved->dataUrl);
+  if (dataUrl.empty()) {
+    result.errorMessage =
+        "HTTPS difficulty tables cannot load data over HTTP";
+    return result;
+  }
   std::string dataError;
   const auto dataBody = fetchText(dataUrl, &dataError);
   if (!dataBody.has_value()) {
@@ -852,8 +890,8 @@ bool DifficultyTableImporter::ImportFromUrl(
     }
     return false;
   }
-  if (!trimmedUrl.starts_with("http://") &&
-      !trimmedUrl.starts_with("https://")) {
+  if (!startsWithAsciiCaseInsensitive(trimmedUrl, "http://") &&
+      !startsWithAsciiCaseInsensitive(trimmedUrl, "https://")) {
     if (errorMessage != nullptr) {
       *errorMessage = "Table URL must start with http:// or https://";
     }
@@ -1023,6 +1061,12 @@ bool DifficultyTableImporter::ImportFromUrl(
 
   const std::string dataUrl =
       resolveUrl(resolved->headerUrl, resolved->dataUrl);
+  if (dataUrl.empty()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "HTTPS difficulty tables cannot load data over HTTP";
+    }
+    return false;
+  }
   const auto dataBody = fetchText_(dataUrl, errorMessage);
   if (!dataBody.has_value()) {
     return false;
@@ -1053,7 +1097,8 @@ bool DifficultyTableImporter::UpdateFromSourceUrl(
     return false;
   }
   const std::string sourceUrl = trimCopy(table->sourceUrl);
-  if (!sourceUrl.starts_with("http://") && !sourceUrl.starts_with("https://")) {
+  if (!startsWithAsciiCaseInsensitive(sourceUrl, "http://") &&
+      !startsWithAsciiCaseInsensitive(sourceUrl, "https://")) {
     if (errorMessage != nullptr) {
       *errorMessage = "Difficulty table does not have an updateable source URL";
     }

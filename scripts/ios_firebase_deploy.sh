@@ -216,12 +216,13 @@ export GITHUB_REPOSITORY="${GITHUB_REPOSITORY:-$(repo_name_from_origin)}"
 export SPACESHIP_ONLY_ALLOW_INTERACTIVE_2FA="${SPACESHIP_ONLY_ALLOW_INTERACTIVE_2FA:-1}"
 
 if [ -z "${FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES:-}" ]; then
-  export FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES=$(
+  FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES=$(
     printf 'Local Firebase build\nBranch: %s\nSHA: %s\nMachine: %s\n' \
       "${GITHUB_HEAD_REF}" \
       "${GITHUB_SHA}" \
       "$(hostname)"
   )
+  export FIREBASE_APP_DISTRIBUTION_RELEASE_NOTES
 fi
 
 if ! git -C "${ROOT_DIR}" diff --quiet || ! git -C "${ROOT_DIR}" diff --cached --quiet; then

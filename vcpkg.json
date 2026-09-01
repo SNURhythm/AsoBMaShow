@@ -58,6 +58,10 @@
         {
             "name": "libsndfile",
             "version": "1.2.2"
+        },
+        {
+            "name": "luajit",
+            "version-date": "2026-07-11"
         }
     ]
 }

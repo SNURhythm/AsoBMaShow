@@ -1,7 +1,7 @@
 #include "SettingsSceneShared.h"
 
+#include "SettingsSceneInputActions.h"
 #include "SettingsSceneInputLayout.h"
-#include "../input/ChartLaneBinding.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
@@ -29,63 +29,12 @@ namespace {
 constexpr std::array<int, 7> kInputKeyModes = {4, 5, 6, 7, 8, 10, 14};
 constexpr std::string_view kBlankStableIdFilter = "\x1fmissing-stable-id";
 
-struct ActionDefinition {
-  input::LogicalAction action;
-  std::string label;
-};
-
 View *makeInputCardsColumn(const LayoutMetrics &metrics) {
   auto *column = new View();
   column->setFlexDirection(FlexDirection::Column);
   column->setGap(static_cast<float>(metrics.secondaryGap));
   column->setWidth(static_cast<float>(metrics.cardsWidth));
   return column;
-}
-
-std::vector<ActionDefinition> actionsForScope(input::InputScope scope) {
-  std::vector<ActionDefinition> result;
-  int firstLane = 0;
-  int noteLanes = scope.keyMode;
-  if (scope.keyMode == 10 || scope.keyMode == 14) {
-    noteLanes = scope.keyMode / 2;
-    firstLane = scope.player == 1 ? 0 : 8;
-  }
-  for (int localLane = 0; localLane < noteLanes; ++localLane) {
-    int physicalLane = firstLane + localLane;
-    if (scope.player == 1) {
-      physicalLane = input_profile::chartLaneForKeyPosition(
-                         scope.keyMode, localLane)
-                         .value_or(physicalLane);
-    }
-    result.push_back(
-        {.action = {input::LogicalActionKind::Lane, physicalLane},
-         .label = "Lane " + std::to_string(localLane + 1)});
-  }
-
-  if (scope.keyMode == 5 || scope.keyMode == 7 || scope.keyMode == 10 ||
-      scope.keyMode == 14) {
-    const int scratchLane = scope.player == 1 ? 7 : 15;
-    result.push_back({.action = {input::LogicalActionKind::Lane, scratchLane},
-                      .label = "Scratch (digital)"});
-  }
-  result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
-                    .label = "Scratch clockwise"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
-       .label = "Scratch counter-clockwise"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Start, 0}, .label = "Start"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Select, 0}, .label = "Select"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Pause, 0}, .label = "Pause"});
-  result.push_back(
-      {.action = {input::LogicalActionKind::Retry, 0}, .label = "Retry"});
-  result.push_back({.action = {input::LogicalActionKind::LaneCoverIncrease, 0},
-                    .label = "Lane cover increase"});
-  result.push_back({.action = {input::LogicalActionKind::LaneCoverDecrease, 0},
-                    .label = "Lane cover decrease"});
-  return result;
 }
 
 std::string directionLabel(input::ControlDirection direction) {
@@ -484,8 +433,9 @@ void SettingsScene::refreshInputDropdowns() {
 View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   ensureInputCaptureController();
   auto *cards = makeInputCardsColumn(metrics);
-  const int bodyWidth =
-      std::max(0, metrics.cardsWidth - metrics.cardPadding * 2);
+  const int bodyWidth = std::max(
+      0, metrics.cardsWidth - metrics.cardPadding * 2 -
+             kInputSettingsCardBorderWidth * 2);
   const InputSettingsLayout layout =
       resolveInputSettingsLayout(bodyWidth, metrics.compact);
 
@@ -794,15 +744,16 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     return result;
   }();
 
-  for (const auto &definition : actionsForScope(scope)) {
+  for (const auto &definition :
+       inputActionsForScope(scope, context.inputProfile.bindings)) {
     auto *actionGroup = new View();
     actionGroup->setFlexDirection(FlexDirection::Column);
     actionGroup->setGap(metrics.compact ? 8.0F : 10.0F);
     actionGroup->setPadding(Edge::All,
-                            static_cast<float>(metrics.compact ? 12 : 16));
+                            static_cast<float>(layout.actionGroupPadding));
     actionGroup->setThemedBackgroundColor(ui_theme::panelSubtle);
     actionGroup->setThemedBorderColor(ui_theme::hairlineSubtle);
-    actionGroup->setBorderWidth(1);
+    actionGroup->setBorderWidth(kInputSettingsActionGroupBorderWidth);
     actionGroup->setCornerRadius(ui_theme::controlRadius());
 
     auto *actionHeader = new View();
@@ -813,24 +764,26 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     actionHeader->setGap(static_cast<float>(layout.selectorGap));
     actionHeader->addView(makeWrappedText(
         definition.label, metrics.bodyTextSize + 2, ui_theme::textPrimary()));
-    const bool listeningForAction =
-        inputCaptureController->state() ==
-            InputCaptureController::State::Listening &&
-        inputCaptureAction.has_value() &&
-        *inputCaptureAction == definition.action;
-    auto *bindButton = makeAccentButton(
-        metrics.compact ? 150 : 190, metrics.actionButtonHeight,
-        makeText(listeningForAction ? "Listening..." : "Bind",
-                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE),
-        listeningForAction ? ui_theme::amber() : ui_theme::cyan());
-    bindButton->setOnClickListener([this, action = definition.action]() {
-      inputCaptureAction = action;
-      inputCaptureController->begin({inputSelectedPlayer, inputSelectedKeyMode},
-                                    action);
-      requestInputViewRebuild();
-    });
-    actionHeader->addView(bindButton);
+    if (definition.bindable) {
+      const bool listeningForAction =
+          inputCaptureController->state() ==
+              InputCaptureController::State::Listening &&
+          inputCaptureAction.has_value() &&
+          *inputCaptureAction == definition.action;
+      auto *bindButton = makeAccentButton(
+          metrics.compact ? 150 : 190, metrics.actionButtonHeight,
+          makeText(listeningForAction ? "Listening..." : "Bind",
+                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE),
+          listeningForAction ? ui_theme::amber() : ui_theme::cyan());
+      bindButton->setOnClickListener([this, action = definition.action]() {
+        inputCaptureAction = action;
+        inputCaptureController->begin(
+            {inputSelectedPlayer, inputSelectedKeyMode}, action);
+        requestInputViewRebuild();
+      });
+      actionHeader->addView(bindButton);
+    }
     actionGroup->addView(actionHeader);
 
     std::vector<input::InputBinding> visibleBindings;
@@ -853,7 +806,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       bindingRow->setGap(metrics.compact ? 8.0F : 10.0F);
       bindingRow->setPadding(Edge::Top, 8.0F);
       bindingRow->setThemedBorderColor(ui_theme::hairlineSubtle);
-      bindingRow->setBorderWidth(1);
+      bindingRow->setBorderWidth(kInputSettingsBindingRowBorderWidth);
 
       const auto device = devices.find(binding.control.deviceId);
       const bool missing =
@@ -882,19 +835,23 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       editor->setFlexWrap(YGWrapWrap);
       editor->setGap(static_cast<float>(layout.selectorGap));
       editor->setAlignItems(YGAlignStretch);
+      const auto editorCapabilities =
+          settings_scene::inputBindingEditorCapabilities(binding.control.kind);
+      const int editorControlWidth =
+          settings_scene::resolveInputBindingEditorControlWidth(
+              layout, editorCapabilities);
 
       auto makeThresholdField = [&](std::string label, float value,
                                     auto onCommit) {
         auto *field = new View();
         field->setFlexDirection(FlexDirection::Column);
         field->setGap(4.0F);
-        field->setWidth(static_cast<float>(layout.numericControlWidth));
-        field->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
+        field->setWidth(static_cast<float>(editorControlWidth));
         field->addView(
             makeText(label, metrics.smallTextSize, ui_theme::textMuted()));
         auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
         input->setEditingText(formatThreshold(value));
-        input->setSize(layout.numericControlWidth, metrics.actionButtonHeight);
+        input->setSize(editorControlWidth, metrics.actionButtonHeight);
         input->setThemedBackgroundColor(ui_theme::control);
         input->setThemedBorderColor(ui_theme::hairline);
         input->setBorderWidth(1);
@@ -910,38 +867,57 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         return field;
       };
 
-      editor->addView(
-          makeThresholdField("Dead zone", binding.deadZone,
-                             [this, bindingId = binding.id](float value) {
-                               inputCaptureController->updateBinding(
-                                   bindingId, {.deadZone = value});
-                               requestInputViewRebuild();
-                             }));
-      editor->addView(
-          makeThresholdField("Activate", binding.activationThreshold,
-                             [this, bindingId = binding.id](float value) {
-                               inputCaptureController->updateBinding(
-                                   bindingId, {.activationThreshold = value});
-                               requestInputViewRebuild();
-                             }));
-      editor->addView(
-          makeThresholdField("Release", binding.releaseThreshold,
-                             [this, bindingId = binding.id](float value) {
-                               inputCaptureController->updateBinding(
-                                   bindingId, {.releaseThreshold = value});
-                               requestInputViewRebuild();
-                             }));
-      auto *invertButton = makeControlButton(
-          std::max(0, layout.numericControlWidth), metrics.actionButtonHeight,
-          makeText(binding.inverted ? "Inverted: On" : "Inverted: Off",
-                   metrics.smallTextSize, ui_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      invertButton->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
-      invertButton->setOnClickListener([this, bindingId = binding.id]() {
-        inputCaptureController->toggleBindingInversion(bindingId);
+      if (editorCapabilities.deadZone) {
+        editor->addView(
+            makeThresholdField("Dead zone", binding.deadZone,
+                               [this, bindingId = binding.id](float value) {
+                                 inputCaptureController->updateBinding(
+                                     bindingId, {.deadZone = value});
+                                 requestInputViewRebuild();
+                               }));
+      }
+      if (editorCapabilities.activationThreshold) {
+        editor->addView(makeThresholdField(
+            "Activate", binding.activationThreshold,
+            [this, bindingId = binding.id](float value) {
+              inputCaptureController->updateBinding(
+                  bindingId, {.activationThreshold = value});
+              requestInputViewRebuild();
+            }));
+      }
+      if (editorCapabilities.releaseThreshold) {
+        editor->addView(
+            makeThresholdField("Release", binding.releaseThreshold,
+                               [this, bindingId = binding.id](float value) {
+                                 inputCaptureController->updateBinding(
+                                     bindingId, {.releaseThreshold = value});
+                                 requestInputViewRebuild();
+                               }));
+      }
+      if (editorCapabilities.inversion) {
+        auto *invertButton = makeControlButton(
+            editorControlWidth, metrics.actionButtonHeight,
+            makeText(binding.inverted ? "Inverted: On" : "Inverted: Off",
+                     metrics.smallTextSize, ui_theme::textPrimary(),
+                     TextView::CENTER, TextView::MIDDLE));
+        invertButton->setOnClickListener([this, bindingId = binding.id]() {
+          inputCaptureController->toggleBindingInversion(bindingId);
+          requestInputViewRebuild();
+        });
+        editor->addView(invertButton);
+      }
+      auto *unbindButton = makeAccentButton(
+          editorControlWidth, metrics.actionButtonHeight,
+          makeText("Unbind", metrics.smallTextSize, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE),
+          ui_theme::coral());
+      unbindButton->setOnClickListener([this, bindingId = binding.id]() {
+        inputCaptureController->cancel();
+        inputCaptureAction.reset();
+        inputCaptureController->removeBinding(bindingId);
         requestInputViewRebuild();
       });
-      editor->addView(invertButton);
+      editor->addView(unbindButton);
       bindingRow->addView(editor);
       actionGroup->addView(bindingRow);
     }

@@ -38,7 +38,8 @@ LuaSkinJavaPattern::compile(std::string_view pattern) {
         context(pcre2_compile_context_create(nullptr),
                 &pcre2_compile_context_free);
     if (!context ||
-        pcre2_set_max_pattern_length(context.get(), 65536) != 0) {
+        pcre2_set_max_pattern_length(context.get(), 65536) != 0 ||
+        pcre2_set_max_varlookbehind(context.get(), 4097) != 0) {
       return std::nullopt;
     }
     int error = 0;

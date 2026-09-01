@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 
+import os
 import pathlib
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 
 CASES = (
@@ -47,6 +51,38 @@ CASES = (
     (r"(?i)([a-z&&[^m-p]])\1", "aA"),
     (r"(?m)^b$", "a\rb"),
     (r"(?dm)^b$", "a\rb"),
+    (r"\bfoo", "‿foo"),
+    (r"(?U:\bfoo)", "‿foo"),
+    (r"\bfoo", "‌foo"),
+    (r"(?U:\bfoo)", "‌foo"),
+    (r"\bfoo", "́foo"),
+    (r"(?U:\bfoo)", "́foo"),
+    (r"\bfoo", "áfoo"),
+    (r"(?U:\bfoo)", "áfoo"),
+    (r"\bfoo", "a\U0001d167foo"),
+    (r"(?U:\bfoo)", "a\U0001d167foo"),
+    (r"a\b𝅧", "a𝅧"),
+    (r"a\B𝅧", "a𝅧"),
+    (r"\bfoo", "_́foo"),
+    (r"\bfoo", "𐐀́foo"),
+    (r"\bfoo", "²foo"),
+    (r"(?U:\bfoo)", "²foo"),
+    (r"\bfoo", "Ⓐfoo"),
+    (r"(?U:\bfoo)", "Ⓐfoo"),
+    (r"\bfoo", "🄰foo"),
+    (r"(?U:\bfoo)", "🄰foo"),
+    (r"\Bfoo", "‿foo"),
+    (r"(?U:\Bfoo)", "‿foo"),
+    (r"\Bfoo", "́foo"),
+    (r"(?U:\Bfoo)", "́foo"),
+    (r"\Bfoo", "áfoo"),
+    (r"(?U:\Bfoo)", "áfoo"),
+    (r"\Bfoo", "a\U0001d167foo"),
+    (r"(?U:\Bfoo)", "a\U0001d167foo"),
+    (r"\Bfoo", "Ⓐfoo"),
+    (r"(?U:\Bfoo)", "Ⓐfoo"),
+    (r"\Bfoo", "🄰foo"),
+    (r"(?U:\Bfoo)", "🄰foo"),
     (r"(?i)A(?-i)b", "ab"),
     ("(?x)a  # ignored\n b", "ab"),
     (r"(?x)[a b]", " "),
@@ -95,6 +131,75 @@ CASES = (
 )
 
 NATIVE_EXECUTABLE = None
+TARGET_JAVA_MAJOR = 17
+
+
+def _java_major(java):
+    result = subprocess.run(
+        [str(java), "-version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    version = re.search(
+        r'(?:version "|javac\s+)(?:1\.)?(\d+)',
+        result.stderr + result.stdout,
+    )
+    return int(version.group(1)) if version else None
+
+
+def _java_home_candidates():
+    configured = os.environ.get("ASOBMASHOW_JAVA_17_HOME")
+    if configured:
+        yield pathlib.Path(configured)
+
+    java_home_tool = pathlib.Path("/usr/libexec/java_home")
+    if sys.platform == "darwin" and java_home_tool.is_file():
+        result = subprocess.run(
+            [str(java_home_tool), "-v", str(TARGET_JAVA_MAJOR)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            yield pathlib.Path(result.stdout.strip())
+
+    configured = os.environ.get("JAVA_HOME")
+    if configured:
+        yield pathlib.Path(configured)
+
+    java = shutil.which("java")
+    if java:
+        yield pathlib.Path(java).resolve().parent.parent
+
+    for candidate in sorted(pathlib.Path("/usr/lib/jvm").glob("*17*")):
+        yield candidate
+
+
+def _java_17_tools():
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    visited = set()
+    for home in _java_home_candidates():
+        home = home.expanduser().resolve()
+        if home in visited:
+            continue
+        visited.add(home)
+        java = home / "bin" / f"java{executable_suffix}"
+        javac = home / "bin" / f"javac{executable_suffix}"
+        if not java.is_file() or not javac.is_file():
+            continue
+        try:
+            if (
+                _java_major(java) == TARGET_JAVA_MAJOR
+                and _java_major(javac) == TARGET_JAVA_MAJOR
+            ):
+                return java, javac
+        except (OSError, subprocess.CalledProcessError):
+            continue
+    raise unittest.SkipTest(
+        "Java 17 is unavailable for the optional Beatoraja Pattern oracle; "
+        "set ASOBMASHOW_JAVA_17_HOME to a JDK 17 installation to run it"
+    )
 
 
 JAVA_SOURCE = r"""
@@ -125,6 +230,18 @@ public final class LuaSkinJavaPatternOracle {
 
 
 class LuaSkinJavaPatternOracleTests(unittest.TestCase):
+    def test_missing_java_17_skips_optional_oracle(self):
+        with mock.patch(
+            f"{__name__}._java_home_candidates", return_value=()
+        ):
+            with self.assertRaises(unittest.SkipTest):
+                _java_17_tools()
+
+    def test_java_oracle_uses_a_consistent_java_17_toolchain(self):
+        java, javac = _java_17_tools()
+        self.assertEqual(_java_major(java), TARGET_JAVA_MAJOR)
+        self.assertEqual(_java_major(javac), TARGET_JAVA_MAJOR)
+
     def test_native_matcher_bounds_group_depth_before_adaptation(self):
         if NATIVE_EXECUTABLE is None:
             self.fail("native matcher executable argument is required")
@@ -148,18 +265,19 @@ class LuaSkinJavaPatternOracleTests(unittest.TestCase):
             self.fail("native matcher executable argument is required")
         native = NATIVE_EXECUTABLE
         self.assertTrue(native.is_file(), native)
+        java_executable, javac_executable = _java_17_tools()
 
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             source = directory / "LuaSkinJavaPatternOracle.java"
             source.write_text(textwrap.dedent(JAVA_SOURCE), encoding="utf-8")
-            subprocess.run(["javac", str(source)], check=True)
+            subprocess.run([str(javac_executable), str(source)], check=True)
 
             for pattern, subject in CASES:
                 with self.subTest(pattern=pattern, subject=subject):
-                    java = subprocess.run(
+                    java_result = subprocess.run(
                         [
-                            "java",
+                            str(java_executable),
                             "-cp",
                             str(directory),
                             "LuaSkinJavaPatternOracle",
@@ -176,7 +294,7 @@ class LuaSkinJavaPatternOracleTests(unittest.TestCase):
                         capture_output=True,
                         text=True,
                     ).stdout.strip()
-                    self.assertEqual(actual, java)
+                    self.assertEqual(actual, java_result)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 #include "../src/view/View.h"
 #include "scene/ResultLayoutGeometry.h"
 #include "ir/IrRankingModal.h"
+#include "scene/SettingsSceneInputActions.h"
 #include "scene/SettingsSceneInputLayout.h"
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
@@ -730,14 +731,17 @@ void testInputSettingsLayoutPolicy() {
   const auto wide = settings_scene::resolveInputSettingsLayout(1200, false);
   assert(!wide.stackSelectors);
   assert(!wide.stackBindingEditor);
+  assert(wide.actionGroupPadding == 16);
   assert(wide.selectorWidth > 0 &&
          wide.selectorWidth * 3 + wide.selectorGap * 2 <= 1200);
+  assert(wide.bindingEditorWidth == 1164);
 
   const auto compact = settings_scene::resolveInputSettingsLayout(520, true);
   assert(compact.stackSelectors);
   assert(compact.stackBindingEditor);
+  assert(compact.actionGroupPadding == 12);
   assert(compact.selectorWidth == 520);
-  assert(compact.numericControlWidth > 0 && compact.numericControlWidth <= 520);
+  assert(compact.bindingEditorWidth == 492);
 
   const auto narrow = settings_scene::resolveInputSettingsLayout(640, false);
   assert(narrow.stackSelectors);
@@ -746,7 +750,172 @@ void testInputSettingsLayoutPolicy() {
 
   const auto empty = settings_scene::resolveInputSettingsLayout(-50, true);
   assert(empty.selectorWidth == 0);
-  assert(empty.numericControlWidth == 0);
+  assert(empty.bindingEditorWidth == 0);
+}
+
+void testInputBindingEditorCapabilitiesMatchControlSemantics() {
+  const auto key = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::Key);
+  assert(!key.deadZone && !key.activationThreshold &&
+         !key.releaseThreshold && !key.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(key) == 1);
+  const auto wideLayout =
+      settings_scene::resolveInputSettingsLayout(1200, false);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
+                                                               key) == 1164);
+
+  const auto axis = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::Axis);
+  assert(axis.deadZone && axis.activationThreshold && axis.releaseThreshold &&
+         axis.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(axis) == 5);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
+                                                               axis) == 223);
+
+  const auto midiNote = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::MidiNote);
+  assert(!midiNote.deadZone && midiNote.activationThreshold &&
+         !midiNote.releaseThreshold && !midiNote.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(midiNote) == 2);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
+                                                               midiNote) ==
+         576);
+
+  const auto midiControl = settings_scene::inputBindingEditorCapabilities(
+      input::ControlKind::MidiControl);
+  assert(midiControl.deadZone && midiControl.activationThreshold &&
+         midiControl.releaseThreshold && !midiControl.inversion);
+  assert(settings_scene::inputBindingEditorControlCount(midiControl) == 4);
+
+  const auto compactLayout =
+      settings_scene::resolveInputSettingsLayout(520, true);
+  assert(settings_scene::resolveInputBindingEditorControlWidth(compactLayout,
+                                                               axis) == 492);
+
+  for (const auto kind : {input::ControlKind::Button,
+                          input::ControlKind::Hat,
+                          input::ControlKind::TouchRegion}) {
+    const auto digital =
+        settings_scene::inputBindingEditorCapabilities(kind);
+    assert(!digital.deadZone && !digital.activationThreshold &&
+           !digital.releaseThreshold && !digital.inversion);
+  }
+
+  const auto unknown = settings_scene::inputBindingEditorCapabilities(
+      static_cast<input::ControlKind>(255));
+  assert(settings_scene::inputBindingEditorControlCount(unknown) == 1);
+}
+
+void testInputBindingEditorStaysInsidePaddedActionGroup() {
+  const auto verify = [](int bodyWidth, bool compact,
+                         settings_scene::InputBindingEditorCapabilities
+                             capabilities) {
+    const auto layout =
+        settings_scene::resolveInputSettingsLayout(bodyWidth, compact);
+    constexpr int cardPadding = 20;
+    View card(0, 0,
+              bodyWidth + cardPadding * 2 +
+                  settings_scene::kInputSettingsCardBorderWidth * 2,
+              compact ? 440 : 180);
+    card.setFlexDirection(FlexDirection::Column);
+    card.setAlignItems(YGAlignStretch);
+    card.setPadding(Edge::All, cardPadding);
+    card.setBorderColor(Color(255, 255, 255, 255));
+    card.setBorderWidth(settings_scene::kInputSettingsCardBorderWidth);
+
+    auto *bindingsBody = new View();
+    bindingsBody->setFlexDirection(FlexDirection::Column);
+    bindingsBody->setAlignItems(YGAlignStretch);
+    auto *actionGroup = new View();
+    actionGroup->setFlexDirection(FlexDirection::Column);
+    actionGroup->setAlignItems(YGAlignStretch);
+    actionGroup->setPadding(
+        Edge::All, static_cast<float>(layout.actionGroupPadding));
+    actionGroup->setBorderColor(Color(255, 255, 255, 255));
+    actionGroup->setBorderWidth(
+        settings_scene::kInputSettingsActionGroupBorderWidth);
+    auto *bindingRow = new View();
+    bindingRow->setFlexDirection(FlexDirection::Column);
+    bindingRow->setAlignItems(YGAlignStretch);
+    bindingRow->setPadding(Edge::Top, 8);
+    bindingRow->setBorderColor(Color(255, 255, 255, 255));
+    bindingRow->setBorderWidth(
+        settings_scene::kInputSettingsBindingRowBorderWidth);
+
+    auto *editor = new View();
+    editor->setFlexDirection(layout.stackBindingEditor
+                                 ? FlexDirection::Column
+                                 : FlexDirection::Row);
+    editor->setGap(static_cast<float>(layout.selectorGap));
+    editor->setAlignItems(YGAlignStretch);
+    const int controlWidth =
+        settings_scene::resolveInputBindingEditorControlWidth(layout,
+                                                               capabilities);
+    for (int index = 0;
+         index < settings_scene::inputBindingEditorControlCount(capabilities);
+         ++index) {
+      auto *control = new View();
+      control->setSize(controlWidth, 40);
+      editor->addView(control);
+    }
+    bindingRow->addView(editor);
+    actionGroup->addView(bindingRow);
+    bindingsBody->addView(actionGroup);
+    card.addView(bindingsBody);
+    card.applyYogaLayout();
+
+    expectNear(bindingsBody->getWidth(), bodyWidth,
+               "input card content width");
+    expectNear(editor->getWidth(), layout.bindingEditorWidth,
+               "binding editor inner width");
+    for (const auto *control : editor->getChildren()) {
+      assert(YGNodeLayoutGetLeft(control->getNode()) + control->getWidth() <=
+             editor->getWidth() + 0.01F);
+      assert(control->getX() + control->getWidth() <=
+             editor->getX() + editor->getWidth() + 0.01F);
+    }
+  };
+
+  verify(1200, false, settings_scene::inputBindingEditorCapabilities(
+                          input::ControlKind::Axis));
+  verify(520, true, settings_scene::inputBindingEditorCapabilities(
+                        input::ControlKind::Key));
+}
+
+void testLegacyDigitalScratchBindingsRemainManageable() {
+  const input::InputBinding playerOneLegacy{
+      .id = "legacy-p1-scratch",
+      .scope = {1, 7},
+      .action = {input::LogicalActionKind::Lane, 7},
+  };
+  const auto playerOneActions = settings_scene::inputActionsForScope(
+      {1, 7}, std::span<const input::InputBinding>(&playerOneLegacy, 1));
+  const auto playerOneRow = std::ranges::find_if(
+      playerOneActions, [&](const auto &definition) {
+        return definition.action == playerOneLegacy.action;
+      });
+  assert(playerOneRow != playerOneActions.end());
+  assert(playerOneRow->label == "Scratch (legacy digital)");
+  assert(!playerOneRow->bindable);
+
+  const input::InputBinding playerTwoLegacy{
+      .id = "legacy-p2-scratch",
+      .scope = {2, 14},
+      .action = {input::LogicalActionKind::Lane, 15},
+  };
+  const auto playerTwoActions = settings_scene::inputActionsForScope(
+      {2, 14}, std::span<const input::InputBinding>(&playerTwoLegacy, 1));
+  assert(std::ranges::any_of(playerTwoActions, [&](const auto &definition) {
+    return definition.action == playerTwoLegacy.action &&
+           definition.label == "Scratch (legacy digital)" &&
+           !definition.bindable;
+  }));
+
+  const auto newProfileActions = settings_scene::inputActionsForScope(
+      {1, 7}, std::span<const input::InputBinding>{});
+  assert(std::ranges::none_of(newProfileActions, [](const auto &definition) {
+    return definition.label == "Scratch (legacy digital)";
+  }));
 }
 
 void testGyroscopeSettingsLayoutAndPresentation() {
@@ -879,6 +1048,9 @@ int main() {
   testRankingDetailLampShrinksInsideCompactMetricCard();
   testBlockingOverlayStopsAllInteractiveEvents();
   testInputSettingsLayoutPolicy();
+  testInputBindingEditorCapabilitiesMatchControlSemantics();
+  testInputBindingEditorStaysInsidePaddedActionGroup();
+  testLegacyDigitalScratchBindingsRemainManageable();
   testGyroscopeSettingsLayoutAndPresentation();
   testInputSettingsRebuildWaitsForPointerTransaction();
   testProfileInlineEditorStaysBoundToItsCard();

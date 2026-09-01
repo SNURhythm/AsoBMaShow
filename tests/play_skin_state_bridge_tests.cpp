@@ -3562,6 +3562,11 @@ void testCustomEventsAcceptManualAritiesAndRollbackCriticalFrames() {
   expect(trace.value && std::get<std::string>(*trace.value) ==
                             "manual:0,manual:1,manual:2,",
          "manual custom callbacks receive the exact supplied arity");
+  bridge.discardFrame();
+
+  bridge.beginFrame(stateAt(113), projectionAt(113));
+  expect(runtime.runtime().beginFrame(113).ok,
+         "critical custom event rollback starts with a fresh owner frame");
   expect(bridge.executeEvent(900, std::array{9}).status ==
              SkinHostCallStatus::Completed &&
              bridge.executeEvent(1'002, {}).status ==

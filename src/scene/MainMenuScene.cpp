@@ -275,12 +275,6 @@ std::optional<double> parseOptionalBpmFilter(const std::string &text) {
   return std::max(0.0, value);
 }
 
-std::optional<size_t>
-difficultyLevelIndex(const std::vector<DifficultyLevelInfo> &levels,
-                     const std::optional<std::string> &level) {
-  return chart_record_filters::difficultyLevelIndex(levels, level);
-}
-
 void normalizeDifficultyFilterRange(
     ChartRecordFilters &filters,
     const std::vector<DifficultyLevelInfo> &levels) {
@@ -1006,23 +1000,6 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
                             ui_theme::controlHover, ui_theme::controlPressed,
                             ui_theme::hairlineStrong);
   }
-}
-
-void styleLockedOptionButton(Button *button, TextView *text, bool selected) {
-  if (button == nullptr || text == nullptr) {
-    return;
-  }
-
-  if (selected) {
-    styleThemedActionButton(button, text, true, ui_theme::primaryAction,
-                            ui_theme::primaryAction, ui_theme::primaryAction,
-                            ui_theme::accentBorderStrong);
-    return;
-  }
-
-  styleThemedActionButton(button, text, false, ui_theme::control,
-                          ui_theme::controlHover, ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
 }
 
 TextView *makeModalLabel(const std::string &text) {

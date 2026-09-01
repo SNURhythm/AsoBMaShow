@@ -14,7 +14,7 @@ elif [ -d "${ROOT_DIR}/vcpkg" ]; then
     VCPKG_PATH="${ROOT_DIR}/vcpkg"
 else
     echo "VCPKG_ROOT not found. Please set VCPKG_ROOT environment variable or install vcpkg in ~/vcpkg"
-    read -p "Enter vcpkg path (or press Enter to use ~/vcpkg): " VCPKG_PATH
+    read -r -p "Enter vcpkg path (or press Enter to use ~/vcpkg): " VCPKG_PATH
     VCPKG_PATH="${VCPKG_PATH:-${HOME}/vcpkg}"
 fi
 

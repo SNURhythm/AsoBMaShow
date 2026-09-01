@@ -29,6 +29,7 @@
   `scripts/android_firebase_deploy.sh --build-only`
 - The Android deploy script loads `.env`, `.env.local`, `android/.env`, and `android/.env.local`.
 - The script defaults to the `firebaseRelease` flavor and will use `/usr/libexec/java_home -v 17` on this machine if the active shell Java is too new for Gradle.
+- Android native builds are pinned to NDK `28.2.13676358` for reproducible 16 KiB page-size support. Install that exact side-by-side NDK or point `ANDROID_NDK_HOME` to it.
 - Use `scripts/android_firebase_deploy.env.example` as the private env template. Real env files must stay out of git.
 - The script can infer `FIREBASE_ANDROID_APP_ID` and `FIREBASE_PROJECT` from `android/app/google-services.json`.
 - Leave `ANDROID_VERSION_CODE` empty unless the user explicitly wants an override. Build-only and deploy runs both use an automatic compact UTC timestamp version code; the script does not query Firebase releases for versioning.

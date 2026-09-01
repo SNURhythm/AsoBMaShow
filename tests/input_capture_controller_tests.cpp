@@ -637,6 +637,80 @@ void testPartialBindingEditsComposeAgainstCurrentProfileState() {
           "latest binding instead of a stale snapshot");
 }
 
+void testUnbindIsTargetedAndTransactional() {
+  RegistryHarness harness;
+  const auto removable =
+      binding("removable", {1, 7}, lane(0), buttonControl("pad:one", 0));
+  const auto sameAction =
+      binding("same-action", {1, 7}, lane(0), keyControl(4));
+  const auto otherScope =
+      binding("other-scope", {2, 14}, lane(8), buttonControl("pad:two", 1));
+  InputProfile profile{.bindings = {removable, sameAction, otherScope}};
+  int saves = 0;
+  std::vector<InputProfile> savedProfiles;
+  bool allowSave = true;
+  InputCaptureController controller(
+      harness.registry, profile,
+      [&](const InputProfile &candidate, std::string &error) {
+        ++saves;
+        savedProfiles.push_back(candidate);
+        if (!allowSave) {
+          error = "disk full";
+          return false;
+        }
+        return true;
+      });
+
+  controller.removeBinding("missing");
+  require(saves == 0 && profile.bindings.size() == 3,
+          "unbinding an unknown ID is a no-op");
+
+  controller.removeBinding("removable");
+  require(saves == 1 && savedProfiles.size() == 1 &&
+              profile.bindings.size() == 2,
+          "unbinding persists exactly once and commits after success");
+  require(std::ranges::none_of(profile.bindings, [](const auto &value) {
+            return value.id == "removable";
+          }),
+          "unbinding removes only the selected binding");
+  require(std::ranges::any_of(profile.bindings, [&](const auto &value) {
+            return sameBinding(value, sameAction);
+          }) &&
+              std::ranges::any_of(profile.bindings, [&](const auto &value) {
+                return sameBinding(value, otherScope);
+              }),
+          "unbinding preserves sibling bindings and other scopes");
+
+  const InputProfile beforeFailure = profile;
+  allowSave = false;
+  controller.removeBinding("same-action");
+  require(saves == 2 && sameProfile(profile, beforeFailure),
+          "a failed unbind save leaves the active profile unchanged");
+  require(controller.lastError() == "disk full",
+          "a failed unbind exposes the persistence error");
+}
+
+void testAmbiguousUnbindFailsClosed() {
+  RegistryHarness harness;
+  const auto first =
+      binding("duplicate", {1, 7}, lane(0), buttonControl("pad:one", 0));
+  const auto second = binding("duplicate", {1, 7}, lane(1), keyControl(4));
+  InputProfile profile{.bindings = {first, second}};
+  const InputProfile before = profile;
+  int saves = 0;
+  InputCaptureController controller(harness.registry, profile,
+                                    [&](const InputProfile &, std::string &) {
+                                      ++saves;
+                                      return true;
+                                    });
+
+  controller.removeBinding("duplicate");
+  require(saves == 0 && sameProfile(profile, before),
+          "an ambiguous unbind fails closed without persistence or mutation");
+  require(!controller.lastError().empty(),
+          "an ambiguous unbind exposes a diagnostic");
+}
+
 void testAmbiguousBindingIdsFailClosed() {
   RegistryHarness harness;
   auto first =
@@ -885,6 +959,8 @@ int main() {
     testMissingStableIdsRemainVisibleAcrossHotplug();
     testSanitizedEditsAndScopedResetPersistOnlyCommittedChanges();
     testPartialBindingEditsComposeAgainstCurrentProfileState();
+    testUnbindIsTargetedAndTransactional();
+    testAmbiguousUnbindFailsClosed();
     testAmbiguousBindingIdsFailClosed();
     testDisconnectRearmsFirstCaptureAfterReconnect();
     testNegativeAxisHatAndMidiCapturePreserveControlIdentity();

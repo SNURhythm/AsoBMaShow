@@ -669,60 +669,6 @@ int courseResultClearTypeForSession(const CoursePlaySession &session,
   return session.finalClearTypeForPresentation(derivedRank);
 }
 
-std::optional<CourseReplayData>
-courseReplayDataForSession(const CoursePlaySession &session,
-                           const RhythmState &resultState,
-                           const ScoreProvenance &provenance) {
-  const std::size_t completedCharts = session.completedResults.size();
-  const std::size_t totalCharts = session.entries.size();
-  if (completedCharts == 0 || completedCharts > totalCharts ||
-      totalCharts > static_cast<std::size_t>(
-                        replay_summary_scan::kMaxCourseStagesPerCandidate)) {
-    return std::nullopt;
-  }
-  std::vector<bms_parser::ChartMeta> expectedMetas;
-  expectedMetas.reserve(completedCharts);
-  for (std::size_t index = 0; index < completedCharts; ++index) {
-    expectedMetas.push_back(session.entries[index].meta);
-  }
-  auto preparedStages = course_replay::prepareCompletedPrefixForSave(
-      session.replayStages, expectedMetas, completedCharts);
-  if (!preparedStages.has_value()) {
-    return std::nullopt;
-  }
-
-  CourseReplayData replay;
-  replay.courseId = session.courseId;
-  replay.courseKey = session.courseKey;
-  if (replay.courseKey.empty()) {
-    replay.courseKey = course_identity::makeCourseKey(session);
-  }
-  if (replay.courseKey.empty()) {
-    return std::nullopt;
-  }
-  replay.courseName = session.courseName;
-  replay.courseGroupName = session.courseGroupName;
-  replay.constraintJson = session.constraintJson;
-  replay.requestedPlayOption = session.requestedPlayOption;
-  replay.assistOption = assist_options::normalize(session.assistOption);
-  replay.initialGaugeType = session.gaugeType;
-  replay.gaugeProfile = session.gaugeProfile;
-  replay.gaugeAutoShift = session.gaugeAutoShift;
-  replay.gaugeAutoShiftLowerBound = session.gaugeAutoShiftLowerBound;
-  replay.longNoteMode = normalizeChartLongNoteModeValue(session.longNoteMode);
-  replay.finalScore = resultState.getScore();
-  replay.maxCombo = session.courseMaximumCombo();
-  replay.finalGauge = resultState.currentGauge;
-  replay.clearType = resultState.getClearTypeRank();
-  replay.completedCharts = static_cast<int>(completedCharts);
-  replay.totalCharts = static_cast<int>(totalCharts);
-  replay.provenance = provenance;
-  replay.clearType =
-      courseResultClearTypeForSession(session, resultState, provenance);
-
-  replay.stages = std::move(*preparedStages);
-  return replay;
-}
 } // namespace
 
 ResultScene::ResultScene(
@@ -1182,14 +1128,16 @@ ResultSkinData ResultScene::makeResultSkinData() const {
             : std::optional<std::string>{stageProvenance->player1.option};
     const std::optional<long long> player1Seed =
         stageProvenance == nullptr ? session.playOptionSeed
-                                   : stageProvenance->player1.seed;
+                                   : std::optional<long long>{
+                                         stageProvenance->player1.seed};
     const std::optional<std::string> player2Option =
         stageProvenance == nullptr
             ? session.playOption2
             : std::optional<std::string>{stageProvenance->player2.option};
     const std::optional<long long> player2Seed =
         stageProvenance == nullptr ? session.playOption2Seed
-                                   : stageProvenance->player2.seed;
+                                   : std::optional<long long>{
+                                         stageProvenance->player2.seed};
     data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
         player1Option.value_or("NORMAL"));
     data.replayDoublePlayOption =

@@ -4,7 +4,8 @@ export LANG=en_US.UTF-8
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ANDROID_DIR="${ROOT_DIR}/android"
-GRADLEW="${ROOT_DIR}/SDL/android-project/gradlew"
+GRADLEW="${ROOT_DIR}/android/gradlew"
+REQUIRED_ANDROID_NDK_VERSION="28.2.13676358"
 BUILD_ONLY=0
 SKIP_BUILD=0
 VARIANT="firebaseRelease"
@@ -306,7 +307,22 @@ set_android_version_code() {
   fi
 }
 
+android_ndk_revision() {
+  local source_properties="$1/source.properties"
+  [ -f "${source_properties}" ] || return 1
+  awk -F= '
+    $1 ~ /^[[:space:]]*Pkg\.Revision[[:space:]]*$/ {
+      revision = $2
+      sub(/^[[:space:]]*/, "", revision)
+      sub(/[[:space:]]*$/, "", revision)
+      print revision
+      exit
+    }
+  ' "${source_properties}"
+}
+
 setup_android_env() {
+  local installed_ndk_version=""
   local ndk_candidate=""
 
   if [ -z "${ANDROID_HOME:-}" ] &&
@@ -331,17 +347,10 @@ setup_android_env() {
   fi
   if [ -z "${ANDROID_NDK_HOME:-}" ] ||
      [ ! -f "${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" ]; then
-    if [ -n "${ANDROID_HOME:-}" ] &&
-       [ -f "${ANDROID_HOME}/ndk-bundle/build/cmake/android.toolchain.cmake" ]; then
-      ndk_candidate="${ANDROID_HOME}/ndk-bundle"
-    elif [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/ndk" ]; then
-      ndk_candidate="$(
-        find "${ANDROID_HOME}/ndk" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' 2>/dev/null |
-          sort -r |
-          head -n 1
-      )"
+    if [ -n "${ANDROID_HOME:-}" ]; then
+      ndk_candidate="${ANDROID_HOME}/ndk/${REQUIRED_ANDROID_NDK_VERSION}"
     fi
-    if [ -n "${ndk_candidate}" ]; then
+    if [ -f "${ndk_candidate}/build/cmake/android.toolchain.cmake" ]; then
       export ANDROID_NDK_HOME="${ndk_candidate}"
     fi
   fi
@@ -357,6 +366,13 @@ setup_android_env() {
   if [ ! -f "${ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake" ]; then
     echo "ANDROID_NDK_HOME does not contain build/cmake/android.toolchain.cmake: ${ANDROID_NDK_HOME}" >&2
     exit 1
+  fi
+  if [ "${SKIP_BUILD}" -eq 0 ]; then
+    installed_ndk_version="$(android_ndk_revision "${ANDROID_NDK_HOME}" || true)"
+    if [ "${installed_ndk_version}" != "${REQUIRED_ANDROID_NDK_VERSION}" ]; then
+      echo "Android NDK ${REQUIRED_ANDROID_NDK_VERSION} is required; found '${installed_ndk_version:-unknown}' in ${ANDROID_NDK_HOME}." >&2
+      exit 1
+    fi
   fi
 }
 
@@ -601,8 +617,10 @@ done
 
 apply_cli_overrides
 capture_version_fixed_flags
-setup_android_env
-setup_java_env
+if [ "${SKIP_BUILD}" -eq 0 ]; then
+  setup_android_env
+  setup_java_env
+fi
 setup_build_metadata
 setup_android_signing_env
 

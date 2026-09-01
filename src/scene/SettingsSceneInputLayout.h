@@ -14,6 +14,9 @@ namespace settings_scene {
 inline constexpr std::string_view kGyroscopeStepAngleLabel = "Step angle (°)";
 inline constexpr std::string_view kGyroscopeReleaseDelayLabel =
     "Release delay (ms)";
+inline constexpr int kInputSettingsCardBorderWidth = 1;
+inline constexpr int kInputSettingsActionGroupBorderWidth = 1;
+inline constexpr int kInputSettingsBindingRowBorderWidth = 1;
 
 constexpr bool shouldShowGyroscopeSettingsCard(std::string_view stableId) {
   return stableId == input::kGyroscopeTurntableStableId;
@@ -27,25 +30,76 @@ struct InputSettingsLayout {
   bool stackSelectors = false;
   bool stackBindingEditor = false;
   int selectorGap = 12;
+  int actionGroupPadding = 16;
   int selectorWidth = 0;
-  int numericControlWidth = 0;
+  int bindingEditorWidth = 0;
 };
+
+struct InputBindingEditorCapabilities {
+  bool deadZone = false;
+  bool activationThreshold = false;
+  bool releaseThreshold = false;
+  bool inversion = false;
+};
+
+constexpr int inputBindingEditorControlCount(
+    InputBindingEditorCapabilities capabilities) {
+  return 1 + static_cast<int>(capabilities.deadZone) +
+         static_cast<int>(capabilities.activationThreshold) +
+         static_cast<int>(capabilities.releaseThreshold) +
+         static_cast<int>(capabilities.inversion);
+}
+
+constexpr InputBindingEditorCapabilities
+inputBindingEditorCapabilities(input::ControlKind kind) {
+  switch (kind) {
+  case input::ControlKind::Axis:
+    return {.deadZone = true,
+            .activationThreshold = true,
+            .releaseThreshold = true,
+            .inversion = true};
+  case input::ControlKind::MidiNote:
+    return {.activationThreshold = true};
+  case input::ControlKind::MidiControl:
+    return {.deadZone = true,
+            .activationThreshold = true,
+            .releaseThreshold = true};
+  case input::ControlKind::Key:
+  case input::ControlKind::Button:
+  case input::ControlKind::Hat:
+  case input::ControlKind::TouchRegion:
+    return {};
+  }
+  return {};
+}
 
 constexpr InputSettingsLayout resolveInputSettingsLayout(int availableWidth,
                                                          bool compact) {
   InputSettingsLayout result;
   const int width = std::max(0, availableWidth);
   result.selectorGap = compact ? 8 : 12;
+  result.actionGroupPadding = compact ? 12 : 16;
   result.stackSelectors = compact || width < 720;
   result.stackBindingEditor = compact || width < 900;
   result.selectorWidth =
       result.stackSelectors ? width
                             : std::max(0, (width - result.selectorGap * 2) / 3);
-  result.numericControlWidth =
-      result.stackBindingEditor
-          ? width
-          : std::max(0, (width - result.selectorGap * 3) / 4);
+  result.bindingEditorWidth =
+      std::max(0, width - result.actionGroupPadding * 2 -
+                      kInputSettingsActionGroupBorderWidth * 2 -
+                      kInputSettingsBindingRowBorderWidth * 2);
   return result;
+}
+
+constexpr int resolveInputBindingEditorControlWidth(
+    InputSettingsLayout layout, InputBindingEditorCapabilities capabilities) {
+  if (layout.stackBindingEditor) {
+    return layout.bindingEditorWidth;
+  }
+  const int controlCount = inputBindingEditorControlCount(capabilities);
+  return std::max(
+      0, (layout.bindingEditorWidth - layout.selectorGap * (controlCount - 1)) /
+             controlCount);
 }
 
 struct GyroscopeSettingsLayout {

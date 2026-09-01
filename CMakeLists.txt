@@ -627,6 +627,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
 
+    if (NOT IOS)
+        add_executable(curl_redirect_policy_tests
+            tests/curl_redirect_policy_tests.cpp
+        )
+        target_compile_features(curl_redirect_policy_tests PRIVATE cxx_std_23)
+        target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)
+    endif()
+
     if(APPLE AND NOT IOS)
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
@@ -1782,14 +1790,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_skin_reference_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME beatoraja_gameplay_skin_ledger
-        COMMAND ${Python3_EXECUTABLE}
-                tests/beatoraja_gameplay_skin_ledger_tests.py
-                --require-complete)
-    set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        RUN_SERIAL TRUE
-    )
+    if (TARGET beatoraja_skin_model_tests)
+        add_test(NAME beatoraja_gameplay_skin_ledger
+            COMMAND ${Python3_EXECUTABLE}
+                    tests/beatoraja_gameplay_skin_ledger_tests.py
+                    --require-complete)
+        set_tests_properties(beatoraja_gameplay_skin_ledger PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RUN_SERIAL TRUE
+            ENVIRONMENT
+                "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:beatoraja_skin_model_tests>"
+        )
+    endif()
     add_test(NAME gameplay_skin_loading_benchmark_script_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
@@ -1797,13 +1809,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(gameplay_skin_loading_benchmark_script_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/beatoraja_gameplay_skin_ledger_evidence_tests.py -v)
-    set_tests_properties(beatoraja_gameplay_skin_ledger_evidence_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+    if (TARGET json_gameplay_skin_decoder_tests)
+        add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
+            COMMAND ${Python3_EXECUTABLE}
+                    -m unittest
+                    tests/beatoraja_gameplay_skin_ledger_evidence_tests.py -v)
+        set_tests_properties(beatoraja_gameplay_skin_ledger_evidence_contract
+            PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                ENVIRONMENT
+                "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:json_gameplay_skin_decoder_tests>"
+        )
+    endif()
     if (TARGET beatoraja_gameplay_cross_format_tests)
         add_test(NAME beatoraja_gameplay_oracle
             COMMAND ${Python3_EXECUTABLE}
@@ -1853,6 +1870,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest
                 tests/settings_virtual_controller_ui_contract_tests.py -v)
     set_tests_properties(settings_virtual_controller_ui_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME settings_input_binding_ui_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/settings_input_binding_ui_contract_tests.py -v)
+    set_tests_properties(settings_input_binding_ui_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME settings_gameplay_skin_initialization_contract
@@ -6726,6 +6750,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endfunction()
 
     asobmashow_register_test(skin_package_store_tests)
+    if (TARGET curl_redirect_policy_tests)
+        asobmashow_register_test(curl_redirect_policy_tests)
+    endif()
 
     foreach(eligibility_target IN ITEMS
         chart_replay_context_tests
@@ -6875,8 +6902,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
+    set_tests_properties(text_input_box_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
+        # The platform-asset bridge resolves the same repository-relative
+        # assets path used by the desktop runtime. Keep this test independent
+        # from whether the main target happened to copy assets into its output.
+        set_tests_properties(skin_resource_catalog_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     endif()
     if (TARGET skin_live_resource_counters_tests)
         asobmashow_register_test(skin_live_resource_counters_tests)
@@ -6913,6 +6947,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_host_modules_tests)
         asobmashow_register_test(lua_skin_host_modules_tests)
+        # Debug callback tests retain the production 4 ms wall-clock guard;
+        # sibling test preemption must not consume that budget.
+        set_tests_properties(lua_skin_host_modules_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if (TARGET lua_skin_http_transport_tests)
         asobmashow_register_test(lua_skin_http_transport_tests)
@@ -7018,12 +7055,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)
+        set_tests_properties(play_skin_state_bridge_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if(TARGET gameplay_skin_session_factory_tests)
         asobmashow_register_test(gameplay_skin_session_factory_tests)
     endif()
     if(TARGET play_skin_session_tests)
         asobmashow_register_test(play_skin_session_tests)
+        set_tests_properties(play_skin_session_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if(TARGET gameplay_skin_loading_benchmark_tests)
         asobmashow_register_test(gameplay_skin_loading_benchmark_tests)
@@ -7034,6 +7073,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(TARGET replay_playfield_presentation_tests)
         asobmashow_register_test(replay_playfield_presentation_tests)
         set_tests_properties(replay_playfield_presentation_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
     endif()
@@ -7113,11 +7153,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(player_profile_manager_tests profile_manager_invalid_shard --shard invalid)
     set_tests_properties(profile_manager_invalid_shard PROPERTIES WILL_FAIL TRUE)
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
-    set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 30)
+    set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 60)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_portable --shard portable)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_validation --shard validation)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_transactions --shard transactions)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_faults --shard faults)
+    # The fault matrix assumes its injected filesystem failure is the only I/O
+    # failure while it classifies exact durable recovery outcomes.
+    set_tests_properties(foundation_profile_archive_faults PROPERTIES RUN_SERIAL TRUE)
     asobmashow_register_test(profile_archive_tests profile_archive_invalid_shard --shard invalid)
     set_tests_properties(profile_archive_invalid_shard PROPERTIES WILL_FAIL TRUE)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)

@@ -164,6 +164,24 @@ void InputCaptureController::updateBinding(std::string_view bindingId,
   persist(std::move(next));
 }
 
+void InputCaptureController::removeBinding(std::string_view bindingId) {
+  lastError_.clear();
+  const auto [current, ambiguous] =
+      findUniqueBinding(profile_.bindings, bindingId);
+  if (ambiguous) {
+    lastError_ = "Input binding ID is ambiguous; unbind was not saved.";
+    return;
+  }
+  if (current == profile_.bindings.end()) {
+    return;
+  }
+
+  InputProfile next = profile_;
+  next.bindings.erase(next.bindings.begin() +
+                      (current - profile_.bindings.begin()));
+  persist(std::move(next));
+}
+
 void InputCaptureController::toggleBindingInversion(
     std::string_view bindingId) {
   lastError_.clear();
