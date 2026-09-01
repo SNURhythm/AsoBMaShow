@@ -182,6 +182,7 @@ void MusicSelectScene::init() {
            context.settings.skinMusicSelectAnalogTicksPerScroll});
   chartSession_ = context.chartRepository.OpenSession(&context.scoreRepository);
   reloadLibrary();
+  selectedBarMoved();
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!context.skinStorageRoots || !context.skinResourcePreparationService ||
@@ -252,6 +253,10 @@ void MusicSelectScene::reloadLibrary() {
   scoreCache_ = context.scoreRepository.LoadBestScores();
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
   libraryRevision_ = context.chartRepository.GetLibraryRevision();
+  bars_.configure({.modeFilter = context.settings.skinModeFilterName,
+                   .difficultyFilter =
+                       context.settings.skinDifficultyFilterName,
+                   .sortId = context.settings.skinSortId});
   bars_.refresh(MusicSelectRepositoryProjection{}.project(
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
@@ -259,6 +264,49 @@ void MusicSelectScene::reloadLibrary() {
        },
        .selectedLongNoteMode = query.selectedLongNoteMode,
        .repositoryRevision = libraryRevision_}));
+  syncResolvedFilters();
+}
+
+void MusicSelectScene::syncResolvedFilters() {
+  const auto snapshot = bars_.snapshot();
+  if (context.settings.skinModeFilterName == snapshot.resolvedModeFilter &&
+      context.settings.skinDifficultyFilterName ==
+          snapshot.resolvedDifficultyFilter) {
+    return;
+  }
+  context.settings.skinModeFilterName = snapshot.resolvedModeFilter;
+  context.settings.skinDifficultyFilterName =
+      snapshot.resolvedDifficultyFilter;
+  if (!context.saveSettings()) {
+    SDL_Log("Unable to save music-select resolved filters");
+  }
+}
+
+std::int64_t MusicSelectScene::elapsedMicros() const {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now() - started_)
+      .count();
+}
+
+void MusicSelectScene::selectedBarMoved() {
+  selectedReplay_ = -1;
+  songBarChangeMicros_ = elapsedMicros();
+}
+
+void MusicSelectScene::setPanelState(int next) {
+  if (panelState_ == next) return;
+  const auto now = elapsedMicros();
+  if (panelState_ > 0 && panelState_ <= 6) {
+    const auto index = static_cast<std::size_t>(panelState_ - 1);
+    panelOffMicros_[index] = now;
+    panelOnMicros_[index].reset();
+  }
+  if (next > 0 && next <= 6) {
+    const auto index = static_cast<std::size_t>(next - 1);
+    panelOnMicros_[index] = now;
+    panelOffMicros_[index].reset();
+  }
+  panelState_ = next;
 }
 
 skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
@@ -300,6 +348,18 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   propertyRuntime.playerHistory = playerHistory_;
   frame.properties =
       projectMusicSelectProperties(context.settings, snapshot, propertyRuntime);
+  if (startInputMicros_) frame.properties.timers[1] = *startInputMicros_;
+  frame.properties.timers[11] = songBarChangeMicros_;
+  for (std::size_t index = 0; index < panelOnMicros_.size(); ++index) {
+    if (panelOnMicros_[index]) {
+      frame.properties.timers[21 + static_cast<int>(index)] =
+          *panelOnMicros_[index];
+    }
+    if (panelOffMicros_[index]) {
+      frame.properties.timers[31 + static_cast<int>(index)] =
+          *panelOffMicros_[index];
+    }
+  }
 
   if (snapshot.selectedIndex < snapshot.rows.size()) {
     const auto &selected = snapshot.rows[snapshot.selectedIndex];
@@ -359,12 +419,15 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     if (pointer.selectIndex) {
       const auto snapshot = bars_.snapshot();
       if (!snapshot.rows.empty()) {
+        selectedBarMoved();
         bars_.setSelectedPosition(static_cast<float>(*pointer.selectIndex) /
                                   snapshot.rows.size());
         const auto selected = bars_.snapshot();
         if (selected.selectedIndex < selected.rows.size() &&
             !selected.rows[selected.selectedIndex].children.empty()) {
           (void)bars_.openSelected();
+          syncResolvedFilters();
+          selectedBarMoved();
         }
       }
     }
@@ -380,12 +443,19 @@ void MusicSelectScene::openSelected() {
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (!selected.children.empty()) {
     (void)bars_.openSelected();
+    syncResolvedFilters();
+    selectedBarMoved();
   } else if (selected.chart) {
     launchSelected();
   }
 }
 
-void MusicSelectScene::closeDirectory() { (void)bars_.close(); }
+void MusicSelectScene::closeDirectory() {
+  if (bars_.close()) {
+    syncResolvedFilters();
+    selectedBarMoved();
+  }
+}
 
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   if (launching_) return;
@@ -473,6 +543,7 @@ void MusicSelectScene::consumeActions() {
       const auto id = numericSelector(action.selector);
       const auto name = selectorName(action.selector);
       if ((id && *id == 1) || name == "musicselect_position") {
+        selectedBarMoved();
         bars_.setSelectedPosition(static_cast<float>(action.floatValue));
       }
       break;
@@ -547,13 +618,15 @@ void MusicSelectScene::applyInputAction(
                   .arguments = {action.argument1, action.argument2}});
     break;
   case MusicSelectInputActionKind::SetPanel:
-    panelState_ = action.value;
+    setPanelState(action.value);
     break;
   case MusicSelectInputActionKind::MoveNext:
     bars_.move(true, unixMillis(), kBarMoveMillis);
+    selectedBarMoved();
     break;
   case MusicSelectInputActionKind::MovePrevious:
     bars_.move(false, unixMillis(), kBarMoveMillis);
+    selectedBarMoved();
     break;
   case MusicSelectInputActionKind::Play:
     launchSelected();
@@ -565,7 +638,10 @@ void MusicSelectScene::applyInputAction(
     launchSelected(true, false);
     break;
   case MusicSelectInputActionKind::OpenFolder:
-    (void)bars_.openSelected();
+    if (bars_.openSelected()) {
+      syncResolvedFilters();
+      selectedBarMoved();
+    }
     break;
   case MusicSelectInputActionKind::CloseFolder:
     closeDirectory();
@@ -686,6 +762,18 @@ void MusicSelectScene::update(float) {
   }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_) {
     reloadLibrary();
+    selectedBarMoved();
+  }
+  if (!startInputMicros_) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    const int inputMillis = skinSession_ ? skinSession_->inputDelayMillis() : 0;
+#else
+    const int inputMillis = 0;
+#endif
+    const auto now = elapsedMicros();
+    if (now > static_cast<std::int64_t>(inputMillis) * 1'000) {
+      startInputMicros_ = now;
+    }
   }
   consumeLogicalInput();
   consumeActions();

@@ -14,6 +14,7 @@
 #endif
 
 #include <chrono>
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -35,6 +36,10 @@ protected:
 
 private:
   void reloadLibrary();
+  void syncResolvedFilters();
+  [[nodiscard]] std::int64_t elapsedMicros() const;
+  void selectedBarMoved();
+  void setPanelState(int);
   skin::MusicSelectSkinFrame makeFrame() const;
   void consumeActions();
   void consumeLogicalInput();
@@ -68,6 +73,10 @@ private:
   int panelState_ = 0;
   int selectedReplay_ = -1;
   int currentRivalIndex_ = -1;
+  std::int64_t songBarChangeMicros_ = 0;
+  std::optional<std::int64_t> startInputMicros_;
+  std::array<std::optional<std::int64_t>, 6> panelOnMicros_{};
+  std::array<std::optional<std::int64_t>, 6> panelOffMicros_{};
   std::chrono::steady_clock::time_point started_;
   std::vector<skin::SkinDiagnostic> diagnostics_;
   MusicSelectToolbarView *toolbar_ = nullptr;

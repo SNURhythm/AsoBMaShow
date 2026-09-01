@@ -145,6 +145,10 @@ MusicSelectSkinSession::MusicSelectSkinSession(
 
 MusicSelectSkinSession::~MusicSelectSkinSession() = default;
 
+int MusicSelectSkinSession::inputDelayMillis() const noexcept {
+  return model_.model.timing.inputMillis;
+}
+
 MusicSelectSkinSessionCreateResult MusicSelectSkinSession::create(
     GameplaySkinActivationRequest request,
     MusicSelectSkinSessionContext context) {

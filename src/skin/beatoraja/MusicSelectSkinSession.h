@@ -90,6 +90,7 @@ public:
   [[nodiscard]] std::vector<MusicSelectSkinAction> takePublishedActions();
   [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
   [[nodiscard]] const SkinEntryId &entry() const noexcept;
+  [[nodiscard]] int inputDelayMillis() const noexcept;
 
 private:
   struct QueuedEventBinding {
