@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import re
 import subprocess
@@ -19,6 +20,9 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.gradle = read("android/app/build.gradle")
+        cls.cmake = read("CMakeLists.txt")
+        cls.vcpkg_manifest = json.loads(read("vcpkg.json"))
+        cls.luajit_overlay = read("vcpkg-overlays/luajit/portfile.cmake")
         cls.root_gradle = read("android/build.gradle")
         cls.lint_config = read("android/app/lint.xml")
         cls.workflow = read(".github/workflows/mobile-beta-deploy.yml")
@@ -72,6 +76,28 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("SDL/android-project/gradlew", self.workflow)
         self.assertIn(expected_wrapper, self.android_readme)
         self.assertTrue((ROOT / expected_wrapper).is_file())
+
+    def test_android_build_enables_lua_skin_runtime(self):
+        self.assertIn(
+            "'-DASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=ON'",
+            self.gradle,
+        )
+        self.assertIn("luajit", self.vcpkg_manifest["dependencies"])
+        self.assertIn(
+            "find_path(LUAJIT_ANDROID_INCLUDE_DIR",
+            self.cmake,
+        )
+        self.assertIn("PATH_SUFFIXES luajit-2.1", self.cmake)
+        self.assertIn("if(VCPKG_TARGET_IS_ANDROID)", self.luajit_overlay)
+        self.assertIn(
+            "elseif(VCPKG_TARGET_IS_LINUX OR VCPKG_TARGET_IS_ANDROID)",
+            self.luajit_overlay,
+        )
+        self.assertIn(
+            'file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/tools")',
+            self.luajit_overlay,
+        )
+        self.assertIn("set(VCPKG_FIXUP_ELF_RPATH OFF)", self.luajit_overlay)
 
     def test_android_sqlite_snapshots_use_private_cache(self):
         self.assertIn("GetAndroidCacheDir()", self.sqlite_raii)

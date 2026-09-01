@@ -38,10 +38,7 @@
             "name": "lua",
             "platform": "!android"
         },
-        {
-            "name": "luajit",
-            "platform": "!android"
-        },
+        "luajit",
         {
             "name": "portaudio",
             "features": [

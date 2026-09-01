@@ -184,6 +184,18 @@ elseif(ANDROID)
     find_package(unarr CONFIG REQUIRED)
     list(APPEND COMMON_LIBS unarr::unarr)
 
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LUAJIT REQUIRED luajit)
+    find_path(LUAJIT_ANDROID_INCLUDE_DIR
+        NAMES lauxlib.h
+        HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+        PATH_SUFFIXES luajit-2.1
+        NO_DEFAULT_PATH
+        REQUIRED)
+    include_directories(BEFORE ${LUAJIT_ANDROID_INCLUDE_DIR})
+    link_directories(${LUAJIT_LIBRARY_DIRS})
+    list(APPEND COMMON_LIBS ${LUAJIT_LIBRARIES})
+
     find_library(ANDROID_LIBRARY android REQUIRED)
     find_library(LOG_LIBRARY log REQUIRED)
     find_library(EGL_LIBRARY EGL REQUIRED)
