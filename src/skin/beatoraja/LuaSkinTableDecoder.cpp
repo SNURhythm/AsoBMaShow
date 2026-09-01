@@ -968,6 +968,22 @@ struct RawDestination {
   std::optional<SkinAuthoredRect> mouseRect;
 };
 
+struct RawSongList {
+  std::string id;
+  int center = 0;
+  std::vector<int> clickable;
+  std::vector<RawDestination> listOff;
+  std::vector<RawDestination> listOn;
+  std::vector<RawDestination> text;
+  std::vector<RawDestination> level;
+  std::vector<RawDestination> lamp;
+  std::vector<RawDestination> playerLamp;
+  std::vector<RawDestination> rivalLamp;
+  std::vector<RawDestination> trophy;
+  std::vector<RawDestination> label;
+  std::optional<RawDestination> graph;
+};
+
 struct RawSkinJudge {
   std::string id;
   int player = 0;
@@ -1170,6 +1186,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinTimingDistributionGraph> rawTimingDistributionGraphs;
   std::vector<RawSkinPmChara> rawPmCharas;
   std::vector<RawDestination> rawDestinations;
+  std::optional<RawSongList> rawSongList;
   std::vector<RawCustomTimer> rawCustomTimers;
   std::vector<RawCustomEvent> rawCustomEvents;
   std::optional<RawSkinNote> note;
@@ -1792,6 +1809,77 @@ bool decodeRawDestination(lua_State *state, int index, std::size_t depth,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 output.frames, request,
                                 decodeRawDestinationFrame);
+}
+
+bool decodeRawSongList(lua_State *state, int index, std::size_t depth,
+                       RawSongList &output, DecodeRequest &request) {
+  if (!requireObject(state, index, depth, request) ||
+      !stringField(state, index, "id", output.id,
+                   LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                   request) ||
+      !integerField(state, index, "center", output.center, request) ||
+      !integerArrayField(state, index, "clickable", output.clickable,
+                         request) ||
+      !decodeObjectArrayField(state, index, "listoff", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.listOff, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "liston", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.listOn, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "text", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.text, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "level", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.level, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "lamp", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.lamp, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "playerlamp", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.playerLamp, request,
+                              decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "rivallamp", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.rivalLamp, request,
+                              decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "trophy", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.trophy, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "label", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.label, request, decodeRawDestination) ||
+      !rawGetField(state, index, "graph", request)) {
+    return false;
+  }
+  if (!lua_isnil(state, -1)) {
+    output.graph.emplace();
+    if (!decodeRawDestination(state, -1, depth + 1, *output.graph, request)) {
+      lua_pop(state, 1);
+      return false;
+    }
+  }
+  lua_pop(state, 1);
+
+  const auto setIndices = [](std::vector<RawDestination> &destinations) {
+    for (std::size_t index = 0; index < destinations.size(); ++index) {
+      destinations[index].authoredIndex =
+          static_cast<std::uint32_t>(index + 1);
+    }
+  };
+  setIndices(output.listOff);
+  setIndices(output.listOn);
+  setIndices(output.text);
+  setIndices(output.level);
+  setIndices(output.lamp);
+  setIndices(output.playerLamp);
+  setIndices(output.rivalLamp);
+  setIndices(output.trophy);
+  setIndices(output.label);
+  if (output.graph) {
+    output.graph->authoredIndex = 1;
+  }
+  return true;
 }
 
 bool decodeRawCover(lua_State *state, int index, std::size_t depth,
@@ -4016,6 +4104,27 @@ void decodeGameplayProtected(lua_State *state, int index,
           static_cast<std::uint32_t>(ordinal + 1);
     }
 
+    if (model.header.type == 5) {
+      request->rawSongList.emplace();
+      if (!rawGetField(state, index, "songlist", request->decoding)) {
+        transferDecodeDiagnostics(*request);
+        request->result.model.reset();
+        return;
+      }
+      if (!lua_isnil(state, -1)) {
+        if (!decodeRawSongList(state, -1, 2, *request->rawSongList,
+                               request->decoding)) {
+          lua_pop(state, 1);
+          transferDecodeDiagnostics(*request);
+          request->result.model.reset();
+          return;
+        }
+      } else {
+        request->rawSongList.reset();
+      }
+      lua_pop(state, 1);
+    }
+
     // JsonSkinLoader constructs custom events before custom timers, while the
     // runtime evaluates timers before events. Preserve each authored vector
     // independently and make that phase-order mismatch explicit once.
@@ -4569,6 +4678,89 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       return false;
     }
   }
+  const auto bindSongListDestination =
+      [&](RawDestination &destination, std::string_view field,
+          std::optional<std::uint32_t> index) {
+        const auto path = [&](std::string_view child) {
+          LuaValuePath result{LuaValuePathElement::field("songlist"),
+                              LuaValuePathElement::field(field)};
+          if (index) {
+            result.push_back(LuaValuePathElement::index(*index));
+          }
+          result.push_back(LuaValuePathElement::field(child));
+          return result;
+        };
+        const auto pathText = [&](std::string_view child) {
+          std::string result = "songlist." + std::string(field);
+          if (index) {
+            result += "[" + std::to_string(*index) + "]";
+          }
+          return result + "." + std::string(child);
+        };
+        const std::uint32_t authoredOrdinal = index.value_or(1) - 1;
+        if (!decodeOptionalBinding(
+                request, decoder, value,
+                {.kind = SkinBindingKind::TimerProperty}, path("timer"),
+                pathText("timer"), authoredOrdinal, destination.timer)) {
+          return false;
+        }
+        for (std::size_t conditionIndex = 0;
+             conditionIndex < destination.conditions.size();
+             ++conditionIndex) {
+          auto &condition = destination.conditions[conditionIndex];
+          if (condition.optionId &&
+              !builtins.contains(
+                  {.kind = SkinBindingKind::BooleanProperty},
+                  SkinBuiltinPropertySelector{*condition.optionId})) {
+            continue;
+          }
+          std::optional<SkinBooleanPropertyId> property;
+          auto conditionPath = path("op");
+          conditionPath.push_back(LuaValuePathElement::index(
+              static_cast<std::uint32_t>(conditionIndex + 1)));
+          if (!decodeOptionalBinding(
+                  request, decoder, value,
+                  {.kind = SkinBindingKind::BooleanProperty},
+                  std::move(conditionPath),
+                  pathText("op") + "[" +
+                      std::to_string(conditionIndex + 1) + "]",
+                  authoredOrdinal, property)) {
+            return false;
+          }
+          condition.property = property;
+        }
+        return decodeOptionalBinding(
+            request, decoder, value,
+            {.kind = SkinBindingKind::BooleanProperty}, path("draw"),
+            pathText("draw"), authoredOrdinal, destination.drawCondition);
+      };
+  if (request.rawSongList) {
+    const auto bindArray = [&](std::string_view field,
+                               std::vector<RawDestination> &destinations) {
+      for (std::size_t index = 0; index < destinations.size(); ++index) {
+        if (!bindSongListDestination(
+                destinations[index], field,
+                static_cast<std::uint32_t>(index + 1))) {
+          return false;
+        }
+      }
+      return true;
+    };
+    if (!bindArray("listoff", request.rawSongList->listOff) ||
+        !bindArray("liston", request.rawSongList->listOn) ||
+        !bindArray("text", request.rawSongList->text) ||
+        !bindArray("level", request.rawSongList->level) ||
+        !bindArray("lamp", request.rawSongList->lamp) ||
+        !bindArray("playerlamp", request.rawSongList->playerLamp) ||
+        !bindArray("rivallamp", request.rawSongList->rivalLamp) ||
+        !bindArray("trophy", request.rawSongList->trophy) ||
+        !bindArray("label", request.rawSongList->label) ||
+        (request.rawSongList->graph &&
+         !bindSongListDestination(*request.rawSongList->graph, "graph",
+                                  std::nullopt))) {
+      return false;
+    }
+  }
   const auto bindJudgeDestination = [&](RawDestination &destination,
                                         std::uint32_t judgeIndex,
                                         std::string_view childArray,
@@ -4795,6 +4987,61 @@ bool materializeGameplay(GameplayDecodeRequest &request,
 
   auto &model = *request.result.model;
   transferBindings(model, decoder.bindings());
+  if (request.rawSongList) {
+    SkinSongListDefinition songList{
+        .id = request.rawSongList->id,
+        .center = request.rawSongList->center,
+        .clickable = request.rawSongList->clickable,
+    };
+    const auto materializeDestinations =
+        [&](const std::vector<RawDestination> &source,
+            std::vector<SkinSongListDestinationDefinition> &destination) {
+          destination.reserve(source.size());
+          for (std::size_t index = 0; index < source.size(); ++index) {
+            SkinDestinationBody presentation;
+            if (!normalizeDestination(
+                    request, source[index], static_cast<std::uint32_t>(index),
+                    presentation, true)) {
+              return false;
+            }
+            destination.push_back(
+                {.objectName = source[index].id,
+                 .destination = std::move(presentation)});
+          }
+          return true;
+        };
+    if (!materializeDestinations(request.rawSongList->listOff,
+                                 songList.listOff) ||
+        !materializeDestinations(request.rawSongList->listOn,
+                                 songList.listOn) ||
+        !materializeDestinations(request.rawSongList->text, songList.text) ||
+        !materializeDestinations(request.rawSongList->level,
+                                 songList.level) ||
+        !materializeDestinations(request.rawSongList->lamp, songList.lamp) ||
+        !materializeDestinations(request.rawSongList->playerLamp,
+                                 songList.playerLamp) ||
+        !materializeDestinations(request.rawSongList->rivalLamp,
+                                 songList.rivalLamp) ||
+        !materializeDestinations(request.rawSongList->trophy,
+                                 songList.trophy) ||
+        !materializeDestinations(request.rawSongList->label,
+                                 songList.label)) {
+      transferDecodeDiagnostics(request);
+      return false;
+    }
+    if (request.rawSongList->graph) {
+      SkinDestinationBody presentation;
+      if (!normalizeDestination(request, *request.rawSongList->graph, 0,
+                                presentation, true)) {
+        transferDecodeDiagnostics(request);
+        return false;
+      }
+      songList.graph = SkinSongListDestinationDefinition{
+          .objectName = request.rawSongList->graph->id,
+          .destination = std::move(presentation)};
+    }
+    model.songListDefinition = std::move(songList);
+  }
   model.customEvents.reserve(request.rawCustomEvents.size());
   for (const auto &event : request.rawCustomEvents) {
     model.customEvents.push_back(
@@ -4904,6 +5151,41 @@ BeatorajaSkinModelDecodeResult LuaSkinTableDecoder::decodeGameplay(
           diagnostic("skin_lua_model_limit_exceeded",
                      "Lua skin gameplay bindings could not be retained within "
                      "host limits"));
+    }
+  }
+  return std::move(request.result);
+}
+
+BeatorajaSkinModelDecodeResult LuaSkinTableDecoder::decodeMusicSelect(
+    const LuaValueHandle &value,
+    LuaSkinMusicSelectDecodeContext context) const {
+  GameplayDecodeRequest request{.enforceGameplayLimits = false};
+  if (auto failure =
+          value.withValueProtected(&request, decodeGameplayProtected)) {
+    request.result.model.reset();
+    request.result.diagnostics.push_back(std::move(*failure));
+  } else if (request.allocationFailed || request.decoding.allocationFailed) {
+    request.result.model.reset();
+    request.result.diagnostics.push_back(diagnostic(
+        "skin_lua_model_allocation_failed",
+        "Lua music-select model could not be copied by the host"));
+  } else if (request.result.model && request.result.model->header.type != 5) {
+    request.result.model.reset();
+    request.result.diagnostics.push_back(diagnostic(
+        "skin_lua_model_type_mismatch",
+        "Lua music-select model does not declare Beatoraja type 5"));
+  } else if (request.result.model) {
+    try {
+      if (!materializeGameplay(
+              request, value,
+              {.runtime = context.runtime, .builtins = context.builtins})) {
+        request.result.model.reset();
+      }
+    } catch (...) {
+      request.result.model.reset();
+      request.result.diagnostics.push_back(diagnostic(
+          "skin_lua_model_allocation_failed",
+          "Lua music-select bindings could not be retained by the host"));
     }
   }
   return std::move(request.result);

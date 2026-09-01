@@ -39,6 +39,7 @@ enum class LuaRuntimePurpose : std::uint8_t {
   Catalog,
   Validation,
   Gameplay,
+  MusicSelect,
 };
 
 enum class LuaRuntimePhase : std::uint8_t {

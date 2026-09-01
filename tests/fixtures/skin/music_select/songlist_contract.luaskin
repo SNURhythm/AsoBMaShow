@@ -1,0 +1,48 @@
+local function destinations(prefix, count)
+  local result = {}
+  for index = 1, count do
+    result[index] = {
+      id = prefix .. tostring(index),
+      loop = index,
+      center = index % 10,
+      offset = index,
+      offsets = {index + 1000},
+      dst = {{time = index, x = index * 2, y = -index,
+              w = 320, h = 24, a = 255}},
+    }
+  end
+  return result
+end
+
+local configured = skin_config ~= nil
+return {
+  type = 5,
+  w = 1280,
+  h = 720,
+  name = configured and "Configured Select" or "Header Select",
+  author = "type-5 contract",
+  property = {{
+    name = "Theme",
+    item = {{name = "Blue", op = 900}},
+    def = "Blue",
+  }},
+  songlist = {
+    id = "song-list",
+    center = 100000,
+    clickable = {-1000, 0, 1000},
+    listoff = destinations("off-", 61),
+    liston = destinations("on-", 61),
+    text = destinations("text-", 12),
+    level = destinations("level-", 8),
+    lamp = destinations("lamp-", 12),
+    playerlamp = destinations("player-lamp-", 12),
+    rivallamp = destinations("rival-lamp-", 12),
+    trophy = destinations("trophy-", 4),
+    label = destinations("label-", 6),
+    graph = {
+      id = "distribution",
+      loop = -1,
+      dst = {{time = 99, x = 12, y = 34, w = 56, h = 78}},
+    },
+  },
+}

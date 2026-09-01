@@ -550,6 +550,35 @@ void testMainStateAccessorsOpenOnlyAtRenderTransition() {
          "the header-captured main-state table is populated in place");
 }
 
+void testMusicSelectPurposeHasTheConfiguredLiveHost() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::MusicSelect, "render_main_state.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  expect(header.value.has_value(),
+         "music-select live host executes its header pass");
+  if (!header.value) {
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "render_main_state_ready");
+  expect(harness->runtime->loadConfigured({}).value.has_value() &&
+             harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "music-select purpose enters the configured render host");
+  const auto result = harness->runtime->invoke(callback, {});
+  const auto *ready = result.value ? std::get_if<bool>(&*result.value) : nullptr;
+  expect(ready && *ready && !result.failure,
+         "music-select exposes main_state, timers, events, and callbacks");
+
+  auto legacy =
+      makeHarness(LuaRuntimePurpose::MusicSelect, "legacy_facade.luaskin");
+  expect(legacy && legacy->runtime->loadHeader().value.has_value(),
+         "music-select purpose exposes the pinned legacy facade");
+}
+
 void testRuntimeProvidesBeatorajaSafeOsLibrary() {
   for (const auto purpose : {LuaRuntimePurpose::Catalog,
                              LuaRuntimePurpose::Validation,
@@ -1228,6 +1257,7 @@ int main() {
   testCatalogLuaLoadersBoundSourceBeforeHostAllocation();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
+  testMusicSelectPurposeHasTheConfiguredLiveHost();
   testRuntimeProvidesBeatorajaSafeOsLibrary();
   testRuntimeSearchesVirtualPackagePath();
   testRuntimeCreatesConfiguredDynamicHistoryData();

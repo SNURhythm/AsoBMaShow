@@ -33,6 +33,11 @@ extern "C" {
 namespace skin {
 namespace {
 
+bool isLivePurpose(LuaRuntimePurpose purpose) noexcept {
+  return purpose == LuaRuntimePurpose::Gameplay ||
+         purpose == LuaRuntimePurpose::MusicSelect;
+}
+
 using Clock = std::chrono::steady_clock;
 constexpr std::uint64_t kHookInstructionInterval = 1'000;
 constexpr std::size_t kMaximumReturnedTableDepth = 64;
@@ -1288,12 +1293,12 @@ LuaValueResult LuaSkinRuntime::loadConfigured(
 }
 
 LuaOperationResult LuaSkinRuntime::enterRenderPhase() {
-  if (!impl_ || impl_->purpose != LuaRuntimePurpose::Gameplay ||
+  if (!impl_ || !isLivePurpose(impl_->purpose) ||
       impl_->phase != LuaRuntimePhase::Configured ||
       impl_->renderTransitionFailed) {
     return {.failure = makeDiagnostic(
                 "skin_lua_phase_invalid",
-                "Lua render transition requires configured gameplay")};
+                "Lua render transition requires a configured live skin")};
   }
   const auto transition = impl_->fileSystem->enterRenderPhase();
   if (!transition.ok) {
@@ -1353,7 +1358,7 @@ void LuaSkinRuntime::setEventExecutor(
 
 LuaOperationResult
 LuaSkinRuntime::beginFrame(std::uint64_t visualStateSequence) {
-  if (!impl_ || impl_->purpose != LuaRuntimePurpose::Gameplay ||
+  if (!impl_ || !isLivePurpose(impl_->purpose) ||
       impl_->phase != LuaRuntimePhase::Render || visualStateSequence == 0 ||
       (impl_->shared->frameBegun &&
        visualStateSequence <= impl_->shared->frameSequence)) {

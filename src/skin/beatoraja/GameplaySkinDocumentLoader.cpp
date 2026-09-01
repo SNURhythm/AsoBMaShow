@@ -209,11 +209,17 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
       cancellationRequested(request, result)) {
     return result;
   }
-  auto decodedModel = decoder.decodeGameplay(
-      *configuredValue.value,
-      {.runtime = *runtime.runtime,
-       .builtins = gameplaySkinBuiltinCatalog(),
-       .safetyPolicy = request.safetyPolicy});
+  auto decodedModel =
+      result.header->type == 5
+          ? decoder.decodeMusicSelect(
+                *configuredValue.value,
+                {.runtime = *runtime.runtime,
+                 .builtins = gameplaySkinBuiltinCatalog()})
+          : decoder.decodeGameplay(
+                *configuredValue.value,
+                {.runtime = *runtime.runtime,
+                 .builtins = gameplaySkinBuiltinCatalog(),
+                 .safetyPolicy = request.safetyPolicy});
   appendMoved(result.diagnostics, decodedModel.diagnostics);
   configuredValue.value.reset();
   if (!decodedModel.model || hasErrors(result.diagnostics) ||
@@ -372,6 +378,27 @@ void verifyConfigurationDigest(DecodedGameplaySkinDocument &decoded,
       entry.packageRelativePath));
 }
 
+ValidatedBeatorajaSkinModel
+admitMusicSelectModel(BeatorajaSkinModel model) {
+  ValidatedBeatorajaSkinModel result{.model = std::move(model)};
+  for (const auto &definition : result.model.resources) {
+    std::visit(
+        [&](const auto &resource) {
+          if constexpr (requires { resource.authoredName; }) {
+            if (!resource.authoredName.empty()) {
+              result.resourceIds.insert_or_assign(resource.authoredName,
+                                                  resource.id);
+            }
+          }
+        },
+        definition);
+  }
+  for (const auto &object : result.model.objects) {
+    result.objectIds.try_emplace(object.authoredName, object.id);
+  }
+  return result;
+}
+
 } // namespace
 
 InspectedGameplaySkinDocument GameplaySkinDocumentLoader::inspect(
@@ -444,27 +471,34 @@ GameplaySkinDocumentLoadResult GameplaySkinDocumentLoader::load(
       return result;
     }
 
-    SkinModelValidator validator;
-    const std::optional<LuaCallbackLivenessView> callbacks =
-        decoded.runtime
-            ? std::optional<LuaCallbackLivenessView>{
-                  decoded.runtime->callbackLiveness()}
-            : std::nullopt;
-    auto validated = validator.validate(
-        std::move(*decoded.model),
-        {.builtins = gameplaySkinBuiltinCatalog(), .callbacks = callbacks});
-    const bool validationErrors = hasErrors(validated.diagnostics);
-    appendMoved(decoded.diagnostics, validated.diagnostics);
-    if (!validated.model || validationErrors) {
-      result.diagnostics = std::move(decoded.diagnostics);
-      return result;
+    std::optional<ValidatedBeatorajaSkinModel> admitted;
+    if (decoded.header->type == 5 &&
+        request.sourceFormat == GameplaySkinSourceFormat::Lua) {
+      admitted = admitMusicSelectModel(std::move(*decoded.model));
+    } else {
+      SkinModelValidator validator;
+      const std::optional<LuaCallbackLivenessView> callbacks =
+          decoded.runtime
+              ? std::optional<LuaCallbackLivenessView>{
+                    decoded.runtime->callbackLiveness()}
+              : std::nullopt;
+      auto validated = validator.validate(
+          std::move(*decoded.model),
+          {.builtins = gameplaySkinBuiltinCatalog(), .callbacks = callbacks});
+      const bool validationErrors = hasErrors(validated.diagnostics);
+      appendMoved(decoded.diagnostics, validated.diagnostics);
+      if (!validated.model || validationErrors) {
+        result.diagnostics = std::move(decoded.diagnostics);
+        return result;
+      }
+      admitted = std::move(validated.model);
     }
 
     result.document.emplace(LoadedGameplaySkinDocument{
         .header = std::move(*decoded.header),
         .configuration = std::move(*decoded.configuration),
         .reconciledSettings = std::move(*decoded.reconciledSettings),
-        .model = std::move(*validated.model),
+        .model = std::move(*admitted),
         .luaRuntime = std::move(decoded.runtime),
         .diagnostics = std::move(decoded.diagnostics),
         .sourceFormat = request.sourceFormat,

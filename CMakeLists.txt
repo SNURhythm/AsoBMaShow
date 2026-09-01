@@ -1213,6 +1213,66 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
         endif()
 
+        add_executable(lua_music_select_skin_decoder_tests
+            tests/lua_music_select_skin_decoder_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/LuaSkinBindingDecoder.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/LuaSkinTableDecoder.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+            src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+            src/skin/beatoraja/SkinJudgeNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
+            src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp
+            src/skin/beatoraja/SkinNoteLineNormalization.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinTextGraphNormalization.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(lua_music_select_skin_decoder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_music_select_skin_decoder_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lua_music_select_skin_decoder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+        if(APPLE)
+            target_sources(lua_music_select_skin_decoder_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
+
         add_executable(lua_skin_gauge_live_integration_tests
             tests/lua_skin_gauge_live_integration_tests.cpp
             src/FileChecksum.cpp
@@ -7011,6 +7071,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_table_decoder_tests)
         asobmashow_register_test(lua_skin_table_decoder_tests)
+    endif()
+    if (TARGET lua_music_select_skin_decoder_tests)
+        asobmashow_register_test(lua_music_select_skin_decoder_tests)
     endif()
     if (TARGET lua_skin_gauge_live_integration_tests)
         asobmashow_register_test(lua_skin_gauge_live_integration_tests)

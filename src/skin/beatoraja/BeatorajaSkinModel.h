@@ -455,6 +455,28 @@ struct SkinDestinationBody {
   std::uint32_t authoredOrdinal = 0;
 };
 
+struct SkinSongListDestinationDefinition {
+  std::string objectName;
+  SkinDestinationBody destination;
+  SkinSourceLocation source;
+};
+
+struct SkinSongListDefinition {
+  std::string id;
+  int center = 0;
+  std::vector<int> clickable;
+  std::vector<SkinSongListDestinationDefinition> listOff;
+  std::vector<SkinSongListDestinationDefinition> listOn;
+  std::vector<SkinSongListDestinationDefinition> text;
+  std::vector<SkinSongListDestinationDefinition> level;
+  std::vector<SkinSongListDestinationDefinition> lamp;
+  std::vector<SkinSongListDestinationDefinition> playerLamp;
+  std::vector<SkinSongListDestinationDefinition> rivalLamp;
+  std::vector<SkinSongListDestinationDefinition> trophy;
+  std::vector<SkinSongListDestinationDefinition> label;
+  std::optional<SkinSongListDestinationDefinition> graph;
+};
+
 enum class SkinNoteVisualKind : std::uint8_t {
   Normal,
   Mine,
@@ -635,6 +657,7 @@ struct SkinGameplayTiming {
 struct BeatorajaSkinModel {
   BeatorajaSkinHeader header;
   SkinGameplayTiming timing;
+  std::optional<SkinSongListDefinition> songListDefinition;
   std::vector<SkinBooleanPropertyBinding> booleanProperties;
   std::vector<SkinIntegerPropertyBinding> integerProperties;
   std::vector<SkinFloatPropertyBinding> floatProperties;
