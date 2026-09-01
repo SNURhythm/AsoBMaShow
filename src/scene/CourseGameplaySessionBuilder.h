@@ -16,6 +16,8 @@ struct CourseGameplaySessionRequest {
   std::string constraintJson;
   std::vector<ChartMetaRecord> records;
   main_menu_profile::Selections selections;
+  std::string player2PlayOption = "NORMAL";
+  bool doublePlayFlip = false;
   bool inputKeysoundEnabled = true;
 };
 

@@ -341,6 +341,8 @@ struct CoursePlaySession {
   int maxCombo = 0;
   bool courseScoreSaved = false;
   std::string requestedPlayOption = "NORMAL";
+  std::string requestedPlayOption2 = "NORMAL";
+  bool doublePlayFlip = false;
   std::optional<std::string> playOption;
   std::optional<long long> playOptionSeed;
   std::optional<std::string> playOption2;

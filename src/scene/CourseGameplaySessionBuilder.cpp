@@ -34,8 +34,12 @@ buildCourseGameplaySession(CourseGameplaySessionRequest request) {
       request.selections.gaugeAutoShiftLowerBound;
   session->longNoteMode = longNoteMode;
   session->constraints = constraints.rules;
-  session->requestedPlayOption = coursePlayOptionForConstraints(
-      request.selections.playOption, constraints);
+  const auto playOptions = coursePlayOptionsForConstraints(
+      request.selections.playOption, request.player2PlayOption,
+      request.doublePlayFlip, constraints);
+  session->requestedPlayOption = playOptions.player1;
+  session->requestedPlayOption2 = playOptions.player2;
+  session->doublePlayFlip = playOptions.doublePlayFlip;
   session->assistOption = assist_options::kOff;
   session->autoKeySound = !request.inputKeysoundEnabled;
   return session;

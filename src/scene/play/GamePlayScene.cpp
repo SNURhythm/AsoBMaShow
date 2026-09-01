@@ -3144,8 +3144,7 @@ void GamePlayScene::init() {
               context.jukebox.stop();
               defer(
                   [this]() {
-                    if (options.practiceMode &&
-                        options.returnScene != nullptr) {
+                    if (options.returnScene != nullptr) {
                       context.sceneManager->changeScene(options.returnScene,
                                                         false);
                     } else {
@@ -4289,7 +4288,8 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   } else {
     applyCourseConstraintsToChart(*nextChart, session->constraints);
     playInfo = play_options::applySelectedPlayOptions(
-        *nextChart, session->requestedPlayOption);
+        *nextChart, session->requestedPlayOption,
+        session->requestedPlayOption2);
     applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
     session->playOption = playInfo.option;
     session->playOptionSeed = playInfo.seed;
@@ -4320,6 +4320,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     nextOptions.playOptionSeed = playInfo.seed;
     nextOptions.playOption2 = playInfo.option2;
     nextOptions.playOption2Seed = playInfo.seed2;
+    nextOptions.doublePlayFlip = session->doublePlayFlip;
     nextOptions.longNoteMode = options.longNoteMode;
     nextOptions.assistOption = session->assistOption;
     nextOptions.playback = course_rules::kRequiredPlaybackRate;
@@ -4330,6 +4331,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
     nextOptions.ownsChart = true;
   }
+  nextOptions.returnScene = options.returnScene;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -5436,6 +5438,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 capturePolicy.captureAnalytics ? &analyticsReplay : nullptr,
                 presentationReplay, retrySource);
         ResultPracticeOptions practiceResultOptions;
+        practiceResultOptions.returnScene = options.returnScene;
         if (options.practiceMode || options.practiceSession != nullptr) {
           practiceResultOptions.enabled = true;
           practiceResultOptions.session = options.practiceSession;
@@ -5456,7 +5459,6 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           practiceResultOptions.longNoteMode = options.longNoteMode;
           practiceResultOptions.assistOption = options.assistOption;
           practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
-          practiceResultOptions.returnScene = options.returnScene;
           practiceResultOptions.practiceGhostCallback =
               options.practiceGhostCallback;
         }

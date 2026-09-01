@@ -4345,6 +4345,11 @@ void MainMenuScene::startSelectedCourse() {
        .constraintJson = activeFolder.courseConstraintJson,
        .records = records,
        .selections = profileSelections,
+       .player2PlayOption = std::string(
+           replay::beatorajaReplayOptionName(
+               context.settings.skinPlayer2RandomOption)
+               .value_or("NORMAL")),
+       .doublePlayFlip = context.settings.skinDoublePlayOption == 1,
        .inputKeysoundEnabled = context.settings.inputKeysoundEnabled});
   startCourseDirect(std::move(session));
 }
@@ -4410,8 +4415,9 @@ void MainMenuScene::startCourseDirect(
         applyCourseConstraintsToChart(*preparedChart, session->constraints);
 
         play_options::PlayOptionReplayInfo playInfo =
-            play_options::applySelectedPlayOptions(*preparedChart,
-                                                   session->requestedPlayOption);
+            play_options::applySelectedPlayOptions(
+                *preparedChart, session->requestedPlayOption,
+                session->requestedPlayOption2);
         applyEffectiveLongNoteModeToChart(*preparedChart,
                                           selectedLongNoteMode);
         session->playOption = playInfo.option;
@@ -4438,6 +4444,7 @@ void MainMenuScene::startCourseDirect(
         options.playOptionSeed = playInfo.seed;
         options.playOption2 = playInfo.option2;
         options.playOption2Seed = playInfo.seed2;
+        options.doublePlayFlip = session->doublePlayFlip;
         options.longNoteMode = selectedLongNoteMode;
         options.assistOption = session->assistOption;
         options.playback = course_rules::kRequiredPlaybackRate;

@@ -906,6 +906,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       .playback = {.percent = context.settings.selectedPlaybackRatePercent,
                    .mode = context.settings.selectedPlaybackMode},
       .clubMode = context.settings.gameplayClubModeEnabled,
+      .returnScene = this,
       .ruleset = selections.ruleset};
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(chart),
@@ -927,6 +928,11 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
        .records = bar.courseCharts,
        .selections =
            main_menu_profile::Selections::fromSettings(context.settings),
+       .player2PlayOption = std::string(
+           replay::beatorajaReplayOptionName(
+               context.settings.skinPlayer2RandomOption)
+               .value_or("NORMAL")),
+       .doublePlayFlip = context.settings.skinDoublePlayOption == 1,
        .inputKeysoundEnabled = context.settings.inputKeysoundEnabled});
   session->autoPlay = autoplay;
   const auto *firstMeta = session->currentMeta();
@@ -942,7 +948,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
   }
   applyCourseConstraintsToChart(*chart, session->constraints);
   const auto playInfo = play_options::applySelectedPlayOptions(
-      *chart, session->requestedPlayOption);
+      *chart, session->requestedPlayOption, session->requestedPlayOption2);
   applyEffectiveLongNoteModeToChart(*chart, session->longNoteMode);
   session->playOption = playInfo.option;
   session->playOptionSeed = playInfo.seed;
@@ -967,6 +973,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
       .playOptionSeed = playInfo.seed,
       .playOption2 = playInfo.option2,
       .playOption2Seed = playInfo.seed2,
+      .doublePlayFlip = session->doublePlayFlip,
       .longNoteMode = session->longNoteMode,
       .assistOption = session->assistOption,
       .playback = course_rules::kRequiredPlaybackRate,
@@ -976,6 +983,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
       .ruleset = session->ruleset,
       .requiredRulesetDescriptor = session->rulesetDescriptor,
       .ownsChart = true,
+      .returnScene = this,
   };
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(chart),
@@ -1062,6 +1070,7 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
       .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
       .replayData = loaded.replayData,
       .pacemakerTarget = selections.pacemakerTarget,
+      .returnScene = this,
   };
   applyReplayProvenanceToStartOptions(options, *loaded.replayData);
   context.sceneManager->changeScene(
