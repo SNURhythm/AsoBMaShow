@@ -22,6 +22,7 @@
 #include "main.h"
 #include "path.h"
 #include "scene/MainMenuScene.h"
+#include "scene/IntroScene.h"
 #include "scene/SceneEventRouting.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/SettingsScene.h"
@@ -787,11 +788,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
   bgfx::setViewMode(rendering::readback_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
+  sceneManager.registerScene("Intro", std::make_unique<IntroScene>(context));
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
   sceneManager.registerScene("Settings",
                              std::make_unique<SettingsScene>(context));
-  sceneManager.changeScene("MainMenu");
+  sceneManager.changeScene("Intro");
 
   // SDL_RenderClear(ren);
   // SDL_RenderCopy(ren, tex, nullptr, nullptr);

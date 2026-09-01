@@ -5,12 +5,15 @@ target_sources(main PRIVATE
     FindBmsProgressPresentation.cpp
     IrUploadsController.cpp
     IrUploadsScene.cpp
+    IntroScene.cpp
     LibraryTasksScene.cpp
     PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
+    MusicSelectScene.cpp
     MusicSelectToolbarView.cpp
+    MusicSelectSkinErrorScene.cpp
     PracticeAnalyticsPresentation.cpp
     PracticeAnalyticsView.cpp
     ProfileSettingsController.cpp
