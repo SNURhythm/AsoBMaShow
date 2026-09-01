@@ -55,7 +55,12 @@ return {
     lamp = destinations("lamp-", 12),
     playerlamp = destinations("player-lamp-", 12),
     rivallamp = destinations("rival-lamp-", 12),
-    trophy = destinations("trophy-", 4),
+    trophy = {
+      {id = "trophy-1", dst = {x = 1, y = 2, w = 3, h = 4}},
+      destinations("trophy-", 4)[2],
+      destinations("trophy-", 4)[3],
+      destinations("trophy-", 4)[4],
+    },
     label = destinations("label-", 6),
     graph = {
       id = "distribution",

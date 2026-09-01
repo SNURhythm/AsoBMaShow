@@ -610,6 +610,12 @@ bool decodeObjectArrayField(lua_State *state, int rootIndex,
     const bool ok = forEachHeaderTableValue(
         state, -1, request, [&](lua_State *state, int valueIndex) {
           output.emplace_back();
+          // LuaSkinLoader#fromLuaValue constructs a default component object
+          // for every non-table value encountered while converting a Lua
+          // table to a Java object array.
+          if (!lua_istable(state, valueIndex)) {
+            return true;
+          }
           const bool decoded = decodeElement(state, valueIndex, depth + 1,
                                              output.back(), request);
           if (!decoded && !request.result.diagnostics.empty() &&

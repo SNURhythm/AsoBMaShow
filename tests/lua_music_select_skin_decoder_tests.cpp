@@ -3,11 +3,13 @@
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
+#include "skin/beatoraja/MusicSelectSkinStateBridge.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -174,6 +176,16 @@ void testConfiguredType5SongListPreservesEveryAuthoredValue() {
               songList.rivalLamp.size() == 12 && songList.trophy.size() == 4 &&
               songList.label.size() == 6,
           "song-list arrays longer than fixed SkinBar slots survive decode");
+  require(songList.trophy.front().destination.frames.size() == 4 &&
+              std::ranges::all_of(
+                  songList.trophy.front().destination.frames,
+                  [](const auto &frame) {
+                    return frame.timeMillis == 0 && frame.x == 0.0 &&
+                           frame.y == 0.0 && frame.width == 0.0 &&
+                           frame.height == 0.0;
+                  }),
+          "Lua object arrays retain Beatoraja's default objects for scalar "
+          "table values");
   require(songList.graph && songList.graph->objectName == "distribution" &&
               songList.graph->destination.loop == -1 &&
               songList.graph->destination.frames.size() == 1 &&
@@ -205,10 +217,134 @@ void testConfiguredType5SongListPreservesEveryAuthoredValue() {
           "negative SongList graph definitions retain select semantics");
 }
 
+void testInstalledAcceptanceSkinsDecodeWhenRequested() {
+  const char *acceptanceRoot =
+      std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
+  if (acceptanceRoot == nullptr || std::string_view(acceptanceRoot).empty()) {
+    return;
+  }
+
+  struct AcceptanceSkin {
+    std::string package;
+    fs::path source;
+    std::string entry;
+  };
+  const fs::path root(acceptanceRoot);
+  const char *packageFilter =
+      std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_PACKAGE");
+  const std::array skins{
+      AcceptanceSkin{"ModernChicAcceptance", root / "ModernChic",
+                     "musicselect.luaskin"},
+      AcceptanceSkin{"LITONE12Acceptance", root / "LITONE12",
+                     "Select/select.luaskin"},
+  };
+
+  for (const auto &skin : skins) {
+    if (packageFilter != nullptr && std::string_view(packageFilter) !=
+                                        skin.package) {
+      continue;
+    }
+    TempDirectory temp;
+    SkinStorageRoots roots{.visiblePackages = temp.root() / "visible",
+                           .privateRevisions = temp.root() / "revisions",
+                           .privateCatalog = temp.root() / "catalog",
+                           .profileOverlays = temp.root() / "overlays",
+                           .liveSources = true};
+    AcceptFiles aliases;
+    const auto package = normalizePackageId(skin.package);
+    require(package.package.has_value(), "acceptance package ID normalizes");
+    if (!package.package) continue;
+    const auto entry = normalizeEntryPath(*package.package, skin.entry);
+    require(entry.entry.has_value(), "acceptance entry normalizes");
+    if (!entry.entry) continue;
+    const fs::path installedPackage =
+        roots.visiblePackages / package.package->directoryName;
+    std::error_code copyError;
+    fs::create_directories(roots.visiblePackages, copyError);
+    if (!copyError) {
+      fs::copy(skin.source, installedPackage, fs::copy_options::recursive,
+               copyError);
+    }
+    require(!copyError,
+            skin.package + " copies into an isolated live installation");
+    if (copyError) continue;
+    SkinTreeSnapshotter snapshotter(roots, aliases);
+    auto snapshot =
+        snapshotter.snapshot(installedPackage, *package.package, {}, {});
+    require(snapshot.prepared.has_value(),
+            skin.package + " snapshots as an acceptance fixture");
+    if (!snapshot.prepared) continue;
+
+    auto makeFileSystem = [&](bool writes) {
+      return LuaSkinFileSystem::create(
+                 {.revision = snapshot.prepared->readView(),
+                  .entry = *entry.entry,
+                  .storageRoots = roots,
+                  .profileId =
+                      writes
+                          ? makeSkinProfileId(
+                                "77777777-7777-4777-8777-777777777777")
+                          : std::nullopt,
+                  .allowDataWrites = writes})
+          .fileSystem;
+    };
+    auto runtimeFileSystem = makeFileSystem(true);
+    auto reconciliationFileSystem = makeFileSystem(false);
+    require(runtimeFileSystem && reconciliationFileSystem,
+            skin.package + " filesystems create");
+    if (!runtimeFileSystem || !reconciliationFileSystem) continue;
+    auto created = LuaSkinRuntime::create(
+        {.purpose = LuaRuntimePurpose::MusicSelect,
+         .fileSystem = std::move(runtimeFileSystem)});
+    require(created.runtime != nullptr,
+            skin.package + " music-select runtime creates");
+    if (!created.runtime) continue;
+    auto headerValue = created.runtime->loadHeader();
+    require(headerValue.value.has_value(),
+            skin.package + " header executes");
+    if (!headerValue.value) continue;
+    LuaSkinTableDecoder decoder;
+    const auto header = decoder.decodeHeader(*headerValue.value);
+    require(header.header && header.header->type == 5,
+            skin.package + " declares a type-5 header");
+    if (!header.header) continue;
+    headerValue.value.reset();
+    const auto reconciled = reconcileSkinConfiguration(
+        *header.header, nullptr, *reconciliationFileSystem);
+    require(reconciled.configuration.has_value(),
+            skin.package + " configuration reconciles");
+    if (!reconciled.configuration) continue;
+    MusicSelectSkinFrame configuredFrame;
+    MusicSelectSkinStateBridge configuredState(configuredFrame);
+    created.runtime->setFrameState(&configuredState);
+    auto configured =
+        created.runtime->loadConfigured(*reconciled.configuration);
+    created.runtime->setFrameState(nullptr);
+    if (!configured.value && configured.failure) {
+      std::cerr << skin.package << ": " << configured.failure->code << ": "
+                << configured.failure->message << '\n';
+    }
+    require(configured.value.has_value(),
+            skin.package + " configured pass executes");
+    if (!configured.value) continue;
+    const auto decoded = decoder.decodeMusicSelect(
+        *configured.value, {.runtime = *created.runtime, .builtins = {}});
+    if (!decoded.model) {
+      for (const auto &diagnostic : decoded.diagnostics) {
+        std::cerr << skin.package << ": " << diagnostic.code << ": "
+                  << diagnostic.message << '\n';
+      }
+    }
+    require(decoded.model.has_value(),
+            skin.package + " configured type-5 table decodes");
+  }
+}
+
 } // namespace
 
 int main() {
   testConfiguredType5SongListPreservesEveryAuthoredValue();
+  testInstalledAcceptanceSkinsDecodeWhenRequested();
   if (failures != 0) {
     std::cerr << failures << " Lua music-select decoder test(s) failed\n";
     return 1;
