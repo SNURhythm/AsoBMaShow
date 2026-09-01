@@ -80,34 +80,6 @@ int songMode(const bms_parser::ChartMeta &meta) {
   return 0;
 }
 
-bool isDirectoryBar(skin::MusicSelectBarKind kind) {
-  // select/bar: these seven concrete classes extend DirectoryBar.
-  switch (kind) {
-  case skin::MusicSelectBarKind::Folder:
-  case skin::MusicSelectBarKind::Table:
-  case skin::MusicSelectBarKind::Hash:
-  case skin::MusicSelectBarKind::Command:
-  case skin::MusicSelectBarKind::Container:
-  case skin::MusicSelectBarKind::SearchWord:
-  case skin::MusicSelectBarKind::SameFolder:
-    return true;
-  case skin::MusicSelectBarKind::Song:
-  case skin::MusicSelectBarKind::Executable:
-  case skin::MusicSelectBarKind::Grade:
-  case skin::MusicSelectBarKind::RandomCourse:
-    return false;
-  }
-  return false;
-}
-
-bool isSelectableBar(skin::MusicSelectBarKind kind) {
-  // select/bar: these four concrete classes extend SelectableBar.
-  return kind == skin::MusicSelectBarKind::Song ||
-         kind == skin::MusicSelectBarKind::Grade ||
-         kind == skin::MusicSelectBarKind::RandomCourse ||
-         kind == skin::MusicSelectBarKind::Executable;
-}
-
 bool isPlayableBar(const MusicSelectBar &bar) {
   // BooleanPropertyFactory.playablebar tests these exact concrete classes.
   switch (bar.kind) {
@@ -319,7 +291,8 @@ void projectSelectedBar(Properties &out,
   const MusicSelectBar *selected =
       bars.selectedIndex < bars.rows.size() ? &bars.rows[bars.selectedIndex]
                                            : nullptr;
-  const bool directory = selected && isDirectoryBar(selected->kind);
+  const bool directory =
+      selected && skin::musicSelectIsDirectoryBarKind(selected->kind);
   const bool song = selected && selected->kind == skin::MusicSelectBarKind::Song;
   const bool course = selected && selected->kind == skin::MusicSelectBarKind::Grade;
   out.booleans[1] = directory;
@@ -351,7 +324,8 @@ void projectSelectedBar(Properties &out,
   }
 
   for (std::size_t replay = 0; replay < selected->replayExists.size(); ++replay) {
-    const bool selectable = isSelectableBar(selected->kind);
+    const bool selectable =
+        skin::musicSelectIsSelectableBarKind(selected->kind);
     const bool exists = selectable && selected->replayExists[replay];
     out.booleans[kReplayExistsIds[replay]] = exists;
     out.booleans[kReplayMissingIds[replay]] = selectable && !exists;

@@ -323,6 +323,41 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
          "successful default table imports request selector reload");
 }
 
+void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "table update repository is ready");
+  bool reloadRequested = false;
+  int reloadCalls = 0;
+  int updatedTableId = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.requestReload = [&](bool includeFolders) {
+    ++reloadCalls;
+    reloadRequested = includeFolders;
+  };
+  deps.updateDifficultyTableFromSourceUrl =
+      [&](ChartRepository::Session &, int tableId, std::string *) {
+        updatedTableId = tableId;
+        return true;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
+       .title = "Update Difficulty Table",
+       .tableId = 47},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "difficulty table update completes through the shared operation");
+  expect(updatedTableId == 47,
+         "difficulty table update retains the selected TableBar identity");
+  expect(reloadCalls == 1 && !reloadRequested,
+         "difficulty table update requests a list-only selector reload");
+}
+
 void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
   const ChartEntry entry{.path = fspath_to_path_t("/tmp/library-entry")};
   expect(chart_library_platform::resolveFolderEntryPath(entry) ==
@@ -338,6 +373,7 @@ int main() {
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
+  testDifficultyTableUpdateUsesTheSharedTaskOperation();
   testDesktopLibraryEntryResolutionPreservesTheStoredPath();
   if (failures != 0) {
     std::cerr << failures << " chart library operation test(s) failed\n";

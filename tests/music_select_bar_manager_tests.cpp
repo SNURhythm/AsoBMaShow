@@ -73,6 +73,54 @@ void testWrapOpenCloseAndPositionSemantics() {
           "direct source selection finds only a current row");
 }
 
+void testClickedDirectoryOpensWithoutMovingTheCenterSelection() {
+  MusicSelectBarManager manager(fixture());
+  manager.move(true, 0, 0);
+  require(manager.snapshot().rows[manager.snapshot().selectedIndex].id.value ==
+              "folder:b",
+          "pointer fixture centers the second root directory");
+  require(manager.open({"folder:a"}) &&
+              manager.snapshot().rows.size() == 2 &&
+              manager.snapshot().directoryBars.back().id.value == "folder:a",
+          "a clicked DirectoryBar opens independently of the center bar");
+  require(manager.close() && manager.snapshot().selectedIndex == 1 &&
+              manager.snapshot().rows[1].id.value == "folder:b",
+          "closing a clicked directory restores the previous center bar");
+}
+
+void testBarClassPredicatesDoNotDependOnChildren() {
+  require(skin::musicSelectIsDirectoryBarKind(
+              skin::MusicSelectBarKind::Folder) &&
+              skin::musicSelectIsDirectoryBarKind(
+                  skin::MusicSelectBarKind::Table) &&
+              skin::musicSelectIsDirectoryBarKind(
+                  skin::MusicSelectBarKind::Hash) &&
+              skin::musicSelectIsDirectoryBarKind(
+                  skin::MusicSelectBarKind::Command) &&
+              skin::musicSelectIsDirectoryBarKind(
+                  skin::MusicSelectBarKind::Container) &&
+              skin::musicSelectIsDirectoryBarKind(
+                  skin::MusicSelectBarKind::SearchWord) &&
+              skin::musicSelectIsDirectoryBarKind(
+                  skin::MusicSelectBarKind::SameFolder),
+          "all seven Beatoraja DirectoryBar classes remain directories even "
+          "when empty");
+  require(skin::musicSelectIsSelectableBarKind(
+              skin::MusicSelectBarKind::Song) &&
+              skin::musicSelectIsSelectableBarKind(
+                  skin::MusicSelectBarKind::Executable) &&
+              skin::musicSelectIsSelectableBarKind(
+                  skin::MusicSelectBarKind::Grade) &&
+              skin::musicSelectIsSelectableBarKind(
+                  skin::MusicSelectBarKind::RandomCourse),
+          "all four Beatoraja SelectableBar classes are classified by type");
+  require(!skin::musicSelectIsDirectoryBarKind(
+              skin::MusicSelectBarKind::Song) &&
+              !skin::musicSelectIsSelectableBarKind(
+                  skin::MusicSelectBarKind::Folder),
+          "directory and selectable class families remain distinct");
+}
+
 void testRefreshRebindsStableSelection() {
   MusicSelectBarManager manager(fixture());
   manager.move(true, 0, 0);
@@ -250,6 +298,8 @@ void testPinnedFilterFallbackAndSort() {
 
 int main() {
   testWrapOpenCloseAndPositionSemantics();
+  testClickedDirectoryOpensWithoutMovingTheCenterSelection();
+  testBarClassPredicatesDoNotDependOnChildren();
   testRefreshRebindsStableSelection();
   testReplayAndHashCommandsUseSelectableSongState();
   testTransientDirectoryRestoresItsSourceBar();

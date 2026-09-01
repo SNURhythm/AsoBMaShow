@@ -16,6 +16,7 @@ enum class TaskStatus { Queued, Running, Complete, Failed, Paused };
 enum class TaskKind {
   RefreshLibrary,
   RefreshPath,
+  UpdateDifficultyTable,
   IndexDownloadedPath,
   AndroidImport
 };
@@ -27,6 +28,7 @@ struct TaskRequest {
   std::filesystem::path folderToAdd;
   std::string iosBookmark;
   std::filesystem::path refreshPath;
+  int tableId = 0;
   std::filesystem::path downloadedPath;
   std::vector<std::filesystem::path> downloadedRemovedPaths;
   main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;

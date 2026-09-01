@@ -81,21 +81,6 @@ int barValue(const MusicSelectBarFrame &bar) {
   return -1;
 }
 
-bool directory(const MusicSelectBarFrame &bar) {
-  switch (bar.kind) {
-  case MusicSelectBarKind::Folder:
-  case MusicSelectBarKind::Table:
-  case MusicSelectBarKind::Hash:
-  case MusicSelectBarKind::Command:
-  case MusicSelectBarKind::Container:
-  case MusicSelectBarKind::SearchWord:
-  case MusicSelectBarKind::SameFolder:
-    return true;
-  default:
-    return false;
-  }
-}
-
 const SkinSongListPresentation *slot(
     std::span<const SkinSongListPresentation> values, std::size_t index,
     std::size_t fixedCount) {
@@ -240,7 +225,8 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
     }
   });
   forEachDrawnRow([&](const auto &row, const auto &bar) {
-    if (directory(bar) && songList.graph && songList.graph->object != 0) {
+    if (musicSelectIsDirectoryBarKind(bar.kind) && songList.graph &&
+        songList.graph->object != 0) {
       appendCommand(result.commands,
                     MusicSelectBarDrawFamily::FolderGraph, row,
                     *songList.graph, 0, frame.elapsedMillis, {}, 0,

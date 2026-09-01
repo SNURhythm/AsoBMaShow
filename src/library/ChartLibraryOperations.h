@@ -20,6 +20,8 @@ struct ChartLibraryOperationsDependencies {
   std::function<bool(ChartRepository::Session &, const std::string &,
                      std::string *, DifficultyTableImportProgressCallback)>
       importDifficultyTableFromUrl;
+  std::function<bool(ChartRepository::Session &, int, std::string *)>
+      updateDifficultyTableFromSourceUrl;
   std::function<int(ChartRepository::Session &,
                     const std::filesystem::path &)>
       importDifficultyTablesFromDirectory;
@@ -42,6 +44,10 @@ private:
   TaskRunResult runPathRefresh(const TaskRequest &, const std::stop_token &,
                                const TaskProgressCallback &,
                                const TaskPauseCallback &);
+  TaskRunResult runDifficultyTableUpdate(const TaskRequest &,
+                                         const std::stop_token &,
+                                         const TaskProgressCallback &,
+                                         const TaskPauseCallback &);
   TaskRunResult runDownloadedIndex(const TaskRequest &,
                                    const std::stop_token &,
                                    const TaskProgressCallback &,

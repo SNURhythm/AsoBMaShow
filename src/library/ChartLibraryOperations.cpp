@@ -45,6 +45,14 @@ ChartLibraryOperations::ChartLibraryOperations(
           return importer.ImportFromDirectory(session, directory);
         };
   }
+  if (!dependencies_.updateDifficultyTableFromSourceUrl) {
+    dependencies_.updateDifficultyTableFromSourceUrl =
+        [](ChartRepository::Session &session, int tableId,
+           std::string *errorMessage) {
+          DifficultyTableImporter importer;
+          return importer.UpdateFromSourceUrl(session, tableId, errorMessage);
+        };
+  }
 }
 
 TaskRunResult ChartLibraryOperations::run(
@@ -55,12 +63,42 @@ TaskRunResult ChartLibraryOperations::run(
     return runRefresh(request, stopToken, progress, waitForResume);
   case TaskKind::RefreshPath:
     return runPathRefresh(request, stopToken, progress, waitForResume);
+  case TaskKind::UpdateDifficultyTable:
+    return runDifficultyTableUpdate(request, stopToken, progress,
+                                    waitForResume);
   case TaskKind::IndexDownloadedPath:
     return runDownloadedIndex(request, stopToken, progress, waitForResume);
   case TaskKind::AndroidImport:
     return runAndroidImport(request, stopToken, progress, waitForResume);
   }
   throw std::runtime_error("Unknown library task");
+}
+
+TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
+    const TaskRequest &request, const std::stop_token &stopToken,
+    const TaskProgressCallback &progress,
+    const TaskPauseCallback &waitForResume) {
+  if (!waitForResume() || stopToken.stop_requested()) {
+    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+  }
+  auto session = dependencies_.repository.OpenSession();
+  if (!session.has_value()) {
+    throw std::runtime_error("Failed to open chart database");
+  }
+  session->EnsureSchema();
+  progress({.current = 0,
+            .total = 1,
+            .stage = ChartScanProgressStage::Preparing},
+           "Updating difficulty table");
+  std::string errorMessage;
+  if (!dependencies_.updateDifficultyTableFromSourceUrl(
+          *session, request.tableId, &errorMessage)) {
+    throw std::runtime_error(errorMessage.empty()
+                                 ? "Failed to update difficulty table"
+                                 : errorMessage);
+  }
+  if (dependencies_.requestReload) dependencies_.requestReload(false);
+  return {.detail = "Complete"};
 }
 
 TaskRunResult ChartLibraryOperations::runPathRefresh(

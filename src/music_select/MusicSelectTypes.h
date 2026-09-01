@@ -45,6 +45,46 @@ enum class MusicSelectBarKind : std::uint8_t {
   SameFolder,
 };
 
+[[nodiscard]] inline constexpr bool
+musicSelectIsDirectoryBarKind(MusicSelectBarKind kind) noexcept {
+  switch (kind) {
+  case MusicSelectBarKind::Folder:
+  case MusicSelectBarKind::Table:
+  case MusicSelectBarKind::Hash:
+  case MusicSelectBarKind::Command:
+  case MusicSelectBarKind::Container:
+  case MusicSelectBarKind::SearchWord:
+  case MusicSelectBarKind::SameFolder:
+    return true;
+  case MusicSelectBarKind::Song:
+  case MusicSelectBarKind::Executable:
+  case MusicSelectBarKind::Grade:
+  case MusicSelectBarKind::RandomCourse:
+    return false;
+  }
+  return false;
+}
+
+[[nodiscard]] inline constexpr bool
+musicSelectIsSelectableBarKind(MusicSelectBarKind kind) noexcept {
+  switch (kind) {
+  case MusicSelectBarKind::Song:
+  case MusicSelectBarKind::Executable:
+  case MusicSelectBarKind::Grade:
+  case MusicSelectBarKind::RandomCourse:
+    return true;
+  case MusicSelectBarKind::Folder:
+  case MusicSelectBarKind::Table:
+  case MusicSelectBarKind::Hash:
+  case MusicSelectBarKind::Command:
+  case MusicSelectBarKind::Container:
+  case MusicSelectBarKind::SearchWord:
+  case MusicSelectBarKind::SameFolder:
+    return false;
+  }
+  return false;
+}
+
 inline constexpr int MusicSelectFeatureUndefinedLn = 1;
 inline constexpr int MusicSelectFeatureMine = 2;
 inline constexpr int MusicSelectFeatureRandom = 4;

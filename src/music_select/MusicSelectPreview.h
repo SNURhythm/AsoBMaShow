@@ -30,6 +30,8 @@ public:
   [[nodiscard]] MusicSelectPreviewMoveResult
   selectedBarMoved(std::optional<MusicSelectPreviewSelection>,
                    std::int64_t nowMicros);
+  void observeSelection(std::optional<MusicSelectPreviewSelection>,
+                        std::int64_t songBarChangeMicros);
   [[nodiscard]] std::optional<MusicSelectPreviewSwitch>
   update(std::int64_t nowMicros, bool launching);
   void reset();

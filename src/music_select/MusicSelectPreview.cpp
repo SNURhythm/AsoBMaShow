@@ -13,6 +13,22 @@ MusicSelectPreviewMoveResult MusicSelectPreviewController::selectedBarMoved(
   return {.stopAudio = stopAudio};
 }
 
+void MusicSelectPreviewController::observeSelection(
+    std::optional<MusicSelectPreviewSelection> selection,
+    std::int64_t songBarChangeMicros) {
+  if (!selection) {
+    pending_.reset();
+    return;
+  }
+  if (active_ && active_->id == selection->id) {
+    pending_.reset();
+    dueMicros_ = -1;
+    return;
+  }
+  pending_ = std::move(selection);
+  dueMicros_ = songBarChangeMicros + kPreviewDelayMicros;
+}
+
 std::optional<MusicSelectPreviewSwitch>
 MusicSelectPreviewController::update(std::int64_t nowMicros, bool launching) {
   if (!pending_ || dueMicros_ < 0 || nowMicros <= dueMicros_ || launching) {

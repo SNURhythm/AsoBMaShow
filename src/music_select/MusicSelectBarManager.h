@@ -36,6 +36,7 @@ public:
   explicit MusicSelectBarManager(MusicSelectProjection = {},
                                  MusicSelectBarManagerConfig = {});
 
+  [[nodiscard]] bool open(const MusicSelectBarId &);
   [[nodiscard]] bool openSelected();
   [[nodiscard]] bool openTransient(MusicSelectBar directory,
                                    std::vector<MusicSelectBar> children);

@@ -310,14 +310,27 @@ void MusicSelectBarManager::rebuildRows(
   }
 }
 
-bool MusicSelectBarManager::openSelected() {
-  const auto *bar = selected();
-  if (bar == nullptr || bar->children.empty()) return false;
-  const MusicSelectBarId id = bar->id;
-  sourceBars_.push_back(id);
+bool MusicSelectBarManager::open(const MusicSelectBarId &id) {
+  const auto *bar = projection_.find(id);
+  if (bar == nullptr || !skin::musicSelectIsDirectoryBarKind(bar->kind)) {
+    return false;
+  }
+  const auto *source = selected();
+  if (source == nullptr) return false;
+  const MusicSelectBarId sourceId = source->id;
+  if (bar->children.empty()) {
+    rebuildRows(sourceId);
+    return false;
+  }
+  sourceBars_.push_back(sourceId);
   directory_.push_back(id);
   rebuildRows();
   return true;
+}
+
+bool MusicSelectBarManager::openSelected() {
+  const auto *bar = selected();
+  return bar != nullptr && open(bar->id);
 }
 
 bool MusicSelectBarManager::openTransient(

@@ -133,6 +133,23 @@ MusicSelectClockFields localClockFields(std::time_t value) {
           .second = local.tm_sec};
 }
 
+std::optional<MusicSelectPreviewSelection>
+previewSelection(const MusicSelectBarManagerSnapshot &snapshot) {
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return std::nullopt;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart) {
+    return std::nullopt;
+  }
+  const auto &meta = selected.chart->meta;
+  return MusicSelectPreviewSelection{
+      .id = selected.id.value,
+      .folder = meta.BmsPath.parent_path(),
+      .previewPath = meta.Preview.empty()
+                         ? std::filesystem::path{}
+                         : meta.BmsPath.parent_path() / meta.Preview,
+  };
+}
+
 std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
   switch (key) {
   case SDLK_0: return MusicSelectControlKey::Num0;
@@ -342,22 +359,8 @@ void MusicSelectScene::selectedBarMoved() {
           : -1;
   songBarChangeMicros_ = elapsedMicros();
 
-  std::optional<MusicSelectPreviewSelection> previewSelection;
-  if (snapshot.selectedIndex < snapshot.rows.size()) {
-    const auto &selected = snapshot.rows[snapshot.selectedIndex];
-    if (selected.kind == skin::MusicSelectBarKind::Song && selected.chart) {
-      const auto &meta = selected.chart->meta;
-      previewSelection = MusicSelectPreviewSelection{
-          .id = selected.id.value,
-          .folder = meta.BmsPath.parent_path(),
-          .previewPath = meta.Preview.empty()
-                             ? std::filesystem::path{}
-                             : meta.BmsPath.parent_path() / meta.Preview,
-      };
-    }
-  }
   const auto previewMove = previewController_.selectedBarMoved(
-      std::move(previewSelection), songBarChangeMicros_);
+      previewSelection(snapshot), songBarChangeMicros_);
   if (previewMove.stopAudio && previewAudio_) {
     previewAudio_->switchTo(std::nullopt);
   }
@@ -624,16 +627,14 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     if (pointer.closeDirectory) closeDirectory();
     if (pointer.selectIndex) {
       const auto snapshot = bars_.snapshot();
-      if (!snapshot.rows.empty()) {
-        selectedBarMoved();
-        bars_.setSelectedPosition(static_cast<float>(*pointer.selectIndex) /
-                                  snapshot.rows.size());
-        const auto selected = bars_.snapshot();
-        if (selected.selectedIndex < selected.rows.size() &&
-            !selected.rows[selected.selectedIndex].children.empty()) {
-          (void)bars_.openSelected();
+      if (*pointer.selectIndex < snapshot.rows.size()) {
+        const auto &clicked = snapshot.rows[*pointer.selectIndex];
+        if (skin::musicSelectIsDirectoryBarKind(clicked.kind)) {
+          (void)bars_.open(clicked.id);
           syncResolvedFilters();
           selectedBarMoved();
+        } else {
+          launchSelected();
         }
       }
     }
@@ -647,11 +648,11 @@ void MusicSelectScene::openSelected() {
   const auto snapshot = bars_.snapshot();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
-  if (!selected.children.empty()) {
+  if (skin::musicSelectIsDirectoryBarKind(selected.kind)) {
     (void)bars_.openSelected();
     syncResolvedFilters();
     selectedBarMoved();
-  } else if (selected.chart) {
+  } else {
     launchSelected();
   }
 }
@@ -1117,8 +1118,8 @@ void MusicSelectScene::consumeActions() {
       const auto id = numericSelector(action.selector);
       const auto name = selectorName(action.selector);
       if ((id && *id == 1) || name == "musicselect_position") {
-        bars_.setSelectedPosition(static_cast<float>(action.floatValue));
         selectedBarMoved();
+        bars_.setSelectedPosition(static_cast<float>(action.floatValue));
       } else if (((id && *id == 8) || name == "ranking_position") &&
                  action.floatValue >= 0.0 && action.floatValue < 1.0) {
         rankingOffset_ = static_cast<int>(
@@ -1146,11 +1147,12 @@ void MusicSelectScene::consumeLogicalInput() {
   logicalInput.currentBar = MusicSelectInputBarKind::Other;
   if (snapshot.selectedIndex < snapshot.rows.size()) {
     const auto &selected = snapshot.rows[snapshot.selectedIndex];
-    logicalInput.currentBar = !selected.children.empty()
-                                   ? MusicSelectInputBarKind::Directory
-                                   : selected.selectable
-                                         ? MusicSelectInputBarKind::Selectable
-                                         : MusicSelectInputBarKind::Other;
+    logicalInput.currentBar =
+        skin::musicSelectIsDirectoryBarKind(selected.kind)
+            ? MusicSelectInputBarKind::Directory
+            : skin::musicSelectIsSelectableBarKind(selected.kind)
+                  ? MusicSelectInputBarKind::Selectable
+                  : MusicSelectInputBarKind::Other;
   }
   logicalInput.selectedReplay = selectedReplay_;
   for (const auto &action :
@@ -1228,10 +1230,9 @@ void MusicSelectScene::applyInputAction(
     launchSelectedReplay(action.value);
     break;
   case MusicSelectInputActionKind::OpenFolder:
-    if (bars_.openSelected()) {
-      syncResolvedFilters();
-      selectedBarMoved();
-    }
+    (void)bars_.openSelected();
+    syncResolvedFilters();
+    selectedBarMoved();
     break;
   case MusicSelectInputActionKind::CloseFolder:
     closeDirectory();
@@ -1314,7 +1315,7 @@ void MusicSelectScene::executeEvent(
   MusicSelectEventContext eventContext{
       .settings = context.settings,
       .sortIndex = sortIndex_,
-      .hasSelectedPlayConfig = selected != nullptr && selected->chart.has_value(),
+      .hasSelectedPlayConfig = selected != nullptr,
       .selectedSongHasPath =
           selected != nullptr && selected->chart.has_value() &&
           !selected->chart->meta.BmsPath.empty(),
@@ -1345,6 +1346,7 @@ void MusicSelectScene::executeEvent(
     switch (effect.kind) {
     case MusicSelectEventEffectKind::RefreshBars:
       reloadLibrary();
+      selectedBarMoved();
       break;
     case MusicSelectEventEffectKind::OpenSettings:
       openSettings();
@@ -1467,6 +1469,16 @@ void MusicSelectScene::executeEvent(
       }
       break;
     case MusicSelectEventEffectKind::UpdateFolder: {
+      if (selected != nullptr &&
+          selected->kind == skin::MusicSelectBarKind::Table &&
+          context.chartLibraryTasks) {
+        context.chartLibraryTasks->enqueue({
+            .kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
+            .title = "Update Difficulty Table",
+            .tableId = selected->tableId,
+        });
+        break;
+      }
       std::filesystem::path path;
       if (selected != nullptr &&
           selected->kind == skin::MusicSelectBarKind::Folder) {
@@ -1530,6 +1542,8 @@ void MusicSelectScene::update(float) {
   }
   consumeLogicalInput();
   consumeActions();
+  previewController_.observeSelection(previewSelection(bars_.snapshot()),
+                                      songBarChangeMicros_);
   if (auto preview = previewController_.update(elapsedMicros(), launching_);
       preview && previewAudio_) {
     previewAudio_->switchTo(std::move(preview->path));
