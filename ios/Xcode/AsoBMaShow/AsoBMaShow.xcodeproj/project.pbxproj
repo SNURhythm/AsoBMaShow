@@ -722,6 +722,7 @@
 				input/CMakeLists.txt,
 				ir/CMakeLists.txt,
 				math/CMakeLists.txt,
+				music_select/CMakeLists.txt,
 				practice/CMakeLists.txt,
 				rendering/CMakeLists.txt,
 				scene/CMakeLists.txt,

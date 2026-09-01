@@ -539,20 +539,21 @@ return {
          "catalog activation without a digest mismatch");
 }
 
-void testCatalogRejectsNonGameplayBeatorajaSkinTypes() {
+void testCatalogAcceptsMusicSelectBeatorajaSkinType() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
-  type = 5, w = 1280, h = 720, name = "music select is not gameplay"
+  type = 5, w = 1280, h = 720, name = "music select"
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::UnavailableType &&
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay &&
              result.metadata && result.metadata->skinType == 5 &&
-             hasDiagnostic(result, "skin_lua_type_unavailable"),
-         "non-gameplay Beatoraja skin types cannot appear in gameplay tabs");
+             result.reconciledSettings &&
+             !hasDiagnostic(result, "skin_lua_type_unavailable"),
+         "Beatoraja music-select skins are catalog-valid skin targets");
 }
 
-void testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats() {
+void testCatalogAdmitsSupportedTargetHeadersAcrossStaticFormats() {
   const auto json = validateDocument(
       "play/parity.json",
       R"json({"type":0,"name":"JSON gameplay","author":"fixture","w":640,"h":480})json");
@@ -585,12 +586,13 @@ void testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats() {
       "select/select.lr2skin",
       "#INFORMATION,5,Music select,fixture\n#RESOLUTION,0\n");
   expect(nonGameplayLr2.disposition ==
-                 SkinValidationDisposition::UnavailableType &&
+                 SkinValidationDisposition::SelectableGameplay &&
              nonGameplayLr2.metadata &&
              nonGameplayLr2.metadata->skinType == 5 &&
-             !nonGameplayLr2.reconciledSettings &&
-             nonGameplayLr2.configurationDigest.empty(),
-         "a decoded non-gameplay LR2 header remains unavailable");
+             nonGameplayLr2.reconciledSettings &&
+             !nonGameplayLr2.configurationDigest.empty(),
+         "a decoded music-select LR2 header remains catalog-valid before the "
+         "Lua-only target projection");
 }
 
 void testCatalogDefersGameplayBindingFailureToGameplayLoading() {
@@ -742,8 +744,8 @@ int main() {
   testCatalogAppendsBeatorajaRandomToCustomOptions();
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
-  testCatalogRejectsNonGameplayBeatorajaSkinTypes();
-  testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats();
+  testCatalogAcceptsMusicSelectBeatorajaSkinType();
+  testCatalogAdmitsSupportedTargetHeadersAcrossStaticFormats();
   testLr2CallerBytePolicyIsSharedAcrossRootAndIncludes();
   testCatalogDefersGameplayBindingFailureToGameplayLoading();
   testCatalogDefersGameplayResourceFailureToGameplayLoading();

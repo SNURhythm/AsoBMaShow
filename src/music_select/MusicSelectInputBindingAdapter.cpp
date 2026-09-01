@@ -135,17 +135,17 @@ void MusicSelectInputBindingAdapter::reset() {
   heldKeys_.clear();
   heldStart_.clear();
   heldSelect_.clear();
-  std::ranges::fill(state_.keys, false);
-  std::ranges::fill(state_.changed, false);
-  std::ranges::fill(state_.analogDelta, 0);
+  std::fill(state_.keys.begin(), state_.keys.end(), false);
+  std::fill(state_.changed.begin(), state_.changed.end(), false);
+  std::fill(state_.analogDelta.begin(), state_.analogDelta.end(), 0);
   state_.start = false;
   state_.select = false;
   analogValues_.clear();
 }
 
 void MusicSelectInputBindingAdapter::clearFrameEdges() {
-  std::ranges::fill(state_.changed, false);
-  std::ranges::fill(state_.analogDelta, 0);
+  std::fill(state_.changed.begin(), state_.changed.end(), false);
+  std::fill(state_.analogDelta.begin(), state_.analogDelta.end(), 0);
   state_.controlPressed.clear();
   state_.commands.clear();
   state_.wheel = 0;
