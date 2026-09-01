@@ -182,6 +182,12 @@ MusicSelectSkinStateBridge::offsetProperty(int id) {
 
 std::int64_t MusicSelectSkinStateBridge::timerProperty(
     const SkinBuiltinPropertySelector &selector) {
+  if (const auto *id = std::get_if<int>(&selector.value)) {
+    if (const auto custom = customTimerValues_.find(*id);
+        custom != customTimerValues_.end()) {
+      return custom->second;
+    }
+  }
   if (const auto value = numericValue(selector, frame_->properties.timers)) {
     return *value;
   }
@@ -193,6 +199,10 @@ std::int64_t MusicSelectSkinStateBridge::timerProperty(
     return std::numeric_limits<std::int64_t>::min();
   }
   return std::numeric_limits<std::int64_t>::min();
+}
+
+void MusicSelectSkinStateBridge::setCustomTimer(int id, std::int64_t value) {
+  customTimerValues_.insert_or_assign(id, value);
 }
 
 std::span<const SkinProjectedNoteView>

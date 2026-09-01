@@ -4,6 +4,7 @@
 #include "../../music_select/MusicSelectTypes.h"
 
 #include <functional>
+#include <filesystem>
 #include <map>
 #include <span>
 #include <string>
@@ -33,6 +34,9 @@ struct MusicSelectSkinFrame {
   std::int64_t elapsedMillis = 0;
   MusicSelectPropertyValues properties;
   MusicSelectSongListFrame songList;
+  std::filesystem::path stageFile;
+  std::filesystem::path backBmp;
+  std::filesystem::path banner;
 };
 
 struct MusicSelectSkinActionSink {
@@ -58,6 +62,7 @@ public:
   stringProperty(const SkinBuiltinPropertySelector &) override;
   SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
+  void setCustomTimer(int, std::int64_t);
   std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
   std::span<const SkinProjectedLongNoteView>
@@ -70,6 +75,7 @@ public:
 
 private:
   const MusicSelectSkinFrame *frame_ = nullptr;
+  std::map<int, std::int64_t> customTimerValues_;
 };
 
 } // namespace skin

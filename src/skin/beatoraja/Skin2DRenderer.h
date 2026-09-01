@@ -33,6 +33,7 @@ namespace skin {
 
 class PlaySkinSession;
 class ResultSkinSession;
+class MusicSelectSkinSession;
 class Skin2DRenderer;
 
 // Move-only proof that PlaySkinSession has already opened the matching Lua
@@ -59,6 +60,7 @@ private:
 
   friend class PlaySkinSession;
   friend class ResultSkinSession;
+  friend class MusicSelectSkinSession;
   friend class Skin2DRenderer;
 };
 

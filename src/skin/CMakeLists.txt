@@ -55,6 +55,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/MusicSelectSkinModelResolver.cpp
         beatoraja/MusicSelectBarRenderer.cpp
         beatoraja/MusicSelectSkinStateBridge.cpp
+        beatoraja/MusicSelectSkinSession.cpp
         beatoraja/NumericGlyphAtlas.cpp
         beatoraja/PlaySkinViewport.cpp
         beatoraja/Skin2DRenderer.cpp

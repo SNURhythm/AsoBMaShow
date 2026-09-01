@@ -94,11 +94,24 @@ void testUnknownPropertiesRemainUnsupported() {
           "only Beatoraja's offset slots exist with default zero values");
 }
 
+void testCustomTimerValuesOverrideTheFrameSnapshot() {
+  MusicSelectSkinFrame frame;
+  frame.properties.timers[10'001] = 42;
+  MusicSelectSkinStateBridge bridge(frame);
+
+  require(bridge.timerProperty({.value = 10'001}) == 42,
+          "music-select bridge exposes the authored frame timer first");
+  bridge.setCustomTimer(10'001, 84);
+  require(bridge.timerProperty({.value = 10'001}) == 84,
+          "the once-per-frame custom-timer update overrides the snapshot");
+}
+
 } // namespace
 
 int main() {
   testExactPropertyNamespacesAndAbsentValues();
   testUnknownPropertiesRemainUnsupported();
+  testCustomTimerValuesOverrideTheFrameSnapshot();
   if (failures != 0) {
     std::cerr << failures << " music-select state bridge test(s) failed\n";
     return 1;
