@@ -2,7 +2,6 @@
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
 #include "../BmsChartFile.h"
-#include "../DifficultyTableImporter.h"
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
@@ -153,13 +152,6 @@ recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
   return ir::IrRecordActivity::None;
 }
 
-constexpr const char *kDefaultDifficultyTableUrls[] = {
-    "https://rattoto10.jounin.jp/table.html",
-    "https://rattoto10.jounin.jp/table_insane.html",
-    "https://stellabms.xyz/sl/table.html",
-    "https://stellabms.xyz/st/table.html",
-};
-
 std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
                              GameplayRuleset ruleset) {
   const double total = resolveEffectiveGaugeTotal(ruleset, meta);
@@ -169,16 +161,6 @@ std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
   while (!value.empty() && value.back() == '0') value.pop_back();
   if (!value.empty() && value.back() == '.') value.pop_back();
   return value;
-}
-
-void ensureLibraryFolderExists(const std::filesystem::path &path) {
-  std::error_code error;
-  if (Utils::EnsureDirectoryExists(path, error)) {
-    return;
-  }
-
-  throw std::runtime_error("Could not create library folder '" +
-                           fspath_to_utf8(path) + "': " + error.message());
 }
 
 bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
@@ -191,36 +173,6 @@ bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
   SDL_Log("Failed to create %s %s: %s", description,
           fspath_to_utf8(path).c_str(), error.message().c_str());
   return false;
-}
-
-const char *homeDirectoryEnvValue() {
-  if (const char *home = std::getenv("HOME");
-      home != nullptr && home[0] != '\0') {
-    return home;
-  }
-#ifdef _WIN32
-  if (const char *profile = std::getenv("USERPROFILE");
-      profile != nullptr && profile[0] != '\0') {
-    return profile;
-  }
-#endif
-  return nullptr;
-}
-
-bool expandCurrentUserHomeShortcut(std::string &path) {
-  if (path.empty() || path.front() != '~') {
-    return true;
-  }
-  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
-    return true;
-  }
-
-  const char *home = homeDirectoryEnvValue();
-  if (home == nullptr) {
-    return false;
-  }
-  path.replace(0, 1, home);
-  return true;
 }
 
 struct SafeAreaInsets {
@@ -856,60 +808,6 @@ using main_menu_library::folderKeyForCourseTable;
 using main_menu_library::folderKeyForLevel;
 using main_menu_library::folderKeyForTable;
 
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-std::mutex gIOSFolderAccessMutex;
-std::vector<void *> gIOSFolderAccessHandles;
-std::unordered_map<path_t, path_t> gIOSResolvedFolderPaths;
-
-void ClearIOSFolderAccessLocked() {
-  for (void *handle : gIOSFolderAccessHandles) {
-    StopIOSSecurityScopedResource(handle);
-  }
-  gIOSFolderAccessHandles.clear();
-  gIOSResolvedFolderPaths.clear();
-}
-
-void ClearIOSFolderAccess() {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
-  ClearIOSFolderAccessLocked();
-}
-
-void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
-  ClearIOSFolderAccessLocked();
-
-  for (const auto &entry : entries) {
-    if (entry.iosBookmark.empty()) {
-      continue;
-    }
-    std::string resolvedPath;
-    std::string errorMessage;
-    void *handle = StartIOSSecurityScopedResource(path_t_to_utf8(entry.path),
-                                                  entry.iosBookmark,
-                                                  resolvedPath, errorMessage);
-    if (!errorMessage.empty()) {
-      SDL_Log("Failed to open folder access for %s: %s",
-              path_t_to_utf8(entry.path).c_str(), errorMessage.c_str());
-    }
-    if (!resolvedPath.empty()) {
-      gIOSResolvedFolderPaths[entry.path] = utf8_to_path_t(resolvedPath);
-    }
-    if (handle != nullptr) {
-      gIOSFolderAccessHandles.push_back(handle);
-    }
-  }
-}
-
-std::filesystem::path ResolveIOSFolderEntryPath(const ChartEntry &entry) {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
-  const auto it = gIOSResolvedFolderPaths.find(entry.path);
-  if (it != gIOSResolvedFolderPaths.end()) {
-    return std::filesystem::path(it->second);
-  }
-  return std::filesystem::path(entry.path);
-}
-#endif
-
 int clearRankForGaugeType(GaugeType gaugeType) {
   switch (gaugeType) {
   case GaugeType::AssistedEasy:
@@ -1205,8 +1103,7 @@ void MainMenuScene::init() {
   chartSession =
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
-    if (libraryActiveTaskCount.load(std::memory_order_acquire) > 0 ||
-        androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
+    if (androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
       return "A chart library scan or import is active.";
     }
     if (replayExportInProgress.load(std::memory_order_acquire)) {
@@ -1257,14 +1154,8 @@ void MainMenuScene::init() {
   context.requestRebuildChartLibrary = [this]() {
     startLibraryRebuild();
   };
-  context.notifyBackgroundTaskPauseStateChanged = [this]() {
-    syncLibraryTaskPauseStateWithForegroundScene();
-  };
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
-  syncLibraryTaskPauseStateWithForegroundScene();
-  startLibraryTaskWorker();
-  enqueueLibraryRefreshTask("Refresh Library");
 }
 
 void MainMenuScene::onPause() {
@@ -1286,8 +1177,6 @@ void MainMenuScene::onResume() {
   // Gameplay selections belong to the committed profile even when its score
   // attachment is temporarily unavailable.
   reloadProfileSelectionsFromSettings();
-  syncLibraryTaskPauseStateWithForegroundScene();
-  startLibraryTaskWorker();
   if (scoreQueryReady) {
     if (refreshScoreClearRankViews().has_value()) {
       scoreClearRanks = {};
@@ -1362,177 +1251,14 @@ void MainMenuScene::applyThemeChange() {
   }
 }
 
-void MainMenuScene::startLibraryTaskWorker() {
-  std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
-  const bool workerPaused = libraryTaskWorkerPaused.load();
-  if (workerPaused) {
-    return;
-  }
-  if (checkEntriesThread.joinable()) {
-    return;
-  }
-  if (!workerPaused) {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    bool changed = false;
-    for (auto &task : libraryTasks) {
-      if (task.status != LibraryTaskStatus::Paused) {
-        continue;
-      }
-      const auto queuedIt = std::find_if(
-          libraryTaskQueue.begin(), libraryTaskQueue.end(),
-          [&task](const auto &queuedTask) { return queuedTask.id == task.id; });
-      if (queuedIt != libraryTaskQueue.end()) {
-        task.status = LibraryTaskStatus::Queued;
-        task.detail = "Waiting";
-        changed = true;
-      }
-    }
-    if (changed) {
-      bumpLibraryTasksRevisionLocked();
-    }
-  }
-  checkEntriesThread = std::jthread(
-      [this](const std::stop_token &stopToken) { libraryTaskLoop(stopToken); });
-}
-
-void MainMenuScene::stopLibraryTaskWorker() {
-  std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
-  if (!checkEntriesThread.joinable()) {
-    return;
-  }
-  SDL_Log("Joining library task worker");
-  checkEntriesThread.request_stop();
-  libraryTaskWorkerPaused = false;
-  libraryTaskPauseCv.notify_all();
-  libraryTaskCv.notify_all();
-  checkEntriesThread.join();
-}
-
-void MainMenuScene::pauseLibraryTaskWorker() {
-  libraryTaskWorkerPaused = true;
-  bool changed = false;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    for (auto &task : libraryTasks) {
-      if (isPauseableLibraryTaskStatus(task.status)) {
-        task.status = LibraryTaskStatus::Paused;
-        task.detail = "Paused";
-        changed = true;
-      }
-    }
-    if (changed) {
-      bumpLibraryTasksRevisionLocked();
-    }
-  }
-  libraryTaskCv.notify_all();
-}
-
-void MainMenuScene::resumeLibraryTaskWorker() {
-  libraryTaskWorkerPaused = false;
-  bool changed = false;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    for (auto &task : libraryTasks) {
-      if (task.status != LibraryTaskStatus::Paused) {
-        continue;
-      }
-      const auto queuedIt = std::find_if(
-          libraryTaskQueue.begin(), libraryTaskQueue.end(),
-          [&task](const auto &queuedTask) { return queuedTask.id == task.id; });
-      task.status = queuedIt != libraryTaskQueue.end()
-                        ? LibraryTaskStatus::Queued
-                        : LibraryTaskStatus::Running;
-      task.detail = queuedIt != libraryTaskQueue.end() ? "Waiting" : "Resuming";
-      changed = true;
-    }
-    if (changed) {
-      bumpLibraryTasksRevisionLocked();
-    }
-  }
-  libraryTaskPauseCv.notify_all();
-  libraryTaskCv.notify_all();
-}
-
-void MainMenuScene::syncLibraryTaskPauseStateWithForegroundScene() {
-  if (context.backgroundTasksPausedForForegroundScene.load()) {
-    pauseLibraryTaskWorker();
-    return;
-  }
-
-  resumeLibraryTaskWorker();
-  startLibraryTaskWorker();
-}
-
-bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
-                                             const std::stop_token &stopToken) {
-  if (!libraryTaskWorkerPaused.load()) {
-    return !stopToken.stop_requested();
-  }
-
-  const LibraryTaskProgressSnapshot snapshot = readLibraryTaskProgress();
-  const double fraction =
-      snapshot.valid && snapshot.taskId == id
-          ? static_cast<double>(snapshot.basisPoints) / 10000.0
-          : 0.0;
-  const int current =
-      snapshot.valid && snapshot.taskId == id ? snapshot.current : 0;
-  const int total =
-      snapshot.valid && snapshot.taskId == id ? snapshot.total : 0;
-  setLibraryTaskState(id, LibraryTaskStatus::Paused, fraction, current, total,
-                      "Paused");
-
-  std::unique_lock<std::mutex> lock(libraryTaskPauseMutex);
-  libraryTaskPauseCv.wait(lock, [this, &stopToken]() {
-    return stopToken.stop_requested() || !libraryTaskWorkerPaused.load();
-  });
-  if (stopToken.stop_requested()) {
-    return false;
-  }
-  setLibraryTaskState(id, LibraryTaskStatus::Running, fraction, current, total,
-                      "Resuming");
-  return true;
-}
-
-void MainMenuScene::enqueueLibraryTask(LibraryTaskRequest task) {
-  task.id = nextLibraryTaskId.fetch_add(1);
-  const std::uint64_t id = task.id;
-  const std::string title = task.title;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.push_back(std::move(task));
-    libraryTasks.push_back(LibraryTaskInfo{
-        .id = id,
-        .title = title,
-        .status = LibraryTaskStatus::Queued,
-        .fraction = 0.0,
-        .current = 0,
-        .total = 0,
-        .detail = "Waiting",
-    });
-    constexpr std::size_t kMaxTaskHistory = 24;
-    while (libraryTasks.size() > kMaxTaskHistory) {
-      const auto removable = std::find_if(
-          libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-            return task.status == LibraryTaskStatus::Complete ||
-                   task.status == LibraryTaskStatus::Failed ||
-                   task.status == LibraryTaskStatus::Paused;
-          });
-      if (removable == libraryTasks.end()) {
-        break;
-      }
-      libraryTasks.erase(removable);
-    }
-    bumpLibraryTasksRevisionLocked();
-  }
-  startLibraryTaskWorker();
-  libraryTaskCv.notify_one();
-}
-
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark, bool rebuildLibraryMetadata) {
-  enqueueLibraryTask(LibraryTaskRequest{
-      .kind = LibraryTaskKind::RefreshLibrary,
+  if (!context.chartLibraryTasks) {
+    return;
+  }
+  context.chartLibraryTasks->enqueue({
+      .kind = chart_library_tasks::TaskKind::RefreshLibrary,
       .title = title,
       .folderToAdd = folderToAdd,
       .iosBookmark = iosBookmark,
@@ -1545,11 +1271,11 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
     const main_menu_library::FindBmsChartIdentity &targetIdentity,
     std::uint64_t selectionGeneration,
     std::vector<std::filesystem::path> removedPaths) {
-  if (path.empty()) {
+  if (path.empty() || !context.chartLibraryTasks) {
     return;
   }
-  enqueueLibraryTask(LibraryTaskRequest{
-      .kind = LibraryTaskKind::IndexDownloadedPath,
+  context.chartLibraryTasks->enqueue({
+      .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
       .title = "Index Downloaded BMS",
       .downloadedPath = path,
       .downloadedRemovedPaths = std::move(removedPaths),
@@ -1560,35 +1286,12 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
 
 #if TARGET_OS_ANDROID
 void MainMenuScene::createPendingAndroidImportTask(bool folderImport) {
-  startLibraryTaskWorker();
-  const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTasks.push_back(LibraryTaskInfo{
-        .id = id,
-        .title = folderImport ? "Import Folder" : "Import Archive",
-        .status = LibraryTaskStatus::Running,
-        .fraction = 0.0,
-        .current = 0,
-        .total = 0,
-        .detail = folderImport ? "Copying selected folder"
-                               : "Copying selected archive",
-    });
-    constexpr std::size_t kMaxTaskHistory = 24;
-    while (libraryTasks.size() > kMaxTaskHistory) {
-      const auto removable = std::find_if(
-          libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-            return task.status == LibraryTaskStatus::Complete ||
-                   task.status == LibraryTaskStatus::Failed ||
-                   task.status == LibraryTaskStatus::Paused;
-          });
-      if (removable == libraryTasks.end()) {
-        break;
-      }
-      libraryTasks.erase(removable);
-    }
-    bumpLibraryTasksRevisionLocked();
+  if (!context.chartLibraryTasks) {
+    return;
   }
+  const std::uint64_t id = context.chartLibraryTasks->reserve(
+      folderImport ? "Import Folder" : "Import Archive",
+      folderImport ? "Copying selected folder" : "Copying selected archive");
   {
     std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
     pendingAndroidArchiveImportTasks.emplace_back(id, folderImport);
@@ -1600,169 +1303,40 @@ void MainMenuScene::createPendingAndroidImportTask(bool folderImport) {
 void MainMenuScene::enqueueAndroidImportTask(
     std::uint64_t id, const std::filesystem::path &importPath,
     bool folderImport) {
-  if (importPath.empty()) {
-    setLibraryTaskState(id, LibraryTaskStatus::Failed, 0.0, 0, 0,
-                        "Import failed: selected path is empty.");
+  if (!context.chartLibraryTasks) {
     return;
   }
-
-  startLibraryTaskWorker();
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.push_back(LibraryTaskRequest{
-        .id = id,
-        .kind = LibraryTaskKind::AndroidImport,
-        .title = folderImport ? "Import Folder" : "Import Archive",
-        .androidImportPath = importPath,
-        .androidImportFolder = folderImport,
-    });
-    auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
-                               [id](const auto &task) {
-                                 return task.id == id;
-                               });
-    if (taskIt == libraryTasks.end()) {
-      libraryTasks.push_back(LibraryTaskInfo{
-          .id = id,
-          .title = folderImport ? "Import Folder" : "Import Archive",
-          .status = LibraryTaskStatus::Queued,
-          .fraction = 0.0,
-          .current = 0,
-          .total = 0,
-          .detail = "Waiting",
-      });
-    } else {
-      taskIt->title = folderImport ? "Import Folder" : "Import Archive";
-      taskIt->status = LibraryTaskStatus::Queued;
-      taskIt->fraction = 0.0;
-      taskIt->current = 0;
-      taskIt->total = 0;
-      taskIt->detail = "Waiting";
-    }
-    bumpLibraryTasksRevisionLocked();
+  if (importPath.empty()) {
+    context.chartLibraryTasks->failReserved(
+        id, "Import failed: selected path is empty.");
+    return;
   }
+  context.chartLibraryTasks->enqueueReserved(
+      id, {.kind = chart_library_tasks::TaskKind::AndroidImport,
+           .title = folderImport ? "Import Folder" : "Import Archive",
+           .androidImportPath = importPath,
+           .androidImportFolder = folderImport});
   tasksModalOpenRequested.store(true);
-  libraryTaskCv.notify_one();
 }
 #endif
 
-bool MainMenuScene::isPauseableLibraryTaskStatus(LibraryTaskStatus status) {
-  return status == LibraryTaskStatus::Queued ||
-         status == LibraryTaskStatus::Running;
-}
-
-bool MainMenuScene::isActiveLibraryTaskStatus(LibraryTaskStatus status) {
-  return isPauseableLibraryTaskStatus(status) ||
-         status == LibraryTaskStatus::Paused;
-}
-
-void MainMenuScene::setLibraryTaskState(std::uint64_t id,
-                                        LibraryTaskStatus status,
-                                        double fraction, int current, int total,
-                                        const std::string &detail) {
-  std::lock_guard<std::mutex> lock(libraryTaskMutex);
-  auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
-                             [id](const auto &task) { return task.id == id; });
-  if (taskIt == libraryTasks.end()) {
-    return;
-  }
-  taskIt->status = status;
-  taskIt->fraction = std::clamp(fraction, 0.0, 1.0);
-  taskIt->current = std::max(0, current);
-  taskIt->total = std::max(0, total);
-  taskIt->detail = detail;
-  bumpLibraryTasksRevisionLocked();
-}
-
-void MainMenuScene::bumpLibraryTasksRevisionLocked() {
-  ++libraryTasksRevision;
-  const int activeCount = static_cast<int>(std::count_if(
-      libraryTasks.begin(), libraryTasks.end(),
-      [](const auto &task) { return isActiveLibraryTaskStatus(task.status); }));
-  libraryActiveTaskCount.store(activeCount, std::memory_order_release);
-}
-
-void MainMenuScene::updateLibraryTaskProgress(
-    std::uint64_t id, const ChartScanProgress &progress) {
-  const int total = std::max(0, progress.total);
-  const int current = total > 0 ? std::clamp(progress.current, 0, total)
-                                : std::max(0, progress.current);
-  const int basisPoints =
-      total > 0
-          ? static_cast<int>((static_cast<std::int64_t>(current) * 10000) /
-                             std::max(1, total))
-          : 0;
-  std::uint64_t revision =
-      libraryProgressRevision.load(std::memory_order_relaxed);
-  if ((revision & 1U) != 0) {
-    ++revision;
-  }
-  libraryProgressRevision.store(revision + 1, std::memory_order_release);
-  libraryProgressTaskId.store(id, std::memory_order_relaxed);
-  libraryProgressCurrent.store(current, std::memory_order_relaxed);
-  libraryProgressTotal.store(total, std::memory_order_relaxed);
-  libraryProgressBasisPoints.store(std::clamp(basisPoints, 0, 10000),
-                                   std::memory_order_relaxed);
-  libraryProgressStage.store(static_cast<int>(progress.stage),
-                             std::memory_order_relaxed);
-  libraryProgressRevision.store(revision + 2, std::memory_order_release);
-}
-
 MainMenuScene::LibraryTaskProgressSnapshot
 MainMenuScene::readLibraryTaskProgress() const {
-  for (int attempt = 0; attempt < 3; ++attempt) {
-    const std::uint64_t before =
-        libraryProgressRevision.load(std::memory_order_acquire);
-    if ((before & 1U) != 0) {
-      continue;
-    }
-    LibraryTaskProgressSnapshot snapshot;
-    snapshot.valid = before != 0;
-    snapshot.revision = before;
-    snapshot.taskId = libraryProgressTaskId.load(std::memory_order_relaxed);
-    snapshot.current = libraryProgressCurrent.load(std::memory_order_relaxed);
-    snapshot.total = libraryProgressTotal.load(std::memory_order_relaxed);
-    snapshot.basisPoints =
-        libraryProgressBasisPoints.load(std::memory_order_relaxed);
-    snapshot.stage = static_cast<ChartScanProgressStage>(
-        libraryProgressStage.load(std::memory_order_relaxed));
-    const std::uint64_t after =
-        libraryProgressRevision.load(std::memory_order_acquire);
-    if (before == after && (after & 1U) == 0) {
-      return snapshot;
-    }
-  }
-  return {};
+  return context.chartLibraryTasks
+             ? context.chartLibraryTasks->snapshot().progress
+             : LibraryTaskProgressSnapshot{};
 }
 
 int MainMenuScene::activeLibraryTaskCount() {
-  return libraryActiveTaskCount.load(std::memory_order_acquire);
+  return context.chartLibraryTasks
+             ? context.chartLibraryTasks->snapshot().activeCount
+             : 0;
 }
 
 void MainMenuScene::requestLibraryScanFlush() {
   if (activeLibraryTaskCount() > 0) {
-    libraryScanFlushRequested.fetch_add(1, std::memory_order_release);
-  }
-  requestLibraryReload(true);
-}
-
-std::uint64_t MainMenuScene::pendingLibraryScanFlushRequest() const {
-  const std::uint64_t requested =
-      libraryScanFlushRequested.load(std::memory_order_acquire);
-  const std::uint64_t completed =
-      libraryScanFlushCompleted.load(std::memory_order_acquire);
-  return requested > completed ? requested : 0;
-}
-
-void MainMenuScene::completeLibraryScanFlush(std::uint64_t request) {
-  if (request == 0) {
-    return;
-  }
-  std::uint64_t completed =
-      libraryScanFlushCompleted.load(std::memory_order_relaxed);
-  while (completed < request &&
-         !libraryScanFlushCompleted.compare_exchange_weak(
-             completed, request, std::memory_order_release,
-             std::memory_order_relaxed)) {
+    context.chartLibraryScanFlushRequested.fetch_add(
+        1, std::memory_order_release);
   }
   requestLibraryReload(true);
 }
@@ -1779,374 +1353,6 @@ void MainMenuScene::refreshTasksButton() {
   }
   displayedLibraryTasksButtonText = label;
   tasksButtonText->setText(label);
-}
-
-void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
-  std::optional<LibraryTaskRequest> pausedTask;
-  while (!stopToken.stop_requested()) {
-    LibraryTaskRequest task;
-    {
-      std::unique_lock<std::mutex> lock(libraryTaskMutex);
-      libraryTaskCv.wait(lock, [this, &stopToken]() {
-        if (stopToken.stop_requested()) {
-          return true;
-        }
-        return !libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty();
-      });
-      if (stopToken.stop_requested()) {
-        break;
-      }
-      auto taskIt = libraryTaskQueue.begin();
-      if (libraryTaskWorkerPaused.load()) {
-        continue;
-      }
-      if (taskIt == libraryTaskQueue.end()) {
-        continue;
-      }
-      task = *taskIt;
-      libraryTaskQueue.erase(taskIt);
-    }
-
-    if (!waitForLibraryTaskResume(task.id, stopToken)) {
-      pausedTask = task;
-      break;
-    }
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
-                        "Starting");
-    try {
-      switch (task.kind) {
-      case LibraryTaskKind::RefreshLibrary:
-        runLibraryRefreshTask(task, stopToken);
-        break;
-      case LibraryTaskKind::IndexDownloadedPath:
-        runDownloadedPathIndexTask(task, stopToken);
-        break;
-      case LibraryTaskKind::AndroidImport:
-#if TARGET_OS_ANDROID
-        runAndroidImportTask(task, stopToken);
-#else
-        throw std::runtime_error("Android import task is unavailable.");
-#endif
-        break;
-      }
-      if (stopToken.stop_requested()) {
-        setLibraryTaskState(task.id, LibraryTaskStatus::Paused, 0.0, 0, 0,
-                            "Paused");
-        pausedTask = task;
-      } else {
-        setLibraryTaskState(task.id, LibraryTaskStatus::Complete, 1.0, 1, 1,
-                            "Complete");
-      }
-    } catch (const std::exception &e) {
-      setLibraryTaskState(task.id, LibraryTaskStatus::Failed, 0.0, 0, 0,
-                          e.what());
-      archive_file::appendDebugLogLine("Library task failed: " + task.title +
-                                       ": " + e.what());
-    }
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    if (pausedTask.has_value()) {
-      const auto queuedIt =
-          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
-                       [&pausedTask](const auto &task) {
-                         return task.id == pausedTask->id;
-                       });
-      if (queuedIt == libraryTaskQueue.end()) {
-        libraryTaskQueue.push_front(*pausedTask);
-      }
-    }
-    for (auto &task : libraryTasks) {
-      if (isPauseableLibraryTaskStatus(task.status)) {
-        task.status = LibraryTaskStatus::Paused;
-        task.detail = "Paused";
-      }
-    }
-    bumpLibraryTasksRevisionLocked();
-  }
-}
-
-void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
-    ChartRepository::Session &chartSession, std::uint64_t taskId,
-    const std::stop_token &stopToken) {
-  if (context.settings.defaultDifficultyTablesSeeded ||
-      stopToken.stop_requested()) {
-    return;
-  }
-
-  constexpr int totalTables =
-      static_cast<int>(sizeof(kDefaultDifficultyTableUrls) /
-                       sizeof(kDefaultDifficultyTableUrls[0]));
-  int successfulTables = 0;
-  bool allSucceeded = true;
-  DifficultyTableImporter importer;
-
-  for (int i = 0; i < totalTables; ++i) {
-    if (stopToken.stop_requested()) {
-      return;
-    }
-
-    const char *url = kDefaultDifficultyTableUrls[i];
-    setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02, i,
-                        totalTables, "Adding default difficulty tables");
-
-    std::string errorMessage;
-    const bool ok = importer.ImportFromUrl(
-        chartSession, url, &errorMessage,
-        [this, taskId, i, totalTables,
-         url](const DifficultyTableImportProgress &progress) {
-          std::string detail = progress.tableName.empty()
-                                   ? std::string(url)
-                                   : progress.tableName;
-          setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02,
-                              i + (progress.current > 0 ? 1 : 0), totalTables,
-                              "Adding default table: " + detail);
-        });
-    if (ok) {
-      ++successfulTables;
-    } else {
-      allSucceeded = false;
-      SDL_Log("Failed to import default difficulty table %s: %s", url,
-              errorMessage.empty() ? "unknown error" : errorMessage.c_str());
-    }
-  }
-
-  if (stopToken.stop_requested()) {
-    return;
-  }
-
-  if (allSucceeded) {
-    context.settings.defaultDifficultyTablesSeeded = true;
-    if (!context.saveSettings()) {
-      SDL_Log("Failed to save default difficulty table seed setting");
-    }
-  }
-  if (successfulTables > 0) {
-    requestLibraryReload(true);
-  }
-}
-
-void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
-                                          const std::stop_token &stopToken) {
-  auto taskSession = context.chartRepository.OpenSession();
-  if (!taskSession.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
-  }
-  taskSession->EnsureSchema();
-
-  auto pauseTask = [&]() {
-    return waitForLibraryTaskResume(task.id, stopToken);
-  };
-  if (!pauseTask()) {
-    return;
-  }
-
-  std::vector<ChartEntry> entries;
-  if (!task.folderToAdd.empty()) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.01, 0, 0,
-                        "Adding folder");
-    if (!taskSession->InsertEntry(task.folderToAdd, task.iosBookmark)) {
-      throw std::runtime_error("Failed to add folder");
-    }
-    requestLibraryReload(true);
-    entries.push_back({
-        .path = fspath_to_path_t(task.folderToAdd),
-        .iosBookmark = task.iosBookmark,
-    });
-  }
-
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
-                      "Importing difficulty tables");
-  if (!pauseTask()) {
-    return;
-  }
-  seedDefaultDifficultyTablesIfNeeded(*taskSession, task.id, stopToken);
-  if (stopToken.stop_requested() || !pauseTask()) {
-    return;
-  }
-  DifficultyTableImporter importer;
-  const int importedTables = importer.ImportFromDirectory(
-      *taskSession, Utils::GetDocumentsPath("tables"));
-  if (importedTables > 0 && !stopToken.stop_requested()) {
-    requestLibraryReload(true);
-  }
-  if (entries.empty()) {
-    entries = taskSession->SelectEffectiveEntries();
-  }
-  if (stopToken.stop_requested()) {
-    return;
-  }
-
-  if (entries.empty()) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.04, 0, 0,
-                        "Waiting for library folder");
-    if (!pauseTask()) {
-      return;
-    }
-    constexpr auto bootstrapMode =
-        main_menu_library::emptyLibraryBootstrapMode(TARGET_PLATFORM);
-    if constexpr (bootstrapMode ==
-                  main_menu_library::EmptyLibraryBootstrapMode::DefaultFolder) {
-      const auto path = ChartRepository::DefaultBmsFolderPath();
-      ensureLibraryFolderExists(path);
-      if (!taskSession->InsertEntry(path)) {
-        throw std::runtime_error("Failed to add default library folder");
-      }
-      entries = taskSession->SelectEffectiveEntries();
-      if (entries.empty()) {
-        throw std::runtime_error(
-            "Default library folder was not available after insertion");
-      }
-    } else {
-      char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
-      std::string folder;
-      if (folder_c == nullptr) {
-        std::cerr << "tinyfd_selectFolderDialog error: " << strerror(errno)
-                  << std::endl;
-        std::cout << "Failed to open folder select dialog.\n";
-
-        while (folder.empty()) {
-          if (stopToken.stop_requested()) {
-            return;
-          }
-
-          std::cout << "Enter bms folder path: ";
-          std::cin >> folder;
-          if (std::cin.eof() || std::cin.fail()) {
-            break;
-          }
-          if (folder.empty()) {
-            continue;
-          }
-
-          if (!expandCurrentUserHomeShortcut(folder)) {
-            std::cout
-                << "Could not expand ~ because no home directory is set.\n";
-            folder.clear();
-            continue;
-          }
-          std::ifstream test(folder);
-          if (!test) {
-            folder.clear();
-          }
-        }
-
-        if (folder.empty()) {
-          return;
-        }
-      } else {
-        folder = folder_c;
-      }
-      const std::filesystem::path path(folder);
-      if (!taskSession->InsertEntry(path)) {
-        throw std::runtime_error("Failed to add selected library folder");
-      }
-      entries = taskSession->SelectEffectiveEntries();
-    }
-  }
-
-  if (stopToken.stop_requested()) {
-    return;
-  }
-
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.06, 0, 0,
-                      "Refreshing folder access");
-  if (!pauseTask()) {
-    return;
-  }
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  RefreshIOSFolderAccess(entries);
-#endif
-  if (task.rebuildLibraryMetadata) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.08, 0, 0,
-                        "Clearing library caches");
-    if (!pauseTask()) {
-      return;
-    }
-    archive_file::appendDebugLogLine(
-        "Manual library rebuild requested; clearing chart metadata caches.");
-    if (!taskSession->ClearChartMeta()) {
-      throw std::runtime_error("Failed to clear chart metadata cache");
-    }
-    requestLibraryReload(true);
-  }
-  LoadCharts(
-      *taskSession, entries, *this, stopToken,
-      [this, taskId = task.id](const ChartScanProgress &progress) {
-        updateLibraryTaskProgress(taskId, progress);
-      },
-      [this, taskId = task.id, &stopToken]() {
-        return waitForLibraryTaskResume(taskId, stopToken);
-      });
-}
-
-void MainMenuScene::runDownloadedPathIndexTask(
-    const LibraryTaskRequest &task, const std::stop_token &stopToken) {
-  auto taskSession = context.chartRepository.OpenSession();
-  if (!taskSession.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
-  }
-  if (!taskSession->EnsureSchema()) {
-    throw std::runtime_error("Failed to prepare chart database");
-  }
-  if (!waitForLibraryTaskResume(task.id, stopToken)) {
-    return;
-  }
-
-  for (const auto &removedPath : task.downloadedRemovedPaths) {
-    if (taskSession->DeleteChartMetaInDirectory(removedPath) < 0) {
-      requestLibraryReload(true);
-      throw std::runtime_error(
-          "Failed to reconcile replaced Find BMS files");
-    }
-  }
-
-  auto entries =
-      main_menu_library::downloadedPathScanEntries(task.downloadedPath);
-  if (entries.empty()) {
-    throw std::runtime_error("Downloaded chart path is empty");
-  }
-  const ChartScanResult scanResult = LoadCharts(
-      *taskSession, entries, *this, stopToken,
-      [this, taskId = task.id](const ChartScanProgress &progress) {
-        updateLibraryTaskProgress(taskId, progress);
-      },
-      [this, taskId = task.id, &stopToken]() {
-        return waitForLibraryTaskResume(taskId, stopToken);
-      },
-      true, false);
-  if (stopToken.stop_requested()) {
-    return;
-  }
-  if (!scanResult.completed) {
-    requestLibraryReload(true);
-    throw std::runtime_error("Failed to index downloaded BMS charts");
-  }
-
-  std::optional<std::filesystem::path> chartPath;
-  if (scanResult.committed && task.downloadedTargetIdentity.valid()) {
-    const auto matches = taskSession->SelectChartMetaByHash(
-        task.downloadedTargetIdentity.sha256,
-        task.downloadedTargetIdentity.md5);
-    chartPath = main_menu_library::downloadedChartPath(
-        matches, task.downloadedPath, scanResult.upsertedChartPaths);
-  }
-  if (!main_menu_library::findBmsIndexTaskSucceeded(
-          task.downloadedTargetIdentity, scanResult.committed, chartPath)) {
-    requestLibraryReload(true);
-    throw std::runtime_error(
-        "Downloaded BMS target was not parsed and indexed");
-  }
-  if (chartPath.has_value()) {
-    std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
-    pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
-        .chartPath = *chartPath,
-        .targetIdentity = task.downloadedTargetIdentity,
-        .selectionGeneration = task.downloadedSelectionGeneration,
-    };
-  }
-  requestLibraryReload(true);
 }
 
 bool MainMenuScene::insertChartFolderEntryImmediately(
@@ -2321,8 +1527,11 @@ void MainMenuScene::importAndroidPathFromPicker(bool folderImport) {
 
         if (importPath.empty()) {
           createPendingAndroidImportTask(folderImport);
-        } else {
-          const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
+        } else if (context.chartLibraryTasks) {
+          const std::uint64_t id = context.chartLibraryTasks->reserve(
+              folderImport ? "Import Folder" : "Import Archive",
+              folderImport ? "Copying selected folder"
+                           : "Copying selected archive");
           enqueueAndroidImportTask(id, importPath, folderImport);
         }
       });
@@ -2354,15 +1563,17 @@ void MainMenuScene::pollPendingAndroidArchiveImport() {
         !pendingAndroidArchiveImportTasks.empty());
   }
   if (archivePath.has_value()) {
-    if (taskId == 0) {
-      taskId = nextLibraryTaskId.fetch_add(1);
+    if (taskId == 0 && context.chartLibraryTasks) {
+      taskId = context.chartLibraryTasks->reserve(
+          folderImport ? "Import Folder" : "Import Archive",
+          folderImport ? "Copying selected folder"
+                       : "Copying selected archive");
     }
     enqueueAndroidImportTask(taskId, *archivePath, folderImport);
   } else {
-    if (taskId != 0) {
-      setLibraryTaskState(taskId, LibraryTaskStatus::Failed, 0.0, 0, 0,
-                          errorMessage.empty() ? "Import failed"
-                                               : errorMessage);
+    if (taskId != 0 && context.chartLibraryTasks) {
+      context.chartLibraryTasks->failReserved(
+          taskId, errorMessage.empty() ? "Import failed" : errorMessage);
     }
     {
       std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
@@ -2389,116 +1600,6 @@ void MainMenuScene::applyPendingAndroidArchiveImport() {
   }
 }
 
-void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
-                                         const std::stop_token &stopToken) {
-  const std::filesystem::path importPath = task.androidImportPath;
-  if (importPath.empty()) {
-    throw std::runtime_error("Import failed: selected path is empty.");
-  }
-
-  std::error_code importPathError;
-  const bool importingFolder =
-      task.androidImportFolder ||
-      std::filesystem::is_directory(importPath, importPathError);
-  const std::string importType = importingFolder ? "folder" : "archive";
-  const std::filesystem::path outputRoot = ChartRepository::DefaultBmsFolderPath();
-
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
-                      "Preparing import");
-  archive_file::appendDebugLogLine(
-      "Android import task requested: " + fspath_to_utf8(importPath) +
-      " outputRoot=" + fspath_to_utf8(outputRoot));
-
-  auto postImportProgress = [this, &task,
-                             importingFolder](double fraction,
-                                              const std::string &message) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
-                        std::clamp(fraction, 0.0, 1.0), 0, 0,
-                        message.empty()
-                            ? (importingFolder ? "Importing folder"
-                                               : "Importing archive")
-                            : message);
-  };
-
-  std::string errorMessage;
-  std::error_code fsError;
-  if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
-    throw std::runtime_error("Import failed: could not create BMS import "
-                             "folder: " +
-                             fsError.message());
-  }
-
-  std::filesystem::path outputFolder;
-  if (importingFolder) {
-    outputFolder = importPath;
-    postImportProgress(0.90, "Refreshing library");
-  } else {
-    auto postUnzipProgress =
-        [&](const archive_file::UnzipProgress &progress) {
-          postImportProgress(progress.fraction * 0.90, progress.message);
-        };
-    const auto unzippedArchive = archive_file::unzipArchiveFully(
-        importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress);
-    if (unzippedArchive.has_value()) {
-      outputFolder = unzippedArchive->outputFolder;
-    }
-  }
-
-  if (outputFolder.empty()) {
-    throw std::runtime_error(
-        stopToken.stop_requested()
-            ? "Import cancelled"
-            : (errorMessage.empty() ? "Import failed"
-                                    : "Import failed: " + errorMessage));
-  }
-  if (stopToken.stop_requested()) {
-    throw std::runtime_error("Import cancelled");
-  }
-
-  auto importSession = context.chartRepository.OpenSession();
-  if (!importSession.has_value()) {
-    throw std::runtime_error("Imported " + importType +
-                             ". Failed to refresh library.");
-  }
-
-  importSession->EnsureSchema();
-  importSession->InsertEntry(outputRoot);
-
-  std::vector<std::filesystem::path> roots{outputFolder};
-  postImportProgress(0.92, "Refreshing library");
-  auto scanProgress = [this, &task](const ChartScanProgress &progress) {
-    const int total = std::max(0, progress.total);
-    const int current = total > 0 ? std::clamp(progress.current, 0, total)
-                                  : std::max(0, progress.current);
-    const double scanFraction =
-        total > 0 ? static_cast<double>(current) / std::max(1, total) : 0.0;
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
-                        0.92 + scanFraction * 0.08, current, total,
-                        chartScanProgressStageText(progress.stage));
-  };
-  auto pauseTask = [this, &task, &stopToken]() {
-    return waitForLibraryTaskResume(task.id, stopToken);
-  };
-  ChartLibraryScanner scanner;
-  const int changedCount = scanner.Scan(
-      *importSession, roots, &stopToken, scanProgress, pauseTask);
-  if (stopToken.stop_requested()) {
-    throw std::runtime_error("Import cancelled");
-  }
-
-  if (!importingFolder) {
-    std::filesystem::remove(importPath, fsError);
-  }
-  requestLibraryReload(true);
-  const std::string message =
-      changedCount > 0 ? "Imported " + importType + ". Library refreshed."
-                       : "Imported " + importType +
-                             ". Library already current.";
-  SDL_Log("Android import task result: %s", message.c_str());
-  archive_file::appendDebugLogLine(message);
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 1.0, 1, 1,
-                      message);
-}
 #endif
 
 void MainMenuScene::initView(ApplicationContext &context) {
@@ -2782,11 +1883,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
     return;
   }
   chartSession->EnsureSchema();
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  RefreshIOSFolderAccess(chartSession->SelectEffectiveEntries());
-#elif TARGET_OS_ANDROID
-  (void)chartSession->SelectEffectiveEntries();
-#endif
+  chart_library_platform::refreshFolderAccess(
+      chartSession->SelectEffectiveEntries());
 
   static constexpr int kChartListItemHeight = 108;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
@@ -4608,15 +3706,28 @@ int MainMenuScene::clearMarkCountForFolder(const std::string &key,
 
 void MainMenuScene::requestLibraryReload(bool includeFolders) {
   if (includeFolders) {
-    folderItemsReloadRequested = true;
+    context.chartLibraryFoldersReloadRequested = true;
   }
-  chartListReloadRequested = true;
+  context.chartLibraryListReloadRequested = true;
 }
 
 void MainMenuScene::applyPendingUiUpdates() {
+  if (context.chartLibraryTasks) {
+    for (auto &completion :
+         context.chartLibraryTasks->takeDownloadedIndexCompletions()) {
+      std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+      pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
+          .chartPath = std::move(completion.chartPath),
+          .targetIdentity = std::move(completion.targetIdentity),
+          .selectionGeneration = completion.selectionGeneration,
+      };
+    }
+  }
   const bool shouldOpenTasksModal = tasksModalOpenRequested.exchange(false);
-  const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
-  const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
+  const bool shouldReloadFolders =
+      context.chartLibraryFoldersReloadRequested.exchange(false);
+  const bool shouldReloadCharts =
+      context.chartLibraryListReloadRequested.exchange(false);
   std::optional<PendingFindBmsSelectionHandoff> findBmsHandoff;
   if (shouldReloadFolders || shouldReloadCharts) {
     std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
@@ -5355,8 +4466,10 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
 
 void MainMenuScene::startSelectedCourse() {
   if (willStart.load() || unzipInProgress.load() ||
-      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || recyclerView == nullptr ||
+      pendingSelectChartPath.has_value() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
+      recyclerView == nullptr ||
       activeFolder.type != LibraryFolderItem::Type::Course ||
       activeFolder.courseId <= 0) {
     return;
@@ -5558,8 +4671,10 @@ void MainMenuScene::startCourseDirect(
 
 void MainMenuScene::startSelectedChart() {
   if (willStart.load() || unzipInProgress.load() ||
-      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || recyclerView == nullptr) {
+      pendingSelectChartPath.has_value() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
+      recyclerView == nullptr) {
     return;
   }
 
@@ -5772,7 +4887,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 void MainMenuScene::openChartViewerForSelection() {
   if (willStart.load() || replayExportInProgress.load() ||
       unzipInProgress.load() || pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
       recyclerView == nullptr) {
     return;
   }
@@ -6043,7 +5159,8 @@ void MainMenuScene::refreshUnzipButtonForSelection(
 void MainMenuScene::startUnzipSelectedArchiveFolder() {
   if (willStart.load() || replayExportInProgress.load() ||
       unzipInProgress.load() || pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
       recyclerView == nullptr) {
     return;
   }
@@ -6061,8 +5178,9 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
   const bool fullArchiveUnzip =
       record.solidArchive && !archive_file::isVirtualPath(record.meta.BmsPath);
   if (willStart.load() || replayExportInProgress.load() ||
-      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || record.unavailable ||
+      pendingSelectChartPath.has_value() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() || record.unavailable ||
       record.meta.BmsPath.empty() || !fullArchiveUnzip) {
     return;
   }
@@ -6562,11 +5680,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
     return fallback;
   }
 
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return ResolveIOSFolderEntryPath(*selected);
-#else
-  return std::filesystem::path(selected->path);
-#endif
+  return chart_library_platform::resolveFolderEntryPath(*selected);
 }
 
 void MainMenuScene::buildParseLogModal() {
@@ -7382,39 +6496,34 @@ void MainMenuScene::refreshTasksModal() {
     return;
   }
 
-  std::uint64_t tasksRevision = 0;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    tasksRevision = libraryTasksRevision;
-  }
-  const LibraryTaskProgressSnapshot progressSnapshot =
-      readLibraryTaskProgress();
-  if (tasksRevision == displayedLibraryTasksRevision &&
-      progressSnapshot.revision == displayedLibraryProgressRevision) {
+  const auto snapshot = context.chartLibraryTasks
+                            ? context.chartLibraryTasks->snapshot()
+                            : chart_library_tasks::Snapshot{};
+  if (snapshot.revision == displayedLibraryTasksRevision &&
+      snapshot.progress.revision == displayedLibraryProgressRevision) {
     return;
   }
-  displayedLibraryTasksRevision = tasksRevision;
-  displayedLibraryProgressRevision = progressSnapshot.revision;
+  displayedLibraryTasksRevision = snapshot.revision;
+  displayedLibraryProgressRevision = snapshot.progress.revision;
   tasksText->setText(tasksModalTextSnapshot());
 }
 
 std::string MainMenuScene::tasksModalTextSnapshot() {
-  const LibraryTaskProgressSnapshot progressSnapshot =
-      readLibraryTaskProgress();
+  const auto snapshot = context.chartLibraryTasks
+                            ? context.chartLibraryTasks->snapshot()
+                            : chart_library_tasks::Snapshot{};
+  const LibraryTaskProgressSnapshot &progressSnapshot = snapshot.progress;
   std::vector<LibraryTaskInfo> activeTasks;
   std::vector<LibraryTaskInfo> recentTasks;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    activeTasks.reserve(libraryTasks.size());
-    recentTasks.reserve(libraryTasks.size());
-    for (const auto &task : libraryTasks) {
-      if (task.status == LibraryTaskStatus::Queued ||
-          task.status == LibraryTaskStatus::Running ||
-          task.status == LibraryTaskStatus::Paused) {
-        activeTasks.push_back(task);
-      } else {
-        recentTasks.push_back(task);
-      }
+  activeTasks.reserve(snapshot.tasks.size());
+  recentTasks.reserve(snapshot.tasks.size());
+  for (const auto &task : snapshot.tasks) {
+    if (task.status == LibraryTaskStatus::Queued ||
+        task.status == LibraryTaskStatus::Running ||
+        task.status == LibraryTaskStatus::Paused) {
+      activeTasks.push_back(task);
+    } else {
+      recentTasks.push_back(task);
     }
   }
 
@@ -11930,8 +11039,6 @@ void MainMenuScene::cleanupScene() {
   context.refreshProfileCaches = nullptr;
   context.requestAddChartFolderFromFiles = nullptr;
   context.requestRebuildChartLibrary = nullptr;
-  context.notifyBackgroundTaskPauseStateChanged = nullptr;
-  libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
     replayExportThread.request_stop();
@@ -11951,7 +11058,6 @@ void MainMenuScene::cleanupScene() {
   }
   archiveImportPickerInProgress = false;
 #endif
-  stopLibraryTaskWorker();
   if (findBmsThread.joinable()) {
     SDL_Log("Joining findBmsThread");
     findBmsCancelled = true;
@@ -11968,9 +11074,6 @@ void MainMenuScene::cleanupScene() {
     loadThread.join();
   }
   joinRetiredPreviewLoadThreads();
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  ClearIOSFolderAccess();
-#endif
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
   chartListCache.clear();
@@ -12180,20 +11283,6 @@ void MainMenuScene::cleanupScene() {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.clear();
-    libraryTasks.clear();
-    bumpLibraryTasksRevisionLocked();
-  }
-  libraryProgressRevision.store(0, std::memory_order_release);
-  libraryProgressTaskId.store(0, std::memory_order_relaxed);
-  libraryProgressCurrent.store(0, std::memory_order_relaxed);
-  libraryProgressTotal.store(0, std::memory_order_relaxed);
-  libraryProgressBasisPoints.store(0, std::memory_order_relaxed);
-  libraryProgressStage.store(
-      static_cast<int>(ChartScanProgressStage::Preparing),
-      std::memory_order_relaxed);
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
   displayedLibraryTasksButtonText.clear();
@@ -12224,53 +11313,6 @@ void MainMenuScene::cleanupScene() {
   lastSafeLeft = -1;
   lastSafeBottom = -1;
   lastSafeRight = -1;
-}
-
-ChartScanResult MainMenuScene::LoadCharts(
-    ChartRepository::Session &chartSession, std::vector<ChartEntry> &entries,
-    MainMenuScene &scene, const std::stop_token &stop_token,
-    ChartScanProgressCallback progressCallback,
-    ChartScanPauseCallback pauseCallback, bool addedPathsOnly,
-    bool requestReload) {
-  std::vector<std::filesystem::path> roots;
-  roots.reserve(entries.size());
-  for (auto &entry : entries) {
-    if (stop_token.stop_requested()) {
-      break;
-    }
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    roots.push_back(ResolveIOSFolderEntryPath(entry));
-#elif TARGET_OS_ANDROID
-    std::filesystem::path root(entry.path);
-    RegisterAndroidChartFolder(root, entry.iosBookmark);
-    roots.push_back(std::move(root));
-#else
-    roots.emplace_back(entry.path);
-#endif
-  }
-
-  if (stop_token.stop_requested()) {
-    return {};
-  }
-
-  SDL_Log("Refreshing chart library");
-  ChartLibraryScanner scanner;
-  const ChartScanResult result =
-      addedPathsOnly
-          ? scanner.ScanAddedWithResult(chartSession, roots, &stop_token,
-                                        progressCallback, pauseCallback)
-          : scanner.ScanWithResult(
-                chartSession, roots, &stop_token, progressCallback,
-                pauseCallback,
-                [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
-                [&scene](std::uint64_t request) {
-                  scene.completeLibraryScanFlush(request);
-                });
-  SDL_Log("Chart library refresh changed %d entries", result.changedCount);
-  if (requestReload && !stop_token.stop_requested()) {
-    scene.requestLibraryReload(true);
-  }
-  return result;
 }
 
 #ifdef _WIN32

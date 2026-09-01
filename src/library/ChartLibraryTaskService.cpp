@@ -113,6 +113,61 @@ std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
   return id;
 }
 
+std::uint64_t ChartLibraryTaskService::reserve(std::string title,
+                                               std::string detail) {
+  std::lock_guard lock(stateMutex_);
+  const std::uint64_t id = nextTaskId_++;
+  tasks_.push_back(TaskInfo{
+      .id = id,
+      .title = std::move(title),
+      .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
+      .detail = gameplayPaused_ ? "Paused" : std::move(detail),
+  });
+  trimHistoryLocked();
+  bumpRevisionLocked();
+  return id;
+}
+
+bool ChartLibraryTaskService::enqueueReserved(std::uint64_t id,
+                                              TaskRequest request) {
+  {
+    std::lock_guard lock(stateMutex_);
+    TaskInfo *task = findTaskLocked(id);
+    if (task == nullptr) {
+      return false;
+    }
+    request.id = id;
+    task->title = request.title;
+    task->status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued;
+    task->fraction = 0.0;
+    task->current = 0;
+    task->total = 0;
+    task->detail = gameplayPaused_ ? "Paused" : "Waiting";
+    queue_.push_back(std::move(request));
+    bumpRevisionLocked();
+  }
+  start();
+  workAvailable_.notify_one();
+  return true;
+}
+
+bool ChartLibraryTaskService::failReserved(std::uint64_t id,
+                                           std::string detail) {
+  std::lock_guard lock(stateMutex_);
+  TaskInfo *task = findTaskLocked(id);
+  if (task == nullptr) {
+    return false;
+  }
+  task->status = TaskStatus::Failed;
+  task->fraction = 0.0;
+  task->current = 0;
+  task->total = 0;
+  task->detail = std::move(detail);
+  trimHistoryLocked();
+  bumpRevisionLocked();
+  return true;
+}
+
 Snapshot ChartLibraryTaskService::snapshot() const {
   std::lock_guard lock(stateMutex_);
   return Snapshot{.revision = revision_,

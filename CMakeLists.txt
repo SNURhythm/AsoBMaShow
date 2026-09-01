@@ -3730,6 +3730,55 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(chart_library_task_service_tests PRIVATE cxx_std_23)
 
+    add_executable(chart_library_operations_tests
+        tests/chart_library_operations_tests.cpp
+        src/library/ChartLibraryOperations.cpp
+        src/library/ChartLibraryPlatform.cpp
+        src/scene/MainMenuLibrary.cpp
+        src/DifficultyTableImporter.cpp
+        src/ChartLibraryScanner.cpp
+        src/ChartScanWorkScheduler.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_library_operations_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_library_operations_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(chart_library_operations_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(chart_library_operations_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(chart_library_operations_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(chart_meta_index_order_tests
         tests/chart_meta_index_order_tests.cpp
         src/sqlite3.c
@@ -6886,6 +6935,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_record_filters_tests
         main_menu_library_tests
         chart_library_task_service_tests
+        chart_library_operations_tests
         chart_meta_index_order_tests
         score_cache_query_tests
         app_database_initializer_tests

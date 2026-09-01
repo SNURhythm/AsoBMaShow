@@ -30,6 +30,11 @@
 #include "repositories/ScoreRepository.h"
 #include "replay/ChartReplayPersistence.h"
 #include "replay/CourseResultPersistence.h"
+#include "library/ChartLibraryOperations.h"
+#include "library/ChartLibraryPlatform.h"
+#include "library/ChartLibraryTaskService.h"
+#include "path.h"
+#include "targets.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -160,6 +165,14 @@ public:
   ScoreRepository scoreRepository;
   ReplayRepository replayRepository;
   MusicPlaylistRepository musicPlaylistRepository;
+  std::unique_ptr<chart_library_tasks::ChartLibraryOperations>
+      chartLibraryOperations;
+  std::unique_ptr<chart_library_tasks::ChartLibraryTaskService>
+      chartLibraryTasks;
+  std::atomic_bool chartLibraryFoldersReloadRequested = false;
+  std::atomic_bool chartLibraryListReloadRequested = false;
+  std::atomic<std::uint64_t> chartLibraryScanFlushRequested{0};
+  std::atomic<std::uint64_t> chartLibraryScanFlushCompleted{0};
   std::shared_ptr<ir::tachi::BokutachiCacheStore> bokutachiCacheStore;
   ir::IrDriverRegistry irDrivers;
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
@@ -549,6 +562,76 @@ public:
     profileSettingsPersistenceCoordinator =
         std::make_unique<ProfileSettingsPersistenceCoordinator>(profileManager,
                                                                 settings);
+    chartLibraryOperations =
+        std::make_unique<chart_library_tasks::ChartLibraryOperations>(
+            chart_library_tasks::ChartLibraryOperationsDependencies{
+                .repository = chartRepository,
+                .tablesDirectory = Utils::GetDocumentsPath("tables"),
+                .defaultDifficultyTablesSeeded =
+                    [this] { return settings.defaultDifficultyTablesSeeded; },
+                .setDefaultDifficultyTablesSeeded = [this](bool seeded) {
+                  settings.defaultDifficultyTablesSeeded = seeded;
+                },
+                .saveSettings = [this] { return saveSettings(); },
+                .requestReload = [this](bool includeFolders) {
+                  if (includeFolders) {
+                    chartLibraryFoldersReloadRequested = true;
+                  }
+                  chartLibraryListReloadRequested = true;
+                },
+                .selectInitialFolder = []()
+                    -> std::optional<std::filesystem::path> {
+                  constexpr auto bootstrapMode =
+                      main_menu_library::emptyLibraryBootstrapMode(
+                          TARGET_PLATFORM);
+                  if constexpr (
+                      bootstrapMode ==
+                      main_menu_library::EmptyLibraryBootstrapMode::
+                          DefaultFolder) {
+                    const auto path = ChartRepository::DefaultBmsFolderPath();
+                    std::error_code error;
+                    if (!Utils::EnsureDirectoryExists(path, error)) {
+                      throw std::runtime_error(
+                          "Could not create library folder '" +
+                          fspath_to_utf8(path) + "': " + error.message());
+                    }
+                    return path;
+                  }
+                  return std::nullopt;
+                },
+                .pendingScanFlushRequest = [this] {
+                  const std::uint64_t requested =
+                      chartLibraryScanFlushRequested.load(
+                          std::memory_order_acquire);
+                  const std::uint64_t completed =
+                      chartLibraryScanFlushCompleted.load(
+                          std::memory_order_acquire);
+                  return requested > completed ? requested : 0;
+                },
+                .completeScanFlush = [this](std::uint64_t request) {
+                  if (request == 0) {
+                    return;
+                  }
+                  std::uint64_t completed =
+                      chartLibraryScanFlushCompleted.load(
+                          std::memory_order_relaxed);
+                  while (completed < request &&
+                         !chartLibraryScanFlushCompleted.compare_exchange_weak(
+                             completed, request, std::memory_order_release,
+                             std::memory_order_relaxed)) {
+                  }
+                  chartLibraryFoldersReloadRequested = true;
+                  chartLibraryListReloadRequested = true;
+                },
+            });
+    chartLibraryTasks =
+        std::make_unique<chart_library_tasks::ChartLibraryTaskService>(
+            [this](const auto &request, const auto &stopToken, auto progress,
+                   auto waitForResume) {
+              return chartLibraryOperations->run(
+                  request, stopToken, std::move(progress),
+                  std::move(waitForResume));
+            });
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     initializeGameplaySkinServices();
 #endif
@@ -579,6 +662,10 @@ public:
           }
           if (profileArchiveOperationActive.load(std::memory_order_acquire)) {
             return "A profile archive operation is active.";
+          }
+          if (chartLibraryTasks &&
+              chartLibraryTasks->snapshot().activeCount > 0) {
+            return "A chart library scan or import is active.";
           }
           if (replayVideoExportActive.load(std::memory_order_acquire)) {
             return "A replay export is active.";
@@ -1314,6 +1401,10 @@ public:
 
   ~ApplicationContext() {
     quitFlag = true;
+    if (chartLibraryTasks) {
+      chartLibraryTasks->shutdown();
+    }
+    chart_library_platform::clearFolderAccess();
     std::string musicStopError;
     musicPlayer.Stop(musicStopError);
     std::cout << "Waiting for threads to join..." << std::endl;

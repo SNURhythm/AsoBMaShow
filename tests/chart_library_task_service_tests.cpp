@@ -310,6 +310,45 @@ void testFailuresCompletionsAndHistoryRemainObservable() {
   service.shutdown();
 }
 
+void testReservedPlatformCopyTaskCanBeQueuedOrFailed() {
+  chart_library_tasks::ChartLibraryTaskService service(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+
+  const auto queuedId = service.reserve("Import Archive", "Copying archive");
+  const auto reserved = service.snapshot();
+  expect(taskFor(reserved, queuedId) != nullptr &&
+             taskFor(reserved, queuedId)->status ==
+                 chart_library_tasks::TaskStatus::Running &&
+             taskFor(reserved, queuedId)->detail == "Copying archive",
+         "platform copy reservation is visible as active work");
+  expect(service.enqueueReserved(
+             queuedId,
+             {.kind = chart_library_tasks::TaskKind::AndroidImport,
+              .title = "Import Archive",
+              .androidImportPath = "copied.zip"}),
+         "reserved platform copy can enter the worker queue");
+  expect(waitUntil([&] {
+           const auto current = service.snapshot();
+           const auto *row = taskFor(current, queuedId);
+           return row != nullptr &&
+                  row->status == chart_library_tasks::TaskStatus::Complete;
+         }),
+         "queued reservation completes with its original task ID");
+
+  const auto failedId = service.reserve("Import Folder", "Copying folder");
+  expect(service.failReserved(failedId, "Folder import cancelled."),
+         "reserved platform copy can publish a failure");
+  const auto failed = service.snapshot();
+  expect(taskFor(failed, failedId) != nullptr &&
+             taskFor(failed, failedId)->status ==
+                 chart_library_tasks::TaskStatus::Failed &&
+             taskFor(failed, failedId)->detail == "Folder import cancelled.",
+         "failed reservation retains the platform error");
+  service.shutdown();
+}
+
 } // namespace
 
 int main() {
@@ -318,6 +357,7 @@ int main() {
   testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume();
   testProgressUpdatesTaskRowAndProgressSnapshotTogether();
   testFailuresCompletionsAndHistoryRemainObservable();
+  testReservedPlatformCopyTaskCanBeQueuedOrFailed();
   if (failures != 0) {
     std::cerr << failures << " chart library task test(s) failed\n";
     return EXIT_FAILURE;

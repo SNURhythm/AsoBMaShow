@@ -34,6 +34,9 @@ void SceneManager::updateBackgroundTaskPauseState() {
   const bool changed =
       context.backgroundTasksPausedForForegroundScene.exchange(shouldPause) !=
       shouldPause;
+  if (context.chartLibraryTasks) {
+    context.chartLibraryTasks->setGameplayPaused(shouldPause);
+  }
   if (changed && context.notifyBackgroundTaskPauseStateChanged) {
     context.notifyBackgroundTaskPauseStateChanged();
   }

@@ -1,6 +1,8 @@
 #pragma once
 #include "../BmsSearchService.h"
 #include "../ChartLibraryScanner.h"
+#include "../library/ChartLibraryPlatform.h"
+#include "../library/ChartLibraryTaskService.h"
 #include "../view/RecyclerView.h"
 #include "ChartFilterSortPanelView.h"
 #include "Scene.h"
@@ -90,7 +92,6 @@ private:
   std::mutex retiredPreviewLoadThreadsMutex;
   std::mutex previewJukeboxLoadMutex;
   bool pendingStopAndClearSelectedChartAfterPreview = false;
-  std::jthread checkEntriesThread;
   std::jthread addFolderPickerThread;
   std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
@@ -102,8 +103,6 @@ private:
   std::atomic_bool replayLoadInProgress = false;
   std::jthread replayExportThread;
   std::jthread unzipThread;
-  std::atomic_bool folderItemsReloadRequested = false;
-  std::atomic_bool chartListReloadRequested = false;
   bool prioritizeVisibleArtworkBindings = false;
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
@@ -113,74 +112,13 @@ private:
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool addFolderPickerInProgress = false;
   std::atomic_bool archiveImportPickerInProgress = false;
-  std::atomic_bool libraryTaskWorkerPaused = false;
   std::atomic_bool tasksModalOpenRequested = false;
-  enum class LibraryTaskStatus {
-    Queued,
-    Running,
-    Complete,
-    Failed,
-    Paused,
-  };
-  enum class LibraryTaskKind {
-    RefreshLibrary,
-    IndexDownloadedPath,
-    AndroidImport,
-  };
-  struct LibraryTaskRequest {
-    std::uint64_t id = 0;
-    LibraryTaskKind kind = LibraryTaskKind::RefreshLibrary;
-    std::string title;
-    std::filesystem::path folderToAdd;
-    std::string iosBookmark;
-    std::filesystem::path downloadedPath;
-    std::vector<std::filesystem::path> downloadedRemovedPaths;
-    main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;
-    std::uint64_t downloadedSelectionGeneration = 0;
-    std::filesystem::path androidImportPath;
-    bool androidImportFolder = false;
-    bool rebuildLibraryMetadata = false;
-  };
-  struct LibraryTaskInfo {
-    std::uint64_t id = 0;
-    std::string title;
-    LibraryTaskStatus status = LibraryTaskStatus::Queued;
-    double fraction = 0.0;
-    int current = 0;
-    int total = 0;
-    std::string detail;
-  };
-  std::deque<LibraryTaskRequest> libraryTaskQueue;
-  std::vector<LibraryTaskInfo> libraryTasks;
-  std::mutex libraryTaskMutex;
-  std::mutex libraryTaskWorkerMutex;
-  std::mutex libraryTaskPauseMutex;
-  std::condition_variable_any libraryTaskCv;
-  std::condition_variable_any libraryTaskPauseCv;
-  std::atomic<std::uint64_t> nextLibraryTaskId{1};
-  std::uint64_t libraryTasksRevision = 0;
-  std::atomic<int> libraryActiveTaskCount{0};
+  using LibraryTaskStatus = chart_library_tasks::TaskStatus;
+  using LibraryTaskInfo = chart_library_tasks::TaskInfo;
+  using LibraryTaskProgressSnapshot = chart_library_tasks::ProgressSnapshot;
   std::uint64_t displayedLibraryTasksRevision = 0;
-  std::atomic<std::uint64_t> libraryProgressRevision{0};
-  std::atomic<std::uint64_t> libraryProgressTaskId{0};
-  std::atomic<int> libraryProgressCurrent{0};
-  std::atomic<int> libraryProgressTotal{0};
-  std::atomic<int> libraryProgressBasisPoints{0};
-  std::atomic<int> libraryProgressStage{
-      static_cast<int>(ChartScanProgressStage::Preparing)};
-  std::atomic<std::uint64_t> libraryScanFlushRequested{0};
-  std::atomic<std::uint64_t> libraryScanFlushCompleted{0};
   std::uint64_t displayedLibraryProgressRevision = 0;
   std::string displayedLibraryTasksButtonText;
-  struct LibraryTaskProgressSnapshot {
-    bool valid = false;
-    std::uint64_t revision = 0;
-    std::uint64_t taskId = 0;
-    int current = 0;
-    int total = 0;
-    int basisPoints = 0;
-    ChartScanProgressStage stage = ChartScanProgressStage::Preparing;
-  };
   struct SelectedChartRandomInfo {
     std::optional<unsigned int> seed;
     std::optional<std::string> prng;
@@ -642,14 +580,6 @@ private:
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
   void startLibraryRebuild();
-  void startLibraryTaskWorker();
-  void stopLibraryTaskWorker();
-  void pauseLibraryTaskWorker();
-  void resumeLibraryTaskWorker();
-  void syncLibraryTaskPauseStateWithForegroundScene();
-  bool waitForLibraryTaskResume(std::uint64_t id,
-                                const std::stop_token &stopToken);
-  void enqueueLibraryTask(LibraryTaskRequest task);
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
@@ -666,31 +596,9 @@ private:
                                 const std::filesystem::path &importPath,
                                 bool folderImport);
 #endif
-  void libraryTaskLoop(const std::stop_token &stopToken);
-  void runLibraryRefreshTask(const LibraryTaskRequest &task,
-                             const std::stop_token &stopToken);
-  void runDownloadedPathIndexTask(const LibraryTaskRequest &task,
-                                  const std::stop_token &stopToken);
-#if TARGET_OS_ANDROID
-  void runAndroidImportTask(const LibraryTaskRequest &task,
-                            const std::stop_token &stopToken);
-#endif
-  void seedDefaultDifficultyTablesIfNeeded(
-      ChartRepository::Session &chartSession, std::uint64_t taskId,
-      const std::stop_token &stopToken);
-  static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
-  static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
-  void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
-                           double fraction, int current, int total,
-                           const std::string &detail);
-  void bumpLibraryTasksRevisionLocked();
-  void updateLibraryTaskProgress(std::uint64_t id,
-                                 const ChartScanProgress &progress);
   LibraryTaskProgressSnapshot readLibraryTaskProgress() const;
   int activeLibraryTaskCount();
   void requestLibraryScanFlush();
-  std::uint64_t pendingLibraryScanFlushRequest() const;
-  void completeLibraryScanFlush(std::uint64_t request);
   void refreshTasksButton();
   bool insertChartFolderEntryImmediately(
       const std::filesystem::path &folderPath,
@@ -922,13 +830,6 @@ private:
   void pollPendingAndroidArchiveImport();
   void applyPendingAndroidArchiveImport();
 #endif
-  static ChartScanResult
-  LoadCharts(ChartRepository::Session &chartSession,
-             std::vector<ChartEntry> &entries, MainMenuScene &scene,
-             const std::stop_token &stop_token,
-             ChartScanProgressCallback progressCallback = nullptr,
-             ChartScanPauseCallback pauseCallback = nullptr,
-             bool addedPathsOnly = false, bool requestReload = true);
   enum DiffType { Deleted, Added };
   struct Diff {
     std::filesystem::path path;

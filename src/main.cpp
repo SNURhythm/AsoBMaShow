@@ -776,6 +776,12 @@ static void reportResultRecoveryWarning(
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
+  if (context.chartLibraryTasks) {
+    context.chartLibraryTasks->start();
+    context.chartLibraryTasks->enqueue(
+        {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+         .title = "Refresh Library"});
+  }
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
