@@ -184,6 +184,38 @@ std::size_t startIndex(const auto &values, std::string_view selected) {
 
 } // namespace
 
+int musicSelectFirstExistingReplay(const MusicSelectBar *bar) noexcept {
+  if (bar != nullptr && bar->selectable) {
+    for (std::size_t index = 0; index < bar->replayExists.size(); ++index) {
+      if (bar->replayExists[index]) return static_cast<int>(index);
+    }
+  }
+  return -1;
+}
+
+int musicSelectNextExistingReplay(const MusicSelectBar *bar,
+                                  int selected) noexcept {
+  if (bar != nullptr && bar->selectable) {
+    for (int offset = 1;
+         offset < static_cast<int>(bar->replayExists.size()); ++offset) {
+      const int index =
+          (offset + selected) % static_cast<int>(bar->replayExists.size());
+      if (index >= 0 && bar->replayExists[static_cast<std::size_t>(index)]) {
+        return index;
+      }
+    }
+  }
+  return selected;
+}
+
+std::string musicSelectSelectedHash(const MusicSelectBar *bar, bool sha256) {
+  if (bar == nullptr || bar->kind != skin::MusicSelectBarKind::Song ||
+      !bar->chart) {
+    return {};
+  }
+  return sha256 ? bar->chart->meta.SHA256 : bar->chart->meta.MD5;
+}
+
 MusicSelectBarManager::MusicSelectBarManager(MusicSelectProjection projection,
                                              MusicSelectBarManagerConfig config)
     : projection_(std::move(projection)), config_(std::move(config)) {
@@ -263,16 +295,54 @@ bool MusicSelectBarManager::openSelected() {
   const auto *bar = selected();
   if (bar == nullptr || bar->children.empty()) return false;
   const MusicSelectBarId id = bar->id;
+  sourceBars_.push_back(id);
   directory_.push_back(id);
   rebuildRows();
   return true;
 }
 
+bool MusicSelectBarManager::openTransient(
+    MusicSelectBar directory, std::vector<MusicSelectBar> children) {
+  const auto *source = selected();
+  if (source == nullptr) return false;
+  const MusicSelectBarId sourceId = source->id;
+  const MusicSelectBarId directoryId = directory.id;
+  const bool hasChild = std::ranges::any_of(
+      directory.children, [&](const MusicSelectBarId &id) {
+        return projection_.find(id) != nullptr ||
+               std::ranges::find(children, id, &MusicSelectBar::id) !=
+                   children.end();
+      });
+  if (!hasChild) return false;
+  for (auto &child : children) {
+    const auto found = std::ranges::find(projection_.bars, child.id,
+                                         &MusicSelectBar::id);
+    if (found == projection_.bars.end()) {
+      projection_.bars.push_back(std::move(child));
+    } else {
+      *found = std::move(child);
+    }
+  }
+  const auto found = std::ranges::find(projection_.bars, directoryId,
+                                       &MusicSelectBar::id);
+  if (found == projection_.bars.end()) {
+    projection_.bars.push_back(std::move(directory));
+  } else {
+    *found = std::move(directory);
+  }
+  sourceBars_.push_back(sourceId);
+  directory_.push_back(directoryId);
+  rebuildRows();
+  return !rows_.empty();
+}
+
 bool MusicSelectBarManager::close() {
   if (directory_.empty()) return false;
-  const MusicSelectBarId closed = directory_.back();
+  const MusicSelectBarId source =
+      sourceBars_.empty() ? directory_.back() : sourceBars_.back();
   directory_.pop_back();
-  rebuildRows(closed);
+  if (!sourceBars_.empty()) sourceBars_.pop_back();
+  rebuildRows(source);
   return true;
 }
 
@@ -306,13 +376,14 @@ void MusicSelectBarManager::refresh(MusicSelectProjection projection) {
   std::optional<MusicSelectBarId> preferred;
   if (const auto *bar = selected()) preferred = bar->id;
   projection_ = std::move(projection);
-  directory_.erase(
-      std::remove_if(directory_.begin(), directory_.end(),
-                     [this](const auto &id) {
-                       const auto *bar = projection_.find(id);
-                       return bar == nullptr || bar->children.empty();
-                     }),
-      directory_.end());
+  for (std::size_t index = 0; index < directory_.size(); ++index) {
+    const auto *bar = projection_.find(directory_[index]);
+    if (bar == nullptr || bar->children.empty()) {
+      directory_.resize(index);
+      sourceBars_.resize(std::min(sourceBars_.size(), index));
+      break;
+    }
+  }
   rebuildRows(preferred);
 }
 

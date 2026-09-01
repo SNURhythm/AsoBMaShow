@@ -49,6 +49,8 @@ private:
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
   void openSelected();
+  void openSameFolder();
+  void copySelectedHash(bool sha256);
   void closeDirectory();
   void enterError(std::vector<skin::SkinDiagnostic>);
   void buildErrorView();

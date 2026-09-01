@@ -288,7 +288,12 @@ std::int64_t MusicSelectScene::elapsedMicros() const {
 }
 
 void MusicSelectScene::selectedBarMoved() {
-  selectedReplay_ = -1;
+  const auto snapshot = bars_.snapshot();
+  selectedReplay_ =
+      snapshot.selectedIndex < snapshot.rows.size()
+          ? musicSelectFirstExistingReplay(
+                &snapshot.rows[snapshot.selectedIndex])
+          : -1;
   songBarChangeMicros_ = elapsedMicros();
 }
 
@@ -446,6 +451,67 @@ void MusicSelectScene::openSelected() {
     selectedBarMoved();
   } else if (selected.chart) {
     launchSelected();
+  }
+}
+
+void MusicSelectScene::openSameFolder() {
+  if (!chartSession_) return;
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+
+  const auto folder = selected.chart->meta.Folder.empty()
+                          ? selected.chart->meta.BmsPath.parent_path()
+                          : selected.chart->meta.Folder;
+  std::vector<ChartMetaRecord> records;
+  ChartMetaQuery query;
+  query.exactFolder = folder;
+  query.selectedLongNoteMode =
+      long_note_mode::valueFromId(context.settings.selectedLnMode);
+  chartSession_->QueryChartMeta(query, records);
+  auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = records,
+       .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
+         return scoreCache_.bestFor(meta, mode);
+       },
+       .selectedLongNoteMode = query.selectedLongNoteMode,
+       .repositoryRevision = libraryRevision_});
+  std::vector<MusicSelectBar> children;
+  std::vector<MusicSelectBarId> childIds;
+  for (auto &bar : projection.bars) {
+    if (bar.kind == skin::MusicSelectBarKind::Song) {
+      childIds.push_back(bar.id);
+      children.push_back(std::move(bar));
+    }
+  }
+  MusicSelectBar directory{
+      .id = {"same-folder:" + selected.id.value},
+      .kind = skin::MusicSelectBarKind::SameFolder,
+      .title = selected.title,
+      .children = std::move(childIds),
+      .presentation = {.kind = skin::MusicSelectBarKind::SameFolder,
+                       .title = selected.title,
+                       .exists = true},
+  };
+  if (bars_.openTransient(std::move(directory), std::move(children))) {
+    syncResolvedFilters();
+    selectedBarMoved();
+  }
+}
+
+void MusicSelectScene::copySelectedHash(bool sha256) {
+  const auto snapshot = bars_.snapshot();
+  const MusicSelectBar *selected =
+      snapshot.selectedIndex < snapshot.rows.size()
+          ? &snapshot.rows[snapshot.selectedIndex]
+          : nullptr;
+  const std::string hash = musicSelectSelectedHash(selected, sha256);
+  if (!hash.empty() && SDL_SetClipboardText(hash.c_str()) != 0) {
+    SDL_Log("Unable to copy selected chart hash: %s", SDL_GetError());
   }
 }
 
@@ -644,6 +710,26 @@ void MusicSelectScene::applyInputAction(
     break;
   case MusicSelectInputActionKind::CloseFolder:
     closeDirectory();
+    break;
+  case MusicSelectInputActionKind::CommandNextReplay: {
+    const auto snapshot = bars_.snapshot();
+    if (snapshot.selectedIndex < snapshot.rows.size()) {
+      selectedReplay_ = musicSelectNextExistingReplay(
+          &snapshot.rows[snapshot.selectedIndex], selectedReplay_);
+    }
+    break;
+  }
+  case MusicSelectInputActionKind::CommandSameFolder:
+    openSameFolder();
+    break;
+  case MusicSelectInputActionKind::CopyMd5:
+    copySelectedHash(false);
+    break;
+  case MusicSelectInputActionKind::CopySha256:
+    copySelectedHash(true);
+    break;
+  case MusicSelectInputActionKind::SelectedBarMoved:
+    selectedBarMoved();
     break;
   case MusicSelectInputActionKind::ToggleCustomJudge:
     context.settings.customJudge = !context.settings.customJudge;

@@ -75,6 +75,58 @@ void testRefreshRebindsStableSelection() {
           "revision replacement rebinds selection by stable bar identity");
 }
 
+void testReplayAndHashCommandsUseSelectableSongState() {
+  MusicSelectBar song{
+      .kind = skin::MusicSelectBarKind::Song,
+      .chart = ChartMetaRecord{},
+      .replayExists = {false, true, false, true},
+      .selectable = true,
+  };
+  song.chart->meta.MD5 = "md5";
+  song.chart->meta.SHA256 = "sha256";
+  require(musicSelectFirstExistingReplay(&song) == 1 &&
+              musicSelectNextExistingReplay(&song, 1) == 3 &&
+              musicSelectNextExistingReplay(&song, 3) == 1,
+          "replay commands scan only the four existing source slots");
+  require(musicSelectSelectedHash(&song, false) == "md5" &&
+              musicSelectSelectedHash(&song, true) == "sha256",
+          "hash commands read only SongBar chart hashes");
+  song.replayExists = {};
+  require(musicSelectFirstExistingReplay(&song) == -1 &&
+              musicSelectNextExistingReplay(&song, -1) == -1,
+          "missing replay slots retain the source -1 selection");
+  song.kind = skin::MusicSelectBarKind::Folder;
+  require(musicSelectSelectedHash(&song, true).empty(),
+          "non-SongBar hashes are inert");
+}
+
+void testTransientDirectoryRestoresItsSourceBar() {
+  MusicSelectBarManager manager(fixture());
+  require(manager.openSelected(), "transient fixture opens its root folder");
+  manager.move(true, 0, 0);
+  require(manager.snapshot().rows[manager.snapshot().selectedIndex].id.value ==
+              "song:2",
+          "transient fixture selects its source song");
+
+  MusicSelectBar sameFolder{
+      .id = {"same-folder:song:2"},
+      .kind = skin::MusicSelectBarKind::SameFolder,
+      .title = "Two",
+      .children = {{"song:1"}, {"song:2"}},
+      .presentation = {.kind = skin::MusicSelectBarKind::SameFolder,
+                       .title = "Two",
+                       .exists = true},
+  };
+  require(manager.openTransient(std::move(sameFolder), {}),
+          "SameFolderBar opens from the current song");
+  require(manager.snapshot().rows.size() == 2 &&
+              manager.snapshot().directoryText == "A > Two > ",
+          "temporary directory participates in the source directory text");
+  require(manager.close() && manager.snapshot().selectedIndex == 1 &&
+              manager.snapshot().rows[1].id.value == "song:2",
+          "closing a temporary directory restores its source song");
+}
+
 void testPinnedFilterFallbackAndSort() {
   auto projection = fixture();
   auto *first = const_cast<MusicSelectBar *>(projection.find({"song:1"}));
@@ -153,6 +205,8 @@ void testPinnedFilterFallbackAndSort() {
 int main() {
   testWrapOpenCloseAndPositionSemantics();
   testRefreshRebindsStableSelection();
+  testReplayAndHashCommandsUseSelectableSongState();
+  testTransientDirectoryRestoresItsSourceBar();
   testPinnedFilterFallbackAndSort();
   if (failures != 0) return 1;
   std::cout << "music-select bar manager tests passed\n";
