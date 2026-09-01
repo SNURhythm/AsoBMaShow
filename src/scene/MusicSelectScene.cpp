@@ -12,7 +12,9 @@
 #include "../PlayOptionUtils.h"
 #include "../audio/Jukebox.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
+#include "../music_select/MusicSelectReplaySlots.h"
 #include "../music_select/MusicSelectPropertyProjection.h"
+#include "../replay/ChartReplayConsumer.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
@@ -276,6 +278,11 @@ void MusicSelectScene::reloadLibrary() {
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
          return scoreCache_.bestFor(meta, mode);
+       },
+       .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
+         return musicSelectExistingChartReplaySlots(
+             record, mode,
+             context.replayRepository.GetResolvedProfileRoot());
        },
        .courseRankFor = [this](std::string_view courseKey, int courseId,
                                int mode) {
@@ -735,6 +742,77 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       true);
 }
 
+void MusicSelectScene::launchSelectedReplay(int slot) {
+  if (launching_ || slot < 0 || slot >= 4) return;
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size() ||
+      !snapshot.rows[snapshot.selectedIndex].chart) {
+    return;
+  }
+  const auto record = *snapshot.rows[snapshot.selectedIndex].chart;
+  const int lnMode =
+      long_note_mode::valueFromId(context.settings.selectedLnMode);
+  const auto paths = musicSelectChartReplaySlotPaths(record, lnMode);
+  if (!paths) return;
+  const auto &slotPath = (*paths)[static_cast<std::size_t>(slot)];
+  std::error_code existsError;
+  if (!std::filesystem::exists(
+          context.replayRepository.GetResolvedProfileRoot() /
+              slotPath.relativePath,
+          existsError)) {
+    return;
+  }
+
+  const auto inventory =
+      context.replayRepository.ListModernReplayFileReferences();
+  if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
+    SDL_Log("Unable to read replay slot inventory: %s",
+            inventory.diagnostic.c_str());
+    return;
+  }
+  const auto resultId =
+      musicSelectChartReplayResultId(inventory.entries, slotPath);
+  if (!resultId) return;
+  auto stored = context.replayRepository.LoadModernChartResult(*resultId);
+  if (stored.status != ModernChartResultReadStatus::Loaded || !stored.record) {
+    SDL_Log("Unable to read replay slot result: %s", stored.diagnostic.c_str());
+    return;
+  }
+
+  launching_ = true;
+  std::atomic_bool cancelled = false;
+  auto consumer =
+      replay::makeRuntimeChartReplayConsumer(context.replayRepository);
+  auto loaded = consumer.load(*stored.record, record.meta.BmsPath, cancelled);
+  if (!loaded.ready() || cancelled) {
+    SDL_Log("Unable to prepare replay slot: %s", loaded.diagnostic.c_str());
+    launching_ = false;
+    return;
+  }
+  context.jukebox.stop();
+  context.jukebox.loadChart(*loaded.chart, true, cancelled);
+  if (cancelled) {
+    launching_ = false;
+    return;
+  }
+  const auto selections =
+      main_menu_profile::Selections::fromSettings(context.settings);
+  StartOptions options{
+      .startPosition = 0,
+      .autoKeySound = false,
+      .autoPlay = false,
+      .gaugeType = loaded.replayData->initialGaugeType,
+      .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
+      .replayData = loaded.replayData,
+      .pacemakerTarget = selections.pacemakerTarget,
+  };
+  applyReplayProvenanceToStartOptions(options, *loaded.replayData);
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(loaded.chart),
+                                      std::move(options)),
+      true);
+}
+
 void MusicSelectScene::consumeActions() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!skinSession_) return;
@@ -845,6 +923,9 @@ void MusicSelectScene::applyInputAction(
     break;
   case MusicSelectInputActionKind::Autoplay:
     launchSelected(true, false);
+    break;
+  case MusicSelectInputActionKind::Replay:
+    launchSelectedReplay(action.value);
     break;
   case MusicSelectInputActionKind::OpenFolder:
     if (bars_.openSelected()) {
@@ -979,7 +1060,8 @@ void MusicSelectScene::executeEvent(
       return;
     case MusicSelectEventEffectKind::Replay:
       selectedReplay_ = effect.value;
-      break;
+      launchSelectedReplay(effect.value);
+      return;
     case MusicSelectEventEffectKind::UpdateFolder: {
       std::filesystem::path path;
       if (selected != nullptr &&

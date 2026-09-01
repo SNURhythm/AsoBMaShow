@@ -126,6 +126,10 @@ struct ProjectionBuilder {
          .title = title,
          .chart = record,
          .score = std::move(best),
+         .replayExists =
+             input.replayExistsFor
+                 ? input.replayExistsFor(record, input.selectedLongNoteMode)
+                 : std::array<bool, 4>{},
          .presentation = {.kind = skin::MusicSelectBarKind::Song,
                           .title = title,
                           .exists = !record.unavailable &&

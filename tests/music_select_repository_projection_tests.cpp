@@ -57,6 +57,11 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
                           .clearType = kClearTypeExHardClearRank})
                     : std::nullopt;
        },
+       .replayExistsFor = [](const ChartMetaRecord &record, int mode) {
+         return record.meta.SHA256 == "aaa" && mode == 2
+                    ? std::array<bool, 4>{true, false, true, false}
+                    : std::array<bool, 4>{};
+       },
        .selectedLongNoteMode = 2,
        .repositoryRevision = 9});
   require(projection.repositoryRevision == 9 && projection.root.size() == 5,
@@ -74,6 +79,8 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
           "SongBar values use SongData full-title and chart fields");
   require(song && song->presentation.lamp == 7 &&
               song->score && song->score->score == 1000 &&
+              song->replayExists ==
+                  std::array<bool, 4>{true, false, true, false} &&
               (song->presentation.featureFlags &
                skin::MusicSelectFeatureChargeNote) != 0 &&
               (song->presentation.featureFlags &

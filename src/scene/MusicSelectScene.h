@@ -52,6 +52,7 @@ private:
   void stopInputListening();
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
+  void launchSelectedReplay(int slot);
   void openSelected();
   void openSameFolder();
   void copySelectedHash(bool sha256);
