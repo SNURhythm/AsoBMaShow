@@ -124,6 +124,21 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
                     minimum + (0,) * (width - len(minimum)),
                 )
 
+    def test_firebase_upload_client_uses_resumable_net_http_compatible_release(self):
+        match = re.search(
+            r"^    fastlane-plugin-firebase_app_distribution "
+            r"\((\d+(?:\.\d+)+)\)$",
+            self.gemfile_lock,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(match, "Firebase App Distribution plugin is not locked")
+        locked = tuple(int(part) for part in match.group(1).split("."))
+        self.assertGreaterEqual(
+            locked + (0,) * (3 - len(locked)),
+            (1, 0, 0),
+            "older releases stream File bodies without Content-Length through Net::HTTP",
+        )
+
     def test_distribution_lanes_are_explicit_and_cannot_route_by_accident(self):
         self.assertIn("lane :firebase do", self.fastfile)
         self.assertIn("lane :testflight_release do", self.fastfile)
