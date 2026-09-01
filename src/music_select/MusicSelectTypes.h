@@ -4,7 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <optional>
 #include <vector>
+
+#include "../repositories/ChartRepository.h"
 
 namespace skin {
 
@@ -57,3 +60,28 @@ struct MusicSelectSongListFrame {
 };
 
 } // namespace skin
+
+struct MusicSelectBarId {
+  std::string value;
+
+  auto operator<=>(const MusicSelectBarId &) const = default;
+};
+
+struct MusicSelectBar {
+  MusicSelectBarId id;
+  skin::MusicSelectBarKind kind = skin::MusicSelectBarKind::Song;
+  std::string title;
+  std::optional<ChartMetaRecord> chart;
+  std::vector<MusicSelectBarId> children;
+  skin::MusicSelectBarFrame presentation;
+  bool selectable = false;
+  bool sortable = false;
+};
+
+struct MusicSelectProjection {
+  std::vector<MusicSelectBar> bars;
+  std::vector<MusicSelectBarId> root;
+  std::uint64_t repositoryRevision = 0;
+
+  [[nodiscard]] const MusicSelectBar *find(const MusicSelectBarId &) const;
+};
