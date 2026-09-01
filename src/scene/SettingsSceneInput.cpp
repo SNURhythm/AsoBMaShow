@@ -62,12 +62,6 @@ std::vector<ActionDefinition> actionsForScope(input::InputScope scope) {
          .label = "Lane " + std::to_string(localLane + 1)});
   }
 
-  if (scope.keyMode == 5 || scope.keyMode == 7 || scope.keyMode == 10 ||
-      scope.keyMode == 14) {
-    const int scratchLane = scope.player == 1 ? 7 : 15;
-    result.push_back({.action = {input::LogicalActionKind::Lane, scratchLane},
-                      .label = "Scratch (digital)"});
-  }
   result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
                     .label = "Scratch clockwise"});
   result.push_back(

@@ -77,14 +77,13 @@ struct ExpectedKeyBinding {
 };
 
 void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
-  const std::vector<ExpectedKeyBinding> expected = {
+  const std::vector<ExpectedKeyBinding> expectedLanes = {
       {{1, 4}, 0, SDL_SCANCODE_D},        {{1, 4}, 1, SDL_SCANCODE_F},
       {{1, 4}, 3, SDL_SCANCODE_J},        {{1, 4}, 4, SDL_SCANCODE_K},
 
       {{1, 5}, 0, SDL_SCANCODE_D},        {{1, 5}, 1, SDL_SCANCODE_F},
       {{1, 5}, 2, SDL_SCANCODE_SPACE},    {{1, 5}, 3, SDL_SCANCODE_J},
-      {{1, 5}, 4, SDL_SCANCODE_K},        {{1, 5}, 7, SDL_SCANCODE_LSHIFT},
-      {{1, 5}, 7, SDL_SCANCODE_RSHIFT},
+      {{1, 5}, 4, SDL_SCANCODE_K},
 
       {{1, 6}, 0, SDL_SCANCODE_S},        {{1, 6}, 1, SDL_SCANCODE_D},
       {{1, 6}, 2, SDL_SCANCODE_F},        {{1, 6}, 4, SDL_SCANCODE_J},
@@ -93,8 +92,7 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
       {{1, 7}, 0, SDL_SCANCODE_S},        {{1, 7}, 1, SDL_SCANCODE_D},
       {{1, 7}, 2, SDL_SCANCODE_F},        {{1, 7}, 3, SDL_SCANCODE_SPACE},
       {{1, 7}, 4, SDL_SCANCODE_J},        {{1, 7}, 5, SDL_SCANCODE_K},
-      {{1, 7}, 6, SDL_SCANCODE_L},        {{1, 7}, 7, SDL_SCANCODE_LSHIFT},
-      {{1, 7}, 7, SDL_SCANCODE_RSHIFT},
+      {{1, 7}, 6, SDL_SCANCODE_L},
 
       {{1, 8}, 7, SDL_SCANCODE_A},        {{1, 8}, 0, SDL_SCANCODE_S},
       {{1, 8}, 1, SDL_SCANCODE_D},        {{1, 8}, 2, SDL_SCANCODE_F},
@@ -103,28 +101,58 @@ void verifyCurrentKeyboardDefaults(const InputProfile &defaults) {
 
       {{1, 10}, 0, SDL_SCANCODE_Z},       {{1, 10}, 1, SDL_SCANCODE_S},
       {{1, 10}, 2, SDL_SCANCODE_X},       {{1, 10}, 3, SDL_SCANCODE_D},
-      {{1, 10}, 4, SDL_SCANCODE_C},       {{1, 10}, 7, SDL_SCANCODE_LSHIFT},
+      {{1, 10}, 4, SDL_SCANCODE_C},
       {{2, 10}, 8, SDL_SCANCODE_COMMA},   {{2, 10}, 9, SDL_SCANCODE_L},
       {{2, 10}, 10, SDL_SCANCODE_PERIOD}, {{2, 10}, 11, SDL_SCANCODE_SEMICOLON},
-      {{2, 10}, 12, SDL_SCANCODE_SLASH},  {{2, 10}, 15, SDL_SCANCODE_RSHIFT},
+      {{2, 10}, 12, SDL_SCANCODE_SLASH},
 
       {{1, 14}, 0, SDL_SCANCODE_Z},       {{1, 14}, 1, SDL_SCANCODE_S},
       {{1, 14}, 2, SDL_SCANCODE_X},       {{1, 14}, 3, SDL_SCANCODE_D},
       {{1, 14}, 4, SDL_SCANCODE_C},       {{1, 14}, 5, SDL_SCANCODE_F},
-      {{1, 14}, 6, SDL_SCANCODE_V},       {{1, 14}, 7, SDL_SCANCODE_LSHIFT},
+      {{1, 14}, 6, SDL_SCANCODE_V},
       {{2, 14}, 8, SDL_SCANCODE_M},       {{2, 14}, 9, SDL_SCANCODE_K},
       {{2, 14}, 10, SDL_SCANCODE_COMMA},  {{2, 14}, 11, SDL_SCANCODE_L},
       {{2, 14}, 12, SDL_SCANCODE_PERIOD}, {{2, 14}, 13, SDL_SCANCODE_SEMICOLON},
-      {{2, 14}, 14, SDL_SCANCODE_SLASH},  {{2, 14}, 15, SDL_SCANCODE_RSHIFT},
+      {{2, 14}, 14, SDL_SCANCODE_SLASH},
   };
 
-  require(defaults.bindings.size() == expected.size(),
-          "default profile contains exactly the legacy keyboard bindings");
-  for (const auto &binding : expected) {
+  struct ExpectedScratchBinding {
+    input::InputScope scope;
+    input::LogicalActionKind action;
+    SDL_Scancode scancode;
+  };
+  const std::vector<ExpectedScratchBinding> expectedScratch = {
+      {{1, 5}, input::LogicalActionKind::ScratchCounterClockwise,
+       SDL_SCANCODE_LSHIFT},
+      {{1, 5}, input::LogicalActionKind::ScratchClockwise,
+       SDL_SCANCODE_RSHIFT},
+      {{1, 7}, input::LogicalActionKind::ScratchCounterClockwise,
+       SDL_SCANCODE_LSHIFT},
+      {{1, 7}, input::LogicalActionKind::ScratchClockwise,
+       SDL_SCANCODE_RSHIFT},
+      {{1, 10}, input::LogicalActionKind::ScratchCounterClockwise,
+       SDL_SCANCODE_LSHIFT},
+      {{2, 10}, input::LogicalActionKind::ScratchClockwise,
+       SDL_SCANCODE_RSHIFT},
+      {{1, 14}, input::LogicalActionKind::ScratchCounterClockwise,
+       SDL_SCANCODE_LSHIFT},
+      {{2, 14}, input::LogicalActionKind::ScratchClockwise,
+       SDL_SCANCODE_RSHIFT},
+  };
+
+  require(defaults.bindings.size() ==
+              expectedLanes.size() + expectedScratch.size(),
+          "default profile contains exactly the keyboard bindings");
+  for (const auto &binding : expectedLanes) {
     require(defaults.hasDigitalBinding(
                 binding.scope, {input::LogicalActionKind::Lane, binding.lane},
                 "keyboard", binding.scancode),
-            "legacy keyboard binding is present");
+            "default keyboard lane binding is present");
+  }
+  for (const auto &binding : expectedScratch) {
+    require(defaults.hasDigitalBinding(binding.scope, {binding.action, 0},
+                                       "keyboard", binding.scancode),
+            "default directional scratch binding is present");
   }
 
   require(defaults.bindingsFor({1, 10}).size() == 6,

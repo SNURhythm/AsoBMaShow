@@ -10,6 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SettingsInputBindingUiContracts(unittest.TestCase):
+    def test_settings_exposes_only_directional_scratch_actions(self) -> None:
+        source = (ROOT / "src/scene/SettingsSceneInput.cpp").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn('"Scratch (digital)"', source)
+        self.assertIn('"Scratch clockwise"', source)
+        self.assertIn('"Scratch counter-clockwise"', source)
+
     def test_each_saved_binding_row_offers_transactional_unbind(self) -> None:
         source = (ROOT / "src/scene/SettingsSceneInput.cpp").read_text(
             encoding="utf-8"
