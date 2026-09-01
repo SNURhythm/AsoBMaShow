@@ -1,5 +1,6 @@
 #include "skin/GameplaySkinTraits.h"
 #include "skin/SkinTargetTraits.h"
+#include "music_select_skin_ledger_evidence.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -51,9 +52,12 @@ void testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testPinnedBeatorajaGameplayTraitMapping();
   testResultTargetsAreFirstClassTraits();
   testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn();
-  return 0;
+  return music_select_skin_ledger_evidence::finish(
+      argc, argv, "gameplay_skin_traits_tests", 0,
+      {"select.target.music-select"}, "gameplay skin trait test failures",
+      "gameplay skin trait tests passed");
 }
