@@ -3698,6 +3698,195 @@ bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
   return true;
 }
 
+enum class MusicSelectNestedDefinitionKind : std::uint8_t {
+  ImageSet,
+  Image,
+  Text,
+  Value,
+  DistributionGraph,
+};
+
+bool materializeMusicSelectNestedDefinitions(
+    GameplayDecodeRequest &request, BeatorajaSkinModel &model,
+    const SkinSongListDefinition &songList) {
+  std::set<std::pair<MusicSelectNestedDefinitionKind, std::string>> installed;
+  const auto append = [&](std::string_view authoredName,
+                          SkinObjectPayload payload,
+                          std::uint32_t authoredOrdinal) {
+    model.objects.push_back(
+        {.id = request.nextSyntheticObjectId++,
+         .authoredName = std::string(authoredName),
+         .payload = std::move(payload),
+         .authoredOrdinal = authoredOrdinal});
+  };
+
+  const auto appendImageSet = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::ImageSet, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.imageSets.find(name);
+    if (definition == request.imageSets.end()) {
+      return true;
+    }
+    SkinImageObject object;
+    object.definitionKind = SkinImageDefinitionKind::ImageSet;
+    object.orderedStates.reserve(definition->second.imageIds.size());
+    std::optional<SkinTimerPropertyId> timer;
+    int cycle = -1;
+    for (const std::string &imageId : definition->second.imageIds) {
+      const auto image = request.images.find(imageId);
+      if (image == request.images.end()) {
+        object.orderedStates.emplace_back();
+        continue;
+      }
+      if (!consumeMaterializedSpriteFrames(
+              request, image->second.sprite.frames.size())) {
+        return false;
+      }
+      if (!timer && image->second.sprite.timer) {
+        timer = image->second.sprite.timer;
+      }
+      if (cycle == -1) {
+        cycle = image->second.sprite.cycleMillis;
+      }
+      object.orderedStates.push_back(image->second.sprite);
+    }
+    for (auto &state : object.orderedStates) {
+      state.timer = timer;
+      state.cycleMillis = cycle;
+    }
+    append(name, std::move(object), definition->second.authoredIndex);
+    return true;
+  };
+
+  const auto appendImage = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::Image, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.images.find(name);
+    if (definition == request.images.end()) {
+      return true;
+    }
+    if (!consumeMaterializedSpriteFrames(
+            request, definition->second.sprite.frames.size())) {
+      return false;
+    }
+    SkinImageObject object{
+        .orderedStates = {definition->second.sprite},
+        .definitionKind = SkinImageDefinitionKind::Image,
+    };
+    append(name, std::move(object), definition->second.authoredIndex);
+    return true;
+  };
+
+  const auto appendText = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::Text, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.texts.find(name);
+    if (definition == request.texts.end()) {
+      return true;
+    }
+    SkinTextObject object;
+    if (!makeTextObject(request, definition->second, object)) {
+      return false;
+    }
+    append(name, std::move(object), definition->second.authoredIndex);
+    return true;
+  };
+
+  const auto appendValue = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::Value, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.numbers.find(name);
+    if (definition == request.numbers.end()) {
+      return true;
+    }
+    NumericGlyphAtlas atlas;
+    if (!materializeNumericGlyphAtlas(
+            request, NumericGlyphAtlasKind::Number,
+            definition->second.image.sprite,
+            {.integerDigits = definition->second.digitCount,
+             .zeroPadding = definition->second.zeroPadding,
+             .numberPadding = definition->second.padding,
+             .perDigitOffsets = definition->second.perDigitOffsets},
+            atlas)) {
+      return false;
+    }
+    SkinNumberObject object;
+    object.digits = std::move(atlas.digits);
+    object.value = definition->second.value;
+    object.digitCount = atlas.format.integerDigits;
+    object.spacing = definition->second.spacing;
+    object.alignment = definition->second.alignment;
+    object.zeroPadding = atlas.format.zeroPadding;
+    object.perDigitOffsets = std::move(atlas.format.perDigitOffsets);
+    append(name, std::move(object), definition->second.image.authoredIndex);
+    return true;
+  };
+
+  const auto appendDistributionGraph = [&](std::string_view name) {
+    if (!installed
+             .emplace(MusicSelectNestedDefinitionKind::DistributionGraph,
+                      name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.graphs.find(name);
+    if (definition == request.graphs.end() || definition->second.type >= 0) {
+      return true;
+    }
+    if (!consumeMaterializedSpriteFrames(
+            request, definition->second.image.sprite.frames.size())) {
+      return false;
+    }
+    append(name,
+           SkinSelectDistributionGraphObject{
+               .type = definition->second.type == -1
+                           ? SkinSelectDistributionGraphType::Normal
+                           : SkinSelectDistributionGraphType::Judge,
+               .sprite = definition->second.image.sprite},
+           definition->second.image.authoredIndex);
+    return true;
+  };
+
+  for (const auto &definition : songList.listOn) {
+    if (!appendImageSet(definition.objectName)) {
+      return false;
+    }
+  }
+  const std::array imageFields{
+      std::span<const SkinSongListDestinationDefinition>(songList.lamp),
+      std::span<const SkinSongListDestinationDefinition>(songList.playerLamp),
+      std::span<const SkinSongListDestinationDefinition>(songList.rivalLamp),
+      std::span<const SkinSongListDestinationDefinition>(songList.trophy),
+      std::span<const SkinSongListDestinationDefinition>(songList.label),
+  };
+  for (const auto field : imageFields) {
+    for (const auto &definition : field) {
+      if (!appendImage(definition.objectName)) {
+        return false;
+      }
+    }
+  }
+  for (const auto &definition : songList.text) {
+    if (!appendText(definition.objectName)) {
+      return false;
+    }
+  }
+  for (const auto &definition : songList.level) {
+    if (!appendValue(definition.objectName)) {
+      return false;
+    }
+  }
+  return !songList.graph || appendDistributionGraph(songList.graph->objectName);
+}
+
 void transferDecodeDiagnostics(GameplayDecodeRequest &request) {
   auto &source = request.decoding.result.diagnostics;
   request.result.diagnostics.insert(request.result.diagnostics.end(),
@@ -4987,6 +5176,8 @@ bool materializeGameplay(GameplayDecodeRequest &request,
 
   auto &model = *request.result.model;
   transferBindings(model, decoder.bindings());
+  request.nextSyntheticObjectId =
+      static_cast<SkinObjectId>(request.rawDestinations.size() + 1U);
   if (request.rawSongList) {
     SkinSongListDefinition songList{
         .id = request.rawSongList->id,
@@ -5041,6 +5232,11 @@ bool materializeGameplay(GameplayDecodeRequest &request,
           .destination = std::move(presentation)};
     }
     model.songListDefinition = std::move(songList);
+    if (!materializeMusicSelectNestedDefinitions(
+            request, model, *model.songListDefinition)) {
+      transferDecodeDiagnostics(request);
+      return false;
+    }
   }
   model.customEvents.reserve(request.rawCustomEvents.size());
   for (const auto &event : request.rawCustomEvents) {
@@ -5054,9 +5250,7 @@ bool materializeGameplay(GameplayDecodeRequest &request,
   for (const auto &timer : request.rawCustomTimers) {
     model.customTimers.push_back({.id = timer.id, .timer = timer.timer});
   }
-  request.nextSyntheticObjectId =
-      static_cast<SkinObjectId>(request.rawDestinations.size() + 1U);
-  model.objects.reserve(request.rawDestinations.size());
+  model.objects.reserve(model.objects.size() + request.rawDestinations.size());
   model.destinations.reserve(request.rawDestinations.size());
   for (std::size_t ordinal = 0; ordinal < request.rawDestinations.size();
        ++ordinal) {
@@ -5069,6 +5263,14 @@ bool materializeGameplay(GameplayDecodeRequest &request,
                            ignored)) {
       transferDecodeDiagnostics(request);
       return false;
+    }
+    if (ignored && model.songListDefinition &&
+        destination.id == model.songListDefinition->id) {
+      payload = SkinSongListObject{
+          .center = model.songListDefinition->center,
+          .clickable = model.songListDefinition->clickable,
+      };
+      ignored = false;
     }
     if (ignored) {
       continue;

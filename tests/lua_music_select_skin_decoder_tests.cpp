@@ -13,6 +13,7 @@
 #include <iostream>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <string>
 #include <string_view>
 
@@ -178,6 +179,30 @@ void testConfiguredType5SongListPreservesEveryAuthoredValue() {
               songList.graph->destination.frames.size() == 1 &&
               songList.graph->destination.frames.front().timeMillis == 99,
           "nullable graph destination preserves authored presentation");
+  const auto canonical = std::ranges::find_if(
+      decoded.model->objects, [](const auto &object) {
+        return object.authoredName == "song-list" &&
+               std::holds_alternative<SkinSongListObject>(object.payload);
+      });
+  require(canonical != decoded.model->objects.end(),
+          "song-list destination creates a canonical object placeholder");
+  const auto imageSet = std::ranges::find_if(
+      decoded.model->objects, [](const auto &object) {
+        const auto *image = std::get_if<SkinImageObject>(&object.payload);
+        return object.authoredName == "on-1" && image &&
+               image->definitionKind == SkinImageDefinitionKind::ImageSet;
+      });
+  require(imageSet != decoded.model->objects.end() &&
+              std::get<SkinImageObject>(imageSet->payload)
+                      .orderedStates.front()
+                      .cycleMillis == 300,
+          "SongList ImageSet definitions retain the first image timing");
+  require(std::ranges::any_of(decoded.model->objects, [](const auto &object) {
+            return object.authoredName == "distribution" &&
+                   std::holds_alternative<SkinSelectDistributionGraphObject>(
+                       object.payload);
+          }),
+          "negative SongList graph definitions retain select semantics");
 }
 
 } // namespace

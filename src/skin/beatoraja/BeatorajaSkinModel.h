@@ -212,11 +212,14 @@ struct SkinSpriteFrames {
   std::optional<int> authoredNoteSlot;
 };
 
+enum class SkinImageDefinitionKind : std::uint8_t { Image, ImageSet };
+
 struct SkinImageObject {
   std::vector<SkinSpriteFrames> orderedStates;
   std::optional<SkinIntegerPropertyId> stateIndex;
   std::optional<SkinEventBindingId> clickEvent;
   int clickMode = 0;
+  SkinImageDefinitionKind definitionKind = SkinImageDefinitionKind::Image;
 };
 
 enum class SkinZeroPaddingMode : std::uint8_t {
@@ -308,6 +311,17 @@ struct SkinGraphObject {
   std::optional<int> builtinImageReference;
   std::variant<SkinFloatPropertyId, SkinSliderObject::IntegerRangeSource> value;
   int direction = 0;
+};
+
+enum class SkinSelectDistributionGraphType : std::uint8_t {
+  Normal,
+  Judge,
+};
+
+struct SkinSelectDistributionGraphObject {
+  SkinSelectDistributionGraphType type =
+      SkinSelectDistributionGraphType::Normal;
+  SkinSpriteFrames sprite;
 };
 
 enum class SkinNoteDistributionGraphType : std::uint8_t {
@@ -477,6 +491,27 @@ struct SkinSongListDefinition {
   std::optional<SkinSongListDestinationDefinition> graph;
 };
 
+struct SkinSongListPresentation {
+  SkinObjectId object = 0;
+  SkinDestinationBody destination;
+  SkinSourceLocation source;
+};
+
+struct SkinSongListObject {
+  int center = 0;
+  std::vector<int> clickable;
+  std::vector<SkinSongListPresentation> listOff;
+  std::vector<SkinSongListPresentation> listOn;
+  std::vector<SkinSongListPresentation> text;
+  std::vector<SkinSongListPresentation> level;
+  std::vector<SkinSongListPresentation> lamp;
+  std::vector<SkinSongListPresentation> playerLamp;
+  std::vector<SkinSongListPresentation> rivalLamp;
+  std::vector<SkinSongListPresentation> trophy;
+  std::vector<SkinSongListPresentation> label;
+  std::optional<SkinSongListPresentation> graph;
+};
+
 enum class SkinNoteVisualKind : std::uint8_t {
   Normal,
   Mine,
@@ -602,6 +637,7 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
+                 SkinSelectDistributionGraphObject, SkinSongListObject,
                  SkinNoteDistributionGraphObject, SkinGaugeGraphObject,
                  SkinBpmGraphObject,
                  SkinTimingVisualizerObject,

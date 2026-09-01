@@ -7,6 +7,7 @@
 #include "Lr2SkinHeaderDecoder.h"
 #include "LuaSkinRuntime.h"
 #include "LuaSkinTableDecoder.h"
+#include "MusicSelectSkinModelResolver.h"
 #include "SkinModelValidator.h"
 #include "../GameplaySkinTraits.h"
 #include "../SkinTargetTraits.h"
@@ -225,6 +226,19 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
   if (!decodedModel.model || hasErrors(result.diagnostics) ||
       cancellationRequested(request, result)) {
     return result;
+  }
+  if (result.header->type == 5) {
+    auto resolved = MusicSelectSkinModelResolver{}.resolve(*decodedModel.model);
+    if (resolved.songList) {
+      const auto object = std::ranges::find_if(
+          decodedModel.model->objects, [](const auto &definition) {
+            return std::holds_alternative<SkinSongListObject>(
+                definition.payload);
+          });
+      if (object != decodedModel.model->objects.end()) {
+        object->payload = std::move(*resolved.songList);
+      }
+    }
   }
   result.model = std::move(decodedModel.model);
   result.runtime = std::move(runtime.runtime);

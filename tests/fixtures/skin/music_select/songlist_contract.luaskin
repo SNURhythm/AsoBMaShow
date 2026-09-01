@@ -15,6 +15,16 @@ local function destinations(prefix, count)
 end
 
 local configured = skin_config ~= nil
+local images = {
+  {id = "bar-state", src = "atlas", x = 0, y = 0,
+   w = 60, h = 20, divx = 3, divy = 1, timer = 42, cycle = 300},
+  {id = "lamp-1", src = "atlas", x = 0, y = 20,
+   w = 10, h = 10, divx = 1, divy = 1},
+}
+local image_sets = {}
+for index = 1, 61 do
+  image_sets[index] = {id = "on-" .. tostring(index), images = {"bar-state"}}
+end
 return {
   type = 5,
   w = 1280,
@@ -26,6 +36,14 @@ return {
     item = {{name = "Blue", op = 900}},
     def = "Blue",
   }},
+  source = {{id = "atlas", path = "atlas.png"}},
+  image = images,
+  imageset = image_sets,
+  value = {{id = "level-1", src = "atlas", x = 0, y = 30,
+            w = 100, h = 10, divx = 10, divy = 1,
+            digit = 2, ref = 100}},
+  graph = {{id = "distribution", src = "atlas", x = 0, y = 40,
+            w = 110, h = 10, divx = 11, divy = 1, type = -1}},
   songlist = {
     id = "song-list",
     center = 100000,
@@ -45,4 +63,5 @@ return {
       dst = {{time = 99, x = 12, y = 34, w = 56, h = 78}},
     },
   },
+  destination = {{id = "song-list", dst = {{x = 0, y = 0}}}},
 }
