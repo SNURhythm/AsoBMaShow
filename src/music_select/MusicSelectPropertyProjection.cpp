@@ -78,6 +78,56 @@ int songMode(const bms_parser::ChartMeta &meta) {
   return 0;
 }
 
+bool isDirectoryBar(skin::MusicSelectBarKind kind) {
+  // select/bar: these seven concrete classes extend DirectoryBar.
+  switch (kind) {
+  case skin::MusicSelectBarKind::Folder:
+  case skin::MusicSelectBarKind::Table:
+  case skin::MusicSelectBarKind::Hash:
+  case skin::MusicSelectBarKind::Command:
+  case skin::MusicSelectBarKind::Container:
+  case skin::MusicSelectBarKind::SearchWord:
+  case skin::MusicSelectBarKind::SameFolder:
+    return true;
+  case skin::MusicSelectBarKind::Song:
+  case skin::MusicSelectBarKind::Executable:
+  case skin::MusicSelectBarKind::Grade:
+  case skin::MusicSelectBarKind::RandomCourse:
+    return false;
+  }
+  return false;
+}
+
+bool isSelectableBar(skin::MusicSelectBarKind kind) {
+  // select/bar: these four concrete classes extend SelectableBar.
+  return kind == skin::MusicSelectBarKind::Song ||
+         kind == skin::MusicSelectBarKind::Grade ||
+         kind == skin::MusicSelectBarKind::RandomCourse ||
+         kind == skin::MusicSelectBarKind::Executable;
+}
+
+bool isPlayableBar(const MusicSelectBar &bar) {
+  // BooleanPropertyFactory.playablebar tests these exact concrete classes.
+  switch (bar.kind) {
+  case skin::MusicSelectBarKind::Song:
+    return bar.chart.has_value() && bar.presentation.exists;
+  case skin::MusicSelectBarKind::Grade:
+  case skin::MusicSelectBarKind::RandomCourse:
+    return bar.presentation.exists;
+  case skin::MusicSelectBarKind::Executable:
+    return true;
+  case skin::MusicSelectBarKind::Folder:
+  case skin::MusicSelectBarKind::Table:
+  case skin::MusicSelectBarKind::Hash:
+  case skin::MusicSelectBarKind::Command:
+  case skin::MusicSelectBarKind::Container:
+  case skin::MusicSelectBarKind::SearchWord:
+  case skin::MusicSelectBarKind::SameFolder:
+    return false;
+  }
+  return false;
+}
+
 int favoriteIndex(int flags, int favorite, int invisible) {
   if ((flags & (favorite | invisible)) == 0) return 0;
   return (flags & invisible) != 0 ? 2 : 1;
@@ -204,16 +254,16 @@ void projectSelectedBar(Properties &out,
   const MusicSelectBar *selected =
       bars.selectedIndex < bars.rows.size() ? &bars.rows[bars.selectedIndex]
                                            : nullptr;
-  const bool directory =
-      selected && selected->kind == skin::MusicSelectBarKind::Folder;
+  const bool directory = selected && isDirectoryBar(selected->kind);
   const bool song = selected && selected->kind == skin::MusicSelectBarKind::Song;
   const bool course = selected && selected->kind == skin::MusicSelectBarKind::Grade;
   out.booleans[1] = directory;
   out.booleans[2] = song;
   out.booleans[3] = course;
-  out.booleans[5] = selected && selected->selectable &&
-                    (selected->presentation.exists ||
-                     selected->kind == skin::MusicSelectBarKind::Executable);
+  out.booleans[5] = selected && isPlayableBar(*selected);
+  out.booleans[100] =
+      selected && (song || course) &&
+      (!selected->score || selected->presentation.lamp == 0);
   out.booleans[1030] = selected &&
                        selected->kind == skin::MusicSelectBarKind::Executable;
   out.booleans[1031] = selected &&
@@ -232,11 +282,12 @@ void projectSelectedBar(Properties &out,
   }
 
   for (std::size_t replay = 0; replay < selected->replayExists.size(); ++replay) {
-    const bool exists = selected->selectable && selected->replayExists[replay];
+    const bool selectable = isSelectableBar(selected->kind);
+    const bool exists = selectable && selected->replayExists[replay];
     out.booleans[kReplayExistsIds[replay]] = exists;
-    out.booleans[kReplayMissingIds[replay]] = selected->selectable && !exists;
+    out.booleans[kReplayMissingIds[replay]] = selectable && !exists;
     // createReplayProperty handles both non-zero types as !exists on selector.
-    out.booleans[kReplaySavedIds[replay]] = selected->selectable && !exists;
+    out.booleans[kReplaySavedIds[replay]] = selectable && !exists;
     out.booleans[kReplaySelectedIds[replay]] =
         runtime.selectedReplay == static_cast<int>(replay);
   }
@@ -305,6 +356,20 @@ void projectSelectedBar(Properties &out,
   out.imageIndexes[89] = favoriteIndex(record.songReviewFavorite, 1, 4);
   out.imageIndexes[90] = favoriteIndex(record.songReviewFavorite, 2, 8);
 
+  // FloatPropertyFactory.getLevelRate intentionally falls through all
+  // recognized Mode cases in the pinned source, leaving maxLevel at 10.
+  const double levelRate = mode == 0 ? 0.0 : meta.PlayLevel / 10.0;
+  out.rates[103] = levelRate;
+  for (int difficulty = 1; difficulty <= 5; ++difficulty) {
+    out.rates[104 + difficulty] =
+        meta.Difficulty == difficulty ? levelRate : 0.0;
+  }
+  for (int judgeIndex = 0; judgeIndex < 5; ++judgeIndex) {
+    out.rates[140 + judgeIndex] = 0.0;
+  }
+  out.rates[145] = 0.0;
+  out.rates[147] = 0.0;
+
   if (!selected->score) return;
   const auto &score = *selected->score;
   const int maximum = score.maxScore;
@@ -336,6 +401,16 @@ void projectSelectedBar(Properties &out,
   out.floats[1115] = selectedRate;
   out.floats[155] = selectedRate;
   out.floats[183] = 0.0;
+  for (int judgeIndex = 0; judgeIndex < 5; ++judgeIndex) {
+    out.rates[140 + judgeIndex] =
+        static_cast<double>(score.judgementCounts[
+            static_cast<std::size_t>(judgeIndex)]) /
+        meta.TotalNotes;
+  }
+  out.rates[145] =
+      static_cast<double>(score.maxCombo.value_or(0)) / meta.TotalNotes;
+  out.rates[147] =
+      static_cast<double>(score.score) / meta.TotalNotes / 2.0;
 
   if (selected->rivalScore) {
     const auto &rival = *selected->rivalScore;

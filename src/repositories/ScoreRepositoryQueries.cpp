@@ -616,10 +616,13 @@ void loadLocalBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
 void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
                          std::string_view schema = {}) {
   const std::string query =
-      "SELECT chart_sha256, ln_mode, score, max_score, max_combo, combo_break, "
-      "final_gauge, clear_rank, created_at "
-      "FROM " +
-      qualifiedScoreTable(schema, "score_sha256_best_score_cache");
+      "SELECT b.chart_sha256, b.ln_mode, b.score, b.max_score, b.max_combo, "
+      "b.combo_break, b.final_gauge, b.clear_rank, b.created_at, "
+      "COALESCE(s.pgreat, 0), COALESCE(s.great, 0), COALESCE(s.good, 0), "
+      "COALESCE(s.bad, 0), COALESCE(s.poor, 0), COALESCE(s.score_source, 0) "
+      "FROM " + qualifiedScoreTable(schema, "score_sha256_best_score_cache") +
+      " b LEFT JOIN " + qualifiedScoreTable(schema, "scores") +
+      " s ON s.id = b.score_id";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "loading score best scores", logSqlErrorText)) {
@@ -638,6 +641,14 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
         static_cast<float>(sqlite3_column_double(stmt.get(), 6));
     snapshot.clearType = sqlite3_column_int(stmt.get(), 7);
     snapshot.createdAt = sqliteColumnString(stmt.get(), 8);
+    for (int index = 0; index < 5; ++index) {
+      snapshot.judgementCounts[static_cast<std::size_t>(index)] =
+          sqlite3_column_int(stmt.get(), 9 + index);
+    }
+    snapshot.source = sqlite3_column_int(stmt.get(), 14) ==
+                              static_cast<int>(ScoreStorageSource::ImportedIr)
+                          ? ScoreBestSource::ImportedIr
+                          : ScoreBestSource::Local;
     storeBestScore(cache.scoreBySha256, sha256, lnMode, snapshot);
   }
 }

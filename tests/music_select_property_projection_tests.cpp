@@ -52,11 +52,13 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
   song.chart->meta.LnMode = 2;
   song.score = ScoreBestSnapshot{.score = 800,
                                  .maxScore = 1000,
+                                 .judgementCounts = {250, 100, 50, 25, 10},
                                  .maxCombo = 321,
                                  .comboBreak = 12,
                                  .clearType = kClearTypeExHardClearRank};
   song.rivalScore = ScoreBestSnapshot{.score = 750,
                                       .maxScore = 1000,
+                                      .judgementCounts = {200, 100, 75, 40, 20},
                                       .maxCombo = 300,
                                       .comboBreak = 20,
                                       .clearType = kClearTypeHardClearRank};
@@ -203,15 +205,75 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.imageIndexes.at(400) == 1,
           "IndexType uses pinned filter, option, gauge, and PlayConfig numbering");
   require(values.rates.at(1) == 0.0 &&
+              values.rates.at(103) == 1.2 &&
+              values.rates.at(105) == 0.0 &&
+              values.rates.at(108) == 1.2 &&
               values.rates.at(110) == 0.8 &&
               values.rates.at(113) == 0.0 &&
               values.rates.at(115) == 0.75 &&
+              values.rates.at(140) == 0.5 &&
+              values.rates.at(141) == 0.2 &&
+              values.rates.at(142) == 0.1 &&
+              values.rates.at(143) == 0.05 &&
+              values.rates.at(144) == 0.02 &&
+              values.rates.at(145) == 0.642 &&
               values.rates.at(147) == 0.8 &&
               values.floats.at(310) == 2.75 &&
               values.rates.at(17) == 0.75 &&
               values.rates.at(18) == 0.5 &&
               values.rates.at(19) == 0.25,
           "FloatPropertyFactory rates retain their source domains");
+}
+
+void testProjectsExactBarClassConditions() {
+  AppSettings settings;
+  MusicSelectPropertyRuntimeSnapshot runtime;
+  constexpr std::array directoryKinds{
+      skin::MusicSelectBarKind::Folder,
+      skin::MusicSelectBarKind::Table,
+      skin::MusicSelectBarKind::Hash,
+      skin::MusicSelectBarKind::Command,
+      skin::MusicSelectBarKind::Container,
+      skin::MusicSelectBarKind::SearchWord,
+      skin::MusicSelectBarKind::SameFolder,
+  };
+  for (const auto kind : directoryKinds) {
+    MusicSelectBarManagerSnapshot bars;
+    bars.rows.push_back({.kind = kind,
+                         .presentation = {.kind = kind, .exists = true},
+                         .selectable = true});
+    const auto values = projectMusicSelectProperties(settings, bars, runtime);
+    require(values.booleans.at(1) && !values.booleans.at(5),
+            "every and only DirectoryBar subtype is a non-playable folder bar");
+  }
+
+  for (const auto kind : {skin::MusicSelectBarKind::Grade,
+                          skin::MusicSelectBarKind::RandomCourse,
+                          skin::MusicSelectBarKind::Executable}) {
+    MusicSelectBarManagerSnapshot bars;
+    bars.rows.push_back({.kind = kind,
+                         .presentation = {.kind = kind, .exists = true}});
+    const auto values = projectMusicSelectProperties(settings, bars, runtime);
+    require(!values.booleans.at(1) && values.booleans.at(5),
+            "playable course and executable bar classes follow Beatoraja");
+  }
+
+  MusicSelectBarManagerSnapshot unplayed;
+  MusicSelectBar song;
+  song.kind = skin::MusicSelectBarKind::Song;
+  song.presentation = {.kind = skin::MusicSelectBarKind::Song,
+                       .exists = true,
+                       .lamp = 0};
+  song.chart.emplace();
+  unplayed.rows.push_back(std::move(song));
+  auto values = projectMusicSelectProperties(settings, unplayed, runtime);
+  require(values.booleans.at(5) && values.booleans.at(100),
+          "an existing unplayed SongBar is playable and not played");
+  unplayed.rows.front().presentation.lamp = 1;
+  unplayed.rows.front().score.emplace();
+  values = projectMusicSelectProperties(settings, unplayed, runtime);
+  require(!values.booleans.at(100),
+          "a SongBar with a non-NoPlay clear is not unplayed");
 }
 
 void testProjectsDirectoryAndFinishedRanking() {
@@ -255,6 +317,7 @@ void testProjectsDirectoryAndFinishedRanking() {
 int main() {
   testProjectsSelectedSongAndPlayerConfiguration();
   testProjectsDirectoryAndFinishedRanking();
+  testProjectsExactBarClassConditions();
   if (failures != 0) return 1;
   std::cout << "music-select property projection tests passed\n";
   return 0;

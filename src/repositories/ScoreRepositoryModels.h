@@ -51,6 +51,7 @@ struct ImportedIrScoreProjectionOutcome {
 struct ScoreBestSnapshot {
   int score = 0;
   int maxScore = 0;
+  std::array<int, 5> judgementCounts{};
   std::optional<int> maxCombo;
   std::optional<int> comboBreak;
   std::optional<int> badPoints;
