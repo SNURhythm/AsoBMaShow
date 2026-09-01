@@ -53,7 +53,9 @@ struct Fixture {
                          "\",\"sha256\":\"" + sha256 +
                          "\",\"title\":\"Chart\",\"subtitle\":\"Sub\","
                          "\"artist\":\"Artist\",\"subartist\":\"Subartist\","
-                         "\"url\":\"chart.zip\",\"url_diff\":\"patch.zip\"}]";
+                         "\"url\":\"chart.zip\",\"url_diff\":\"patch.zip\","
+                         "\"org_md5\":[\"11111111111111111111111111111111\","
+                         "\"22222222222222222222222222222222\"]}]";
 };
 
 std::string snapshotTable(const std::filesystem::path &databasePath,
@@ -139,6 +141,10 @@ void testParseAndReplacementRollback() {
   assert(parsed->charts.front().subtitle == "Sub");
   assert(parsed->charts.front().subartist == "Subartist");
   assert(parsed->charts.front().urlDiff == "patch.zip");
+  assert(parsed->charts.front().originalMd5s ==
+         std::optional<std::vector<std::string>>({
+             "11111111111111111111111111111111",
+             "22222222222222222222222222222222"}));
   assert(parsed->courses.size() == 1);
   assert(parsed->courses.front().groupName == "Course");
   assert(parsed->courses.front().level == "*1");

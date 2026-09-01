@@ -69,6 +69,20 @@ std::string jsonStringAt(const json &object, const char *key,
   return jsonValueToString(*it, fallback);
 }
 
+std::optional<std::vector<std::string>> jsonStringListAt(
+    const json &object, const char *key) {
+  if (!object.is_object()) return std::nullopt;
+  const auto found = object.find(key);
+  if (found == object.end() || !found->is_array()) return std::nullopt;
+  std::vector<std::string> values;
+  values.reserve(found->size());
+  for (const auto &value : *found) {
+    if (!value.is_string()) return std::vector<std::string>{};
+    values.push_back(value.get<std::string>());
+  }
+  return values;
+}
+
 std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
@@ -383,6 +397,7 @@ difficulty_table::Chart readChartItem(const json &item,
   chart.subartist = jsonStringAt(item, "subartist");
   chart.url = jsonStringAt(item, "url");
   chart.urlDiff = jsonStringAt(item, "url_diff");
+  chart.originalMd5s = jsonStringListAt(item, "org_md5");
   return chart;
 }
 

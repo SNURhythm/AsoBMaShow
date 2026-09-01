@@ -93,6 +93,11 @@ struct ChartMetaRecord {
   // under this chart's SHA-256 identity.  Its bit assignments are consumed by
   // gameplay skin image indexes 89 and 90.
   int songReviewFavorite = 0;
+  // Difficulty-table SongData fields used by Beatoraja's download-site
+  // selector event. Physical library rows leave both values empty.
+  std::string downloadUrl;
+  std::string appendDownloadUrl;
+  std::optional<std::vector<std::string>> originalMd5s;
 };
 
 struct ChartSequenceFeatures {

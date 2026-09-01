@@ -13,6 +13,7 @@
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "../Utils.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 #include <SDL2/SDL.h>
 #include "../path.h"
 
@@ -1636,6 +1637,8 @@ void queryChartMeta(
     query += chartFavoriteColumnExpr("cm");
     query += ", ";
     query += songReviewFavoriteColumnExpr("cm");
+    query += ", COALESCE(dte.url, ''), COALESCE(dte.url_diff, ''), "
+             "dte.org_md5";
     query += " FROM difficulty_table_entries dte "
              "JOIN difficulty_tables dt ON dt.id = dte.table_id "
              "LEFT JOIN chart_meta cm ON cm.path = ";
@@ -1675,6 +1678,8 @@ void queryChartMeta(
     query += chartFavoriteColumnExpr("cm");
     query += ", ";
     query += songReviewFavoriteColumnExpr("cm");
+    query += ", COALESCE(dce.url, ''), COALESCE(dce.url_diff, ''), "
+             "dce.org_md5";
     query += " FROM difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
              "JOIN difficulty_tables dt ON dt.id = dc.table_id "
@@ -1716,6 +1721,7 @@ void queryChartMeta(
   query += chartFavoriteColumnExpr("cm");
   query += ", ";
   query += songReviewFavoriteColumnExpr("cm");
+  query += ", '', '', NULL";
   query += " FROM chart_meta cm WHERE 1 = 1";
   appendChartMetaFilters(query, chartQuery);
   appendChartMetaOrderBy(query, chartQuery, "cm");
@@ -2106,6 +2112,26 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   if (sqlite3_column_count(stmt) > idx) {
     record.songReviewFavorite = sqlite3_column_int(stmt, idx++);
   }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.downloadUrl = columnString(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.appendDownloadUrl = columnString(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx &&
+      sqlite3_column_type(stmt, idx) != SQLITE_NULL) {
+    try {
+      const auto value = nlohmann::json::parse(columnString(stmt, idx));
+      if (value.is_array()) {
+        record.originalMd5s = value.get<std::vector<std::string>>();
+      } else {
+        record.originalMd5s = std::vector<std::string>{};
+      }
+    } catch (...) {
+      record.originalMd5s = std::vector<std::string>{};
+    }
+  }
+  ++idx;
   return record;
 }
 
@@ -2173,6 +2199,7 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
       query += ", ";
       query += "'', 0, 0, ";
       query += songReviewFavoriteColumnExpr("cm");
+      query += ", '', '', NULL";
       query += " FROM chart_meta cm WHERE cm.path IN (";
       for (std::size_t index = 0; index < count; ++index) {
         query += index == 0 ? "?" : ",?";

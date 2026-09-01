@@ -771,6 +771,100 @@ void testChartQueryBehaviorMatrix() {
   assert(hardCount != allCounts.end() && hardCount->second == 1);
 }
 
+void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "chart.db";
+  ChartRepository charts(chartPath);
+  assert(charts.EnsureReady());
+  auto session = charts.OpenSession();
+  assert(session.has_value());
+
+  constexpr std::string_view installedMd5 =
+      "11111111111111111111111111111111";
+  constexpr std::string_view installedSha =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  auto installed = chartMeta(temporary.path() / "installed");
+  installed.MD5 = installedMd5;
+  installed.SHA256 = installedSha;
+  installed.Title = "Installed";
+  assert(session->InsertChartMeta(installed));
+
+  difficulty_table::Document table;
+  table.name = "URL table";
+  table.symbol = "☆";
+  table.sourceUrl = "https://table.example/header.json";
+  table.dataUrl = "https://table.example/data.json";
+  table.levelOrder = {"1"};
+  table.charts = {
+      {.level = "1",
+       .md5 = std::string(installedMd5),
+       .sha256 = std::string(installedSha),
+       .title = "Installed table row",
+       .url = "https://table.example/installed.zip",
+       .urlDiff = "https://table.example/installed-patch.zip"},
+      {.level = "1",
+       .md5 = "22222222222222222222222222222222",
+       .sha256 =
+           "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       .title = "Unavailable table row",
+       .url = "https://table.example/unavailable.zip",
+       .urlDiff = "https://table.example/unavailable-patch.zip",
+       .originalMd5s = std::vector<std::string>{
+           std::string(installedMd5)}},
+  };
+  table.courses = {{
+      .name = "URL course",
+      .groupName = "Courses",
+      .level = "1",
+      .charts = {{.level = "1",
+                  .md5 = std::string(installedMd5),
+                  .sha256 = std::string(installedSha),
+                  .title = "Installed course row",
+                  .url = "https://course.example/installed.zip",
+                  .urlDiff =
+                      "https://course.example/installed-patch.zip"}},
+  }};
+  assert(session->ReplaceDifficultyTable(table));
+
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  ChartMetaQuery levelQuery;
+  levelQuery.tableId = tables.front().id;
+  levelQuery.tableLevel = "1";
+  std::vector<ChartMetaRecord> levelRows;
+  session->QueryChartMeta(levelQuery, levelRows);
+  assert(levelRows.size() == 2);
+  assert(levelRows[0].downloadUrl ==
+         "https://table.example/installed.zip");
+  assert(levelRows[0].appendDownloadUrl ==
+         "https://table.example/installed-patch.zip");
+  assert(levelRows[1].downloadUrl ==
+         "https://table.example/unavailable.zip");
+  assert(levelRows[1].appendDownloadUrl ==
+         "https://table.example/unavailable-patch.zip");
+  assert(levelRows[1].originalMd5s ==
+         std::optional<std::vector<std::string>>({std::string(installedMd5)}));
+
+  const auto courses =
+      session->SelectDifficultyCourses(tables.front().id, "Courses");
+  assert(courses.size() == 1);
+  ChartMetaQuery courseQuery;
+  courseQuery.courseId = courses.front().id;
+  std::vector<ChartMetaRecord> courseRows;
+  session->QueryChartMeta(courseQuery, courseRows);
+  assert(courseRows.size() == 1);
+  assert(courseRows.front().downloadUrl ==
+         "https://course.example/installed.zip");
+  assert(courseRows.front().appendDownloadUrl ==
+         "https://course.example/installed-patch.zip");
+
+  std::vector<ChartMetaRecord> libraryRows;
+  session->QueryChartMeta({}, libraryRows);
+  assert(libraryRows.size() == 1);
+  assert(libraryRows.front().downloadUrl.empty());
+  assert(libraryRows.front().appendDownloadUrl.empty());
+}
+
 void testExactFolderQuery() {
   TempDirectory temporary;
   std::atomic<int> connections{0};
@@ -1292,6 +1386,7 @@ int main() {
   testSelectChartMetaByHashUsesDurableIndexedIdentity();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
+  testDifficultyEntryDownloadUrlsFollowTheirSourceRows();
   testExactFolderQuery();
   testChartMigrationCompatibilityMatrix();
   testChartMigrationReleaseFailureDoesNotReportSuccess();

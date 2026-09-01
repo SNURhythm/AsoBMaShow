@@ -17,6 +17,7 @@
 #include "../ResultContracts.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../PlatformDocumentHandoff.h"
+#include "../PlatformOpen.h"
 #include "../RAII.h"
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
@@ -68,8 +69,6 @@
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
-#include <shlobj.h>
-#include <shellapi.h>
 
 #elif __APPLE__
 
@@ -81,7 +80,6 @@
 #include <sys/stat.h>
 #else
 // define something for OSX
-#include "../MacNatives.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
@@ -103,12 +101,6 @@
 #include <iostream>
 #include <limits>
 #include <sstream>
-#if TARGET_OS_LINUX
-#include <spawn.h>
-#include <sys/wait.h>
-extern char **environ;
-#endif
-
 namespace {
 
 constexpr int kRootPadding = 28;
@@ -611,196 +603,6 @@ SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.right * static_cast<float>(rendering::window_width)));
 #endif
   return insets;
-}
-
-bool revealPathInFileManager(const std::filesystem::path &path,
-                             const OverlayAnchor &sourceAnchor,
-                             std::string &errorMessage) {
-  (void)sourceAnchor;
-  errorMessage.clear();
-  if (path.empty()) {
-    errorMessage = "Chart file path is empty";
-    return false;
-  }
-
-  std::error_code errorCode;
-  std::filesystem::path targetPath = path;
-  if (!targetPath.is_absolute()) {
-    const auto absolutePath = std::filesystem::absolute(targetPath, errorCode);
-    if (!errorCode) {
-      targetPath = absolutePath;
-    }
-    errorCode.clear();
-  }
-  std::filesystem::path archivePath;
-  std::filesystem::path innerPath;
-  if (archive_file::splitVirtualPath(targetPath, archivePath, innerPath)) {
-    targetPath = archivePath;
-  }
-
-  const std::string targetPathText = fspath_to_utf8(targetPath);
-  const bool targetExists = std::filesystem::exists(targetPath, errorCode);
-  if (errorCode) {
-    errorMessage =
-        "Could not check chart file: " + targetPathText + " (" +
-        errorCode.message() + ")";
-    return false;
-  }
-  if (!targetExists) {
-    errorMessage = "Chart file does not exist: " +
-                   targetPathText;
-    return false;
-  }
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  const NormalizedOverlayAnchor normalizedSourceAnchor =
-      normalizeOverlayAnchor(sourceAnchor, rendering::window_width,
-                             rendering::window_height);
-  return RevealIOSFileInFiles(
-      targetPathText,
-      {.x = normalizedSourceAnchor.x,
-       .y = normalizedSourceAnchor.y,
-       .width = normalizedSourceAnchor.width,
-       .height = normalizedSourceAnchor.height},
-      errorMessage);
-#elif TARGET_OS_ANDROID
-  errorMessage = "Reveal is not supported on Android yet";
-  return false;
-#elif TARGET_OS_OSX
-  return RevealPathInFinder(targetPathText, errorMessage);
-#elif defined(_WIN32)
-  const std::wstring nativePath = targetPath.wstring();
-  const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED |
-                                                     COINIT_DISABLE_OLE1DDE);
-  const bool didCoInitialize = SUCCEEDED(coInit);
-  PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(nativePath.c_str());
-  if (pidl == nullptr) {
-    if (didCoInitialize) {
-      CoUninitialize();
-    }
-    errorMessage = "Could not resolve chart file for Explorer";
-    return false;
-  }
-
-  const HRESULT result = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-  ILFree(pidl);
-  if (didCoInitialize) {
-    CoUninitialize();
-  }
-  if (FAILED(result)) {
-    std::ostringstream stream;
-    stream << "Could not open Explorer: HRESULT 0x" << std::hex
-           << static_cast<unsigned long>(result);
-    errorMessage = stream.str();
-    return false;
-  }
-  return true;
-#elif TARGET_OS_LINUX
-  const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
-  if (errorCode) {
-    errorMessage =
-        "Could not check chart file type: " + targetPathText + " (" +
-        errorCode.message() + ")";
-    return false;
-  }
-  std::filesystem::path directoryPath =
-      isDirectory ? targetPath : targetPath.parent_path();
-  if (directoryPath.empty()) {
-    directoryPath = ".";
-  }
-
-  std::string openerPath;
-  for (const char *candidate :
-       {"/usr/bin/xdg-open", "/bin/xdg-open", "/usr/local/bin/xdg-open"}) {
-    if (std::filesystem::exists(candidate, errorCode)) {
-      openerPath = candidate;
-      break;
-    }
-    errorCode.clear();
-  }
-  if (openerPath.empty()) {
-    errorMessage = "Could not find xdg-open";
-    return false;
-  }
-
-  const std::string directoryText = fspath_to_utf8(directoryPath);
-  pid_t pid = 0;
-  char *argv[] = {const_cast<char *>(openerPath.c_str()),
-                  const_cast<char *>(directoryText.c_str()), nullptr};
-  const int result =
-      posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
-  if (result != 0) {
-    errorMessage =
-        std::string("Could not open file manager: ") + std::strerror(result);
-    return false;
-  }
-  std::thread([pid]() {
-    int status = 0;
-    waitpid(pid, &status, 0);
-  }).detach();
-  return true;
-#else
-  errorMessage = "Reveal is not supported on this platform";
-  return false;
-#endif
-}
-
-bool openExternalUrl(const std::string &url, std::string &errorMessage) {
-  errorMessage.clear();
-  if (url.empty()) {
-    errorMessage = "URL is empty";
-    return false;
-  }
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return OpenURLInIOSBrowser(url, errorMessage);
-#elif TARGET_OS_ANDROID
-  return OpenURLInAndroidBrowser(url, errorMessage);
-#elif TARGET_OS_OSX
-  return OpenURLInDefaultBrowser(url, errorMessage);
-#elif defined(_WIN32)
-  const HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr,
-                                         nullptr, SW_SHOWNORMAL);
-  if (reinterpret_cast<intptr_t>(result) <= 32) {
-    errorMessage = "Could not open browser";
-    return false;
-  }
-  return true;
-#elif TARGET_OS_LINUX
-  std::error_code errorCode;
-  std::string openerPath;
-  for (const char *candidate :
-       {"/usr/bin/xdg-open", "/bin/xdg-open", "/usr/local/bin/xdg-open"}) {
-    if (std::filesystem::exists(candidate, errorCode)) {
-      openerPath = candidate;
-      break;
-    }
-    errorCode.clear();
-  }
-  if (openerPath.empty()) {
-    errorMessage = "Could not find xdg-open";
-    return false;
-  }
-
-  pid_t pid = 0;
-  char *argv[] = {const_cast<char *>(openerPath.c_str()),
-                  const_cast<char *>(url.c_str()), nullptr};
-  const int result =
-      posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
-  if (result != 0) {
-    errorMessage =
-        std::string("Could not open browser: ") + std::strerror(result);
-    return false;
-  }
-  std::thread([pid]() {
-    int status = 0;
-    waitpid(pid, &status, 0);
-  }).detach();
-  return true;
-#else
-  errorMessage = "Opening URLs is not supported on this platform";
-  return false;
-#endif
 }
 
 using main_menu_library::folderKeyForCourse;
@@ -5052,8 +4854,15 @@ void MainMenuScene::revealSelectedChartInFileManager() {
       .width = revealButton->getWidth(),
       .height = revealButton->getHeight(),
   };
-  if (!revealPathInFileManager(record->meta.BmsPath, sourceAnchor,
-                               errorMessage)) {
+  const auto normalized = normalizeOverlayAnchor(
+      sourceAnchor, rendering::window_width, rendering::window_height);
+  if (!platform_open::revealPathInFileManager(
+          record->meta.BmsPath,
+          {.x = normalized.x,
+           .y = normalized.y,
+           .width = normalized.width,
+           .height = normalized.height},
+          errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
             fspath_to_utf8(record->meta.BmsPath).c_str(),
             errorMessage.c_str());
@@ -7246,7 +7055,7 @@ void MainMenuScene::applyFindBmsUpdates() {
 
 void MainMenuScene::openFindBmsResultUrl(const std::string &url) {
   std::string errorMessage;
-  if (!openExternalUrl(url, errorMessage)) {
+  if (!platform_open::openExternalUrl(url, errorMessage)) {
     SDL_Log("Failed to open URL %s: %s", url.c_str(), errorMessage.c_str());
   }
 }

@@ -1,5 +1,7 @@
 #include "MusicSelectScene.h"
 
+#include "../PlatformOpen.h"
+
 #include "IrUploadsScene.h"
 #include "LibraryTasksScene.h"
 #include "MusicPlayerScene.h"
@@ -14,6 +16,7 @@
 #include "../music_select/MusicSelectRepositoryProjection.h"
 #include "../music_select/MusicSelectReplaySlots.h"
 #include "../music_select/MusicSelectFavorites.h"
+#include "../music_select/MusicSelectExternalActions.h"
 #include "../music_select/MusicSelectPropertyProjection.h"
 #include "../replay/ChartReplayConsumer.h"
 #include "../rendering/common.h"
@@ -1102,6 +1105,65 @@ void MusicSelectScene::executeEvent(
       selectedReplay_ = effect.value;
       launchSelectedReplay(effect.value);
       return;
+    case MusicSelectEventEffectKind::OpenDocument:
+      if (selected != nullptr && platform_open::desktopOpenSupported()) {
+        for (const auto &path : musicSelectDocumentPaths(*selected)) {
+          std::string error;
+          if (!platform_open::openPath(path, error)) {
+            SDL_Log("Failed to open chart document %s: %s",
+                    path.string().c_str(), error.c_str());
+          }
+        }
+      }
+      break;
+    case MusicSelectEventEffectKind::OpenExplorer:
+      if (selected != nullptr && platform_open::desktopOpenSupported()) {
+        MusicSelectExplorerLookups lookups;
+        lookups.originalMd5Paths = [this](
+                                            std::span<const std::string> md5s) {
+          std::vector<std::filesystem::path> paths;
+          if (!chartSession_) return paths;
+          for (auto hash = md5s.rbegin(); hash != md5s.rend(); ++hash) {
+            for (const auto &meta :
+                 chartSession_->SelectChartMetaByHash({}, *hash)) {
+              paths.push_back(meta.BmsPath);
+            }
+          }
+          return paths;
+        };
+        lookups.textPaths = [this](std::string_view text) {
+          std::vector<std::filesystem::path> paths;
+          if (!chartSession_) return paths;
+          ChartMetaQuery query;
+          query.keyword = std::string(text);
+          std::vector<ChartMetaRecord> records;
+          chartSession_->QueryChartMeta(query, records);
+          paths.reserve(records.size());
+          for (const auto &record : records) {
+            paths.push_back(record.meta.BmsPath);
+          }
+          return paths;
+        };
+        if (const auto path = musicSelectExplorerPath(*selected, lookups)) {
+          std::string error;
+          if (!platform_open::openPath(*path, error)) {
+            SDL_Log("Failed to open selector path %s: %s",
+                    path->string().c_str(), error.c_str());
+          }
+        }
+      }
+      break;
+    case MusicSelectEventEffectKind::OpenDownloadSite:
+      if (selected != nullptr && platform_open::desktopOpenSupported()) {
+        for (const auto &url : musicSelectDownloadUrls(*selected)) {
+          std::string error;
+          if (!platform_open::openExternalUrl(url, error)) {
+            SDL_Log("Failed to open selector download URL %s: %s",
+                    url.c_str(), error.c_str());
+          }
+        }
+      }
+      break;
     case MusicSelectEventEffectKind::UpdateFolder: {
       std::filesystem::path path;
       if (selected != nullptr &&

@@ -16,6 +16,7 @@ struct Chart {
   std::string subartist;
   std::string url;
   std::string urlDiff;
+  std::optional<std::vector<std::string>> originalMd5s;
 };
 
 struct Course {
