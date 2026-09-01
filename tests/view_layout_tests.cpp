@@ -734,14 +734,14 @@ void testInputSettingsLayoutPolicy() {
   assert(wide.actionGroupPadding == 16);
   assert(wide.selectorWidth > 0 &&
          wide.selectorWidth * 3 + wide.selectorGap * 2 <= 1200);
-  assert(wide.bindingEditorWidth == 1168);
+  assert(wide.bindingEditorWidth == 1164);
 
   const auto compact = settings_scene::resolveInputSettingsLayout(520, true);
   assert(compact.stackSelectors);
   assert(compact.stackBindingEditor);
   assert(compact.actionGroupPadding == 12);
   assert(compact.selectorWidth == 520);
-  assert(compact.bindingEditorWidth == 496);
+  assert(compact.bindingEditorWidth == 492);
 
   const auto narrow = settings_scene::resolveInputSettingsLayout(640, false);
   assert(narrow.stackSelectors);
@@ -762,7 +762,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
   const auto wideLayout =
       settings_scene::resolveInputSettingsLayout(1200, false);
   assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
-                                                               key) == 1168);
+                                                               key) == 1164);
 
   const auto axis = settings_scene::inputBindingEditorCapabilities(
       input::ControlKind::Axis);
@@ -770,7 +770,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
          axis.inversion);
   assert(settings_scene::inputBindingEditorControlCount(axis) == 5);
   assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
-                                                               axis) == 224);
+                                                               axis) == 223);
 
   const auto midiNote = settings_scene::inputBindingEditorCapabilities(
       input::ControlKind::MidiNote);
@@ -779,7 +779,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
   assert(settings_scene::inputBindingEditorControlCount(midiNote) == 2);
   assert(settings_scene::resolveInputBindingEditorControlWidth(wideLayout,
                                                                midiNote) ==
-         578);
+         576);
 
   const auto midiControl = settings_scene::inputBindingEditorCapabilities(
       input::ControlKind::MidiControl);
@@ -790,7 +790,7 @@ void testInputBindingEditorCapabilitiesMatchControlSemantics() {
   const auto compactLayout =
       settings_scene::resolveInputSettingsLayout(520, true);
   assert(settings_scene::resolveInputBindingEditorControlWidth(compactLayout,
-                                                               axis) == 496);
+                                                               axis) == 492);
 
   for (const auto kind : {input::ControlKind::Button,
                           input::ControlKind::Hat,
@@ -812,11 +812,35 @@ void testInputBindingEditorStaysInsidePaddedActionGroup() {
                              capabilities) {
     const auto layout =
         settings_scene::resolveInputSettingsLayout(bodyWidth, compact);
-    View actionGroup(0, 0, bodyWidth, compact ? 360 : 100);
-    actionGroup.setFlexDirection(FlexDirection::Column);
-    actionGroup.setAlignItems(YGAlignStretch);
-    actionGroup.setPadding(Edge::All,
-                           static_cast<float>(layout.actionGroupPadding));
+    constexpr int cardPadding = 20;
+    View card(0, 0,
+              bodyWidth + cardPadding * 2 +
+                  settings_scene::kInputSettingsCardBorderWidth * 2,
+              compact ? 440 : 180);
+    card.setFlexDirection(FlexDirection::Column);
+    card.setAlignItems(YGAlignStretch);
+    card.setPadding(Edge::All, cardPadding);
+    card.setBorderColor(Color(255, 255, 255, 255));
+    card.setBorderWidth(settings_scene::kInputSettingsCardBorderWidth);
+
+    auto *bindingsBody = new View();
+    bindingsBody->setFlexDirection(FlexDirection::Column);
+    bindingsBody->setAlignItems(YGAlignStretch);
+    auto *actionGroup = new View();
+    actionGroup->setFlexDirection(FlexDirection::Column);
+    actionGroup->setAlignItems(YGAlignStretch);
+    actionGroup->setPadding(
+        Edge::All, static_cast<float>(layout.actionGroupPadding));
+    actionGroup->setBorderColor(Color(255, 255, 255, 255));
+    actionGroup->setBorderWidth(
+        settings_scene::kInputSettingsActionGroupBorderWidth);
+    auto *bindingRow = new View();
+    bindingRow->setFlexDirection(FlexDirection::Column);
+    bindingRow->setAlignItems(YGAlignStretch);
+    bindingRow->setPadding(Edge::Top, 8);
+    bindingRow->setBorderColor(Color(255, 255, 255, 255));
+    bindingRow->setBorderWidth(
+        settings_scene::kInputSettingsBindingRowBorderWidth);
 
     auto *editor = new View();
     editor->setFlexDirection(layout.stackBindingEditor
@@ -834,9 +858,14 @@ void testInputBindingEditorStaysInsidePaddedActionGroup() {
       control->setSize(controlWidth, 40);
       editor->addView(control);
     }
-    actionGroup.addView(editor);
-    actionGroup.applyYogaLayout();
+    bindingRow->addView(editor);
+    actionGroup->addView(bindingRow);
+    bindingsBody->addView(actionGroup);
+    card.addView(bindingsBody);
+    card.applyYogaLayout();
 
+    expectNear(bindingsBody->getWidth(), bodyWidth,
+               "input card content width");
     expectNear(editor->getWidth(), layout.bindingEditorWidth,
                "binding editor inner width");
     for (const auto *control : editor->getChildren()) {

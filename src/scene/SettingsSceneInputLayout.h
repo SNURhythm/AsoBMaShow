@@ -14,6 +14,9 @@ namespace settings_scene {
 inline constexpr std::string_view kGyroscopeStepAngleLabel = "Step angle (°)";
 inline constexpr std::string_view kGyroscopeReleaseDelayLabel =
     "Release delay (ms)";
+inline constexpr int kInputSettingsCardBorderWidth = 1;
+inline constexpr int kInputSettingsActionGroupBorderWidth = 1;
+inline constexpr int kInputSettingsBindingRowBorderWidth = 1;
 
 constexpr bool shouldShowGyroscopeSettingsCard(std::string_view stableId) {
   return stableId == input::kGyroscopeTurntableStableId;
@@ -82,7 +85,9 @@ constexpr InputSettingsLayout resolveInputSettingsLayout(int availableWidth,
       result.stackSelectors ? width
                             : std::max(0, (width - result.selectorGap * 2) / 3);
   result.bindingEditorWidth =
-      std::max(0, width - result.actionGroupPadding * 2);
+      std::max(0, width - result.actionGroupPadding * 2 -
+                      kInputSettingsActionGroupBorderWidth * 2 -
+                      kInputSettingsBindingRowBorderWidth * 2);
   return result;
 }
 

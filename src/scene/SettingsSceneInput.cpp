@@ -433,8 +433,9 @@ void SettingsScene::refreshInputDropdowns() {
 View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   ensureInputCaptureController();
   auto *cards = makeInputCardsColumn(metrics);
-  const int bodyWidth =
-      std::max(0, metrics.cardsWidth - metrics.cardPadding * 2);
+  const int bodyWidth = std::max(
+      0, metrics.cardsWidth - metrics.cardPadding * 2 -
+             kInputSettingsCardBorderWidth * 2);
   const InputSettingsLayout layout =
       resolveInputSettingsLayout(bodyWidth, metrics.compact);
 
@@ -752,7 +753,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                             static_cast<float>(layout.actionGroupPadding));
     actionGroup->setThemedBackgroundColor(ui_theme::panelSubtle);
     actionGroup->setThemedBorderColor(ui_theme::hairlineSubtle);
-    actionGroup->setBorderWidth(1);
+    actionGroup->setBorderWidth(kInputSettingsActionGroupBorderWidth);
     actionGroup->setCornerRadius(ui_theme::controlRadius());
 
     auto *actionHeader = new View();
@@ -805,7 +806,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       bindingRow->setGap(metrics.compact ? 8.0F : 10.0F);
       bindingRow->setPadding(Edge::Top, 8.0F);
       bindingRow->setThemedBorderColor(ui_theme::hairlineSubtle);
-      bindingRow->setBorderWidth(1);
+      bindingRow->setBorderWidth(kInputSettingsBindingRowBorderWidth);
 
       const auto device = devices.find(binding.control.deviceId);
       const bool missing =
