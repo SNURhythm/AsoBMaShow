@@ -36,6 +36,7 @@ public:
   void confirmReplace();
   void rejectReplace();
   void updateBinding(std::string_view bindingId, const BindingEdit &edit);
+  void removeBinding(std::string_view bindingId);
   void toggleBindingInversion(std::string_view bindingId);
   void resetScopeToDefaults(input::InputScope);
   bool updateGyroscopeTurntableConfig(input::GyroscopeTurntableConfig config);

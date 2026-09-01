@@ -942,6 +942,19 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         requestInputViewRebuild();
       });
       editor->addView(invertButton);
+      auto *unbindButton = makeAccentButton(
+          std::max(0, layout.numericControlWidth), metrics.actionButtonHeight,
+          makeText("Unbind", metrics.smallTextSize, ui_theme::textPrimary(),
+                   TextView::CENTER, TextView::MIDDLE),
+          ui_theme::coral());
+      unbindButton->setFlexGrow(layout.stackBindingEditor ? 0.0F : 1.0F);
+      unbindButton->setOnClickListener([this, bindingId = binding.id]() {
+        inputCaptureController->cancel();
+        inputCaptureAction.reset();
+        inputCaptureController->removeBinding(bindingId);
+        requestInputViewRebuild();
+      });
+      editor->addView(unbindButton);
       bindingRow->addView(editor);
       actionGroup->addView(bindingRow);
     }

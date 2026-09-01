@@ -1872,6 +1872,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(settings_virtual_controller_ui_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME settings_input_binding_ui_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/settings_input_binding_ui_contract_tests.py -v)
+    set_tests_properties(settings_input_binding_ui_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     add_test(NAME settings_gameplay_skin_initialization_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest

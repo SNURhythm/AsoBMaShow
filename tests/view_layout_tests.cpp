@@ -732,6 +732,8 @@ void testInputSettingsLayoutPolicy() {
   assert(!wide.stackBindingEditor);
   assert(wide.selectorWidth > 0 &&
          wide.selectorWidth * 3 + wide.selectorGap * 2 <= 1200);
+  assert(wide.numericControlWidth > 0 &&
+         wide.numericControlWidth * 5 + wide.selectorGap * 4 <= 1200);
 
   const auto compact = settings_scene::resolveInputSettingsLayout(520, true);
   assert(compact.stackSelectors);

@@ -44,7 +44,7 @@ constexpr InputSettingsLayout resolveInputSettingsLayout(int availableWidth,
   result.numericControlWidth =
       result.stackBindingEditor
           ? width
-          : std::max(0, (width - result.selectorGap * 3) / 4);
+          : std::max(0, (width - result.selectorGap * 4) / 5);
   return result;
 }
 
