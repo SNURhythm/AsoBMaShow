@@ -4,6 +4,7 @@
 #include "GameplaySkinBuiltinCatalog.h"
 #include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
+#include "../SkinTargetTraits.h"
 #include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
@@ -350,6 +351,9 @@ skinModelReferencedResourceIdsForTesting(
             addSprite(object.knob);
           } else if constexpr (std::is_same_v<T, SkinGraphObject>) {
             if (!object.builtinImageReference) addSprite(object.fill);
+          } else if constexpr (
+              std::is_same_v<T, SkinSelectDistributionGraphObject>) {
+            addSprite(object.sprite);
           } else if constexpr (std::is_same_v<T, SkinGaugeObject>) {
             for (const auto &node : object.orderedNodes) addSprite(node);
           } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
@@ -383,6 +387,7 @@ skinModelReferencedResourceIdsForTesting(
               std::is_same_v<T, SkinPracticeObject> ||
               std::is_same_v<T, SkinBuiltinImageObject> ||
               std::is_same_v<T, SkinPmCharaObject> ||
+              std::is_same_v<T, SkinSongListObject> ||
               std::is_same_v<T, SkinInvalidInGameplayObject> ||
               std::is_same_v<T, SkinBlankObject>) {
             // These objects either generate pixels, use a separate auxiliary
@@ -720,6 +725,14 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     }
     LoadedGameplaySkinDocument document = std::move(*loaded.document);
     appendMovedDiagnostics(result.diagnostics, document.diagnostics);
+    const auto target = skinTargetTraitForType(document.model.model.header.type);
+    if (!target || target->kind != SkinTargetKind::Gameplay) {
+      result.diagnostics.push_back(sessionDiagnostic(
+          "skin.session.type_mismatch",
+          "Configured document does not match a Beatoraja gameplay target.",
+          activation.entry.packageRelativePath));
+      return finish();
+    }
 
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();

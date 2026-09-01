@@ -5412,6 +5412,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/MusicSelectSkinSession.cpp
+            src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp

@@ -1,3 +1,4 @@
+#include "skin/beatoraja/MusicSelectSkinSession.h"
 #include "skin/beatoraja/PlaySkinSession.h"
 #include "skin/beatoraja/ResultSkinSession.h"
 
@@ -1175,6 +1176,18 @@ if skin_config then
             .liveResourceCounters = liveResourceCounters_};
   }
 
+  MusicSelectSkinSessionContext musicSelectContext() {
+    MusicSelectSkinFrame initialFrame;
+    initialFrame.serial = 1;
+    return {.storageRoots = roots_,
+            .resourcePreparation = resources_,
+            .initialFrame = std::move(initialFrame),
+            .textureDevice = device_,
+            .movieDevice = movieDevice_,
+            .audioBackend = audioBackend_,
+            .liveResourceCounters = liveResourceCounters_};
+  }
+
   const SkinEntryId &entry() const noexcept { return entry_; }
   const SkinProfileId &profile() const noexcept { return profile_; }
   const std::string &configurationDigest() const noexcept {
@@ -1661,7 +1674,7 @@ return skin
                                         "skin/skipped.lr2skin",
                                         "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 10 && unavailable == 2,
+               selectable == 11 && unavailable == 1,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -2473,6 +2486,26 @@ void testActivationRejectsAReconciledDigestMismatch() {
                            "skin.session.configuration_digest_mismatch") &&
              !fs::exists(fixture.configuredMarkerPath()),
          "digest mismatch rejects before configured-phase sandbox writes");
+}
+
+void testMusicSelectActivationCreatesAConfiguredOwningSession() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 93,
+  };
+  auto created = MusicSelectSkinSession::create(
+      std::move(request), fixture.musicSelectContext());
+  const bool hasError = std::ranges::any_of(
+      created.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error;
+      });
+  expect(created.session != nullptr && !hasError &&
+             fixture.device()->createCalls == 2,
+         "type-5 activation runs the configured document loader, resource "
+         "plan, and owning music-select session");
 }
 
 void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
@@ -6652,6 +6685,7 @@ int main() {
   testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks();
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
+  testMusicSelectActivationCreatesAConfiguredOwningSession();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
   testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();
