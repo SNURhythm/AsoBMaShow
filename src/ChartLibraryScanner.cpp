@@ -118,6 +118,26 @@ bool parsedChartMetaLooksInsertable(const bms_parser::ChartMeta &meta) {
          (meta.TotalNotes > 0 || meta.TotalLandmineNotes > 0);
 }
 
+struct ParsedChartMetadata {
+  bms_parser::ChartMeta meta;
+  ChartSequenceFeatures sequenceFeatures;
+};
+
+ChartSequenceFeatures sequenceFeatures(const bms_parser::Chart &chart) {
+  ChartSequenceFeatures result;
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) continue;
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) continue;
+      // SongData.setBMSModel at the pinned commit checks these exact values.
+      result.hasBpmStop = result.hasBpmStop || timeline->StopLength > 0;
+      result.hasScrollChange =
+          result.hasScrollChange || timeline->Scroll != 1.0;
+    }
+  }
+  return result;
+}
+
 bool hasTextDocumentExtension(const std::filesystem::path &path) {
   std::string filename = fspath_to_utf8(path.filename());
   if (filename.size() < 4) {
@@ -452,7 +472,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     bool deleted = false;
     bool parseAttempted = false;
     bool hasDocument = false;
-    std::optional<bms_parser::ChartMeta> preparedMeta;
+    std::optional<ParsedChartMetadata> preparedMeta;
   };
   std::vector<ScanDiff> diffs;
   std::vector<std::pair<std::filesystem::path, bool>> documentFlagUpdates;
@@ -596,7 +616,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto parseChartMeta = [&](const std::filesystem::path &path,
                             const std::vector<unsigned char> *bytes)
-      -> std::optional<bms_parser::ChartMeta> {
+      -> std::optional<ParsedChartMetadata> {
     const std::string chartText = fspath_to_utf8(path);
     bms_parser::Parser parser;
     bms_parser::Chart *rawChart = nullptr;
@@ -604,7 +624,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::atomic_bool cancelled(false);
     try {
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &rawChart, false, true, cancelled);
+        parser.Parse(*bytes, &rawChart, false, false, cancelled);
         chart.reset(rawChart);
         rawChart = nullptr;
         if (chart != nullptr) {
@@ -617,7 +637,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &rawChart, false, true,
+        archive_file::parseChart(parser, path, &rawChart, false, false,
                                  cancelled);
         chart.reset(rawChart);
         rawChart = nullptr;
@@ -647,7 +667,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           " md5=" + chart->Meta.MD5 + " sha256=" + chart->Meta.SHA256);
       return std::nullopt;
     }
-    return chart->Meta;
+    return ParsedChartMetadata{.meta = std::move(chart->Meta),
+                               .sequenceFeatures = sequenceFeatures(*chart)};
   };
 
   struct ArchiveParseBatch {
@@ -655,13 +676,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::vector<std::filesystem::path> innerPaths;
     std::vector<bool> parseAttempted;
     std::vector<bool> hasDocument;
-    std::vector<std::optional<bms_parser::ChartMeta>> preparedMetas;
+    std::vector<std::optional<ParsedChartMetadata>> preparedMetas;
   };
 
   struct ArchiveParsedChart {
     std::filesystem::path innerPath;
     std::filesystem::path chartPath;
-    std::optional<bms_parser::ChartMeta> meta;
+    std::optional<ParsedChartMetadata> meta;
   };
 
   struct ArchiveParseJobResult {
@@ -711,7 +732,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::filesystem::path path;
     bool parseAttempted = false;
     bool hasDocument = false;
-    std::optional<bms_parser::ChartMeta> meta;
+    std::optional<ParsedChartMetadata> meta;
   };
   struct PreparedArchive {
     std::filesystem::path path;
@@ -2066,14 +2087,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   }
 
-  auto insertIndividualChartMeta = [&](bms_parser::ChartMeta &meta,
+  auto insertIndividualChartMeta = [&](ParsedChartMetadata &parsed,
                                        bool hasDocument) -> bool {
     if (!recordStorageResult(
-            scanBatch->UpsertChart(meta, std::nullopt, hasDocument))) {
+            scanBatch->UpsertChart(parsed.meta, std::nullopt, hasDocument,
+                                   parsed.sequenceFeatures))) {
       return false;
     }
     if (!reconcileExisting) {
-      upsertedChartPaths.push_back(meta.BmsPath);
+      upsertedChartPaths.push_back(parsed.meta.BmsPath);
     }
     return true;
   };
@@ -2090,10 +2112,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   };
 
   auto parseIndividualChartBatch = [&](std::size_t begin, std::size_t end)
-      -> std::vector<std::optional<bms_parser::ChartMeta>> {
+      -> std::vector<std::optional<ParsedChartMetadata>> {
     using Clock = std::chrono::steady_clock;
     const std::size_t count = end > begin ? end - begin : 0;
-    std::vector<std::optional<bms_parser::ChartMeta>> parsedMetas(count);
+    std::vector<std::optional<ParsedChartMetadata>> parsedMetas(count);
     if (count == 0) {
       return parsedMetas;
     }
@@ -2773,11 +2795,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
               parsedInBatch < batch.hasDocument.size() &&
               batch.hasDocument[parsedInBatch];
           if (recordStorageResult(scanBatch->UpsertChart(
-                  *parsed.meta, storedArchiveSourcePreference, hasDocument))) {
+                  parsed.meta->meta, storedArchiveSourcePreference,
+                  hasDocument, parsed.meta->sequenceFeatures))) {
             ++insertedCharts;
             ++storedChartCount;
             if (!reconcileExisting) {
-              upsertedChartPaths.push_back(parsed.meta->BmsPath);
+              upsertedChartPaths.push_back(parsed.meta->meta.BmsPath);
             }
           } else {
             archiveStorageHealthy = false;

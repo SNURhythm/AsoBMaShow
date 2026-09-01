@@ -77,6 +77,10 @@ struct ChartMetaRecord {
   // SongData.CONTENT_TEXT as established by Beatoraja's library scan. This
   // is a folder-level fact, separate from BMS header metadata.
   bool hasDocument = false;
+  // SongData's FEATURE_STOPSEQUENCE and FEATURE_SCROLL bits are derived from
+  // every timeline while Beatoraja scans a chart.
+  bool hasBpmStop = false;
+  bool hasScrollChange = false;
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unavailable = false;
@@ -89,6 +93,11 @@ struct ChartMetaRecord {
   // under this chart's SHA-256 identity.  Its bit assignments are consumed by
   // gameplay skin image indexes 89 and 90.
   int songReviewFavorite = 0;
+};
+
+struct ChartSequenceFeatures {
+  bool hasBpmStop = false;
+  bool hasScrollChange = false;
 };
 
 enum class ChartMetaPathBatchReadStatus { Loaded, Invalid, StorageFailure };
@@ -179,7 +188,8 @@ public:
       bool UpsertChart(
           const bms_parser::ChartMeta &meta,
           std::optional<ChartSourcePreference> sourcePreference,
-          bool hasDocument = false);
+          bool hasDocument = false,
+          ChartSequenceFeatures sequenceFeatures = {});
       bool UpdateChartHasDocument(const std::filesystem::path &path,
                                   bool hasDocument);
       bool DeleteChart(const std::filesystem::path &path);

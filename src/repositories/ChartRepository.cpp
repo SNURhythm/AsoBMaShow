@@ -29,7 +29,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 5;
+constexpr int kChartDatabaseSchemaVersion = 6;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -163,6 +163,8 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "total_backspin_notes INTEGER,"
       "ln_mode INTEGER NOT NULL DEFAULT 0,"
       "has_document INTEGER NOT NULL DEFAULT 0,"
+      "has_bpm_stop INTEGER NOT NULL DEFAULT 0,"
+      "has_scroll_change INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")";
@@ -565,6 +567,13 @@ bool migrateChartDatabaseToVersion5(sqlite3 *db, bool &completed) {
   return true;
 }
 
+bool migrateChartDatabaseToVersion6(sqlite3 *db, bool &completed) {
+  // SongData derives both feature bits from the full timeline model. Older
+  // chart_meta rows contain no equivalent source fact, so they must be
+  // rebuilt by the normal scanner rather than assigned a guessed value.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -609,6 +618,8 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {3, "persist authored TOTAL metadata", migrateChartDatabaseToVersion3},
       {4, "persist folder document metadata", migrateChartDatabaseToVersion4},
       {5, "persist SongReview favorite flags", migrateChartDatabaseToVersion5},
+      {6, "persist stop and scroll sequence flags",
+       migrateChartDatabaseToVersion6},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

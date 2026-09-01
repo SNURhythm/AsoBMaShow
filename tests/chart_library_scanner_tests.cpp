@@ -273,6 +273,35 @@ void testBasicNoOpAndDeleteScan() {
   assert(repository.GetLibraryRevision() > stableRevision);
 }
 
+void testSequenceFeaturesMatchBeatorajaSongData() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  const auto chartPath = root / "sequence-features.bms";
+  {
+    std::ofstream chart(chartPath);
+    chart << chartText("Sequence Features")
+          << "#STOP01 48\n"
+          << "#SCROLL01 0.5\n"
+          << "#00209:01\n"
+          << "#002SC:01\n";
+  }
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {root}) == 1);
+
+  const std::array paths{chartPath};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(records.records.size() == 1);
+  assert(records.records.front().hasBpmStop);
+  assert(records.records.front().hasScrollChange);
+}
+
 void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -1608,6 +1637,7 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
 
 int main() {
   testBasicNoOpAndDeleteScan();
+  testSequenceFeaturesMatchBeatorajaSongData();
   testFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testKnownChartRefreshesFolderTextDocumentFlag();

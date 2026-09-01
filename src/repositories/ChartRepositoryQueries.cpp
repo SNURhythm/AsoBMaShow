@@ -85,6 +85,8 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.total_backspin_notes, 0),"
     "COALESCE(cm.ln_mode, 0),"
     "COALESCE(cm.has_document, 0),"
+    "COALESCE(cm.has_bpm_stop, 0),"
+    "COALESCE(cm.has_scroll_change, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -132,6 +134,8 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.total_backspin_notes, 0),"
     "COALESCE(cm.ln_mode, 0),"
     "COALESCE(cm.has_document, 0),"
+    "COALESCE(cm.has_bpm_stop, 0),"
+    "COALESCE(cm.has_scroll_change, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -2048,12 +2052,17 @@ bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
 ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   ChartMetaRecord record;
   record.meta = readChartMeta(stmt);
-  // ChartMeta consumes the first 29 source columns.  The shared select list
-  // reserves its 30th column for SongData.CONTENT_TEXT, which belongs to the
-  // record wrapper rather than bms_parser::ChartMeta.
-  int idx = kChartMetaColumnCount - 1;
+  // ChartMeta consumes the first 29 source columns. The remaining shared
+  // columns are SongData facts owned by the record wrapper.
+  int idx = 29;
   if (sqlite3_column_count(stmt) > idx) {
     record.hasDocument = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasBpmStop = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasScrollChange = sqlite3_column_int(stmt, idx++) != 0;
   }
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);

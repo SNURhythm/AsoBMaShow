@@ -44,7 +44,8 @@ bool modeMatches(std::string_view filter, int mode) {
 }
 
 bool difficultyMatches(std::string_view filter,
-                       const bms_parser::ChartMeta &meta) {
+                       const ChartMetaRecord &record) {
+  const auto &meta = record.meta;
   if (filter == "ALL") return true;
   if (filter == "SCRATCH CHART") {
     return meta.TotalNotes > 0 &&
@@ -57,7 +58,8 @@ bool difficultyMatches(std::string_view filter,
                meta.TotalNotes;
   }
   if (filter == "SPEED CHANGE CHART") {
-    return meta.MinBpm != meta.MaxBpm;
+    return meta.MinBpm != meta.MaxBpm || record.hasScrollChange ||
+           record.hasBpmStop;
   }
   constexpr std::array<std::pair<std::string_view, int>, 5> profiles{{
       {"BEGINNER", 0}, {"NORMAL", 500}, {"HYPER", 700},
@@ -224,7 +226,7 @@ void MusicSelectBarManager::rebuildRows(
           if (!bar.chart ||
               (((bar.chart->songReviewFavorite & (4 | 8)) == 0) &&
                modeMatches(mode, songMode(bar.chart->meta)) &&
-               difficultyMatches(difficulty, bar.chart->meta))) {
+               difficultyMatches(difficulty, *bar.chart))) {
             rows_.push_back(bar);
           }
         }

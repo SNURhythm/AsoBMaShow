@@ -85,15 +85,17 @@ void testPinnedFilterFallbackAndSort() {
   first->chart->meta.Title = "Zulu";
   first->chart->meta.KeyMode = 7;
   first->chart->meta.TotalNotes = 500;
+  first->chart->meta.MinBpm = first->chart->meta.MaxBpm = 120;
   first->score = ScoreBestSnapshot{.score = 500, .maxScore = 1000};
   second->chart.emplace();
   second->chart->meta.Title = "Alpha";
   second->chart->meta.KeyMode = 14;
   second->chart->meta.TotalNotes = 1300;
+  second->chart->meta.MinBpm = second->chart->meta.MaxBpm = 120;
   second->score = ScoreBestSnapshot{.score = 1800, .maxScore = 2600};
 
   MusicSelectBarManager manager(
-      std::move(projection),
+      projection,
       {.modeFilter = "14KEY", .difficultyFilter = "ANOTHER",
        .sortId = "TITLE"});
   require(manager.openSelected(), "filter fixture opens the first folder");
@@ -122,6 +124,16 @@ void testPinnedFilterFallbackAndSort() {
               snapshot.rows.front().id.value == "song:2" &&
               snapshot.rows.back().id.value == "song:1",
           "sortable directories use the selected BarSorter");
+
+  first->chart->hasBpmStop = true;
+  second->chart->hasScrollChange = true;
+  MusicSelectBarManager speedManager(
+      std::move(projection),
+      {.modeFilter = "ALL", .difficultyFilter = "SPEED CHANGE CHART"});
+  require(speedManager.openSelected(), "speed filter fixture opens");
+  snapshot = speedManager.snapshot();
+  require(snapshot.rows.size() == 2,
+          "speed-change filter uses stop and scroll sequence flags");
 
   auto invisible = fixture();
   auto *hiddenOne = const_cast<MusicSelectBar *>(invisible.find({"song:1"}));
