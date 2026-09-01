@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
+import os
 import pathlib
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -127,6 +130,68 @@ CASES = (
 )
 
 NATIVE_EXECUTABLE = None
+TARGET_JAVA_MAJOR = 17
+
+
+def _java_major(java):
+    result = subprocess.run(
+        [str(java), "-version"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    version = re.search(
+        r'version "(?:1\.)?(\d+)', result.stderr + result.stdout
+    )
+    return int(version.group(1)) if version else None
+
+
+def _java_home_candidates():
+    configured = os.environ.get("ASOBMASHOW_JAVA_17_HOME")
+    if configured:
+        yield pathlib.Path(configured)
+
+    java_home_tool = pathlib.Path("/usr/libexec/java_home")
+    if sys.platform == "darwin" and java_home_tool.is_file():
+        result = subprocess.run(
+            [str(java_home_tool), "-v", str(TARGET_JAVA_MAJOR)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            yield pathlib.Path(result.stdout.strip())
+
+    configured = os.environ.get("JAVA_HOME")
+    if configured:
+        yield pathlib.Path(configured)
+
+    java = shutil.which("java")
+    if java:
+        yield pathlib.Path(java).resolve().parent.parent
+
+    for candidate in sorted(pathlib.Path("/usr/lib/jvm").glob("*17*")):
+        yield candidate
+
+
+def _java_17_tools():
+    executable_suffix = ".exe" if os.name == "nt" else ""
+    visited = set()
+    for home in _java_home_candidates():
+        home = home.expanduser().resolve()
+        if home in visited:
+            continue
+        visited.add(home)
+        java = home / "bin" / f"java{executable_suffix}"
+        javac = home / "bin" / f"javac{executable_suffix}"
+        if not java.is_file() or not javac.is_file():
+            continue
+        if _java_major(java) == TARGET_JAVA_MAJOR:
+            return java, javac
+    raise RuntimeError(
+        "Java 17 is required for the Beatoraja Pattern oracle; set "
+        "ASOBMASHOW_JAVA_17_HOME to a JDK 17 installation"
+    )
 
 
 JAVA_SOURCE = r"""
@@ -180,18 +245,19 @@ class LuaSkinJavaPatternOracleTests(unittest.TestCase):
             self.fail("native matcher executable argument is required")
         native = NATIVE_EXECUTABLE
         self.assertTrue(native.is_file(), native)
+        java_executable, javac_executable = _java_17_tools()
 
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             source = directory / "LuaSkinJavaPatternOracle.java"
             source.write_text(textwrap.dedent(JAVA_SOURCE), encoding="utf-8")
-            subprocess.run(["javac", str(source)], check=True)
+            subprocess.run([str(javac_executable), str(source)], check=True)
 
             for pattern, subject in CASES:
                 with self.subTest(pattern=pattern, subject=subject):
-                    java = subprocess.run(
+                    java_result = subprocess.run(
                         [
-                            "java",
+                            str(java_executable),
                             "-cp",
                             str(directory),
                             "LuaSkinJavaPatternOracle",
@@ -208,7 +274,7 @@ class LuaSkinJavaPatternOracleTests(unittest.TestCase):
                         capture_output=True,
                         text=True,
                     ).stdout.strip()
-                    self.assertEqual(actual, java)
+                    self.assertEqual(actual, java_result)
 
 
 if __name__ == "__main__":
