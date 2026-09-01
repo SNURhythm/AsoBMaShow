@@ -601,6 +601,10 @@ json settingsToJson(const AppSettings &settings) {
        settings.skinMusicSelectScrollDurationHigh},
       {"skinMusicSelectAnalogTicksPerScroll",
        settings.skinMusicSelectAnalogTicksPerScroll},
+      {"skinPlayer2RandomOption", settings.skinPlayer2RandomOption},
+      {"skinDoublePlayOption", settings.skinDoublePlayOption},
+      {"skinBgaMode", settings.skinBgaMode},
+      {"skinBgaExpandMode", settings.skinBgaExpandMode},
       {"skinTargetId", settings.skinTargetId},
       {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
@@ -807,6 +811,13 @@ AppSettings settingsFromJson(const json &document,
             settings.skinMusicSelectScrollDurationHigh, diagnostics);
   readValue(document, "skinMusicSelectAnalogTicksPerScroll",
             settings.skinMusicSelectAnalogTicksPerScroll, diagnostics);
+  readValue(document, "skinPlayer2RandomOption",
+            settings.skinPlayer2RandomOption, diagnostics);
+  readValue(document, "skinDoublePlayOption", settings.skinDoublePlayOption,
+            diagnostics);
+  readValue(document, "skinBgaMode", settings.skinBgaMode, diagnostics);
+  readValue(document, "skinBgaExpandMode", settings.skinBgaExpandMode,
+            diagnostics);
   readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,
                         diagnostics);
   readBoundedSkinTargetList(document, settings.skinTargetList, diagnostics);

@@ -257,6 +257,13 @@ public:
   int skinMusicSelectScrollDurationLow = 300;
   int skinMusicSelectScrollDurationHigh = 50;
   int skinMusicSelectAnalogTicksPerScroll = 3;
+  // Remaining selector-owned Config/PlayerConfig values. These retain the
+  // pinned source's integer domains because the native settings model cannot
+  // losslessly represent BGA AUTO or every DP option.
+  int skinPlayer2RandomOption = 0;
+  int skinDoublePlayOption = 0;
+  int skinBgaMode = 0;
+  int skinBgaExpandMode = 1;
   // Raw PlayerConfig.targetid and targetlist. TargetProperty performs target
   // lookup only when StringPropertyFactory asks for a neighbouring label, so
   // these remain independent from Aso's selectable pacemaker targets.

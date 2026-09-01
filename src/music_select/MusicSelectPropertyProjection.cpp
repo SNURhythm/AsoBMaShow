@@ -417,10 +417,11 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
   out.imageIndexes[42] = replay::projectedBeatorajaReplayOptionIndex(
                              settings.selectedPlayOption)
                              .value_or(0);
-  out.imageIndexes[43] = 0;
-  out.imageIndexes[54] = 0;
+  out.imageIndexes[43] = settings.skinPlayer2RandomOption;
+  out.imageIndexes[54] = settings.skinDoublePlayOption;
   out.imageIndexes[55] = static_cast<int>(settings.hispeedFixMode);
-  out.imageIndexes[72] = settings.bgaEnabled ? 0 : 2;
+  out.imageIndexes[72] = settings.skinBgaMode;
+  out.imageIndexes[73] = settings.skinBgaExpandMode;
   out.imageIndexes[75] = settings.notesDisplayTimingAutoAdjust ? 1 : 0;
   out.imageIndexes[78] = beatorajaGaugeAutoShift(selections.gaugeAutoShift);
   out.imageIndexes[341] = gaugeTypeIndex(selections.gaugeAutoShiftLowerBound);

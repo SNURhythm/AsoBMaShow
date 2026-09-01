@@ -76,6 +76,10 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   settings.selectedGaugeAutoShiftMode = "best_clear";
   settings.selectedGaugeAutoShiftLowerBound = "easy";
   settings.selectedPlayOption = "R-RANDOM";
+  settings.skinPlayer2RandomOption = 9;
+  settings.skinDoublePlayOption = 3;
+  settings.skinBgaMode = 2;
+  settings.skinBgaExpandMode = 1;
   settings.selectedLnMode = "CN";
   settings.selectedAssistOption = assist_options::kBpmGuide;
   settings.visibleTimeDurationMilliseconds = 600;
@@ -186,10 +190,11 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.imageIndexes.at(12) == 6 &&
               values.imageIndexes.at(40) == 3 &&
               values.imageIndexes.at(42) == 3 &&
-              values.imageIndexes.at(43) == 0 &&
-              values.imageIndexes.at(54) == 0 &&
+              values.imageIndexes.at(43) == 9 &&
+              values.imageIndexes.at(54) == 3 &&
               values.imageIndexes.at(55) == 2 &&
               values.imageIndexes.at(72) == 2 &&
+              values.imageIndexes.at(73) == 1 &&
               values.imageIndexes.at(78) == 3 &&
               values.imageIndexes.at(301) == 1 &&
               values.imageIndexes.at(306) == 1 &&

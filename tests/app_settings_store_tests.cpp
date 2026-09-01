@@ -474,6 +474,54 @@ void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
          "music-select input configuration uses Beatoraja upper bounds");
 }
 
+void testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "music-select-options.json";
+  AppSettings defaults;
+  expect(defaults.skinPlayer2RandomOption == 0 &&
+             defaults.skinDoublePlayOption == 0 &&
+             defaults.skinBgaMode == 0 && defaults.skinBgaExpandMode == 1,
+         "music-select option configuration uses Beatoraja defaults");
+
+  AppSettings configured;
+  configured.skinPlayer2RandomOption = 9;
+  configured.skinDoublePlayOption = 3;
+  configured.skinBgaMode = 2;
+  configured.skinBgaExpandMode = 2;
+  std::string error;
+  expect(AppSettingsStore::Save(path, configured, error),
+         "music-select option configuration saves: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinPlayer2RandomOption == 9 &&
+             loaded.settings.skinDoublePlayOption == 3 &&
+             loaded.settings.skinBgaMode == 2 &&
+             loaded.settings.skinBgaExpandMode == 2,
+         "music-select option configuration survives persistence");
+
+  AppSettings lower;
+  lower.skinPlayer2RandomOption = -1;
+  lower.skinDoublePlayOption = -1;
+  lower.skinBgaMode = -1;
+  lower.skinBgaExpandMode = -1;
+  lower.sanitize();
+  expect(lower.skinPlayer2RandomOption == 0 &&
+             lower.skinDoublePlayOption == 0 && lower.skinBgaMode == 0 &&
+             lower.skinBgaExpandMode == 0,
+         "music-select option configuration clamps to Beatoraja lower bounds");
+
+  AppSettings upper;
+  upper.skinPlayer2RandomOption = 10;
+  upper.skinDoublePlayOption = 4;
+  upper.skinBgaMode = 3;
+  upper.skinBgaExpandMode = 3;
+  upper.sanitize();
+  expect(upper.skinPlayer2RandomOption == 9 &&
+             upper.skinDoublePlayOption == 3 && upper.skinBgaMode == 2 &&
+             upper.skinBgaExpandMode == 2,
+         "music-select option configuration clamps to Beatoraja upper bounds");
+}
+
 void testConfiguredTargetListSkinStringsRoundTrip() {
   // The bridge must keep PlayerConfig.targetid and targetlist raw: source
   // TargetProperty performs lookup and fallback only when a skin asks.
@@ -1574,6 +1622,7 @@ int main() {
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
   testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds();
+  testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds();
   testConfiguredTargetListSkinStringsRoundTrip();
   testPlayerConfigurationSkinStringsAreBounded();
   testSkinTargetSelectionsSurviveRestart();
