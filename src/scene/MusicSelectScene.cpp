@@ -409,8 +409,23 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   }
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
-  const auto playInfo =
-      play_options::applySelectedPlayOptions(*chart, selections.playOption);
+  play_options::PlayOptionReplayInfo playInfo;
+  if (!play_options::applyPlayOptionModifier(
+          *chart, selections.playOption, std::nullopt, 0, playInfo.option,
+          playInfo.seed, "music-select")) {
+    launching_ = false;
+    return;
+  }
+  if (chart->Meta.IsDP) {
+    const auto player2 = replay::beatorajaReplayOptionName(
+        context.settings.skinPlayer2RandomOption);
+    if (!player2 || !play_options::applyPlayOptionModifier(
+                        *chart, std::string(*player2), std::nullopt, 1,
+                        playInfo.option2, playInfo.seed2, "music-select")) {
+      launching_ = false;
+      return;
+    }
+  }
   int lnMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
   if (lnMode == 0) lnMode = long_note_mode::valueFromId(selections.longNoteMode);
   applyEffectiveLongNoteModeToChart(*chart, lnMode);
@@ -431,6 +446,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       .playOptionSeed = playInfo.seed,
       .playOption2 = playInfo.option2,
       .playOption2Seed = playInfo.seed2,
+      .doublePlayFlip = context.settings.skinDoublePlayOption == 1,
       .longNoteMode = lnMode,
       .assistOption = selections.assistOption,
       .pacemakerTarget = selections.pacemakerTarget,
@@ -601,15 +617,64 @@ void MusicSelectScene::executeEvent(
     const skin::MusicSelectSkinAction &action) {
   const auto id = numericSelector(action.selector);
   const auto name = selectorName(action.selector);
-  if ((id && *id == 15) || name == "play") {
-    launchSelected();
-  } else if ((id && *id == 16) || name == "autoplay") {
-    launchSelected(true, false);
-  } else if ((id && *id == 315) || name == "practice") {
-    launchSelected(false, true);
-  } else if ((id && *id == 14) || name == "skinconfig" ||
-             (id && *id == 13) || name == "keyconfig") {
-    openSettings();
+  const auto snapshot = bars_.snapshot();
+  const MusicSelectBar *selected =
+      snapshot.selectedIndex < snapshot.rows.size()
+          ? &snapshot.rows[snapshot.selectedIndex]
+          : nullptr;
+  MusicSelectEventContext eventContext{
+      .settings = context.settings,
+      .sortIndex = sortIndex_,
+      .hasSelectedPlayConfig = selected != nullptr && selected->chart.has_value(),
+      .selectedSongHasPath =
+          selected != nullptr && selected->chart.has_value() &&
+          !selected->chart->meta.BmsPath.empty(),
+      .rivalCount = 0,
+      .currentRivalIndex = currentRivalIndex_,
+  };
+  const int argument1 = action.arguments.empty() ? 0 : action.arguments[0];
+  const int argument2 =
+      action.arguments.size() < 2 ? 0 : action.arguments[1];
+  auto outcome = MusicSelectEventController::execute(
+      eventContext, id.value_or(-1), name, argument1, argument2);
+  sortIndex_ = eventContext.sortIndex;
+  currentRivalIndex_ = eventContext.currentRivalIndex;
+  if (!outcome.failure.empty()) {
+    enterError({skin::SkinDiagnostic{
+        .code = "skin.music_select.event_failed",
+        .message = std::move(outcome.failure)}});
+    return;
+  }
+  if (outcome.settingsChanged && !context.saveSettings()) {
+    enterError({skin::SkinDiagnostic{
+        .code = "skin.music_select.settings_save_failed",
+        .message = "The music-select event changed configuration, but the "
+                   "profile settings could not be saved."}});
+    return;
+  }
+  for (const auto &effect : outcome.effects) {
+    switch (effect.kind) {
+    case MusicSelectEventEffectKind::RefreshBars:
+      reloadLibrary();
+      break;
+    case MusicSelectEventEffectKind::OpenSettings:
+      openSettings();
+      return;
+    case MusicSelectEventEffectKind::Play:
+      launchSelected();
+      return;
+    case MusicSelectEventEffectKind::Autoplay:
+      launchSelected(true, false);
+      return;
+    case MusicSelectEventEffectKind::Practice:
+      launchSelected(false, true);
+      return;
+    case MusicSelectEventEffectKind::Replay:
+      selectedReplay_ = effect.value;
+      break;
+    default:
+      break;
+    }
   }
 }
 

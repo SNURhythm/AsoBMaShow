@@ -3,6 +3,7 @@
 #include "MusicSelectToolbarView.h"
 #include "Scene.h"
 #include "../music_select/MusicSelectBarManager.h"
+#include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
 #include "../repositories/ScoreRepositoryModels.h"
@@ -66,6 +67,7 @@ private:
   int sortIndex_ = 0;
   int panelState_ = 0;
   int selectedReplay_ = -1;
+  int currentRivalIndex_ = -1;
   std::chrono::steady_clock::time_point started_;
   std::vector<skin::SkinDiagnostic> diagnostics_;
   MusicSelectToolbarView *toolbar_ = nullptr;
