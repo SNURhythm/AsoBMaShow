@@ -177,7 +177,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
       "chart_artist, score, max_score, max_combo, combo_break, pgreat, great, "
       "good, bad, poor, kpoor, fast, slow, final_gauge, clear_type, "
-      "play_duration_seconds, "
+      "play_duration_seconds, bad_points, average_judge_micros, "
       "ruleset_version, eligibility, provenance_json, attempt_id, "
       "score_source, source_provider_id, source_server_origin, "
       "source_remote_score_id, source_sync_generation";
@@ -185,7 +185,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
     query += ", created_at";
   }
   query += ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   if (createdAt.has_value()) {
     query += ", ?";
   }
@@ -233,6 +233,22 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   bound = bound && sqlite3_bind_int64(stmt.get(), bindIndex++,
                                        scorePlayDurationSeconds(score)) ==
                        SQLITE_OK;
+  const std::optional<int> badPoints =
+      storage.source == ScoreStorageSource::LocalGameplay
+          ? std::optional<int>(score.bad + score.poor + score.kPoor)
+          : storage.badPoints;
+  if (badPoints) {
+    bindInt(*badPoints);
+  } else {
+    bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
+  }
+  if (storage.averageJudgeMicros) {
+    bound = bound && sqlite3_bind_int64(stmt.get(), bindIndex++,
+                                        *storage.averageJudgeMicros) ==
+                         SQLITE_OK;
+  } else {
+    bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
+  }
   bindInt(score.provenance.ruleset.version);
   bindInt(static_cast<int>(score.provenance.eligibility));
   bindText(provenanceJson);
@@ -261,7 +277,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   if (createdAt.has_value()) {
     bindText(*createdAt);
   }
-  const int expectedBindIndex = createdAt.has_value() ? 32 : 31;
+  const int expectedBindIndex = createdAt.has_value() ? 34 : 33;
   if (!bound || bindIndex != expectedBindIndex) {
     logSqlError("binding score insert", db);
     return {.diagnostic = "could not bind the score insert"};
@@ -326,7 +342,8 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
           "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
           "final_gauge, clear_type, play_duration_seconds, ruleset_version, "
           "eligibility, "
-          "provenance_json, created_at FROM scores WHERE attempt_id = ?",
+          "provenance_json, created_at, average_judge_micros FROM scores "
+          "WHERE attempt_id = ?",
           stmt, "preparing projected score collision lookup",
           logSqlErrorText) ||
       !bindSqliteText(stmt.get(), 1, pending.attemptId)) {
@@ -378,7 +395,9 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
       !readStrictScoreInteger(stmt.get(), 22, indexedRulesetVersion) ||
       !readStrictScoreInteger(stmt.get(), 23, indexedEligibility) ||
       !readStrictScoreText(stmt.get(), 24, storedProvenanceJson, false) ||
-      !readStrictScoreText(stmt.get(), 25, storedCreatedAt, false)) {
+      !readStrictScoreText(stmt.get(), 25, storedCreatedAt, false) ||
+      (sqlite3_column_type(stmt.get(), 26) != SQLITE_NULL &&
+       sqlite3_column_type(stmt.get(), 26) != SQLITE_INTEGER)) {
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic =
                 "stored projected score has invalid SQLite value types"};
@@ -404,6 +423,16 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
             .diagnostic =
                 "stored projected score play duration does not match the "
                 "attempted provenance"};
+  }
+  const std::optional<std::int64_t> storedAverageJudgeMicros =
+      sqlite3_column_type(stmt.get(), 26) == SQLITE_INTEGER
+          ? std::optional<std::int64_t>(sqlite3_column_int64(stmt.get(), 26))
+          : std::nullopt;
+  if (storedAverageJudgeMicros != pending.averageJudgeMicros) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic =
+                "stored projected score average judge does not match the "
+                "attempted payload"};
   }
 
   const int nextRc = sqlite3_step(stmt.get());
@@ -621,7 +650,7 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
       "COALESCE(s.pgreat, 0), COALESCE(s.great, 0), COALESCE(s.good, 0), "
       "COALESCE(s.bad, 0), COALESCE(s.poor, 0), COALESCE(s.score_source, 0), "
       "COALESCE(h.play_count, 0), COALESCE(h.clear_count, 0), "
-      "h.last_played "
+      "h.last_played, metrics.bad_points, metrics.average_judge_micros "
       "FROM " + qualifiedScoreTable(schema, "score_sha256_best_score_cache") +
       " b LEFT JOIN " + qualifiedScoreTable(schema, "scores") +
       " s ON s.id = b.score_id LEFT JOIN (SELECT lower(trim(p.chart_sha256)) "
@@ -636,7 +665,16 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
       "p.score_source = " +
       std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
       " GROUP BY lower(trim(p.chart_sha256)), modes.ln_mode) h ON "
-      "h.chart_sha256 = b.chart_sha256 AND h.ln_mode = b.ln_mode";
+      "h.chart_sha256 = b.chart_sha256 AND h.ln_mode = b.ln_mode LEFT JOIN "
+      "(SELECT lower(trim(m.chart_sha256)) AS chart_sha256, modes.ln_mode, "
+      "MIN(m.bad_points) AS bad_points, MIN(m.average_judge_micros) AS "
+      "average_judge_micros FROM " +
+      qualifiedScoreTable(schema, "scores") + " m JOIN " +
+      score_cache_queries::detail::playableLongNoteModesSql() +
+      " modes ON m.ln_mode = -1 OR m.ln_mode = modes.ln_mode WHERE " +
+      score_cache_queries::detail::scoreParticipatesInBestExpr("m") +
+      " GROUP BY lower(trim(m.chart_sha256)), modes.ln_mode) metrics ON "
+      "metrics.chart_sha256 = b.chart_sha256 AND metrics.ln_mode = b.ln_mode";
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
           db, query, stmt, "loading score best scores", logSqlErrorText)) {
@@ -668,6 +706,12 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
     if (sqlite3_column_type(stmt.get(), 17) == SQLITE_INTEGER) {
       snapshot.lastPlayedUnixSeconds =
           static_cast<std::int64_t>(sqlite3_column_int64(stmt.get(), 17));
+    }
+    if (sqlite3_column_type(stmt.get(), 18) == SQLITE_INTEGER) {
+      snapshot.badPoints = sqlite3_column_int(stmt.get(), 18);
+    }
+    if (sqlite3_column_type(stmt.get(), 19) == SQLITE_INTEGER) {
+      snapshot.averageJudgeMicros = sqlite3_column_int64(stmt.get(), 19);
     }
     storeBestScore(cache.scoreBySha256, sha256, lnMode, snapshot);
   }
@@ -994,7 +1038,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   const score_repository_detail::ScoreWriteOutcome inserted =
       score_repository_detail::InsertScoreWriteOnConnection(
           db, pending.score, pending.attemptId, pending.createdAt,
-          *provenanceJson);
+          *provenanceJson,
+          {.averageJudgeMicros = pending.averageJudgeMicros});
   if (inserted.status == score_repository_detail::ScoreWriteStatus::Inserted) {
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
     return {.status = ProjectionStatus::Inserted};

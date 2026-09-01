@@ -3,6 +3,8 @@
 //
 
 #include "GamePlayScene.h"
+
+#include "../../BeatorajaScoreMetrics.h"
 #include "GameplayBmsResourceAvailability.h"
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
@@ -5347,6 +5349,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           recordedReplay.laneCoverEvents.empty()
               ? effectiveNoteStartPositionPercent()
               : recordedReplay.laneCoverEvents.front().noteStartPositionPercent;
+      const auto timing = beatorajaResultTimingStatistics(
+          &recordedReplay, chart->Meta.TotalNotes, chart);
       const replay::ChartReplayCapture capture{
           .result = std::move(*result),
           .setupFacts = {.chart = resultIdentity,
@@ -5362,6 +5366,9 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           .touchSamples = modernCapture->touchSamples,
           .laneCoverEvents = modernCapture->laneCoverEvents,
           .timeBounds = modernCapture->timeBounds,
+          .averageJudgeMicros =
+              timing ? std::optional<std::int64_t>(timing->averageJudgeMicros)
+                     : std::nullopt,
       };
       auto attempt = replay::captureChartReplayPersistenceAttempt(
           capture, constructionDiagnostic);

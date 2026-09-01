@@ -35,6 +35,36 @@ bool bindText(sqlite3_stmt *statement, int index, std::string_view value) {
                            SQLITE_TRANSIENT) == SQLITE_OK;
 }
 
+bool readAverageJudgeMicros(sqlite3 *database, int resultId, bool &found,
+                            std::int64_t &value,
+                            std::string &diagnostic) {
+  found = false;
+  value = 0;
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(
+          database,
+          "SELECT average_judge_micros FROM modern_chart_score_metrics "
+          "WHERE modern_chart_result_id=?",
+          statement) != SQLITE_OK ||
+      sqlite3_bind_int(statement.get(), 1, resultId) != SQLITE_OK) {
+    diagnostic = "could not prepare modern chart score metric read";
+    return false;
+  }
+  const int rc = sqlite3_step(statement.get());
+  if (rc == SQLITE_DONE) return true;
+  if (rc != SQLITE_ROW ||
+      sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER) {
+    diagnostic = "modern chart score metric has invalid types";
+    return false;
+  }
+  value = sqlite3_column_int64(statement.get(), 0);
+  found = value >= 0 && sqlite3_step(statement.get()) == SQLITE_DONE;
+  if (!found) {
+    diagnostic = "modern chart score metric is inconsistent";
+  }
+  return found;
+}
+
 std::optional<std::string>
 serializeGaugeHistory(std::span<const float> history) {
   try {
@@ -1046,10 +1076,12 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
   SqliteStatementHandle statement;
   constexpr const char *query =
       "SELECT pending.modern_chart_result_id,pending.created_at,"
-      "result.created_at,result.attempt_id FROM "
+      "result.created_at,result.attempt_id,metrics.average_judge_micros FROM "
       "modern_pending_chart_score_writes pending LEFT JOIN "
       "modern_chart_results result ON result.id="
-      "pending.modern_chart_result_id WHERE pending.attempt_id=?";
+      "pending.modern_chart_result_id LEFT JOIN modern_chart_score_metrics "
+      "metrics ON metrics.modern_chart_result_id=result.id WHERE "
+      "pending.attempt_id=?";
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK ||
       !bindText(statement.get(), 1, attemptId)) {
     return {.status = PendingReadStatus::StorageFailure,
@@ -1063,7 +1095,9 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
       sqlite3_column_type(statement.get(), 0) != SQLITE_INTEGER ||
       sqlite3_column_type(statement.get(), 1) != SQLITE_TEXT ||
       sqlite3_column_type(statement.get(), 2) != SQLITE_TEXT ||
-      sqlite3_column_type(statement.get(), 3) != SQLITE_TEXT) {
+      sqlite3_column_type(statement.get(), 3) != SQLITE_TEXT ||
+      (sqlite3_column_type(statement.get(), 4) != SQLITE_NULL &&
+       sqlite3_column_type(statement.get(), 4) != SQLITE_INTEGER)) {
     return {.status = rc == SQLITE_ROW ? PendingReadStatus::IntegrityConflict
                                        : PendingReadStatus::StorageFailure,
             .diagnostic = "modern pending score row has invalid types"};
@@ -1072,6 +1106,15 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
   const std::string pendingCreatedAt = sqliteColumnString(statement.get(), 1);
   const std::string resultCreatedAt = sqliteColumnString(statement.get(), 2);
   const std::string resultAttemptId = sqliteColumnString(statement.get(), 3);
+  std::optional<std::int64_t> averageJudgeMicros;
+  if (sqlite3_column_type(statement.get(), 4) == SQLITE_INTEGER) {
+    const auto value = sqlite3_column_int64(statement.get(), 4);
+    if (value < 0) {
+      return {.status = PendingReadStatus::IntegrityConflict,
+              .diagnostic = "modern pending score metric is invalid"};
+    }
+    averageJudgeMicros = value;
+  }
   if (rawId <= 0 || rawId > std::numeric_limits<int>::max() ||
       pendingCreatedAt.empty() || pendingCreatedAt != resultCreatedAt ||
       resultAttemptId != attemptId ||
@@ -1100,6 +1143,7 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
               .modernResultId = resultId,
               .createdAt = std::move(pendingCreatedAt),
               .score = std::move(loaded.record->result.score),
+              .averageJudgeMicros = averageJudgeMicros,
           },
   };
 }
@@ -1953,11 +1997,13 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     const result_persistence::ModernChartResult &result,
     const std::optional<ir::IrSubmissionSnapshot> &snapshot,
     const std::optional<ModernReplayFileAttachment> &replayFile,
-    std::span<const ir::IrOutboxDraft> irDrafts) {
+    std::span<const ir::IrOutboxDraft> irDrafts,
+    std::optional<std::int64_t> averageJudgeMicros) {
   profile_database_activity::WriteGuard writeGuard;
   std::string diagnostic;
   if (result.resultId != 0 ||
-      !result_persistence::validateModernChartResult(result, diagnostic)) {
+      !result_persistence::validateModernChartResult(result, diagnostic) ||
+      (averageJudgeMicros && *averageJudgeMicros < 0)) {
     return {.status = ModernChartStageStatus::Invalid,
             .diagnostic = std::move(diagnostic)};
   }
@@ -2035,7 +2081,19 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     const bool snapshotAgrees =
         snapshotFound == snapshot.has_value() &&
         (!snapshotFound || (storedSnapshot && *storedSnapshot == *snapshot));
+    bool metricFound = false;
+    std::int64_t storedAverageJudgeMicros = 0;
+    if (!readAverageJudgeMicros(impl_->sessionDatabase,
+                               existing.record->result.resultId, metricFound,
+                               storedAverageJudgeMicros, diagnostic)) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = std::move(diagnostic)};
+    }
+    const bool metricAgrees =
+        metricFound == averageJudgeMicros.has_value() &&
+        (!metricFound || storedAverageJudgeMicros == *averageJudgeMicros);
     if (existing.record->result != expected || !snapshotAgrees ||
+        !metricAgrees ||
         !verifyDrafts(impl_->sessionDatabase, result.attemptId, irDrafts,
                       diagnostic)) {
       return {.status = ModernChartStageStatus::IntegrityConflict,
@@ -2093,6 +2151,21 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
                     *provenanceJson, resultId)) {
     return {.status = ModernChartStageStatus::StorageFailure,
             .diagnostic = "could not insert modern chart result"};
+  }
+  if (averageJudgeMicros) {
+    SqliteStatementHandle metric;
+    if (prepareSqliteStatement(
+            impl_->sessionDatabase,
+            "INSERT INTO modern_chart_score_metrics("
+            "modern_chart_result_id,average_judge_micros) VALUES(?,?)",
+            metric) != SQLITE_OK ||
+        sqlite3_bind_int(metric.get(), 1, resultId) != SQLITE_OK ||
+        sqlite3_bind_int64(metric.get(), 2, *averageJudgeMicros) != SQLITE_OK ||
+        sqlite3_step(metric.get()) != SQLITE_DONE ||
+        sqlite3_changes(impl_->sessionDatabase) != 1) {
+      return {.status = ModernChartStageStatus::StorageFailure,
+              .diagnostic = "could not insert modern chart score metric"};
+    }
   }
   if (snapshot.has_value()) {
     SqliteStatementHandle statement;

@@ -109,6 +109,7 @@ struct PendingChartScoreWrite {
   int modernResultId = 0;
   std::string createdAt;
   ChartScoreWrite score;
+  std::optional<std::int64_t> averageJudgeMicros;
 
   [[nodiscard]] bool hasExactlyOneOwner() const noexcept {
     return (replayId > 0) != (modernResultId > 0);
@@ -549,7 +550,8 @@ public:
       const result_persistence::ModernChartResult &result,
       const std::optional<ir::IrSubmissionSnapshot> &snapshot,
       const std::optional<ModernReplayFileAttachment> &replayFile,
-      std::span<const ir::IrOutboxDraft> irDrafts = {});
+      std::span<const ir::IrOutboxDraft> irDrafts = {},
+      std::optional<std::int64_t> averageJudgeMicros = std::nullopt);
   ModernChartResultReadOutcome
   LoadModernChartResultByAttempt(std::string_view attemptId);
   ModernChartResultReadOutcome LoadModernChartResult(int resultId);

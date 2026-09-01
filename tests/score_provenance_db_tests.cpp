@@ -1542,7 +1542,17 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   pending.score.kPoor = 40;
   pending.score.comboBreak = 22;
   pending.score.longNoteMode = 2;
+  pending.averageJudgeMicros = 20'000;
   assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  auto metricBest = samplePendingScore(root, "best-score-ir-bp", 15,
+                                       "2026-07-18 12:35:56", 10, 5);
+  metricBest.score.bad = 2;
+  metricBest.score.poor = 1;
+  metricBest.score.longNoteMode = 2;
+  metricBest.averageJudgeMicros = 10'000;
+  assert(helper.SaveProjectedScore(metricBest).status ==
          result_persistence::ProjectionStatus::Inserted);
 
   const auto best = helper.LoadBestScore(sampleMeta(root, "best-score-ir-bp"),
@@ -1550,6 +1560,13 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   assert(best.has_value());
   assert(best->comboBreak == 22);
   assert(best->badPoints == 62);
+
+  const auto selectorBest = helper.LoadBestScores().bestForHash(
+      pending.score.chartSha256, pending.score.longNoteMode);
+  assert(selectorBest.has_value());
+  assert(selectorBest->score == pending.score.score);
+  assert(selectorBest->badPoints == 3);
+  assert(selectorBest->averageJudgeMicros == 10'000);
 }
 
 void testBestScoreCanFilterExactRuleset(const std::filesystem::path &root) {

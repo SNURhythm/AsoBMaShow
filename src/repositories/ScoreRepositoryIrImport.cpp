@@ -227,6 +227,7 @@ ImportedIrScoreProjectionOutcome ScoreRepository::ReplaceImportedIrScores(
         .serverOrigin = serverOrigin,
         .remoteScoreId = remote.remoteScoreId,
         .syncGeneration = syncGeneration,
+        .badPoints = remote.badPoints,
     };
     const auto inserted = score_repository_detail::InsertScoreWriteOnConnection(
         database, write, std::nullopt, *createdAt, *provenanceJson, storage);

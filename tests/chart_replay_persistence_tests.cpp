@@ -257,6 +257,7 @@ struct Harness {
   ReplayFileInspection inspected{.state = ReplayFileState::Missing};
   bool cleanupSucceeds = true;
   ModernChartStageOutcome staged;
+  std::optional<std::int64_t> stagedAverageJudgeMicros;
   result_persistence::PendingReadOutcome pending;
   result_persistence::ProjectionOutcome projected{
       .status = result_persistence::ProjectionStatus::Inserted};
@@ -422,8 +423,10 @@ struct Harness {
           return std::vector<std::byte>{std::byte{0x42}};
         },
         .stage =
-            [this](const auto &, const auto &, const auto &attachment, auto) {
+            [this](const auto &, const auto &, const auto &attachment,
+                   const auto &averageJudgeMicros, auto) {
               events.emplace_back(attachment ? "stage-file" : "stage-summary");
+              stagedAverageJudgeMicros = averageJudgeMicros;
               return staged;
             },
         .loadPending =
@@ -475,6 +478,7 @@ struct Harness {
 
 void testFileFirstSuccessAndExactRetry() {
   Harness harness;
+  harness.attempt.averageJudgeMicros = 12'345;
   ChartReplayPersistence persistence(harness.dependencies());
   const auto saved = persistence.persist(harness.attempt);
   expect(saved.state == ChartReplayPersistenceState::SavedWithReplay &&
@@ -487,6 +491,8 @@ void testFileFirstSuccessAndExactRetry() {
                                        "install", "stage-file",
                                        "load-pending", "project", "ack"}),
          "file bytes install before the result transaction and projection");
+  expect(harness.stagedAverageJudgeMicros == 12'345,
+         "average judge duration reaches durable score staging");
 
   Harness retry;
   auto stored = retry.attempt.result;
@@ -777,7 +783,8 @@ void testRealRepositoriesPersistBrdAndAdvanceOccupiedSlot() {
   expect(repository.EnsureSchema() && score.EnsureSchema(),
          "integration repositories initialize");
   ChartReplayPersistence persistence(score, repository);
-  const auto attempt = validAttempt();
+  auto attempt = validAttempt();
+  attempt.averageJudgeMicros = 20'000;
   const auto saved = persistence.persist(attempt);
   expect(saved.state == ChartReplayPersistenceState::SavedWithReplay &&
              saved.receipt && saved.replayAttached,

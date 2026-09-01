@@ -15,6 +15,7 @@ struct ChartReplayCapture {
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
   ReplayTimeBounds timeBounds;
+  std::optional<std::int64_t> averageJudgeMicros;
 };
 
 [[nodiscard]] std::optional<ChartReplayPersistenceAttempt>
