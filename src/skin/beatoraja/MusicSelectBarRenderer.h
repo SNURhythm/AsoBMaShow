@@ -42,6 +42,7 @@ struct MusicSelectBarDrawCommand {
   std::string text;
   int value = 0;
   std::array<int, 11> folderLampCounts{};
+  std::array<int, 28> folderRankCounts{};
 };
 
 struct MusicSelectBarRenderPlan {

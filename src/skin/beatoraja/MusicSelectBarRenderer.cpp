@@ -136,7 +136,8 @@ void appendCommand(std::vector<MusicSelectBarDrawCommand> &commands,
                    const SkinSongListPresentation &presentation,
                    std::size_t slotIndex, std::int64_t elapsedMillis,
                    std::string text = {}, int value = 0,
-                   std::array<int, 11> folderLampCounts = {}) {
+                   std::array<int, 11> folderLampCounts = {},
+                   std::array<int, 28> folderRankCounts = {}) {
   const auto destination = destinationAt(presentation, elapsedMillis);
   commands.push_back({.family = family,
                       .row = row.row,
@@ -147,7 +148,8 @@ void appendCommand(std::vector<MusicSelectBarDrawCommand> &commands,
                       .offsetY = row.y + (destination ? destination->y : 0.0),
                       .text = std::move(text),
                       .value = value,
-                      .folderLampCounts = folderLampCounts});
+                      .folderLampCounts = folderLampCounts,
+                      .folderRankCounts = folderRankCounts});
 }
 
 } // namespace
@@ -231,7 +233,7 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
       appendCommand(result.commands,
                     MusicSelectBarDrawFamily::FolderGraph, row,
                     *songList.graph, 0, frame.elapsedMillis, {}, 0,
-                    bar.folderLampCounts);
+                    bar.folderLampCounts, bar.folderRankCounts);
     }
   });
   forEachDrawnRow([&](const auto &row, const auto &bar) {

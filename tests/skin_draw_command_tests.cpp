@@ -503,7 +503,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          std::uint64_t sessionSerial = 1,
          bool markProcessedNotes = false,
          const PlaySkinViewport *requestedViewport = nullptr,
-         const SkinPreparedMovieView *movies = nullptr) {
+         const SkinPreparedMovieView *movies = nullptr,
+         const MusicSelectSongListFrame *musicSelectSongList = nullptr) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto defaultViewport = viewport();
@@ -521,7 +522,78 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .runtime = &runtime.runtime(),
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
-                                 .gaugeRandomSource = gaugeRandomSource});
+                                 .gaugeRandomSource = gaugeRandomSource,
+                                 .musicSelectSongList = musicSelectSongList});
+}
+
+void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  SkinImageObject barImage;
+  barImage.definitionKind = SkinImageDefinitionKind::ImageSet;
+  for (int value = 0; value < 7; ++value) {
+    const SkinResourceId resource = static_cast<SkinResourceId>(100 + value);
+    resources.addImage(resource, {.x = 0, .y = 0, .w = 10, .h = 10});
+    barImage.orderedStates.push_back(
+        {.resource = resource,
+         .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}});
+  }
+  SkinSongListPresentation barPresentation{
+      .object = 2,
+      .destination = destination(2, 1, 100.0).presentation};
+  SkinSongListObject songList{
+      .center = 0,
+      .clickable = {0},
+      .listOn = {barPresentation},
+  };
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 5;
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "song-list",
+       .payload = std::move(songList),
+       .authoredOrdinal = 7,
+       .critical = true},
+      {.id = 2,
+       .authoredName = "bar-image",
+       .payload = std::move(barImage),
+       .authoredOrdinal = 1},
+  };
+  model.model.destinations = {destination(1, 7, 0.0)};
+  MusicSelectSongListFrame frame;
+  frame.bars = {{.kind = MusicSelectBarKind::SearchWord,
+                 .title = "query"}};
+  const auto evaluated = evaluate(renderer, runtime, model, resources, state,
+                                  1, 0, nullptr, std::nullopt, nullptr, 1,
+                                  false, nullptr, nullptr, &frame);
+  expect(evaluated.submitReady.has_value() &&
+             evaluated.submitReady->commands.size() == 1,
+         "SkinBar lowers the source-selected image-set state");
+  if (evaluated.submitReady && !evaluated.submitReady->commands.empty()) {
+    const auto *quad = std::get_if<SkinTexturedQuadCommand>(
+        &evaluated.submitReady->commands.front().payload);
+    expect(quad != nullptr && quad->resource == 106,
+           "SearchWordBar maps to image-set state six");
+  }
+  expect(evaluated.interactionLayout.has_value(),
+         "SkinBar publishes its immutable pointer layout");
+  if (evaluated.interactionLayout) {
+    const auto playViewport = viewport();
+    const UiLogicalPoint point{
+        .x = static_cast<float>(playViewport.authoredToUi.m00 * 110.0 +
+                                playViewport.authoredToUi.m01 * 30.0 +
+                                playViewport.authoredToUi.tx),
+        .y = static_cast<float>(playViewport.authoredToUi.m10 * 110.0 +
+                                playViewport.authoredToUi.m11 * 30.0 +
+                                playViewport.authoredToUi.ty)};
+    const auto hit = evaluated.interactionLayout->musicSelectBarAt(
+        point);
+    expect(hit && hit->row == 0 && hit->barIndex == 0 &&
+               hit->authoredOrdinal == 7,
+           "SkinBar hit testing keeps clickable order and wrapped index");
+  }
 }
 
 void testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers() {
@@ -6324,6 +6396,7 @@ void testDesktopAndIpadFitCommandFixtures() {
 } // namespace
 
 int main() {
+  testMusicSelectSongListLowersSelectedBarStateAndPublishesHit();
   testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers();
   testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering();
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();

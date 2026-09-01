@@ -736,6 +736,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -788,6 +789,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -1824,6 +1826,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinCoverNormalization.cpp
@@ -5100,6 +5103,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -5279,6 +5283,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -5457,6 +5462,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp

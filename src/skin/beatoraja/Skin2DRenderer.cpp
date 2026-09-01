@@ -8,6 +8,7 @@
 #include "SkinGaugeGraphRenderer.h"
 #include "SkinNoteDistributionGraphRenderer.h"
 #include "SkinHitErrorVisualizerRenderer.h"
+#include "MusicSelectBarRenderer.h"
 #include "SkinTimingVisualizerRenderer.h"
 
 #include <algorithm>
@@ -17,6 +18,7 @@
 #include <cmath>
 #include <limits>
 #include <memory>
+#include <numeric>
 #include <ranges>
 #include <string>
 #include <type_traits>
@@ -1152,21 +1154,13 @@ struct TextLayoutInput {
   std::optional<SkinDiagnostic> failure;
 };
 
-TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
-                                  const FrameLookupIndex &index,
-                                  const SkinObjectDefinition &object,
-                                  const SkinTextObject &text,
-                                  std::size_t maximumCodepoints) {
+TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
+                                          const SkinObjectDefinition &object,
+                                          const SkinTextObject &text,
+                                          std::string value,
+                                          std::size_t maximumCodepoints) {
   TextLayoutInput result;
-  result.value = text.literal;
-  if (text.value) {
-    auto resolved = resolveString(inputs, index, *text.value);
-    if (resolved.failure) {
-      result.failure = *resolved.failure;
-      return result;
-    }
-    result.value = std::move(*resolved.value);
-  }
+  result.value = std::move(value);
   if (result.value.empty() && !(text.editable && text.writer)) {
     result.suppressed = true;
     return result;
@@ -1231,6 +1225,23 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
     }
   }
   return result;
+}
+
+TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
+                                  const FrameLookupIndex &index,
+                                  const SkinObjectDefinition &object,
+                                  const SkinTextObject &text,
+                                  std::size_t maximumCodepoints) {
+  std::string value = text.literal;
+  if (text.value) {
+    auto resolved = resolveString(inputs, index, *text.value);
+    if (resolved.failure) {
+      return {.failure = *resolved.failure};
+    }
+    value = std::move(*resolved.value);
+  }
+  return prepareTextLayoutForValue(inputs, object, text, std::move(value),
+                                   maximumCodepoints);
 }
 
 int pairKerning(const PreparedSkinTextAtlas &atlas, char32_t left,
@@ -3041,6 +3052,528 @@ lowerJudge(const SkinFrameInputs &inputs, const FrameLookupIndex &index,
   return result;
 }
 
+struct PreparedMusicSelectPresentation {
+  const SkinObjectDefinition *object = nullptr;
+  std::optional<AuthoredDestinationGeometry> geometry;
+  const SkinSpriteFrames *sprite = nullptr;
+  const SkinSourceRect *spriteFrame = nullptr;
+  std::optional<NumericLayout> number;
+  std::optional<TextLayoutInput> text;
+  std::vector<const SkinSourceRect *> graphFrames;
+  std::vector<SkinDiagnostic> failures;
+};
+
+struct MusicSelectSongListLoweringResult {
+  std::vector<SkinDrawCommand> commands;
+  std::vector<SkinMusicSelectBarInteractionGeometry> interactions;
+  std::vector<SkinDiagnostic> failures;
+  std::size_t glyphCount = 0;
+};
+
+void translateMusicSelectGeometry(AuthoredDestinationGeometry &geometry,
+                                  double x, double y) {
+  geometry.rect.x += x;
+  geometry.rect.y += y;
+  if (geometry.clip) {
+    geometry.clip->x += x;
+    geometry.clip->y += y;
+  }
+}
+
+PreparedMusicSelectPresentation prepareMusicSelectPresentation(
+    const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+    std::span<const SkinObjectDefinition *const> objects,
+    const SkinSongListPresentation &presentation,
+    std::size_t maximumCodepoints,
+    std::optional<int> forcedImageState = std::nullopt,
+    std::optional<std::int64_t> forcedNumberValue = std::nullopt) {
+  PreparedMusicSelectPresentation result;
+  if (presentation.object == 0) {
+    return result;
+  }
+  result.object = findObject(objects, presentation.object);
+  if (result.object == nullptr) {
+    result.failures.push_back(diagnostic(
+        "skin.renderer.music_select.object_missing",
+        "Song-list presentation references an absent skin object."));
+    return result;
+  }
+  auto destination =
+      resolveDestination(inputs, index, presentation.destination);
+  result.failures = std::move(destination.failures);
+  result.geometry = std::move(destination.geometry);
+  if (!result.failures.empty() || !result.geometry) {
+    return result;
+  }
+
+  if (const auto *image =
+          std::get_if<SkinImageObject>(&result.object->payload)) {
+    if (image->orderedStates.empty()) {
+      result.failures.push_back(diagnostic(
+          "skin.renderer.image.states",
+          "Song-list image object has no source states."));
+      return result;
+    }
+    std::int64_t state = forcedImageState.value_or(0);
+    if (!forcedImageState && image->stateIndex) {
+      const auto resolved = resolveInteger(inputs, index, *image->stateIndex);
+      if (resolved.failure) {
+        result.failures.push_back(*resolved.failure);
+        return result;
+      }
+      state = *resolved.value;
+    }
+    if (state < 0) {
+      result.geometry.reset();
+      return result;
+    }
+    std::size_t stateIndex = static_cast<std::size_t>(state);
+    if (stateIndex >= image->orderedStates.size()) {
+      stateIndex = 0;
+    }
+    result.sprite = &image->orderedStates[stateIndex];
+    const auto selected = selectSpriteFrame(inputs, index, *result.sprite);
+    if (selected.failure) {
+      result.failures.push_back(*selected.failure);
+      return result;
+    }
+    if (selected.suppressed || selected.frame == nullptr) {
+      result.geometry.reset();
+      return result;
+    }
+    result.spriteFrame = selected.frame;
+    return result;
+  }
+
+  if (const auto *number =
+          std::get_if<SkinNumberObject>(&result.object->payload)) {
+    result.number = forcedNumberValue
+                        ? prepareNumberLayoutForValue(*number,
+                                                      *forcedNumberValue)
+                        : prepareNumberLayout(inputs, index, *number);
+    if (result.number->failure) {
+      result.failures.push_back(*result.number->failure);
+      return result;
+    }
+    if (result.number->suppressed ||
+        !selectNumericAnimation(inputs, index, *result.number)) {
+      if (result.number->failure) {
+        result.failures.push_back(*result.number->failure);
+      }
+      result.geometry.reset();
+    }
+    return result;
+  }
+
+  if (const auto *text =
+          std::get_if<SkinTextObject>(&result.object->payload)) {
+    result.text = prepareTextLayout(inputs, index, *result.object, *text,
+                                    maximumCodepoints);
+    if (result.text->failure) {
+      result.failures.push_back(*result.text->failure);
+      return result;
+    }
+    return result;
+  }
+
+  if (const auto *graph =
+          std::get_if<SkinSelectDistributionGraphObject>(
+              &result.object->payload)) {
+    const std::size_t states =
+        graph->type == SkinSelectDistributionGraphType::Normal ? 11U : 28U;
+    if (graph->sprite.resource == 0 || graph->sprite.frames.empty() ||
+        graph->sprite.frames.size() % states != 0) {
+      result.failures.push_back(diagnostic(
+          "skin.renderer.music_select.graph_sprite",
+          "Song-list distribution graph has an invalid source grid."));
+      return result;
+    }
+    const std::size_t animationFrames = graph->sprite.frames.size() / states;
+    result.graphFrames.reserve(states);
+    for (std::size_t state = 0; state < states; ++state) {
+      const auto selected = selectAnimationFrame(
+          inputs, index, animationFrames, graph->sprite.cycleMillis,
+          graph->sprite.timer);
+      if (selected.failure) {
+        result.failures.push_back(*selected.failure);
+        return result;
+      }
+      result.graphFrames.push_back(
+          selected.suppressed
+              ? nullptr
+              : &graph->sprite.frames[selected.frame * states + state]);
+    }
+    return result;
+  }
+
+  result.failures.push_back(diagnostic(
+      "skin.renderer.music_select.object_unsupported",
+      "Song-list presentation resolved to an unsupported object type."));
+  return result;
+}
+
+MusicSelectSongListLoweringResult lowerMusicSelectSongList(
+    const SkinFrameInputs &inputs, const FrameLookupIndex &index,
+    std::span<const SkinObjectDefinition *const> objects,
+    const SkinDestination &outerDestination,
+    const SkinSongListObject &songList, std::size_t maximumCommands,
+    std::size_t maximumGlyphs) {
+  MusicSelectSongListLoweringResult result;
+  if (inputs.musicSelectSongList == nullptr) {
+    result.failures.push_back(diagnostic(
+        "skin.renderer.music_select.state_missing",
+        "Song-list rendering requires a music-select frame snapshot."));
+    return result;
+  }
+
+  // SkinBar.prepare calls its wrapper first, then prepares every nested object
+  // in these exact field orders before BarRenderer calculates its 60 rows.
+  const auto outer =
+      resolveDestination(inputs, index, outerDestination.presentation);
+  result.failures.insert(result.failures.end(), outer.failures.begin(),
+                         outer.failures.end());
+  std::map<const SkinSongListPresentation *, PreparedMusicSelectPresentation>
+      prepared;
+  const auto prepareAll = [&](const auto &presentations) {
+    for (const auto &presentation : presentations) {
+      prepared.emplace(
+          &presentation,
+          prepareMusicSelectPresentation(inputs, index, objects,
+                                         presentation, maximumGlyphs));
+    }
+  };
+  prepareAll(songList.listOn);
+  prepareAll(songList.listOff);
+  prepareAll(songList.trophy);
+  prepareAll(songList.text);
+  prepareAll(songList.level);
+  prepareAll(songList.label);
+  prepareAll(songList.lamp);
+  prepareAll(songList.playerLamp);
+  prepareAll(songList.rivalLamp);
+  if (songList.graph) {
+    prepareAll(std::span<const SkinSongListPresentation>{&*songList.graph, 1});
+  }
+  for (auto &[presentation, value] : prepared) {
+    (void)presentation;
+    result.failures.insert(result.failures.end(),
+                           std::make_move_iterator(value.failures.begin()),
+                           std::make_move_iterator(value.failures.end()));
+  }
+  if (!result.failures.empty() || !outer.geometry) {
+    return result;
+  }
+
+  const auto plan = MusicSelectBarRenderer{}.plan(
+      songList, *inputs.musicSelectSongList);
+  if (plan.failure) {
+    result.failures.push_back(
+        diagnostic("skin.renderer.music_select.plan", *plan.failure));
+    return result;
+  }
+
+  struct RowGeometry {
+    bool drawable = false;
+    std::size_t barIndex = 0;
+    double preparedX = 0.0;
+    double preparedY = 0.0;
+    double x = 0.0;
+    double y = 0.0;
+    AuthoredRect pointerRegion;
+  };
+  std::array<RowGeometry, MusicSelectBarRenderer::barCount> rows{};
+  for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+    const auto &logical = plan.rows[rowIndex];
+    const bool selected = static_cast<int>(rowIndex) == songList.center;
+    const auto &bars = selected ? songList.listOn : songList.listOff;
+    if (rowIndex >= bars.size() || logical.value == -1) {
+      continue;
+    }
+    const auto &bar = bars[rowIndex];
+    const auto found = prepared.find(&bar);
+    if (found == prepared.end() || !found->second.geometry) {
+      continue;
+    }
+    auto &row = rows[rowIndex];
+    row.drawable = true;
+    row.barIndex = logical.barIndex;
+    row.preparedX = found->second.geometry->rect.x;
+    row.preparedY = found->second.geometry->rect.y;
+    row.x = row.preparedX;
+    row.y = row.preparedY;
+    row.pointerRegion = found->second.geometry->rect;
+  }
+
+  const auto &frame = *inputs.musicSelectSongList;
+  if (frame.movementDirection != 0 &&
+      frame.movementEndMillis > frame.wallClockMillis) {
+    const double interpolation =
+        frame.movementDirection < 0
+            ? static_cast<double>(frame.wallClockMillis -
+                                  frame.movementEndMillis) /
+                  frame.movementDirection
+            : static_cast<double>(frame.movementEndMillis -
+                                  frame.wallClockMillis) /
+                  frame.movementDirection;
+    const auto stationary = rows;
+    for (std::size_t rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+      auto &row = rows[rowIndex];
+      if (!row.drawable) {
+        continue;
+      }
+      const int adjacent = static_cast<int>(rowIndex) +
+                           (frame.movementDirection >= 0 ? 1 : -1);
+      if (adjacent < 0 || adjacent >= static_cast<int>(rows.size()) ||
+          !stationary[static_cast<std::size_t>(adjacent)].drawable) {
+        continue;
+      }
+      const auto &next = stationary[static_cast<std::size_t>(adjacent)];
+      row.x = static_cast<double>(truncatingJavaInt(
+          row.x + (next.x - row.x) *
+                      std::clamp(interpolation, -1.0, 1.0)));
+      row.y = static_cast<double>(truncatingJavaInt(
+          row.y + (next.y - row.y) * interpolation));
+    }
+  } else {
+    for (auto &row : rows) {
+      if (row.drawable) {
+        row.x = static_cast<double>(truncatingJavaInt(row.x));
+        row.y = static_cast<double>(truncatingJavaInt(row.y));
+      }
+    }
+  }
+
+  const auto presentationFor = [&](const MusicSelectBarDrawCommand &command)
+      -> const SkinSongListPresentation * {
+    const auto from = [&](const auto &values) {
+      return command.slot < values.size() ? &values[command.slot] : nullptr;
+    };
+    switch (command.family) {
+    case MusicSelectBarDrawFamily::BarImage: {
+      const bool selected =
+          static_cast<int>(command.row) == songList.center;
+      return from(selected ? songList.listOn : songList.listOff);
+    }
+    case MusicSelectBarDrawFamily::FolderGraph:
+      return songList.graph ? &*songList.graph : nullptr;
+    case MusicSelectBarDrawFamily::Title:
+      return from(songList.text);
+    case MusicSelectBarDrawFamily::Trophy:
+      return from(songList.trophy);
+    case MusicSelectBarDrawFamily::Lamp:
+      return from(songList.lamp);
+    case MusicSelectBarDrawFamily::PlayerLamp:
+      return from(songList.playerLamp);
+    case MusicSelectBarDrawFamily::RivalLamp:
+      return from(songList.rivalLamp);
+    case MusicSelectBarDrawFamily::Level:
+      return from(songList.level);
+    case MusicSelectBarDrawFamily::Label:
+      return from(songList.label);
+    }
+    return nullptr;
+  };
+  const auto fakeDestination = [&](const SkinSongListPresentation &value) {
+    SkinDestination destination{.object = value.object,
+                                .presentation = value.destination};
+    destination.presentation.authoredOrdinal =
+        outerDestination.presentation.authoredOrdinal;
+    return destination;
+  };
+  const auto appendCommand = [&](SkinDrawCommand command) {
+    if (result.commands.size() >= maximumCommands) {
+      return false;
+    }
+    command.authoredOrdinal = outerDestination.presentation.authoredOrdinal;
+    result.commands.push_back(std::move(command));
+    return true;
+  };
+
+  for (const auto &command : plan.commands) {
+    if (command.row >= rows.size() || !rows[command.row].drawable) {
+      continue;
+    }
+    const auto *presentation = presentationFor(command);
+    if (presentation == nullptr || presentation->object == 0) {
+      continue;
+    }
+    const auto &row = rows[command.row];
+    const auto found = prepared.find(presentation);
+    if (found == prepared.end() || found->second.object == nullptr) {
+      continue;
+    }
+    const auto &initial = found->second;
+    const auto *image =
+        std::get_if<SkinImageObject>(&initial.object->payload);
+    const auto *number =
+        std::get_if<SkinNumberObject>(&initial.object->payload);
+    const auto *text = std::get_if<SkinTextObject>(&initial.object->payload);
+    const auto *graph =
+        std::get_if<SkinSelectDistributionGraphObject>(
+            &initial.object->payload);
+
+    if (command.family == MusicSelectBarDrawFamily::BarImage ||
+        command.family == MusicSelectBarDrawFamily::Level) {
+      auto dynamic = prepareMusicSelectPresentation(
+          inputs, index, objects, *presentation,
+          maximumGlyphs - std::min(maximumGlyphs, result.glyphCount),
+          command.family == MusicSelectBarDrawFamily::BarImage
+              ? std::optional<int>{command.value}
+              : std::nullopt,
+          command.family == MusicSelectBarDrawFamily::Level
+              ? std::optional<std::int64_t>{command.value}
+              : std::nullopt);
+      result.failures.insert(result.failures.end(),
+                             std::make_move_iterator(dynamic.failures.begin()),
+                             std::make_move_iterator(dynamic.failures.end()));
+      if (!dynamic.geometry) {
+        continue;
+      }
+      translateMusicSelectGeometry(*dynamic.geometry,
+                                   row.x - row.preparedX,
+                                   row.y - row.preparedY);
+      if (image && dynamic.sprite && dynamic.spriteFrame) {
+        auto lowered = lowerSpriteQuad(
+            inputs, initial.object->id,
+            outerDestination.presentation.authoredOrdinal, *dynamic.geometry,
+            *dynamic.sprite, *dynamic.spriteFrame);
+        if (lowered.failure) {
+          result.failures.push_back(*lowered.failure);
+        } else if (lowered.command &&
+                   !appendCommand(std::move(*lowered.command))) {
+          result.failures.push_back(diagnostic(
+              "skin.renderer.command.limit",
+              "Song-list commands exceed the fixed frame limit."));
+          return result;
+        }
+      } else if (number && dynamic.number) {
+        auto destination = fakeDestination(*presentation);
+        auto lowered = lowerNumeric(inputs, *initial.object, destination,
+                                    *dynamic.geometry, *dynamic.number);
+        if (lowered.failure) {
+          result.failures.push_back(*lowered.failure);
+        } else if (lowered.commands.size() >
+                   maximumCommands - result.commands.size()) {
+          result.failures.push_back(diagnostic(
+              "skin.renderer.command.limit",
+              "Song-list number commands exceed the fixed frame limit."));
+          return result;
+        } else {
+          result.commands.insert(
+              result.commands.end(),
+              std::make_move_iterator(lowered.commands.begin()),
+              std::make_move_iterator(lowered.commands.end()));
+        }
+      }
+      continue;
+    }
+
+    if (!initial.geometry) {
+      continue;
+    }
+    auto geometry = *initial.geometry;
+    translateMusicSelectGeometry(geometry, row.x, row.y);
+    if (image && initial.sprite && initial.spriteFrame) {
+      auto lowered = lowerSpriteQuad(
+          inputs, initial.object->id,
+          outerDestination.presentation.authoredOrdinal, geometry,
+          *initial.sprite, *initial.spriteFrame);
+      if (lowered.failure) {
+        result.failures.push_back(*lowered.failure);
+      } else if (lowered.command &&
+                 !appendCommand(std::move(*lowered.command))) {
+        result.failures.push_back(diagnostic(
+            "skin.renderer.command.limit",
+            "Song-list commands exceed the fixed frame limit."));
+        return result;
+      }
+      continue;
+    }
+    if (text) {
+      auto layout = prepareTextLayoutForValue(
+          inputs, *initial.object, *text, command.text,
+          maximumGlyphs - std::min(maximumGlyphs, result.glyphCount));
+      if (layout.failure) {
+        result.failures.push_back(*layout.failure);
+        continue;
+      }
+      if (layout.suppressed) {
+        continue;
+      }
+      auto destination = fakeDestination(*presentation);
+      auto lowered = lowerText(inputs, *initial.object, destination, geometry,
+                               *text, layout);
+      if (lowered.failure) {
+        result.failures.push_back(*lowered.failure);
+      } else if (lowered.command &&
+                 (result.commands.size() >= maximumCommands ||
+                  lowered.glyphCount > maximumGlyphs - result.glyphCount)) {
+        result.failures.push_back(diagnostic(
+            "skin.renderer.command.limit",
+            "Song-list text commands exceed a fixed frame limit."));
+        return result;
+      } else if (lowered.command) {
+        result.glyphCount += lowered.glyphCount;
+        appendCommand(std::move(*lowered.command));
+      }
+      continue;
+    }
+    if (graph) {
+      const auto counts =
+          graph->type == SkinSelectDistributionGraphType::Normal
+              ? std::span<const int>(command.folderLampCounts)
+              : std::span<const int>(command.folderRankCounts);
+      const int total = std::accumulate(counts.begin(), counts.end(), 0);
+      if (total <= 0 || initial.graphFrames.size() != counts.size()) {
+        continue;
+      }
+      int prior = 0;
+      for (std::size_t reversed = counts.size(); reversed > 0; --reversed) {
+        const std::size_t state = reversed - 1;
+        const int count = counts[state];
+        const auto *frameRegion = initial.graphFrames[state];
+        if (count <= 0 || frameRegion == nullptr) {
+          prior += std::max(0, count);
+          continue;
+        }
+        auto segment = geometry;
+        segment.rect.x += segment.rect.width * prior / total;
+        segment.rect.width = segment.rect.width * count / total;
+        auto lowered = lowerSpriteQuad(
+            inputs, initial.object->id,
+            outerDestination.presentation.authoredOrdinal, segment,
+            graph->sprite, *frameRegion);
+        if (lowered.failure) {
+          result.failures.push_back(*lowered.failure);
+        } else if (lowered.command &&
+                   !appendCommand(std::move(*lowered.command))) {
+          result.failures.push_back(diagnostic(
+              "skin.renderer.command.limit",
+              "Song-list graph commands exceed the fixed frame limit."));
+          return result;
+        }
+        prior += count;
+      }
+    }
+  }
+
+  for (const int clickable : songList.clickable) {
+    if (clickable < 0 || clickable >= static_cast<int>(rows.size())) {
+      continue;
+    }
+    const auto &row = rows[static_cast<std::size_t>(clickable)];
+    if (!row.drawable) {
+      continue;
+    }
+    result.interactions.push_back(
+        {.authoredOrdinal = outerDestination.presentation.authoredOrdinal,
+         .row = static_cast<std::size_t>(clickable),
+         .barIndex = row.barIndex,
+         .authoredRegion = row.pointerRegion});
+  }
+  return result;
+}
+
 bool reportObjectFailure(SkinFrameEvaluationResult &result,
                          const SkinObjectDefinition &object,
                          SkinDiagnostic failure) {
@@ -3064,6 +3597,29 @@ SkinInteractionLayout::authoredPointForUi(double x, double y) const noexcept {
   return std::isfinite(result.x) && std::isfinite(result.y)
              ? std::optional<AuthoredPoint>{result}
              : std::nullopt;
+}
+
+std::optional<SkinMusicSelectBarHit>
+SkinInteractionLayout::musicSelectBarAt(UiLogicalPoint point) const noexcept {
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) {
+    return std::nullopt;
+  }
+  for (const auto &bar : musicSelectBars) {
+    const auto &rect = bar.authoredRegion;
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) ||
+        !std::isfinite(rect.width) || !std::isfinite(rect.height) ||
+        rect.width < 0.0 || rect.height < 0.0) {
+      continue;
+    }
+    if (rect.x <= authored->x && rect.x + rect.width >= authored->x &&
+        rect.y <= authored->y && rect.y + rect.height >= authored->y) {
+      return SkinMusicSelectBarHit{.authoredOrdinal = bar.authoredOrdinal,
+                                   .row = bar.row,
+                                   .barIndex = bar.barIndex};
+    }
+  }
+  return std::nullopt;
 }
 
 PresentationUiHit
@@ -3583,6 +4139,35 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         return result;
       }
       if (disabledOptionalObject(lookupIndex, object->id)) {
+        continue;
+      }
+      if (const auto *songList =
+              std::get_if<SkinSongListObject>(&object->payload)) {
+        auto lowered = lowerMusicSelectSongList(
+            inputs, lookupIndex, objects, destination, *songList,
+            skinFrameMaximumCommands(inputs) - buffer.commands.size(),
+            skinFrameMaximumGlyphInstances(inputs) - glyphInstances);
+        if (!lowered.failures.empty()) {
+          bool critical = false;
+          for (auto &failure : lowered.failures) {
+            critical = reportObjectFailure(result, *object,
+                                           std::move(failure)) ||
+                       critical;
+          }
+          if (critical) {
+            return result;
+          }
+          continue;
+        }
+        glyphInstances += lowered.glyphCount;
+        buffer.commands.insert(
+            buffer.commands.end(),
+            std::make_move_iterator(lowered.commands.begin()),
+            std::make_move_iterator(lowered.commands.end()));
+        interactionLayout.musicSelectBars.insert(
+            interactionLayout.musicSelectBars.end(),
+            std::make_move_iterator(lowered.interactions.begin()),
+            std::make_move_iterator(lowered.interactions.end()));
         continue;
       }
       if (const auto *practiceObject =

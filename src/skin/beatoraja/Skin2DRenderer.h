@@ -9,6 +9,7 @@
 #include "SkinGeneratedTextureRaster.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
+#include "../../music_select/MusicSelectTypes.h"
 #include "../../scene/play/SkinGameplayGraphState.h"
 
 #include <cstddef>
@@ -247,6 +248,10 @@ struct SkinFrameInputs {
   bool markProcessedNotes = false;
   SkinSafetyPolicy safetyPolicy{};
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
+  // Present only for Beatoraja SkinType 5. The SkinSongList object consumes
+  // this immutable selector snapshot while ordinary objects continue through
+  // the shared property bridge.
+  const MusicSelectSongListFrame *musicSelectSongList = nullptr;
 };
 
 [[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(
@@ -319,6 +324,19 @@ struct SkinLaneGroupInteractionRegion {
   AuthoredRect authoredRegion;
 };
 
+struct SkinMusicSelectBarInteractionGeometry {
+  std::uint32_t authoredOrdinal = 0;
+  std::size_t row = 0;
+  std::size_t barIndex = 0;
+  AuthoredRect authoredRegion;
+};
+
+struct SkinMusicSelectBarHit {
+  std::uint32_t authoredOrdinal = 0;
+  std::size_t row = 0;
+  std::size_t barIndex = 0;
+};
+
 // Immutable-by-publication frame snapshot.  Consumers receive this only after
 // the matching command buffer has evaluated successfully; no callback or
 // writer is retained or invoked by the geometry queue.
@@ -337,6 +355,9 @@ struct SkinInteractionLayout {
   std::vector<SkinInteractionControl> controlsTopmostFirst;
   std::vector<SkinLaneInteractionRegion> laneRegions;
   std::vector<SkinLaneGroupInteractionRegion> laneGroupRegions;
+  // Retains SkinBar.clickable order. Unlike generic controls, the source
+  // selector walks this authored list directly rather than reversing it.
+  std::vector<SkinMusicSelectBarInteractionGeometry> musicSelectBars;
 
   [[nodiscard]] std::optional<AuthoredPoint>
   authoredPointForUi(double x, double y) const noexcept;
@@ -352,6 +373,8 @@ struct SkinInteractionLayout {
   [[nodiscard]] std::optional<SkinEventInvocation>
   eventInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
                      long long eventMicros) const noexcept;
+  [[nodiscard]] std::optional<SkinMusicSelectBarHit>
+  musicSelectBarAt(UiLogicalPoint point) const noexcept;
 };
 
 struct SkinFrameEvaluationResult {

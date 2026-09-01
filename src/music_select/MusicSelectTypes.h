@@ -41,6 +41,7 @@ struct MusicSelectBarFrame {
   int featureFlags = 0;
   std::string trophyName;
   std::array<int, 11> folderLampCounts{};
+  std::array<int, 28> folderRankCounts{};
 };
 
 struct MusicSelectSongListFrame {
