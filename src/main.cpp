@@ -963,6 +963,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
   while (!context.quitFlag) {
     context.pollGameplaySkinCommits();
+    if (context.chartLibraryFolderActions) {
+      context.chartLibraryFolderActions->poll();
+    }
 
     auto currentFrameTime = std::chrono::steady_clock::now();
     context.applicationUptimeMillis.store(

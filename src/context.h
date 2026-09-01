@@ -207,6 +207,8 @@ public:
       chartLibraryOperations;
   std::unique_ptr<chart_library_tasks::ChartLibraryTaskService>
       chartLibraryTasks;
+  std::unique_ptr<chart_library_platform::FolderActionService>
+      chartLibraryFolderActions;
   std::atomic_bool chartLibraryFoldersReloadRequested = false;
   std::atomic_bool chartLibraryListReloadRequested = false;
   std::atomic<std::uint64_t> chartLibraryScanFlushRequested{0};
@@ -707,6 +709,16 @@ public:
                   request, stopToken, std::move(progress),
                   std::move(waitForResume));
             });
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+    chartLibraryFolderActions =
+        std::make_unique<chart_library_platform::FolderActionService>(
+            chartRepository, *chartLibraryTasks);
+    requestAddChartFolderFromFiles = [this] {
+      if (chartLibraryFolderActions) {
+        chartLibraryFolderActions->requestAddFolder();
+      }
+    };
+#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     initializeGameplaySkinServices();
 #endif
@@ -741,6 +753,9 @@ public:
           if (chartLibraryTasks &&
               chartLibraryTasks->snapshot().activeCount > 0) {
             return "A chart library scan or import is active.";
+          }
+          if (chartLibraryFolderActions && chartLibraryFolderActions->active()) {
+            return "A chart import picker is active.";
           }
           if (replayVideoExportActive.load(std::memory_order_acquire)) {
             return "A replay export is active.";
@@ -1487,6 +1502,8 @@ public:
 
   ~ApplicationContext() {
     quitFlag = true;
+    requestAddChartFolderFromFiles = nullptr;
+    chartLibraryFolderActions.reset();
     if (chartLibraryTasks) {
       chartLibraryTasks->shutdown();
     }

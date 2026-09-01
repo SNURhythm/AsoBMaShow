@@ -92,8 +92,6 @@ private:
   std::mutex retiredPreviewLoadThreadsMutex;
   std::mutex previewJukeboxLoadMutex;
   bool pendingStopAndClearSelectedChartAfterPreview = false;
-  std::jthread addFolderPickerThread;
-  std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
   std::jthread replayLoadThread;
   std::shared_ptr<std::atomic_bool> replayLoadCancelToken =
@@ -110,8 +108,6 @@ private:
   std::uint64_t replayIrUploadFeedbackRevision = 0;
   std::unordered_map<std::string, std::uint64_t> replayIrObservedRevisions;
   std::atomic_bool unzipInProgress = false;
-  std::atomic_bool addFolderPickerInProgress = false;
-  std::atomic_bool archiveImportPickerInProgress = false;
   std::atomic_bool tasksModalOpenRequested = false;
   using LibraryTaskStatus = chart_library_tasks::TaskStatus;
   using LibraryTaskInfo = chart_library_tasks::TaskInfo;
@@ -411,11 +407,6 @@ private:
   std::optional<PendingUnzipResult> pendingUnzipResult;
   std::mutex unzipProgressMutex;
   std::optional<PendingUnzipProgress> pendingUnzipProgress;
-  std::mutex androidArchiveImportMutex;
-  std::optional<std::string> pendingAndroidArchiveImportError;
-  std::deque<std::pair<std::uint64_t, bool>> pendingAndroidArchiveImportTasks;
-  std::atomic_bool androidArchiveImportCopyPending = false;
-  std::uint64_t nextAndroidArchiveImportPollMs = 0;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct PendingFindBmsSelectionHandoff {
     std::filesystem::path chartPath;
@@ -590,19 +581,10 @@ private:
       const main_menu_library::FindBmsChartIdentity &targetIdentity = {},
       std::uint64_t selectionGeneration = 0,
       std::vector<std::filesystem::path> removedPaths = {});
-#if TARGET_OS_ANDROID
-  void createPendingAndroidImportTask(bool folderImport);
-  void enqueueAndroidImportTask(std::uint64_t id,
-                                const std::filesystem::path &importPath,
-                                bool folderImport);
-#endif
   LibraryTaskProgressSnapshot readLibraryTaskProgress() const;
   int activeLibraryTaskCount();
   void requestLibraryScanFlush();
   void refreshTasksButton();
-  bool insertChartFolderEntryImmediately(
-      const std::filesystem::path &folderPath,
-      const std::string &iosBookmark);
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;
@@ -819,17 +801,6 @@ private:
   void stopReplayLoadWorker();
   void applyReplayExportProgress();
   void applyReplayExportResult();
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  void addIOSFolderEntryFromFiles();
-#endif
-#if TARGET_OS_ANDROID
-  void addAndroidFolderEntryFromPicker();
-  void importAndroidArchiveFromPicker();
-  void importAndroidFolderFromPicker();
-  void importAndroidPathFromPicker(bool folderImport);
-  void pollPendingAndroidArchiveImport();
-  void applyPendingAndroidArchiveImport();
-#endif
   enum DiffType { Deleted, Added };
   struct Diff {
     std::filesystem::path path;

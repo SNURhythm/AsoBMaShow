@@ -907,19 +907,12 @@ void MainMenuScene::init() {
   chartSession =
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
-    if (androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
-      return "A chart library scan or import is active.";
-    }
     if (replayExportInProgress.load(std::memory_order_acquire)) {
       return "A replay export is active.";
     }
     if (unzipInProgress.load(std::memory_order_acquire) ||
         findBmsJobRunning.load(std::memory_order_acquire)) {
       return "A chart archive operation is active.";
-    }
-    if (addFolderPickerInProgress.load(std::memory_order_acquire) ||
-        archiveImportPickerInProgress.load(std::memory_order_acquire)) {
-      return "A chart import picker is active.";
     }
     if (willStart.load(std::memory_order_acquire)) {
       return "A chart or replay transition is active.";
@@ -940,21 +933,6 @@ void MainMenuScene::init() {
     observedIrAccountEvidenceRevision = 0;
     replayIrObservedRevisions.clear();
   };
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  context.requestAddChartFolderFromFiles = [this]() {
-    addIOSFolderEntryFromFiles();
-  };
-#elif TARGET_OS_ANDROID
-  if (AndroidBuildHasManageExternalStorage()) {
-    context.requestAddChartFolderFromFiles = [this]() {
-      addAndroidFolderEntryFromPicker();
-    };
-  } else {
-    context.requestAddChartFolderFromFiles = [this]() {
-      importAndroidFolderFromPicker();
-    };
-  }
-#endif
   context.requestRebuildChartLibrary = [this]() {
     startLibraryRebuild();
   };
@@ -1088,42 +1066,6 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
   });
 }
 
-#if TARGET_OS_ANDROID
-void MainMenuScene::createPendingAndroidImportTask(bool folderImport) {
-  if (!context.chartLibraryTasks) {
-    return;
-  }
-  const std::uint64_t id = context.chartLibraryTasks->reserve(
-      folderImport ? "Import Folder" : "Import Archive",
-      folderImport ? "Copying selected folder" : "Copying selected archive");
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    pendingAndroidArchiveImportTasks.emplace_back(id, folderImport);
-  }
-  androidArchiveImportCopyPending.store(true);
-  tasksModalOpenRequested.store(true);
-}
-
-void MainMenuScene::enqueueAndroidImportTask(
-    std::uint64_t id, const std::filesystem::path &importPath,
-    bool folderImport) {
-  if (!context.chartLibraryTasks) {
-    return;
-  }
-  if (importPath.empty()) {
-    context.chartLibraryTasks->failReserved(
-        id, "Import failed: selected path is empty.");
-    return;
-  }
-  context.chartLibraryTasks->enqueueReserved(
-      id, {.kind = chart_library_tasks::TaskKind::AndroidImport,
-           .title = folderImport ? "Import Folder" : "Import Archive",
-           .androidImportPath = importPath,
-           .androidImportFolder = folderImport});
-  tasksModalOpenRequested.store(true);
-}
-#endif
-
 MainMenuScene::LibraryTaskProgressSnapshot
 MainMenuScene::readLibraryTaskProgress() const {
   return context.chartLibraryTasks
@@ -1158,253 +1100,6 @@ void MainMenuScene::refreshTasksButton() {
   displayedLibraryTasksButtonText = label;
   tasksButtonText->setText(label);
 }
-
-bool MainMenuScene::insertChartFolderEntryImmediately(
-    const std::filesystem::path &folderPath, const std::string &iosBookmark) {
-  if (folderPath.empty()) {
-    return false;
-  }
-
-  auto entrySession = context.chartRepository.OpenSession();
-  if (!entrySession.has_value()) {
-    SDL_Log("Failed to open chart database while adding folder %s",
-            fspath_to_utf8(folderPath).c_str());
-    return false;
-  }
-
-  if (!entrySession->InsertEntry(folderPath, iosBookmark)) {
-    SDL_Log("Failed to add chart folder entry %s",
-            fspath_to_utf8(folderPath).c_str());
-    return false;
-  }
-
-  requestLibraryReload(true);
-  return true;
-}
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-void MainMenuScene::addIOSFolderEntryFromFiles() {
-  if (willStart.load() || replayExportInProgress.load() ||
-      addFolderPickerInProgress.load()) {
-    return;
-  }
-  if (addFolderPickerThread.joinable()) {
-    addFolderPickerThread.join();
-  }
-  if (addFolderPickerInProgress.exchange(true)) {
-    return;
-  }
-
-  addFolderPickerThread =
-      std::jthread([this](const std::stop_token &stopToken) {
-        struct PickerFlagReset {
-          std::atomic_bool &flag;
-          ~PickerFlagReset() { flag.store(false); }
-        } reset{addFolderPickerInProgress};
-
-        std::string folder;
-        std::string bookmark;
-        std::string errorMessage;
-        if (!PickIOSFolder(folder, bookmark, errorMessage)) {
-          if (!errorMessage.empty()) {
-            SDL_Log("Failed to pick iOS library folder: %s",
-                    errorMessage.c_str());
-          }
-          return;
-        }
-        if (stopToken.stop_requested()) {
-          return;
-        }
-
-        std::filesystem::path folderPath(folder);
-        std::string folderName =
-            !folderPath.filename().empty()
-                ? fspath_to_utf8(folderPath.filename())
-                : fspath_to_utf8(folderPath);
-        if (folderName.empty()) {
-          folderName = "Folder";
-        }
-        insertChartFolderEntryImmediately(folderPath, bookmark);
-        enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
-                                  bookmark);
-      });
-}
-#endif
-
-#if TARGET_OS_ANDROID
-void MainMenuScene::addAndroidFolderEntryFromPicker() {
-  if (willStart.load() || replayExportInProgress.load() ||
-      addFolderPickerInProgress.load()) {
-    return;
-  }
-  if (addFolderPickerThread.joinable()) {
-    addFolderPickerThread.join();
-  }
-  if (addFolderPickerInProgress.exchange(true)) {
-    return;
-  }
-
-  addFolderPickerThread =
-      std::jthread([this](const std::stop_token &stopToken) {
-        struct PickerFlagReset {
-          std::atomic_bool &flag;
-          ~PickerFlagReset() { flag.store(false); }
-        } reset{addFolderPickerInProgress};
-
-        std::filesystem::path folder;
-        std::string treeUri;
-        std::string errorMessage;
-        if (!PickAndroidChartFolder(folder, treeUri, errorMessage)) {
-          if (!errorMessage.empty()) {
-            SDL_Log("Failed to pick Android library folder: %s",
-                    errorMessage.c_str());
-          }
-          return;
-        }
-        if (stopToken.stop_requested()) {
-          return;
-        }
-
-        std::filesystem::path folderPath(folder);
-        std::string folderName =
-            !folderPath.filename().empty()
-                ? fspath_to_utf8(folderPath.filename())
-                : fspath_to_utf8(folderPath);
-        if (folderName.empty()) {
-          folderName = "Folder";
-        }
-        insertChartFolderEntryImmediately(folderPath, treeUri);
-        enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
-                                  treeUri);
-      });
-}
-
-void MainMenuScene::importAndroidArchiveFromPicker() {
-  importAndroidPathFromPicker(false);
-}
-
-void MainMenuScene::importAndroidFolderFromPicker() {
-  importAndroidPathFromPicker(true);
-}
-
-void MainMenuScene::importAndroidPathFromPicker(bool folderImport) {
-  if (willStart.load() || replayExportInProgress.load() ||
-      archiveImportPickerInProgress.load()) {
-    return;
-  }
-  if (archiveImportPickerThread.joinable()) {
-    archiveImportPickerThread.join();
-  }
-  if (archiveImportPickerInProgress.exchange(true)) {
-    return;
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setText(folderImport ? "Choose a folder..."
-                                           : "Choose an archive...");
-  }
-
-  archiveImportPickerThread =
-      std::jthread([this, folderImport](const std::stop_token &stopToken) {
-        struct PickerFlagReset {
-          std::atomic_bool &flag;
-          ~PickerFlagReset() { flag.store(false); }
-        } reset{archiveImportPickerInProgress};
-
-        std::filesystem::path importPath;
-        std::string errorMessage;
-        const bool picked =
-            folderImport ? PickAndroidFolderForImport(importPath, errorMessage)
-                         : PickAndroidArchiveForImport(importPath,
-                                                       errorMessage);
-        if (!picked) {
-          std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-          pendingAndroidArchiveImportError =
-              errorMessage.empty()
-                  ? (folderImport ? "Folder import cancelled."
-                                  : "Archive import cancelled.")
-                  : errorMessage;
-          return;
-        }
-        if (stopToken.stop_requested()) {
-          return;
-        }
-
-        if (importPath.empty()) {
-          createPendingAndroidImportTask(folderImport);
-        } else if (context.chartLibraryTasks) {
-          const std::uint64_t id = context.chartLibraryTasks->reserve(
-              folderImport ? "Import Folder" : "Import Archive",
-              folderImport ? "Copying selected folder"
-                           : "Copying selected archive");
-          enqueueAndroidImportTask(id, importPath, folderImport);
-        }
-      });
-}
-
-void MainMenuScene::pollPendingAndroidArchiveImport() {
-  const std::uint64_t now = SDL_GetTicks64();
-  if (now < nextAndroidArchiveImportPollMs) {
-    return;
-  }
-  nextAndroidArchiveImportPollMs = now + 1000;
-
-  std::string errorMessage;
-  const auto archivePath = ConsumePendingAndroidArchiveImport(errorMessage);
-  if (!archivePath.has_value() && errorMessage.empty()) {
-    return;
-  }
-
-  std::uint64_t taskId = 0;
-  bool folderImport = false;
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    if (!pendingAndroidArchiveImportTasks.empty()) {
-      taskId = pendingAndroidArchiveImportTasks.front().first;
-      folderImport = pendingAndroidArchiveImportTasks.front().second;
-      pendingAndroidArchiveImportTasks.pop_front();
-    }
-    androidArchiveImportCopyPending.store(
-        !pendingAndroidArchiveImportTasks.empty());
-  }
-  if (archivePath.has_value()) {
-    if (taskId == 0 && context.chartLibraryTasks) {
-      taskId = context.chartLibraryTasks->reserve(
-          folderImport ? "Import Folder" : "Import Archive",
-          folderImport ? "Copying selected folder"
-                       : "Copying selected archive");
-    }
-    enqueueAndroidImportTask(taskId, *archivePath, folderImport);
-  } else {
-    if (taskId != 0 && context.chartLibraryTasks) {
-      context.chartLibraryTasks->failReserved(
-          taskId, errorMessage.empty() ? "Import failed" : errorMessage);
-    }
-    {
-      std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-      pendingAndroidArchiveImportError = errorMessage;
-    }
-  }
-}
-
-void MainMenuScene::applyPendingAndroidArchiveImport() {
-  std::optional<std::string> errorMessage;
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    if (pendingAndroidArchiveImportError.has_value()) {
-      errorMessage = std::move(pendingAndroidArchiveImportError);
-      pendingAndroidArchiveImportError.reset();
-    }
-  }
-
-  if (errorMessage.has_value()) {
-    SDL_Log("Android archive import failed: %s", errorMessage->c_str());
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText("Archive import failed");
-    }
-  }
-}
-
-#endif
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
@@ -1606,14 +1301,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   suppressPreviewForChartPath.reset();
   unzipDeleteCandidatePath.reset();
   unzipEstimatedUncompressedSize = 0;
-#if TARGET_OS_ANDROID
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    pendingAndroidArchiveImportError.reset();
-    pendingAndroidArchiveImportTasks.clear();
-  }
-  androidArchiveImportCopyPending = false;
-#endif
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   chartSelectionGeneration = 0;
@@ -1936,18 +1623,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
                             ui_theme::accentBorderStrong);
     addFolderButton->setCornerRadius(ui_theme::controlRadius());
     addFolderButton->setStyledBorderWidth(1);
-#if TARGET_OS_ANDROID
     addFolderButton->setOnClickListener([this]() {
-      if (AndroidBuildHasManageExternalStorage()) {
-        addAndroidFolderEntryFromPicker();
-      } else {
-        importAndroidFolderFromPicker();
+      if (this->context.requestAddChartFolderFromFiles) {
+        this->context.requestAddChartFolderFromFiles();
       }
     });
-#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    addFolderButton->setOnClickListener(
-        [this]() { addIOSFolderEntryFromFiles(); });
-#endif
     nav->addView(addFolderButton);
   }
 #if TARGET_OS_ANDROID
@@ -1964,7 +1644,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   importArchiveButton->setCornerRadius(ui_theme::controlRadius());
   importArchiveButton->setStyledBorderWidth(1);
   importArchiveButton->setOnClickListener(
-      [this]() { importAndroidArchiveFromPicker(); });
+      [this]() {
+        if (this->context.chartLibraryFolderActions) {
+          this->context.chartLibraryFolderActions->requestImportArchive();
+        }
+      });
   nav->addView(importArchiveButton);
 #endif
 
@@ -10738,10 +10422,6 @@ void MainMenuScene::update(float dt) {
   applyReplayFileDocumentHandoff();
   applyParseLogDocumentHandoff();
   observeReplayIrServiceRevisions();
-#if TARGET_OS_ANDROID
-  pollPendingAndroidArchiveImport();
-  applyPendingAndroidArchiveImport();
-#endif
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
@@ -10839,27 +10519,12 @@ void MainMenuScene::cleanupScene() {
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
-  context.requestAddChartFolderFromFiles = nullptr;
   context.requestRebuildChartLibrary = nullptr;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
     replayExportThread.request_stop();
     replayExportThread.join();
   }
-  if (addFolderPickerThread.joinable()) {
-    SDL_Log("Joining addFolderPickerThread");
-    addFolderPickerThread.request_stop();
-    addFolderPickerThread.join();
-  }
-  addFolderPickerInProgress = false;
-#if TARGET_OS_ANDROID
-  if (archiveImportPickerThread.joinable()) {
-    SDL_Log("Joining archiveImportPickerThread");
-    archiveImportPickerThread.request_stop();
-    archiveImportPickerThread.join();
-  }
-  archiveImportPickerInProgress = false;
-#endif
   if (findBmsThread.joinable()) {
     SDL_Log("Joining findBmsThread");
     findBmsCancelled = true;
