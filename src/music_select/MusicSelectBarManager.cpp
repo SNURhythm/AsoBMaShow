@@ -1,11 +1,190 @@
 #include "MusicSelectBarManager.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
+#include <cmath>
+#include <compare>
 #include <ranges>
+#include <string_view>
 #include <utility>
 
-MusicSelectBarManager::MusicSelectBarManager(MusicSelectProjection projection)
-    : projection_(std::move(projection)) {
+namespace {
+
+constexpr std::array<std::string_view, 10> kModeFilters{
+    "ALL", "7KEY", "14KEY", "9KEY", "5KEY",
+    "10KEY", "24KEY", "48KEY", "SINGLE", "DOUBLE"};
+constexpr std::array<std::string_view, 9> kDifficultyFilters{
+    "ALL", "BEGINNER", "NORMAL", "HYPER", "ANOTHER", "INSANE",
+    "SCRATCH CHART", "LONG NOTE CHART", "SPEED CHANGE CHART"};
+
+int songMode(const bms_parser::ChartMeta &meta) {
+  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
+  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
+  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
+  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
+  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
+  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
+  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
+  return 0;
+}
+
+bool modeMatches(std::string_view filter, int mode) {
+  if (mode == 0 || filter == "ALL") return true;
+  if (filter == "7KEY") return mode == 7;
+  if (filter == "14KEY") return mode == 14;
+  if (filter == "9KEY") return mode == 9;
+  if (filter == "5KEY") return mode == 5;
+  if (filter == "10KEY") return mode == 10;
+  if (filter == "24KEY") return mode == 25;
+  if (filter == "48KEY") return mode == 50;
+  if (filter == "SINGLE") return mode == 5 || mode == 7;
+  if (filter == "DOUBLE") return mode == 10 || mode == 14;
+  return false;
+}
+
+bool difficultyMatches(std::string_view filter,
+                       const bms_parser::ChartMeta &meta) {
+  if (filter == "ALL") return true;
+  if (filter == "SCRATCH CHART") {
+    return meta.TotalNotes > 0 &&
+           (meta.TotalScratchNotes + meta.TotalBackSpinNotes) * 8 >=
+               meta.TotalNotes;
+  }
+  if (filter == "LONG NOTE CHART") {
+    return meta.TotalNotes > 0 &&
+           (meta.TotalLongNotes + meta.TotalBackSpinNotes) * 20 >=
+               meta.TotalNotes;
+  }
+  if (filter == "SPEED CHANGE CHART") {
+    return meta.MinBpm != meta.MaxBpm;
+  }
+  constexpr std::array<std::pair<std::string_view, int>, 5> profiles{{
+      {"BEGINNER", 0}, {"NORMAL", 500}, {"HYPER", 700},
+      {"ANOTHER", 1300}, {"INSANE", 2700},
+  }};
+  std::string_view closest = profiles.front().first;
+  int closestDistance = std::abs(meta.TotalNotes - profiles.front().second);
+  for (const auto &[name, target] : profiles) {
+    const int distance = std::abs(meta.TotalNotes - target);
+    if (distance <= closestDistance) {
+      closest = name;
+      closestDistance = distance;
+    }
+  }
+  return filter == closest;
+}
+
+std::string lowerAscii(std::string_view value) {
+  std::string result(value);
+  std::ranges::transform(result, result.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return result;
+}
+
+int titleCompare(const MusicSelectBar &left, const MusicSelectBar &right) {
+  const auto leftTitle = lowerAscii(
+      left.chart ? left.chart->meta.Title : left.title);
+  const auto rightTitle = lowerAscii(
+      right.chart ? right.chart->meta.Title : right.title);
+  if (leftTitle < rightTitle) return -1;
+  if (leftTitle > rightTitle) return 1;
+  if (left.chart && right.chart) {
+    return left.chart->meta.Difficulty - right.chart->meta.Difficulty;
+  }
+  return 0;
+}
+
+int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
+                  std::string_view sortId) {
+  if (!left.chart || !right.chart) return titleCompare(left, right);
+  const auto &a = left.chart->meta;
+  const auto &b = right.chart->meta;
+  if (sortId == "ARTIST") {
+    const auto aa = lowerAscii(a.Artist);
+    const auto bb = lowerAscii(b.Artist);
+    return aa < bb ? -1 : aa > bb ? 1 : 0;
+  }
+  if (sortId == "BPM") return a.MaxBpm < b.MaxBpm ? -1 : a.MaxBpm > b.MaxBpm;
+  if (sortId == "LENGTH") return a.PlayLength < b.PlayLength ? -1 : a.PlayLength > b.PlayLength;
+  if (sortId == "LEVEL") {
+    if (a.PlayLevel != b.PlayLevel) return a.PlayLevel < b.PlayLevel ? -1 : 1;
+    return a.Difficulty - b.Difficulty;
+  }
+  if (sortId == "CLEAR") {
+    if (!left.score && !right.score) return 0;
+    if (!left.score) return 1;
+    if (!right.score) return -1;
+    return left.presentation.lamp - right.presentation.lamp;
+  }
+  if (sortId == "SCORE") {
+    const int leftNotes = left.score ? left.score->maxScore / 2 : 0;
+    const int rightNotes = right.score ? right.score->maxScore / 2 : 0;
+    if (leftNotes == 0 && rightNotes == 0) return 0;
+    if (leftNotes == 0) return 1;
+    if (rightNotes == 0) return -1;
+    const double la = static_cast<double>(left.score->score) / leftNotes;
+    const double rb = static_cast<double>(right.score->score) / rightNotes;
+    return la < rb ? -1 : la > rb;
+  }
+  if (sortId == "MISSCOUNT") {
+    if (!left.score && !right.score) return 0;
+    if (!left.score) return 1;
+    if (!right.score) return -1;
+    return left.score->badPoints.value_or(left.score->comboBreak.value_or(0)) -
+           right.score->badPoints.value_or(right.score->comboBreak.value_or(0));
+  }
+  if (sortId == "LASTUPDATE") {
+    if (!left.score && !right.score) return 0;
+    if (!left.score) return 1;
+    if (!right.score) return -1;
+    return left.score->lastPlayedUnixSeconds.value_or(0) <
+                   right.score->lastPlayedUnixSeconds.value_or(0)
+               ? -1
+               : left.score->lastPlayedUnixSeconds.value_or(0) >
+                         right.score->lastPlayedUnixSeconds.value_or(0);
+  }
+  if (sortId == "RIVALCOMPARE_CLEAR") {
+    if ((!left.score || !left.rivalScore) &&
+        (!right.score || !right.rivalScore)) return 0;
+    if (!left.score || !left.rivalScore) return 1;
+    if (!right.score || !right.rivalScore) return -1;
+    return (left.presentation.lamp - left.presentation.rivalLamp) -
+           (right.presentation.lamp - right.presentation.rivalLamp);
+  }
+  if (sortId == "RIVALCOMPARE_SCORE") {
+    const int leftNotes = left.score ? left.score->maxScore / 2 : 0;
+    const int rightNotes = right.score ? right.score->maxScore / 2 : 0;
+    const int leftRivalNotes =
+        left.rivalScore ? left.rivalScore->maxScore / 2 : 0;
+    const int rightRivalNotes =
+        right.rivalScore ? right.rivalScore->maxScore / 2 : 0;
+    if ((leftNotes == 0 || leftRivalNotes == 0) &&
+        (rightNotes == 0 || rightRivalNotes == 0)) return 0;
+    if (leftNotes == 0 || leftRivalNotes == 0) return 1;
+    if (rightNotes == 0 || rightRivalNotes == 0) return -1;
+    const double la = static_cast<double>(left.score->score) / leftNotes -
+                      static_cast<double>(left.rivalScore->score) /
+                          leftRivalNotes;
+    const double rb = static_cast<double>(right.score->score) / rightNotes -
+                      static_cast<double>(right.rivalScore->score) /
+                          rightRivalNotes;
+    return la < rb ? -1 : la > rb;
+  }
+  return titleCompare(left, right);
+}
+
+std::size_t startIndex(const auto &values, std::string_view selected) {
+  const auto found = std::ranges::find(values, selected);
+  return static_cast<std::size_t>(std::distance(values.begin(), found));
+}
+
+} // namespace
+
+MusicSelectBarManager::MusicSelectBarManager(MusicSelectProjection projection,
+                                             MusicSelectBarManagerConfig config)
+    : projection_(std::move(projection)), config_(std::move(config)) {
   rebuildRows();
 }
 
@@ -24,6 +203,49 @@ void MusicSelectBarManager::rebuildRows(
   rows_.reserve(ids->size());
   for (const auto &id : *ids) {
     if (const auto *bar = projection_.find(id)) rows_.push_back(*bar);
+  }
+  if (!rows_.empty()) {
+    const auto original = rows_;
+    const std::size_t modeStart = startIndex(kModeFilters, config_.modeFilter);
+    const std::size_t difficultyStart =
+        startIndex(kDifficultyFilters, config_.difficultyFilter);
+    bool filtered = false;
+    for (std::size_t difficultyTrial = 0;
+         difficultyTrial < kDifficultyFilters.size() && !filtered;
+         ++difficultyTrial) {
+      const auto difficulty = kDifficultyFilters[
+          (difficultyStart + difficultyTrial) % kDifficultyFilters.size()];
+      for (std::size_t modeTrial = 0; modeTrial < kModeFilters.size();
+           ++modeTrial) {
+        const auto mode =
+            kModeFilters[(modeStart + modeTrial) % kModeFilters.size()];
+        rows_.clear();
+        for (const auto &bar : original) {
+          if (!bar.chart ||
+              (((bar.chart->songReviewFavorite & (4 | 8)) == 0) &&
+               modeMatches(mode, songMode(bar.chart->meta)) &&
+               difficultyMatches(difficulty, bar.chart->meta))) {
+            rows_.push_back(bar);
+          }
+        }
+        if (!rows_.empty()) {
+          config_.modeFilter = mode;
+          config_.difficultyFilter = difficulty;
+          filtered = true;
+          break;
+        }
+      }
+    }
+    if (!filtered) rows_ = original;
+    if (!directory_.empty()) {
+      const auto *directory = projection_.find(directory_.back());
+      if (directory && directory->sortable) {
+        std::stable_sort(rows_.begin(), rows_.end(), [this](const auto &left,
+                                                            const auto &right) {
+          return sourceCompare(left, right, config_.sortId) < 0;
+        });
+      }
+    }
   }
   selectedIndex_ = 0;
   if (preferred) {
@@ -72,6 +294,13 @@ void MusicSelectBarManager::setSelectedPosition(float value) {
   }
 }
 
+void MusicSelectBarManager::configure(MusicSelectBarManagerConfig config) {
+  std::optional<MusicSelectBarId> preferred;
+  if (const auto *bar = selected()) preferred = bar->id;
+  config_ = std::move(config);
+  rebuildRows(preferred);
+}
+
 void MusicSelectBarManager::refresh(MusicSelectProjection projection) {
   std::optional<MusicSelectBarId> preferred;
   if (const auto *bar = selected()) preferred = bar->id;
@@ -98,5 +327,7 @@ MusicSelectBarManagerSnapshot MusicSelectBarManager::snapshot() const {
           .directory = directory_,
           .directoryText = std::move(directoryText),
           .movementDirection = movementDirection_,
-          .movementEndMillis = movementEndMillis_};
+          .movementEndMillis = movementEndMillis_,
+          .resolvedModeFilter = config_.modeFilter,
+          .resolvedDifficultyFilter = config_.difficultyFilter};
 }
