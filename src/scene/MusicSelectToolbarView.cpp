@@ -30,6 +30,8 @@ std::uint32_t codepointFor(MusicSelectToolbarControl control) {
     return ui_icons::kMusic;
   case MusicSelectToolbarControl::Tasks:
     return ui_icons::kTasks;
+  case MusicSelectToolbarControl::PlayOptions:
+    return ui_icons::kPlayOptions;
   case MusicSelectToolbarControl::IrUploads:
     return ui_icons::kIrUploads;
   case MusicSelectToolbarControl::Settings:
@@ -121,6 +123,7 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::RevealChart,
                 MusicSelectToolbarControl::MusicPlayer,
                 MusicSelectToolbarControl::Tasks,
+                MusicSelectToolbarControl::PlayOptions,
                 MusicSelectToolbarControl::IrUploads,
                 MusicSelectToolbarControl::Settings,
                 MusicSelectToolbarControl::Collapse,
@@ -201,6 +204,11 @@ void MusicSelectToolbarView::activateControl(
   case MusicSelectToolbarControl::Tasks:
     if (callbacks_.openTasks) {
       callbacks_.openTasks();
+    }
+    break;
+  case MusicSelectToolbarControl::PlayOptions:
+    if (callbacks_.openPlayOptions) {
+      callbacks_.openPlayOptions();
     }
     break;
   case MusicSelectToolbarControl::IrUploads:

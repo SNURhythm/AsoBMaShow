@@ -1,6 +1,8 @@
 #pragma once
 
 #include "MusicSelectToolbarView.h"
+#include "MainMenuPlayOptionsModal.h"
+#include "MainMenuProfileSelections.h"
 #include "Scene.h"
 #include "../music_select/MusicSelectBarManager.h"
 #include "../music_select/MusicSelectEventController.h"
@@ -23,6 +25,7 @@
 #include <chrono>
 #include <array>
 #include <atomic>
+#include <functional>
 #include <future>
 #include <map>
 #include <memory>
@@ -32,7 +35,10 @@
 #include <vector>
 
 class BlockingOverlayView;
+class OverlayPortal;
+class ResultRecordListView;
 class TextInputBox;
+class TextView;
 struct SkinGameplayChartGraphState;
 class MusicSelectScene final : public Scene {
 public:
@@ -89,10 +95,20 @@ private:
   void revealChart();
   void openMusicPlayer();
   void openTasks();
+  void openPlayOptions();
   void openIrUploads();
   void openSettings();
   void syncToolbar();
   void persistToolbar(MusicSelectToolbarState);
+  [[nodiscard]] PlayOptionsPanelState playOptionsState() const;
+  void updatePlayOptions(
+      const std::function<void(main_menu_profile::Selections &)> &);
+  void refreshPlayOptionsModal();
+  void showChartRecordsModal(const ChartMetaRecord &);
+  void loadChartRecordsModal(const ChartMetaRecord &);
+  void showTasksModal();
+  void refreshTasksModal();
+  [[nodiscard]] std::string tasksModalTextSnapshot() const;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   [[nodiscard]] bool
   activateSkin(skin::GameplaySkinActivationRequest);
@@ -159,6 +175,17 @@ private:
   MusicSelectToolbarView *toolbar_ = nullptr;
   BlockingOverlayView *searchOverlay_ = nullptr;
   TextInputBox *searchInput_ = nullptr;
+  View *modalLayer_ = nullptr;
+  OverlayPortal *modalOverlayPortal_ = nullptr;
+  std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal_;
+  BlockingOverlayView *chartRecordsModal_ = nullptr;
+  ResultRecordListView *chartRecordsView_ = nullptr;
+  TextView *chartRecordsTitle_ = nullptr;
+  TextView *chartRecordsEmptyText_ = nullptr;
+  BlockingOverlayView *tasksModal_ = nullptr;
+  TextView *tasksModalText_ = nullptr;
+  std::uint64_t displayedTasksRevision_ = 0;
+  std::uint64_t displayedTaskProgressRevision_ = 0;
   View *errorView_ = nullptr;
   bool failed_ = false;
   bool launching_ = false;

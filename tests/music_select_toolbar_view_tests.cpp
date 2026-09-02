@@ -46,6 +46,7 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
       .openChartRecords = [&] { actions.emplace_back("records"); },
       .revealChart = [&] { actions.emplace_back("reveal"); },
       .openTasks = [&] { actions.emplace_back("tasks"); },
+      .openPlayOptions = [&] { actions.emplace_back("play-options"); },
       .openIrUploads = [&] { actions.emplace_back("ir"); },
       .openSettings = [&] { actions.emplace_back("settings"); },
       .persist = [&](MusicSelectToolbarState state) { saved.push_back(state); },
@@ -62,8 +63,8 @@ void testExpandedUsesOnlyExactFontAwesomeControls() {
   const std::vector<std::uint32_t> expected = {
       ui_icons::kDrag,        ui_icons::kChartLine, ui_icons::kRecords,
       ui_icons::kReveal,      ui_icons::kMusic,     ui_icons::kTasks,
-      ui_icons::kIrUploads,   ui_icons::kSettings,  ui_icons::kCollapse,
-      ui_icons::kHide};
+      ui_icons::kPlayOptions, ui_icons::kIrUploads, ui_icons::kSettings,
+      ui_icons::kCollapse,    ui_icons::kHide};
   expect(toolbar->controls().size() == expected.size(),
          "expanded toolbar has drag plus chart and application controls");
   for (std::size_t index = 0;
@@ -126,11 +127,12 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::RevealChart);
   toolbar->activateControl(MusicSelectToolbarControl::MusicPlayer);
   toolbar->activateControl(MusicSelectToolbarControl::Tasks);
+  toolbar->activateControl(MusicSelectToolbarControl::PlayOptions);
   toolbar->activateControl(MusicSelectToolbarControl::IrUploads);
   toolbar->activateControl(MusicSelectToolbarControl::Settings);
   expect(actions == std::vector<std::string>({"viewer", "records", "reveal",
-                                               "music", "tasks", "ir",
-                                               "settings"}),
+                                               "music", "tasks", "play-options",
+                                               "ir", "settings"}),
          "toolbar exposes chart and application actions");
 
   toolbar->activateControl(MusicSelectToolbarControl::Collapse);
@@ -143,7 +145,7 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::Expand);
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Expanded &&
-             toolbar->controls().size() == 10,
+             toolbar->controls().size() == 11,
          "expand persists and rebuilds the toolbar");
 
   toolbar->applyYogaLayout();
@@ -195,7 +197,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
                        .x = 80.0F,
                        .y = 60.0F,
                        .hasPosition = true});
-  expect(toolbar->getVisible() && toolbar->controls().size() == 10 &&
+  expect(toolbar->getVisible() && toolbar->controls().size() == 11 &&
              toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");

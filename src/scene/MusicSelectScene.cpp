@@ -7,9 +7,7 @@
 #endif
 
 #include "IrUploadsScene.h"
-#include "ChartRecordsScene.h"
 #include "ChartViewerScene.h"
-#include "LibraryTasksScene.h"
 #include "MusicPlayerScene.h"
 #include "SceneManager.h"
 #include "SettingsScene.h"
@@ -26,12 +24,19 @@
 #include "../music_select/MusicSelectExternalActions.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
 #include "../music_select/MusicSelectPropertyProjection.h"
+#include "../library/ChartLibraryTaskService.h"
 #include "../input/SDLPointerEvent.h"
+#include "../ResultRecordSummary.h"
 #include "../replay/ChartReplayConsumer.h"
 #include "../replay/CourseReplayConsumer.h"
+#include "../replay/ReplayFileActionService.h"
 #include "../rendering/common.h"
+#include "../repositories/LegacyResultSummary.h"
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
+#include "../view/OverlayPortal.h"
+#include "../view/ResultRecordListView.h"
+#include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
@@ -54,6 +59,8 @@
 #include <memory>
 #include <ranges>
 #include <set>
+#include <span>
+#include <sstream>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -113,6 +120,20 @@ Button *makeButton(std::string label) {
   labelView->setAlign(TextView::CENTER);
   result->setContentView(labelView);
   return result;
+}
+
+const char *taskProgressStageText(ChartScanProgressStage stage) {
+  switch (stage) {
+  case ChartScanProgressStage::Preparing: return "Preparing library scan";
+  case ChartScanProgressStage::ScanningRoots: return "Scanning folders";
+  case ChartScanProgressStage::IndexingArchives: return "Indexing archives";
+  case ChartScanProgressStage::PreparingUpdates:
+    return "Preparing chart updates";
+  case ChartScanProgressStage::RemovingDeleted: return "Removing deleted charts";
+  case ChartScanProgressStage::ParsingCharts: return "Parsing charts";
+  case ChartScanProgressStage::ReadingArchive: return "Reading archive entries";
+  }
+  return "Refreshing library";
 }
 
 std::filesystem::path resolveChartAsset(const ChartMetaRecord &record,
@@ -331,6 +352,19 @@ void MusicSelectScene::init() {
 
   syncToolbar();
   buildSearchPrompt();
+  modalLayer_ = new View(0, 0, rendering::window_width,
+                         rendering::window_height);
+  modalLayer_->setPositionType(YGPositionTypeAbsolute);
+  modalLayer_->setPosition(Edge::Left, 0);
+  modalLayer_->setPosition(Edge::Top, 0);
+  modalOverlayPortal_ = new OverlayPortal(
+      0, 0, rendering::window_width, rendering::window_height);
+  modalOverlayPortal_->setPositionType(YGPositionTypeAbsolute);
+  modalOverlayPortal_->setPosition(Edge::Left, 0);
+  modalOverlayPortal_->setPosition(Edge::Top, 0);
+  modalOverlayPortal_->setZIndex(2000);
+  modalLayer_->addView(modalOverlayPortal_);
+  addView(modalLayer_);
   startInputListening();
 }
 
@@ -912,6 +946,34 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (failed_) return Scene::handleEvents(event);
+  if (chartRecordsModal_ != nullptr && chartRecordsModal_->getVisible()) {
+    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+        event.key.keysym.sym == SDLK_ESCAPE) {
+      chartRecordsModal_->setVisible(false);
+      return {};
+    }
+    (void)chartRecordsModal_->handleEvents(event);
+    return {};
+  }
+  if (tasksModal_ != nullptr && tasksModal_->getVisible()) {
+    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+        event.key.keysym.sym == SDLK_ESCAPE) {
+      tasksModal_->setVisible(false);
+      return {};
+    }
+    (void)tasksModal_->handleEvents(event);
+    return {};
+  }
+  if (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
+      playOptionsModal_->root()->getVisible()) {
+    if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+        event.key.keysym.sym == SDLK_ESCAPE) {
+      playOptionsModal_->hide();
+      return {};
+    }
+    (void)playOptionsModal_->root()->handleEvents(event);
+    return {};
+  }
   if (searchOverlay_ != nullptr && searchOverlay_->getVisible()) {
     if (event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
         event.key.keysym.sym == SDLK_ESCAPE) {
@@ -2191,6 +2253,25 @@ void MusicSelectScene::update(float) {
     searchOverlay_->setSize(rendering::window_width,
                             rendering::window_height);
   }
+  if (modalLayer_ != nullptr) {
+    modalLayer_->setSize(rendering::window_width, rendering::window_height);
+  }
+  if (modalOverlayPortal_ != nullptr) {
+    modalOverlayPortal_->setSize(rendering::window_width,
+                                 rendering::window_height);
+  }
+  if (playOptionsModal_ != nullptr) {
+    playOptionsModal_->resize(rendering::window_width,
+                              rendering::window_height);
+  }
+  if (chartRecordsModal_ != nullptr) {
+    chartRecordsModal_->setSize(rendering::window_width,
+                                rendering::window_height);
+  }
+  if (tasksModal_ != nullptr) {
+    tasksModal_->setSize(rendering::window_width, rendering::window_height);
+    if (tasksModal_->getVisible()) refreshTasksModal();
+  }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_) {
     reloadLibrary();
     selectedBarMoved();
@@ -2342,8 +2423,111 @@ void MusicSelectScene::openChartRecords() {
       selected.chart->meta.BmsPath.empty()) {
     return;
   }
-  context.sceneManager->changeScene(std::make_unique<ChartRecordsScene>(
-      context, *selected.chart, SceneReturnTarget::Retained(this)), true);
+  showChartRecordsModal(*selected.chart);
+}
+
+void MusicSelectScene::showChartRecordsModal(const ChartMetaRecord &record) {
+  if (modalLayer_ == nullptr) return;
+  if (chartRecordsModal_ == nullptr) {
+    chartRecordsModal_ = new BlockingOverlayView(
+        0, 0, rendering::window_width, rendering::window_height);
+    chartRecordsModal_->setPositionType(YGPositionTypeAbsolute);
+    chartRecordsModal_->setPosition(Edge::Left, 0);
+    chartRecordsModal_->setPosition(Edge::Top, 0);
+    chartRecordsModal_->setZIndex(1000);
+    chartRecordsModal_->setVisible(false);
+    chartRecordsModal_->setFlexDirection(FlexDirection::Column);
+    chartRecordsModal_->setAlignItems(YGAlignCenter);
+    chartRecordsModal_->setJustifyContent(YGJustifyCenter);
+    chartRecordsModal_->setThemedBackgroundColor(ui_theme::scrim);
+
+    auto *panel = new View();
+    panel->setWidth(760)
+        ->setHeight(640)
+        ->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch)
+        ->setGap(14)
+        ->setPadding(Edge::All, 22)
+        ->setThemedBackgroundColor(ui_theme::panelStrong)
+        ->setCornerRadius(ui_theme::panelRadius())
+        ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+        ->setThemedBorderColor(ui_theme::hairlineStrong)
+        ->setBorderWidth(1);
+
+    auto *title = makeText("Records", 30, ui_theme::textPrimary);
+    title->setHeight(42);
+    panel->addView(title);
+    chartRecordsTitle_ = makeText({}, 20, ui_theme::textSecondary);
+    chartRecordsTitle_->setHeight(32);
+    chartRecordsTitle_->setOverflow(TextView::TextOverflow::Hidden);
+    panel->addView(chartRecordsTitle_);
+
+    chartRecordsView_ = new ResultRecordListView();
+    chartRecordsView_->setFlex(1)->setMinHeight(0);
+    chartRecordsView_->clearBackgroundColor();
+    chartRecordsView_->setThemedBorderColor(ui_theme::hairline);
+    chartRecordsView_->setBorderWidth(1);
+    panel->addView(chartRecordsView_);
+
+    chartRecordsEmptyText_ = makeText("No records.", 20,
+                                      ui_theme::textSecondary);
+    chartRecordsEmptyText_->setHeight(48);
+    chartRecordsEmptyText_->setAlign(TextView::CENTER);
+    chartRecordsEmptyText_->setVisible(false);
+    panel->addView(chartRecordsEmptyText_);
+
+    auto *footer = new View();
+    footer->setFlexDirection(FlexDirection::Row)
+        ->setJustifyContent(YGJustifyFlexEnd)
+        ->setHeight(56);
+    auto *close = makeButton("Close");
+    close->setOnClickListener([this] {
+      if (chartRecordsModal_ != nullptr) chartRecordsModal_->setVisible(false);
+    });
+    footer->addView(close);
+    panel->addView(footer);
+
+    chartRecordsModal_->addView(panel);
+    modalLayer_->addView(chartRecordsModal_);
+  }
+  if (playOptionsModal_ != nullptr) playOptionsModal_->hide();
+  if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
+  chartRecordsTitle_->setText(record.meta.Title);
+  loadChartRecordsModal(record);
+  chartRecordsModal_->setSize(rendering::window_width, rendering::window_height);
+  chartRecordsModal_->setVisible(true);
+  chartRecordsModal_->applyYogaLayout();
+}
+
+void MusicSelectScene::loadChartRecordsModal(const ChartMetaRecord &record) {
+  if (chartRecordsView_ == nullptr || chartRecordsEmptyText_ == nullptr) return;
+  std::vector<ResultRecordSummary> projected;
+  const auto legacy = context.replayRepository.ListLegacyChartSummaries(
+      record.meta, kMaximumLegacyResultSummaryRows);
+  projected.reserve(legacy.size());
+  for (const LegacyChartResultSummary &summary : legacy) {
+    projected.push_back(makeLegacyChartResultRecord(summary));
+  }
+  if (!record.meta.SHA256.empty()) {
+    const auto history = context.replayRepository.ListModernChartResults(
+        record.meta.SHA256, kMaximumModernChartHistoryRows);
+    if (history.status == ModernChartHistoryReadStatus::Loaded) {
+      replay::ReplayFileActionService replayActions(context.replayRepository);
+      projected.reserve(projected.size() + history.records.size());
+      for (const ModernChartResultRecord &modern : history.records) {
+        const auto inspected = replayActions.probe(modern.replayFile);
+        projected.push_back(makeModernChartResultRecord(
+            modern, replay::replayStateForFileAction(inspected.state),
+            ir::IrRecordState::Hidden));
+      }
+    }
+  }
+  const auto records = mergeResultRecords(
+      std::span<const ReplaySummary>{}, projected,
+      std::span<const ir::IrRemoteScore>{}, std::string_view{},
+      std::string_view{});
+  chartRecordsView_->setResultRecords(records);
+  chartRecordsEmptyText_->setVisible(records.empty());
 }
 
 void MusicSelectScene::revealChart() {
@@ -2353,8 +2537,307 @@ void MusicSelectScene::revealChart() {
 }
 
 void MusicSelectScene::openTasks() {
-  context.sceneManager->changeScene(std::make_unique<LibraryTasksScene>(
-      context, SceneReturnTarget::Retained(this)), true);
+  showTasksModal();
+}
+
+std::string MusicSelectScene::tasksModalTextSnapshot() const {
+  const auto snapshot = context.chartLibraryTasks
+                            ? context.chartLibraryTasks->snapshot()
+                            : chart_library_tasks::Snapshot{};
+  const auto &progress = snapshot.progress;
+  std::vector<chart_library_tasks::TaskInfo> active;
+  std::vector<chart_library_tasks::TaskInfo> recent;
+  active.reserve(snapshot.tasks.size());
+  recent.reserve(snapshot.tasks.size());
+  for (const auto &task : snapshot.tasks) {
+    if (task.status == chart_library_tasks::TaskStatus::Queued ||
+        task.status == chart_library_tasks::TaskStatus::Running ||
+        task.status == chart_library_tasks::TaskStatus::Paused) {
+      active.push_back(task);
+    } else {
+      recent.push_back(task);
+    }
+  }
+  if (active.empty() && recent.empty()) return "No parsing tasks.";
+
+  std::ostringstream text;
+  if (active.empty()) {
+    text << "No active tasks.\n\nRecent tasks\n\n";
+  } else {
+    text << active.size()
+         << (active.size() == 1 ? " active task" : " active tasks")
+         << "\n\n";
+  }
+  const auto appendTask = [&text, &progress](
+                              const chart_library_tasks::TaskInfo &task) {
+    std::string status;
+    switch (task.status) {
+    case chart_library_tasks::TaskStatus::Queued: status = "Queued"; break;
+    case chart_library_tasks::TaskStatus::Running: status = "Running"; break;
+    case chart_library_tasks::TaskStatus::Complete: status = "Complete"; break;
+    case chart_library_tasks::TaskStatus::Failed: status = "Failed"; break;
+    case chart_library_tasks::TaskStatus::Paused: status = "Paused"; break;
+    }
+    text << task.title << "\n" << status;
+    if (task.status == chart_library_tasks::TaskStatus::Running) {
+      if (progress.valid && progress.taskId == task.id) {
+        text << " - " << (progress.basisPoints / 100) << "%";
+        if (progress.total > 0) {
+          text << " (" << progress.current << " / " << progress.total << ")";
+        }
+        text << "\n" << taskProgressStageText(progress.stage);
+      } else {
+        text << " - " << static_cast<int>(std::round(task.fraction * 100.0))
+             << "%";
+        if (task.total > 0) {
+          text << " (" << task.current << " / " << task.total << ")";
+        }
+        if (!task.detail.empty()) text << "\n" << task.detail;
+      }
+    } else if (!task.detail.empty() && task.detail != status) {
+      text << "\n" << task.detail;
+    }
+    text << "\n\n";
+  };
+  for (const auto &task : active) appendTask(task);
+  if (!active.empty() && !recent.empty()) text << "Recent tasks\n\n";
+  constexpr std::size_t kMaxRecentTasksShown = 8;
+  for (std::size_t index = 0;
+       index < recent.size() && index < kMaxRecentTasksShown; ++index) {
+    appendTask(recent[recent.size() - index - 1]);
+  }
+  return text.str();
+}
+
+void MusicSelectScene::showTasksModal() {
+  if (modalLayer_ == nullptr) return;
+  if (tasksModal_ == nullptr) {
+    tasksModal_ = new BlockingOverlayView(
+        0, 0, rendering::window_width, rendering::window_height);
+    tasksModal_->setPositionType(YGPositionTypeAbsolute);
+    tasksModal_->setPosition(Edge::Left, 0);
+    tasksModal_->setPosition(Edge::Top, 0);
+    tasksModal_->setZIndex(1000);
+    tasksModal_->setVisible(false);
+    tasksModal_->setFlexDirection(FlexDirection::Column);
+    tasksModal_->setAlignItems(YGAlignCenter);
+    tasksModal_->setJustifyContent(YGJustifyCenter);
+    tasksModal_->setThemedBackgroundColor(ui_theme::scrim);
+
+    auto *panel = new View();
+    panel->setWidth(760)
+        ->setHeight(460)
+        ->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch)
+        ->setGap(14)
+        ->setPadding(Edge::All, 22)
+        ->setThemedBackgroundColor(ui_theme::panelStrong)
+        ->setCornerRadius(ui_theme::panelRadius())
+        ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+        ->setThemedBorderColor(ui_theme::hairlineStrong)
+        ->setBorderWidth(1);
+    auto *title = makeText("Tasks", 30, ui_theme::textPrimary);
+    title->setHeight(42);
+    panel->addView(title);
+
+    auto *scroll = new ScrollView(0, 0, 716, 400);
+    scroll->setWidth(716)
+        ->setFlex(1)
+        ->setThemedBackgroundColor(ui_theme::insetSurface)
+        ->setCornerRadius(ui_theme::controlRadius())
+        ->setThemedBorderColor(ui_theme::hairline)
+        ->setBorderWidth(1);
+    scroll->setContentPadding(Edge::All, 12);
+    auto *content = new View();
+    content->setFlexDirection(FlexDirection::Column)
+        ->setAlignItems(YGAlignStretch);
+    tasksModalText_ = makeText({}, 18, ui_theme::textSecondary);
+    tasksModalText_->setWrap(true);
+    tasksModalText_->setOverflow(TextView::TextOverflow::Visible);
+    content->addView(tasksModalText_);
+    scroll->setContentView(content);
+    panel->addView(scroll);
+
+    auto *footer = new View();
+    footer->setFlexDirection(FlexDirection::Row)
+        ->setJustifyContent(YGJustifyFlexEnd)
+        ->setGap(12)
+        ->setHeight(56);
+    auto *refresh = makeButton("Refresh List");
+    refresh->setOnClickListener([this] {
+      if (context.chartLibraryTasks &&
+          context.chartLibraryTasks->snapshot().activeCount > 0) {
+        context.chartLibraryScanFlushRequested.fetch_add(1,
+                                                          std::memory_order_release);
+      }
+      reloadLibrary();
+      selectedBarMoved();
+      if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
+    });
+    auto *close = makeButton("Close");
+    close->setOnClickListener([this] {
+      if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
+    });
+    footer->addView(refresh);
+    footer->addView(close);
+    panel->addView(footer);
+    tasksModal_->addView(panel);
+    modalLayer_->addView(tasksModal_);
+  }
+  if (playOptionsModal_ != nullptr) playOptionsModal_->hide();
+  if (chartRecordsModal_ != nullptr) chartRecordsModal_->setVisible(false);
+  tasksModal_->setSize(rendering::window_width, rendering::window_height);
+  tasksModal_->setVisible(true);
+  displayedTasksRevision_ = 0;
+  displayedTaskProgressRevision_ = 0;
+  refreshTasksModal();
+  tasksModal_->applyYogaLayout();
+}
+
+void MusicSelectScene::refreshTasksModal() {
+  if (tasksModal_ == nullptr || tasksModalText_ == nullptr) return;
+  const auto snapshot = context.chartLibraryTasks
+                            ? context.chartLibraryTasks->snapshot()
+                            : chart_library_tasks::Snapshot{};
+  if (snapshot.revision == displayedTasksRevision_ &&
+      snapshot.progress.revision == displayedTaskProgressRevision_) {
+    return;
+  }
+  displayedTasksRevision_ = snapshot.revision;
+  displayedTaskProgressRevision_ = snapshot.progress.revision;
+  tasksModalText_->setText(tasksModalTextSnapshot());
+}
+
+PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
+  const main_menu_profile::Selections selections =
+      main_menu_profile::Selections::fromSettings(context.settings);
+  PlayOptionsPanelState state{
+      .ruleset = selections.ruleset,
+      .gaugeType = selections.gaugeType,
+      .gaugeAutoShift = selections.gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = selections.gaugeAutoShiftLowerBound,
+      .playOption = selections.playOption,
+      .longNoteMode = selections.longNoteMode,
+      .assistOption = selections.assistOption,
+      .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
+      .clubMode = context.settings.gameplayClubModeEnabled,
+      .pacemakerTarget = selections.pacemakerTarget};
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return state;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (!selected.chart) return state;
+  const int chartLnMode = normalizeChartLongNoteModeValue(
+      selected.chart->meta.LnMode);
+  if (chartLnMode > 0) {
+    state.longNoteMode = long_note_mode::idFromValue(
+        chartLnMode, AppSettings::kDefaultLnMode);
+    state.longNoteModeLocked = true;
+  }
+  return state;
+}
+
+void MusicSelectScene::updatePlayOptions(
+    const std::function<void(main_menu_profile::Selections &)> &update) {
+  auto selections = main_menu_profile::Selections::fromSettings(context.settings);
+  update(selections);
+  selections.applyTo(context.settings);
+  context.settings.sanitize();
+  if (!context.saveSettings()) {
+    SDL_Log("Failed to save music-select play options");
+  }
+  refreshPlayOptionsModal();
+}
+
+void MusicSelectScene::refreshPlayOptionsModal() {
+  if (playOptionsModal_ != nullptr) {
+    playOptionsModal_->refresh(playOptionsState());
+  }
+}
+
+void MusicSelectScene::openPlayOptions() {
+  if (modalLayer_ == nullptr) return;
+  if (chartRecordsModal_ != nullptr) chartRecordsModal_->setVisible(false);
+  if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
+  if (!playOptionsModal_) {
+    playOptionsModal_ = MainMenuPlayOptionsModal::Create(
+        modalLayer_,
+        {.onRulesetSelected = [this](GameplayRuleset ruleset) {
+           updatePlayOptions([ruleset](auto &selections) {
+             selections.ruleset = ruleset;
+           });
+         },
+         .onGaugeSelected = [this](GaugeType gauge,
+                                   GaugeAutoShiftMode autoShift) {
+           updatePlayOptions([gauge, autoShift](auto &selections) {
+             selections.gaugeType = gauge;
+             selections.gaugeAutoShift = autoShift;
+           });
+         },
+         .onGaugeLowerBoundSelected = [this](GaugeType gauge) {
+           updatePlayOptions([gauge](auto &selections) {
+             selections.gaugeAutoShiftLowerBound = gauge;
+           });
+         },
+         .onPlayOptionSelected = [this](const std::string &option) {
+           updatePlayOptions([&option](auto &selections) {
+             selections.playOption = play_options::normalizePlayOption(option);
+           });
+         },
+         .onLongNoteModeSelected = [this](const std::string &mode) {
+           const auto state = playOptionsState();
+           if (state.longNoteModeLocked &&
+               long_note_mode::parseId(mode, AppSettings::kDefaultLnMode) !=
+                   state.longNoteMode) {
+             return;
+           }
+           updatePlayOptions([&mode](auto &selections) {
+             selections.longNoteMode = long_note_mode::parseId(
+                 mode, AppSettings::kDefaultLnMode);
+           });
+         },
+         .onAssistOptionSelected = [this](const std::string &option) {
+           updatePlayOptions([&option](auto &selections) {
+             selections.assistOption = assist_options::normalize(option);
+           });
+         },
+         .onPlaybackRateSelected = [this](int percent) {
+           context.settings.selectedPlaybackRatePercent = percent;
+           context.settings.sanitize();
+           if (!context.saveSettings()) {
+             SDL_Log("Failed to save music-select playback rate");
+           }
+           refreshPlayOptionsModal();
+         },
+         .onPlaybackModeSelected = [this](const std::string &mode) {
+           if (mode != "pitch-shift") return;
+           context.settings.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
+           context.settings.sanitize();
+           if (!context.saveSettings()) {
+             SDL_Log("Failed to save music-select playback mode");
+           }
+           refreshPlayOptionsModal();
+         },
+         .onClubModeToggled = [this] {
+           context.settings.gameplayClubModeEnabled =
+               !context.settings.gameplayClubModeEnabled;
+           if (!context.saveSettings()) {
+             SDL_Log("Failed to save music-select Club mode");
+           }
+           refreshPlayOptionsModal();
+         },
+         .onPacemakerSelected = [this](const std::string &target) {
+           updatePlayOptions([&target](auto &selections) {
+             selections.pacemakerTarget = pacemaker::normalizeTargetId(target);
+           });
+         }},
+        modalOverlayPortal_);
+  }
+  if (playOptionsModal_ == nullptr) return;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+#endif
+  refreshPlayOptionsModal();
+  playOptionsModal_->show();
 }
 
 void MusicSelectScene::openIrUploads() {
@@ -2389,6 +2872,7 @@ void MusicSelectScene::syncToolbar() {
        .revealChart = [this] { revealChart(); },
        .openMusicPlayer = [this] { openMusicPlayer(); },
        .openTasks = [this] { openTasks(); },
+       .openPlayOptions = [this] { openPlayOptions(); },
        .openIrUploads = [this] { openIrUploads(); },
        .openSettings = [this] { openSettings(); },
        .persist = [this](MusicSelectToolbarState updated) {
@@ -2582,9 +3066,18 @@ void MusicSelectScene::cleanupScene() {
   skinTextInputs_.clear();
 #endif
   chartSession_.reset();
+  playOptionsModal_.reset();
   toolbar_ = nullptr;
   searchOverlay_ = nullptr;
   searchInput_ = nullptr;
+  modalOverlayPortal_ = nullptr;
+  modalLayer_ = nullptr;
+  chartRecordsModal_ = nullptr;
+  chartRecordsView_ = nullptr;
+  chartRecordsTitle_ = nullptr;
+  chartRecordsEmptyText_ = nullptr;
+  tasksModal_ = nullptr;
+  tasksModalText_ = nullptr;
   errorView_ = nullptr;
   diagnostics_.clear();
 }

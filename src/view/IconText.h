@@ -16,6 +16,7 @@ inline constexpr uint32_t kRecords = 0xf03a;
 inline constexpr uint32_t kReveal = 0xf07c;
 inline constexpr uint32_t kMusic = 0xf001;
 inline constexpr uint32_t kTasks = 0xf0ae;
+inline constexpr uint32_t kPlayOptions = 0xf1de;
 inline constexpr uint32_t kIrUploads = 0xf0ee;
 inline constexpr uint32_t kSettings = 0xf013;
 inline constexpr uint32_t kCollapse = 0xf077;

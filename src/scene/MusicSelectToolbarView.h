@@ -17,6 +17,7 @@ enum class MusicSelectToolbarControl {
   RevealChart,
   MusicPlayer,
   Tasks,
+  PlayOptions,
   IrUploads,
   Settings,
   Collapse,
@@ -30,6 +31,7 @@ struct MusicSelectToolbarCallbacks {
   std::function<void()> revealChart;
   std::function<void()> openMusicPlayer;
   std::function<void()> openTasks;
+  std::function<void()> openPlayOptions;
   std::function<void()> openIrUploads;
   std::function<void()> openSettings;
   std::function<void(MusicSelectToolbarState)> persist;
