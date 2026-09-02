@@ -119,10 +119,32 @@ size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
   response->append(ptr, byteCount);
   return byteCount;
 }
+
+int difficultyTableCurlProgress(void *userdata, curl_off_t, curl_off_t,
+                                curl_off_t, curl_off_t) {
+  const auto *checkpoint =
+      static_cast<const DifficultyTableImportCheckpoint *>(userdata);
+  return checkpoint != nullptr && *checkpoint && !(*checkpoint)() ? 1 : 0;
+}
 #endif
 
+bool difficultyTableCheckpoint(
+    const DifficultyTableImportCheckpoint &checkpoint,
+    std::string *errorMessage) {
+  if (!checkpoint || checkpoint()) return true;
+  if (errorMessage != nullptr) {
+    *errorMessage = "Difficulty table update was interrupted";
+  }
+  return false;
+}
+
 std::optional<std::string> fetchUrlText(const std::string &url,
-                                        std::string *errorMessage) {
+                                        std::string *errorMessage,
+                                        const DifficultyTableImportCheckpoint &
+                                            checkpoint) {
+  if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+    return std::nullopt;
+  }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   std::string body;
   std::string iosError;
@@ -132,7 +154,9 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     }
     return std::nullopt;
   }
-  return body;
+  return difficultyTableCheckpoint(checkpoint, errorMessage)
+             ? std::optional<std::string>{std::move(body)}
+             : std::nullopt;
 #elif TARGET_OS_ANDROID
   std::string body;
   std::string androidError;
@@ -143,7 +167,9 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     }
     return std::nullopt;
   }
-  return body;
+  return difficultyTableCheckpoint(checkpoint, errorMessage)
+             ? std::optional<std::string>{std::move(body)}
+             : std::nullopt;
 #else
   std::call_once(curlInitFlag, []() { curl_global_init(CURL_GLOBAL_DEFAULT); });
   CurlEasyHandle curl(curl_easy_init());
@@ -168,6 +194,12 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
                    CurlRedirectProtocolsForInitialUrl(url));
+  if (checkpoint) {
+    curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION,
+                     difficultyTableCurlProgress);
+    curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &checkpoint);
+  }
   ConfigureCurlTrustStore(curl.get());
 
   const CURLcode result = curl_easy_perform(curl.get());
@@ -187,7 +219,9 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     }
     return std::nullopt;
   }
-  return body;
+  return difficultyTableCheckpoint(checkpoint, errorMessage)
+             ? std::optional<std::string>{std::move(body)}
+             : std::nullopt;
 #endif
 }
 
@@ -683,8 +717,9 @@ struct ResolvedDifficultyHeader {
 std::optional<ResolvedDifficultyHeader>
 resolveDifficultyHeader(const std::string &tableUrl,
                         const std::string &pageBody,
-                        const DifficultyTableTextFetcher &fetchText,
-                        bool rejectNestedList, std::string &errorMessage) {
+                        const DifficultyTableControlledTextFetcher &fetchText,
+                        bool rejectNestedList, std::string &errorMessage,
+                        const DifficultyTableImportCheckpoint &checkpoint) {
   ResolvedDifficultyHeader resolved;
   try {
     const json maybeHeader = json::parse(pageBody);
@@ -709,7 +744,8 @@ resolveDifficultyHeader(const std::string &tableUrl,
     }
     resolved.headerUrl = *headerUrl;
     std::string headerError;
-    const auto headerBody = fetchText(resolved.headerUrl, &headerError);
+    const auto headerBody =
+        fetchText(resolved.headerUrl, &headerError, checkpoint);
     if (!headerBody.has_value()) {
       errorMessage =
           headerError.empty() ? "Failed to download table header" : headerError;
@@ -743,13 +779,14 @@ struct DifficultyTableDownloadResult {
 
 DifficultyTableDownloadResult
 downloadDifficultyTable(const std::string &tableUrl,
-                        const DifficultyTableTextFetcher &fetchText) {
+                        const DifficultyTableControlledTextFetcher &fetchText,
+                        const DifficultyTableImportCheckpoint &checkpoint) {
   DifficultyTableDownloadResult result;
   result.sourceUrl = tableUrl;
   result.tableName = tableUrl;
 
   std::string pageError;
-  const auto pageBody = fetchText(tableUrl, &pageError);
+  const auto pageBody = fetchText(tableUrl, &pageError, checkpoint);
   if (!pageBody.has_value()) {
     result.errorMessage =
         pageError.empty() ? "Failed to download table page" : pageError;
@@ -757,7 +794,7 @@ downloadDifficultyTable(const std::string &tableUrl,
   }
 
   auto resolved = resolveDifficultyHeader(tableUrl, *pageBody, fetchText, true,
-                                          result.errorMessage);
+                                          result.errorMessage, checkpoint);
   if (!resolved.has_value()) {
     return result;
   }
@@ -770,7 +807,7 @@ downloadDifficultyTable(const std::string &tableUrl,
     return result;
   }
   std::string dataError;
-  const auto dataBody = fetchText(dataUrl, &dataError);
+  const auto dataBody = fetchText(dataUrl, &dataError, checkpoint);
   if (!dataBody.has_value()) {
     result.errorMessage =
         dataError.empty() ? "Failed to download table data" : dataError;
@@ -921,13 +958,29 @@ DifficultyTableImporter::DifficultyTableImporter() : fetchText_(fetchUrlText) {}
 
 DifficultyTableImporter::DifficultyTableImporter(
     DifficultyTableTextFetcher fetchText)
-    : fetchText_(fetchText ? std::move(fetchText)
-                           : DifficultyTableTextFetcher(fetchUrlText)) {}
+    : fetchText_([fetchText = std::move(fetchText)](
+                     const std::string &url, std::string *errorMessage,
+                     const DifficultyTableImportCheckpoint &checkpoint)
+                     -> std::optional<std::string> {
+        if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+          return std::nullopt;
+        }
+        const auto result = fetchText
+                                ? fetchText(url, errorMessage)
+                                : fetchUrlText(url, errorMessage, checkpoint);
+        return result && difficultyTableCheckpoint(checkpoint, errorMessage)
+                   ? result
+                   : std::nullopt;
+      }) {}
 
 bool DifficultyTableImporter::ImportFromUrl(
     ChartRepository::Session &session, const std::string &pageUrl,
     std::string *errorMessage,
-    DifficultyTableImportProgressCallback progressCallback) {
+    DifficultyTableImportProgressCallback progressCallback,
+    DifficultyTableImportCheckpoint checkpoint) {
+  if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+    return false;
+  }
   const std::string trimmedUrl = trimCopy(pageUrl);
   if (trimmedUrl.empty()) {
     if (errorMessage != nullptr) {
@@ -943,7 +996,7 @@ bool DifficultyTableImporter::ImportFromUrl(
     return false;
   }
 
-  const auto pageBody = fetchText_(trimmedUrl, errorMessage);
+  const auto pageBody = fetchText_(trimmedUrl, errorMessage, checkpoint);
   if (!pageBody.has_value()) {
     return false;
   }
@@ -993,6 +1046,9 @@ bool DifficultyTableImporter::ImportFromUrl(
       };
 
       while (nextIndex < tableEntries.size() || !inFlight.empty()) {
+        if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+          return false;
+        }
         while (nextIndex < tableEntries.size() &&
                inFlight.size() < kMaxConcurrentDifficultyTableDownloads) {
           const auto &table = tableEntries[nextIndex];
@@ -1011,11 +1067,13 @@ bool DifficultyTableImporter::ImportFromUrl(
                 {completed, total,
                  "Fetching: " + (table.name.empty() ? table.url : table.name)});
           }
-          const DifficultyTableTextFetcher fetchText = fetchText_;
+          const DifficultyTableControlledTextFetcher fetchText = fetchText_;
           inFlight.push_back(
               {table, std::async(std::launch::async, [tableUrl = table.url,
-                                                      fetchText]() {
-                 return downloadDifficultyTable(tableUrl, fetchText);
+                                                      fetchText,
+                                                      checkpoint]() {
+                 return downloadDifficultyTable(tableUrl, fetchText,
+                                                checkpoint);
                })});
           ++nextIndex;
         }
@@ -1034,6 +1092,9 @@ bool DifficultyTableImporter::ImportFromUrl(
           if (result.document.has_value()) {
             if (progressCallback) {
               progressCallback({completed, total, "Importing: " + displayName});
+            }
+            if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+              return false;
             }
             if (session.ReplaceDifficultyTable(*result.document)) {
               ++imported;
@@ -1089,7 +1150,7 @@ bool DifficultyTableImporter::ImportFromUrl(
 
   std::string headerError;
   auto resolved = resolveDifficultyHeader(trimmedUrl, *pageBody, fetchText_,
-                                          false, headerError);
+                                          false, headerError, checkpoint);
   if (!resolved.has_value()) {
     if (errorMessage != nullptr) {
       *errorMessage = headerError == "Could not find a bmstable header link"
@@ -1112,13 +1173,19 @@ bool DifficultyTableImporter::ImportFromUrl(
     }
     return false;
   }
-  const auto dataBody = fetchText_(dataUrl, errorMessage);
+  const auto dataBody = fetchText_(dataUrl, errorMessage, checkpoint);
   if (!dataBody.has_value()) {
+    return false;
+  }
+  if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
     return false;
   }
   std::string parseError;
   auto document = difficulty_table::Parse(resolved->headerJson, *dataBody,
                                           trimmedUrl, parseError);
+  if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+    return false;
+  }
   if (!document.has_value() || !session.ReplaceDifficultyTable(*document)) {
     if (errorMessage != nullptr) {
       *errorMessage = "Downloaded table data could not be imported";
@@ -1129,7 +1196,11 @@ bool DifficultyTableImporter::ImportFromUrl(
 }
 
 bool DifficultyTableImporter::UpdateFromSourceUrl(
-    ChartRepository::Session &session, int tableId, std::string *errorMessage) {
+    ChartRepository::Session &session, int tableId, std::string *errorMessage,
+    DifficultyTableImportCheckpoint checkpoint) {
+  if (!difficultyTableCheckpoint(checkpoint, errorMessage)) {
+    return false;
+  }
   const auto tables = session.SelectDifficultyTables();
   const auto table =
       std::find_if(tables.begin(), tables.end(), [tableId](const auto &value) {
@@ -1149,7 +1220,8 @@ bool DifficultyTableImporter::UpdateFromSourceUrl(
     }
     return false;
   }
-  return ImportFromUrl(session, sourceUrl, errorMessage);
+  return ImportFromUrl(session, sourceUrl, errorMessage, nullptr,
+                       std::move(checkpoint));
 }
 
 int DifficultyTableImporter::ImportFromDirectory(

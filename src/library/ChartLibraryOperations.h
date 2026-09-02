@@ -20,7 +20,8 @@ struct ChartLibraryOperationsDependencies {
   std::function<bool(ChartRepository::Session &, const std::string &,
                      std::string *, DifficultyTableImportProgressCallback)>
       importDifficultyTableFromUrl;
-  std::function<bool(ChartRepository::Session &, int, std::string *)>
+  std::function<bool(ChartRepository::Session &, int, std::string *,
+                     const DifficultyTableImportCheckpoint &)>
       updateDifficultyTableFromSourceUrl;
   std::function<int(ChartRepository::Session &,
                     const std::filesystem::path &)>

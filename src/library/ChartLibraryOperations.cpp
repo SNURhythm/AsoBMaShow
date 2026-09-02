@@ -9,6 +9,7 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -48,9 +49,11 @@ ChartLibraryOperations::ChartLibraryOperations(
   if (!dependencies_.updateDifficultyTableFromSourceUrl) {
     dependencies_.updateDifficultyTableFromSourceUrl =
         [](ChartRepository::Session &session, int tableId,
-           std::string *errorMessage) {
+           std::string *errorMessage,
+           const DifficultyTableImportCheckpoint &checkpoint) {
           DifficultyTableImporter importer;
-          return importer.UpdateFromSourceUrl(session, tableId, errorMessage);
+          return importer.UpdateFromSourceUrl(session, tableId, errorMessage,
+                                              checkpoint);
         };
   }
   if (!dependencies_.refreshFolderAccess) {
@@ -96,12 +99,26 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
             .total = 1,
             .stage = ChartScanProgressStage::Preparing},
            "Updating difficulty table");
+  std::atomic_bool interrupted = false;
+  const DifficultyTableImportCheckpoint checkpoint = [&] {
+    const bool resumed = waitForResume() && !stopToken.stop_requested();
+    if (!resumed) interrupted.store(true, std::memory_order_release);
+    return resumed;
+  };
   std::string errorMessage;
   if (!dependencies_.updateDifficultyTableFromSourceUrl(
-          *session, request.tableId, &errorMessage)) {
+          *session, request.tableId, &errorMessage, checkpoint)) {
+    if (interrupted.load(std::memory_order_acquire) ||
+        stopToken.stop_requested()) {
+      return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    }
     throw std::runtime_error(errorMessage.empty()
                                  ? "Failed to update difficulty table"
                                  : errorMessage);
+  }
+  if (interrupted.load(std::memory_order_acquire) ||
+      stopToken.stop_requested()) {
+    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
   if (dependencies_.requestReload) dependencies_.requestReload(false);
   return {.detail = "Complete"};

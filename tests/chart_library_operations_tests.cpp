@@ -386,9 +386,10 @@ void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
     reloadRequested = includeFolders;
   };
   deps.updateDifficultyTableFromSourceUrl =
-      [&](ChartRepository::Session &, int tableId, std::string *) {
+      [&](ChartRepository::Session &, int tableId, std::string *,
+          const DifficultyTableImportCheckpoint &checkpoint) {
         updatedTableId = tableId;
-        return true;
+        return checkpoint() && checkpoint();
       };
   chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
 
@@ -408,6 +409,39 @@ void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
          "difficulty table update requests a list-only selector reload");
 }
 
+void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "pausable table repository is ready");
+  bool reloadRequested = false;
+  int importerCheckpoints = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.updateDifficultyTableFromSourceUrl =
+      [&](ChartRepository::Session &, int, std::string *,
+          const DifficultyTableImportCheckpoint &checkpoint) {
+        ++importerCheckpoints;
+        if (!checkpoint()) return false;
+        ++importerCheckpoints;
+        return checkpoint();
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+  int pauseCalls = 0;
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
+       .title = "Update Difficulty Table",
+       .tableId = 47},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [&] { return ++pauseCalls < 3; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "an interrupted in-progress import returns a paused task");
+  expect(importerCheckpoints == 2 && pauseCalls == 3,
+         "the running importer receives the shared task pause checkpoint");
+  expect(!reloadRequested,
+         "a paused difficulty-table update does not publish a reload");
+}
+
 void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
   const ChartEntry entry{.path = fspath_to_path_t("/tmp/library-entry")};
   expect(chart_library_platform::resolveFolderEntryPath(entry) ==
@@ -425,6 +459,7 @@ int main() {
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
   testDifficultyTableUpdateUsesTheSharedTaskOperation();
+  testDifficultyTableUpdateStopsAtAnImporterCheckpoint();
   testDesktopLibraryEntryResolutionPreservesTheStoredPath();
   if (failures != 0) {
     std::cerr << failures << " chart library operation test(s) failed\n";

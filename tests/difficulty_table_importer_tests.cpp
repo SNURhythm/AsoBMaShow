@@ -257,6 +257,33 @@ void testHttpsTableRejectsInsecureDataUrl() {
           "HtTp://example.test/table/data.json");
 }
 
+void testCheckpointInterruptsAnUpdateBetweenDownloadStages() {
+  const Fixture fixture;
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  std::vector<std::string> requestedUrls;
+  DifficultyTableImporter importer(
+      [&](const std::string &url, std::string *) -> std::optional<std::string> {
+        requestedUrls.push_back(url);
+        return url == fixture.sourceUrl
+                   ? std::optional<std::string>{fixture.headerJson}
+                   : std::optional<std::string>{fixture.dataJson};
+      });
+  int checkpoints = 0;
+  std::string error;
+  assert(!importer.ImportFromUrl(
+      *session, fixture.sourceUrl, &error, nullptr,
+      [&] { return ++checkpoints < 4; }));
+  assert(checkpoints == 4);
+  assert(requestedUrls == std::vector<std::string>{fixture.sourceUrl});
+  assert(error == "Difficulty table update was interrupted");
+  assert(session->SelectDifficultyTables().empty());
+}
+
 void testListImportKeepsBoundedConcurrencyAndSkipsExistingSources() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -341,6 +368,7 @@ int main() {
   testParseAndReplacementRollback();
   testInjectedFetcherAndProgress();
   testHttpsTableRejectsInsecureDataUrl();
+  testCheckpointInterruptsAnUpdateBetweenDownloadStages();
   testListImportKeepsBoundedConcurrencyAndSkipsExistingSources();
   return 0;
 }
