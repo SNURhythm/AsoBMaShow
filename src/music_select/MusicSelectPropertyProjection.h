@@ -60,6 +60,9 @@ struct MusicSelectPropertyRuntimeSnapshot {
   std::string irUserName;
   bool irOnline = false;
   bool updateScore = true;
+  bool stageFileAvailable = false;
+  bool backBmpAvailable = false;
+  bool bannerAvailable = false;
   PlayerScoreHistorySnapshot playerHistory;
   MusicSelectRankingSnapshot ranking;
 };

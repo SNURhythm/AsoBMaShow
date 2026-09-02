@@ -29,7 +29,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 8;
+constexpr int kChartDatabaseSchemaVersion = 10;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -169,10 +169,24 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "total_landmine_notes INTEGER NOT NULL DEFAULT 0,"
       "has_random_sequence INTEGER NOT NULL DEFAULT 0,"
       "most_prevalent_bpm REAL NOT NULL DEFAULT 0,"
+      "has_bga INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")";
   return execSql(db, query, "creating chart meta table");
+}
+
+bool createFolderTableSchema(sqlite3 *db) {
+  // These are FolderData's path, date, and adddate fields. The selector's
+  // remaining FolderData fields are derived by the existing physical-folder
+  // projection rather than assigned unrelated defaults here.
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS folder ("
+      "path TEXT PRIMARY KEY,"
+      "date INTEGER NOT NULL DEFAULT 0,"
+      "adddate INTEGER NOT NULL DEFAULT 0"
+      ")";
+  return execSql(db, query, "creating folder table");
 }
 
 std::optional<std::string> normalizedPathTextForStorage(
@@ -391,6 +405,7 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
       "DROP TABLE IF EXISTS solid_archives",
       "DROP TABLE IF EXISTS archive_scan_cache",
       "DROP TABLE IF EXISTS chart_scan_checkpoint",
+      "DROP TABLE IF EXISTS folder",
   };
   for (const auto *query : queries) {
     if (!execSql(db, query, "invalidating chart metadata cache")) {
@@ -400,6 +415,9 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
   }
   if (ok) {
     ok = createChartMetaTableSchema(db);
+  }
+  if (ok) {
+    ok = createFolderTableSchema(db);
   }
   if (ok) {
     ok = setChartMetadataRebuildRequired(db, true);
@@ -632,6 +650,31 @@ bool migrateChartDatabaseToVersion8(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool migrateChartDatabaseToVersion9(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_bga",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_bga INTEGER NOT NULL DEFAULT 0",
+          "checking chart BGA-content column", "adding chart BGA-content column",
+          logSqlErrorText)) {
+    return false;
+  }
+  // Older rows have no BMSModel#getBgaList-equivalent fact. Rebuild rather
+  // than deriving it from #BMP declarations or display metadata.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
+bool migrateChartDatabaseToVersion10(sqlite3 *db, bool &completed) {
+  // FolderData.date/adddate cannot be recovered from chart records. Keep
+  // existing chart metadata and let the next source-equivalent library walk
+  // establish the folder records from the file system.
+  if (!createFolderTableSchema(db)) {
+    return false;
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -681,6 +724,9 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {7, "persist chart library add dates", migrateChartDatabaseToVersion7},
       {8, "persist selector chart feature metadata",
        migrateChartDatabaseToVersion8},
+      {9, "persist chart BGA content metadata",
+       migrateChartDatabaseToVersion9},
+      {10, "persist selector folder add dates", migrateChartDatabaseToVersion10},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -1376,6 +1422,7 @@ static bool deleteArchiveRecords(sqlite3 *db,
 }
 
 static bool clearChartMeta(sqlite3 *db) {
+  createFolderTableSchema(db);
   createSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
   createChartScanCheckpointTable(db);
@@ -1394,6 +1441,10 @@ static bool clearChartMeta(sqlite3 *db) {
   }
   const int chartChanges = sqlite3_changes(db);
   bool changed = chartChanges > 0;
+  if (!execSql(db, "DELETE FROM folder", "clearing folders")) {
+    return false;
+  }
+  changed = sqlite3_changes(db) > 0 || changed;
   if (!execSql(db, "DELETE FROM solid_archives", "clearing solid archives")) {
     return false;
   }
@@ -1442,7 +1493,8 @@ static bool createEntriesTable(sqlite3 *db) {
 }
 
 bool chart_repository_detail::EnsureCoreSchema(sqlite3 *database) {
-  return createChartMetaTable(database) && createSolidArchiveTable(database) &&
+  return createChartMetaTable(database) && createFolderTableSchema(database) &&
+         createSolidArchiveTable(database) &&
          createFavoritesTable(database) && createEntriesTable(database) &&
          createChartStateTables(database);
 }

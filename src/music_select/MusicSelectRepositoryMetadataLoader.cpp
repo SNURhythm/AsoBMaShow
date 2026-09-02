@@ -4,6 +4,7 @@ MusicSelectRepositoryMetadata MusicSelectRepositoryProjection::loadMetadata(
     ChartRepository::Session &session, int selectedLongNoteMode) {
   MusicSelectRepositoryMetadata metadata;
   metadata.entries = session.SelectEffectiveEntries();
+  metadata.folders = session.SelectFolderRecords();
   for (const auto &table : session.SelectDifficultyTables()) {
     MusicSelectDifficultyTableSource source{.info = table};
     for (const auto &level : session.SelectDifficultyLevels(table.id)) {

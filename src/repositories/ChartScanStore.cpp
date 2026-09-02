@@ -11,9 +11,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace {
@@ -144,6 +147,7 @@ const char *insertChartMetaSql() {
          "total_landmine_notes,"
          "has_random_sequence,"
          "most_prevalent_bpm,"
+         "has_bga,"
          "source_priority,"
          "source_archive_size"
          ") VALUES("
@@ -183,6 +187,7 @@ const char *insertChartMetaSql() {
          "@total_landmine_notes,"
          "@has_random_sequence,"
          "@most_prevalent_bpm,"
+         "@has_bga,"
          "@source_priority,"
          "@source_archive_size"
          ") ON CONFLICT(path) DO UPDATE SET "
@@ -220,6 +225,7 @@ const char *insertChartMetaSql() {
          "total_landmine_notes=excluded.total_landmine_notes,"
          "has_random_sequence=excluded.has_random_sequence,"
          "most_prevalent_bpm=excluded.most_prevalent_bpm,"
+         "has_bga=excluded.has_bga,"
          "source_priority=excluded.source_priority,"
          "source_archive_size=excluded.source_archive_size";
 }
@@ -286,8 +292,9 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 34, chartMeta.TotalLandmineNotes);
   sqlite3_bind_int(statement, 35, chartMeta.RandomValues.empty() ? 0 : 1);
   sqlite3_bind_double(statement, 36, chartMeta.MostPrevalentBpm);
-  sqlite3_bind_int(statement, 37, sourcePreference.priority);
-  sqlite3_bind_int64(statement, 38,
+  sqlite3_bind_int(statement, 37, sequenceFeatures.hasBga ? 1 : 0);
+  sqlite3_bind_int(statement, 38, sourcePreference.priority);
+  sqlite3_bind_int64(statement, 39,
                      clampSqlInteger(sourcePreference.archiveSize));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
@@ -520,6 +527,10 @@ struct ChartRepository::Session::ScanBatch::Impl {
     }
   }
 
+  void noteFolderChanged(bool changed = true) {
+    folderChanged = folderChanged || changed;
+  }
+
   bool ensureChartInsertStatement() {
     if (chartInsertStatementReady) {
       return true;
@@ -539,6 +550,7 @@ struct ChartRepository::Session::ScanBatch::Impl {
   SqliteStatementHandle chartInsertStatement;
   const std::int64_t addDateSeconds;
   int changedCount = 0;
+  bool folderChanged = false;
   bool ready = false;
   bool committed = false;
   bool chartInsertStatementAttempted = false;
@@ -878,6 +890,165 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
   return true;
 }
 
+bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
+    std::span<const ChartFolderScanNode> nodes,
+    std::span<const std::filesystem::path> roots) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+
+  struct StoredFolder {
+    std::string storedPath;
+    std::int64_t dateSeconds = 0;
+    std::int64_t addDateSeconds = 0;
+  };
+  std::map<std::filesystem::path, StoredFolder> stored;
+  SqliteStatementHandle select;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "SELECT path, date, adddate FROM folder", select,
+          "selecting folder scan records", logSqlErrorText)) {
+    return false;
+  }
+  int selectResult = SQLITE_OK;
+  while ((selectResult = sqlite3_step(select.get())) == SQLITE_ROW) {
+    const std::string storedPath = sqliteColumnString(select.get(), 0);
+    const auto path = storedPathFromDatabase(storedPath).lexically_normal();
+    if (!path.empty()) {
+          stored.emplace(path, StoredFolder{
+                               .storedPath = storedPath,
+                               .dateSeconds = sqlite3_column_int64(select.get(), 1),
+                               .addDateSeconds = sqlite3_column_int64(select.get(), 2),
+                           });
+    }
+  }
+  if (selectResult != SQLITE_DONE) {
+    logSqlError("selecting folder scan records", impl_->database());
+    return false;
+  }
+
+  std::map<std::filesystem::path, const ChartFolderScanNode *> nodesByPath;
+  std::map<std::filesystem::path, std::vector<std::filesystem::path>>
+      children;
+  for (const auto &node : nodes) {
+    const auto path = std::filesystem::path(node.path).lexically_normal();
+    if (path.empty()) {
+      continue;
+    }
+    nodesByPath[path] = &node;
+  }
+  for (const auto &[path, _] : nodesByPath) {
+    const auto parent = path.parent_path().lexically_normal();
+    if (nodesByPath.contains(parent)) {
+      children[parent].push_back(path);
+    }
+  }
+
+  SqliteStatementHandle upsert;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(),
+          "INSERT INTO folder(path, date, adddate) VALUES (?, ?, ?) "
+          "ON CONFLICT(path) DO UPDATE SET date = excluded.date, "
+          "adddate = excluded.adddate",
+          upsert, "preparing folder scan upsert", logSqlErrorText)) {
+    return false;
+  }
+  SqliteStatementHandle erase;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "DELETE FROM folder WHERE path = ?", erase,
+          "preparing folder scan delete", logSqlErrorText)) {
+    return false;
+  }
+
+  std::set<std::filesystem::path> deleted;
+  const auto deleteSubtree = [&](const std::filesystem::path &root) {
+    bool succeeded = true;
+    for (const auto &[path, record] : stored) {
+      if (deleted.contains(path) ||
+          (path != root && !pathIsInsideDirectory(path, root))) {
+        continue;
+      }
+      sqlite3_reset(erase.get());
+      sqlite3_clear_bindings(erase.get());
+      bindSqliteText(erase.get(), 1, record.storedPath);
+      if (sqlite3_step(erase.get()) != SQLITE_DONE) {
+        logSqlError("deleting missing folder scan record", impl_->database());
+        succeeded = false;
+        break;
+      }
+          impl_->noteFolderChanged();
+      deleted.insert(path);
+    }
+    return succeeded;
+  };
+
+  std::function<bool(const std::filesystem::path &, bool)> process;
+  process = [&](const std::filesystem::path &path, bool updateFolder) {
+    const auto node = nodesByPath.find(path);
+    if (node == nodesByPath.end()) {
+      return true;
+    }
+    std::set<std::filesystem::path> presentChildren;
+    for (const auto &child : children[path]) {
+      presentChildren.insert(child);
+    }
+
+    if (!node->second->containsBms) {
+      for (const auto &child : children[path]) {
+        bool updateChild = true;
+        const auto existing = stored.find(child);
+        if (existing != stored.end() && !deleted.contains(child)) {
+          const auto childNode = nodesByPath.find(child);
+          updateChild = childNode == nodesByPath.end() ||
+                        existing->second.dateSeconds !=
+                            childNode->second->dateSeconds;
+        }
+        if (!process(child, updateChild)) {
+          return false;
+        }
+      }
+    }
+
+    if (updateFolder) {
+      const auto existing = stored.find(path);
+      const bool valuesChanged =
+          existing == stored.end() ||
+          existing->second.dateSeconds != node->second->dateSeconds ||
+          existing->second.addDateSeconds != impl_->addDateSeconds;
+      sqlite3_reset(upsert.get());
+      sqlite3_clear_bindings(upsert.get());
+      bindSqliteText(upsert.get(), 1,
+                     chart_storage_identity::StoredPathText(path));
+      sqlite3_bind_int64(upsert.get(), 2, node->second->dateSeconds);
+      sqlite3_bind_int64(upsert.get(), 3, impl_->addDateSeconds);
+      if (sqlite3_step(upsert.get()) != SQLITE_DONE) {
+        logSqlError("upserting folder scan record", impl_->database());
+        return false;
+      }
+      impl_->noteFolderChanged(valuesChanged);
+    }
+
+    for (const auto &[candidate, _] : stored) {
+      if (deleted.contains(candidate) ||
+          candidate.parent_path().lexically_normal() != path ||
+          presentChildren.contains(candidate)) {
+        continue;
+      }
+      if (!deleteSubtree(candidate)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  for (const auto &root : roots) {
+    const auto normalized = root.lexically_normal();
+    if (nodesByPath.contains(normalized) && !process(normalized, true)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(
     const std::filesystem::path &path) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
@@ -926,7 +1097,7 @@ bool ChartRepository::Session::ScanBatch::Commit() {
   }
   impl_->committed = true;
   impl_->ready = false;
-  if (impl_->changedCount > 0) {
+  if (impl_->changedCount > 0 || impl_->folderChanged) {
     chart_repository_detail::BumpLibraryRevision();
   }
   return true;

@@ -110,6 +110,28 @@ void testCustomTimerValuesOverrideTheFrameSnapshot() {
           "the once-per-frame custom-timer update overrides the snapshot");
 }
 
+void testPublishedSongResourcesOverrideChartPathFlags() {
+  MusicSelectSkinFrame frame;
+  frame.properties.booleans[190] = false;
+  frame.properties.booleans[191] = true;
+  frame.properties.booleans[192] = false;
+  frame.properties.booleans[193] = true;
+  frame.properties.booleans[194] = false;
+  frame.properties.booleans[195] = true;
+  MusicSelectSkinStateBridge bridge(frame);
+  bridge.setPublishedSongResources(
+      {.stageFile = false, .banner = true, .backBmp = false});
+
+  require(bridge.booleanProperty({190}).value &&
+              !bridge.booleanProperty({191}).value &&
+              !bridge.booleanProperty({192}).value &&
+              bridge.booleanProperty({193}).value &&
+              bridge.booleanProperty({194}).value &&
+              !bridge.booleanProperty({195}).value,
+          "selector artwork flags read published SongBar pixmaps and never "
+          "a chart path or selector backbmp declaration");
+}
+
 void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
   MusicSelectSkinFrame frame;
   MusicSelectSkinStateBridge local(frame);
@@ -140,6 +162,7 @@ int main(int argc, char **argv) {
   testExactPropertyNamespacesAndAbsentValues();
   testUnknownPropertiesRemainUnsupported();
   testCustomTimerValuesOverrideTheFrameSnapshot();
+  testPublishedSongResourcesOverrideChartPathFlags();
   testSkinTimerWritesUseBeatorajaCustomTimerRules();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_skin_state_bridge_tests", failures,

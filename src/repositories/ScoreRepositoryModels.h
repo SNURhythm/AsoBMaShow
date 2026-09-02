@@ -53,6 +53,8 @@ struct ScoreBestSnapshot {
   int score = 0;
   int maxScore = 0;
   std::array<int, 5> judgementCounts{};
+  int fast = 0;
+  int slow = 0;
   int playCount = 0;
   int clearCount = 0;
   std::optional<std::int64_t> lastPlayedUnixSeconds;

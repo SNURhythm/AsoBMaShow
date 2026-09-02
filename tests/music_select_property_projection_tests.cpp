@@ -33,6 +33,7 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
                        .level = 12};
   song.chart.emplace();
   song.chart->hasDocument = true;
+  song.chart->hasBga = true;
   song.chart->hasRandomSequence = true;
   song.chart->songReviewFavorite = 0x5;
   song.chart->meta.Title = "Title";
@@ -44,7 +45,10 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
   song.chart->meta.SHA256 = "abc";
   song.chart->meta.PlayLevel = 12;
   song.chart->meta.TotalNotes = 500;
+  song.chart->meta.Total = 276.5;
   song.chart->meta.TotalLongNotes = 25;
+  song.chart->meta.TotalScratchNotes = 40;
+  song.chart->meta.TotalBackSpinNotes = 5;
   song.chart->meta.TotalLandmineNotes = 2;
   song.chart->meta.MinBpm = 120;
   song.chart->meta.MaxBpm = 180;
@@ -57,6 +61,8 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
   song.score = ScoreBestSnapshot{.score = 800,
                                  .maxScore = 1000,
                                  .judgementCounts = {250, 100, 50, 25, 10},
+                                 .fast = 17,
+                                 .slow = 19,
                                  .playCount = 9,
                                  .clearCount = 7,
                                  .lastPlayedUnixSeconds = 1'700'000'000,
@@ -82,6 +88,8 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   settings.skinDifficultyFilterName = "ANOTHER";
   settings.skinSortId = "SCORE";
   settings.skinTargetId = "RATE_AA";
+  settings.skinTargetList = {"RATE_A-", "RATE_A", "RATE_A+", "RATE_AA-",
+                             "RATE_AA", "RATE_AA+", "MAX"};
   settings.skinChartReplicationMode = "RIVALOPTION";
   settings.selectedGaugeType = "hard";
   settings.selectedGaugeAutoShiftMode = "best_clear";
@@ -145,6 +153,9 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   runtime.irUserName = "IR Player";
   runtime.irOnline = true;
   runtime.updateScore = false;
+  runtime.stageFileAvailable = true;
+  runtime.backBmpAvailable = false;
+  runtime.bannerAvailable = true;
   runtime.playerHistory = {.playCount = 9,
                            .clearCount = 7,
                            .judgementCounts = {11, 12, 13, 14, 15},
@@ -156,17 +167,32 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   require(values.strings.at(1) == "Rival" &&
               values.strings.at(2) == "Player" &&
               values.strings.at(3) == "RANK AA" &&
+              values.strings.at(200) == "RANK A" &&
+              values.strings.at(209) == "RANK AA-" &&
+              values.strings.at(210) == "RANK AA+" &&
+              values.strings.at(219) == "RANK A-" &&
               values.strings.at(10) == "Title" &&
               values.strings.at(12) == "Title Subtitle" &&
               values.strings.at(16) == "Artist Sub Artist" &&
               values.strings.at(1000) == "Root > Folder > ",
-          "StringPropertyFactory values follow the selected SongData and selector");
+          "StringPropertyFactory values follow the selected SongData, "
+          "selector, and target-list ring");
   require(values.booleans.at(2) && !values.booleans.at(1) &&
               values.booleans.at(5) && values.booleans.at(1102) &&
               values.booleans.at(197) && !values.booleans.at(1197) &&
               values.booleans.at(1200) && values.booleans.at(1207) &&
               values.booleans.at(22) && values.booleans.at(179) &&
+              !values.booleans.at(170) && values.booleans.at(171) &&
+              !values.booleans.at(190) && values.booleans.at(191) &&
+              !values.booleans.at(192) && values.booleans.at(193) &&
+              values.booleans.at(194) && !values.booleans.at(195) &&
               values.booleans.at(625) &&
+              !values.booleans.at(200) && values.booleans.at(201) &&
+              !values.booleans.at(202) && !values.booleans.at(203) &&
+              !values.booleans.at(204) && !values.booleans.at(205) &&
+              !values.booleans.at(206) && !values.booleans.at(207) &&
+              values.booleans.at(352) && !values.booleans.at(353) &&
+              !values.booleans.at(354) &&
               values.booleans.at(60) && !values.booleans.at(61),
           "BooleanPropertyFactory selector, clear, replay, panel, rival, and save flags are exact");
   require(values.integers.at(20) == 144 &&
@@ -180,7 +206,8 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.integers.at(32) == 2 &&
               values.integers.at(333) == 50,
           "ValueType clock and PlayerData values use source integer arithmetic");
-  require(values.integers.at(71) == 800 &&
+  require(values.integers.contains(100) && values.integers.at(100) == 129100 &&
+              values.integers.at(71) == 800 &&
               values.integers.at(72) == 1000 &&
               values.integers.at(74) == 500 &&
               values.integers.at(75) == 321 &&
@@ -188,17 +215,34 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.integers.at(77) == 9 &&
               values.integers.at(78) == 7 &&
               values.integers.at(79) == 2 &&
+              values.integers.at(80) == 250 &&
+              values.integers.at(84) == 10 &&
+              values.integers.at(110) == 250 &&
+              values.integers.at(114) == 10 &&
+              values.integers.at(350) == 430 &&
+              values.integers.at(351) == 25 &&
+              values.integers.at(352) == 40 &&
+              values.integers.at(353) == 5 &&
+              values.integers.at(423) == 17 &&
+              values.integers.at(424) == 19 &&
+              values.integers.at(280) == 200 &&
+              values.integers.at(284) == 20 &&
+              values.integers.at(400) == 2 &&
+              values.integers.at(368) == 276 &&
+              values.integers.at(425) == 35 &&
               values.integers.at(90) == 180 &&
               values.integers.at(91) == 120 &&
               values.integers.at(92) == 150 &&
               values.integers.at(96) == 12 &&
               values.integers.at(102) == 80 &&
               values.integers.at(103) == 0 &&
+              values.integers.contains(154) && values.integers.at(154) == 89 &&
               values.integers.at(121) == 750 &&
               values.integers.at(271) == 750 &&
               values.integers.at(1163) == 2 &&
               values.integers.at(1164) == 34,
-          "selected score, chart, rival, rate, BPM, and length integers match ValueType");
+          "selected score, score point, chart, rival, rate, BPM, and length "
+          "integers match ValueType");
   require(values.imageIndexes.at(10) == 4 &&
               values.imageIndexes.at(11) == 4 &&
               values.imageIndexes.at(12) == 6 &&
@@ -211,7 +255,13 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.imageIndexes.at(73) == 1 &&
               values.imageIndexes.at(78) == 3 &&
               values.imageIndexes.at(301) == 1 &&
+              values.imageIndexes.contains(302) &&
+              values.imageIndexes.at(302) == 0 &&
               values.imageIndexes.at(306) == 1 &&
+              values.imageIndexes.contains(304) &&
+              values.imageIndexes.at(304) == 0 &&
+              values.imageIndexes.contains(307) &&
+              values.imageIndexes.at(307) == 1 &&
               values.imageIndexes.at(308) == 1 &&
               values.imageIndexes.at(340) == 1 &&
               values.imageIndexes.at(400) == 1,

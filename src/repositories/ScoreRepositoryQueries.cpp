@@ -649,7 +649,8 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
       "SELECT b.chart_sha256, b.ln_mode, b.score, b.max_score, b.max_combo, "
       "b.combo_break, b.final_gauge, b.clear_rank, b.created_at, "
       "COALESCE(s.pgreat, 0), COALESCE(s.great, 0), COALESCE(s.good, 0), "
-      "COALESCE(s.bad, 0), COALESCE(s.poor, 0), COALESCE(s.score_source, 0), "
+      "COALESCE(s.bad, 0), COALESCE(s.poor, 0), COALESCE(s.fast, 0), "
+      "COALESCE(s.slow, 0), COALESCE(s.score_source, 0), "
       "COALESCE(h.play_count, 0), COALESCE(h.clear_count, 0), "
       "h.last_played, metrics.bad_points, metrics.average_judge_micros "
       "FROM " + qualifiedScoreTable(schema, "score_sha256_best_score_cache") +
@@ -698,21 +699,23 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
       snapshot.judgementCounts[static_cast<std::size_t>(index)] =
           sqlite3_column_int(stmt.get(), 9 + index);
     }
-    snapshot.source = sqlite3_column_int(stmt.get(), 14) ==
+    snapshot.fast = sqlite3_column_int(stmt.get(), 14);
+    snapshot.slow = sqlite3_column_int(stmt.get(), 15);
+    snapshot.source = sqlite3_column_int(stmt.get(), 16) ==
                               static_cast<int>(ScoreStorageSource::ImportedIr)
                           ? ScoreBestSource::ImportedIr
                           : ScoreBestSource::Local;
-    snapshot.playCount = sqlite3_column_int(stmt.get(), 15);
-    snapshot.clearCount = sqlite3_column_int(stmt.get(), 16);
-    if (sqlite3_column_type(stmt.get(), 17) == SQLITE_INTEGER) {
-      snapshot.lastPlayedUnixSeconds =
-          static_cast<std::int64_t>(sqlite3_column_int64(stmt.get(), 17));
-    }
-    if (sqlite3_column_type(stmt.get(), 18) == SQLITE_INTEGER) {
-      snapshot.badPoints = sqlite3_column_int(stmt.get(), 18);
-    }
+    snapshot.playCount = sqlite3_column_int(stmt.get(), 17);
+    snapshot.clearCount = sqlite3_column_int(stmt.get(), 18);
     if (sqlite3_column_type(stmt.get(), 19) == SQLITE_INTEGER) {
-      snapshot.averageJudgeMicros = sqlite3_column_int64(stmt.get(), 19);
+      snapshot.lastPlayedUnixSeconds =
+          static_cast<std::int64_t>(sqlite3_column_int64(stmt.get(), 19));
+    }
+    if (sqlite3_column_type(stmt.get(), 20) == SQLITE_INTEGER) {
+      snapshot.badPoints = sqlite3_column_int(stmt.get(), 20);
+    }
+    if (sqlite3_column_type(stmt.get(), 21) == SQLITE_INTEGER) {
+      snapshot.averageJudgeMicros = sqlite3_column_int64(stmt.get(), 21);
     }
     storeBestScore(cache.scoreBySha256, sha256, lnMode, snapshot);
   }
@@ -1526,7 +1529,7 @@ score_repository_detail::LoadBestScoreOnConnection(
 
   std::string query = "SELECT score, max_score, max_combo, combo_break, "
       "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
-      "CAST(kpoor AS INTEGER), final_gauge, ";
+      "CAST(kpoor AS INTEGER), fast, slow, final_gauge, ";
   query += effectiveClearRank +
            ", created_at, provenance_json, score_source, attempt_id "
            "FROM scores s WHERE ";
@@ -1569,7 +1572,7 @@ score_repository_detail::LoadBestScoreOnConnection(
     if (requiredRuleset != nullptr) {
       std::string provenanceError;
       const auto provenance = deserializeScoreProvenance(
-          sqliteColumnString(stmt.get(), 8), provenanceError);
+          sqliteColumnString(stmt.get(), 10), provenanceError);
       if (!provenance.has_value() || provenance->ruleset != *requiredRuleset) {
         continue;
       }
@@ -1578,7 +1581,9 @@ score_repository_detail::LoadBestScoreOnConnection(
     ScoreBestSnapshot snapshot;
     snapshot.score = sqlite3_column_int(stmt.get(), 0);
     snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
-    const bool imported = sqlite3_column_int(stmt.get(), 9) ==
+    snapshot.fast = sqlite3_column_int(stmt.get(), 5);
+    snapshot.slow = sqlite3_column_int(stmt.get(), 6);
+    const bool imported = sqlite3_column_int(stmt.get(), 11) ==
                           static_cast<int>(ScoreStorageSource::ImportedIr);
     if (!imported) {
       snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
@@ -1590,12 +1595,12 @@ score_repository_detail::LoadBestScoreOnConnection(
         }
       }
       snapshot.finalGauge =
-          static_cast<float>(sqlite3_column_double(stmt.get(), 5));
+          static_cast<float>(sqlite3_column_double(stmt.get(), 7));
     }
-    snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
-    snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
-    if (sqlite3_column_type(stmt.get(), 10) == SQLITE_TEXT) {
-      snapshot.attemptId = sqliteColumnString(stmt.get(), 10);
+    snapshot.clearType = sqlite3_column_int(stmt.get(), 8);
+    snapshot.createdAt = sqliteColumnString(stmt.get(), 9);
+    if (sqlite3_column_type(stmt.get(), 12) == SQLITE_TEXT) {
+      snapshot.attemptId = sqliteColumnString(stmt.get(), 12);
     }
     snapshot.source =
         imported ? ScoreBestSource::ImportedIr : ScoreBestSource::Local;
@@ -1762,7 +1767,7 @@ score_repository_detail::LoadBestClearScoreOnConnection(
 
   std::string query = "SELECT score, max_score, max_combo, combo_break, "
       "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
-      "CAST(kpoor AS INTEGER), final_gauge, ";
+      "CAST(kpoor AS INTEGER), fast, slow, final_gauge, ";
   query += effectiveClearRank +
            ", created_at, score_source, attempt_id "
            "FROM scores s WHERE ";
@@ -1804,7 +1809,9 @@ score_repository_detail::LoadBestClearScoreOnConnection(
   ScoreBestSnapshot snapshot;
   snapshot.score = sqlite3_column_int(stmt.get(), 0);
   snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
-  const bool imported = sqlite3_column_int(stmt.get(), 8) ==
+  snapshot.fast = sqlite3_column_int(stmt.get(), 5);
+  snapshot.slow = sqlite3_column_int(stmt.get(), 6);
+  const bool imported = sqlite3_column_int(stmt.get(), 10) ==
                         static_cast<int>(ScoreStorageSource::ImportedIr);
   if (!imported) {
     snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
@@ -1816,12 +1823,12 @@ score_repository_detail::LoadBestClearScoreOnConnection(
       }
     }
     snapshot.finalGauge =
-        static_cast<float>(sqlite3_column_double(stmt.get(), 5));
+        static_cast<float>(sqlite3_column_double(stmt.get(), 7));
   }
-  snapshot.clearType = sqlite3_column_int(stmt.get(), 6);
-  snapshot.createdAt = sqliteColumnString(stmt.get(), 7);
-  if (sqlite3_column_type(stmt.get(), 9) == SQLITE_TEXT) {
-    snapshot.attemptId = sqliteColumnString(stmt.get(), 9);
+  snapshot.clearType = sqlite3_column_int(stmt.get(), 8);
+  snapshot.createdAt = sqliteColumnString(stmt.get(), 9);
+  if (sqlite3_column_type(stmt.get(), 11) == SQLITE_TEXT) {
+    snapshot.attemptId = sqliteColumnString(stmt.get(), 11);
   }
   snapshot.source =
       imported ? ScoreBestSource::ImportedIr : ScoreBestSource::Local;
@@ -1923,8 +1930,8 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
   const std::string courseKey = courseKeyForSession(session);
   const int lnMode = long_note_mode::normalizeValue(session.longNoteMode);
   const std::string query =
-      "SELECT score, max_score, max_combo, combo_break, final_gauge,"
-      "clear_type, created_at "
+      "SELECT score, max_score, max_combo, combo_break, fast, slow, "
+      "final_gauge, clear_type, created_at "
       "FROM course_scores c "
       "WHERE ((? != '' AND course_key = ?) OR "
       "(COALESCE(course_key, '') = '' AND course_id = ?)) "
@@ -1956,10 +1963,12 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
   snapshot.maxScore = sqlite3_column_int(stmt.get(), 1);
   snapshot.maxCombo = sqlite3_column_int(stmt.get(), 2);
   snapshot.comboBreak = sqlite3_column_int(stmt.get(), 3);
+  snapshot.fast = sqlite3_column_int(stmt.get(), 4);
+  snapshot.slow = sqlite3_column_int(stmt.get(), 5);
   snapshot.finalGauge =
-      static_cast<float>(sqlite3_column_double(stmt.get(), 4));
-  snapshot.clearType = sqlite3_column_int(stmt.get(), 5);
-  snapshot.createdAt = sqliteColumnString(stmt.get(), 6);
+      static_cast<float>(sqlite3_column_double(stmt.get(), 6));
+  snapshot.clearType = sqlite3_column_int(stmt.get(), 7);
+  snapshot.createdAt = sqliteColumnString(stmt.get(), 8);
   return snapshot;
 }
 

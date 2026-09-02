@@ -27,6 +27,7 @@ struct MusicSelectDifficultyTableSource {
 
 struct MusicSelectRepositoryMetadata {
   std::vector<ChartEntry> entries;
+  std::vector<ChartFolderRecord> folders;
   std::vector<MusicSelectDifficultyTableSource> tables;
 };
 

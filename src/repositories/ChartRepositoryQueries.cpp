@@ -92,6 +92,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.total_landmine_notes, 0),"
     "COALESCE(cm.has_random_sequence, 0),"
     "COALESCE(cm.most_prevalent_bpm, 0),"
+    "COALESCE(cm.has_bga, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -145,6 +146,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.total_landmine_notes, 0),"
     "COALESCE(cm.has_random_sequence, 0),"
     "COALESCE(cm.most_prevalent_bpm, 0),"
+    "COALESCE(cm.has_bga, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -1273,6 +1275,30 @@ void ChartRepository::Session::SelectAllChartMeta(
   selectAllChartMeta(impl_->database(), chartMetas);
 }
 
+std::vector<ChartFolderRecord>
+ChartRepository::Session::SelectFolderRecords() {
+  std::vector<ChartFolderRecord> records;
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "SELECT path, date, adddate FROM folder",
+          statement, "selecting folder records", logSqlErrorText)) {
+    return records;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    std::filesystem::path path(
+        utf8_to_path_t(sqliteColumnString(statement.get(), 0)));
+    if (!path.empty()) {
+      chart_storage_identity::ToAbsolutePath(path);
+    }
+    records.push_back({
+        .path = fspath_to_path_t(path),
+        .dateSeconds = sqlite3_column_int64(statement.get(), 1),
+        .addDateSeconds = sqlite3_column_int64(statement.get(), 2),
+    });
+  }
+  return records;
+}
+
 void ChartRepository::Session::SelectFavoriteMusicTracks(
     std::vector<MusicTrackRecord> &tracks) {
   selectFavoriteMusicTracks(impl_->database(), tracks);
@@ -2119,6 +2145,9 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   }
   if (sqlite3_column_count(stmt) > idx) {
     record.meta.MostPrevalentBpm = sqlite3_column_double(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasBga = sqlite3_column_int(stmt, idx++) != 0;
   }
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);

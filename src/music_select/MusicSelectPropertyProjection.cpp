@@ -93,6 +93,42 @@ int songMode(const bms_parser::ChartMeta &meta) {
   return 0;
 }
 
+int selectableScorePoint(const ScoreBestSnapshot &score) {
+  // ScoreDataProperty.update() evaluates the persisted ScoreData's default
+  // BEAT_7K playmode.  The persisted record supplies its note count; the
+  // selector snapshot's maximum EX score is that same count times two.
+  const int notes = score.maxScore / 2;
+  if (notes <= 0) return 0;
+  const auto count = [&](int judge) {
+    return score.judgementCounts[static_cast<std::size_t>(judge)];
+  };
+  const auto combo = score.maxCombo.value_or(0);
+  return static_cast<int>((150000LL * count(0) + 100000LL * count(1) +
+                           20000LL * count(2)) /
+                          notes) +
+         static_cast<int>((50000LL * combo) / notes);
+}
+
+int selectableNextRank(const ScoreBestSnapshot &score) {
+  const int notes = score.maxScore / 2;
+  const double rate = notes == 0
+                          ? 1.0
+                          : static_cast<double>(score.score) / (notes * 2);
+  int nextRank = std::numeric_limits<int>::min();
+  for (int rank = 0; rank < 27; ++rank) {
+    const bool qualifies =
+        notes != 0 && rate >= static_cast<double>(rank) / 27.0;
+    if (rank % 3 == 0 && !qualifies &&
+        nextRank == std::numeric_limits<int>::min()) {
+      nextRank = static_cast<int>(std::ceil(
+          rank * (notes * 2) / 27.0 - rate * (notes * 2)));
+    }
+  }
+  return nextRank == std::numeric_limits<int>::min()
+             ? notes * 2 - score.score
+             : nextRank;
+}
+
 bool isPlayableBar(const MusicSelectBar &bar) {
   // BooleanPropertyFactory.playablebar tests these exact concrete classes.
   switch (bar.kind) {
@@ -300,6 +336,7 @@ void projectRanking(Properties &out,
 
 void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
   const int maximum = score.maxScore;
+  out.integers[100] = selectableScorePoint(score);
   out.integers[71] = score.score;
   out.integers[72] = maximum;
   out.integers[75] = score.maxCombo.value_or(0);
@@ -307,12 +344,26 @@ void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
   out.integers[77] = score.playCount;
   out.integers[78] = score.clearCount;
   out.integers[79] = score.playCount - score.clearCount;
+  for (int judge = 0; judge < 5; ++judge) {
+    const int count = score.judgementCounts[static_cast<std::size_t>(judge)];
+    // NUMBER_PERFECT2..NUMBER_POOR2 read ScoreData directly, while
+    // NUMBER_PERFECT..NUMBER_POOR read the selected selector state.
+    // Both resolve to this selected ScoreData in MusicSelector.
+    out.integers[80 + judge] = count;
+    out.integers[110 + judge] = count;
+  }
+  out.integers[423] = score.fast;
+  out.integers[424] = score.slow;
+  // IntegerPropertyFactory's combobreak is the selected BAD + POOR judge
+  // count; it is not ScoreData's separately stored minimum-BP field.
+  out.integers[425] = score.judgementCounts[3] + score.judgementCounts[4];
   if (score.lastPlayedUnixSeconds) {
     projectLastPlayed(out, *score.lastPlayedUnixSeconds);
   }
   out.integers[101] = score.score;
   out.integers[102] = integerRate(score.score, maximum);
   out.integers[103] = integerRateAfterDot(score.score, maximum);
+  out.integers[154] = selectableNextRank(score);
   out.integers[105] = score.maxCombo.value_or(0);
   out.integers[150] = 0;
   out.integers[170] = 0;
@@ -330,6 +381,19 @@ void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
   out.floats[1115] = selectedRate;
   out.floats[155] = selectedRate;
   out.floats[183] = 0.0;
+
+  // createNowRank uses the adjacent SkinProperty rank boundaries and retains
+  // only the one interval containing the selected EX-score rate.
+  constexpr std::array<int, 9> rankBoundaries{0, 6, 9, 12, 15,
+                                               18, 21, 24, 28};
+  for (int rank = 0; rank < 8; ++rank) {
+    const int low = rankBoundaries[static_cast<std::size_t>(rank)];
+    const int high = rankBoundaries[static_cast<std::size_t>(rank + 1)];
+    const bool qualifies = maximum > 0 &&
+                           score.score * 27 >= maximum * low &&
+                           (high > 27 || score.score * 27 < maximum * high);
+    out.booleans[200 + (7 - rank)] = qualifies;
+  }
 }
 
 void projectSelectedBar(Properties &out,
@@ -397,6 +461,11 @@ void projectSelectedBar(Properties &out,
   }
   if (selected->score) {
     projectSelectableScore(out, *selected->score);
+    const int rivalScore = selected->rivalScore ? selected->rivalScore->score
+                                                 : 0;
+    out.booleans[352] = selected->score->score > rivalScore;
+    out.booleans[353] = selected->score->score < rivalScore;
+    out.booleans[354] = selected->score->score == rivalScore;
   }
   if (selected->rivalScore) {
     out.imageIndexes[371] =
@@ -419,6 +488,8 @@ void projectSelectedBar(Properties &out,
 
   out.booleans[174] = !record.hasDocument;
   out.booleans[175] = record.hasDocument;
+  out.booleans[170] = !record.hasBga;
+  out.booleans[171] = record.hasBga;
   const bool hasLongNote =
       meta.TotalLongNotes > 0 || meta.TotalBackSpinNotes > 0;
   out.booleans[172] = !hasLongNote;
@@ -448,10 +519,17 @@ void projectSelectedBar(Properties &out,
 
   out.integers[74] = meta.TotalNotes;
   out.integers[106] = meta.TotalNotes;
+  out.integers[350] = meta.TotalNotes - meta.TotalLongNotes -
+                      meta.TotalScratchNotes - meta.TotalBackSpinNotes;
+  out.integers[351] = meta.TotalLongNotes;
+  out.integers[352] = meta.TotalScratchNotes;
+  out.integers[353] = meta.TotalBackSpinNotes;
   out.integers[90] = static_cast<int>(meta.MaxBpm);
   out.integers[91] = static_cast<int>(meta.MinBpm);
   out.integers[92] = static_cast<int>(meta.MostPrevalentBpm);
   out.integers[96] = static_cast<int>(meta.PlayLevel);
+  out.integers[400] = meta.Rank;
+  out.integers[368] = static_cast<int>(meta.Total);
   out.integers[1163] = (meta.PlayLength / 1'000'000 / 60) % 60;
   out.integers[1164] = (meta.PlayLength / 1'000'000) % 60;
   out.imageIndexes[89] = favoriteIndex(record.songReviewFavorite, 1, 4);
@@ -497,6 +575,10 @@ void projectSelectedBar(Properties &out,
     out.integers[157] = out.integers[122];
     out.integers[158] = out.integers[123];
     out.integers[271] = rival.score;
+    for (int judge = 0; judge < 5; ++judge) {
+      out.integers[280 + judge] =
+          rival.judgementCounts[static_cast<std::size_t>(judge)];
+    }
     out.rates[114] = 0.0;
     out.rates[115] = rivalRate;
     out.floats[122] = rivalRate;
@@ -521,6 +603,11 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
   out.strings[2] = runtime.playerName;
   out.strings[3] =
       skin::beatorajaTargetPropertyName(settings.skinTargetId);
+  const auto targetNeighbours = skin::beatorajaTargetNeighbourNames(
+      settings.skinTargetId, settings.skinTargetList);
+  for (std::size_t index = 0; index < targetNeighbours.size(); ++index) {
+    out.strings[200 + static_cast<int>(index)] = targetNeighbours[index];
+  }
   out.strings[30] = runtime.searchWord;
   out.strings[60] = settings.skinModeFilterName;
   out.strings[61] = settings.skinSortId;
@@ -540,6 +627,12 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
   out.booleans[60] = !runtime.updateScore;
   out.booleans[61] = runtime.updateScore;
   out.booleans[62] = runtime.updateScore;
+  out.booleans[190] = !runtime.stageFileAvailable;
+  out.booleans[191] = runtime.stageFileAvailable;
+  out.booleans[192] = !runtime.bannerAvailable;
+  out.booleans[193] = runtime.bannerAvailable;
+  out.booleans[194] = !runtime.backBmpAvailable;
+  out.booleans[195] = runtime.backBmpAvailable;
   out.booleans[624] = runtime.rivalName.empty();
   out.booleans[625] = !runtime.rivalName.empty();
   out.booleans[400] = settings.constantScroll;
@@ -571,10 +664,13 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
   out.imageIndexes[78] = beatorajaGaugeAutoShift(selections.gaugeAutoShift);
   out.imageIndexes[341] = gaugeTypeIndex(selections.gaugeAutoShiftLowerBound);
   out.imageIndexes[301] = settings.customJudge ? 1 : 0;
+  out.imageIndexes[302] = settings.scrollMode == 1 ? 1 : 0;
   out.imageIndexes[303] = settings.showJudgeArea ? 1 : 0;
+  out.imageIndexes[304] = settings.longNoteModifierMode == 1 ? 1 : 0;
   out.imageIndexes[305] = settings.markProcessedNotes ? 1 : 0;
   out.imageIndexes[306] =
       assist_options::isBpmGuide(settings.selectedAssistOption) ? 1 : 0;
+  out.imageIndexes[307] = settings.mineMode == 1 ? 1 : 0;
   out.imageIndexes[308] = beatorajaLnMode(settings.selectedLnMode);
   for (int replayIndex = 0; replayIndex < 4; ++replayIndex) {
     out.imageIndexes[321 + replayIndex] =

@@ -275,6 +275,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
     std::vector<const ChartMetaRecord *> records;
   };
   std::map<std::filesystem::path, FolderNode> folders;
+  std::map<std::filesystem::path, std::int64_t> folderAddDates;
   std::vector<std::filesystem::path> physicalRoots;
   const auto ensureFolder = [&](const std::filesystem::path &path)
       -> FolderNode & {
@@ -311,6 +312,12 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
   };
 
   if (input.metadata != nullptr) {
+    for (const auto &record : input.metadata->folders) {
+      const auto path = std::filesystem::path(record.path).lexically_normal();
+      if (!path.empty()) {
+        folderAddDates.insert_or_assign(path, record.addDateSeconds);
+      }
+    }
     for (const auto &entry : input.metadata->entries) {
       const std::filesystem::path root(entry.path);
       if (root.empty()) continue;
@@ -344,6 +351,20 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
     for (const auto &entry : input.metadata->entries) {
       connectFolderToRoot(entry.path);
     }
+    // FolderBar queries FolderData when the current directory has no songs.
+    // Its persisted rows therefore remain real selector bars even when a
+    // branch contains no chart record to otherwise introduce it here.
+    for (const auto &record : input.metadata->folders) {
+      const auto path = std::filesystem::path(record.path).lexically_normal();
+      if (path.empty() ||
+          std::ranges::none_of(physicalRoots, [&](const auto &root) {
+            return pathAtOrInside(path, root);
+          })) {
+        continue;
+      }
+      (void)ensureFolder(path);
+      connectFolderToRoot(path);
+    }
   }
   for (const auto &record : input.records) {
     connectFolderToRoot(physicalFolder(record));
@@ -362,7 +383,11 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
         .directoryPath = node.path,
         .presentation = {.kind = skin::MusicSelectBarKind::Folder,
                          .title = title,
-                         .exists = true},
+                         .exists = true,
+                         .addDateSeconds =
+                             folderAddDates.contains(node.path)
+                                 ? folderAddDates.at(node.path)
+                                 : 0},
         .selectable = true,
         .sortable = true,
     };
@@ -372,9 +397,13 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
       values.reserve(node.records.size());
       for (const auto *record : node.records) values.push_back(*record);
       builder.aggregate(folder, values);
-    }
-    for (const auto &child : node.children) {
-      folder.children.push_back(addFolder(child));
+    } else {
+      // FolderBar.getChildren returns immediate SongBars and stops when that
+      // list is nonempty. Its child directories are used only by an empty
+      // physical folder.
+      for (const auto &child : node.children) {
+        folder.children.push_back(addFolder(child));
+      }
     }
     const auto id = folder.id;
     builder.result.bars.push_back(std::move(folder));

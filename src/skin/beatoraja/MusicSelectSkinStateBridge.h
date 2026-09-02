@@ -6,6 +6,7 @@
 #include <functional>
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <set>
 #include <span>
 #include <string>
@@ -29,12 +30,21 @@ struct MusicSelectSkinActionSink {
   std::function<void(int, std::string_view)> stringWriter;
 };
 
+struct MusicSelectPublishedSongResources {
+  bool stageFile = false;
+  bool banner = false;
+  // MusicSelector only publishes SongBar banner and stagefile pixmaps.
+  bool backBmp = false;
+};
+
 class MusicSelectSkinStateBridge final : public ISkinFrameState {
 public:
-  explicit MusicSelectSkinStateBridge(const MusicSelectSkinFrame &);
+  explicit MusicSelectSkinStateBridge(
+      const MusicSelectSkinFrame &, MusicSelectSkinActionSink = {});
   MusicSelectSkinStateBridge(const MusicSelectSkinFrame &,
                              std::map<int, std::int64_t> &,
-                             const std::set<int> &);
+                             const std::set<int> &,
+                             MusicSelectSkinActionSink = {});
 
   std::uint64_t frameSerial() const noexcept override;
   SkinPropertyLookup<bool>
@@ -50,7 +60,9 @@ public:
   SkinPropertyLookup<SkinRuntimeOffset> offsetProperty(int) override;
   std::int64_t timerProperty(const SkinBuiltinPropertySelector &) override;
   bool setTimerProperty(int, std::int64_t) override;
+  bool setFloatProperty(int, double) override;
   void setCustomTimer(int, std::int64_t);
+  void setPublishedSongResources(MusicSelectPublishedSongResources) noexcept;
   std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override;
   std::span<const SkinProjectedLongNoteView>
@@ -66,6 +78,9 @@ private:
   std::map<int, std::int64_t> customTimerValues_;
   std::map<int, std::int64_t> *persistentCustomTimerValues_ = nullptr;
   const std::set<int> *activeCustomTimerIds_ = nullptr;
+  MusicSelectSkinActionSink actionSink_;
+  std::map<int, double> floatOverrides_;
+  std::optional<MusicSelectPublishedSongResources> publishedSongResources_;
 };
 
 } // namespace skin

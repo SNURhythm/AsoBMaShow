@@ -105,6 +105,9 @@ void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
   metadata.entries.push_back({.path = utf8_to_path_t("/songs/child")});
   metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
   metadata.entries.push_back({.path = utf8_to_path_t("/songs/empty")});
+  metadata.folders.push_back(
+      {.path = utf8_to_path_t("/songs"), .dateSeconds = 50,
+       .addDateSeconds = 1'700'001'111});
 
   const auto projection = MusicSelectRepositoryProjection{}.project(
       {.records = records, .metadata = &metadata});
@@ -114,18 +117,33 @@ void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
           "three source command roots");
   const auto *root = projection.find(projection.root.front());
   require(root && root->directoryPath == "/songs" &&
-              root->children.size() == 3,
-          "the configured ancestor owns its direct song and descendant folder");
-  const auto *nested = child(projection, root, 1);
-  require(nested && nested->directoryPath == "/songs/child" &&
-              nested->children.size() == 1 &&
-              child(projection, nested, 0)->title == "Child",
-          "the configured descendant appears only below its ancestor");
-  const auto *empty = child(projection, root, 2);
-  require(empty && empty->directoryPath == "/songs/empty" &&
-              empty->children.empty(),
-          "an empty configured descendant remains reachable below its "
-          "configured ancestor");
+              root->children.size() == 1 &&
+              child(projection, root, 0)->title == "Root" &&
+              root->presentation.addDateSeconds == 1'700'001'111,
+          "a physical folder with immediate songs returns only those songs "
+          "like FolderBar.getChildren and uses FolderData.adddate");
+}
+
+void testProjectsPersistedEmptyFolderBars() {
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
+  metadata.folders = {
+      {.path = utf8_to_path_t("/songs"), .dateSeconds = 1,
+       .addDateSeconds = 2},
+      {.path = utf8_to_path_t("/songs/empty"), .dateSeconds = 3,
+       .addDateSeconds = 4},
+  };
+
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = {}, .metadata = &metadata});
+  const auto *root = projection.find(projection.root.front());
+  const auto *empty = child(projection, root, 0);
+  require(root && root->directoryPath == "/songs" && empty &&
+              empty->kind == skin::MusicSelectBarKind::Folder &&
+              empty->directoryPath == "/songs/empty" &&
+              empty->presentation.addDateSeconds == 4,
+          "FolderBar exposes persisted empty FolderData children with their "
+          "source adddate");
 }
 
 void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
@@ -237,18 +255,14 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
           "difficulty TableBar preserves repository identity and URL");
 
   const auto *folder = child(projection, physical, 0);
-  require(folder && folder->title == "A" && folder->children.size() == 3,
-          "FolderBar preserves direct songs alongside nested folders");
+  require(folder && folder->title == "A" && folder->children.size() == 2,
+          "FolderBar returns immediate songs before child directories");
   const auto *second = child(projection, folder, 0);
   const auto *first = child(projection, folder, 1);
-  const auto *nestedFolder = child(projection, folder, 2);
   require(second && first && second->title == "Second" &&
-              first->title == "First" && nestedFolder &&
-              nestedFolder->kind == skin::MusicSelectBarKind::Folder &&
-              nestedFolder->title == "sub" &&
-              nestedFolder->children.size() == 1 &&
-              child(projection, nestedFolder, 0)->title == "Nested",
-          "physical SongBars deduplicate first SHA occurrence and reverse order");
+              first->title == "First",
+          "physical SongBars deduplicate first SHA occurrence and reverse "
+          "order without appending nested folders");
   require(folder && folder->presentation.folderLampCounts[0] == 1 &&
               folder->presentation.folderLampCounts[7] == 2 &&
               folder->presentation.folderRankCounts[0] == 1 &&
@@ -411,6 +425,7 @@ void testProjectsRecentScoreImprovementCommandChildren() {
 int main(int argc, char **argv) {
   testProjectsFoldersSongsScoresAndSourceFlags();
   testOverlappingConfiguredRootsFormOnePhysicalHierarchy();
+  testProjectsPersistedEmptyFolderBars();
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
   testProjectsReplaySlotsForCompleteGrades();
   testEmptyImportedCourseIsUnavailable();

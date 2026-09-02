@@ -255,7 +255,8 @@ void testScanBatchCommitAndRollback() {
   assert(batch.has_value());
   assert(batch->UpsertChart(meta, std::nullopt, false,
                             {.hasBpmStop = true,
-                             .hasScrollChange = true}));
+                             .hasScrollChange = true,
+                             .hasBga = true}));
   assert(batch->CheckpointAndContinue(checkpoint));
   assert(batch->Commit());
   assert(session->CountAllChartMeta() == 1);
@@ -264,6 +265,7 @@ void testScanBatchCommitAndRollback() {
   assert(records.size() == 1);
   assert(records.front().hasBpmStop);
   assert(records.front().hasScrollChange);
+  assert(records.front().hasBga);
   assert(records.front().meta.TotalLandmineNotes == 3);
   assert(records.front().hasRandomSequence);
   assert(records.front().meta.MostPrevalentBpm == 175.5);
@@ -424,7 +426,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 8);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 10);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -625,7 +627,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=9"));
+                   "PRAGMA user_version=11"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -1129,7 +1131,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 8);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 10);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -1163,6 +1165,9 @@ void testChartMigrationCompatibilityMatrix() {
                     "SELECT COUNT(*) FROM pragma_table_info('chart_meta') "
                     "WHERE name IN ('has_bpm_stop', "
                     "'has_scroll_change')") == 2);
+    assert(queryInt(database.get(),
+                    "SELECT COUNT(*) FROM pragma_table_info('folder') "
+                    "WHERE name IN ('path', 'date', 'adddate')") == 3);
   }
 }
 
@@ -1201,13 +1206,13 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 8);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 10);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
                     "WHERE id=1") == 1);
   }
-  assert(repository.GetLibraryRevision() == revisionBefore + 5);
+  assert(repository.GetLibraryRevision() == revisionBefore + 6);
 }
 
 void testLegacyIosContainerPathRebasesToCurrentDocuments() {

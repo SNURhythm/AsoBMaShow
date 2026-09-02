@@ -60,16 +60,18 @@ std::optional<Value> namedValue(
 } // namespace
 
 MusicSelectSkinStateBridge::MusicSelectSkinStateBridge(
-    const MusicSelectSkinFrame &frame)
-    : frame_(&frame) {}
+    const MusicSelectSkinFrame &frame, MusicSelectSkinActionSink actionSink)
+    : frame_(&frame), actionSink_(std::move(actionSink)) {}
 
 MusicSelectSkinStateBridge::MusicSelectSkinStateBridge(
     const MusicSelectSkinFrame &frame,
     std::map<int, std::int64_t> &persistentCustomTimerValues,
-    const std::set<int> &activeCustomTimerIds)
+    const std::set<int> &activeCustomTimerIds,
+    MusicSelectSkinActionSink actionSink)
     : frame_(&frame),
       persistentCustomTimerValues_(&persistentCustomTimerValues),
-      activeCustomTimerIds_(&activeCustomTimerIds) {}
+      activeCustomTimerIds_(&activeCustomTimerIds),
+      actionSink_(std::move(actionSink)) {}
 
 std::uint64_t MusicSelectSkinStateBridge::frameSerial() const noexcept {
   return frame_->serial;
@@ -93,11 +95,34 @@ SkinPropertyLookup<bool> MusicSelectSkinStateBridge::booleanProperty(
   }
   const bool negated = *id < 0;
   const int positive = negated ? -*id : *id;
+  if (publishedSongResources_) {
+    std::optional<bool> available;
+    switch (positive) {
+    case 190:
+    case 191: available = publishedSongResources_->stageFile; break;
+    case 192:
+    case 193: available = publishedSongResources_->banner; break;
+    case 194:
+    case 195: available = publishedSongResources_->backBmp; break;
+    default: break;
+    }
+    if (available) {
+      const bool artworkProperty = positive == 191 || positive == 193 ||
+                                   positive == 195;
+      const bool value = artworkProperty ? *available : !*available;
+      return supported(negated ? !value : value);
+    }
+  }
   const auto found = frame_->properties.booleans.find(positive);
   const bool value = found != frame_->properties.booleans.end()
                          ? found->second
                          : false;
   return supported(negated ? !value : value);
+}
+
+void MusicSelectSkinStateBridge::setPublishedSongResources(
+    MusicSelectPublishedSongResources resources) noexcept {
+  publishedSongResources_ = resources;
 }
 
 SkinPropertyLookup<std::int64_t> MusicSelectSkinStateBridge::integerProperty(
@@ -141,6 +166,14 @@ SkinPropertyLookup<double> MusicSelectSkinStateBridge::floatProperty(
   const auto &named = domain == SkinFloatPropertyDomain::Rate
                           ? frame_->properties.namedRates
                           : frame_->properties.namedFloats;
+  if (domain == SkinFloatPropertyDomain::Rate) {
+    if (const auto *id = std::get_if<int>(&selector.value)) {
+      if (const auto override = floatOverrides_.find(*id);
+          override != floatOverrides_.end()) {
+        return supported(override->second);
+      }
+    }
+  }
   if (const auto value = numericValue(selector, numeric)) {
     return supported(*value);
   }
@@ -228,6 +261,17 @@ bool MusicSelectSkinStateBridge::setTimerProperty(int id,
     customTimerValues_.insert_or_assign(id, value);
   }
   return true;
+}
+
+bool MusicSelectSkinStateBridge::setFloatProperty(int id, double value) {
+  if ((id < 17 || id > 19) || !actionSink_.floatWriter) return false;
+  try {
+    floatOverrides_.insert_or_assign(id, value);
+    actionSink_.floatWriter(id, value);
+    return true;
+  } catch (...) {
+    return false;
+  }
 }
 
 void MusicSelectSkinStateBridge::setCustomTimer(int id, std::int64_t value) {

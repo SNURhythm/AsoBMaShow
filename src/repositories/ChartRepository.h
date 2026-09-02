@@ -79,6 +79,8 @@ struct ChartMetaRecord {
   // SongData.CONTENT_TEXT as established by Beatoraja's library scan. This
   // is a folder-level fact, separate from BMS header metadata.
   bool hasDocument = false;
+  // SongData.CONTENT_BGA, computed from BMSModel#getBgaList while scanning.
+  bool hasBga = false;
   // SongData's FEATURE_STOPSEQUENCE and FEATURE_SCROLL bits are derived from
   // every timeline while Beatoraja scans a chart.
   bool hasBpmStop = false;
@@ -108,6 +110,21 @@ struct ChartMetaRecord {
 struct ChartSequenceFeatures {
   bool hasBpmStop = false;
   bool hasScrollChange = false;
+  bool hasBga = false;
+};
+
+// FolderData's persisted date and adddate fields. The library scanner owns
+// the tree-walk rules which decide which physical folders reach this store.
+struct ChartFolderRecord {
+  path_t path;
+  std::int64_t dateSeconds = 0;
+  std::int64_t addDateSeconds = 0;
+};
+
+struct ChartFolderScanNode {
+  path_t path;
+  std::int64_t dateSeconds = 0;
+  bool containsBms = false;
 };
 
 enum class ChartMetaPathBatchReadStatus { Loaded, Invalid, StorageFailure };
@@ -212,6 +229,8 @@ public:
       bool UpsertArchiveCache(const ArchiveScanCacheUpdate &update);
       bool UpdateSourcePreference(
           const ChartSourcePreferenceUpdate &update);
+      bool SynchronizeFolders(std::span<const ChartFolderScanNode> nodes,
+                              std::span<const std::filesystem::path> roots);
       std::optional<int>
       CountChartsInArchive(const std::filesystem::path &path);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
@@ -236,6 +255,7 @@ public:
     int CountAllChartMeta();
     int CountSolidArchives();
     void SelectAllChartMeta(std::vector<bms_parser::ChartMeta> &chartMetas);
+    std::vector<ChartFolderRecord> SelectFolderRecords();
     void SelectFavoriteMusicTracks(std::vector<MusicTrackRecord> &tracks);
     int CountFavoriteCharts();
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);

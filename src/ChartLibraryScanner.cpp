@@ -125,6 +125,9 @@ struct ParsedChartMetadata {
 
 ChartSequenceFeatures sequenceFeatures(const bms_parser::Chart &chart) {
   ChartSequenceFeatures result;
+  // SongData#setBMSModel uses BMSModel#getBgaList, which the pinned decoder
+  // fills from declared #BMP resources rather than from BGA timeline use.
+  result.hasBga = !chart.BmpTable.empty();
   for (const auto *measure : chart.Measures) {
     if (measure == nullptr) continue;
     for (const auto *timeline : measure->TimeLines) {
@@ -285,6 +288,14 @@ std::int64_t fileTimeToSqlNs(std::filesystem::file_time_type time) {
     return std::numeric_limits<std::int64_t>::min();
   }
   return static_cast<std::int64_t>(nanos);
+}
+
+std::int64_t fileTimeToUnixSeconds(std::filesystem::file_time_type time) {
+  const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::file_clock::to_sys(time)
+                               .time_since_epoch())
+                           .count();
+  return static_cast<std::int64_t>(seconds);
 }
 
 bool archiveFileState(const std::filesystem::path &path,
@@ -601,6 +612,19 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
     }
     return state;
+  };
+
+  std::map<std::filesystem::path, ChartFolderScanNode> folderScanNodes;
+  std::vector<std::filesystem::path> folderScanRoots;
+  const auto observeFolder = [&](const std::filesystem::path &path) {
+    std::error_code error;
+    const auto modified = std::filesystem::last_write_time(path, error);
+    const std::int64_t dateSeconds =
+        error ? -1 : fileTimeToUnixSeconds(modified);
+    const auto normalized = path.lexically_normal();
+    folderScanNodes.insert_or_assign(
+        normalized, ChartFolderScanNode{.path = fspath_to_path_t(normalized),
+                                        .dateSeconds = dateSeconds});
   };
 
   for (const auto &chartMeta : chartMetas) {
@@ -1531,6 +1555,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       continue;
     }
 
+    std::error_code rootDirectoryError;
+    if (std::filesystem::is_directory(root, rootDirectoryError) &&
+        !rootDirectoryError) {
+      const auto normalizedRoot = root.lexically_normal();
+      observeFolder(normalizedRoot);
+      folderScanRoots.push_back(normalizedRoot);
+    }
+
     std::filesystem::recursive_directory_iterator iterator(
         root, std::filesystem::directory_options::skip_permission_denied,
         error);
@@ -1542,6 +1574,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
       std::error_code directoryTypeError;
       if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
+        observeFolder(iterator->path());
         if (isFindBmsPrivateStorageDirectory(iterator->path())) {
           iterator.disable_recursion_pending();
         }
@@ -1553,6 +1586,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
       const std::filesystem::path path = iterator->path();
       if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
+        if (const auto folder = folderScanNodes.find(
+                path.parent_path().lexically_normal());
+            folder != folderScanNodes.end()) {
+          folder->second.containsBms = true;
+        }
         scheduleOrdinaryChart(path, hasDocumentForChartPath(path));
         continue;
       }
@@ -1699,7 +1737,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       sourcePreferenceRefreshPaths.empty() &&
       cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
-      staleSolidArchives.empty() && reindexedArchives.empty();
+      staleSolidArchives.empty() && reindexedArchives.empty() &&
+      folderScanNodes.empty();
   if (noScanWork) {
     entityScheduler.finish();
     for (const auto &exception : entityScheduler.takeExceptions()) {
@@ -1988,6 +2027,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     storageHealthy = success && storageHealthy;
     return success;
   };
+  std::vector<ChartFolderScanNode> scannedFolders;
+  scannedFolders.reserve(folderScanNodes.size());
+  for (const auto &[_, node] : folderScanNodes) {
+    scannedFolders.push_back(node);
+  }
+  if (!folderScanRoots.empty()) {
+    recordStorageResult(
+        scanBatch->SynchronizeFolders(scannedFolders, folderScanRoots));
+  }
   std::vector<std::filesystem::path> upsertedChartPaths;
   std::uint64_t completedFlushRequest = 0;
 

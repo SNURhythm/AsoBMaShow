@@ -82,6 +82,28 @@ bool metadataRebuildRequired(const std::filesystem::path &databasePath) {
   return required;
 }
 
+void seedFolderRecord(const std::filesystem::path &databasePath,
+                      const std::filesystem::path &folder,
+                      std::int64_t dateSeconds,
+                      std::int64_t addDateSeconds) {
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement = nullptr;
+  assert(sqlite3_prepare_v2(
+             database,
+             "INSERT INTO folder(path, date, adddate) VALUES(?, ?, ?)", -1,
+             &statement, nullptr) == SQLITE_OK);
+  const std::string path = folder.string();
+  assert(sqlite3_bind_text(statement, 1, path.c_str(),
+                           static_cast<int>(path.size()), SQLITE_TRANSIENT) ==
+         SQLITE_OK);
+  assert(sqlite3_bind_int64(statement, 2, dateSeconds) == SQLITE_OK);
+  assert(sqlite3_bind_int64(statement, 3, addDateSeconds) == SQLITE_OK);
+  assert(sqlite3_step(statement) == SQLITE_DONE);
+  assert(sqlite3_finalize(statement) == SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+}
+
 using ArchiveEntryHandle =
     std::unique_ptr<archive_entry, decltype(&archive_entry_free)>;
 
@@ -277,14 +299,21 @@ void testSequenceFeaturesMatchBeatorajaSongData() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
   std::filesystem::create_directories(root);
-  const auto chartPath = root / "sequence-features.bms";
+  const auto chartPath = root / "declared-bmp.bms";
   {
     std::ofstream chart(chartPath);
     chart << chartText("Sequence Features")
           << "#STOP01 48\n"
           << "#SCROLL01 0.5\n"
+          << "#BMP01 stage.png\n"
           << "#00209:01\n"
           << "#002SC:01\n";
+  }
+  const auto undeclaredBgaPath = root / "undeclared-bga.bms";
+  {
+    std::ofstream chart(undeclaredBgaPath);
+    chart << chartText("Undeclared BGA")
+          << "#00204:01\n";
   }
 
   ChartRepository repository(temporary.path() / "chart.db");
@@ -292,14 +321,64 @@ void testSequenceFeaturesMatchBeatorajaSongData() {
   auto session = repository.OpenSession();
   assert(session.has_value());
   ChartLibraryScanner scanner;
-  assert(scanner.Scan(*session, {root}) == 1);
+  assert(scanner.Scan(*session, {root}) == 2);
 
-  const std::array paths{chartPath};
+  const std::array paths{chartPath, undeclaredBgaPath};
   const auto records = session->SelectChartMetaByPaths(paths);
   assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
-  assert(records.records.size() == 1);
+  assert(records.records.size() == 2);
   assert(records.records.front().hasBpmStop);
   assert(records.records.front().hasScrollChange);
+  assert(records.records.front().hasBga);
+  assert(!records.records.back().hasBga);
+}
+
+void testFolderRecordsMatchBeatorajaFolderTraversal() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto directSongFolder = root / "songs";
+  const auto hiddenChild = directSongFolder / "hidden";
+  const auto nestedFolder = root / "collections" / "deep";
+  writeChart(directSongFolder, "direct", "Direct Folder Chart");
+  writeChart(hiddenChild, "hidden", "Hidden Child Chart");
+  writeChart(nestedFolder, "nested", "Nested Folder Chart");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  seedFolderRecord(repository.DatabasePath(), directSongFolder, 0, 1);
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {root}) == 3);
+
+  const auto records = session->SelectFolderRecords();
+  const auto find = [&](const std::filesystem::path &path) {
+    return std::find_if(records.begin(), records.end(), [&](const auto &item) {
+      return std::filesystem::path(item.path).lexically_normal() ==
+             path.lexically_normal();
+    });
+  };
+  const auto rootRecord = find(root);
+  const auto directRecord = find(directSongFolder);
+  const auto collectionsRecord = find(root / "collections");
+  const auto nestedRecord = find(nestedFolder);
+  assert(rootRecord != records.end());
+  assert(directRecord != records.end());
+  assert(collectionsRecord != records.end());
+  assert(nestedRecord != records.end());
+  assert(find(hiddenChild) == records.end());
+  assert(directRecord->addDateSeconds > 1);
+  const auto stableDirectAddDate = directRecord->addDateSeconds;
+
+  assert(scanner.Scan(*session, {root}) == 0);
+  const auto stableRecords = session->SelectFolderRecords();
+  const auto stableDirect = std::find_if(
+      stableRecords.begin(), stableRecords.end(), [&](const auto &item) {
+        return std::filesystem::path(item.path).lexically_normal() ==
+               directSongFolder.lexically_normal();
+      });
+  assert(stableDirect != stableRecords.end());
+  assert(stableDirect->addDateSeconds == stableDirectAddDate);
 }
 
 void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {
@@ -639,6 +718,7 @@ public:
 
 std::atomic_bool countPostInsertChartPathReads{false};
 std::atomic_bool observedChartInsert{false};
+std::atomic_bool observedPostInsertSelect{false};
 std::atomic_int postInsertChartPathReads{0};
 
 int countPostInsertChartPathReadAuthorizer(void *, int action,
@@ -651,10 +731,13 @@ int countPostInsertChartPathReadAuthorizer(void *, int action,
   if (action == SQLITE_INSERT && first != nullptr &&
       std::string_view(first) == "chart_meta") {
     observedChartInsert.store(true, std::memory_order_relaxed);
+  } else if (action == SQLITE_SELECT &&
+             observedChartInsert.load(std::memory_order_relaxed)) {
+    observedPostInsertSelect.store(true, std::memory_order_relaxed);
   } else if (action == SQLITE_READ && first != nullptr && second != nullptr &&
              std::string_view(first) == "chart_meta" &&
              std::string_view(second) == "path" &&
-             observedChartInsert.load(std::memory_order_relaxed)) {
+             observedPostInsertSelect.load(std::memory_order_relaxed)) {
     postInsertChartPathReads.fetch_add(1, std::memory_order_relaxed);
   }
   return SQLITE_OK;
@@ -677,12 +760,14 @@ public:
   ~ScopedPostInsertChartPathReadCounter() {
     countPostInsertChartPathReads.store(false, std::memory_order_relaxed);
     observedChartInsert.store(false, std::memory_order_relaxed);
+    observedPostInsertSelect.store(false, std::memory_order_relaxed);
     postInsertChartPathReads.store(0, std::memory_order_relaxed);
     sqlite3_reset_auto_extension();
   }
 
   void start() {
     observedChartInsert.store(false, std::memory_order_relaxed);
+    observedPostInsertSelect.store(false, std::memory_order_relaxed);
     postInsertChartPathReads.store(0, std::memory_order_relaxed);
     countPostInsertChartPathReads.store(true, std::memory_order_relaxed);
   }
@@ -1638,6 +1723,7 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
 int main() {
   testBasicNoOpAndDeleteScan();
   testSequenceFeaturesMatchBeatorajaSongData();
+  testFolderRecordsMatchBeatorajaFolderTraversal();
   testFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testKnownChartRefreshesFolderTextDocumentFlag();
