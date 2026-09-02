@@ -327,18 +327,26 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
         });
     if (root == physicalRoots.end()) addPhysicalRoot(folder);
   }
-  for (const auto &record : input.records) {
-    auto current = physicalFolder(record);
+  const auto connectFolderToRoot = [&](const std::filesystem::path &path) {
+    auto current = path.lexically_normal();
     const auto root = std::ranges::find_if(
         physicalRoots, [&](const auto &candidate) {
           return pathAtOrInside(current, candidate);
         });
-    if (root == physicalRoots.end()) continue;
+    if (root == physicalRoots.end()) return;
     while (current != *root) {
       const auto parent = current.parent_path();
       addChild(parent, current);
       current = parent;
     }
+  };
+  if (input.metadata != nullptr) {
+    for (const auto &entry : input.metadata->entries) {
+      connectFolderToRoot(entry.path);
+    }
+  }
+  for (const auto &record : input.records) {
+    connectFolderToRoot(physicalFolder(record));
   }
 
   std::function<MusicSelectBarId(const std::filesystem::path &)> addFolder;

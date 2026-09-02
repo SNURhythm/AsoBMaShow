@@ -1782,8 +1782,14 @@ void MusicSelectScene::executeEvent(
           }
           return paths;
         };
+        const auto isArchiveFile = [](const std::filesystem::path &path) {
+          std::error_code error;
+          return archive_file::hasSupportedArchiveExtension(path) &&
+                 std::filesystem::is_regular_file(path, error) && !error;
+        };
         if (const auto path = musicSelectExplorerPath(
-                *selected, lookups, archive_file::splitVirtualPath)) {
+                *selected, lookups, archive_file::splitVirtualPath,
+                isArchiveFile)) {
           std::string error;
           if (!platform_open::openPath(*path, error)) {
             SDL_Log("Failed to open selector path %s: %s",
@@ -1824,13 +1830,14 @@ void MusicSelectScene::executeEvent(
       }
       break;
     case MusicSelectEventEffectKind::UpdateFolder: {
-      if (selected != nullptr &&
-          selected->kind == skin::MusicSelectBarKind::Table &&
-          context.chartLibraryTasks) {
+      const auto tableId = selected != nullptr
+                               ? musicSelectDifficultyTableUpdateId(*selected)
+                               : std::nullopt;
+      if (tableId && context.chartLibraryTasks) {
         context.chartLibraryTasks->enqueue({
             .kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
             .title = "Update Difficulty Table",
-            .tableId = selected->tableId,
+            .tableId = *tableId,
         });
         break;
       }
@@ -1852,6 +1859,9 @@ void MusicSelectScene::executeEvent(
       break;
     case MusicSelectEventEffectKind::ChangeFavoriteChart:
       changeSelectedFavorite(false, effect.value);
+      break;
+    case MusicSelectEventEffectKind::ApplyBgaEnabled:
+      context.jukebox.setVisualsEnabled(effect.value != 0);
       break;
     default:
       break;

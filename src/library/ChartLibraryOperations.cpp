@@ -544,10 +544,14 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
              progressStageText(value.stage));
   };
   ChartLibraryScanner scanner;
-  const int changedCount = scanner.Scan(*session, roots, &stopToken,
-                                        scanProgress, waitForResume);
+  const auto scanResult = scanner.ScanWithResult(
+      *session, roots, &stopToken, scanProgress, waitForResume);
   if (stopToken.stop_requested()) {
     throw std::runtime_error("Import cancelled");
+  }
+  if (!scanResult.completed) {
+    throw std::runtime_error("Imported " + importType +
+                             ". Failed to refresh library.");
   }
 
   if (!importingFolder) {
@@ -557,9 +561,9 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
     dependencies_.requestReload(true);
   }
   const std::string message =
-      changedCount > 0 ? "Imported " + importType + ". Library refreshed."
-                       : "Imported " + importType +
-                             ". Library already current.";
+      scanResult.changedCount > 0
+          ? "Imported " + importType + ". Library refreshed."
+          : "Imported " + importType + ". Library already current.";
   SDL_Log("Android import task result: %s", message.c_str());
   archive_file::appendDebugLogLine(message);
   return {.detail = "Complete"};

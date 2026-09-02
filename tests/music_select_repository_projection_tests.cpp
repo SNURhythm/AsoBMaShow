@@ -104,6 +104,7 @@ void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
   MusicSelectRepositoryMetadata metadata;
   metadata.entries.push_back({.path = utf8_to_path_t("/songs/child")});
   metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
+  metadata.entries.push_back({.path = utf8_to_path_t("/songs/empty")});
 
   const auto projection = MusicSelectRepositoryProjection{}.project(
       {.records = records, .metadata = &metadata});
@@ -113,13 +114,18 @@ void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
           "three source command roots");
   const auto *root = projection.find(projection.root.front());
   require(root && root->directoryPath == "/songs" &&
-              root->children.size() == 2,
+              root->children.size() == 3,
           "the configured ancestor owns its direct song and descendant folder");
   const auto *nested = child(projection, root, 1);
   require(nested && nested->directoryPath == "/songs/child" &&
               nested->children.size() == 1 &&
               child(projection, nested, 0)->title == "Child",
           "the configured descendant appears only below its ancestor");
+  const auto *empty = child(projection, root, 2);
+  require(empty && empty->directoryPath == "/songs/empty" &&
+              empty->children.empty(),
+          "an empty configured descendant remains reachable below its "
+          "configured ancestor");
 }
 
 void testProjectsExactRootHierarchyTablesCoursesAndCommands() {

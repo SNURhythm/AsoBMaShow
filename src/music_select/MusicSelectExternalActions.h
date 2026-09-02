@@ -26,6 +26,8 @@ using MusicSelectArchiveDocumentResolver = std::function<
 using MusicSelectArchivePathSplitter = std::function<bool(
     const std::filesystem::path &, std::filesystem::path &,
     std::filesystem::path &)>;
+using MusicSelectArchiveFilePredicate =
+    std::function<bool(const std::filesystem::path &)>;
 
 enum class MusicSelectPointerOrigin {
   Mouse,
@@ -121,7 +123,11 @@ musicSelectExplorerTitleQuery(std::string_view title);
 [[nodiscard]] std::optional<std::filesystem::path>
 musicSelectExplorerPath(const MusicSelectBar &,
                         const MusicSelectExplorerLookups &,
-                        const MusicSelectArchivePathSplitter & = {});
+                        const MusicSelectArchivePathSplitter & = {},
+                        const MusicSelectArchiveFilePredicate & = {});
+
+[[nodiscard]] std::optional<int>
+musicSelectDifficultyTableUpdateId(const MusicSelectBar &);
 
 [[nodiscard]] std::optional<std::filesystem::path>
 musicSelectRefreshPath(const MusicSelectBar &,

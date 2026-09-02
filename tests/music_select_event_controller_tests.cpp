@@ -166,9 +166,14 @@ void testPlayerAndApplicationOptionsUseExactDomains() {
           "non-positive duration arg2 uses the source increment of one");
 
   settings.skinBgaMode = 0;
-  (void)run(context, 72, -1);
-  require(settings.skinBgaMode == 2 && !settings.bgaEnabled,
+  changed = run(context, 72, -1);
+  require(settings.skinBgaMode == 2 && !settings.bgaEnabled &&
+              has(changed, Effect::ApplyBgaEnabled, 0),
           "BGA cycles ON/AUTO/OFF and synchronizes native playback");
+  changed = run(context, 72);
+  require(settings.skinBgaMode == 0 && settings.bgaEnabled &&
+              has(changed, Effect::ApplyBgaEnabled, 1),
+          "re-enabling BGA resumes the live jukebox visual authority");
   settings.skinBgaExpandMode = 0;
   (void)run(context, 73, -1);
   require(settings.skinBgaExpandMode == 2 &&

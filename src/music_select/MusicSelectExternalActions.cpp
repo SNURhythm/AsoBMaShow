@@ -86,13 +86,17 @@ std::string musicSelectExplorerTitleQuery(std::string_view title) {
 std::optional<std::filesystem::path>
 musicSelectExplorerPath(const MusicSelectBar &bar,
                         const MusicSelectExplorerLookups &lookups,
-                        const MusicSelectArchivePathSplitter &splitArchive) {
+                        const MusicSelectArchivePathSplitter &splitArchive,
+                        const MusicSelectArchiveFilePredicate &isArchiveFile) {
   if (bar.kind == skin::MusicSelectBarKind::Folder) {
     std::filesystem::path archive;
     std::filesystem::path inner;
     if (splitArchive &&
         splitArchive(bar.directoryPath, archive, inner)) {
       return archive.parent_path();
+    }
+    if (isArchiveFile && isArchiveFile(bar.directoryPath)) {
+      return bar.directoryPath.parent_path();
     }
     return bar.directoryPath;
   }
@@ -111,6 +115,15 @@ musicSelectExplorerPath(const MusicSelectBar &bar,
   const std::string query = musicSelectExplorerTitleQuery(bar.title);
   if (query.empty() || !lookups.textPaths) return std::nullopt;
   return firstParent(lookups.textPaths(query), splitArchive);
+}
+
+std::optional<int>
+musicSelectDifficultyTableUpdateId(const MusicSelectBar &bar) {
+  if (bar.kind != skin::MusicSelectBarKind::Table || bar.tableId <= 0 ||
+      bar.tableUrl.empty()) {
+    return std::nullopt;
+  }
+  return bar.tableId;
 }
 
 std::optional<std::filesystem::path>

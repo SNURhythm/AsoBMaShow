@@ -254,6 +254,7 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
     settings.skinBgaMode = cycleInteger(settings.skinBgaMode, 3, argument1);
     settings.bgaEnabled = settings.skinBgaMode != 2;
     changedWithSound(outcome);
+    effect(outcome, Effect::ApplyBgaEnabled, settings.bgaEnabled ? 1 : 0);
     break;
   case 73:
     settings.skinBgaExpandMode =

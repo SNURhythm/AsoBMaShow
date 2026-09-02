@@ -180,6 +180,22 @@ require(
     and removed_paths_index <= targeted_delete_index < incremental_scan_index,
     "removed Find BMS variants must be reconciled before incremental indexing",
 )
+android_import_start = library_operations_source.find(
+    "TaskRunResult ChartLibraryOperations::runAndroidImport("
+)
+android_import_end = library_operations_source.find(
+    "const char *ChartLibraryOperations::progressStageText(",
+    android_import_start,
+)
+android_import = library_operations_source[
+    android_import_start:android_import_end
+]
+require(
+    "scanner.ScanWithResult" in android_import
+    and "scanResult.completed" in android_import,
+    "Android imports must retain their source until a completed "
+    "post-extraction scan",
+)
 require(
     main_menu_source.count(
         "findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration"

@@ -135,6 +135,24 @@ void testFolderAndDownloadSiteBranches() {
   assert(musicSelectExplorerPath(folder, {}) ==
          std::filesystem::path("/charts/folder"));
 
+  MusicSelectBar archiveFolder{.kind = skin::MusicSelectBarKind::Folder,
+                               .directoryPath = "/charts/package.zip"};
+  const auto isArchive = [](const std::filesystem::path &path) {
+    return path == "/charts/package.zip";
+  };
+  assert(musicSelectExplorerPath(archiveFolder, {}, {}, isArchive) ==
+         std::filesystem::path("/charts"));
+
+  MusicSelectBar localCourses{.kind = skin::MusicSelectBarKind::Table,
+                              .title = "COURSE"};
+  assert(!musicSelectDifficultyTableUpdateId(localCourses));
+  MusicSelectBar importedTable{.kind = skin::MusicSelectBarKind::Table,
+                               .tableId = 42,
+                               .tableUrl = "https://example.test/table"};
+  assert(musicSelectDifficultyTableUpdateId(importedTable) == 42);
+  importedTable.tableUrl.clear();
+  assert(!musicSelectDifficultyTableUpdateId(importedTable));
+
   auto bar = song("missing.bms", false);
   bar.chart->downloadUrl = "https://example.test/archive.zip";
   bar.chart->appendDownloadUrl = "https://example.test/patch.zip";

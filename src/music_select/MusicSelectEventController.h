@@ -22,6 +22,7 @@ enum class MusicSelectEventEffectKind {
   ChangeFavoriteSong,
   ChangeFavoriteChart,
   SetRival,
+  ApplyBgaEnabled,
 };
 
 struct MusicSelectEventEffect {
