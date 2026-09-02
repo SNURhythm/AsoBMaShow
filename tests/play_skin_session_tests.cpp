@@ -693,6 +693,7 @@ struct ActivationFixtureOptions {
   bool resultDuplicateTimerExec = false;
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
+  bool musicSelectInteractionBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -913,7 +914,23 @@ if skin_config then
   assert(main_state.audio_loop("session-audio.ogg", 0.5) == true)
 )lua";
     }
-    if (options.movieBearing && options.resourceBearing) {
+    if (options.musicSelectInteractionBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "fixture-image", path = "resources/fixture.png"}},
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    slider = {{id = "position", src = "fixture-image", x = 0, y = 0,
+               w = 10, h = 10, angle = 1, range = 100, type = 1,
+               changeable = true}},
+    text = {{id = "searchword", font = "fixture-font", size = 16, ref = 30}},
+    destination = {
+      {id = "position", dst = {{x = 100, y = 100, w = 20, h = 20}}},
+      {id = "searchword", dst = {{x = 300, y = 200, w = 200, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.movieBearing && options.resourceBearing) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -2507,6 +2524,75 @@ void testMusicSelectActivationCreatesAConfiguredOwningSession() {
              fixture.device()->createCalls == 2,
          "type-5 activation runs the configured document loader, resource "
          "plan, and owning music-select session");
+}
+
+void testMusicSelectPublishesPointerCapturesAndTextFocus() {
+  ActivationFixture fixture({.skinType = 5,
+                             .resourceBearing = true,
+                             .musicSelectInteractionBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 96,
+  };
+  auto sessionContext = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  sessionContext.quadBackend = &quadBackend;
+  sessionContext.initialFrame.properties.strings[30] = "needle";
+  auto created = MusicSelectSkinSession::create(
+      std::move(request), std::move(sessionContext));
+  if (!created.session) {
+    expect(false, "music-select interaction fixture creates a session");
+    return;
+  }
+
+  RenderContext renderContext;
+  MusicSelectSkinFrame firstFrame;
+  firstFrame.serial = 1;
+  firstFrame.properties.strings[30] = "needle";
+  if (!created.session->render(renderContext, firstFrame)) {
+    expect(false, "music-select interaction fixture publishes a frame");
+    return;
+  }
+  const auto slider = created.session->queuePointerDown(
+      {.x = 225.0F, .y = 915.0F}, 0, 1);
+  const bool moved = created.session->queuePointerDrag(
+      {.x = 270.0F, .y = 915.0F}, 2);
+  const auto text = created.session->queuePointerDown(
+      {.x = 525.0F, .y = 757.5F}, 0, 3);
+  const bool wrote = text.focusedStringWriter &&
+                     created.session->queueStringWrite(
+                         text.focusedStringWriter->writer, "replacement");
+
+  MusicSelectSkinFrame secondFrame = firstFrame;
+  secondFrame.serial = 2;
+  const bool rendered = created.session->render(renderContext, secondFrame);
+  const auto actions = created.session->takePublishedActions();
+  const auto numericSelector = [](const MusicSelectSkinAction &action) {
+    const auto *value = std::get_if<int>(&action.selector.value);
+    return value != nullptr ? *value : -1;
+  };
+  expect(slider.consumed && moved && text.consumed &&
+             text.focusedStringWriter &&
+             text.focusedStringWriter->currentValue == "needle" &&
+             std::abs(text.focusedStringWriter->bounds.x - 450.0) < 0.001 &&
+             std::abs(text.focusedStringWriter->bounds.y - 735.0) < 0.001 &&
+             std::abs(text.focusedStringWriter->bounds.width - 300.0) < 0.001 &&
+             std::abs(text.focusedStringWriter->bounds.height - 45.0) < 0.001 &&
+             wrote &&
+             rendered && actions.size() == 3 &&
+             actions[0].kind == MusicSelectSkinActionKind::FloatWriter &&
+             numericSelector(actions[0]) == 1 &&
+             std::abs(actions[0].floatValue - 0.5) < 0.001 &&
+             actions[1].kind == MusicSelectSkinActionKind::FloatWriter &&
+             numericSelector(actions[1]) == 1 &&
+             std::abs(actions[1].floatValue - 0.8) < 0.001 &&
+             actions[2].kind == MusicSelectSkinActionKind::StringWriter &&
+             numericSelector(actions[2]) == 30 &&
+             actions[2].stringValue == "replacement",
+         "music-select pointer Down and drag publish the topmost slider "
+         "writer, and editable text exposes its exact overlay state");
 }
 
 void testMusicSelectPreparesEveryCurrentDirectoryTitle() {
@@ -6742,6 +6828,7 @@ int main(int argc, char **argv) {
   testRequestedExternalGameplaySkinCreatesARealSession();
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
+  testMusicSelectPublishesPointerCapturesAndTextFocus();
   testMusicSelectPreparesEveryCurrentDirectoryTitle();
   testMusicSelectLuaSessionRejectsRecursiveCustomEvents();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();

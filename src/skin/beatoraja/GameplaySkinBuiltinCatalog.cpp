@@ -220,15 +220,16 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, rate, selector);
   }
 
-  // FloatPropertyFactory.RateType provides built-in writers for the three
-  // Config.AudioConfig fields and BMSPlayer's practice-menu viewport.
-  // Lane-cover mutation remains unavailable through this binding surface.
+  // These are exactly the RateType entries constructed with a FloatWriter.
+  // Lane-cover mutation remains unavailable because its RateType has no
+  // writer in the pinned source.
   const SkinBindingType floatWriter{.kind = SkinBindingKind::FloatWriter};
-  for (const int selector : {17, 18, 19, 20}) {
+  for (const int selector : {1, 7, 8, 17, 18, 19, 20}) {
     add(entries, floatWriter, selector);
   }
-  for (const char *selector : {"mastervolume", "keyvolume", "bgmvolume",
-                               "practice_position"}) {
+  for (const char *selector : {
+           "musicselect_position", "skinselect_position", "ranking_position",
+           "mastervolume", "keyvolume", "bgmvolume", "practice_position"}) {
     add(entries, floatWriter, selector);
   }
 

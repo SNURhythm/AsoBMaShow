@@ -24,6 +24,7 @@
 #include "../music_select/MusicSelectExternalActions.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
 #include "../music_select/MusicSelectPropertyProjection.h"
+#include "../input/SDLPointerEvent.h"
 #include "../replay/ChartReplayConsumer.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
@@ -316,6 +317,7 @@ void MusicSelectScene::init() {
 
 void MusicSelectScene::onPause() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
   if (skinSession_) skinSession_->suspendAudio();
 #endif
   stopInputListening();
@@ -652,6 +654,123 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   return frame;
 }
 
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+TextInputBox *MusicSelectScene::skinTextInputForSize(int requestedSize) {
+  const int size = std::max(1, requestedSize);
+  const auto existing = skinTextInputs_.find(size);
+  if (existing != skinTextInputs_.end()) return existing->second;
+  auto *input = new TextInputBox(kFontPath, size);
+  input->setPositionType(YGPositionTypeAbsolute);
+  input->setZIndex(9000);
+  input->setPadding(Edge::All, 0);
+  input->setVAlign(TextView::MIDDLE);
+  input->setVisible(false);
+  input->onSubmit([input](const std::string &) { input->endEditing(); });
+  input->onEditingFinished(
+      [this](const std::string &value) { commitSkinTextEditing(value); });
+  addView(input);
+  skinTextInputs_.insert_or_assign(size, input);
+  return input;
+}
+
+void MusicSelectScene::beginSkinTextEditing(
+    const skin::MusicSelectSkinPointerResult::StringFocus &focus) {
+  if (skinTextInput_ != nullptr && skinTextInput_->getSelected()) {
+    skinTextInput_->endEditing();
+  }
+  skinTextInput_ = skinTextInputForSize(
+      static_cast<int>(std::lround(focus.bounds.height)));
+  activeSkinStringWriter_ = focus.writer;
+  const auto colorChannel = [](float value) {
+    return static_cast<Uint8>(
+        std::lround(std::clamp(value, 0.0F, 1.0F) * 255.0F));
+  };
+  skinTextInput_->setColor(
+      {colorChannel(focus.rgba[0]), colorChannel(focus.rgba[1]),
+       colorChannel(focus.rgba[2]), colorChannel(focus.rgba[3])});
+  skinTextInput_->setEditingText(focus.currentValue);
+  skinTextInput_->setSize(static_cast<int>(std::lround(focus.bounds.width)),
+                          static_cast<int>(std::lround(focus.bounds.height)));
+  skinTextInput_->setPositionNoLayout(
+      static_cast<int>(std::lround(focus.bounds.x)),
+      static_cast<int>(std::lround(focus.bounds.y)),
+      YGPositionTypeAbsolute);
+  skinTextInput_->setVisible(true);
+  skinTextInput_->beginEditing();
+}
+
+void MusicSelectScene::commitSkinTextEditing(const std::string &value) {
+  const auto writer = std::exchange(activeSkinStringWriter_, std::nullopt);
+  if (writer && skinSession_) {
+    (void)skinSession_->queueStringWrite(*writer, value);
+  }
+  if (skinTextInput_ != nullptr) skinTextInput_->setVisible(false);
+}
+
+void MusicSelectScene::applySkinPointerResult(
+    const skin::MusicSelectSkinPointerResult &pointer) {
+  if (pointer.focusedStringWriter) {
+    beginSkinTextEditing(*pointer.focusedStringWriter);
+  }
+  if (pointer.closeDirectory) closeDirectory();
+  if (!pointer.selectIndex) return;
+  const auto snapshot = bars_.snapshot();
+  if (*pointer.selectIndex >= snapshot.rows.size()) return;
+  const auto &clicked = snapshot.rows[*pointer.selectIndex];
+  if (skin::musicSelectIsDirectoryBarKind(clicked.kind)) {
+    (void)bars_.open(clicked.id);
+    syncResolvedFilters();
+    selectedBarMoved();
+  } else {
+    (void)bars_.select(clicked.id);
+    selectedBarMoved();
+    launchSelected();
+  }
+}
+
+bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
+  if (!skinSession_) return false;
+  UiLogicalPoint point;
+  switch (event.type) {
+  case SDL_MOUSEBUTTONDOWN: {
+    if (event.button.which == SDL_TOUCH_MOUSEID) return false;
+    rendering::screenToUi(event.button.x * rendering::widthScale,
+                          event.button.y * rendering::heightScale,
+                          point.x, point.y);
+    const auto pointer = skinSession_->queuePointerDown(
+        point, static_cast<int>(event.button.button) - 1, steadyMicros());
+    applySkinPointerResult(pointer);
+    return pointer.consumed;
+  }
+  case SDL_MOUSEMOTION:
+    if (event.motion.which == SDL_TOUCH_MOUSEID || event.motion.state == 0) {
+      return false;
+    }
+    rendering::screenToUi(event.motion.x * rendering::widthScale,
+                          event.motion.y * rendering::heightScale,
+                          point.x, point.y);
+    return skinSession_->queuePointerDrag(point, steadyMicros());
+  case SDL_FINGERDOWN: {
+    if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                              point.y);
+    const auto pointer =
+        skinSession_->queuePointerDown(point, 0, steadyMicros());
+    applySkinPointerResult(pointer);
+    return pointer.consumed;
+  }
+  case SDL_FINGERMOTION: {
+    if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                              point.y);
+    return skinSession_->queuePointerDrag(point, steadyMicros());
+  }
+  default:
+    return false;
+  }
+}
+#endif
+
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (failed_) return Scene::handleEvents(event);
   if (searchOverlay_ != nullptr && searchOverlay_->getVisible()) {
@@ -664,6 +783,18 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   if (toolbar_ != nullptr && !toolbar_->handleEvents(event)) return {};
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinTextInput_ != nullptr && skinTextInput_->getSelected() &&
+      event.type == SDL_KEYDOWN && event.key.repeat == 0 &&
+      event.key.keysym.sym == SDLK_ESCAPE) {
+    skinTextInput_->endEditing();
+  }
+  if (skinTextInput_ != nullptr && skinTextInput_->getSelected() &&
+      !skinTextInput_->handleEvents(event)) {
+    return {};
+  }
+  if (queueSkinPointerEvent(event)) return {};
+#endif
 
   if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
       event.key.repeat == 0) {
@@ -692,37 +823,6 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     }
     return {};
   }
-#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  // Pinned MainController forwards selector mouse callbacks independently of
-  // TIMER_STARTINPUT, matching the logical-input path in update().
-  if (skinSession_ && event.type == SDL_MOUSEBUTTONDOWN &&
-      event.button.which != SDL_TOUCH_MOUSEID) {
-    float x = 0.0F;
-    float y = 0.0F;
-    rendering::screenToUi(event.button.x * rendering::widthScale,
-                          event.button.y * rendering::heightScale, x, y);
-    const auto pointer = skinSession_->queuePointerDown(
-        {.x = x, .y = y}, static_cast<int>(event.button.button) - 1,
-        steadyMicros());
-    if (pointer.closeDirectory) closeDirectory();
-    if (pointer.selectIndex) {
-      const auto snapshot = bars_.snapshot();
-      if (*pointer.selectIndex < snapshot.rows.size()) {
-        const auto &clicked = snapshot.rows[*pointer.selectIndex];
-        if (skin::musicSelectIsDirectoryBarKind(clicked.kind)) {
-          (void)bars_.open(clicked.id);
-          syncResolvedFilters();
-          selectedBarMoved();
-        } else {
-          (void)bars_.select(clicked.id);
-          selectedBarMoved();
-          launchSelected();
-        }
-      }
-    }
-    if (pointer.consumed) return {};
-  }
-#endif
   return {};
 }
 
@@ -873,6 +973,9 @@ void MusicSelectScene::buildSearchPrompt() {
 
 void MusicSelectScene::showSearchPrompt() {
   if (searchOverlay_ == nullptr || searchInput_ == nullptr) return;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+#endif
   stopInputListening();
   searchInput_->setEditingText("");
   searchOverlay_->setSize(rendering::window_width, rendering::window_height);
@@ -1217,6 +1320,7 @@ void MusicSelectScene::changeSelectedFavorite(bool song, int direction) {
 void MusicSelectScene::consumeActions() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!skinSession_) return;
+  bool audioSettingsChanged = false;
   for (const auto &action : skinSession_->takePublishedActions()) {
     switch (action.kind) {
     case skin::MusicSelectSkinActionKind::Event:
@@ -1233,6 +1337,23 @@ void MusicSelectScene::consumeActions() {
         rankingOffset_ = static_cast<int>(
             std::max(1, ranking_.totalPlayers) * action.floatValue);
         ranking_.offset = rankingOffset_;
+      } else if ((id && *id == 17) || name == "mastervolume") {
+        audioSettingsChanged =
+            audioSettingsChanged ||
+            context.settings.audioVideo.audio.masterVolume !=
+                action.floatValue;
+        context.settings.audioVideo.audio.masterVolume = action.floatValue;
+      } else if ((id && *id == 18) || name == "keyvolume") {
+        audioSettingsChanged =
+            audioSettingsChanged ||
+            context.settings.audioVideo.audio.keysoundVolume !=
+                action.floatValue;
+        context.settings.audioVideo.audio.keysoundVolume = action.floatValue;
+      } else if ((id && *id == 19) || name == "bgmvolume") {
+        audioSettingsChanged =
+            audioSettingsChanged ||
+            context.settings.audioVideo.audio.bgmVolume != action.floatValue;
+        context.settings.audioVideo.audio.bgmVolume = action.floatValue;
       }
       break;
     }
@@ -1243,6 +1364,12 @@ void MusicSelectScene::consumeActions() {
       }
       break;
     }
+    }
+  }
+  if (audioSettingsChanged) {
+    (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
+    if (!context.saveSettings()) {
+      SDL_Log("Failed to save music-select skin audio settings");
     }
   }
 #endif
@@ -1676,6 +1803,9 @@ void MusicSelectScene::enterError(
   previewController_.reset();
   if (previewAudio_) previewAudio_->switchTo(std::nullopt);
   if (searchInput_ != nullptr) searchInput_->endEditing();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+#endif
   if (searchOverlay_ != nullptr) searchOverlay_->setVisible(false);
   diagnostics_ = std::move(diagnostics);
   if (diagnostics_.empty()) {
@@ -1871,6 +2001,9 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 
 void MusicSelectScene::cleanupScene() {
   if (searchInput_ != nullptr) searchInput_->endEditing();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+#endif
   stopInputListening();
   if (rankingGeneration_ != 0 && context.irRankingService) {
     context.irRankingService->close(rankingGeneration_);
@@ -1885,6 +2018,9 @@ void MusicSelectScene::cleanupScene() {
   previewAudio_.reset();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
+  activeSkinStringWriter_.reset();
+  skinTextInput_ = nullptr;
+  skinTextInputs_.clear();
 #endif
   chartSession_.reset();
   toolbar_ = nullptr;

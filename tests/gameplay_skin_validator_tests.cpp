@@ -346,6 +346,11 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   expect(!catalog.contains({.kind = SkinBindingKind::FloatWriter},
                            SkinBuiltinPropertySelector{4}),
          "catalog rejects the lane-cover writer until it is executable");
+  for (const int selector : {1, 7, 8}) {
+    expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                            SkinBuiltinPropertySelector{selector}),
+           "catalog admits each pinned selector-position writer");
+  }
   for (const int selector : {17, 18, 19}) {
     expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
                             SkinBuiltinPropertySelector{selector}),

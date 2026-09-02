@@ -158,6 +158,7 @@ MusicSelectSkinSession::MusicSelectSkinSession(
     std::shared_ptr<SkinTextureDevice> textureDevice,
     SkinBuiltinImageReader builtinImageReader,
     std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters,
+    rendering::SkinQuadBatchBackend *quadBackend,
     SkinSafetyPolicy safetyPolicy, ViewportSettings viewportSettings,
     std::stop_token stop, std::vector<std::string> preparedRuntimeStrings,
     std::map<int, std::filesystem::path> preparedBuiltinImagePaths)
@@ -171,8 +172,11 @@ MusicSelectSkinSession::MusicSelectSkinSession(
       builtinImageReader_(std::move(builtinImageReader)),
       liveResourceCounters_(std::move(liveResourceCounters)),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
-      stop_(stop), quadRenderer_(
-                       std::make_unique<rendering::SkinQuadBatchRenderer>()),
+      stop_(stop),
+      quadRenderer_(quadBackend
+                        ? std::make_unique<rendering::SkinQuadBatchRenderer>(
+                              *quadBackend)
+                        : std::make_unique<rendering::SkinQuadBatchRenderer>()),
       preparedRuntimeStrings_(std::move(preparedRuntimeStrings)),
       preparedBuiltinImagePaths_(std::move(preparedBuiltinImagePaths)) {
   for (std::size_t index = 0; index < model_.model.customEvents.size();
@@ -371,8 +375,9 @@ MusicSelectSkinSessionCreateResult MusicSelectSkinSession::create(
             std::move(preparedMovies.catalog), std::move(context.storageRoots),
             context.resourcePreparation, std::move(context.textureDevice),
             std::move(context.builtinImageReader),
-            std::move(context.liveResourceCounters), context.safetyPolicy,
-            request.viewport, context.stop, std::move(runtimeStrings),
+            std::move(context.liveResourceCounters), context.quadBackend,
+            context.safetyPolicy, request.viewport, context.stop,
+            std::move(runtimeStrings),
             std::move(builtinImagePaths)));
   } catch (...) {
     result.session.reset();
@@ -667,22 +672,39 @@ MusicSelectSkinPointerResult MusicSelectSkinSession::queuePointerDown(
   } else if (control.kind == PresentationUiControlKind::Text) {
     const auto *text = publishedInteractionLayout_->editableTextAtUi(point);
     if (text == nullptr) return {};
-    result.focusedStringWriter = text->writer;
+    const auto regions = publishedInteractionLayout_->uiHitRegions();
+    const auto region = std::ranges::find_if(
+        regions, [&](const PresentationUiHitRegion &candidate) {
+          return candidate.hit.kind == PresentationUiControlKind::Text &&
+                 candidate.hit.sourceObject == text->sourceObject &&
+                 candidate.hit.authoredOrdinal == text->authoredOrdinal;
+        });
+    if (region == regions.end()) return {};
+    const auto [minimumX, maximumX] = std::ranges::minmax(
+        region->boundary, {}, &UiLogicalPoint::x);
+    const auto [minimumY, maximumY] = std::ranges::minmax(
+        region->boundary, {}, &UiLogicalPoint::y);
+    result.focusedStringWriter = MusicSelectSkinPointerResult::StringFocus{
+        .writer = text->writer,
+        .currentValue = text->currentValue,
+        .bounds = {.x = minimumX.x,
+                   .y = minimumY.y,
+                   .width = maximumX.x - minimumX.x,
+                   .height = maximumY.y - minimumY.y},
+        .rgba = text->rgba};
   } else {
     const auto invocation = publishedInteractionLayout_->writerInvocationFor(
         control, point, eventMicros);
     if (!invocation || !queueFloatWriter(*invocation)) return {};
-    result.capturedControl = control;
   }
   return result;
 }
 
-bool MusicSelectSkinSession::queuePointerMove(
-    const PresentationUiHit &hit, UiLogicalPoint point,
-    long long eventMicros) {
+bool MusicSelectSkinSession::queuePointerDrag(UiLogicalPoint point,
+                                              long long eventMicros) {
   if (!publishedInteractionLayout_) return false;
-  const auto invocation = publishedInteractionLayout_->writerInvocationFor(
-      hit, point, eventMicros);
+  const auto invocation = publishedInteractionLayout_->sliderWriterInvocationAt(
+      point, eventMicros);
   return invocation && queueFloatWriter(*invocation);
 }
 

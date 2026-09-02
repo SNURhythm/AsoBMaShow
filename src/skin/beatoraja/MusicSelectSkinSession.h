@@ -25,6 +25,7 @@ struct RenderContext;
 
 namespace rendering {
 class SkinQuadBatchRenderer;
+class SkinQuadBatchBackend;
 }
 
 namespace skin {
@@ -38,6 +39,7 @@ struct MusicSelectSkinSessionContext {
   SkinBuiltinImageReader builtinImageReader;
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
+  rendering::SkinQuadBatchBackend *quadBackend = nullptr;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
@@ -62,11 +64,17 @@ struct MusicSelectSkinAction {
 };
 
 struct MusicSelectSkinPointerResult {
+  struct StringFocus {
+    SkinStringWriterId writer{};
+    std::string currentValue;
+    UiLogicalRect bounds;
+    std::array<float, 4> rgba{1.0F, 1.0F, 1.0F, 1.0F};
+  };
+
   bool consumed = false;
   std::optional<std::size_t> selectIndex;
   bool closeDirectory = false;
-  std::optional<PresentationUiHit> capturedControl;
-  std::optional<SkinStringWriterId> focusedStringWriter;
+  std::optional<StringFocus> focusedStringWriter;
 };
 
 class MusicSelectSkinSession final {
@@ -86,8 +94,7 @@ public:
   void resumeAudio() noexcept;
   [[nodiscard]] MusicSelectSkinPointerResult
   queuePointerDown(UiLogicalPoint, int button, long long eventMicros);
-  [[nodiscard]] bool queuePointerMove(const PresentationUiHit &,
-                                      UiLogicalPoint, long long eventMicros);
+  [[nodiscard]] bool queuePointerDrag(UiLogicalPoint, long long eventMicros);
   [[nodiscard]] bool queueStringWrite(SkinStringWriterId, std::string);
   [[nodiscard]] std::vector<MusicSelectSkinAction> takePublishedActions();
   [[nodiscard]] std::vector<SkinDiagnostic> takeLastDiagnostics();
@@ -116,7 +123,8 @@ private:
       std::unique_ptr<SkinMovieCatalog>, SkinStorageRoots,
       SkinResourcePreparationService &, std::shared_ptr<SkinTextureDevice>,
       SkinBuiltinImageReader, std::shared_ptr<SkinLiveResourceCounters>,
-      SkinSafetyPolicy, ViewportSettings, std::stop_token,
+      rendering::SkinQuadBatchBackend *, SkinSafetyPolicy, ViewportSettings,
+      std::stop_token,
       std::vector<std::string>, std::map<int, std::filesystem::path>);
 
   static LuaSkinEventExecutionResult executeHostEvent(

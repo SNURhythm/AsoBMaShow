@@ -83,6 +83,13 @@ private:
   [[nodiscard]] bool
   activateSkin(skin::GameplaySkinActivationRequest);
   [[nodiscard]] bool reactivateSkinAfterSettings();
+  [[nodiscard]] TextInputBox *skinTextInputForSize(int);
+  void beginSkinTextEditing(
+      const skin::MusicSelectSkinPointerResult::StringFocus &);
+  void commitSkinTextEditing(const std::string &);
+  void applySkinPointerResult(
+      const skin::MusicSelectSkinPointerResult &);
+  [[nodiscard]] bool queueSkinPointerEvent(SDL_Event &);
 #endif
 
   skin::GameplaySkinActivationRequest activationRequest_;
@@ -137,5 +144,8 @@ private:
   bool reactivateSkinOnResume_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
+  TextInputBox *skinTextInput_ = nullptr;
+  std::map<int, TextInputBox *> skinTextInputs_;
+  std::optional<skin::SkinStringWriterId> activeSkinStringWriter_;
 #endif
 };

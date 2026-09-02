@@ -193,6 +193,7 @@ SkinTextInteractionGeometry textInteraction(
   return {.sourceObject = sourceObject,
           .authoredOrdinal = authoredOrdinal,
           .authoredRegion = region,
+          .rgba = geometry.rgba,
           .writer = *text.writer,
           .currentValue = std::move(currentValue)};
 }
@@ -3898,6 +3899,37 @@ SkinInteractionLayout::writerInvocationFor(const PresentationUiHit &hit,
         .writer = *slider->writer,
         .normalizedValue = static_cast<float>(normalizedValue),
         .eventMicros = eventMicros};
+  }
+  return std::nullopt;
+}
+
+std::optional<SkinWriterInvocation>
+SkinInteractionLayout::sliderWriterInvocationAt(
+    UiLogicalPoint point, long long eventMicros) const noexcept {
+  const auto authored = authoredPointForUi(point.x, point.y);
+  if (!authored) return std::nullopt;
+  for (const auto &control : controlsTopmostFirst) {
+    const auto *slider = std::get_if<SkinSliderInteractionGeometry>(&control);
+    if (slider == nullptr || !slider->writer || slider->range <= 0.0 ||
+        !std::isfinite(slider->range) || slider->direction < 0 ||
+        slider->direction > 3) {
+      continue;
+    }
+    const auto &region = slider->authoredHitRegion;
+    if (!std::isfinite(region.x) || !std::isfinite(region.y) ||
+        !std::isfinite(region.width) || !std::isfinite(region.height) ||
+        region.width < 0.0 || region.height < 0.0 ||
+        authored->x < region.x || authored->x > region.x + region.width ||
+        authored->y < region.y || authored->y > region.y + region.height) {
+      continue;
+    }
+    return writerInvocationFor(
+        {.kind = slider->kind,
+         .layoutRevision = revision,
+         .sourceObject = slider->sourceObject,
+         .authoredOrdinal = slider->authoredOrdinal,
+         .writer = slider->writer},
+        point, eventMicros);
   }
   return std::nullopt;
 }

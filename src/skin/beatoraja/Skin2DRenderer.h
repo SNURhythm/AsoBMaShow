@@ -307,6 +307,7 @@ struct SkinTextInteractionGeometry {
   SkinObjectId sourceObject = 0;
   std::uint32_t authoredOrdinal = 0;
   AuthoredRect authoredRegion;
+  std::array<float, 4> rgba{1.0F, 1.0F, 1.0F, 1.0F};
   SkinStringWriterId writer{};
   std::string currentValue;
 };
@@ -373,6 +374,9 @@ struct SkinInteractionLayout {
   [[nodiscard]] std::optional<SkinWriterInvocation>
   writerInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
                       long long eventMicros) const noexcept;
+  [[nodiscard]] std::optional<SkinWriterInvocation>
+  sliderWriterInvocationAt(UiLogicalPoint point,
+                           long long eventMicros) const noexcept;
   [[nodiscard]] std::optional<SkinEventInvocation>
   eventInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
                      long long eventMicros) const noexcept;
