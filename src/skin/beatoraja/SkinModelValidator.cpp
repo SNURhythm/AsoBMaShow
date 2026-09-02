@@ -77,9 +77,14 @@ SkinModelValidationResult SkinModelValidator::validate(
         "Lua skin requires a supported Beatoraja screen type"));
     return result;
   }
-  if (model.header.width <= 0 || model.header.height <= 0 ||
-      model.header.width > LuaSkinTableDecoderPolicy::maxGameplayDimension ||
-      model.header.height > LuaSkinTableDecoderPolicy::maxGameplayDimension) {
+  // JsonSkinLoader passes the selector header dimensions straight through to
+  // its Skin constructor.  Type-5 skins therefore must not acquire the
+  // gameplay decoder's canvas policy at the model boundary.
+  const bool musicSelect = model.header.type == 5;
+  if (!musicSelect &&
+      (model.header.width <= 0 || model.header.height <= 0 ||
+       model.header.width > LuaSkinTableDecoderPolicy::maxGameplayDimension ||
+       model.header.height > LuaSkinTableDecoderPolicy::maxGameplayDimension)) {
     result.criticalFailure = true;
     result.diagnostics.push_back(validationDiagnostic(
         "skin_lua_model_canvas_invalid",
@@ -158,7 +163,7 @@ SkinModelValidationResult SkinModelValidator::validate(
           if constexpr (std::is_same_v<T, SkinMovieResource>) {
             return imageResourceIds.insert(resource.id).second;
           } else {
-            if (resource.authoredName.empty()) {
+            if (!musicSelect && resource.authoredName.empty()) {
               return false;
             }
             // JSONSkinLoader's sourceMap is populated with Map.put(), so a
@@ -185,7 +190,7 @@ SkinModelValidationResult SkinModelValidator::validate(
   }
 
   for (const auto &object : model.objects) {
-    if (object.id == 0 || object.authoredName.empty() ||
+    if (object.id == 0 || (!musicSelect && object.authoredName.empty()) ||
         !objectIds.insert(object.id).second) {
       result.criticalFailure = true;
       result.diagnostics.push_back(validationDiagnostic(
@@ -198,7 +203,7 @@ SkinModelValidationResult SkinModelValidator::validate(
     // allowing repeated authored destination names.
     objectNames.try_emplace(object.authoredName, object.id);
   }
-  if (std::ranges::any_of(model.objects, [](const auto &object) {
+  if (!musicSelect && std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *graph =
             std::get_if<SkinNoteDistributionGraphObject>(&object.payload);
         return graph != nullptr &&
@@ -213,7 +218,7 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
-  if (std::ranges::any_of(model.objects, [](const auto &object) {
+  if (!musicSelect && std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *visualizer =
             std::get_if<SkinTimingVisualizerObject>(&object.payload);
         return visualizer != nullptr &&
@@ -226,7 +231,7 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
-  if (std::ranges::any_of(model.objects, [](const auto &object) {
+  if (!musicSelect && std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *graph = std::get_if<SkinBpmGraphObject>(&object.payload);
         return graph != nullptr &&
                (graph->delayMillis < 0 || graph->lineWidth <= 0);
@@ -238,7 +243,7 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
-  if (std::ranges::any_of(model.objects, [](const auto &object) {
+  if (!musicSelect && std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *graph =
             std::get_if<SkinTimingDistributionGraphObject>(&object.payload);
         return graph != nullptr && graph->lineWidth == 0;
@@ -251,7 +256,7 @@ SkinModelValidationResult SkinModelValidator::validate(
     return result;
   }
 
-  if (std::ranges::any_of(model.objects, [](const auto &object) {
+  if (!musicSelect && std::ranges::any_of(model.objects, [](const auto &object) {
         const auto *visualizer =
             std::get_if<SkinHitErrorVisualizerObject>(&object.payload);
         return visualizer != nullptr &&

@@ -13,7 +13,7 @@ assert(os.exit == nil)
 assert(os.getenv == nil)
 assert(os.remove == nil)
 assert(os.rename == nil)
-assert(os.setlocale == nil)
+assert(type(os.setlocale) == "function")
 assert(os.tmpname == nil)
 
 return { phase = skin_config and "configured" or "header" }

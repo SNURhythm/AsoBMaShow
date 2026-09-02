@@ -288,28 +288,19 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
            "catalog admits each reported IntegerPropertyFactory ValueType "
            "selector");
   }
-  for (const int selector : {0, 65'535}) {
-    expect(catalog.contains(
-               {.kind = SkinBindingKind::IntegerProperty,
-                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-               SkinBuiltinPropertySelector{selector}) &&
-               catalog.contains(
-                   {.kind = SkinBindingKind::IntegerProperty,
-                    .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-                   SkinBuiltinPropertySelector{selector}),
-           "integer factory cache domain is admitted at both inclusive bounds");
-  }
   for (const int selector : {314, 315, 316}) {
     expect(catalog.contains(
                {.kind = SkinBindingKind::IntegerProperty,
                 .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-               SkinBuiltinPropertySelector{selector}) &&
-               catalog.contains(
-                   {.kind = SkinBindingKind::IntegerProperty,
-                    .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-                   SkinBuiltinPropertySelector{selector}),
-           "compatibility catalog accepts each integer selector in both "
-           "IntegerPropertyFactory input domains");
+               SkinBuiltinPropertySelector{selector}),
+           "catalog admits each IntegerPropertyFactory ValueType selector");
+  }
+  for (const int selector : {0, 65'535, 314, 315, 316}) {
+    expect(!catalog.contains(
+               {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+               SkinBuiltinPropertySelector{selector}),
+           "an integer factory cache slot without a source property is absent");
   }
   for (const int selector : {4, 5}) {
     expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,

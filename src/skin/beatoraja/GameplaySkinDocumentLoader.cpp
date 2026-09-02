@@ -215,7 +215,8 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
           ? decoder.decodeMusicSelect(
                 *configuredValue.value,
                 {.runtime = *runtime.runtime,
-                 .builtins = gameplaySkinBuiltinCatalog()})
+                 .builtins = gameplaySkinBuiltinCatalog(),
+                 .safetyPolicy = request.safetyPolicy})
           : decoder.decodeGameplay(
                 *configuredValue.value,
                 {.runtime = *runtime.runtime,

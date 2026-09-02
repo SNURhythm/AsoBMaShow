@@ -1487,6 +1487,7 @@ return {
     {id='early-late',dst={{x=200,y=0,w=100,h=50}}},
   }
 }
+
 )lua");
   expect(decoded.model && decoded.model->objects.size() == 3,
          "all three pinned judgegraph modes remain live model objects");
@@ -1565,6 +1566,33 @@ return {
                                            "skin_lua_model_judgegraph_invalid";
                                   }) != invalidDecode.diagnostics.end(),
          "decoder rejects a judgegraph constructor mode absent from the pinned implementation");
+}
+
+void testMusicSelectValidationDoesNotAddGameplayModelPolicies() {
+  BeatorajaSkinModel selector;
+  selector.header = {.type = 5, .width = 0, .height = -1};
+  selector.resources.emplace_back(SkinImageResource{
+      .id = 1,
+      .authoredName = "",
+      .virtualPath = "unused.png",
+  });
+  selector.objects.push_back({
+      .id = 1,
+      .authoredName = "",
+      .payload = SkinBlankObject{},
+  });
+  selector.objects.push_back({
+      .id = 2,
+      .authoredName = "raw-judgegraph",
+      .payload = SkinNoteDistributionGraphObject{
+          .type = static_cast<SkinNoteDistributionGraphType>(9)},
+  });
+
+  const auto validated =
+      test_support::validateWithAuthoredBuiltins(std::move(selector));
+  expect(validated.model && !validated.criticalFailure,
+         "type-5 validation leaves selector canvas, empty reflected names, "
+         "and raw graph modes to Beatoraja runtime behavior");
 }
 
 void testTimingVisualizerDecodesPinnedPresentationFields() {
@@ -2546,6 +2574,7 @@ int main(int argc, char **argv) {
   testBooleanFieldsUseLuaTruthiness();
   testPracticePositionSliderDecodesItsExecutableWriter();
   testJudgeGraphsDecodePinnedModesAndPresentationFlags();
+  testMusicSelectValidationDoesNotAddGameplayModelPolicies();
   testGaugeGraphsAreTypedSupportedGameplayObjects();
   testBpmGraphsDecodePinnedDefaultsNormalizationAndValidation();
   testTimingVisualizerDecodesPinnedPresentationFields();

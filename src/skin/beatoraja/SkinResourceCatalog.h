@@ -10,6 +10,7 @@
 #include "../../view/DecodedImageCache.h"
 #include "../../view/ImageDecodeCoordinator.h"
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <functional>
@@ -18,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <set>
 #include <stop_token>
 #include <string_view>
 #include <thread>
@@ -61,7 +63,7 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumScalableFontPaintBlendOperations =
       64U * 1024U * 1024U;
   static constexpr std::size_t cacheByteBudget = 128U * 1024U * 1024U;
-  static constexpr std::size_t workerCount = 2;
+  static constexpr std::size_t workerCount = 6;
 };
 
 [[nodiscard]] constexpr std::size_t skinResourceLimit(
@@ -105,8 +107,10 @@ public:
   }
   [[nodiscard]] std::size_t
   remainingScalableFontPaintBlendOperations() const noexcept {
-    return SkinResourcePolicy::maximumScalableFontPaintBlendOperations -
-           scalableFontPaintBlendOperations_;
+    const std::size_t maximum = skinResourceLimit(
+        safetyPolicy_,
+        SkinResourcePolicy::maximumScalableFontPaintBlendOperations);
+    return maximum - std::min(maximum, scalableFontPaintBlendOperations_);
   }
 
 private:
@@ -245,6 +249,8 @@ struct SkinResourceValidationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  std::map<SkinObjectId, std::vector<std::string>>
+      requiredRuntimeStringsByObject;
   bool practiceMode = false;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
@@ -260,6 +266,8 @@ struct SkinResourcePreparationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  std::map<SkinObjectId, std::vector<std::string>>
+      requiredRuntimeStringsByObject;
   bool practiceMode = false;
   std::map<int, std::filesystem::path> builtinImagePaths;
   SkinBuiltinImageReader builtinImageReader;
@@ -267,6 +275,36 @@ struct SkinResourcePreparationInputs {
   std::stop_token stop;
 };
 struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
+
+// Selector title changes use the same font preparation as the initial plan,
+// but do not revisit images, movies, or unrelated text objects.
+struct SkinTextAtlasPreparationInputs {
+  SkinRevisionLease revision;
+  SkinEntryId entry;
+  const LuaSkinFileSystem &fileSystem;
+  const ValidatedBeatorajaSkinModel &model;
+  const BeatorajaSkinConfiguration &configuration;
+  std::map<SkinObjectId, std::vector<std::string>>
+      requiredRuntimeStringsByObject;
+  std::set<SkinObjectId> targetObjects;
+  SkinSafetyPolicy safetyPolicy{};
+  std::stop_token stop;
+};
+struct SkinPreparedTextAtlasUpdate {
+  SkinPreparedGlyphAtlas atlas;
+  // These are the SkinText objects collected into the prepared atlas. The
+  // catalog uses their resident bindings rather than assuming an atlas key is
+  // globally unique across a pre-existing compatibility catalog.
+  std::vector<SkinObjectId> objects;
+};
+struct SkinTextAtlasUpdatePlan {
+  std::vector<SkinPreparedTextAtlasUpdate> atlases;
+};
+struct SkinTextAtlasPreparationResult {
+  std::optional<SkinTextAtlasUpdatePlan> plan;
+  bool cancelled = false;
+  std::vector<SkinDiagnostic> diagnostics;
+};
 
 class SkinResourcePreparationService {
 public:
@@ -280,6 +318,8 @@ public:
   SkinResourcePreparationService &operator=(const SkinResourcePreparationService &) = delete;
   SkinResourceValidationResult validateResources(SkinResourceValidationInputs);
   SkinResourcePlanResult decodeAndPlan(SkinResourcePreparationInputs);
+  SkinTextAtlasPreparationResult
+  prepareTextAtlasUpdates(SkinTextAtlasPreparationInputs);
   void shutdown() noexcept;
 private:
   enum class State { Running, Stopping, Stopped };
@@ -440,6 +480,17 @@ public:
   const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
       const SkinGeneratedTextureKey &,
       const SkinGeneratedTextureData &) const noexcept override;
+  // Beatoraja keeps the selector skin resident while its selected song's
+  // stage, back, and banner resources change. These three source references
+  // are therefore replaced independently of the authored resource catalog.
+  [[nodiscard]] bool replaceBuiltinImage(
+      int reference,
+      std::optional<image_decode::DecodedImageData> pixels) noexcept;
+  // Replaces a resident text atlas on the render owner. The object bindings
+  // select the same resident SkinText instances that prepared this refresh.
+  [[nodiscard]] bool
+  replaceTextAtlas(SkinPreparedGlyphAtlas &&atlas,
+                   std::span<const SkinObjectId> objects) noexcept;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };
