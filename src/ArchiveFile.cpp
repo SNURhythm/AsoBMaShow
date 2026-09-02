@@ -96,6 +96,9 @@ namespace {
 bool stopRequested(const std::stop_token *stopToken);
 bool pauseIfNeeded(const PauseCallback &pauseCallback,
                    std::string *errorMessage = nullptr);
+bool unzipCheckpoint(const std::stop_token *stopToken,
+                     const PauseCallback &pauseCallback,
+                     std::string *errorMessage = nullptr);
 void reportUnzipProgress(const UnzipProgressCallback &callback,
                           double fraction, std::uint64_t current,
                           std::uint64_t total, std::string message);
@@ -1557,8 +1560,9 @@ private:
 class SevenZipFileOutStream final : public ISequentialOutStream {
 public:
   SevenZipFileOutStream(const std::filesystem::path &path,
-                        const std::stop_token *stopToken)
-      : stopToken_(stopToken) {
+                        const std::stop_token *stopToken,
+                        PauseCallback pauseCallback)
+      : stopToken_(stopToken), pauseCallback_(std::move(pauseCallback)) {
     file_.open(path, std::ios::binary | std::ios::trunc);
   }
 
@@ -1593,7 +1597,7 @@ public:
     if (processedSize != nullptr) {
       *processedSize = 0;
     }
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       return E_ABORT;
     }
     if (size == 0) {
@@ -1616,6 +1620,7 @@ public:
 private:
   std::ofstream file_;
   const std::stop_token *stopToken_ = nullptr;
+  PauseCallback pauseCallback_;
   ULONG refCount_ = 0;
 };
 
@@ -2018,10 +2023,12 @@ public:
                               std::unordered_map<UInt32, Entry> entries,
                               std::uint64_t totalFiles,
                               const std::stop_token *stopToken,
-                              UnzipProgressCallback progressCallback)
+                              UnzipProgressCallback progressCallback,
+                              PauseCallback pauseCallback)
       : outputFolder_(std::move(outputFolder)), entries_(std::move(entries)),
         totalFiles_(std::max<std::uint64_t>(totalFiles, 1)),
-        stopToken_(stopToken), progressCallback_(std::move(progressCallback)) {}
+        stopToken_(stopToken), progressCallback_(std::move(progressCallback)),
+        pauseCallback_(std::move(pauseCallback)) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -2052,7 +2059,7 @@ public:
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
 
   STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2066,7 +2073,7 @@ public:
     }
     *outStream = nullptr;
     currentEntry_ = nullptr;
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2086,7 +2093,8 @@ public:
       return E_FAIL;
     }
 
-    auto *stream = new SevenZipFileOutStream(outputPath, stopToken_);
+    auto *stream =
+        new SevenZipFileOutStream(outputPath, stopToken_, pauseCallback_);
     if (!stream->isOpen()) {
       delete stream;
       failed_ = true;
@@ -2101,7 +2109,7 @@ public:
   }
 
   STDMETHOD(PrepareOperation)(Int32) throw() override {
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2123,7 +2131,7 @@ public:
       }
     }
     currentEntry_ = nullptr;
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2140,6 +2148,7 @@ private:
   std::uint64_t totalFiles_ = 1;
   const std::stop_token *stopToken_ = nullptr;
   UnzipProgressCallback progressCallback_;
+  PauseCallback pauseCallback_;
   const Entry *currentEntry_ = nullptr;
   std::uint64_t completedFiles_ = 0;
   ULONG refCount_ = 0;
@@ -3204,6 +3213,7 @@ bool extractArchiveFullyWithLibarchive(
     const std::shared_ptr<const CachedIndex> &index,
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
+    const PauseCallback &pauseCallback,
     std::string *errorMessage) {
   auto archiveStorage = openArchive(archivePath, errorMessage);
   if (archiveStorage == nullptr) {
@@ -3232,7 +3242,7 @@ bool extractArchiveFullyWithLibarchive(
   std::array<unsigned char, 64 * 1024> buffer{};
   std::uint64_t completedFiles = 0;
   for (;;) {
-    if (stopRequested(stopToken)) {
+    if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
       return fail("Unzip cancelled");
     }
     const int status = archive_read_next_header(archiveHandle, &entry);
@@ -3281,7 +3291,7 @@ bool extractArchiveFullyWithLibarchive(
       return fail("Could not write unzipped file: " + pathForLog(outputPath));
     }
     for (;;) {
-      if (stopRequested(stopToken)) {
+      if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
         return fail("Unzip cancelled");
       }
       const la_ssize_t count =
@@ -6744,6 +6754,7 @@ bool extractSevenZipArchiveFully(
     const std::shared_ptr<const CachedIndex> &index,
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
+    const PauseCallback &pauseCallback,
     std::string *errorMessage) {
   if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
       index->sevenZipFormat == 0) {
@@ -6758,10 +6769,9 @@ bool extractSevenZipArchiveFully(
     return false;
   }
 
-  PauseCallback inputPauseCallback;
-  if (stopToken != nullptr) {
-    inputPauseCallback = [stopToken] { return !stopRequested(stopToken); };
-  }
+  const PauseCallback inputPauseCallback = [stopToken, pauseCallback] {
+    return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
+  };
   std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
   SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
                                         std::move(inputPauseCallback));
@@ -6810,7 +6820,8 @@ bool extractSevenZipArchiveFully(
   }
 
   auto *callback = new SevenZipFullExtractCallback(
-      outputFolder, std::move(entries), fileCount, stopToken, progressCallback);
+      outputFolder, std::move(entries), fileCount, stopToken, progressCallback,
+      pauseCallback);
   IArchiveExtractCallback *callbackInterface = callback;
   callbackInterface->AddRef();
   CMyComPtr<IArchiveExtractCallback> callbackHandle;
@@ -6897,6 +6908,18 @@ bool pauseIfNeeded(const PauseCallback &pauseCallback,
   }
   if (errorMessage != nullptr && errorMessage->empty()) {
     *errorMessage = "Operation cancelled";
+  }
+  return false;
+}
+
+bool unzipCheckpoint(const std::stop_token *stopToken,
+                     const PauseCallback &pauseCallback,
+                     std::string *errorMessage) {
+  if (!stopRequested(stopToken) && pauseIfNeeded(pauseCallback)) {
+    return true;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = "Unzip cancelled";
   }
   return false;
 }
@@ -8257,6 +8280,7 @@ bool extractArchiveFullyWithBatchReader(
     const std::vector<Entry> &entries,
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
+    const PauseCallback &pauseCallback,
     std::string *errorMessage) {
   static constexpr std::size_t kMaxBatchFiles = 128;
   static constexpr std::uint64_t kMaxBatchBytes = 64ull * 1024ull * 1024ull;
@@ -8294,10 +8318,7 @@ bool extractArchiveFullyWithBatchReader(
   std::uint64_t writtenCount = 0;
   std::size_t nextFile = 0;
   while (nextFile < filesToExtract.size()) {
-    if (stopRequested(stopToken)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Unzip cancelled";
-      }
+    if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
       return false;
     }
 
@@ -8320,9 +8341,16 @@ bool extractArchiveFullyWithBatchReader(
 
     std::vector<FileData> batchFiles;
     const EntryRange range{.start = batchStartOrder, .end = batchEndOrder};
-    const auto keepGoing = [stopToken]() { return !stopRequested(stopToken); };
+    const auto keepGoing = [stopToken, pauseCallback]() {
+      return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
+    };
     if (!readArchiveEntriesInRange(archivePath, batchPaths, range, batchFiles,
                                    errorMessage, keepGoing)) {
+      if (errorMessage != nullptr &&
+          (*errorMessage == "Operation cancelled" ||
+           stopRequested(stopToken))) {
+        *errorMessage = "Unzip cancelled";
+      }
       return false;
     }
     if (batchFiles.empty() && !batchPaths.empty()) {
@@ -8333,10 +8361,7 @@ bool extractArchiveFullyWithBatchReader(
     }
 
     for (const FileData &file : batchFiles) {
-      if (stopRequested(stopToken)) {
-        if (errorMessage != nullptr) {
-          *errorMessage = "Unzip cancelled";
-        }
+      if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
         return false;
       }
 
@@ -8394,7 +8419,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::filesystem::path &destinationRoot,
                   std::string *errorMessage,
                   const std::stop_token *stopToken,
-                  UnzipProgressCallback progressCallback) {
+                  UnzipProgressCallback progressCallback,
+                  PauseCallback pauseCallback) {
   reportUnzipProgress(progressCallback, 0.02, 0, 0, "Preparing unzip");
   if (archivePath.empty() || !hasSupportedArchiveExtension(archivePath)) {
     if (errorMessage != nullptr) {
@@ -8410,16 +8436,14 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     }
     return std::nullopt;
   }
-  if (stopRequested(stopToken)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
-    }
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
 
   reportUnzipProgress(progressCallback, 0.04, 0, 0,
                       "Reading archive index");
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
   if (index == nullptr) {
     return std::nullopt;
   }
@@ -8500,10 +8524,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                                  errorMessage, error)) {
     return std::nullopt;
   }
-  if (stopRequested(stopToken)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
-    }
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
 
@@ -8517,7 +8538,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   if (index->backend == ArchiveIndexBackend::SevenZip) {
     extracted = extractSevenZipArchiveFully(archivePath, outputFolder, index,
                                             stopToken, progressCallback,
-                                            errorMessage);
+                                            pauseCallback, errorMessage);
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
@@ -8525,13 +8546,13 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       index->backend == ArchiveIndexBackend::LibArchive) {
     extracted = extractArchiveFullyWithLibarchive(
         archivePath, outputFolder, index, stopToken, progressCallback,
-        errorMessage);
+        pauseCallback, errorMessage);
   }
 #endif
   if (!extracted && !stopRequested(stopToken)) {
     extracted = extractArchiveFullyWithBatchReader(
         archivePath, outputFolder, index->entries, stopToken, progressCallback,
-        errorMessage);
+        pauseCallback, errorMessage);
   }
   if (!extracted) {
     if (errorMessage != nullptr && errorMessage->empty()) {
@@ -8541,10 +8562,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     }
     return std::nullopt;
   }
-  if (stopRequested(stopToken)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
-    }
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
 

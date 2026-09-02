@@ -503,6 +503,32 @@ void testDeltaFilteredSevenZipUsesSdk() {
   }));
 }
 
+void testFullUnzipHonorsPauseDuringExtraction() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "pause-during-unzip.zip";
+  writeStoredZip(archivePath,
+                 {"folder/first.bms", "folder/second.bms",
+                  "folder/third.bms"});
+
+  bool wroteFirstFile = false;
+  int pauseCalls = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      archivePath, temporary.path() / "output", &error, nullptr,
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0) wroteFirstFile = true;
+      },
+      [&] {
+        ++pauseCalls;
+        return !wroteFirstFile;
+      });
+
+  assert(!result.has_value());
+  assert(wroteFirstFile);
+  assert(pauseCalls > 0);
+  assert(error == "Unzip cancelled");
+}
+
 void testDebugLogRetainsNewestThousandLines() {
   for (int index = 0; index <= 1000; ++index) {
     archive_file::appendDebugLogLine("retention-marker-" +
@@ -531,6 +557,7 @@ int main() {
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
+  testFullUnzipHonorsPauseDuringExtraction();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

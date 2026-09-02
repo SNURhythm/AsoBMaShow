@@ -487,7 +487,8 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
       postImportProgress(value.fraction * 0.90, value.message);
     };
     const auto unzippedArchive = archive_file::unzipArchiveFully(
-        importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress);
+        importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress,
+        waitForResume);
     if (unzippedArchive.has_value()) {
       outputFolder = unzippedArchive->outputFolder;
     }
