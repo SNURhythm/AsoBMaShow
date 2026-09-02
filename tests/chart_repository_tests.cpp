@@ -1058,6 +1058,11 @@ void testChartMigrationCompatibilityMatrix() {
                      "ALTER TABLE chart_meta DROP COLUMN total_landmine_notes;"
                      "ALTER TABLE chart_meta DROP COLUMN has_random_sequence;"
                      "ALTER TABLE chart_meta DROP COLUMN most_prevalent_bpm"));
+      if (inputVersion <= 5) {
+        assert(execute(database.get(),
+                       "ALTER TABLE chart_meta DROP COLUMN has_bpm_stop;"
+                       "ALTER TABLE chart_meta DROP COLUMN has_scroll_change"));
+      }
       const std::string favoriteMd5 =
           inputVersion <= 1 ? upperMd5 : std::string(lowerMd5);
       const std::string favoriteSha =

@@ -572,6 +572,20 @@ bool migrateChartDatabaseToVersion5(sqlite3 *db, bool &completed) {
 }
 
 bool migrateChartDatabaseToVersion6(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_bpm_stop",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_bpm_stop INTEGER NOT NULL DEFAULT 0",
+          "checking chart BPM-stop column", "adding chart BPM-stop column",
+          logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_scroll_change",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_scroll_change INTEGER NOT NULL DEFAULT 0",
+          "checking chart scroll-change column",
+          "adding chart scroll-change column", logSqlErrorText)) {
+    return false;
+  }
   // SongData derives both feature bits from the full timeline model. Older
   // chart_meta rows contain no equivalent source fact, so they must be
   // rebuilt by the normal scanner rather than assigned a guessed value.
