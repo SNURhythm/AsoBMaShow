@@ -251,8 +251,9 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
   require(imported && imported->kind == skin::MusicSelectBarKind::Table &&
               imported->title == "Satellite" && imported->tableId == 42 &&
               imported->tableUrl == "https://example.invalid/table" &&
-              imported->children.size() == 2,
-          "difficulty TableBar preserves repository identity and URL");
+              imported->children.size() == 2 && !imported->sortable,
+          "difficulty TableBar preserves repository identity, metadata order, "
+          "and URL");
 
   const auto *folder = child(projection, physical, 0);
   require(folder && folder->title == "A" && folder->children.size() == 2,
@@ -274,7 +275,7 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
   const auto *grade = child(projection, imported, 1);
   require(level && level->kind == skin::MusicSelectBarKind::Hash &&
               level->title == "sl12" && level->tableLevel == "12" &&
-              level->children.size() == 2 &&
+              level->children.size() == 2 && !level->sortable &&
               child(projection, level, 0)->title == "Table One" &&
               child(projection, level, 1)->title == "Table Missing",
           "HashBar keeps table element order including unavailable songs");

@@ -592,9 +592,9 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
     expect(bar != nullptr && label != nullptr &&
                bar->vertices[0].x == 100.0F &&
                label->vertices[0].x == 105.0F &&
-               label->vertices[0].y == bar->vertices[0].y - 20.0F,
-           "the selected row index does not act as SkinBar's constructor "
-           "position");
+               label->vertices[0].y == bar->vertices[0].y - 50.0F,
+           "position one offsets relative children by the bar height without "
+           "moving the bar image");
   }
   expect(evaluated.interactionLayout.has_value(),
          "SkinBar publishes its immutable pointer layout");

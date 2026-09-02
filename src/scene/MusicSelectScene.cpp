@@ -580,8 +580,12 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   const auto wall = unixMillis();
   frame.songList.wallClockMillis = wall;
   frame.songList.wallClockSeconds = wall / 1000;
+  // PlayerConfig.getLnmode(), consumed by SkinBar's LN label selection, is
+  // zero-based: LN, CN, HCN. The gameplay model uses the distinct 1/2/3
+  // representation internally.
   frame.songList.playerLnMode =
-      long_note_mode::valueFromId(context.settings.selectedLnMode);
+      long_note_mode::valueFromId(context.settings.selectedLnMode) -
+      long_note_mode::kLnValue;
   frame.songList.movementDirection = snapshot.movementDirection;
   frame.songList.movementEndMillis = snapshot.movementEndMillis;
   frame.songList.bars.reserve(snapshot.rows.size());

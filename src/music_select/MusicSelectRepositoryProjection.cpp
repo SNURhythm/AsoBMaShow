@@ -546,7 +546,9 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
                            .title = tableSource.info.name,
                            .exists = true},
           .selectable = true,
-          .sortable = true,
+          // Difficulty-table levels are ordered by the imported table's
+          // metadata (SelectDifficultyLevels), as in the native library.
+          .sortable = false,
       };
       for (const auto &levelSource : tableSource.levels) {
         MusicSelectBar level{
@@ -561,7 +563,8 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
                                       levelSource.info.level,
                              .exists = true},
             .selectable = true,
-            .sortable = true,
+            // HashBar entries retain the authored difficulty-table order.
+            .sortable = false,
         };
         level.children =
             builder.addElementSongs(levelSource.records, level.id.value);

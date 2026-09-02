@@ -135,6 +135,7 @@ struct MusicSelectSongListFrame {
   std::int64_t elapsedMillis = 0;
   std::int64_t wallClockSeconds = 0;
   std::int64_t wallClockMillis = 0;
+  // Beatoraja PlayerConfig.getLnmode(): LN=0, CN=1, HCN=2.
   int playerLnMode = 0;
   bool rivalSelected = false;
   int movementDirection = 0;

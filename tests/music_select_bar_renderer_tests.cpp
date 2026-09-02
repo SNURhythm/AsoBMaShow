@@ -166,6 +166,33 @@ void testTextFallbackAndNewBoundary() {
           "non-rival mode uses the ordinary lamp family");
 }
 
+void testUndefinedLongNoteUsesBeatorajaLnModeIndex() {
+  auto songList = completeSongList();
+  auto frame = completeFrame();
+  frame.bars.front().featureFlags = MusicSelectFeatureUndefinedLn;
+  frame.playerLnMode = 0;
+
+  const auto lnPlan = MusicSelectBarRenderer{}.plan(songList, frame);
+  const auto hasLabel = [](const MusicSelectBarRenderPlan &plan, int slot) {
+    return std::ranges::any_of(plan.commands, [slot](const auto &command) {
+      return command.family == MusicSelectBarDrawFamily::Label &&
+             command.slot == static_cast<std::size_t>(slot);
+    });
+  };
+  require(hasLabel(lnPlan, 0),
+          "undefined LN uses Beatoraja PlayerConfig LN index zero");
+
+  frame.playerLnMode = 1;
+  const auto cnPlan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(hasLabel(cnPlan, 3),
+          "undefined LN uses Beatoraja PlayerConfig CN index one");
+
+  frame.playerLnMode = 2;
+  const auto hcnPlan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(hasLabel(hcnPlan, 4),
+          "undefined LN uses Beatoraja PlayerConfig HCN index two");
+}
+
 void testClickableUsesAuthoredOrderAndInclusiveDestination() {
   auto songList = completeSongList();
   auto frame = completeFrame();
@@ -196,6 +223,7 @@ void testMovementInterpolatesTowardThePinnedAdjacentSlot() {
 int main(int argc, char **argv) {
   testPinnedDrawOrderSlotsAndClassValues();
   testTextFallbackAndNewBoundary();
+  testUndefinedLongNoteUsesBeatorajaLnModeIndex();
   testClickableUsesAuthoredOrderAndInclusiveDestination();
   testMovementInterpolatesTowardThePinnedAdjacentSlot();
   return music_select_runtime_ledger_assertions::finish(
