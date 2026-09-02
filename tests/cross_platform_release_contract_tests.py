@@ -174,6 +174,23 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             "the evidence test must be registered only after its CMake target exists",
         )
 
+    def test_music_select_toolbar_persistence_is_registered_in_ctest(self):
+        target_declaration = self.cmake.index(
+            "add_executable(application_ui_state_store_tests"
+        )
+        registration = "asobmashow_register_test(application_ui_state_store_tests)"
+        self.assertIn(
+            registration,
+            self.cmake,
+            "toolbar persistence must be exercised by the normal CTest suite",
+        )
+        test_registration = self.cmake.index(registration)
+        self.assertGreater(
+            test_registration,
+            target_declaration,
+            "toolbar persistence must be exercised by the normal CTest suite",
+        )
+
     def test_result_persistence_wrapper_ignores_inherited_cdpath(self):
         with tempfile.TemporaryDirectory() as temporary:
             Path(temporary, "scripts").mkdir()

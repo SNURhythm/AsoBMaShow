@@ -2065,6 +2065,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_music_select_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    add_test(NAME music_select_error_flow_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/music_select_error_flow_contract_tests.py -v)
+    set_tests_properties(music_select_error_flow_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
     if (TARGET beatoraja_skin_model_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger
             COMMAND ${Python3_EXECUTABLE}
@@ -7586,6 +7592,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
     asobmashow_register_test(ir_credential_migration_tests ir_credential_migration_tests)

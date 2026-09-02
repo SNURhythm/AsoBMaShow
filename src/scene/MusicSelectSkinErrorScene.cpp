@@ -88,6 +88,10 @@ void MusicSelectSkinErrorScene::init() {
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(12);
+  auto *back = makeButton("Back");
+  back->setOnClickListener(
+      [this] { context.sceneManager->changeScene("Intro"); });
+  actions->addView(back);
   auto *settings = makeButton("Settings");
   settings->setOnClickListener([this] { openSettings(); });
   actions->addView(settings);
@@ -100,7 +104,7 @@ void MusicSelectSkinErrorScene::init() {
 void MusicSelectSkinErrorScene::openSettings() {
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
-      SceneReturnTarget::Retained(this)), true);
+      SceneReturnTarget::Registered("Intro")));
 }
 
 void MusicSelectSkinErrorScene::update(float) {
