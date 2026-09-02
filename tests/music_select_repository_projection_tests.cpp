@@ -97,6 +97,31 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
           "DirectoryBar aggregates its child clear lamps");
 }
 
+void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
+  std::vector<ChartMetaRecord> records{
+      chart("/songs/child/a.bms", "child", "Child", "", "/songs/child"),
+      chart("/songs/root.bms", "root", "Root", "", "/songs")};
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = utf8_to_path_t("/songs/child")});
+  metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
+
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = records, .metadata = &metadata});
+
+  require(projection.root.size() == 4,
+          "overlapping configured folders project one physical root plus the "
+          "three source command roots");
+  const auto *root = projection.find(projection.root.front());
+  require(root && root->directoryPath == "/songs" &&
+              root->children.size() == 2,
+          "the configured ancestor owns its direct song and descendant folder");
+  const auto *nested = child(projection, root, 1);
+  require(nested && nested->directoryPath == "/songs/child" &&
+              nested->children.size() == 1 &&
+              child(projection, nested, 0)->title == "Child",
+          "the configured descendant appears only below its ancestor");
+}
+
 void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
   std::vector<ChartMetaRecord> records{
       chart("/songs/A/first.bms", "first", "First", "", "/songs/A"),
@@ -379,6 +404,7 @@ void testProjectsRecentScoreImprovementCommandChildren() {
 
 int main(int argc, char **argv) {
   testProjectsFoldersSongsScoresAndSourceFlags();
+  testOverlappingConfiguredRootsFormOnePhysicalHierarchy();
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
   testProjectsReplaySlotsForCompleteGrades();
   testEmptyImportedCourseIsUnavailable();

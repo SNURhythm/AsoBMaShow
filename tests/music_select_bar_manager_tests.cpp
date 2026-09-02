@@ -181,6 +181,41 @@ void testTableContextUsesOpenedTableAndHashTitles() {
   require(local.name.empty() && local.level.empty() &&
               local.fullName.empty(),
           "the local COURSE table does not publish imported-table context");
+
+  MusicSelectProjection projection;
+  projection.root = {{"table:42"}};
+  projection.bars = {
+      {.id = {"table:42"},
+       .kind = skin::MusicSelectBarKind::Table,
+       .title = "Satellite",
+       .children = {{"hash:42:12"}},
+       .tableId = 42,
+       .selectable = true},
+      {.id = {"hash:42:12"},
+       .kind = skin::MusicSelectBarKind::Hash,
+       .title = "sl12",
+       .children = {{"song:table"}},
+       .tableId = 42,
+       .selectable = true},
+      {.id = {"song:table"},
+       .kind = skin::MusicSelectBarKind::Song,
+       .title = "Song",
+       .selectable = true},
+  };
+  MusicSelectBarManager manager(std::move(projection));
+  require(musicSelectTableContextForLaunch(manager.snapshot()).name.empty(),
+          "table properties are empty before navigating into a table");
+  require(manager.openSelected() &&
+              musicSelectTableContextForLaunch(manager.snapshot()).name ==
+                  "Satellite",
+          "table properties follow the currently opened Table bar");
+  require(manager.openSelected() &&
+              musicSelectTableContextForLaunch(manager.snapshot()).level ==
+                  "sl12",
+          "table properties follow the currently opened Hash bar");
+  require(manager.close() &&
+              musicSelectTableContextForLaunch(manager.snapshot()).level.empty(),
+          "closing the Hash bar clears the current table level");
 }
 
 void testTransientDirectoryRestoresItsSourceBar() {

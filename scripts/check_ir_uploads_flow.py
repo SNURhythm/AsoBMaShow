@@ -63,7 +63,8 @@ music_select_handler = music_select[
 ]
 require(
     "std::make_unique<IrUploadsScene>" in music_select_handler
-    and "SceneReturnTarget::Retained(this)" in music_select_handler,
+    and "SceneReturnTarget::Retained(" in music_select_handler
+    and "reactivateSkinOnResume_ = true" in music_select_handler,
     "skinned Song Select toolbar opens the same retained IR Uploads scene",
 )
 require(
@@ -73,6 +74,10 @@ require(
 require(
     "SettingsDestination::Ir" in uploads_scene,
     "configuration targets the IR tab",
+)
+require(
+    "returnTarget_.notifySettingsWillOpen()" in uploads_scene,
+    "indirect IR Settings visits notify the retained Song Select scene",
 )
 require(
     "ListIrUploadCandidates" in uploads_scene

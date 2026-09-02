@@ -290,28 +290,50 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
       children.push_back(child.lexically_normal());
     }
   };
+  auto addPhysicalRoot = [&](const std::filesystem::path &path) {
+    const auto normalized = path.lexically_normal();
+    if (std::ranges::any_of(physicalRoots, [&](const auto &candidate) {
+          return pathAtOrInside(normalized, candidate);
+        })) {
+      return;
+    }
+    std::size_t insertionIndex = physicalRoots.size();
+    for (std::size_t index = 0; index < physicalRoots.size(); ++index) {
+      if (pathAtOrInside(physicalRoots[index], normalized)) {
+        insertionIndex = std::min(insertionIndex, index);
+      }
+    }
+    std::erase_if(physicalRoots, [&](const auto &candidate) {
+      return pathAtOrInside(candidate, normalized);
+    });
+    insertionIndex = std::min(insertionIndex, physicalRoots.size());
+    physicalRoots.insert(physicalRoots.begin() + insertionIndex, normalized);
+  };
 
   if (input.metadata != nullptr) {
     for (const auto &entry : input.metadata->entries) {
       const std::filesystem::path root(entry.path);
       if (root.empty()) continue;
-      physicalRoots.push_back(root.lexically_normal());
+      addPhysicalRoot(root);
       (void)ensureFolder(root);
     }
   }
   for (const auto &record : input.records) {
     const auto folder = physicalFolder(record);
     ensureFolder(folder).records.push_back(&record);
-    auto root = std::ranges::find_if(physicalRoots, [&](const auto &candidate) {
-      return pathAtOrInside(folder, candidate);
-    });
-    if (root == physicalRoots.end()) {
-      if (std::ranges::find(physicalRoots, folder) == physicalRoots.end()) {
-        physicalRoots.push_back(folder);
-      }
-      continue;
-    }
-    auto current = folder;
+    const auto root = std::ranges::find_if(
+        physicalRoots, [&](const auto &candidate) {
+          return pathAtOrInside(folder, candidate);
+        });
+    if (root == physicalRoots.end()) addPhysicalRoot(folder);
+  }
+  for (const auto &record : input.records) {
+    auto current = physicalFolder(record);
+    const auto root = std::ranges::find_if(
+        physicalRoots, [&](const auto &candidate) {
+          return pathAtOrInside(current, candidate);
+        });
+    if (root == physicalRoots.end()) continue;
     while (current != *root) {
       const auto parent = current.parent_path();
       addChild(parent, current);

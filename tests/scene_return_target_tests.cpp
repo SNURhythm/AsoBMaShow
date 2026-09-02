@@ -43,11 +43,29 @@ void testRetainedTargetHasNoFallback() {
              SceneReturnResolution::Unavailable,
          "null retained identity is unavailable");
 }
+
+void testRetainedTargetNotifiesBeforeIndirectSettings() {
+  auto *identity = reinterpret_cast<Scene *>(0x1234);
+  int notifications = 0;
+  const auto target = SceneReturnTarget::Retained(
+      identity, [&notifications] { ++notifications; });
+  target.notifySettingsWillOpen();
+  expect(notifications == 1,
+         "a retained target can prepare its scene for an indirect Settings "
+         "visit");
+
+  const auto registered = SceneReturnTarget::Registered("Intro");
+  registered.notifySettingsWillOpen();
+  expect(notifications == 1,
+         "a registered target does not synthesize a retained-scene "
+         "notification");
+}
 } // namespace
 
 int main() {
   testRegisteredTargetHasNoFallback();
   testRetainedTargetHasNoFallback();
+  testRetainedTargetNotifiesBeforeIndirectSettings();
   if (failures != 0) {
     std::cerr << failures << " scene return target test(s) failed\n";
     return 1;

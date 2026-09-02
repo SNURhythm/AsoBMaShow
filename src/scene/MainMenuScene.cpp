@@ -933,9 +933,6 @@ void MainMenuScene::init() {
     observedIrAccountEvidenceRevision = 0;
     replayIrObservedRevisions.clear();
   };
-  context.requestRebuildChartLibrary = [this]() {
-    startLibraryRebuild();
-  };
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
 }
@@ -10519,7 +10516,6 @@ void MainMenuScene::cleanupScene() {
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
-  context.requestRebuildChartLibrary = nullptr;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
     replayExportThread.request_stop();

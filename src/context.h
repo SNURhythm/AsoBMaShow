@@ -709,6 +709,14 @@ public:
                   request, stopToken, std::move(progress),
                   std::move(waitForResume));
             });
+    requestRebuildChartLibrary = [this] {
+      if (chartLibraryTasks) {
+        chartLibraryTasks->enqueue(
+            {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+             .title = "Rebuild Library",
+             .rebuildLibraryMetadata = true});
+      }
+    };
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
     chartLibraryFolderActions =
         std::make_unique<chart_library_platform::FolderActionService>(
@@ -1502,6 +1510,7 @@ public:
 
   ~ApplicationContext() {
     quitFlag = true;
+    requestRebuildChartLibrary = nullptr;
     requestAddChartFolderFromFiles = nullptr;
     chartLibraryFolderActions.reset();
     if (chartLibraryTasks) {

@@ -604,9 +604,10 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
       context.profileManager.activeProfile().displayName;
   // Beatoraja property 30 is setter-only and always reads as an empty string.
   propertyRuntime.searchWord.clear();
-  propertyRuntime.tableName = tableContext_.name;
-  propertyRuntime.tableLevel = tableContext_.level;
-  propertyRuntime.tableFullName = tableContext_.fullName;
+  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
+  propertyRuntime.tableName = tableContext.name;
+  propertyRuntime.tableLevel = tableContext.level;
+  propertyRuntime.tableFullName = tableContext.fullName;
   propertyRuntime.version = ASOBMASHOW_APPLICATION_VERSION;
   propertyRuntime.irName = context.settings.irProviders.empty()
                                ? std::string{}
@@ -1121,7 +1122,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     launching_ = false;
     return;
   }
-  tableContext_ = musicSelectTableContextForLaunch(snapshot);
+  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
   StartOptions options{
       .startPosition = 0,
       .autoKeySound = !context.settings.inputKeysoundEnabled,
@@ -1137,8 +1138,8 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       .longNoteMode = lnMode,
       .assistOption = selections.assistOption,
       .pacemakerTarget = selections.pacemakerTarget,
-      .tableName = tableContext_.name,
-      .tableLevel = tableContext_.level,
+      .tableName = tableContext.name,
+      .tableLevel = tableContext.level,
       .practiceMode = practice,
       .playback = {.percent = context.settings.selectedPlaybackRatePercent,
                    .mode = context.settings.selectedPlaybackMode},
@@ -1200,7 +1201,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
     launching_ = false;
     return;
   }
-  tableContext_ = musicSelectTableContextForLaunch(bars_.snapshot());
+  const auto tableContext = musicSelectTableContextForLaunch(bars_.snapshot());
   StartOptions options{
       .startPosition = 0,
       .autoKeySound = session->autoKeySound,
@@ -1216,8 +1217,8 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
       .doublePlayFlip = session->doublePlayFlip,
       .longNoteMode = session->longNoteMode,
       .assistOption = session->assistOption,
-      .tableName = tableContext_.name,
-      .tableLevel = tableContext_.level,
+      .tableName = tableContext.name,
+      .tableLevel = tableContext.level,
       .playback = course_rules::kRequiredPlaybackRate,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .courseSession = session,
@@ -1328,11 +1329,11 @@ void MusicSelectScene::launchCourseReplay(
     launching_ = false;
     return;
   }
-  tableContext_ = musicSelectTableContextForLaunch(snapshot);
+  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
   StartOptions options =
       makeCourseReplayStageStartOptions(session, stageReplay);
-  options.tableName = tableContext_.name;
-  options.tableLevel = tableContext_.level;
+  options.tableName = tableContext.name;
+  options.tableLevel = tableContext.level;
   options.returnScene = this;
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(chart),
@@ -1396,7 +1397,7 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
     launching_ = false;
     return;
   }
-  tableContext_ = musicSelectTableContextForLaunch(snapshot);
+  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   StartOptions options{
@@ -1407,8 +1408,8 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
       .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
       .replayData = loaded.replayData,
       .pacemakerTarget = selections.pacemakerTarget,
-      .tableName = tableContext_.name,
-      .tableLevel = tableContext_.level,
+      .tableName = tableContext.name,
+      .tableLevel = tableContext.level,
       .returnScene = this,
   };
   applyReplayProvenanceToStartOptions(options, *loaded.replayData);
@@ -2032,7 +2033,10 @@ void MusicSelectScene::openTasks() {
 
 void MusicSelectScene::openIrUploads() {
   context.sceneManager->changeScene(std::make_unique<IrUploadsScene>(
-      context, SceneReturnTarget::Retained(this)), true);
+      context,
+      SceneReturnTarget::Retained(
+          this, [this] { reactivateSkinOnResume_ = true; })),
+      true);
 }
 
 void MusicSelectScene::openSettings() {

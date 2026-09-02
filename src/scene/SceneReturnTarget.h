@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <utility>
 
@@ -12,15 +13,25 @@ struct SceneReturnTarget {
   Kind kind = Kind::Registered;
   std::string registeredName = "MainMenu";
   Scene *retained = nullptr;
+  std::function<void()> settingsWillOpen;
 
   static SceneReturnTarget Registered(std::string name) {
     return {.kind = Kind::Registered,
             .registeredName = std::move(name),
-            .retained = nullptr};
+            .retained = nullptr,
+            .settingsWillOpen = {}};
   }
 
-  static SceneReturnTarget Retained(Scene *scene) {
-    return {.kind = Kind::Retained, .registeredName = {}, .retained = scene};
+  static SceneReturnTarget Retained(
+      Scene *scene, std::function<void()> settingsWillOpen = {}) {
+    return {.kind = Kind::Retained,
+            .registeredName = {},
+            .retained = scene,
+            .settingsWillOpen = std::move(settingsWillOpen)};
+  }
+
+  void notifySettingsWillOpen() const {
+    if (kind == Kind::Retained && settingsWillOpen) settingsWillOpen();
   }
 };
 

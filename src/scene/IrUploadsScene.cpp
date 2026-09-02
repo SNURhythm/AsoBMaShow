@@ -622,6 +622,7 @@ void IrUploadsScene::goBack() {
 void IrUploadsScene::openIrSettings() {
   stopPreparation();
   if (context.sceneManager != nullptr) {
+    returnTarget_.notifySettingsWillOpen();
     context.sceneManager->changeScene(
         std::make_unique<SettingsScene>(context, SettingsDestination::Ir,
                                         returnTarget_),
