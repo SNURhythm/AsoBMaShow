@@ -416,11 +416,15 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
             .courseCharts = courseSource.stages,
             .presentation = {.kind = skin::MusicSelectBarKind::Grade,
                              .title = courseSource.info.name,
-                             .exists = std::ranges::all_of(
-                                 courseSource.stages, [](const auto &stage) {
-                                   return !stage.unavailable &&
-                                          !stage.meta.BmsPath.empty();
-                                 })},
+                             // CourseData.validate rejects zero-song courses
+                             // before Beatoraja constructs a GradeBar.
+                             .exists = !courseSource.stages.empty() &&
+                                       std::ranges::all_of(
+                                           courseSource.stages,
+                                           [](const auto &stage) {
+                                             return !stage.unavailable &&
+                                                    !stage.meta.BmsPath.empty();
+                                           })},
             .selectable = true,
         };
         for (const int id : beatorajaCourseConstraintIdsFromJson(

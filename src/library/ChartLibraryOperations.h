@@ -18,7 +18,8 @@ struct ChartLibraryOperationsDependencies {
   std::function<bool()> saveSettings;
   std::function<void(bool includeFolders)> requestReload;
   std::function<bool(ChartRepository::Session &, const std::string &,
-                     std::string *, DifficultyTableImportProgressCallback)>
+                     std::string *, DifficultyTableImportProgressCallback,
+                     const DifficultyTableImportCheckpoint &)>
       importDifficultyTableFromUrl;
   std::function<bool(ChartRepository::Session &, int, std::string *,
                      const DifficultyTableImportCheckpoint &)>
@@ -59,7 +60,7 @@ private:
                                  const TaskPauseCallback &);
   void seedDefaultDifficultyTablesIfNeeded(
       ChartRepository::Session &, const std::stop_token &,
-      const TaskProgressCallback &);
+      const TaskProgressCallback &, const TaskPauseCallback &);
   static const char *progressStageText(ChartScanProgressStage) noexcept;
 
   ChartLibraryOperationsDependencies dependencies_;

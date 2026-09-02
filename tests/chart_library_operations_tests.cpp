@@ -340,7 +340,8 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
   };
   deps.importDifficultyTableFromUrl =
       [&](ChartRepository::Session &, const std::string &url,
-          std::string *, DifficultyTableImportProgressCallback) {
+          std::string *, DifficultyTableImportProgressCallback,
+          const DifficultyTableImportCheckpoint &) {
         importedUrls.push_back(url);
         return true;
       };
@@ -371,6 +372,53 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
   expect(saveCalls == 1, "successful default imports save settings once");
   expect(reloadRequested,
          "successful default table imports request selector reload");
+}
+
+void testRefreshPausesInsideDefaultTableSeeding() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "pausable table seed repository is ready");
+  bool reloadRequested = false;
+  bool seeded = false;
+  bool gameplayPaused = false;
+  int importCalls = 0;
+  int saveCalls = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.defaultDifficultyTablesSeeded = [&] { return seeded; };
+  deps.setDefaultDifficultyTablesSeeded = [&](bool value) { seeded = value; };
+  deps.saveSettings = [&] {
+    ++saveCalls;
+    return true;
+  };
+  deps.importDifficultyTableFromUrl =
+      [&](ChartRepository::Session &, const std::string &, std::string *,
+          DifficultyTableImportProgressCallback,
+          const DifficultyTableImportCheckpoint &checkpoint) {
+        ++importCalls;
+        gameplayPaused = true;
+        return checkpoint();
+      };
+  deps.importDifficultyTablesFromDirectory =
+      [](ChartRepository::Session &, const std::filesystem::path &) {
+        return 0;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [&] { return !gameplayPaused; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "gameplay pause interrupts default table seeding");
+  expect(importCalls == 1,
+         "paused default seeding starts no additional table import");
+  expect(!seeded && saveCalls == 0,
+         "an interrupted default seed does not persist completion");
+  expect(!reloadRequested,
+         "an interrupted default seed does not publish a reload");
 }
 
 void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
@@ -458,6 +506,7 @@ int main() {
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
+  testRefreshPausesInsideDefaultTableSeeding();
   testDifficultyTableUpdateUsesTheSharedTaskOperation();
   testDifficultyTableUpdateStopsAtAnImporterCheckpoint();
   testDesktopLibraryEntryResolutionPreservesTheStoredPath();

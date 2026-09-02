@@ -32,10 +32,12 @@ ChartLibraryOperations::ChartLibraryOperations(
     dependencies_.importDifficultyTableFromUrl =
         [](ChartRepository::Session &session, const std::string &url,
            std::string *errorMessage,
-           DifficultyTableImportProgressCallback progressCallback) {
+           DifficultyTableImportProgressCallback progressCallback,
+           const DifficultyTableImportCheckpoint &checkpoint) {
           DifficultyTableImporter importer;
           return importer.ImportFromUrl(session, url, errorMessage,
-                                        std::move(progressCallback));
+                                        std::move(progressCallback),
+                                        checkpoint);
         };
   }
   if (!dependencies_.importDifficultyTablesFromDirectory) {
@@ -203,7 +205,8 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   if (!waitForResume() || stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
-  seedDefaultDifficultyTablesIfNeeded(*session, stopToken, progress);
+  seedDefaultDifficultyTablesIfNeeded(*session, stopToken, progress,
+                                      waitForResume);
   if (!waitForResume() || stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
@@ -294,7 +297,8 @@ TaskRunResult ChartLibraryOperations::runRefresh(
 
 void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     ChartRepository::Session &session, const std::stop_token &stopToken,
-    const TaskProgressCallback &progress) {
+    const TaskProgressCallback &progress,
+    const TaskPauseCallback &waitForResume) {
   if ((dependencies_.defaultDifficultyTablesSeeded &&
        dependencies_.defaultDifficultyTablesSeeded()) ||
       stopToken.stop_requested()) {
@@ -306,8 +310,16 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
                        sizeof(kDefaultDifficultyTableUrls[0]));
   int successfulTables = 0;
   bool allSucceeded = true;
+  bool interrupted = false;
+  const DifficultyTableImportCheckpoint checkpoint = [&] {
+    if (stopToken.stop_requested() || !waitForResume()) {
+      interrupted = true;
+      return false;
+    }
+    return true;
+  };
   for (int i = 0; i < totalTables; ++i) {
-    if (stopToken.stop_requested()) {
+    if (!checkpoint()) {
       return;
     }
     const char *url = kDefaultDifficultyTableUrls[i];
@@ -327,7 +339,11 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
                     .total = totalTables,
                     .stage = ChartScanProgressStage::Preparing},
                    "Adding default table: " + detail);
-        });
+        },
+        checkpoint);
+    if (interrupted || stopToken.stop_requested()) {
+      return;
+    }
     if (ok) {
       ++successfulTables;
     } else {
@@ -337,7 +353,7 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     }
   }
 
-  if (stopToken.stop_requested()) {
+  if (interrupted || stopToken.stop_requested()) {
     return;
   }
   if (allSucceeded && dependencies_.setDefaultDifficultyTablesSeeded) {

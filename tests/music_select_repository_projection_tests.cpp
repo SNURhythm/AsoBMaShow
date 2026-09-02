@@ -295,6 +295,27 @@ void testProjectsReplaySlotsForCompleteGrades() {
           "complete GradeBars project the exact four course replay slots");
 }
 
+void testEmptyImportedCourseIsUnavailable() {
+  MusicSelectDifficultyTableSource table{
+      .info = {.id = 9, .name = "Table"}};
+  table.courses.push_back(
+      {.info = {.id = 74,
+                .courseKey = "empty-course",
+                .tableId = 9,
+                .name = "Empty Course"},
+       .stages = {}});
+  MusicSelectRepositoryMetadata metadata;
+  metadata.tables.push_back(std::move(table));
+
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = {}, .metadata = &metadata});
+  const auto *imported = projection.find({"table:9"});
+  const auto *grade = child(projection, imported, 0);
+  require(grade && grade->courseCharts.empty() &&
+              !grade->presentation.exists,
+          "an imported GradeBar without stages is unavailable");
+}
+
 void testProjectionOwnsItsRepositoryValues() {
   std::vector<ChartMetaRecord> records{
       chart("/songs/a/a.bms", "stable", "Before", "", "/songs/a")};
@@ -355,6 +376,7 @@ int main(int argc, char **argv) {
   testProjectsFoldersSongsScoresAndSourceFlags();
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
   testProjectsReplaySlotsForCompleteGrades();
+  testEmptyImportedCourseIsUnavailable();
   testProjectionOwnsItsRepositoryValues();
   testProjectsSearchHistoryAfterCommands();
   testProjectsRecentScoreImprovementCommandChildren();

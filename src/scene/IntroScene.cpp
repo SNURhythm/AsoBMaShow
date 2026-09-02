@@ -41,7 +41,13 @@ Button *button(std::string label) {
 }
 } // namespace
 
-void IntroScene::init() { buildView(); }
+void IntroScene::init() {
+  navigation_.reset(
+      musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput));
+  buildView();
+  startInputListening();
+  syncNavigationSelection();
+}
 
 void IntroScene::buildView() {
   rootLayout_ =
@@ -57,13 +63,13 @@ void IntroScene::buildView() {
   title->setWidth(720)->setHeight(92);
   rootLayout_->addView(title);
 
-  auto *startButton = button("Start");
-  startButton->setOnClickListener([this] { start(); });
-  rootLayout_->addView(startButton);
+  startButton_ = button("Start");
+  startButton_->setOnClickListener([this] { start(); });
+  rootLayout_->addView(startButton_);
 
-  auto *settingsButton = button("Settings");
-  settingsButton->setOnClickListener([this] { openSettings(); });
-  rootLayout_->addView(settingsButton);
+  settingsButton_ = button("Settings");
+  settingsButton_->setOnClickListener([this] { openSettings(); });
+  rootLayout_->addView(settingsButton_);
   rootLayout_->applyYogaLayout();
   layoutWidth_ = rendering::window_width;
   layoutHeight_ = rendering::window_height;
@@ -108,10 +114,33 @@ void IntroScene::openSettings() {
 }
 
 EventHandleResult IntroScene::handleEvents(SDL_Event &event) {
+  if ((event.type == SDL_KEYDOWN || event.type == SDL_KEYUP) &&
+      event.key.repeat == 0 && inputBindingAdapter_) {
+    const bool down = event.type == SDL_KEYDOWN;
+    std::optional<MusicSelectControlKey> key;
+    switch (event.key.keysym.sym) {
+    case SDLK_UP: key = MusicSelectControlKey::Up; break;
+    case SDLK_DOWN: key = MusicSelectControlKey::Down; break;
+    case SDLK_RETURN:
+    case SDLK_KP_ENTER: key = MusicSelectControlKey::Enter; break;
+    default: break;
+    }
+    if (key) {
+      auto &input = inputBindingAdapter_->state();
+      if (down) {
+        input.controlPressed.insert(*key);
+        input.controlHeld.insert(*key);
+      } else {
+        input.controlHeld.erase(*key);
+      }
+      return {};
+    }
+  }
   return Scene::handleEvents(event);
 }
 
 void IntroScene::update(float) {
+  processNavigationInput();
   if (rootLayout_ != nullptr &&
       (layoutWidth_ != rendering::window_width ||
        layoutHeight_ != rendering::window_height)) {
@@ -125,7 +154,68 @@ void IntroScene::update(float) {
 void IntroScene::renderScene() {}
 
 void IntroScene::cleanupScene() {
+  stopInputListening();
   rootLayout_ = nullptr;
+  startButton_ = nullptr;
+  settingsButton_ = nullptr;
   layoutWidth_ = -1;
   layoutHeight_ = -1;
+}
+
+void IntroScene::startInputListening() {
+  if (inputSubscription_ != 0 || inputDeviceSubscription_ != 0) return;
+  const auto layout =
+      musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput);
+  inputBindingAdapter_ = std::make_unique<MusicSelectInputBindingAdapter>(
+      context.inputProfile, layout);
+  inputSubscription_ = context.inputDeviceRegistry.subscribeInput(
+      [this](const input::PhysicalInputEvent &event) {
+        if (inputBindingAdapter_) inputBindingAdapter_->consume(event);
+      });
+  inputDeviceSubscription_ = context.inputDeviceRegistry.subscribeDevices(
+      [this](const input::InputDeviceSnapshot &device) {
+        if (!device.connected && inputBindingAdapter_) {
+          inputBindingAdapter_->disconnectDevice(device.stableId);
+        }
+      });
+}
+
+void IntroScene::stopInputListening() {
+  if (inputSubscription_ != 0) {
+    context.inputDeviceRegistry.unsubscribe(inputSubscription_);
+    inputSubscription_ = 0;
+  }
+  if (inputDeviceSubscription_ != 0) {
+    context.inputDeviceRegistry.unsubscribe(inputDeviceSubscription_);
+    inputDeviceSubscription_ = 0;
+  }
+  if (inputBindingAdapter_) inputBindingAdapter_->reset();
+  inputBindingAdapter_.reset();
+}
+
+void IntroScene::syncNavigationSelection() {
+  if (startButton_ == nullptr || settingsButton_ == nullptr) return;
+  const bool startSelected = navigation_.choice() == IntroSceneChoice::Start;
+  startButton_->setSelected(startSelected);
+  settingsButton_->setSelected(!startSelected);
+  startButton_->setThemedBorderColors(
+      startSelected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
+      ui_theme::accentBorder, ui_theme::accentBorderStrong);
+  settingsButton_->setThemedBorderColors(
+      startSelected ? ui_theme::hairlineStrong : ui_theme::accentBorderStrong,
+      ui_theme::accentBorder, ui_theme::accentBorderStrong);
+}
+
+void IntroScene::processNavigationInput() {
+  if (!inputBindingAdapter_) return;
+  const auto result = navigation_.process(inputBindingAdapter_->state(),
+                                          SDL_GetTicks64());
+  inputBindingAdapter_->clearFrameEdges();
+  if (result.selectionChanged) syncNavigationSelection();
+  if (!result.activated) return;
+  if (*result.activated == IntroSceneChoice::Settings) {
+    openSettings();
+  } else {
+    start();
+  }
 }
