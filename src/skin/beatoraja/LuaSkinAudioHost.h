@@ -51,6 +51,7 @@ struct LuaSkinAudioOperationResult {
 
 struct LuaSkinAudioPolicy {
   std::size_t maximumIdentities = 256;
+  bool allowRenderPhaseLoads = false;
 };
 
 class LuaSkinAudioHost final {

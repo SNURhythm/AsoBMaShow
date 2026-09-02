@@ -8,17 +8,20 @@
 #include "LuaSkinAudioHost.h"
 #include "LuaSkinHttpClient.h"
 #include "LuaSkinHostModules.h"
+#include "LuaJValueCoercion.h"
 
 extern "C" {
 #include <lauxlib.h>
 #include <lua.h>
 #include <luajit.h>
+#include <lualib.h>
 }
 
 #include <atomic>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -98,6 +101,8 @@ struct LuaRuntimeShared {
   bool enforceResourceBudget = true;
   std::uint32_t generation = 0;
   std::vector<int> callbackReferences;
+  std::vector<int> callbackParameterCounts;
+  std::vector<int> bindingValueReferences;
   std::unordered_map<const void *, std::uint32_t> callbackSlotsByIdentity;
   std::uint64_t callbackCompilationInstructions = 0;
   std::chrono::nanoseconds callbackCompilationWallUsed{0};
@@ -493,17 +498,41 @@ std::optional<LuaScalar> readScalar(lua_State *state, int index) {
   case LUA_TSTRING: {
     std::size_t size = 0;
     const char *text = lua_tolstring(state, index, &size);
-    if (size > kMaximumReturnedStringBytes) {
-      return std::nullopt;
-    }
     return LuaScalar{std::string(text, size)};
   }
   default:
-    return std::nullopt;
+    // SkinLuaAccessor applies LuaJ's conversion methods at the property
+    // boundary. Preserve a non-nil scalar surrogate here so selector-side
+    // coercion can retain that behavior instead of turning the frame into a
+    // host validation failure.
+    return LuaScalar{luaToJString(state, index)};
   }
 }
 
 } // namespace
+
+std::uint32_t retainLuaBindingValue(lua_State *state, int index) noexcept {
+  if (state == nullptr) {
+    return 0;
+  }
+  auto *shared = runtimeShared(state);
+  if (shared == nullptr) {
+    return 0;
+  }
+  const int candidate = absoluteIndex(state, index);
+  lua_pushvalue(state, candidate);
+  const int reference = luaL_ref(state, LUA_REGISTRYINDEX);
+  if (reference == LUA_REFNIL || reference == LUA_NOREF) {
+    return 0;
+  }
+  try {
+    shared->bindingValueReferences.push_back(reference);
+    return static_cast<std::uint32_t>(shared->bindingValueReferences.size());
+  } catch (...) {
+    luaL_unref(state, LUA_REGISTRYINDEX, reference);
+    return 0;
+  }
+}
 
 struct LuaValueHandle::Impl {
   std::shared_ptr<LuaRuntimeShared> shared;
@@ -533,12 +562,51 @@ enum class BindingLookupFailure : std::uint8_t {
   None,
   Missing,
   InvalidType,
-  InvalidNumber,
   SourceTooLarge,
   WorkLimit,
   CallbackLimit,
   HostAllocation,
 };
+
+std::optional<int> luaFunctionParameterCount(lua_State *state,
+                                             int index) noexcept {
+  // LuaJ exposes LuaFunction.narg() through debug.getinfo(..., "u"). Open
+  // the library only for this internal query: the skin never receives a
+  // debug global.
+  const int savedTop = lua_gettop(state);
+  const int functionIndex = absoluteIndex(state, index);
+  const auto restore = [&] { lua_settop(state, savedTop); };
+
+  lua_pushcfunction(state, luaopen_debug);
+  if (lua_pcall(state, 0, 1, 0) != 0 || !lua_istable(state, -1)) {
+    restore();
+    return std::nullopt;
+  }
+  lua_getfield(state, -1, "getinfo");
+  if (!lua_isfunction(state, -1)) {
+    restore();
+    return std::nullopt;
+  }
+  lua_pushvalue(state, functionIndex);
+  lua_pushliteral(state, "u");
+  if (lua_pcall(state, 2, 1, 0) != 0 || !lua_istable(state, -1)) {
+    restore();
+    return std::nullopt;
+  }
+  lua_getfield(state, -1, "nparams");
+  if (!lua_isnumber(state, -1)) {
+    restore();
+    return std::nullopt;
+  }
+  const double parameterCount = static_cast<double>(lua_tonumber(state, -1));
+  restore();
+  if (!std::isfinite(parameterCount) || std::trunc(parameterCount) != parameterCount ||
+      parameterCount < 0.0 ||
+      parameterCount > static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<int>(parameterCount);
+}
 
 bool retainCallbackValue(lua_State *state, int index, LuaRuntimeShared &shared,
                          LuaCallbackId &callback,
@@ -559,12 +627,19 @@ bool retainCallbackValue(lua_State *state, int index, LuaRuntimeShared &shared,
     failure = BindingLookupFailure::CallbackLimit;
     return false;
   }
+  const auto parameterCount = luaFunctionParameterCount(state, candidate);
   lua_pushvalue(state, candidate);
   // The registry reference keeps this exact function alive, so Lua cannot
   // recycle its identity pointer while the O(1) identity index contains it.
   const int reference = luaL_ref(state, LUA_REGISTRYINDEX);
   try {
     shared.callbackReferences.push_back(reference);
+    try {
+      shared.callbackParameterCounts.push_back(parameterCount.value_or(-1));
+    } catch (...) {
+      shared.callbackReferences.pop_back();
+      throw;
+    }
     const auto slot =
         static_cast<std::uint32_t>(shared.callbackReferences.size());
     try {
@@ -572,6 +647,7 @@ bool retainCallbackValue(lua_State *state, int index, LuaRuntimeShared &shared,
           shared.callbackSlotsByIdentity.emplace(identity, slot);
       if (!inserted) {
         shared.callbackReferences.pop_back();
+        shared.callbackParameterCounts.pop_back();
         luaL_unref(state, LUA_REGISTRYINDEX, reference);
         callback = {.slot = existing->second,
                     .generation = shared.generation};
@@ -579,6 +655,7 @@ bool retainCallbackValue(lua_State *state, int index, LuaRuntimeShared &shared,
       }
     } catch (...) {
       shared.callbackReferences.pop_back();
+      shared.callbackParameterCounts.pop_back();
       throw;
     }
   } catch (...) {
@@ -624,45 +701,10 @@ bool chargeBindingLookupWork(BindingSourceLookupRequest &request,
   return true;
 }
 
-bool luaJNumericStringSyntax(std::string_view text) noexcept {
-  while (!text.empty() && text.front() == ' ') {
-    text.remove_prefix(1);
-  }
-  while (!text.empty() && text.back() == ' ') {
-    text.remove_suffix(1);
-  }
-  if (text.empty()) {
-    return false;
-  }
-  // LuaJ's custom parser truncates its decimal fallback at 64 bytes. Keep the
-  // shared safe subset instead of reproducing trailing-garbage acceptance.
-  if (text.size() > 64) {
-    return false;
-  }
-  if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
-    return std::ranges::all_of(text.substr(2), [](char value) noexcept {
-      return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
-             (value >= 'A' && value <= 'F');
-    });
-  }
-  return std::ranges::all_of(text, [](char value) noexcept {
-    return (value >= '0' && value <= '9') || value == '+' || value == '-' ||
-           value == '.' || value == 'e' || value == 'E';
-  });
-}
-
 void storeNumericBinding(lua_State *state, int index,
                          BindingSourceLookupRequest &request) noexcept {
   const double numeric = static_cast<double>(lua_tonumber(state, index));
-  // LuaJ wraps some overflows during integer conversion. Keep the portable
-  // LuaJ/LuaJIT subset by rejecting non-finite and out-of-range values first.
-  if (!std::isfinite(numeric) ||
-      numeric < static_cast<double>(std::numeric_limits<int>::min()) ||
-      numeric > static_cast<double>(std::numeric_limits<int>::max())) {
-    request.failure = BindingLookupFailure::InvalidNumber;
-    return;
-  }
-  request.source = static_cast<int>(numeric);
+  request.source = luaJToInt(numeric);
 }
 
 int lookupBindingSourceArgument(lua_State *state) {
@@ -674,6 +716,18 @@ int lookupBindingSourceArgument(lua_State *state) {
   }
   lua_rawgeti(state, LUA_REGISTRYINDEX, request->valueReference);
   for (const auto &element : *request->path) {
+    if (const auto *retained =
+            std::get_if<LuaValuePathElement::RetainedValue>(&element.key)) {
+      if (retained->slot == 0 ||
+          retained->slot > request->shared->bindingValueReferences.size()) {
+        request->failure = BindingLookupFailure::Missing;
+        return 0;
+      }
+      lua_pop(state, 1);
+      lua_rawgeti(state, LUA_REGISTRYINDEX,
+                  request->shared->bindingValueReferences[retained->slot - 1]);
+      continue;
+    }
     if (!lua_istable(state, -1)) {
       request->failure = BindingLookupFailure::Missing;
       return 0;
@@ -727,9 +781,7 @@ int lookupBindingSourceArgument(lua_State *state) {
     if (!chargeBindingLookupWork(*request, size)) {
       return 0;
     }
-    if (request->limits.numericFactoryAvailable &&
-        luaJNumericStringSyntax(std::string_view(text, size)) &&
-        lua_isnumber(state, -1)) {
+    if (request->limits.numericFactoryAvailable && lua_isnumber(state, -1)) {
       storeNumericBinding(state, -1, *request);
       return 0;
     }
@@ -1132,11 +1184,6 @@ LuaValueHandle::lookupBindingSource(const LuaValuePath &path,
     return {.failure = makeDiagnostic("skin_lua_binding_missing",
                                       "Lua binding path is nil or missing"),
             .workBytes = request.workBytes};
-  case BindingLookupFailure::InvalidNumber:
-    return {.failure = makeDiagnostic(
-                "skin_lua_binding_number_invalid",
-                "Lua binding number is outside the supported integer range"),
-            .workBytes = request.workBytes};
   case BindingLookupFailure::SourceTooLarge:
     return {.failure = makeDiagnostic(
                 "skin_lua_binding_source_too_large",
@@ -1211,8 +1258,15 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   impl->fileSystem = std::move(options.fileSystem);
   impl->httpTransport = std::move(options.httpTransport);
   try {
+    const bool unrestrictedAudio = !options.safetyPolicy.enforces(
+        SkinSafetyGuard::ResourceAllocationLimit);
     impl->audioHost = std::make_unique<LuaSkinAudioHost>(
-        *impl->fileSystem, std::move(options.audioBackend), options.stop);
+        *impl->fileSystem, std::move(options.audioBackend), options.stop,
+        LuaSkinAudioPolicy{
+            .maximumIdentities =
+                unrestrictedAudio ? std::numeric_limits<std::size_t>::max()
+                                  : LuaSkinAudioPolicy{}.maximumIdentities,
+            .allowRenderPhaseLoads = unrestrictedAudio});
     impl->legacyInputHost = std::make_unique<LuaSkinLegacyInputHost>(
         std::move(options.legacyInputSnapshot));
   } catch (...) {
@@ -1240,8 +1294,11 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
            options.safetyPolicy.enforces(SkinSafetyGuard::LuaResourceBudget)
                ? LuaRuntimePolicy::maxModuleSearchTemplates
                : std::numeric_limits<std::size_t>::max(),
-       .allowProcessGlobalOperations = !options.safetyPolicy.enforces(
-           SkinSafetyGuard::ProcessGlobalMutation),
+       // SkinLuaAccessor always installs SafeOsLib.  Its normal (non-sandbox)
+       // runtime exposes os.time/date while removing process-global mutators;
+       // this is independent of source-resource compatibility limits.
+       .allowProcessGlobalOperations = false,
+       .allowOsLibrary = !options.safetyPolicy.preservesPinnedLuaSandbox(),
        .coroutineContext = shared.get(),
        .coroutineCreated = installHook});
   if (!installed.modules) {
@@ -1454,10 +1511,23 @@ LuaCallbackResult LuaSkinRuntime::invoke(LuaCallbackId callback,
   return {.value = std::move(request.value)};
 }
 
+std::optional<int>
+LuaSkinRuntime::callbackParameterCount(LuaCallbackId callback) const noexcept {
+  if (!impl_ || callback.generation != impl_->shared->generation ||
+      callback.slot == 0 ||
+      callback.slot > impl_->shared->callbackParameterCounts.size()) {
+    return std::nullopt;
+  }
+  const int parameterCount =
+      impl_->shared->callbackParameterCounts[callback.slot - 1];
+  return parameterCount >= 0 ? std::optional<int>{parameterCount}
+                             : std::nullopt;
+}
+
 LuaCallbackCompileResult
 LuaSkinRuntime::compileCallbackScript(std::string_view script,
                                       LuaCallbackScriptKind kind) {
-  if (!impl_ || impl_->phase != LuaRuntimePhase::Configured || script.empty() ||
+  if (!impl_ || impl_->phase != LuaRuntimePhase::Configured ||
       (impl_->shared->enforceResourceBudget &&
        script.size() > kMaximumCallbackScriptBytes)) {
     return {.failure = makeDiagnostic("skin_lua_callback_script_invalid",

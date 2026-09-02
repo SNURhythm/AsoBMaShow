@@ -118,7 +118,11 @@ struct LuaCallbackLookupResult {
 };
 
 struct LuaValuePathElement {
-  std::variant<std::string, std::uint32_t> key;
+  struct RetainedValue {
+    std::uint32_t slot = 0;
+  };
+
+  std::variant<std::string, std::uint32_t, RetainedValue> key;
 
   static LuaValuePathElement field(std::string_view name) {
     return {.key = std::string(name)};
@@ -126,10 +130,18 @@ struct LuaValuePathElement {
   static LuaValuePathElement index(std::uint32_t value) {
     return {.key = value};
   }
+  static LuaValuePathElement retainedValue(std::uint32_t slot) {
+    return {.key = RetainedValue{.slot = slot}};
+  }
 };
 
 using LuaValuePath = std::vector<LuaValuePathElement>;
 using LuaBindingSourceValue = std::variant<int, std::string, LuaCallbackId>;
+
+// Type-5 Lua tables are serialized by iterating all entries, including
+// non-numeric keys. Preserve an entry's value while decoding so a later
+// binding lookup addresses that value rather than an invented ordinal.
+[[nodiscard]] std::uint32_t retainLuaBindingValue(lua_State *, int) noexcept;
 
 struct LuaBindingSourceLookupLimits {
   std::size_t maxStringBytes = std::numeric_limits<std::size_t>::max();
@@ -269,6 +281,8 @@ public:
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);
   LuaCallbackCompileResult compileCallbackScript(std::string_view,
                                                  LuaCallbackScriptKind);
+  [[nodiscard]] std::optional<int>
+  callbackParameterCount(LuaCallbackId) const noexcept;
   [[nodiscard]] LuaCallbackLivenessView callbackLiveness() const noexcept;
   [[nodiscard]] LuaRuntimePhase phase() const noexcept;
   [[nodiscard]] std::span<const SkinCompatibilityDiagnostic>

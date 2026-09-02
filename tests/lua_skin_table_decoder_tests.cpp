@@ -586,8 +586,9 @@ void testHeaderArraysFollowBeatorajaTableKeys() {
              fractional.header->width == 17 && fractional.header->height == 720,
          "integer conversion truncates numeric values like pinned LuaValue");
   const auto nonnumeric = fixture().decode("nonnumeric.luaskin");
-  expect(!nonnumeric.header && !nonnumeric.diagnostics.empty(),
-         "nonnumeric strings do not silently coerce to zero");
+  expect(nonnumeric.header && nonnumeric.diagnostics.empty() &&
+             nonnumeric.header->type == 0,
+         "Lua headers use LuaJ's zero coercion for nonnumeric type values");
   const auto unknownType = fixture().decode("unknown-type.luaskin");
   expect(!unknownType.header && !unknownType.diagnostics.empty(),
          "unknown Beatoraja skin type IDs are rejected");
@@ -600,12 +601,12 @@ void testHeaderArraysFollowBeatorajaTableKeys() {
 }
 
 void testAuthoredDimensionsStayWithinTheDecoderBoundary() {
-  for (const std::string_view invalid :
-       {"dimension-zero.luaskin", "dimension-negative.luaskin"}) {
-    const auto result = fixture().decode(invalid);
-    expect(!result.header && !result.diagnostics.empty(),
-           "non-positive authored dimensions are rejected");
-  }
+  const auto zero = fixture().decode("dimension-zero.luaskin");
+  const auto negative = fixture().decode("dimension-negative.luaskin");
+  expect(zero.header && zero.diagnostics.empty() && zero.header->width == 0 &&
+             negative.header && negative.diagnostics.empty() &&
+             negative.header->height == -1,
+         "type-5 headers preserve non-positive authored dimensions");
   const auto tooWide = fixture().decode("dimension-too-wide.luaskin");
   const auto tooTall = fixture().decode("dimension-too-tall.luaskin");
   expect(tooWide.header && tooWide.header->width == 8193 && tooTall.header &&
@@ -984,20 +985,20 @@ void testReconciliationRejectsEmptyConfigurationKeys() {
   header.type = 5;
   header.options = {{.name = "", .choices = {{.label = "Value", .value = 1}}}};
   auto option = reconcileSkinConfiguration(header, nullptr, *fileSystem);
-  expect(!option.configuration && !option.diagnostics.empty(),
-         "empty option names never become configuration keys");
+  expect(option.configuration && option.diagnostics.empty(),
+         "type-5 option names preserve Beatoraja's empty-key behavior");
 
   header.options.clear();
   header.files = {{.name = "", .pattern = "ordinary/*.png"}};
   auto file = reconcileSkinConfiguration(header, nullptr, *fileSystem);
-  expect(!file.configuration && !file.diagnostics.empty(),
-         "empty file names never become configuration keys");
+  expect(file.configuration && file.diagnostics.empty(),
+         "type-5 file names preserve Beatoraja's empty-key behavior");
 
   header.files.clear();
   header.offsets = {{.name = "", .id = 100}};
   auto offset = reconcileSkinConfiguration(header, nullptr, *fileSystem);
-  expect(!offset.configuration && !offset.diagnostics.empty(),
-         "empty offset names never become configuration keys");
+  expect(offset.configuration && offset.diagnostics.empty(),
+         "type-5 offset names preserve Beatoraja's empty-key behavior");
 }
 
 void testPinnedFilePatternChoicesAreDeterministicAndCaseInsensitive() {

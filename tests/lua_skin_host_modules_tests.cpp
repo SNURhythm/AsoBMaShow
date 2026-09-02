@@ -394,8 +394,9 @@ if not skin_config then
 end
 for _, name in ipairs({
   "event_index", "exscore", "float_number", "gauge", "gauge_type",
-  "judge", "number", "option", "rate", "set_timer", "text", "time", "timer",
-  "volume_bg", "volume_key", "volume_sys"
+  "judge", "key_pressed", "number", "option", "rate", "set_timer",
+  "set_volume_bg", "set_volume_key", "set_volume_sys", "text", "time",
+  "timer", "volume_bg", "volume_key", "volume_sys"
 }) do
   assert(type(state[name]) == "function", "missing main_state." .. name)
 end
@@ -413,6 +414,15 @@ assert(state.time() == 123456)
 assert(state.volume_bg() == 0.3)
 assert(state.volume_key() == 0.4)
 assert(state.volume_sys() == 0.5)
+assert(state.key_pressed(29))
+assert(state.key_pressed("A"))
+assert(not state.key_pressed("No Such Key"))
+assert(state.set_volume_bg(0.25) == true)
+assert(state.set_volume_key(0.35) == true)
+assert(state.set_volume_sys(0.45) == true)
+assert(math.abs(state.volume_bg() - 0.25) < 0.000001)
+assert(math.abs(state.volume_key() - 0.35) < 0.000001)
+assert(math.abs(state.volume_sys() - 0.45) < 0.000001)
 assert(state.set_timer(10000, 789) == true)
 assert(state.timer(10000) == 789)
 assert(not pcall(function() state.set_timer(9999, 1) end))
@@ -818,7 +828,8 @@ return {
 
   std::optional<RuntimeHarness>
   createWithAudio(std::string_view entryName, LuaRuntimePurpose purpose,
-                  std::shared_ptr<LuaSkinAudioBackend> audioBackend) {
+                  std::shared_ptr<LuaSkinAudioBackend> audioBackend,
+                  SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{}) {
     auto fileSystem = createFileSystem(entryName);
     if (!fileSystem) {
       return std::nullopt;
@@ -827,6 +838,7 @@ return {
     auto runtime = LuaSkinRuntime::create(
         {.purpose = purpose,
          .fileSystem = std::move(fileSystem),
+         .safetyPolicy = safetyPolicy,
          .audioBackend = std::move(audioBackend)});
     expect(runtime.runtime != nullptr, "audio host contract runtime creates");
     if (!runtime.runtime) {
@@ -977,15 +989,15 @@ public:
     }
     if (selector.value == decltype(selector.value){19} &&
         domain == SkinFloatPropertyDomain::Rate) {
-      return {.value = 0.3, .supported = true};
+      return {.value = bgVolume_, .supported = true};
     }
     if (selector.value == decltype(selector.value){18} &&
         domain == SkinFloatPropertyDomain::Rate) {
-      return {.value = 0.4, .supported = true};
+      return {.value = keyVolume_, .supported = true};
     }
     if (selector.value == decltype(selector.value){17} &&
         domain == SkinFloatPropertyDomain::Rate) {
-      return {.value = 0.5, .supported = true};
+      return {.value = systemVolume_, .supported = true};
     }
     return {};
   }
@@ -1001,6 +1013,14 @@ public:
     if (id < 10'000 || id > 19'999) return false;
     customTimer_ = value;
     return true;
+  }
+  bool setFloatProperty(int id, double value) override {
+    switch (id) {
+    case 17: systemVolume_ = value; return true;
+    case 18: keyVolume_ = value; return true;
+    case 19: bgVolume_ = value; return true;
+    default: return false;
+    }
   }
   std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept override { return {}; }
@@ -1018,6 +1038,9 @@ public:
 
 private:
   std::int64_t customTimer_ = std::numeric_limits<std::int64_t>::min();
+  double systemVolume_ = 0.5;
+  double keyVolume_ = 0.4;
+  double bgVolume_ = 0.3;
 };
 
 void testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates() {
@@ -1201,6 +1224,9 @@ void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
          "selected main-state surface keeps the header module empty");
   SelectedMainState state;
   harness->runtime->setFrameState(&state);
+  expect(harness->runtime->setLegacyInputSnapshot(
+             {.pressedKeys = {29}}),
+         "selected main-state surface publishes current legacy input");
   const auto configured = harness->runtime->loadConfigured(happyConfiguration());
   expect(configured.value.has_value() && !configured.failure,
          "selected main-state surface reads the bound configured state");
@@ -1452,6 +1478,34 @@ void testPinnedAudioSurfaceOwnsResolvedBackendIdentities() {
              state->destroyed,
          "Lua session teardown disposes every remaining identity exactly once "
          "before releasing the backend");
+
+  auto compatibilityState = std::make_shared<FakeAudioState>();
+  auto compatibility = fixture().createWithAudio(
+      "audio_surface.luaskin", LuaRuntimePurpose::Gameplay,
+      std::make_shared<FakeAudioBackend>(compatibilityState),
+      SkinSafetyPolicy{SkinSafetyLevel::Unrestricted});
+  if (!compatibility) {
+    return;
+  }
+  expect(compatibility->runtime->loadHeader().value.has_value(),
+         "Beatoraja-compatible audio fixture loads its header");
+  const auto configured =
+      compatibility->runtime->loadConfigured(happyConfiguration());
+  const auto renderMiss = configured.value
+                              ? configured.value->callbackNamed("render_miss")
+                              : std::nullopt;
+  expect(renderMiss && compatibility->runtime->enterRenderPhase().ok &&
+             compatibility->runtime->beginFrame(1).ok,
+         "Beatoraja-compatible audio fixture reaches its render callback");
+  if (renderMiss) {
+    const auto invoked = compatibility->runtime->invoke(*renderMiss, {});
+    expect(invoked.value == std::optional<LuaScalar>{true} &&
+               !invoked.failure && compatibilityState->loads.size() == 9 &&
+               compatibilityState->loads.back().ends_with(
+                   "/skin/render-miss.ogg"),
+           "Beatoraja-compatible audio loads a path first referenced during "
+           "render instead of applying a host preload-only gate");
+  }
 }
 
 void testAudioHostBoundsIdentitiesAndHonorsSessionCancellation() {

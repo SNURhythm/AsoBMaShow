@@ -20,6 +20,7 @@ struct LuaSkinGameplayDecodeContext {
 struct LuaSkinMusicSelectDecodeContext {
   LuaSkinRuntime &runtime;
   SkinBuiltinBindingCatalogView builtins;
+  SkinSafetyPolicy safetyPolicy{SkinSafetyLevel::Unrestricted};
 };
 
 struct LuaSkinTableDecoderPolicy {

@@ -1,4 +1,5 @@
 #include "LuaSkinAudioHost.h"
+#include "LuaSkinHostModules.h"
 #include "../package/SkinPathPolicy.h"
 
 #include <utility>
@@ -72,10 +73,8 @@ LuaSkinAudioHost::load(std::string_view authored,
     auto [inserted, unused] =
         loaded_.emplace(std::move(resolved), LoadedIdentity{});
     (void)unused;
-    // Render callbacks may address only identities declared or preloaded while
-    // the configured document was prepared. Unknown render-time paths remain
-    // cached misses so a callback never synchronously decodes audio.
-    if (backend_ && !renderPhase_ && !stop_.stop_requested()) {
+    if (backend_ && (!renderPhase_ || policy_.allowRenderPhaseLoads) &&
+        !stop_.stop_requested()) {
       inserted->second = backend_->load(inserted->first, stop_);
       if (inserted->second && !*inserted->second) {
         inserted->second.reset();
