@@ -692,6 +692,8 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  // Pinned MainController forwards selector mouse callbacks independently of
+  // TIMER_STARTINPUT, matching the logical-input path in update().
   if (skinSession_ && event.type == SDL_MOUSEBUTTONDOWN &&
       event.button.which != SDL_TOUCH_MOUSEID) {
     float x = 0.0F;
@@ -1509,7 +1511,8 @@ void MusicSelectScene::executeEvent(
           }
           return paths;
         };
-        if (const auto path = musicSelectExplorerPath(*selected, lookups)) {
+        if (const auto path = musicSelectExplorerPath(
+                *selected, lookups, archive_file::splitVirtualPath)) {
           std::string error;
           if (!platform_open::openPath(*path, error)) {
             SDL_Log("Failed to open selector path %s: %s",
@@ -1630,6 +1633,9 @@ void MusicSelectScene::update(float) {
       startInputMicros_ = now;
     }
   }
+  // Pinned Beatoraja exposes the authored selector delay through timer 1 but
+  // MainController still calls MusicSelector.input() before that timer turns
+  // on. Keep controller and keyboard input live across the same interval.
   consumeLogicalInput();
   consumeActions();
   previewController_.observeSelection(

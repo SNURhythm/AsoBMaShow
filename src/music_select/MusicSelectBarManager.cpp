@@ -62,6 +62,8 @@ bool difficultyMatches(std::string_view filter,
     return meta.MinBpm != meta.MaxBpm || record.hasScrollChange ||
            record.hasBpmStop;
   }
+  // Pinned Beatoraja DifficultyFilter.closestMatch deliberately ignores
+  // SongData.difficulty here and chooses the nearest NOTES profile.
   constexpr std::array<std::pair<std::string_view, int>, 5> profiles{{
       {"BEGINNER", 0}, {"NORMAL", 500}, {"HYPER", 700},
       {"ANOTHER", 1300}, {"INSANE", 2700},

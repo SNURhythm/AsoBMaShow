@@ -220,12 +220,14 @@ void testPinnedFilterFallbackAndSort() {
   first->chart->meta.Title = "Zulu";
   first->chart->meta.KeyMode = 7;
   first->chart->meta.TotalNotes = 500;
+  first->chart->meta.Difficulty = 4;
   first->chart->meta.MinBpm = first->chart->meta.MaxBpm = 120;
   first->score = ScoreBestSnapshot{.score = 500, .maxScore = 1000};
   second->chart.emplace();
   second->chart->meta.Title = "Alpha";
   second->chart->meta.KeyMode = 14;
   second->chart->meta.TotalNotes = 1300;
+  second->chart->meta.Difficulty = 1;
   second->chart->meta.MinBpm = second->chart->meta.MaxBpm = 120;
   second->score = ScoreBestSnapshot{.score = 1800, .maxScore = 2600};
 
@@ -239,7 +241,8 @@ void testPinnedFilterFallbackAndSort() {
               snapshot.rows.front().id.value == "song:2" &&
               snapshot.resolvedModeFilter == "14KEY" &&
               snapshot.resolvedDifficultyFilter == "ANOTHER",
-          "ModeFilter and DifficultyFilter retain a non-empty exact match");
+          "named difficulty uses the pinned nearest-notes profile rather than "
+          "the chart difficulty field");
 
   manager.configure({.modeFilter = "48KEY",
                      .difficultyFilter = "INSANE",

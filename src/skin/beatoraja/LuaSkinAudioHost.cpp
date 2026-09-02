@@ -97,8 +97,12 @@ LuaSkinAudioHost::play(std::string_view path, float volume,
   if (!result.ok()) return result;
   LoadedIdentity *identity = load(path, result);
   if (identity != nullptr && *identity) {
-    active_.insert_or_assign(std::move(resolved),
-                             ActivePlayback{.volume = volume, .loop = loop});
+    if (loop || !suspended_) {
+      active_.insert_or_assign(
+          resolved, ActivePlayback{.volume = volume, .loop = loop});
+    } else {
+      active_.erase(resolved);
+    }
     if (backend_ && !suspended_) {
       backend_->play(**identity, backend_->systemVolume() * volume, loop);
     }
@@ -154,12 +158,15 @@ LuaSkinAudioHost::dispose(std::string_view authored) noexcept {
 void LuaSkinAudioHost::suspend() noexcept {
   if (suspended_) return;
   suspended_ = true;
-  if (!backend_) return;
-  for (const auto &[path, playback] : active_) {
-    (void)playback;
-    const auto found = loaded_.find(path);
-    if (found != loaded_.end() && found->second) {
+  for (auto playback = active_.begin(); playback != active_.end();) {
+    const auto found = loaded_.find(playback->first);
+    if (backend_ && found != loaded_.end() && found->second) {
       backend_->stop(*found->second);
+    }
+    if (!playback->second.loop) {
+      playback = active_.erase(playback);
+    } else {
+      ++playback;
     }
   }
 }

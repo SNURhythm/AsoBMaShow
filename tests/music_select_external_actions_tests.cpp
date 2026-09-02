@@ -115,6 +115,18 @@ void testExplorerBranchPriority() {
 
   bar.title = "~leading";
   assert(musicSelectExplorerTitleQuery(bar.title) == "~leading");
+
+  const auto archived = song("/charts/package.zip/nested/chart.bms", true);
+  const auto splitArchive = [](const std::filesystem::path &path,
+                               std::filesystem::path &archive,
+                               std::filesystem::path &inner) {
+    if (path != "/charts/package.zip/nested/chart.bms") return false;
+    archive = "/charts/package.zip";
+    inner = "nested/chart.bms";
+    return true;
+  };
+  assert(musicSelectExplorerPath(archived, {}, splitArchive) ==
+         std::filesystem::path("/charts"));
 }
 
 void testFolderAndDownloadSiteBranches() {

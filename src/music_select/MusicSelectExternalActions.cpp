@@ -24,9 +24,22 @@ std::size_t firstCodePointLength(std::string_view text) {
 }
 
 std::optional<std::filesystem::path>
-firstParent(const std::vector<std::filesystem::path> &paths) {
+explorerParent(const std::filesystem::path &path,
+               const MusicSelectArchivePathSplitter &splitArchive) {
+  if (path.empty()) return std::nullopt;
+  std::filesystem::path archive;
+  std::filesystem::path inner;
+  if (splitArchive && splitArchive(path, archive, inner)) {
+    return archive.parent_path();
+  }
+  return path.parent_path();
+}
+
+std::optional<std::filesystem::path>
+firstParent(const std::vector<std::filesystem::path> &paths,
+            const MusicSelectArchivePathSplitter &splitArchive) {
   for (const auto &path : paths) {
-    if (!path.empty()) return path.parent_path();
+    if (const auto parent = explorerParent(path, splitArchive)) return parent;
   }
   return std::nullopt;
 }
@@ -72,22 +85,32 @@ std::string musicSelectExplorerTitleQuery(std::string_view title) {
 
 std::optional<std::filesystem::path>
 musicSelectExplorerPath(const MusicSelectBar &bar,
-                        const MusicSelectExplorerLookups &lookups) {
+                        const MusicSelectExplorerLookups &lookups,
+                        const MusicSelectArchivePathSplitter &splitArchive) {
   if (bar.kind == skin::MusicSelectBarKind::Folder) {
+    std::filesystem::path archive;
+    std::filesystem::path inner;
+    if (splitArchive &&
+        splitArchive(bar.directoryPath, archive, inner)) {
+      return archive.parent_path();
+    }
     return bar.directoryPath;
   }
   if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart) {
     return std::nullopt;
   }
-  if (bar.presentation.exists) return bar.chart->meta.BmsPath.parent_path();
+  if (bar.presentation.exists) {
+    return explorerParent(bar.chart->meta.BmsPath, splitArchive);
+  }
   if (bar.chart->originalMd5s) {
     return lookups.originalMd5Paths
-               ? firstParent(lookups.originalMd5Paths(*bar.chart->originalMd5s))
+               ? firstParent(lookups.originalMd5Paths(*bar.chart->originalMd5s),
+                             splitArchive)
                : std::nullopt;
   }
   const std::string query = musicSelectExplorerTitleQuery(bar.title);
   if (query.empty() || !lookups.textPaths) return std::nullopt;
-  return firstParent(lookups.textPaths(query));
+  return firstParent(lookups.textPaths(query), splitArchive);
 }
 
 std::optional<std::filesystem::path>

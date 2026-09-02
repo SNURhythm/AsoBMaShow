@@ -35,7 +35,8 @@ musicSelectExplorerTitleQuery(std::string_view title);
 
 [[nodiscard]] std::optional<std::filesystem::path>
 musicSelectExplorerPath(const MusicSelectBar &,
-                        const MusicSelectExplorerLookups &);
+                        const MusicSelectExplorerLookups &,
+                        const MusicSelectArchivePathSplitter & = {});
 
 [[nodiscard]] std::optional<std::filesystem::path>
 musicSelectRefreshPath(const MusicSelectBar &,

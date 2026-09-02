@@ -1866,6 +1866,8 @@ void testVersion4MigrationPreservesOutcomesAndRows(
          ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+  assert(queryInt(migrated.get(),
+                  "SELECT bad_points FROM scores WHERE id=1") == 12);
   assert(chartOutcome(migrated.get()) == chartBefore);
   assert(courseOutcome(migrated.get()) == courseBefore);
   for (const std::string table : {"scores", "course_scores"}) {

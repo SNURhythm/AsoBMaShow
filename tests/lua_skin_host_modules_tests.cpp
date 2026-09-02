@@ -1511,17 +1511,17 @@ void testAudioHostSuspendsAndRestoresActivePlayback() {
       .identity = {.value = 1}, .volume = 0.125F, .loop = false};
   const FakeAudioPlayCall resumedLoop{
       .identity = {.value = 2}, .volume = 0.5F, .loop = true};
-  expect(state->plays.size() == 5 &&
-             std::ranges::count(state->plays, resumedOne) == 2 &&
+  expect(state->plays.size() == 4 &&
+             std::ranges::count(state->plays, resumedOne) == 1 &&
              std::ranges::count(state->plays, resumedLoop) == 2,
-         "resuming a skin restores each authored playback once with current "
-         "system-volume scaling");
+         "resuming a skin restores only authored loops with current "
+         "system-volume scaling and never replays a completed one-shot");
 
   host.suspend();
   expect(host.stop("one.ogg").ok() && host.dispose("loop.ogg").ok(),
          "stopped and disposed playback can be changed while suspended");
   host.resume();
-  expect(state->plays.size() == 5,
+  expect(state->plays.size() == 4,
          "stopped and disposed playback is not restarted on resume");
 }
 

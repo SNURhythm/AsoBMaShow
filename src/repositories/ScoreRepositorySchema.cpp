@@ -78,6 +78,7 @@ bool currentScoreSchemaIsValid(sqlite3 *db);
 bool ensureScorePlayDurationColumn(sqlite3 *db);
 bool ensureScorePlayDurationInvariant(sqlite3 *db);
 bool ensureScoreSelectorMetricColumns(sqlite3 *db);
+bool backfillScoreSelectorMetrics(sqlite3 *db);
 bool attachChartDatabaseForScoreMigration(
     sqlite3 *db, const std::filesystem::path &chartPath);
 void detachChartDatabaseForScoreMigration(sqlite3 *db);
@@ -1360,6 +1361,19 @@ bool ensureScoreSelectorMetricColumns(sqlite3 *db) {
              "adding score average-judge column", logSqlErrorText);
 }
 
+bool backfillScoreSelectorMetrics(sqlite3 *db) {
+  if (!execSql(db,
+               "UPDATE scores SET bad_points = bad + poor + kpoor "
+               "WHERE bad_points IS NULL AND score_source = 0",
+               "backfilling local score bad points")) {
+    return false;
+  }
+  if (sqlite3_changes(db) > 0) {
+    score_repository_detail::IncrementRevision();
+  }
+  return true;
+}
+
 bool ensureScorePlayDurationInvariant(sqlite3 *db) {
   const std::string maximum =
       std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds);
@@ -1943,6 +1957,9 @@ bool score_repository_detail::CreateScoreTableOnConnection(
       !ensureScorePlayDurationColumn(db) ||
       !ensureScoreSelectorMetricColumns(db) ||
       !ensureScoreImportedIrColumns(db)) {
+    return false;
+  }
+  if (!backfillScoreSelectorMetrics(db)) {
     return false;
   }
 
