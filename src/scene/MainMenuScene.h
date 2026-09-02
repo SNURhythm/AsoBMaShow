@@ -34,6 +34,7 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include <array>
 #include <atomic>
@@ -241,6 +242,7 @@ private:
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   PlayOptionsPanelView *playOptionsPanel = nullptr;
+  std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal;
   View *parseLogModalRoot = nullptr;
   View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;

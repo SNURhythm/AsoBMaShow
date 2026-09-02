@@ -1153,6 +1153,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
   playOptionsPanel = nullptr;
+  playOptionsModal.reset();
   musicModalRoot = nullptr;
   unzipModalRoot = nullptr;
   unzipProgressTrack = nullptr;
@@ -6729,65 +6730,8 @@ void MainMenuScene::buildPlayOptionsModal() {
   if (rootLayout == nullptr) {
     return;
   }
-
-  const float availablePanelWidth =
-      std::max(300.0f, static_cast<float>(rendering::window_width) - 48.0f);
-  const float kModalPanelWidth = std::min(760.0f, availablePanelWidth);
-  constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalScrollRightPadding = 18.0f;
-  const float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
-  const float kOptionContentWidth =
-      std::max(0.0f, kModalContentWidth - kModalScrollRightPadding);
-  const float availablePanelHeight =
-      std::max(240.0f, static_cast<float>(rendering::window_height) - 72.0f);
-  const float kModalPanelHeight = std::min(820.0f, availablePanelHeight);
-
-  playOptionsModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
-                                                 rendering::window_height);
-  playOptionsModalRoot->setPositionType(YGPositionTypeAbsolute);
-  playOptionsModalRoot->setPosition(Edge::Left, 0);
-  playOptionsModalRoot->setPosition(Edge::Top, 0);
-  playOptionsModalRoot->setZIndex(1000);
-  playOptionsModalRoot->setVisible(false);
-  playOptionsModalRoot->setFlexDirection(FlexDirection::Column);
-  playOptionsModalRoot->setAlignItems(YGAlignCenter);
-  playOptionsModalRoot->setJustifyContent(YGJustifyCenter);
-  playOptionsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
-
-  auto *panel = new View();
-  panel->setWidth(kModalPanelWidth)
-      ->setHeight(kModalPanelHeight)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::All, 22)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(modalPanelBorder)
-      ->setBorderWidth(1);
-
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Play Options");
-  title->setThemedColor(ui_theme::textPrimary);
-  title->setHeight(42);
-  panel->addView(title);
-
-  auto *scrollView = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
-                                    1);
-  scrollView->setWidth(kModalContentWidth);
-  scrollView->setFlex(1.0f);
-  scrollView->setContentPadding(Edge::Right, kModalScrollRightPadding);
-
-  auto *optionsContent = new View();
-  optionsContent->setFlexDirection(FlexDirection::Column);
-  optionsContent->setAlignItems(YGAlignStretch);
-  optionsContent->setGap(12);
-  optionsContent->setWidth(kOptionContentWidth);
-
-  const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
-  playOptionsPanel = new PlayOptionsPanelView(
+  playOptionsModal = MainMenuPlayOptionsModal::Create(
+      rootLayout,
       {.onRulesetSelected = [this](GameplayRuleset ruleset) {
          setGameplayRulesetSelection(ruleset);
        },
@@ -6819,41 +6763,16 @@ void MainMenuScene::buildPlayOptionsModal() {
        .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
        .onPacemakerSelected = [this](const std::string &target) {
          setPacemakerTargetSelection(target);
-       }},
-      {.width = kOptionContentWidth,
-       .playOptionColumns = static_cast<int>(playOptionColumns),
-       .showGauge = true,
-       .showLaneOrder = false,
-       .showPacemaker = true},
-      overlayPortal);
-  optionsContent->addView(playOptionsPanel);
-
-  scrollView->setContentView(optionsContent);
-  panel->addView(scrollView);
-
-  auto *footer = new View();
-  footer->setFlexDirection(FlexDirection::Row);
-  footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setHeight(58);
-  playOptionsCloseButton =
-      makeModalButton("Close", 20, &playOptionsCloseButtonText);
-  playOptionsCloseButton->setOnClickListener(
-      [this]() { hidePlayOptionsModal(); });
-  footer->addView(playOptionsCloseButton);
-  panel->addView(footer);
-
-  playOptionsModalRoot->addView(panel);
-  rootLayout->addView(playOptionsModalRoot);
+       }}, overlayPortal);
+  if (!playOptionsModal) return;
+  playOptionsModalRoot = playOptionsModal->root();
+  playOptionsPanel = playOptionsModal->panel();
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
   refreshPlaybackSelectionControls();
   refreshPacemakerTargetButtons();
-  styleThemedActionButton(playOptionsCloseButton, playOptionsCloseButtonText,
-                          true, ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
 }
 
 void MainMenuScene::showPlayOptionsModal() {
@@ -6867,20 +6786,14 @@ void MainMenuScene::showPlayOptionsModal() {
   refreshAssistOptionButtons();
   refreshPlaybackSelectionControls();
   refreshPacemakerTargetButtons();
-  playOptionsModalRoot->setSize(rendering::window_width,
-                                rendering::window_height);
-  playOptionsModalRoot->setVisible(true);
-  playOptionsModalRoot->applyYogaLayout();
+  playOptionsModal->show();
 }
 
 void MainMenuScene::hidePlayOptionsModal() {
   if (playOptionsModalRoot == nullptr) {
     return;
   }
-  if (playOptionsPanel != nullptr) {
-    playOptionsPanel->closeDropdowns();
-  }
-  playOptionsModalRoot->setVisible(false);
+  playOptionsModal->hide();
 }
 
 void MainMenuScene::buildReplayModal() {
@@ -10508,6 +10421,7 @@ void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   revealContextMenu.reset();
   rankingsModal.reset();
+  playOptionsModal.reset();
   replayFileDocumentHandoff.close();
   parseLogDocumentHandoff.close();
   replayDeleteConfirmation.cancel();
