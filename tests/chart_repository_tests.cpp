@@ -386,7 +386,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 6);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 7);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -587,7 +587,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=7"));
+                   "PRAGMA user_version=8"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -816,6 +816,9 @@ void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
       .name = "URL course",
       .groupName = "Courses",
       .level = "1",
+      .trophies = {{.name = "silvermedal",
+                    .missRate = 5.0,
+                    .scoreRate = 70.0}},
       .charts = {{.level = "1",
                   .md5 = std::string(installedMd5),
                   .sha256 = std::string(installedSha),
@@ -848,6 +851,10 @@ void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
   const auto courses =
       session->SelectDifficultyCourses(tables.front().id, "Courses");
   assert(courses.size() == 1);
+  assert(courses.front().trophies.size() == 1);
+  assert(courses.front().trophies.front().name == "silvermedal");
+  assert(courses.front().trophies.front().missRate == 5.0);
+  assert(courses.front().trophies.front().scoreRate == 70.0);
   ChartMetaQuery courseQuery;
   courseQuery.courseId = courses.front().id;
   std::vector<ChartMetaRecord> courseRows;
@@ -1029,7 +1036,7 @@ void testChartMigrationCompatibilityMatrix() {
   });
 
   TempDirectory temporary;
-  for (const int inputVersion : {0, 1, 2, 3, 4, 5}) {
+  for (const int inputVersion : {0, 1, 2, 3, 4, 5, 6}) {
     const auto path =
         temporary.path() / ("migration-v" + std::to_string(inputVersion) +
                             ".db");
@@ -1040,6 +1047,8 @@ void testChartMigrationCompatibilityMatrix() {
     {
       Database database = openDatabase(path);
       assert(database);
+      assert(execute(database.get(),
+                     "ALTER TABLE chart_meta DROP COLUMN add_date"));
       const std::string favoriteMd5 =
           inputVersion <= 1 ? upperMd5 : std::string(lowerMd5);
       const std::string favoriteSha =
@@ -1063,7 +1072,7 @@ void testChartMigrationCompatibilityMatrix() {
               "'migration.bms','" +
               favoriteMd5 + "','" + favoriteSha + "');"
               "PRAGMA user_version=" + std::to_string(inputVersion)));
-      if (inputVersion == 5) {
+      if (inputVersion >= 5) {
         assert(execute(database.get(),
                        "INSERT INTO review(sha256, favorite) VALUES('" +
                            std::string(lowerSha) + "', 2)"));
@@ -1074,7 +1083,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 7);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -1146,13 +1155,13 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 6);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 7);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
                     "WHERE id=1") == 1);
   }
-  assert(repository.GetLibraryRevision() == revisionBefore + 3);
+  assert(repository.GetLibraryRevision() == revisionBefore + 4);
 }
 
 void testLegacyIosContainerPathRebasesToCurrentDocuments() {

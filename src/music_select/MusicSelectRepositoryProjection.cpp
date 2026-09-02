@@ -135,6 +135,7 @@ struct ProjectionBuilder {
                           .title = title,
                           .exists = !record.unavailable &&
                                     !record.meta.BmsPath.empty(),
+                          .addDateSeconds = record.addDateSeconds,
                           .lamp = lamp,
                           .difficulty = record.meta.Difficulty,
                           .level = static_cast<int>(record.meta.PlayLevel),
@@ -433,12 +434,36 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
           grade.courseTotalNotes += stage.meta.TotalNotes;
           grade.presentation.featureFlags |= songFeatures(stage.meta);
         }
-        if (input.courseRankFor) {
-          const int rank = input.courseRankFor(
-              grade.courseKey, grade.courseId, input.selectedLongNoteMode);
+        if (input.courseScoresFor) {
+          const auto scores = input.courseScoresFor(
+              grade.courseKey, grade.courseId, input.selectedLongNoteMode,
+              !courseSource.stages.empty() &&
+                  courseSource.stages.front().meta.IsDP);
+          int rank = kNoClearTypeRank;
+          for (const auto &score : scores) {
+            if (score) rank = std::max(rank, score->clearType);
+          }
           grade.presentation.lamp = beatorajaClearType(rank);
-          if (rank != kNoClearTypeRank) {
-            grade.score = ScoreBestSnapshot{.clearType = rank};
+          grade.score = scores.front();
+
+          // GradeBar checks trophies from last to first against the normal,
+          // mirror, and random ScoreData records. Each record independently
+          // retains its highest EX score and lowest BP.
+          for (auto trophy = courseSource.info.trophies.rbegin();
+               trophy != courseSource.info.trophies.rend(); ++trophy) {
+            const bool qualified = std::ranges::any_of(
+                scores, [&](const std::optional<ScoreBestSnapshot> &score) {
+                  return score && score->badPoints &&
+                         score->maxScore != 0 &&
+                         trophy->missRate >=
+                             *score->badPoints * 200.0 / score->maxScore &&
+                         trophy->scoreRate <=
+                             score->score * 100.0 / score->maxScore;
+                });
+            if (qualified) {
+              grade.presentation.trophyName = trophy->name;
+              break;
+            }
           }
         }
         table.children.push_back(grade.id);

@@ -2547,6 +2547,72 @@ void testChartAndCourseRoundTripAndPathIsolation(
   assert(retargetable.GetRevision() > revisionBefore);
 }
 
+void testCourseSelectorOptionScoresMatchBeatorajaBuckets(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-selector-option-scores" / "score.db";
+  ScoreRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  CoursePlaySession session;
+  session.courseId = 24;
+  session.courseName = "Selector Course";
+  session.courseGroupName = "Group";
+  session.constraintJson = "[]";
+  session.longNoteMode = 2;
+  session.entries.push_back({.meta = sampleMeta(root, "selector-course")});
+  session.courseKey = course_identity::makeCourseKey(session);
+
+  const auto save = [&](std::string player1, std::string player2, bool flip,
+                        std::string provenanceName) {
+    ScoreProvenance provenance = sampleProvenance(provenanceName);
+    provenance.player1.option = std::move(player1);
+    provenance.player2.option = std::move(player2);
+    provenance.doublePlayFlip = flip;
+    assert(helper.SaveCourseScore(session, sampleState(20, 5), 1, 1,
+                                  provenance));
+  };
+  save("NORMAL", "NORMAL", false, "selector-normal");
+  save("MIRROR", "MIRROR", true, "selector-mirror");
+  save("RANDOM", "NORMAL", false, "selector-random-score");
+  save("NORMAL", "RANDOM", false, "selector-random-lamp");
+
+  {
+    auto db = openDatabase(path);
+    execOrAbort(
+        db.get(),
+        "UPDATE course_scores SET score=100,max_score=200,bad=6,poor=2,"
+        "kpoor=1,clear_type=" +
+            std::to_string(kClearTypeNormalClearRank) + " WHERE id=1;" +
+            "UPDATE course_scores SET score=110,max_score=220,bad=3,poor=1,"
+            "kpoor=0,clear_type=" +
+            std::to_string(kClearTypeHardClearRank) + " WHERE id=2;" +
+            "UPDATE course_scores SET score=180,max_score=200,bad=7,poor=2,"
+            "kpoor=1,clear_type=" +
+            std::to_string(kClearTypeEasyClearRank) + " WHERE id=3;" +
+            "UPDATE course_scores SET score=160,max_score=240,bad=1,poor=1,"
+            "kpoor=0,clear_type=" +
+            std::to_string(kClearTypeFullComboRank) + " WHERE id=4");
+  }
+
+  const auto scores = helper.LoadCourseSelectorOptionScores(
+      session.courseKey, session.courseId, session.longNoteMode, true);
+  assert(scores[0].has_value());
+  assert(scores[0]->score == 100);
+  assert(scores[0]->maxScore == 200);
+  assert(scores[0]->badPoints == 9);
+  assert(scores[0]->clearType == kClearTypeNormalClearRank);
+  assert(scores[1].has_value());
+  assert(scores[1]->score == 110);
+  assert(scores[1]->maxScore == 220);
+  assert(scores[1]->badPoints == 4);
+  assert(scores[1]->clearType == kClearTypeHardClearRank);
+  assert(scores[2].has_value());
+  assert(scores[2]->score == 180);
+  assert(scores[2]->maxScore == 240);
+  assert(scores[2]->badPoints == 2);
+  assert(scores[2]->clearType == kClearTypeFullComboRank);
+}
+
 void testModifiedPlaybackDoesNotUpdateBestScores(
     const std::filesystem::path &root) {
   const auto path = root / "assisted-clear-cap" / "score.db";
@@ -3258,6 +3324,7 @@ int main() {
   testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
   testFutureVersionIsRejected(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
+  testCourseSelectorOptionScoresMatchBeatorajaBuckets(root);
   testModifiedPlaybackDoesNotUpdateBestScores(root);
   testVersion8MigrationReclassifiesBeatorajaValidScores(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);

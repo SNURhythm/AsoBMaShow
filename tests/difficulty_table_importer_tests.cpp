@@ -47,7 +47,10 @@ struct Fixture {
       "{\"name\":\"Test Table\",\"symbol\":\"*\","
       "\"data_url\":\"data.json\",\"level_order\":[\"1\"],"
       "\"course\":[{\"name\":\"Course *1\","
-      "\"constraint\":[\"gauge_lr2\"],\"charts\":[{\"sha256\":\"" +
+      "\"constraint\":[\"gauge_lr2\"],"
+      "\"trophy\":[{\"name\":\"bronzemedal\",\"missrate\":7.5,"
+      "\"scorerate\":55.0},{\"name\":\"invalid\",\"missrate\":0,"
+      "\"scorerate\":50.0}],\"charts\":[{\"sha256\":\"" +
       sha256 + "\"}]}]}";
   std::string dataJson = "[{\"level\":\"1\",\"md5\":\"" + md5 +
                          "\",\"sha256\":\"" + sha256 +
@@ -149,6 +152,10 @@ void testParseAndReplacementRollback() {
   assert(parsed->courses.front().groupName == "Course");
   assert(parsed->courses.front().level == "*1");
   assert(parsed->courses.front().constraintJson == "[\"gauge_lr2\"]");
+  assert(parsed->courses.front().trophies.size() == 1);
+  assert(parsed->courses.front().trophies.front().name == "bronzemedal");
+  assert(parsed->courses.front().trophies.front().missRate == 7.5);
+  assert(parsed->courses.front().trophies.front().scoreRate == 55.0);
   assert(parsed->courses.front().charts.size() == 1);
   assert(parsed->courses.front().charts.front().md5 == fixture.md5);
 

@@ -68,6 +68,11 @@ struct ScoreBestSnapshot {
   ScoreBestSource source = ScoreBestSource::Local;
 };
 
+// Beatoraja GradeBar reads three independent ScoreData records: normal,
+// mirror, and every other randomized option.
+using CourseSelectorOptionScores =
+    std::array<std::optional<ScoreBestSnapshot>, 3>;
+
 // The local equivalent of Beatoraja's one-row ScoreData record.  Aso stores
 // each authenticated play independently, so this projection retains the
 // particular historical fields SkinPropertyFactory reads: the first attempt

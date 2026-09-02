@@ -35,6 +35,7 @@ ChartMetaRecord chart(std::string path, std::string sha256,
   result.meta.LnMode = 2;
   result.meta.TotalLandmineNotes = 1;
   result.meta.TotalNotes = 400;
+  result.addDateSeconds = 1'700'000'000;
   return result;
 }
 
@@ -77,7 +78,8 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
   require(song && song->kind == skin::MusicSelectBarKind::Song &&
               song->title == "Alpha Another" && song->chart &&
               song->presentation.exists && song->presentation.level == 12 &&
-              song->presentation.difficulty == 4,
+              song->presentation.difficulty == 4 &&
+              song->presentation.addDateSeconds == 1'700'000'000,
           "SongBar values use SongData full-title and chart fields");
   require(song && song->presentation.lamp == 7 &&
               song->score && song->score->score == 1000 &&
@@ -130,7 +132,16 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
                 .groupName = "GRADE",
                 .level = "1",
                 .name = "Course",
-                .constraintJson = R"(["grade_mirror","no_speed"])"},
+                .constraintJson = R"(["grade_mirror","no_speed"])",
+                .trophies = {{.name = "bronzemedal",
+                              .missRate = 8.0,
+                              .scoreRate = 55.0},
+                             {.name = "silvermedal",
+                              .missRate = 5.0,
+                              .scoreRate = 70.0},
+                             {.name = "goldmedal",
+                              .missRate = 2.5,
+                              .scoreRate = 85.0}}},
        .stages = {courseFirst, courseMissing}});
   metadata.tables.push_back(std::move(table));
 
@@ -151,10 +162,21 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
          }
          return std::optional<ScoreBestSnapshot>{};
        },
-       .courseRankFor = [](std::string_view key, int id, int mode) {
-         return key == "course-key" && id == 73 && mode == 2
-                    ? kClearTypeHardClearRank
-                    : kNoClearTypeRank;
+       .courseScoresFor = [](std::string_view key, int id, int mode, bool) {
+         MusicSelectCourseOptionScores scores;
+         if (key == "course-key" && id == 73 && mode == 2) {
+           scores[0] = ScoreBestSnapshot{
+               .score = 1'450,
+               .maxScore = 2'000,
+               .badPoints = 40,
+               .clearType = kClearTypeHardClearRank};
+           scores[2] = ScoreBestSnapshot{
+               .score = 1'720,
+               .maxScore = 2'200,
+               .badPoints = 20,
+               .clearType = kClearTypeNormalClearRank};
+         }
+         return scores;
        },
        .metadata = &metadata,
        .modeFilter = "ALL",
@@ -213,6 +235,7 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
               grade->courseStages.size() == 2 &&
               grade->courseTotalNotes == 1000 &&
               !grade->presentation.exists && grade->presentation.lamp == 6 &&
+              grade->presentation.trophyName == "silvermedal" &&
               grade->courseConstraints.size() == 2 &&
               grade->courseConstraints[0] ==
                   skin::MusicSelectCourseConstraint::Mirror &&

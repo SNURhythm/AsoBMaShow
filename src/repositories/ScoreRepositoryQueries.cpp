@@ -7,6 +7,7 @@
 #include "../CoursePlaySession.h"
 #include "../LongNoteModeUtils.h"
 #include "../ProfileDatabaseActivity.h"
+#include "../replay/ReplayOption.h"
 #include "ReplayRepository.h"
 #include "../ResultContracts.h"
 #include "../ResultPersistenceModel.h"
@@ -1831,6 +1832,84 @@ ScoreRepository::LoadBestCourseScore(const CoursePlaySession &session) {
   }
   return score_repository_detail::LoadBestCourseScoreOnConnection(
       impl_->sessionDatabase, session);
+}
+
+CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
+    std::string_view courseKey, int legacyCourseId, int longNoteMode,
+    bool doublePlay) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  CourseSelectorOptionScores scores;
+  if (!EnsureSessionDatabaseLocked()) return scores;
+
+  const std::string query =
+      "SELECT score,max_score,bad + poor + kpoor,clear_type,play_option,"
+      "provenance_json FROM course_scores c WHERE "
+      "((?1<>'' AND course_key=?1) OR "
+      "(COALESCE(course_key,'')='' AND course_id=?2)) AND "
+      "(ln_mode=?3 OR ln_mode=-1) AND " +
+      score_cache_queries::detail::scoreParticipatesInBestExpr("c");
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->sessionDatabase, query, statement,
+          "loading selector course option scores", logSqlErrorText)) {
+    return scores;
+  }
+  bindSqliteTextView(statement.get(), 1, courseKey);
+  sqlite3_bind_int(statement.get(), 2, legacyCourseId);
+  sqlite3_bind_int(statement.get(), 3,
+                   long_note_mode::normalizeValue(longNoteMode));
+
+  const auto optionIndex = [](std::string_view option) {
+    return replay::projectedBeatorajaReplayOptionIndex(option).value_or(0);
+  };
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(statement.get())) == SQLITE_ROW) {
+    std::string player1 = sqliteColumnString(statement.get(), 4);
+    std::string player2 = "NORMAL";
+    bool flip = false;
+    std::string provenanceError;
+    const auto provenance = deserializeScoreProvenance(
+        sqliteColumnString(statement.get(), 5), provenanceError);
+    if (provenance && provenance->ruleset.version > 0) {
+      player1 = provenance->player1.option;
+      player2 = provenance->player2.option;
+      flip = provenance->doublePlayFlip;
+    }
+
+    const int first = optionIndex(player1);
+    const int second = optionIndex(player2);
+    int bucket = 0;
+    if (first > 0 || (doublePlay && (second > 0 || flip))) bucket = 2;
+    if (first == 1 && (!doublePlay || (second == 1 && flip))) bucket = 1;
+
+    ScoreBestSnapshot row{
+        .score = sqlite3_column_int(statement.get(), 0),
+        .maxScore = sqlite3_column_int(statement.get(), 1),
+        .clearType = sqlite3_column_int(statement.get(), 3),
+    };
+    if (sqlite3_column_type(statement.get(), 2) == SQLITE_INTEGER) {
+      row.badPoints = sqlite3_column_int(statement.get(), 2);
+    }
+    auto &aggregate = scores[static_cast<std::size_t>(bucket)];
+    if (!aggregate) {
+      aggregate = row;
+      continue;
+    }
+    aggregate->score = std::max(aggregate->score, row.score);
+    aggregate->maxScore = std::max(aggregate->maxScore, row.maxScore);
+    aggregate->clearType = std::max(aggregate->clearType, row.clearType);
+    if (row.badPoints &&
+        (!aggregate->badPoints || *row.badPoints < *aggregate->badPoints)) {
+      aggregate->badPoints = row.badPoints;
+    }
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("loading selector course option scores",
+                impl_->sessionDatabase);
+    return {};
+  }
+  return scores;
 }
 
 std::optional<ScoreBestSnapshot>

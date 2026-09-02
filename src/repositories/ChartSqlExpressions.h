@@ -40,8 +40,9 @@ inline constexpr const char *kChartMetaSelectColumns =
     "cm.ln_mode,"
     "cm.has_document,"
     "cm.has_bpm_stop,"
-    "cm.has_scroll_change";
-inline constexpr int kChartMetaColumnCount = 32;
+    "cm.has_scroll_change,"
+    "cm.add_date";
+inline constexpr int kChartMetaColumnCount = 33;
 
 inline std::string chartSourcePriorityExpr(std::string_view alias) {
   const std::string aliasText(alias);

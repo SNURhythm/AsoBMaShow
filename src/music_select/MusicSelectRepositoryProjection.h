@@ -35,13 +35,16 @@ struct MusicSelectSearchSource {
   std::vector<ChartMetaRecord> records;
 };
 
+using MusicSelectCourseOptionScores = CourseSelectorOptionScores;
+
 struct MusicSelectRepositoryProjectionInput {
   std::span<const ChartMetaRecord> records;
   std::function<std::optional<ScoreBestSnapshot>(const bms_parser::ChartMeta &,
                                                  int)> scoreFor;
   std::function<std::array<bool, 4>(const ChartMetaRecord &, int)>
       replayExistsFor;
-  std::function<int(std::string_view, int, int)> courseRankFor;
+  std::function<MusicSelectCourseOptionScores(std::string_view, int, int, bool)>
+      courseScoresFor;
   const MusicSelectRepositoryMetadata *metadata = nullptr;
   std::span<const MusicSelectSearchSource> searches;
   const RecentScoreImprovements *recentScoreImprovements = nullptr;

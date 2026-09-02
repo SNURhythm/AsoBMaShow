@@ -29,7 +29,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 6;
+constexpr int kChartDatabaseSchemaVersion = 7;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -165,6 +165,7 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "has_document INTEGER NOT NULL DEFAULT 0,"
       "has_bpm_stop INTEGER NOT NULL DEFAULT 0,"
       "has_scroll_change INTEGER NOT NULL DEFAULT 0,"
+      "add_date INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")";
@@ -574,6 +575,20 @@ bool migrateChartDatabaseToVersion6(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool migrateChartDatabaseToVersion7(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "add_date",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN add_date INTEGER NOT NULL DEFAULT 0",
+          "checking chart add date column", "adding chart add date column",
+          logSqlErrorText)) {
+    return false;
+  }
+  // Existing Aso rows have no SongData.adddate source fact. Re-discover them
+  // through the normal scanner, which is also how Beatoraja assigns adddate.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -620,6 +635,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {5, "persist SongReview favorite flags", migrateChartDatabaseToVersion5},
       {6, "persist stop and scroll sequence flags",
        migrateChartDatabaseToVersion6},
+      {7, "persist chart library add dates", migrateChartDatabaseToVersion7},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

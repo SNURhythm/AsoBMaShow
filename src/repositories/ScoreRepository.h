@@ -135,6 +135,9 @@ public:
       int selectedLongNoteMode = 0);
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
+  CourseSelectorOptionScores LoadCourseSelectorOptionScores(
+      std::string_view courseKey, int legacyCourseId, int longNoteMode,
+      bool doublePlay);
   CourseScoreRecoveryResult RecoverCourseRecords(
       std::span<const course_identity::Definition> definitions);
   ScoreClearRankCache LoadBestClearRanks();

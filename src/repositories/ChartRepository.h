@@ -74,6 +74,8 @@ struct ChartMetaQuery {
 
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
+  // SongData.adddate is the library-update time in Unix seconds.
+  std::int64_t addDateSeconds = 0;
   // SongData.CONTENT_TEXT as established by Beatoraja's library scan. This
   // is a folder-level fact, separate from BMS header metadata.
   bool hasDocument = false;
@@ -173,6 +175,7 @@ struct DifficultyCourseInfo {
   std::string level;
   std::string name;
   std::string constraintJson;
+  std::vector<difficulty_table::Trophy> trophies;
 };
 
 /**

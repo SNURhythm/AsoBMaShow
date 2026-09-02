@@ -140,6 +140,7 @@ const char *insertChartMetaSql() {
          "has_document,"
          "has_bpm_stop,"
          "has_scroll_change,"
+         "add_date,"
          "source_priority,"
          "source_archive_size"
          ") VALUES("
@@ -175,6 +176,7 @@ const char *insertChartMetaSql() {
          "@has_document,"
          "@has_bpm_stop,"
          "@has_scroll_change,"
+         "@add_date,"
          "@source_priority,"
          "@source_archive_size"
          ")";
@@ -184,7 +186,8 @@ bool bindAndInsertChartMeta(
     sqlite3 *database, sqlite3_stmt *statement,
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<ChartSourcePreference> &sourcePreferenceHint,
-    bool hasDocument, ChartSequenceFeatures sequenceFeatures) {
+    bool hasDocument, ChartSequenceFeatures sequenceFeatures,
+    std::int64_t addDateSeconds) {
   if (statement == nullptr) {
     logSdlSqlErrorText("inserting a chart", "statement is not prepared");
     return false;
@@ -237,8 +240,9 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 30, hasDocument ? 1 : 0);
   sqlite3_bind_int(statement, 31, sequenceFeatures.hasBpmStop ? 1 : 0);
   sqlite3_bind_int(statement, 32, sequenceFeatures.hasScrollChange ? 1 : 0);
-  sqlite3_bind_int(statement, 33, sourcePreference.priority);
-  sqlite3_bind_int64(statement, 34,
+  sqlite3_bind_int64(statement, 33, addDateSeconds);
+  sqlite3_bind_int(statement, 34, sourcePreference.priority);
+  sqlite3_bind_int64(statement, 35,
                      clampSqlInteger(sourcePreference.archiveSize));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
@@ -414,7 +418,11 @@ bool ChartRepository::Session::InsertChartMeta(
     return false;
   }
   if (!bindAndInsertChartMeta(database, statement.get(), chartMeta,
-                              std::nullopt, false, {})) {
+                              std::nullopt, false, {},
+                              std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::system_clock::now()
+                                      .time_since_epoch())
+                                  .count())) {
     return false;
   }
   chart_repository_detail::BumpLibraryRevision();
@@ -423,7 +431,11 @@ bool ChartRepository::Session::InsertChartMeta(
 
 struct ChartRepository::Session::ScanBatch::Impl {
   explicit Impl(std::shared_ptr<ChartSessionStorage> storageValue)
-      : storage(std::move(storageValue)) {
+      : storage(std::move(storageValue)),
+        addDateSeconds(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count()) {
     if (!beginTransaction()) {
       return;
     }
@@ -480,6 +492,7 @@ struct ChartRepository::Session::ScanBatch::Impl {
   std::shared_ptr<ChartSessionStorage> storage;
   std::unique_ptr<SqliteTransactionHandle> transaction;
   SqliteStatementHandle chartInsertStatement;
+  const std::int64_t addDateSeconds;
   int changedCount = 0;
   bool ready = false;
   bool committed = false;
@@ -510,7 +523,7 @@ bool ChartRepository::Session::ScanBatch::UpsertChart(
   if (!bindAndInsertChartMeta(impl_->database(),
                               impl_->chartInsertStatement.get(), meta,
                               sourcePreference, hasDocument,
-                              sequenceFeatures)) {
+                              sequenceFeatures, impl_->addDateSeconds)) {
     return false;
   }
   impl_->noteChanged();

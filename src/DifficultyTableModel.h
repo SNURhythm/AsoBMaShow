@@ -19,11 +19,20 @@ struct Chart {
   std::optional<std::vector<std::string>> originalMd5s;
 };
 
+struct Trophy {
+  std::string name;
+  double missRate = 0.0;
+  double scoreRate = 0.0;
+
+  bool operator==(const Trophy &) const = default;
+};
+
 struct Course {
   std::string name;
   std::string groupName;
   std::string level;
   std::string constraintJson;
+  std::vector<Trophy> trophies;
   std::vector<Chart> charts;
 };
 

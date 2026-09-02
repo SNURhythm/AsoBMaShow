@@ -385,9 +385,10 @@ void MusicSelectScene::reloadLibrary() {
              record, mode,
              context.replayRepository.GetResolvedProfileRoot());
        },
-       .courseRankFor = [this](std::string_view courseKey, int courseId,
-                               int mode) {
-         return clearRankCache_.bestCourseRankFor(courseKey, courseId, mode);
+       .courseScoresFor = [this](std::string_view courseKey, int courseId,
+                                 int mode, bool doublePlay) {
+         return context.scoreRepository.LoadCourseSelectorOptionScores(
+             courseKey, courseId, mode, doublePlay);
        },
        .metadata = &metadata,
        .searches = searches,

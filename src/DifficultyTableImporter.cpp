@@ -83,6 +83,22 @@ std::optional<std::vector<std::string>> jsonStringListAt(
   return values;
 }
 
+double jsonNumberAt(const json &object, const char *key) {
+  if (!object.is_object()) return 0.0;
+  const auto found = object.find(key);
+  return found != object.end() && found->is_number()
+             ? found->get<double>()
+             : 0.0;
+}
+
+std::optional<std::string> jsonPresentStringAt(const json &object,
+                                               const char *key) {
+  if (!object.is_object()) return std::nullopt;
+  const auto found = object.find(key);
+  if (found == object.end() || found->is_null()) return std::nullopt;
+  return jsonValueToString(*found);
+}
+
 std::optional<std::string> readTextFile(const std::filesystem::path &path) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
@@ -870,6 +886,20 @@ std::optional<difficulty_table::Document> difficulty_table::Parse(
         .level = level,
         .constraintJson = std::move(constraintJson),
     };
+    const auto trophyIt = courseValue->find("trophy");
+    if (trophyIt != courseValue->end() && trophyIt->is_array()) {
+      for (const auto &value : *trophyIt) {
+        const auto name = jsonPresentStringAt(value, "name");
+        Trophy trophy{.name = name.value_or(""),
+                      .missRate = jsonNumberAt(value, "missrate"),
+                      .scoreRate = jsonNumberAt(value, "scorerate")};
+        // CourseData.TrophyData.validate is the pinned source contract.
+        if (name.has_value() && trophy.missRate > 0.0 &&
+            trophy.scoreRate < 100.0) {
+          course.trophies.push_back(std::move(trophy));
+        }
+      }
+    }
     auto courseCharts = readCourseCharts(*courseValue);
     course.charts.reserve(courseCharts.size());
     for (auto &chart : courseCharts) {
