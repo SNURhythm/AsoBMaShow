@@ -188,6 +188,34 @@ void testTouchRowsSelectWithoutDesktopActivation() {
   assert(!musicSelectPointerActivatesRow(MusicSelectPointerOrigin::Touch));
 }
 
+void testTouchGestureDefersBarTapAndConvertsVerticalDragToRows() {
+  MusicSelectTouchGesture gesture;
+  assert(gesture.begin(7, 0.50F, MusicSelectTouchTarget::Bar));
+  const auto belowThreshold = gesture.move(7, 0.48F);
+  assert(belowThreshold.accepted && belowThreshold.rowDelta == 0 &&
+         !belowThreshold.sliderDrag);
+  const auto upwards = gesture.move(7, 0.39F);
+  assert(upwards.accepted && upwards.rowDelta == 2 &&
+         !upwards.sliderDrag);
+  const auto release = gesture.end(7);
+  assert(release.accepted && !release.tap);
+
+  assert(gesture.begin(8, 0.25F, MusicSelectTouchTarget::Bar));
+  const auto tap = gesture.end(8);
+  assert(tap.accepted && tap.tap);
+}
+
+void testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion() {
+  MusicSelectTouchGesture gesture;
+  assert(gesture.begin(11, 0.20F, MusicSelectTouchTarget::Slider));
+  assert(!gesture.begin(12, 0.20F, MusicSelectTouchTarget::Bar));
+  assert(!gesture.move(12, 0.30F).accepted);
+  const auto slider = gesture.move(11, 0.30F);
+  assert(slider.accepted && slider.sliderDrag && slider.rowDelta == 0);
+  assert(!gesture.end(12).accepted);
+  assert(gesture.end(11).accepted);
+}
+
 } // namespace
 
 int main() {
@@ -197,5 +225,7 @@ int main() {
   testFolderAndDownloadSiteBranches();
   testRefreshPathUsesThePhysicalArchive();
   testTouchRowsSelectWithoutDesktopActivation();
+  testTouchGestureDefersBarTapAndConvertsVerticalDragToRows();
+  testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion();
   return 0;
 }

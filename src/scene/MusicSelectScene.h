@@ -6,6 +6,7 @@
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
+#include "../music_select/MusicSelectExternalActions.h"
 #include "../music_select/MusicSelectPreview.h"
 #include "../music_select/MusicSelectRanking.h"
 #include "../music_select/MusicSelectSearchHistory.h"
@@ -26,8 +27,6 @@
 
 class BlockingOverlayView;
 class TextInputBox;
-enum class MusicSelectPointerOrigin;
-
 class MusicSelectScene final : public Scene {
 public:
   MusicSelectScene(ApplicationContext &,
@@ -150,5 +149,6 @@ private:
   TextInputBox *skinTextInput_ = nullptr;
   std::map<int, TextInputBox *> skinTextInputs_;
   std::optional<skin::SkinStringWriterId> activeSkinStringWriter_;
+  MusicSelectTouchGesture skinTouchGesture_;
 #endif
 };

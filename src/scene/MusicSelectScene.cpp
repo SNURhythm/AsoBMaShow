@@ -319,6 +319,7 @@ void MusicSelectScene::init() {
 void MusicSelectScene::onPause() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+  skinTouchGesture_.cancel();
   if (skinSession_) skinSession_->suspendAudio();
 #endif
   stopInputListening();
@@ -760,16 +761,55 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                               point.y);
+    const auto target = skinSession_->pointerTargetAt(point);
+    if (target.kind == skin::MusicSelectSkinPointerTargetKind::Bar) {
+      return skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.y,
+                                     MusicSelectTouchTarget::Bar);
+    }
     const auto pointer =
         skinSession_->queuePointerDown(point, 0, steadyMicros());
     applySkinPointerResult(pointer, MusicSelectPointerOrigin::Touch);
+    if (target.kind == skin::MusicSelectSkinPointerTargetKind::Slider &&
+        pointer.consumed) {
+      (void)skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.y,
+                                    MusicSelectTouchTarget::Slider);
+    }
     return pointer.consumed;
   }
   case SDL_FINGERMOTION: {
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
+    const auto motion =
+        skinTouchGesture_.move(event.tfinger.fingerId, event.tfinger.y);
+    if (!motion.accepted) return false;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                               point.y);
-    return skinSession_->queuePointerDrag(point, steadyMicros());
+    if (motion.sliderDrag) {
+      (void)skinSession_->queuePointerDrag(point, steadyMicros());
+    }
+    if (motion.rowDelta != 0) {
+      const int duration = context.settings.skinMusicSelectScrollDurationLow;
+      const bool increase = motion.rowDelta > 0;
+      const int direction = increase ? duration : -duration;
+      const auto deadline = unixMillis() + duration;
+      for (int count = std::abs(motion.rowDelta); count > 0; --count) {
+        bars_.move(increase, direction, deadline);
+      }
+      selectedBarMoved();
+    }
+    return true;
+  }
+  case SDL_FINGERUP: {
+    if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
+    const auto release = skinTouchGesture_.end(event.tfinger.fingerId);
+    if (!release.accepted) return false;
+    if (release.tap) {
+      rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
+                                point.y);
+      const auto pointer =
+          skinSession_->queuePointerDown(point, 0, steadyMicros());
+      applySkinPointerResult(pointer, MusicSelectPointerOrigin::Touch);
+    }
+    return true;
   }
   default:
     return false;
@@ -981,6 +1021,7 @@ void MusicSelectScene::showSearchPrompt() {
   if (searchOverlay_ == nullptr || searchInput_ == nullptr) return;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+  skinTouchGesture_.cancel();
 #endif
   stopInputListening();
   searchInput_->setEditingText("");
@@ -1906,6 +1947,7 @@ void MusicSelectScene::enterError(
   if (searchInput_ != nullptr) searchInput_->endEditing();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+  skinTouchGesture_.cancel();
 #endif
   if (searchOverlay_ != nullptr) searchOverlay_->setVisible(false);
   diagnostics_ = std::move(diagnostics);
@@ -2104,6 +2146,7 @@ void MusicSelectScene::cleanupScene() {
   if (searchInput_ != nullptr) searchInput_->endEditing();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
+  skinTouchGesture_.cancel();
 #endif
   stopInputListening();
   if (rankingGeneration_ != 0 && context.irRankingService) {

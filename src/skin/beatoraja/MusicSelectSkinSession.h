@@ -77,6 +77,20 @@ struct MusicSelectSkinPointerResult {
   std::optional<StringFocus> focusedStringWriter;
 };
 
+enum class MusicSelectSkinPointerTargetKind : std::uint8_t {
+  None,
+  Bar,
+  Slider,
+  Image,
+  Text,
+};
+
+struct MusicSelectSkinPointerTarget {
+  MusicSelectSkinPointerTargetKind kind =
+      MusicSelectSkinPointerTargetKind::None;
+  std::optional<std::size_t> selectIndex;
+};
+
 class MusicSelectSkinSession final {
 public:
   static MusicSelectSkinSessionCreateResult
@@ -92,6 +106,8 @@ public:
   [[nodiscard]] bool refreshResources(const MusicSelectSkinFrame &);
   void suspendAudio() noexcept;
   void resumeAudio() noexcept;
+  [[nodiscard]] MusicSelectSkinPointerTarget
+  pointerTargetAt(UiLogicalPoint) const noexcept;
   [[nodiscard]] MusicSelectSkinPointerResult
   queuePointerDown(UiLogicalPoint, int button, long long eventMicros);
   [[nodiscard]] bool queuePointerDrag(UiLogicalPoint, long long eventMicros);

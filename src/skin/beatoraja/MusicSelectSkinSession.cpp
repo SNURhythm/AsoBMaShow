@@ -639,23 +639,48 @@ bool MusicSelectSkinSession::refreshResources(
   }
 }
 
-MusicSelectSkinPointerResult MusicSelectSkinSession::queuePointerDown(
-    UiLogicalPoint point, int button, long long eventMicros) {
-  MusicSelectSkinPointerResult result;
-  if (!publishedInteractionLayout_) return result;
+MusicSelectSkinPointerTarget
+MusicSelectSkinSession::pointerTargetAt(UiLogicalPoint point) const noexcept {
+  if (!publishedInteractionLayout_) return {};
   const auto bar = publishedInteractionLayout_->musicSelectBarAt(point);
   const auto control = publishedInteractionLayout_->hitTestUiControl(point);
   if (bar &&
       (control.kind == PresentationUiControlKind::None ||
        bar->authoredOrdinal >= control.authoredOrdinal)) {
+    return {.kind = MusicSelectSkinPointerTargetKind::Bar,
+            .selectIndex = bar->barIndex};
+  }
+  switch (control.kind) {
+  case PresentationUiControlKind::Slider:
+  case PresentationUiControlKind::LaneCover:
+    return {.kind = MusicSelectSkinPointerTargetKind::Slider};
+  case PresentationUiControlKind::Image:
+    return {.kind = MusicSelectSkinPointerTargetKind::Image};
+  case PresentationUiControlKind::Text:
+    return {.kind = MusicSelectSkinPointerTargetKind::Text};
+  case PresentationUiControlKind::None:
+  case PresentationUiControlKind::NativeOverlay:
+  case PresentationUiControlKind::VirtualController:
+    return {};
+  }
+  return {};
+}
+
+MusicSelectSkinPointerResult MusicSelectSkinSession::queuePointerDown(
+    UiLogicalPoint point, int button, long long eventMicros) {
+  MusicSelectSkinPointerResult result;
+  const auto target = pointerTargetAt(point);
+  if (target.kind == MusicSelectSkinPointerTargetKind::Bar) {
     result.consumed = true;
-    result.selectIndex = button == 0
-                             ? std::optional<std::size_t>(bar->barIndex)
-                             : std::nullopt;
+    result.selectIndex = button == 0 ? target.selectIndex : std::nullopt;
     result.closeDirectory = button != 0;
     return result;
   }
-  if (control.kind == PresentationUiControlKind::None) return result;
+  if (target.kind == MusicSelectSkinPointerTargetKind::None ||
+      !publishedInteractionLayout_) {
+    return result;
+  }
+  const auto control = publishedInteractionLayout_->hitTestUiControl(point);
   result.consumed = true;
   if (control.kind == PresentationUiControlKind::Image) {
     const auto invocation = publishedInteractionLayout_->eventInvocationFor(

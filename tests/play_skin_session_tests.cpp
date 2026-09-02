@@ -2607,22 +2607,29 @@ void testRequestedModernChicSessionPublishesChartListRows() {
 
   RenderContext renderContext;
   const bool rendered = created.session->render(renderContext, frame);
+  const auto centerTarget = created.session->pointerTargetAt(
+      {.x = 1200.0F, .y = 540.0F});
   const bool hasCenterBarVertex = std::ranges::any_of(
       quadBackend.submittedVertices, [](const auto &vertex) {
         return std::abs(vertex.x - 1125.0F) < 0.1F &&
                vertex.y >= 505.0F && vertex.y <= 575.0F;
       });
-  if (!rendered || !hasCenterBarVertex) {
+  if (!rendered || !hasCenterBarVertex ||
+      centerTarget.kind != MusicSelectSkinPointerTargetKind::Bar ||
+      centerTarget.selectIndex != std::optional<std::size_t>{8}) {
     std::cerr << "ModernChic chart-list probe: rendered=" << rendered
               << " vertices=" << quadBackend.reservedVertices
               << " center-bar-vertex=" << hasCenterBarVertex
+              << " center-target=" << static_cast<int>(centerTarget.kind)
               << '\n';
     for (const auto &diagnostic : created.session->takeLastDiagnostics()) {
       std::cerr << "ModernChic render diagnostic: " << diagnostic.code
                 << ": " << diagnostic.message << '\n';
     }
   }
-  expect(rendered && hasCenterBarVertex,
+  expect(rendered && hasCenterBarVertex &&
+             centerTarget.kind == MusicSelectSkinPointerTargetKind::Bar &&
+             centerTarget.selectIndex == std::optional<std::size_t>{8},
          "ModernChic renders and publishes its center chart-list row");
 }
 
@@ -2694,6 +2701,8 @@ void testMusicSelectPublishesPointerCapturesAndTextFocus() {
     expect(false, "music-select interaction fixture publishes a frame");
     return;
   }
+  const auto sliderTarget =
+      created.session->pointerTargetAt({.x = 225.0F, .y = 915.0F});
   const auto slider = created.session->queuePointerDown(
       {.x = 225.0F, .y = 915.0F}, 0, 1);
   const bool moved = created.session->queuePointerDrag(
@@ -2712,7 +2721,8 @@ void testMusicSelectPublishesPointerCapturesAndTextFocus() {
     const auto *value = std::get_if<int>(&action.selector.value);
     return value != nullptr ? *value : -1;
   };
-  expect(slider.consumed && moved && text.consumed &&
+  expect(sliderTarget.kind == MusicSelectSkinPointerTargetKind::Slider &&
+             slider.consumed && moved && text.consumed &&
              text.focusedStringWriter &&
              text.focusedStringWriter->currentValue == "needle" &&
              std::abs(text.focusedStringWriter->bounds.x - 450.0) < 0.001 &&
