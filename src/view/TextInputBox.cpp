@@ -141,6 +141,8 @@ std::string TextInputBox::getText() const { return displayedText(); }
 
 void TextInputBox::beginEditing() {
   if (isSelected) return;
+  applyYogaLayout();
+  refreshDisplay(false);
   onSelected();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showNativeTextEditor();

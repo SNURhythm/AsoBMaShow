@@ -30,6 +30,7 @@ int ui_view_height = design_height;
 namespace {
 
 int clearCompositionCalls = 0;
+SDL_Rect nativeInputRect{};
 
 void expect(bool condition, const char *message) {
   if (!condition) {
@@ -139,6 +140,23 @@ void testFocusedInputConsumesItsInitiatingTouch() {
   input.endEditing();
 }
 
+void testBeginEditingUsesTheLatestDeclaredInputFrame() {
+  nativeInputRect = {};
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.setPositionNoLayout(450, 735, YGPositionTypeAbsolute);
+  input.beginEditing();
+
+  expect(nativeInputRect.x >= input.getX() &&
+             nativeInputRect.x < input.getX() + input.getWidth() &&
+             nativeInputRect.y >= input.getY() &&
+             nativeInputRect.y < input.getY() + input.getHeight() &&
+             nativeInputRect.w > 0 && nativeInputRect.h > 0,
+         "begin editing frames the platform editor at the declared touch "
+         "target");
+  input.endEditing();
+}
+
 void testDeferredTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -191,6 +209,11 @@ extern "C" void SDLCALL TextInputBoxTest_ClearComposition() {
   ++clearCompositionCalls;
 }
 
+extern "C" void SDLCALL TextInputBoxTest_SetTextInputRect(
+    const SDL_Rect *rect) {
+  nativeInputRect = rect != nullptr ? *rect : SDL_Rect{};
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -202,6 +225,7 @@ int main() {
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
   testFocusedInputConsumesItsInitiatingTouch();
+  testBeginEditingUsesTheLatestDeclaredInputFrame();
   testDeferredTextKeepsRasterizedLineHeight();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 
