@@ -88,14 +88,27 @@ std::string lowerAscii(std::string_view value) {
   return result;
 }
 
+bool titleSortParticipates(const MusicSelectBar &bar) {
+  return bar.kind == skin::MusicSelectBarKind::Song ||
+         bar.kind == skin::MusicSelectBarKind::Folder;
+}
+
 int titleCompare(const MusicSelectBar &left, const MusicSelectBar &right) {
+  const bool leftParticipates = titleSortParticipates(left);
+  const bool rightParticipates = titleSortParticipates(right);
+  if (!leftParticipates && !rightParticipates) return 0;
+  if (!leftParticipates) return 1;
+  if (!rightParticipates) return -1;
+
+  const bool songs = left.kind == skin::MusicSelectBarKind::Song &&
+                     right.kind == skin::MusicSelectBarKind::Song;
   const auto leftTitle = lowerAscii(
-      left.chart ? left.chart->meta.Title : left.title);
+      songs && left.chart ? left.chart->meta.Title : left.title);
   const auto rightTitle = lowerAscii(
-      right.chart ? right.chart->meta.Title : right.title);
+      songs && right.chart ? right.chart->meta.Title : right.title);
   if (leftTitle < rightTitle) return -1;
   if (leftTitle > rightTitle) return 1;
-  if (left.chart && right.chart) {
+  if (songs && left.chart && right.chart) {
     return left.chart->meta.Difficulty - right.chart->meta.Difficulty;
   }
   return 0;
@@ -103,7 +116,9 @@ int titleCompare(const MusicSelectBar &left, const MusicSelectBar &right) {
 
 int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
                   std::string_view sortId) {
-  if (!left.chart || !right.chart) return titleCompare(left, right);
+  if (sortId == "TITLE" || !left.chart || !right.chart) {
+    return titleCompare(left, right);
+  }
   const auto &a = left.chart->meta;
   const auto &b = right.chart->meta;
   if (sortId == "ARTIST") {
@@ -266,11 +281,13 @@ void MusicSelectBarManager::rebuildRows(
   rows_.clear();
   const std::vector<MusicSelectBarId> *ids = &projection_.root;
   bool showInvisibleCharts = false;
+  bool sortable = true;
   if (!directory_.empty()) {
     const auto *directory = projection_.find(directory_.back());
     if (directory != nullptr) {
       ids = &directory->children;
       showInvisibleCharts = directory->showInvisibleCharts;
+      sortable = directory->sortable;
     }
   }
   rows_.reserve(ids->size());
@@ -311,14 +328,11 @@ void MusicSelectBarManager::rebuildRows(
       }
     }
     if (!filtered) rows_ = original;
-    if (!directory_.empty()) {
-      const auto *directory = projection_.find(directory_.back());
-      if (directory && directory->sortable) {
-        std::stable_sort(rows_.begin(), rows_.end(), [this](const auto &left,
-                                                            const auto &right) {
-          return sourceCompare(left, right, config_.sortId) < 0;
-        });
-      }
+    if (sortable) {
+      std::stable_sort(rows_.begin(), rows_.end(), [this](const auto &left,
+                                                          const auto &right) {
+        return sourceCompare(left, right, config_.sortId) < 0;
+      });
     }
   }
   selectedIndex_ = 0;

@@ -129,8 +129,8 @@ void testRefreshRebindsStableSelection() {
   auto next = fixture(2);
   std::swap(next.root[0], next.root[1]);
   manager.refresh(std::move(next));
-  require(manager.snapshot().selectedIndex == 0 &&
-              manager.snapshot().rows.front().id.value == "folder:b",
+  require(manager.snapshot().selectedIndex == 1 &&
+              manager.snapshot().rows[1].id.value == "folder:b",
           "revision replacement rebinds selection by stable bar identity");
 }
 
@@ -395,6 +395,85 @@ void testPinnedFilterFallbackAndSort() {
           "DirectoryBar showInvisibleChart bypasses only invisible-bit removal");
 }
 
+void testSourceSortingKeepsDifficultyTableFolderOrder() {
+  ChartMetaRecord alpha;
+  alpha.meta.Title = "Alpha Song";
+  ChartMetaRecord zulu;
+  zulu.meta.Title = "Zulu Song";
+  MusicSelectProjection projection;
+  projection.root = {{"table:first"}, {"folder:zulu"}, {"table:second"},
+                     {"folder:alpha"}};
+  projection.bars = {
+      {.id = {"table:first"},
+       .kind = skin::MusicSelectBarKind::Table,
+       .title = "First table",
+       .children = {{"hash:12"}, {"hash:1"}},
+       .selectable = true,
+       .sortable = true},
+      {.id = {"folder:zulu"},
+       .kind = skin::MusicSelectBarKind::Folder,
+       .title = "Zulu folder",
+       .selectable = true,
+       .sortable = true},
+      {.id = {"table:second"},
+       .kind = skin::MusicSelectBarKind::Table,
+       .title = "Second table",
+       .selectable = true,
+       .sortable = true},
+      {.id = {"folder:alpha"},
+       .kind = skin::MusicSelectBarKind::Folder,
+       .title = "Alpha folder",
+       .selectable = true,
+       .sortable = true},
+      {.id = {"hash:12"},
+       .kind = skin::MusicSelectBarKind::Hash,
+       .title = "sl12",
+       .children = {{"song:zulu"}, {"song:alpha"}},
+       .selectable = true,
+       .sortable = true},
+      {.id = {"hash:1"},
+       .kind = skin::MusicSelectBarKind::Hash,
+       .title = "sl1",
+       .selectable = true,
+       .sortable = true},
+      {.id = {"song:zulu"},
+       .kind = skin::MusicSelectBarKind::Song,
+       .title = "Zulu Song",
+       .chart = zulu,
+       .selectable = true},
+      {.id = {"song:alpha"},
+       .kind = skin::MusicSelectBarKind::Song,
+       .title = "Alpha Song",
+       .chart = alpha,
+       .selectable = true},
+  };
+  MusicSelectBarManager manager(std::move(projection), {.sortId = "TITLE"});
+  auto snapshot = manager.snapshot();
+  require(snapshot.rows.size() == 4 &&
+              snapshot.rows[0].id.value == "folder:alpha" &&
+              snapshot.rows[1].id.value == "folder:zulu" &&
+              snapshot.rows[2].id.value == "table:first" &&
+              snapshot.rows[3].id.value == "table:second",
+          "the root applies Beatoraja's selected BarSorter while preserving "
+          "non-Folder table order");
+
+  require(manager.select({"table:first"}) && manager.openSelected(),
+          "difficulty-table sorting fixture opens its first table");
+  snapshot = manager.snapshot();
+  require(snapshot.rows.size() == 2 &&
+              snapshot.rows[0].id.value == "hash:12" &&
+              snapshot.rows[1].id.value == "hash:1",
+          "TableBar keeps difficulty-folder metadata order under the selected "
+          "sorter");
+
+  require(manager.openSelected(), "difficulty-table sorting fixture opens its level");
+  snapshot = manager.snapshot();
+  require(snapshot.rows.size() == 2 &&
+              snapshot.rows[0].id.value == "song:alpha" &&
+              snapshot.rows[1].id.value == "song:zulu",
+          "HashBar still applies the selected song sorter");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -407,6 +486,7 @@ int main(int argc, char **argv) {
   testTableContextUsesOpenedTableAndHashTitles();
   testTransientDirectoryRestoresItsSourceBar();
   testPinnedFilterFallbackAndSort();
+  testSourceSortingKeepsDifficultyTableFolderOrder();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_bar_manager_tests", failures,
       "music-select bar manager assertion(s) failed",
