@@ -100,7 +100,7 @@ void MusicSelectSkinErrorScene::init() {
 void MusicSelectSkinErrorScene::openSettings() {
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
-      SceneReturnTarget::Retained(this)));
+      SceneReturnTarget::Retained(this)), true);
 }
 
 void MusicSelectSkinErrorScene::update(float) {

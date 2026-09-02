@@ -104,6 +104,26 @@ void seedFolderRecord(const std::filesystem::path &databasePath,
   assert(sqlite3_close(database) == SQLITE_OK);
 }
 
+void setFolderAddDate(const std::filesystem::path &databasePath,
+                      const std::filesystem::path &folder,
+                      std::int64_t addDateSeconds) {
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement = nullptr;
+  assert(sqlite3_prepare_v2(
+             database, "UPDATE folder SET adddate = ? WHERE path = ?", -1,
+             &statement, nullptr) == SQLITE_OK);
+  assert(sqlite3_bind_int64(statement, 1, addDateSeconds) == SQLITE_OK);
+  const std::string path = folder.string();
+  assert(sqlite3_bind_text(statement, 2, path.c_str(),
+                           static_cast<int>(path.size()), SQLITE_TRANSIENT) ==
+         SQLITE_OK);
+  assert(sqlite3_step(statement) == SQLITE_DONE);
+  assert(sqlite3_changes(database) == 1);
+  assert(sqlite3_finalize(statement) == SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+}
+
 using ArchiveEntryHandle =
     std::unique_ptr<archive_entry, decltype(&archive_entry_free)>;
 
@@ -369,6 +389,8 @@ void testFolderRecordsMatchBeatorajaFolderTraversal() {
   assert(find(hiddenChild) == records.end());
   assert(directRecord->addDateSeconds > 1);
   const auto stableDirectAddDate = directRecord->addDateSeconds;
+  constexpr std::int64_t stableRootAddDate = 1'234'567;
+  setFolderAddDate(repository.DatabasePath(), root, stableRootAddDate);
 
   assert(scanner.Scan(*session, {root}) == 0);
   const auto stableRecords = session->SelectFolderRecords();
@@ -379,6 +401,13 @@ void testFolderRecordsMatchBeatorajaFolderTraversal() {
       });
   assert(stableDirect != stableRecords.end());
   assert(stableDirect->addDateSeconds == stableDirectAddDate);
+  const auto stableRoot = std::find_if(
+      stableRecords.begin(), stableRecords.end(), [&](const auto &item) {
+        return std::filesystem::path(item.path).lexically_normal() ==
+               root.lexically_normal();
+      });
+  assert(stableRoot != stableRecords.end());
+  assert(stableRoot->addDateSeconds == stableRootAddDate);
 }
 
 void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {

@@ -258,10 +258,6 @@ void FolderActionService::poll() {
   const std::uint64_t now = SDL_GetTicks64();
   if (now < impl_->nextPollMillis) return;
   impl_->nextPollMillis = now + 1000;
-  {
-    std::lock_guard lock(impl_->pendingMutex);
-    if (impl_->pendingImports.empty()) return;
-  }
   std::string error;
   const auto path = ConsumePendingAndroidArchiveImport(error);
   if (!path && error.empty()) return;
@@ -269,10 +265,14 @@ void FolderActionService::poll() {
   bool folder = false;
   {
     std::lock_guard lock(impl_->pendingMutex);
-    if (impl_->pendingImports.empty()) return;
-    id = impl_->pendingImports.front().first;
-    folder = impl_->pendingImports.front().second;
-    impl_->pendingImports.pop_front();
+    if (!impl_->pendingImports.empty()) {
+      id = impl_->pendingImports.front().first;
+      folder = impl_->pendingImports.front().second;
+      impl_->pendingImports.pop_front();
+    }
+  }
+  if (id == 0 && impl_->tasks != nullptr) {
+    id = impl_->tasks->reserve("Import Archive", "Copying shared archive");
   }
   if (path) {
     impl_->enqueueImport(id, *path, folder);

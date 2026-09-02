@@ -1010,16 +1010,21 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
 
     if (updateFolder) {
       const auto existing = stored.find(path);
+      const std::int64_t addDateSeconds =
+          existing == stored.end() ||
+                  existing->second.dateSeconds != node->second->dateSeconds
+              ? impl_->addDateSeconds
+              : existing->second.addDateSeconds;
       const bool valuesChanged =
           existing == stored.end() ||
           existing->second.dateSeconds != node->second->dateSeconds ||
-          existing->second.addDateSeconds != impl_->addDateSeconds;
+          existing->second.addDateSeconds != addDateSeconds;
       sqlite3_reset(upsert.get());
       sqlite3_clear_bindings(upsert.get());
       bindSqliteText(upsert.get(), 1,
                      chart_storage_identity::StoredPathText(path));
       sqlite3_bind_int64(upsert.get(), 2, node->second->dateSeconds);
-      sqlite3_bind_int64(upsert.get(), 3, impl_->addDateSeconds);
+      sqlite3_bind_int64(upsert.get(), 3, addDateSeconds);
       if (sqlite3_step(upsert.get()) != SQLITE_DONE) {
         logSqlError("upserting folder scan record", impl_->database());
         return false;
