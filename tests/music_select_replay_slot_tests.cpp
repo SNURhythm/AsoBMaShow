@@ -77,11 +77,57 @@ void testFindsOnlyTheExactModernChartReference() {
           "slot lookup never substitutes another replay history entry");
 }
 
+void testUsesExactSourceCoursePathsAndCourseOwnership() {
+  MusicSelectBar course;
+  course.courseConstraintJson = R"(["grade_mirror","no_speed"])";
+  ChartMetaRecord first;
+  first.meta.SHA256 = std::string(64, 'a');
+  first.meta.LnMode = 0;
+  first.meta.TotalLongNotes = 1;
+  ChartMetaRecord second;
+  second.meta.SHA256 = std::string(64, 'b');
+  second.meta.LnMode = 2;
+  course.courseCharts = {first, second};
+
+  const auto paths = musicSelectCourseReplaySlotPaths(course, 2);
+  require(paths.has_value() &&
+              (*paths)[0].relativePath ==
+                  std::filesystem::path("replay") /
+                      "Caaaaaaaaaabbbbbbbbbb_04.brd" &&
+              (*paths)[3].relativePath ==
+                  std::filesystem::path("replay") /
+                      "Caaaaaaaaaabbbbbbbbbb_04_3.brd",
+          "course slots use source hashes, undefined-LN mode, constraints, and suffixes");
+  if (!paths) return;
+
+  const auto root = std::filesystem::temp_directory_path() /
+                    "asobmashow-music-select-course-replay-slots";
+  std::filesystem::remove_all(root);
+  touch(root / (*paths)[1].relativePath);
+  require(musicSelectExistingCourseReplaySlots(course, 2, root) ==
+              std::array<bool, 4>{false, true, false, false},
+          "course slot availability is exactly filesystem existence");
+
+  ModernReplayFileInventoryEntry chart{
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .reference = {.resultId = 31, .identity = (*paths)[1]}};
+  ModernReplayFileInventoryEntry savedCourse{
+      .owner = ModernReplayOwnerKind::CourseResult,
+      .reference = {.resultId = 47, .identity = (*paths)[1]}};
+  const std::array entries{chart, savedCourse};
+  require(musicSelectCourseReplayResultId(entries, (*paths)[1]) == 47,
+          "course slot lookup matches course ownership and exact path identity");
+  require(!musicSelectCourseReplayResultId(entries, (*paths)[2]).has_value(),
+          "course slot lookup never substitutes another history entry");
+  std::filesystem::remove_all(root);
+}
+
 } // namespace
 
 int main() {
   testUsesExactSourceChartPathsAndFilesExistsSemantics();
   testFindsOnlyTheExactModernChartReference();
+  testUsesExactSourceCoursePathsAndCourseOwnership();
   if (failures != 0) return 1;
   std::cout << "music-select replay slot tests passed\n";
   return 0;

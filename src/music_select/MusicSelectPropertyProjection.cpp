@@ -5,6 +5,7 @@
 #include "../replay/ReplayOption.h"
 #include "../scene/MainMenuProfileSelections.h"
 #include "../scene/play/PlayfieldVisualState.h"
+#include "../skin/beatoraja/BeatorajaTargetPropertyNames.h"
 
 #include <algorithm>
 #include <array>
@@ -67,6 +68,18 @@ int beatorajaLnMode(std::string_view value) {
   if (value == long_note_mode::kCnId) return 1;
   if (value == long_note_mode::kHcnId) return 2;
   return 0;
+}
+
+int beatorajaClearType(int rank) {
+  if (rank == kNoClearTypeRank) return 0;
+  if (rank >= kClearTypeFullComboRank) return 8;
+  if (rank >= kClearTypeExHardClearRank) return 7;
+  if (rank >= kClearTypeHardClearRank) return 6;
+  if (rank >= kClearTypeNormalClearRank) return 5;
+  if (rank >= kClearTypeEasyClearRank) return 4;
+  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
+  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
+  return 1;
 }
 
 int songMode(const bms_parser::ChartMeta &meta) {
@@ -299,9 +312,6 @@ void projectSelectedBar(Properties &out,
   out.booleans[2] = song;
   out.booleans[3] = course;
   out.booleans[5] = selected && isPlayableBar(*selected);
-  out.booleans[100] =
-      selected && (song || course) &&
-      (!selected->score || selected->presentation.lamp == 0);
   out.booleans[1030] = selected &&
                        selected->kind == skin::MusicSelectBarKind::Executable;
   out.booleans[1031] = selected &&
@@ -315,13 +325,20 @@ void projectSelectedBar(Properties &out,
     projectCourse(out, *selected);
   }
 
-  const int clear = std::clamp(selected->presentation.lamp, 0, 10);
+  // These properties read SelectableBar::getScore(). GradeBar's normal score
+  // deliberately differs from its aggregate normal/mirror/random bar lamp.
+  const std::optional<int> clear =
+      selected->score
+          ? std::optional<int>(beatorajaClearType(selected->score->clearType))
+          : std::nullopt;
   constexpr std::array<int, 11> clearIds{
       100, 101, 1100, 1101, 102, 103, 104, 1102, 105, 1103, 1104};
-  for (std::size_t index = 0; index < clearIds.size(); ++index) {
+  out.booleans[100] = (song || course) && (!clear || *clear == 0);
+  for (std::size_t index = 1; index < clearIds.size(); ++index) {
     out.booleans[clearIds[index]] =
-        (song || course) && clear == static_cast<int>(index);
+        (song || course) && clear && *clear == static_cast<int>(index);
   }
+  if (clear) out.imageIndexes[370] = *clear;
 
   for (std::size_t replay = 0; replay < selected->replayExists.size(); ++replay) {
     const bool selectable =
@@ -441,8 +458,6 @@ void projectSelectedBar(Properties &out,
   out.integers[177] = score.badPoints.value_or(0);
   out.integers[183] = 0;
   out.integers[184] = 0;
-  out.imageIndexes[370] = clear;
-
   const double selectedRate = scoreRate(score.score, maximum);
   out.rates[110] = selectedRate;
   out.rates[111] = selectedRate;
@@ -499,7 +514,8 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
                  std::max(1, runtime.ranking.totalPlayers);
   out.strings[1] = runtime.rivalName;
   out.strings[2] = runtime.playerName;
-  out.strings[3] = runtime.targetName;
+  out.strings[3] =
+      skin::beatorajaTargetPropertyName(settings.skinTargetId);
   out.strings[30] = runtime.searchWord;
   out.strings[60] = settings.skinModeFilterName;
   out.strings[61] = settings.skinSortId;

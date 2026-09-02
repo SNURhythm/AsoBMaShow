@@ -45,6 +45,8 @@ struct MusicSelectRepositoryProjectionInput {
       replayExistsFor;
   std::function<MusicSelectCourseOptionScores(std::string_view, int, int, bool)>
       courseScoresFor;
+  std::function<std::array<bool, 4>(const MusicSelectBar &, int)>
+      courseReplayExistsFor;
   const MusicSelectRepositoryMetadata *metadata = nullptr;
   std::span<const MusicSelectSearchSource> searches;
   const RecentScoreImprovements *recentScoreImprovements = nullptr;

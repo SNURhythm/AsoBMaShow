@@ -26,6 +26,7 @@
 #include "../music_select/MusicSelectPropertyProjection.h"
 #include "../input/SDLPointerEvent.h"
 #include "../replay/ChartReplayConsumer.h"
+#include "../replay/CourseReplayConsumer.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
@@ -392,6 +393,11 @@ void MusicSelectScene::reloadLibrary() {
          return context.scoreRepository.LoadCourseSelectorOptionScores(
              courseKey, courseId, mode, doublePlay);
        },
+       .courseReplayExistsFor = [this](const MusicSelectBar &bar, int mode) {
+         return musicSelectExistingCourseReplaySlots(
+             bar, mode,
+             context.replayRepository.GetResolvedProfileRoot());
+       },
        .metadata = &metadata,
        .searches = searches,
        .recentScoreImprovements = &recentScoreImprovements_,
@@ -598,9 +604,6 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   propertyRuntime.sortIndex = sortIndex_;
   propertyRuntime.playerName =
       context.profileManager.activeProfile().displayName;
-  propertyRuntime.targetName = context.settings.skinTargetId == "MAX"
-                                   ? "MAX"
-                                   : std::string{};
   // Beatoraja property 30 is setter-only and always reads as an empty string.
   propertyRuntime.searchWord.clear();
   propertyRuntime.tableName = tableContext_.name;
@@ -1203,14 +1206,107 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
   launchCourse(playlist, true);
 }
 
+void MusicSelectScene::launchCourseReplay(
+    const MusicSelectBar &course, int slot,
+    const MusicSelectBarManagerSnapshot &snapshot) {
+  const int lnMode =
+      long_note_mode::valueFromId(context.settings.selectedLnMode);
+  const auto paths = musicSelectCourseReplaySlotPaths(course, lnMode);
+  if (!paths) return;
+  const auto &slotPath = (*paths)[static_cast<std::size_t>(slot)];
+  std::error_code existsError;
+  if (!std::filesystem::exists(
+          context.replayRepository.GetResolvedProfileRoot() /
+              slotPath.relativePath,
+          existsError)) {
+    return;
+  }
+
+  const auto inventory =
+      context.replayRepository.ListModernReplayFileReferences();
+  if (inventory.status != ModernReplayFileInventoryStatus::Loaded) {
+    SDL_Log("Unable to read course replay slot inventory: %s",
+            inventory.diagnostic.c_str());
+    return;
+  }
+  const auto resultId =
+      musicSelectCourseReplayResultId(inventory.entries, slotPath);
+  if (!resultId) return;
+  auto stored = context.replayRepository.LoadModernCourseResult(*resultId);
+  if (stored.status != ModernCourseResultReadStatus::Loaded ||
+      !stored.record) {
+    SDL_Log("Unable to read course replay slot result: %s",
+            stored.diagnostic.c_str());
+    return;
+  }
+
+  std::vector<std::filesystem::path> chartPaths;
+  chartPaths.reserve(stored.record->result.stages.size());
+  for (std::size_t index = 0;
+       index < stored.record->result.stages.size(); ++index) {
+    if (index >= course.courseCharts.size()) return;
+    chartPaths.push_back(course.courseCharts[index].meta.BmsPath);
+  }
+
+  launching_ = true;
+  std::atomic_bool cancelled = false;
+  auto consumer =
+      replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
+  auto loaded = consumer.load(*stored.record, chartPaths, cancelled);
+  if (!loaded.ready() || cancelled) {
+    SDL_Log("Unable to prepare course replay slot: %s",
+            loaded.diagnostic.c_str());
+    launching_ = false;
+    return;
+  }
+  auto session = replay::makeCourseReplayLaunchSession(
+      std::move(loaded), replay::CourseReplayLaunchMode::Watch);
+  if (session == nullptr ||
+      !session->hasCourseReplayStage(session->currentIndex)) {
+    launching_ = false;
+    return;
+  }
+  auto stageReplay = session->currentCourseReplayStageReplay();
+  if (stageReplay == nullptr) {
+    launching_ = false;
+    return;
+  }
+  session->applyReplayStagePlayOptions(*stageReplay);
+  auto chart = session->takePreparedCourseChart(session->currentIndex);
+  if (chart == nullptr) {
+    launching_ = false;
+    return;
+  }
+
+  context.jukebox.stop();
+  context.jukebox.loadChart(*chart, true, cancelled);
+  if (cancelled) {
+    launching_ = false;
+    return;
+  }
+  tableContext_ = musicSelectTableContextForLaunch(snapshot);
+  StartOptions options =
+      makeCourseReplayStageStartOptions(session, stageReplay);
+  options.tableName = tableContext_.name;
+  options.tableLevel = tableContext_.level;
+  options.returnScene = this;
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::move(chart),
+                                      std::move(options)),
+      true);
+}
+
 void MusicSelectScene::launchSelectedReplay(int slot) {
   if (launching_ || slot < 0 || slot >= 4) return;
   const auto snapshot = bars_.snapshot();
-  if (snapshot.selectedIndex >= snapshot.rows.size() ||
-      !snapshot.rows[snapshot.selectedIndex].chart) {
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind == skin::MusicSelectBarKind::Grade) {
+    launchCourseReplay(selected, slot, snapshot);
     return;
   }
-  const auto record = *snapshot.rows[snapshot.selectedIndex].chart;
+  if (!selected.chart) return;
+  const auto record = *selected.chart;
   const int lnMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   const auto paths = musicSelectChartReplaySlotPaths(record, lnMode);

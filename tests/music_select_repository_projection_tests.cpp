@@ -261,6 +261,40 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
           "update ContainerBars expose the exact thirty command titles");
 }
 
+void testProjectsReplaySlotsForCompleteGrades() {
+  auto first =
+      chart("/songs/C/one.bms", "course-one", "One", "", "/songs/C");
+  auto second =
+      chart("/songs/C/two.bms", "course-two", "Two", "", "/songs/C");
+  MusicSelectDifficultyTableSource table{
+      .info = {.id = 9, .name = "Table"}};
+  table.courses.push_back(
+      {.info = {.id = 73,
+                .courseKey = "course-key",
+                .tableId = 9,
+                .name = "Course"},
+       .stages = {first, second}});
+  MusicSelectRepositoryMetadata metadata;
+  metadata.tables.push_back(std::move(table));
+
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = {},
+       .courseReplayExistsFor = [](const MusicSelectBar &bar, int mode) {
+         return bar.courseKey == "course-key" && bar.courseId == 73 &&
+                        bar.courseCharts.size() == 2 && mode == 2
+                    ? std::array<bool, 4>{false, true, false, true}
+                    : std::array<bool, 4>{};
+       },
+       .metadata = &metadata,
+       .selectedLongNoteMode = 2});
+  const auto *imported = projection.find({"table:9"});
+  const auto *grade = child(projection, imported, 0);
+  require(grade && grade->presentation.exists &&
+              grade->replayExists ==
+                  std::array<bool, 4>{false, true, false, true},
+          "complete GradeBars project the exact four course replay slots");
+}
+
 void testProjectionOwnsItsRepositoryValues() {
   std::vector<ChartMetaRecord> records{
       chart("/songs/a/a.bms", "stable", "Before", "", "/songs/a")};
@@ -320,6 +354,7 @@ void testProjectsRecentScoreImprovementCommandChildren() {
 int main(int argc, char **argv) {
   testProjectsFoldersSongsScoresAndSourceFlags();
   testProjectsExactRootHierarchyTablesCoursesAndCommands();
+  testProjectsReplaySlotsForCompleteGrades();
   testProjectionOwnsItsRepositoryValues();
   testProjectsSearchHistoryAfterCommands();
   testProjectsRecentScoreImprovementCommandChildren();

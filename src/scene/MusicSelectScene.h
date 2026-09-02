@@ -62,6 +62,8 @@ private:
   void launchCourse(const MusicSelectBar &, bool autoplay);
   void launchSelectedDirectoryAutoplay();
   void launchSelectedReplay(int slot);
+  void launchCourseReplay(const MusicSelectBar &, int slot,
+                          const MusicSelectBarManagerSnapshot &);
   void changeSelectedFavorite(bool song, int direction);
   void openSelected();
   void openSameFolder();

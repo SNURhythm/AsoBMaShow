@@ -81,6 +81,7 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   settings.skinModeFilterName = "14KEY";
   settings.skinDifficultyFilterName = "ANOTHER";
   settings.skinSortId = "SCORE";
+  settings.skinTargetId = "RATE_AA";
   settings.skinChartReplicationMode = "RIVALOPTION";
   settings.selectedGaugeType = "hard";
   settings.selectedGaugeAutoShiftMode = "best_clear";
@@ -134,7 +135,6 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   runtime.selectedReplay = 2;
   runtime.sortIndex = 6;
   runtime.playerName = "Player";
-  runtime.targetName = "MAX";
   runtime.rivalName = "Rival";
   runtime.searchWord = "needle";
   runtime.tableName = "Table";
@@ -155,7 +155,7 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
 
   require(values.strings.at(1) == "Rival" &&
               values.strings.at(2) == "Player" &&
-              values.strings.at(3) == "MAX" &&
+              values.strings.at(3) == "RANK AA" &&
               values.strings.at(10) == "Title" &&
               values.strings.at(12) == "Title Subtitle" &&
               values.strings.at(16) == "Artist Sub Artist" &&
@@ -243,7 +243,9 @@ void testProjectsCourseContract() {
   course.kind = skin::MusicSelectBarKind::Grade;
   course.title = "Course";
   course.presentation = {.kind = skin::MusicSelectBarKind::Grade,
-                         .exists = true};
+                         .exists = true,
+                         .lamp = 6};
+  course.score = ScoreBestSnapshot{.clearType = kNoClearTypeRank};
   course.courseStages = {
       {.title = "One", .hasPath = true},
       {.title = std::nullopt, .hasPath = false},
@@ -265,6 +267,11 @@ void testProjectsCourseContract() {
               values.booleans.at(1012) && values.booleans.at(1017) &&
               !values.booleans.at(1003) && !values.booleans.at(1015),
           "GradeBar constraints project the exact CourseData enum options");
+  require(values.booleans.at(100),
+          "GradeBar not-played reads only the pinned normal-option score even when another option supplies its lamp");
+  require(values.imageIndexes.at(370) == 0 &&
+              !values.booleans.at(104),
+          "GradeBar selected clear properties use the normal score instead of its aggregate lamp");
 }
 
 void testUnavailableSongRatesStayZeroWithoutNotes() {

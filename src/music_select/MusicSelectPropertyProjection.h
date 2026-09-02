@@ -50,7 +50,6 @@ struct MusicSelectPropertyRuntimeSnapshot {
   int selectedReplay = -1;
   int sortIndex = 0;
   std::string playerName;
-  std::string targetName;
   std::string rivalName;
   std::string searchWord;
   std::string tableName;

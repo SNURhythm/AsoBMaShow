@@ -467,6 +467,10 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
             }
           }
         }
+        if (grade.presentation.exists && input.courseReplayExistsFor) {
+          grade.replayExists = input.courseReplayExistsFor(
+              grade, input.selectedLongNoteMode);
+        }
         table.children.push_back(grade.id);
         builder.result.bars.push_back(std::move(grade));
       }
