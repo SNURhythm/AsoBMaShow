@@ -29,7 +29,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 7;
+constexpr int kChartDatabaseSchemaVersion = 8;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -166,6 +166,9 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "has_bpm_stop INTEGER NOT NULL DEFAULT 0,"
       "has_scroll_change INTEGER NOT NULL DEFAULT 0,"
       "add_date INTEGER NOT NULL DEFAULT 0,"
+      "total_landmine_notes INTEGER NOT NULL DEFAULT 0,"
+      "has_random_sequence INTEGER NOT NULL DEFAULT 0,"
+      "most_prevalent_bpm REAL NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")";
@@ -589,6 +592,32 @@ bool migrateChartDatabaseToVersion7(sqlite3 *db, bool &completed) {
   return invalidateChartMetadataForNormalScan(db, completed);
 }
 
+bool migrateChartDatabaseToVersion8(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "total_landmine_notes",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN total_landmine_notes INTEGER NOT NULL DEFAULT 0",
+          "checking chart landmine column", "adding chart landmine column",
+          logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_random_sequence",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_random_sequence INTEGER NOT NULL DEFAULT 0",
+          "checking chart random-sequence column",
+          "adding chart random-sequence column", logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "chart_meta", "most_prevalent_bpm",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN most_prevalent_bpm REAL NOT NULL DEFAULT 0",
+          "checking chart main BPM column", "adding chart main BPM column",
+          logSqlErrorText)) {
+    return false;
+  }
+  // Older rows do not contain SongData's mine/random feature facts or the
+  // separately calculated SongInformation.mainbpm value.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -636,6 +665,8 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {6, "persist stop and scroll sequence flags",
        migrateChartDatabaseToVersion6},
       {7, "persist chart library add dates", migrateChartDatabaseToVersion7},
+      {8, "persist selector chart feature metadata",
+       migrateChartDatabaseToVersion8},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

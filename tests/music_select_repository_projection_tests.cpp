@@ -34,6 +34,7 @@ ChartMetaRecord chart(std::string path, std::string sha256,
   result.meta.TotalLongNotes = 3;
   result.meta.LnMode = 2;
   result.meta.TotalLandmineNotes = 1;
+  result.hasRandomSequence = true;
   result.meta.TotalNotes = 400;
   result.addDateSeconds = 1'700'000'000;
   return result;
@@ -88,7 +89,9 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
               (song->presentation.featureFlags &
                skin::MusicSelectFeatureChargeNote) != 0 &&
               (song->presentation.featureFlags &
-               skin::MusicSelectFeatureMine) != 0,
+               skin::MusicSelectFeatureMine) != 0 &&
+              (song->presentation.featureFlags &
+               skin::MusicSelectFeatureRandom) != 0,
           "score lamps and source feature bits use Beatoraja IDs");
   require(folder && folder->presentation.folderLampCounts[7] == 1,
           "DirectoryBar aggregates its child clear lamps");

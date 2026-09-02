@@ -76,7 +76,8 @@ bool modeMatches(std::string_view filter, int mode) {
   return false;
 }
 
-int songFeatures(const bms_parser::ChartMeta &meta) {
+int songFeatures(const ChartMetaRecord &record) {
+  const auto &meta = record.meta;
   int features = 0;
   if (meta.TotalLongNotes > 0 || meta.TotalBackSpinNotes > 0) {
     switch (meta.LnMode) {
@@ -89,7 +90,7 @@ int songFeatures(const bms_parser::ChartMeta &meta) {
   if (meta.TotalLandmineNotes > 0) {
     features |= skin::MusicSelectFeatureMine;
   }
-  if (meta.RandomSeed.has_value() || !meta.RandomValues.empty()) {
+  if (record.hasRandomSequence) {
     features |= skin::MusicSelectFeatureRandom;
   }
   return features;
@@ -139,7 +140,7 @@ struct ProjectionBuilder {
                           .lamp = lamp,
                           .difficulty = record.meta.Difficulty,
                           .level = static_cast<int>(record.meta.PlayLevel),
-                          .featureFlags = songFeatures(record.meta)},
+                          .featureFlags = songFeatures(record)},
          .selectable = true});
     return id;
   }
@@ -432,7 +433,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
                .hasPath = !stage.unavailable &&
                           !stage.meta.BmsPath.empty()});
           grade.courseTotalNotes += stage.meta.TotalNotes;
-          grade.presentation.featureFlags |= songFeatures(stage.meta);
+          grade.presentation.featureFlags |= songFeatures(stage);
         }
         if (input.courseScoresFor) {
           const auto scores = input.courseScoresFor(

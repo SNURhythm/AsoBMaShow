@@ -172,6 +172,8 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
     refreshWithSound(outcome);
     break;
   case 312: {
+    // Pinned songbar_sort writes PlayerConfig.sortid only. It intentionally
+    // leaves MusicSelector.sort (integer property 12) unchanged.
     const auto found = std::ranges::find(kAllSorts, settings.skinSortId);
     if (found == kAllSorts.end()) break;
     const auto index = static_cast<int>(std::distance(kAllSorts.begin(), found));
@@ -377,6 +379,8 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
     changedWithSound(outcome);
     break;
   case 344: {
+    // Pinned chartreplicationmode also reads and writes PlayerConfig.sortid,
+    // including its exact no-op unless sortid already names a mode.
     const auto found = std::ranges::find(kChartReplicationModes,
                                          settings.skinSortId);
     if (found == kChartReplicationModes.end()) break;

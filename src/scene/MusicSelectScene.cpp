@@ -1500,6 +1500,8 @@ void MusicSelectScene::applyInputAction(
     saveSettings = true;
     break;
   case MusicSelectInputActionKind::ToggleConstant:
+    // Pinned MusicSelectInputProcessor toggles PlayerConfig.scrollMode here;
+    // this shortcut is distinct from event 400's enableConstant setting.
     context.settings.scrollMode = context.settings.scrollMode == 1 ? 0 : 1;
     saveSettings = true;
     break;

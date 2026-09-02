@@ -369,7 +369,7 @@ void projectSelectedBar(Properties &out,
       meta.TotalLongNotes > 0 || meta.TotalBackSpinNotes > 0;
   out.booleans[172] = !hasLongNote;
   out.booleans[173] = hasLongNote;
-  const bool hasRandom = meta.RandomSeed.has_value() || !meta.RandomValues.empty();
+  const bool hasRandom = record.hasRandomSequence;
   out.booleans[178] = !hasRandom;
   out.booleans[179] = hasRandom;
   out.booleans[176] = meta.MinBpm == meta.MaxBpm;

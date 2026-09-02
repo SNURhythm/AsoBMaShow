@@ -83,6 +83,9 @@ struct ChartMetaRecord {
   // every timeline while Beatoraja scans a chart.
   bool hasBpmStop = false;
   bool hasScrollChange = false;
+  // SongData.FEATURE_RANDOM is a normalized chart feature. Parser random
+  // choices must not be retained merely to reconstruct this selector fact.
+  bool hasRandomSequence = false;
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unavailable = false;

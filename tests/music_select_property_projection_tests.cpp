@@ -33,6 +33,7 @@ const MusicSelectBar &selectedSong(MusicSelectBarManagerSnapshot &bars) {
                        .level = 12};
   song.chart.emplace();
   song.chart->hasDocument = true;
+  song.chart->hasRandomSequence = true;
   song.chart->songReviewFavorite = 0x5;
   song.chart->meta.Title = "Title";
   song.chart->meta.SubTitle = "Subtitle";
@@ -164,7 +165,8 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.booleans.at(5) && values.booleans.at(1102) &&
               values.booleans.at(197) && !values.booleans.at(1197) &&
               values.booleans.at(1200) && values.booleans.at(1207) &&
-              values.booleans.at(22) && values.booleans.at(625) &&
+              values.booleans.at(22) && values.booleans.at(179) &&
+              values.booleans.at(625) &&
               values.booleans.at(60) && !values.booleans.at(61),
           "BooleanPropertyFactory selector, clear, replay, panel, rival, and save flags are exact");
   require(values.integers.at(20) == 144 &&

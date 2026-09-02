@@ -141,6 +141,9 @@ const char *insertChartMetaSql() {
          "has_bpm_stop,"
          "has_scroll_change,"
          "add_date,"
+         "total_landmine_notes,"
+         "has_random_sequence,"
+         "most_prevalent_bpm,"
          "source_priority,"
          "source_archive_size"
          ") VALUES("
@@ -177,6 +180,9 @@ const char *insertChartMetaSql() {
          "@has_bpm_stop,"
          "@has_scroll_change,"
          "@add_date,"
+         "@total_landmine_notes,"
+         "@has_random_sequence,"
+         "@most_prevalent_bpm,"
          "@source_priority,"
          "@source_archive_size"
          ")";
@@ -241,8 +247,11 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 31, sequenceFeatures.hasBpmStop ? 1 : 0);
   sqlite3_bind_int(statement, 32, sequenceFeatures.hasScrollChange ? 1 : 0);
   sqlite3_bind_int64(statement, 33, addDateSeconds);
-  sqlite3_bind_int(statement, 34, sourcePreference.priority);
-  sqlite3_bind_int64(statement, 35,
+  sqlite3_bind_int(statement, 34, chartMeta.TotalLandmineNotes);
+  sqlite3_bind_int(statement, 35, chartMeta.RandomValues.empty() ? 0 : 1);
+  sqlite3_bind_double(statement, 36, chartMeta.MostPrevalentBpm);
+  sqlite3_bind_int(statement, 37, sourcePreference.priority);
+  sqlite3_bind_int64(statement, 38,
                      clampSqlInteger(sourcePreference.archiveSize));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);

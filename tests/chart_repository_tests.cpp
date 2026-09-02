@@ -241,6 +241,9 @@ void testScanBatchCommitAndRollback() {
   assert(session.has_value());
 
   auto meta = chartMeta(temporary.path());
+  meta.TotalLandmineNotes = 3;
+  meta.RandomValues = {2};
+  meta.MostPrevalentBpm = 175.5;
   const ChartScanCheckpoint checkpoint{
       .found = true,
       .scanSignature = "repository-test",
@@ -261,6 +264,9 @@ void testScanBatchCommitAndRollback() {
   assert(records.size() == 1);
   assert(records.front().hasBpmStop);
   assert(records.front().hasScrollChange);
+  assert(records.front().meta.TotalLandmineNotes == 3);
+  assert(records.front().hasRandomSequence);
+  assert(records.front().meta.MostPrevalentBpm == 175.5);
 
   auto rollback = session->BeginScanBatch();
   assert(rollback.has_value());
@@ -386,7 +392,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 7);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 8);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -587,7 +593,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=8"));
+                   "PRAGMA user_version=9"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -1036,7 +1042,7 @@ void testChartMigrationCompatibilityMatrix() {
   });
 
   TempDirectory temporary;
-  for (const int inputVersion : {0, 1, 2, 3, 4, 5, 6}) {
+  for (const int inputVersion : {0, 1, 2, 3, 4, 5, 6, 7}) {
     const auto path =
         temporary.path() / ("migration-v" + std::to_string(inputVersion) +
                             ".db");
@@ -1048,7 +1054,10 @@ void testChartMigrationCompatibilityMatrix() {
       Database database = openDatabase(path);
       assert(database);
       assert(execute(database.get(),
-                     "ALTER TABLE chart_meta DROP COLUMN add_date"));
+                     "ALTER TABLE chart_meta DROP COLUMN add_date;"
+                     "ALTER TABLE chart_meta DROP COLUMN total_landmine_notes;"
+                     "ALTER TABLE chart_meta DROP COLUMN has_random_sequence;"
+                     "ALTER TABLE chart_meta DROP COLUMN most_prevalent_bpm"));
       const std::string favoriteMd5 =
           inputVersion <= 1 ? upperMd5 : std::string(lowerMd5);
       const std::string favoriteSha =
@@ -1083,7 +1092,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 8);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -1155,13 +1164,13 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 7);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 8);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
                     "WHERE id=1") == 1);
   }
-  assert(repository.GetLibraryRevision() == revisionBefore + 4);
+  assert(repository.GetLibraryRevision() == revisionBefore + 5);
 }
 
 void testLegacyIosContainerPathRebasesToCurrentDocuments() {
