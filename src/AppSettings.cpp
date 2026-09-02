@@ -55,6 +55,9 @@ parseBgaDisplayMode(const std::string &value,
   if (value == "stretch" || value == "2") {
     return AppSettings::BgaDisplayMode::Stretch;
   }
+  if (value == "no-expand" || value == "3") {
+    return AppSettings::BgaDisplayMode::NoExpand;
+  }
   return fallback;
 }
 
@@ -90,6 +93,8 @@ const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
     return "fill";
   case AppSettings::BgaDisplayMode::Stretch:
     return "stretch";
+  case AppSettings::BgaDisplayMode::NoExpand:
+    return "no-expand";
   }
   return "fit";
 }
@@ -442,6 +447,7 @@ void AppSettings::sanitize() {
   case BgaDisplayMode::Fit:
   case BgaDisplayMode::Fill:
   case BgaDisplayMode::Stretch:
+  case BgaDisplayMode::NoExpand:
     break;
   default:
     bgaDisplayMode = BgaDisplayMode::Fit;

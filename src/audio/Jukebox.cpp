@@ -2173,9 +2173,12 @@ Jukebox::BgaRect Jukebox::calculateBgaRect(int sourceWidth,
 
   const float scaleX = targetWidth / static_cast<float>(sourceWidth);
   const float scaleY = targetHeight / static_cast<float>(sourceHeight);
-  const float scale = mode == AppSettings::BgaDisplayMode::Fill
-                          ? std::max(scaleX, scaleY)
-                          : std::min(scaleX, scaleY);
+  float scale = mode == AppSettings::BgaDisplayMode::Fill
+                    ? std::max(scaleX, scaleY)
+                    : std::min(scaleX, scaleY);
+  if (mode == AppSettings::BgaDisplayMode::NoExpand) {
+    scale = std::min(scale, 1.0F);
+  }
   const float width = static_cast<float>(sourceWidth) * scale;
   const float height = static_cast<float>(sourceHeight) * scale;
   return {(targetWidth - width) * 0.5f, (targetHeight - height) * 0.5f, width,

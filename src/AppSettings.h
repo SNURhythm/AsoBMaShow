@@ -22,6 +22,7 @@ public:
     Fit = 0,
     Fill = 1,
     Stretch = 2,
+    NoExpand = 3,
   };
 
   enum class NotePriorityMode {

@@ -171,8 +171,18 @@ void testPlayerAndApplicationOptionsUseExactDomains() {
           "BGA cycles ON/AUTO/OFF and synchronizes native playback");
   settings.skinBgaExpandMode = 0;
   (void)run(context, 73, -1);
-  require(settings.skinBgaExpandMode == 2,
-          "BGA expand cycles FULL/KEEP_ASPECT/OFF");
+  require(settings.skinBgaExpandMode == 2 &&
+              settings.bgaDisplayMode ==
+                  AppSettings::BgaDisplayMode::NoExpand,
+          "BGA expand OFF reaches the live no-expansion renderer mode");
+  (void)run(context, 73);
+  require(settings.skinBgaExpandMode == 0 &&
+              settings.bgaDisplayMode == AppSettings::BgaDisplayMode::Stretch,
+          "BGA expand FULL reaches the live stretch renderer mode");
+  (void)run(context, 73);
+  require(settings.skinBgaExpandMode == 1 &&
+              settings.bgaDisplayMode == AppSettings::BgaDisplayMode::Fit,
+          "BGA expand KEEP_ASPECT reaches the live fit renderer mode");
 
   settings.notesDisplayTimingMilliseconds = 500;
   require(!run(context, 74).settingsChanged,

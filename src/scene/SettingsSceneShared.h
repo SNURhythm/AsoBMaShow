@@ -737,6 +737,8 @@ inline std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
     return "Fill";
   case AppSettings::BgaDisplayMode::Stretch:
     return "Stretch";
+  case AppSettings::BgaDisplayMode::NoExpand:
+    return "No expansion";
   }
   return "Fit";
 }
@@ -825,6 +827,7 @@ nextBgaDisplayMode(AppSettings::BgaDisplayMode mode) {
   case AppSettings::BgaDisplayMode::Fill:
     return AppSettings::BgaDisplayMode::Stretch;
   case AppSettings::BgaDisplayMode::Stretch:
+  case AppSettings::BgaDisplayMode::NoExpand:
     return AppSettings::BgaDisplayMode::Fit;
   }
   return AppSettings::BgaDisplayMode::Fit;

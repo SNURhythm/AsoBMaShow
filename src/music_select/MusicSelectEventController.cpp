@@ -258,6 +258,17 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
   case 73:
     settings.skinBgaExpandMode =
         cycleInteger(settings.skinBgaExpandMode, 3, argument1);
+    switch (settings.skinBgaExpandMode) {
+    case 0:
+      settings.bgaDisplayMode = AppSettings::BgaDisplayMode::Stretch;
+      break;
+    case 1:
+      settings.bgaDisplayMode = AppSettings::BgaDisplayMode::Fit;
+      break;
+    case 2:
+      settings.bgaDisplayMode = AppSettings::BgaDisplayMode::NoExpand;
+      break;
+    }
     changedWithSound(outcome);
     break;
   case 74: {
