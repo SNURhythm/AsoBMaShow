@@ -26,6 +26,7 @@ struct ChartLibraryOperationsDependencies {
                     const std::filesystem::path &)>
       importDifficultyTablesFromDirectory;
   std::function<std::optional<std::filesystem::path>()> selectInitialFolder;
+  std::function<void(const std::vector<ChartEntry> &)> refreshFolderAccess;
   std::function<std::uint64_t()> pendingScanFlushRequest;
   std::function<void(std::uint64_t)> completeScanFlush;
 };

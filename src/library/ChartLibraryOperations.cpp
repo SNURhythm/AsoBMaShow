@@ -53,6 +53,12 @@ ChartLibraryOperations::ChartLibraryOperations(
           return importer.UpdateFromSourceUrl(session, tableId, errorMessage);
         };
   }
+  if (!dependencies_.refreshFolderAccess) {
+    dependencies_.refreshFolderAccess =
+        [](const std::vector<ChartEntry> &entries) {
+          chart_library_platform::refreshFolderAccess(entries);
+        };
+  }
 }
 
 TaskRunResult ChartLibraryOperations::run(
@@ -214,7 +220,10 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
 
-  chart_library_platform::refreshFolderAccess(entries);
+  // iOS refresh tears down all current security-scoped handles before opening
+  // this list. Keep the scan roots scoped to a newly added folder, but always
+  // reopen every effective entry.
+  dependencies_.refreshFolderAccess(session->SelectEffectiveEntries());
 
   if (request.rebuildLibraryMetadata) {
     progress({.current = 8,

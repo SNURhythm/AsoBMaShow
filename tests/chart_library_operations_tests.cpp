@@ -155,10 +155,60 @@ void testRefreshScansThroughTheRealRepository() {
   auto session = repository.OpenSession();
   expect(session.has_value() && session->CountAllChartMeta() == 1,
          "refresh indexes the real BMS fixture");
+  std::vector<ChartMetaRecord> records;
+  if (session.has_value()) session->QueryChartMeta({}, records);
+  expect(records.size() == 1 && records.front().addDateSeconds > 0,
+         "first scan persists Beatoraja SongData adddate seconds");
   expect(repository.GetLibraryRevision() > before,
          "refresh advances the repository library revision");
   expect(!progress.empty(), "refresh publishes scanner progress");
   expect(reloadRequested, "completed refresh requests selector reload");
+}
+
+void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
+  TempDirectory temporary;
+  const auto existingRoot = temporary.path() / "existing";
+  const auto addedRoot = temporary.path() / "added";
+  std::filesystem::create_directories(existingRoot);
+  writeChart(addedRoot);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "folder access repository is ready");
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->InsertEntry(existingRoot, "old-bookmark"),
+         "existing external folder is registered");
+  bool reloadRequested = false;
+  std::vector<ChartEntry> refreshedEntries;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.refreshFolderAccess = [&](const std::vector<ChartEntry> &entries) {
+    refreshedEntries = entries;
+  };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Add Folder",
+       .folderToAdd = addedRoot,
+       .iosBookmark = "new-bookmark"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "adding another folder completes");
+  expect(refreshedEntries.size() == 2,
+         "security access refresh receives every effective folder");
+  expect(std::ranges::any_of(refreshedEntries, [&](const ChartEntry &entry) {
+           return std::filesystem::path(entry.path).lexically_normal() ==
+                      existingRoot.lexically_normal() &&
+                  entry.iosBookmark == "old-bookmark";
+         }),
+         "security access refresh retains the existing folder bookmark");
+  expect(std::ranges::any_of(refreshedEntries, [&](const ChartEntry &entry) {
+           return std::filesystem::path(entry.path).lexically_normal() ==
+                      addedRoot.lexically_normal() &&
+                  entry.iosBookmark == "new-bookmark";
+         }),
+         "security access refresh includes the newly added folder bookmark");
 }
 
 void testPathRefreshReconcilesOnlyTheRequestedSubtree() {
@@ -370,6 +420,7 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 int main() {
   testRefreshStopsAtTheExistingPauseCheckpoint();
   testRefreshScansThroughTheRealRepository();
+  testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
