@@ -90,6 +90,7 @@ using IOSNativeTextEditorCallback =
 using IOSDownloadProgressCallback =
     void (*)(void *context, std::uint64_t downloadedBytes,
              std::uint64_t totalBytes);
+using IOSDownloadCheckpoint = std::function<bool()>;
 // get Documents path
 std::string GetIOSDocumentsPath();
 // Returns an app-owned Application Support directory that exists and is
@@ -142,7 +143,8 @@ bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int &preferredHeight);
 bool SetIOSMetalLayerDrawableSize(void *metalLayer, int width, int height);
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
-                        std::string &errorMessage);
+                        std::string &errorMessage,
+                        IOSDownloadCheckpoint checkpoint = nullptr);
 bool PostURLTextIOS(const std::string &url, std::string &body,
                     std::string &errorMessage);
 bool DownloadURLBinaryIOS(const std::string &url,

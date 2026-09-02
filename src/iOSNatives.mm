@@ -4027,7 +4027,8 @@ std::vector<std::string> ListDocumentFilesRecursively() {
 }
 
 bool DownloadURLTextIOS(const std::string &url, std::string &body,
-                        std::string &errorMessage) {
+                        std::string &errorMessage,
+                        IOSDownloadCheckpoint checkpoint) {
   @autoreleasepool {
     NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
     NSURL *nsUrl = [NSURL URLWithString:urlString];
@@ -4071,8 +4072,27 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
             dispatch_semaphore_signal(semaphore);
           }];
     [task resume];
-    const long waitResult = dispatch_semaphore_wait(
-        semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+    constexpr int kWaitSliceMilliseconds = 100;
+    constexpr int kActiveWaitSliceLimit = 300;
+    long waitResult = 1;
+    int activeWaitSlices = 0;
+    while (activeWaitSlices < kActiveWaitSliceLimit &&
+           (waitResult = dispatch_semaphore_wait(
+                semaphore,
+                dispatch_time(DISPATCH_TIME_NOW,
+                              kWaitSliceMilliseconds * NSEC_PER_MSEC))) != 0) {
+      if (checkpoint) {
+        [task suspend];
+        if (!checkpoint()) {
+          [task cancel];
+          [session invalidateAndCancel];
+          errorMessage = "Download interrupted.";
+          return false;
+        }
+        [task resume];
+      }
+      ++activeWaitSlices;
+    }
     if (waitResult != 0) {
       [task cancel];
       [session invalidateAndCancel];

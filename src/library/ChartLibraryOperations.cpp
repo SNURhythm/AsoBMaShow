@@ -33,29 +33,32 @@ ChartLibraryOperations::ChartLibraryOperations(
         [](ChartRepository::Session &session, const std::string &url,
            std::string *errorMessage,
            DifficultyTableImportProgressCallback progressCallback,
-           const DifficultyTableImportCheckpoint &checkpoint) {
+           const DifficultyTableImportCheckpoint &checkpoint,
+           const DifficultyTableImportPauseProbe &pauseRequested) {
           DifficultyTableImporter importer;
           return importer.ImportFromUrl(session, url, errorMessage,
                                         std::move(progressCallback),
-                                        checkpoint);
+                                        checkpoint, pauseRequested);
         };
   }
   if (!dependencies_.importDifficultyTablesFromDirectory) {
     dependencies_.importDifficultyTablesFromDirectory =
         [](ChartRepository::Session &session,
-           const std::filesystem::path &directory) {
+           const std::filesystem::path &directory,
+           const DifficultyTableImportCheckpoint &checkpoint) {
           DifficultyTableImporter importer;
-          return importer.ImportFromDirectory(session, directory);
+          return importer.ImportFromDirectory(session, directory, checkpoint);
         };
   }
   if (!dependencies_.updateDifficultyTableFromSourceUrl) {
     dependencies_.updateDifficultyTableFromSourceUrl =
         [](ChartRepository::Session &session, int tableId,
            std::string *errorMessage,
-           const DifficultyTableImportCheckpoint &checkpoint) {
+           const DifficultyTableImportCheckpoint &checkpoint,
+           const DifficultyTableImportPauseProbe &pauseRequested) {
           DifficultyTableImporter importer;
           return importer.UpdateFromSourceUrl(session, tableId, errorMessage,
-                                              checkpoint);
+                                              checkpoint, pauseRequested);
         };
   }
   if (!dependencies_.refreshFolderAccess) {
@@ -107,9 +110,14 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
     if (!resumed) interrupted.store(true, std::memory_order_release);
     return resumed;
   };
+  const DifficultyTableImportPauseProbe pauseRequested = [&] {
+    return stopToken.stop_requested() ||
+           (dependencies_.pauseRequested && dependencies_.pauseRequested());
+  };
   std::string errorMessage;
   if (!dependencies_.updateDifficultyTableFromSourceUrl(
-          *session, request.tableId, &errorMessage, checkpoint)) {
+          *session, request.tableId, &errorMessage, checkpoint,
+          pauseRequested)) {
     if (interrupted.load(std::memory_order_acquire) ||
         stopToken.stop_requested()) {
       return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
@@ -210,9 +218,18 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   if (!waitForResume() || stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
+  bool tableImportInterrupted = false;
+  const DifficultyTableImportCheckpoint tableImportCheckpoint = [&] {
+    const bool resumed = waitForResume() && !stopToken.stop_requested();
+    tableImportInterrupted = tableImportInterrupted || !resumed;
+    return resumed;
+  };
   const int importedTables = dependencies_.importDifficultyTablesFromDirectory(
-      *session, dependencies_.tablesDirectory);
-  if (importedTables > 0 && !stopToken.stop_requested() &&
+      *session, dependencies_.tablesDirectory, tableImportCheckpoint);
+  if (tableImportInterrupted || stopToken.stop_requested()) {
+    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+  }
+  if (importedTables > 0 &&
       dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
@@ -318,6 +335,10 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     }
     return true;
   };
+  const DifficultyTableImportPauseProbe pauseRequested = [&] {
+    return stopToken.stop_requested() ||
+           (dependencies_.pauseRequested && dependencies_.pauseRequested());
+  };
   for (int i = 0; i < totalTables; ++i) {
     if (!checkpoint()) {
       return;
@@ -340,7 +361,7 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
                     .stage = ChartScanProgressStage::Preparing},
                    "Adding default table: " + detail);
         },
-        checkpoint);
+        checkpoint, pauseRequested);
     if (interrupted || stopToken.stop_requested()) {
       return;
     }

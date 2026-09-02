@@ -341,12 +341,14 @@ void testRefreshSeedsTheExactDefaultTablesOnce() {
   deps.importDifficultyTableFromUrl =
       [&](ChartRepository::Session &, const std::string &url,
           std::string *, DifficultyTableImportProgressCallback,
-          const DifficultyTableImportCheckpoint &) {
+          const DifficultyTableImportCheckpoint &,
+          const DifficultyTableImportPauseProbe &) {
         importedUrls.push_back(url);
         return true;
       };
   deps.importDifficultyTablesFromDirectory =
-      [](ChartRepository::Session &, const std::filesystem::path &) {
+      [](ChartRepository::Session &, const std::filesystem::path &,
+         const DifficultyTableImportCheckpoint &) {
         return 0;
       };
   chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
@@ -393,13 +395,15 @@ void testRefreshPausesInsideDefaultTableSeeding() {
   deps.importDifficultyTableFromUrl =
       [&](ChartRepository::Session &, const std::string &, std::string *,
           DifficultyTableImportProgressCallback,
-          const DifficultyTableImportCheckpoint &checkpoint) {
+          const DifficultyTableImportCheckpoint &checkpoint,
+          const DifficultyTableImportPauseProbe &) {
         ++importCalls;
         gameplayPaused = true;
         return checkpoint();
       };
   deps.importDifficultyTablesFromDirectory =
-      [](ChartRepository::Session &, const std::filesystem::path &) {
+      [](ChartRepository::Session &, const std::filesystem::path &,
+         const DifficultyTableImportCheckpoint &) {
         return 0;
       };
   chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
@@ -421,6 +425,39 @@ void testRefreshPausesInsideDefaultTableSeeding() {
          "an interrupted default seed does not publish a reload");
 }
 
+void testRefreshPausesInsideLocalTableImport() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "local table import repository is ready");
+  bool reloadRequested = false;
+  bool gameplayPaused = false;
+  int importerCheckpoints = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.importDifficultyTablesFromDirectory =
+      [&](ChartRepository::Session &, const std::filesystem::path &,
+          const DifficultyTableImportCheckpoint &checkpoint) {
+        ++importerCheckpoints;
+        gameplayPaused = true;
+        checkpoint();
+        return 0;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [&] { return !gameplayPaused; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "gameplay pause interrupts local difficulty table imports");
+  expect(importerCheckpoints == 1,
+         "local difficulty table import receives the shared checkpoint");
+  expect(!reloadRequested,
+         "an interrupted local table import does not publish a reload");
+}
+
 void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -435,7 +472,8 @@ void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
   };
   deps.updateDifficultyTableFromSourceUrl =
       [&](ChartRepository::Session &, int tableId, std::string *,
-          const DifficultyTableImportCheckpoint &checkpoint) {
+          const DifficultyTableImportCheckpoint &checkpoint,
+          const DifficultyTableImportPauseProbe &) {
         updatedTableId = tableId;
         return checkpoint() && checkpoint();
       };
@@ -466,7 +504,8 @@ void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
   auto deps = dependencies(repository, temporary.path(), reloadRequested);
   deps.updateDifficultyTableFromSourceUrl =
       [&](ChartRepository::Session &, int, std::string *,
-          const DifficultyTableImportCheckpoint &checkpoint) {
+          const DifficultyTableImportCheckpoint &checkpoint,
+          const DifficultyTableImportPauseProbe &) {
         ++importerCheckpoints;
         if (!checkpoint()) return false;
         ++importerCheckpoints;
@@ -507,6 +546,7 @@ int main() {
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
   testRefreshPausesInsideDefaultTableSeeding();
+  testRefreshPausesInsideLocalTableImport();
   testDifficultyTableUpdateUsesTheSharedTaskOperation();
   testDifficultyTableUpdateStopsAtAnImporterCheckpoint();
   testDesktopLibraryEntryResolutionPreservesTheStoredPath();

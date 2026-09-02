@@ -39,6 +39,13 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
         cls.curl_raii = read("src/CurlRAII.h")
         cls.download_support = read("src/bms_search/DownloadSupport.cpp")
         cls.difficulty_importer = read("src/DifficultyTableImporter.cpp")
+        cls.android_natives_header = read("src/AndroidNatives.h")
+        cls.android_natives = read("src/AndroidNatives.cpp")
+        cls.android_activity = read(
+            "android/app/src/main/java/com/snurhythm/asobmashow/"
+            "AsoBMaShowActivity.java"
+        )
+        cls.ios_natives_header = read("src/iOSNatives.hpp")
         cls.ios_natives = read("src/iOSNatives.mm")
         cls.sqlite_header = read("src/sqlite3.h")
         cls.macos_triplet = read("vcpkg-triplets/arm64-osx-asobmashow.cmake")
@@ -94,6 +101,41 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
                 next_function_name, 1
             )[0]
             self.assertNotIn("sharedSession", function)
+
+    def test_mobile_difficulty_table_downloads_observe_task_checkpoints(self):
+        self.assertIn("IOSDownloadCheckpoint", self.ios_natives_header)
+        ios_text_download = self.ios_natives.split(
+            "bool DownloadURLTextIOS", 1
+        )[1].split("bool PostURLTextIOS", 1)[0]
+        self.assertIn("checkpoint()", ios_text_download)
+        self.assertIn("[task suspend]", ios_text_download)
+        self.assertIn("[task resume]", ios_text_download)
+
+        self.assertIn("AndroidDownloadCheckpoint", self.android_natives_header)
+        self.assertIn("nativeDownloadUrlTextCheckpoint", self.android_natives)
+        self.assertIn("nativeDownloadUrlTextPauseRequested", self.android_natives)
+        android_text_download = self.android_activity.split(
+            "public String downloadUrlText", 1
+        )[1].split("public String postUrlText", 1)[0]
+        self.assertIn("checkpointToken", android_text_download)
+        self.assertIn("pauseMonitor", android_text_download)
+        self.assertIn("nativeDownloadUrlTextPauseRequested", android_text_download)
+        read_text_response = self.android_activity.split(
+            "private String readTextResponse", 1
+        )[1].split("private void copyBinaryResponse", 1)[0]
+        self.assertIn("nativeDownloadUrlTextCheckpoint", read_text_response)
+
+        fetch_url_text = self.difficulty_importer.split(
+            "std::optional<std::string> fetchUrlText", 1
+        )[1].split("std::string trimUrlForBase", 1)[0]
+        ios_import = fetch_url_text.split(
+            "#if TARGET_OS_IOS || TARGET_OS_SIMULATOR", 1
+        )[1].split("#elif TARGET_OS_ANDROID", 1)[0]
+        android_import = fetch_url_text.split(
+            "#elif TARGET_OS_ANDROID", 1
+        )[1].split("#else", 1)[0]
+        self.assertIn("checkpoint", ios_import)
+        self.assertIn("checkpoint", android_import)
 
     def test_release_contract_targets_keep_transitive_dependencies_and_feature_guards(self):
         redirect_target = self.cmake.split(

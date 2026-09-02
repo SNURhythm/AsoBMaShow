@@ -20,11 +20,13 @@ struct DifficultyTableImportProgress {
 using DifficultyTableImportProgressCallback =
     std::function<void(const DifficultyTableImportProgress &)>;
 using DifficultyTableImportCheckpoint = std::function<bool()>;
+using DifficultyTableImportPauseProbe = std::function<bool()>;
 
 using DifficultyTableControlledTextFetcher =
     std::function<std::optional<std::string>(
         const std::string &url, std::string *errorMessage,
-        const DifficultyTableImportCheckpoint &checkpoint)>;
+        const DifficultyTableImportCheckpoint &checkpoint,
+        const DifficultyTableImportPauseProbe &pauseRequested)>;
 
 class DifficultyTableImporter {
 public:
@@ -35,13 +37,17 @@ public:
       ChartRepository::Session &session, const std::string &pageUrl,
       std::string *errorMessage = nullptr,
       DifficultyTableImportProgressCallback progressCallback = nullptr,
-      DifficultyTableImportCheckpoint checkpoint = nullptr);
+      DifficultyTableImportCheckpoint checkpoint = nullptr,
+      DifficultyTableImportPauseProbe pauseRequested = nullptr);
   bool UpdateFromSourceUrl(ChartRepository::Session &session, int tableId,
                            std::string *errorMessage = nullptr,
                            DifficultyTableImportCheckpoint checkpoint =
+                               nullptr,
+                           DifficultyTableImportPauseProbe pauseRequested =
                                nullptr);
   int ImportFromDirectory(ChartRepository::Session &session,
-                          const std::filesystem::path &directory);
+                          const std::filesystem::path &directory,
+                          DifficultyTableImportCheckpoint checkpoint = nullptr);
 
 private:
   DifficultyTableControlledTextFetcher fetchText_;

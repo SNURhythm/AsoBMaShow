@@ -16,6 +16,8 @@
 using AndroidDownloadProgressCallback =
     std::function<void(std::uint64_t downloadedBytes,
                        std::uint64_t totalBytes)>;
+using AndroidDownloadCheckpoint = std::function<bool()>;
+using AndroidDownloadPauseProbe = std::function<bool()>;
 
 struct AndroidNativeMusicMetadata {
   std::string title;
@@ -100,7 +102,9 @@ std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &pa
 bool OpenURLInAndroidBrowser(const std::string &url,
                              std::string &errorMessage);
 bool DownloadURLTextAndroid(const std::string &url, std::string &body,
-                            std::string &errorMessage);
+                            std::string &errorMessage,
+                            AndroidDownloadCheckpoint checkpoint = nullptr,
+                            AndroidDownloadPauseProbe pauseRequested = nullptr);
 bool PostURLTextAndroid(const std::string &url, std::string &body,
                         std::string &errorMessage);
 bool DownloadURLToFileAndroid(const std::string &url,

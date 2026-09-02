@@ -17,15 +17,19 @@ struct ChartLibraryOperationsDependencies {
   std::function<void(bool)> setDefaultDifficultyTablesSeeded;
   std::function<bool()> saveSettings;
   std::function<void(bool includeFolders)> requestReload;
+  std::function<bool()> pauseRequested;
   std::function<bool(ChartRepository::Session &, const std::string &,
                      std::string *, DifficultyTableImportProgressCallback,
-                     const DifficultyTableImportCheckpoint &)>
+                     const DifficultyTableImportCheckpoint &,
+                     const DifficultyTableImportPauseProbe &)>
       importDifficultyTableFromUrl;
   std::function<bool(ChartRepository::Session &, int, std::string *,
-                     const DifficultyTableImportCheckpoint &)>
+                     const DifficultyTableImportCheckpoint &,
+                     const DifficultyTableImportPauseProbe &)>
       updateDifficultyTableFromSourceUrl;
   std::function<int(ChartRepository::Session &,
-                    const std::filesystem::path &)>
+                    const std::filesystem::path &,
+                    const DifficultyTableImportCheckpoint &)>
       importDifficultyTablesFromDirectory;
   std::function<std::optional<std::filesystem::path>()> selectInitialFolder;
   std::function<void(const std::vector<ChartEntry> &)> refreshFolderAccess;

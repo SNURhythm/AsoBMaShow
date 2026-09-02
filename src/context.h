@@ -622,6 +622,10 @@ public:
                   }
                   chartLibraryListReloadRequested = true;
                 },
+                .pauseRequested = [this] {
+                  return backgroundTasksPausedForForegroundScene.load(
+                      std::memory_order_acquire);
+                },
                 .selectInitialFolder = []()
                     -> std::optional<std::filesystem::path> {
                   constexpr auto bootstrapMode =
