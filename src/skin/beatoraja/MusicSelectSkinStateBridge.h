@@ -22,6 +22,7 @@ struct MusicSelectSkinFrame {
   std::filesystem::path stageFile;
   std::filesystem::path backBmp;
   std::filesystem::path banner;
+  SkinGameplayGraphState gameplayGraph;
 };
 
 struct MusicSelectSkinActionSink {
@@ -72,6 +73,8 @@ public:
   SkinGaugeStateView gaugeState() const noexcept override;
   SkinJudgeStateView judgeState(int) const noexcept override;
   SkinNoteExpansionStateView noteExpansionState() const noexcept override;
+  [[nodiscard]] SkinGameplayGraphStateView
+  gameplayGraphState() const noexcept override;
 
 private:
   const MusicSelectSkinFrame *frame_ = nullptr;

@@ -19,7 +19,6 @@ public:
   void cleanupScene() override;
 
 private:
-  void backToIntro();
   void openSettings();
 
   std::string selectedSkinPath_;

@@ -311,4 +311,19 @@ MusicSelectSkinStateBridge::noteExpansionState() const noexcept {
   return {};
 }
 
+SkinGameplayGraphStateView
+MusicSelectSkinStateBridge::gameplayGraphState() const noexcept {
+  SkinGameplayGraphStateView result;
+  if (frame_ == nullptr || frame_->gameplayGraph.chart == nullptr) {
+    return result;
+  }
+  const auto &chart = *frame_->gameplayGraph.chart;
+  result.normalDistribution = chart.normalDistribution;
+  result.bpmSeries = chart.bpmSeries;
+  result.mainBpm = chart.mainBpm;
+  result.minimumBpm = chart.minimumBpm;
+  result.maximumBpm = chart.maximumBpm;
+  return result;
+}
+
 } // namespace skin

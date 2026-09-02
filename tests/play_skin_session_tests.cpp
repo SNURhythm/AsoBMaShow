@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -700,6 +701,10 @@ struct ActivationFixtureOptions {
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
   bool musicSelectInteractionBearing = false;
+  bool musicSelectMainStateBearing = false;
+  bool musicSelectBuiltinImageBearing = false;
+  bool musicSelectCallbackTextBearing = false;
+  bool musicSelectMissingCallbackFontBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -920,7 +925,47 @@ if skin_config then
   assert(main_state.audio_loop("session-audio.ogg", 0.5) == true)
 )lua";
     }
-    if (options.musicSelectInteractionBearing) {
+    if (options.musicSelectMainStateBearing) {
+      script += R"lua(
+  assert(main_state.key_pressed(29))
+  assert(main_state.key_pressed("A"))
+  assert(main_state.set_volume_sys(0.45))
+  assert(main_state.set_volume_key(0.35))
+  assert(main_state.set_volume_bg(0.25))
+  assert(math.abs(main_state.volume_sys() - 0.45) < 0.000001)
+  assert(math.abs(main_state.volume_key() - 0.35) < 0.000001)
+  assert(math.abs(main_state.volume_bg() - 0.25) < 0.000001)
+)lua";
+    }
+    if (options.musicSelectMissingCallbackFontBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    font = {{id = "missing-font", path = "resources/missing.ttf", type = 0}},
+    text = {{id = "missing-callback-text", font = "missing-font", size = 16,
+             value = function() return "unavailable" end}},
+    destination = {
+      {id = "missing-callback-text", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectCallbackTextBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "fixture-image", path = "resources/fixture.png"}},
+    image = {{id = "fixture-object", src = "fixture-image", x = 0, y = 0,
+              w = 40, h = 20}},
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    text = {{id = "callback-text", font = "fixture-font", size = 16,
+             value = function() return "callback \u{03a9}" end}},
+    destination = {
+      {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
+      {id = "callback-text", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectInteractionBearing) {
       script += R"lua(
   return {
     type = 5, w = 1280, h = 720,
@@ -972,6 +1017,15 @@ if skin_config then
     destination = {
       {id = "movie-object-one", dst = {{x = 0, y = 0, w = 80, h = 40}}},
       {id = "movie-object-two", dst = {{x = 80, y = 0, w = 80, h = 40}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectBuiltinImageBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    destination = {
+      {id = "-100", dst = {{x = 0, y = 0, w = 40, h = 20}}}
     }
   }
 )lua";
@@ -1062,7 +1116,10 @@ if skin_config then
     customTimers = {{id = 10000, timer = function()
       assert(main_state.event_exec(1000))
       return 0
-    end}}
+    end}})lua" +
+                (options.skinType == 5 ? R"lua(,
+    destination = {})lua"
+                                       : "") + R"lua(
   }
 )lua";
     } else if (options.resultDuplicateEventExec) {
@@ -1105,7 +1162,9 @@ if skin_config then
                                          ? options.configuredSkinType
                                          : options.skinType;
       script += "\n  return { type = " + std::to_string(configuredSkinType) +
-                ", w = 1280, h = 720 }\n";
+                ", w = 1280, h = 720" +
+                (configuredSkinType == 5 ? ", destination = {}" : "") +
+                " }\n";
     }
     script += "\nend\nif phase_count ~= 1 then\n"
               "  error(\"header phase did not begin in a fresh state\")\n"
@@ -2493,6 +2552,20 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
          "unsupported optional visuals may remain visible as warnings");
 }
 
+void testMusicSelectSourceResolutionMatchesPinnedEnumLookup() {
+  const auto known = musicSelectSkinSourceResolution(
+      {.type = 5, .width = 1920, .height = 1200});
+  const auto unknown = musicSelectSkinSourceResolution(
+      {.type = 5, .width = 1536, .height = 864});
+  const auto invalid = musicSelectSkinSourceResolution(
+      {.type = 5, .width = 0, .height = -1});
+  expect(known.width == 1920.0 && known.height == 1200.0 &&
+             unknown.width == 1280.0 && unknown.height == 720.0 &&
+             invalid.width == 1280.0 && invalid.height == 720.0,
+         "music-select source resolution uses Beatoraja's exact enum lookup "
+         "and HD fallback");
+}
+
 void testRequestedModernChicSessionPublishesChartListRows() {
   const char *acceptanceRoot =
       std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
@@ -2614,12 +2687,20 @@ void testRequestedModernChicSessionPublishesChartListRows() {
         return std::abs(vertex.x - 1125.0F) < 0.1F &&
                vertex.y >= 505.0F && vertex.y <= 575.0F;
       });
+  const bool centerLevelUsesBarRelativePosition = std::ranges::any_of(
+      quadBackend.submittedVertices, [](const auto &vertex) {
+        return std::abs(vertex.x - 1155.0F) < 0.1F &&
+               vertex.y >= 505.0F && vertex.y <= 575.0F;
+      });
   if (!rendered || !hasCenterBarVertex ||
+      !centerLevelUsesBarRelativePosition ||
       centerTarget.kind != MusicSelectSkinPointerTargetKind::Bar ||
       centerTarget.selectIndex != std::optional<std::size_t>{8}) {
     std::cerr << "ModernChic chart-list probe: rendered=" << rendered
               << " vertices=" << quadBackend.reservedVertices
               << " center-bar-vertex=" << hasCenterBarVertex
+              << " center-level-position="
+              << centerLevelUsesBarRelativePosition
               << " center-target=" << static_cast<int>(centerTarget.kind)
               << '\n';
     for (const auto &diagnostic : created.session->takeLastDiagnostics()) {
@@ -2627,10 +2708,118 @@ void testRequestedModernChicSessionPublishesChartListRows() {
                 << ": " << diagnostic.message << '\n';
     }
   }
-  expect(rendered && hasCenterBarVertex &&
+  expect(rendered && hasCenterBarVertex && centerLevelUsesBarRelativePosition &&
              centerTarget.kind == MusicSelectSkinPointerTargetKind::Bar &&
              centerTarget.selectIndex == std::optional<std::size_t>{8},
-         "ModernChic renders and publishes its center chart-list row");
+         "ModernChic renders its level at the authored bar-relative position "
+         "and publishes the center chart-list row");
+}
+
+void testRequestedLitoneMusicSelectSessionCreatesWithoutHostPolicyFailures() {
+  const char *acceptanceRoot =
+      std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
+  if (acceptanceRoot == nullptr || *acceptanceRoot == '\0') return;
+  const fs::path source = fs::path(acceptanceRoot) / "LITONE12";
+  expect(fs::is_directory(source),
+         "LITONE12 acceptance root is a readable directory");
+  if (!fs::is_directory(source)) return;
+
+  TempDirectory temp;
+  SkinStorageRoots roots{
+      .visiblePackages = temp.root() / "visible",
+      .privateRevisions = temp.root() / "revisions",
+      .privateCatalog = temp.root() / "catalog",
+      .profileOverlays = temp.root() / "overlays",
+      .liveSources = true,
+  };
+  const auto package = normalizePackageId("LITONE12Acceptance").package;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "Select/select.luaskin").entry
+              : std::nullopt;
+  const auto profile =
+      makeSkinProfileId("88888888-8888-4888-8888-888888888888");
+  expect(package && entry && profile,
+         "LITONE12 music-select activation IDs normalize");
+  if (!package || !entry || !profile) return;
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(source, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "LITONE12 acceptance package snapshots");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease.has_value() && publishError.empty(),
+         "LITONE12 acceptance revision publishes");
+  if (!lease) return;
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  const auto validation =
+      validator.validate(lease->readView(), *entry, nullptr, {});
+  expect(validation.disposition ==
+                 SkinValidationDisposition::SelectableGameplay &&
+             validation.metadata && validation.metadata->skinType == 5 &&
+             validation.reconciledSettings &&
+             !validation.configurationDigest.empty(),
+         "LITONE12 music-select entry validates");
+  if (validation.disposition !=
+          SkinValidationDisposition::SelectableGameplay ||
+      !validation.metadata || validation.metadata->skinType != 5 ||
+      !validation.reconciledSettings || validation.configurationDigest.empty()) {
+    return;
+  }
+
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  frame.elapsedMillis = 2'000;
+  frame.songList.elapsedMillis = 2'000;
+  frame.songList.selectedIndex = 8;
+  for (int index = 0; index < 17; ++index) {
+    frame.songList.bars.push_back(
+        {.kind = MusicSelectBarKind::Song,
+         .title = "Chart " + std::to_string(index),
+         .exists = true,
+         .difficulty = 2,
+         .level = 10});
+  }
+
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto movieDevice = std::make_shared<SessionMovieDevice>();
+  auto counters = std::make_shared<SkinLiveResourceCounters>();
+  auto audioState = std::make_shared<SessionAudioState>();
+  auto audio = std::make_shared<SessionAudioBackend>(audioState, counters);
+  auto created = MusicSelectSkinSession::create(
+      {.activation = {.revision = std::move(*lease),
+                      .entry = *entry,
+                      .reconciledSettings = *validation.reconciledSettings,
+                      .configurationDigest = validation.configurationDigest},
+       .profileId = *profile,
+       .sessionSerial = 98},
+      {.storageRoots = roots,
+       .resourcePreparation = resources,
+       .initialFrame = frame,
+       .textureDevice = device,
+       .movieDevice = movieDevice,
+       .audioBackend = std::move(audio),
+       .liveResourceCounters = counters});
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << "LITONE12 session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+  }
+  const bool hostPolicyFailure = std::ranges::any_of(
+      created.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.code.contains("limit") ||
+               diagnostic.message.contains("policy") ||
+               diagnostic.message.contains("quota");
+      });
+  expect(created.session != nullptr && !hostPolicyFailure &&
+             movieDevice->loadCalls != 0,
+         "LITONE12 music-select creates with its bitmap fonts and movie "
+         "without host-defined budgets or validation failures");
 }
 
 void testActivationRejectsAReconciledDigestMismatch() {
@@ -2670,6 +2859,103 @@ void testMusicSelectActivationCreatesAConfiguredOwningSession() {
              fixture.device()->createCalls == 2,
          "type-5 activation runs the configured document loader, resource "
          "plan, and owning music-select session");
+}
+
+void testMusicSelectPreparationDefersRenderOwnedResources() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 95,
+  };
+  auto context = fixture.musicSelectContext();
+  auto prepared = MusicSelectSkinSession::prepare(
+      std::move(request),
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = context.initialFrame,
+       .builtinImageReader = context.builtinImageReader,
+       .audioBackend = context.audioBackend,
+       .stop = context.stop});
+  expect(prepared.prepared.has_value() && !prepared.cancelled &&
+             fixture.device()->createCalls == 0,
+         "music-select preparation leaves render-owned texture creation "
+         "until its loading result is finalized");
+  if (!prepared.prepared) return;
+
+  auto finalized = MusicSelectSkinSession::finalize(
+      std::move(*prepared.prepared),
+      {.resourcePreparation = context.resourcePreparation,
+       .textureDevice = context.textureDevice,
+       .movieDevice = context.movieDevice,
+       .liveResourceCounters = context.liveResourceCounters});
+  const bool hasError = std::ranges::any_of(
+      finalized.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error;
+      });
+  expect(finalized.session != nullptr && !hasError &&
+             fixture.device()->createCalls == 2,
+         "music-select finalization owns the deferred render-thread uploads");
+}
+
+void testMusicSelectCompatibilityDoesNotAddHostResourcePolicies() {
+  const auto policy = musicSelectSkinCompatibilityPolicy();
+  expect(policy.level() == SkinSafetyLevel::BeatorajaCompatibility &&
+             !policy.enforces(SkinSafetyGuard::LuaResourceBudget) &&
+             !policy.enforces(SkinSafetyGuard::ResourceAllocationLimit) &&
+             !policy.enforces(SkinSafetyGuard::LuaDecoderLimit) &&
+             !policy.preservesPinnedLuaSandbox() &&
+             policy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+             policy.enforces(SkinSafetyGuard::ProcessGlobalMutation),
+         "type-5 skin loading uses the pinned standard Lua loader rather "
+         "than adding host budgets or removing its skin-root and SafeOs "
+         "boundaries");
+}
+
+void testMusicSelectMainStateWritesVolumesAndReadsCurrentInput() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectMainStateBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 99,
+  };
+  auto context = fixture.musicSelectContext();
+  context.captureLegacyInputGeneration = [] {
+    LuaSkinLegacyInputGeneration input;
+    input.pressedGdxKeys.set(29);
+    return input;
+  };
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  const bool rendered = created.session &&
+                        created.session->render(renderContext, frame);
+  const auto actions = created.session
+                           ? created.session->takePublishedActions()
+                           : std::vector<MusicSelectSkinAction>{};
+  const auto actionValue = [&](int id) -> std::optional<double> {
+    const auto found = std::ranges::find_if(
+        actions, [id](const MusicSelectSkinAction &action) {
+          const auto *selector = std::get_if<int>(&action.selector.value);
+          return action.kind == MusicSelectSkinActionKind::FloatWriter &&
+                 selector != nullptr && *selector == id;
+        });
+    return found == actions.end() ? std::nullopt
+                                  : std::optional<double>(found->floatValue);
+  };
+  const auto system = actionValue(17);
+  const auto key = actionValue(18);
+  const auto background = actionValue(19);
+  expect(rendered && system && std::abs(*system - 0.45) < 0.000001 &&
+             key && std::abs(*key - 0.35) < 0.000001 && background &&
+             std::abs(*background - 0.25) < 0.000001,
+         "type-5 main_state reads current input and publishes each pinned "
+         "audio-volume setter without a host gate");
 }
 
 void testMusicSelectPublishesPointerCapturesAndTextFocus() {
@@ -2744,7 +3030,7 @@ void testMusicSelectPublishesPointerCapturesAndTextFocus() {
          "writer, and editable text exposes its exact overlay state");
 }
 
-void testMusicSelectPreparesEveryCurrentDirectoryTitle() {
+void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
   if (!fixture.ready()) return;
   GameplaySkinActivationRequest request{
@@ -2753,6 +3039,8 @@ void testMusicSelectPreparesEveryCurrentDirectoryTitle() {
       .sessionSerial = 95,
   };
   auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
   for (int index = 0; index < 80; ++index) {
     context.initialFrame.songList.bars.push_back(
         {.title = "Directory title " + std::to_string(index)});
@@ -2764,20 +3052,167 @@ void testMusicSelectPreparesEveryCurrentDirectoryTitle() {
     expect(false, "music-select title prewarm fixture creates a session");
     return;
   }
-  MusicSelectSkinFrame moved;
-  moved.serial = 2;
+  MusicSelectSkinFrame reused;
+  reused.serial = 2;
   for (int index = 0; index < 80; ++index) {
-    moved.songList.bars.push_back(
+    reused.songList.bars.push_back(
         {.title = "Directory title " + std::to_string(index)});
   }
-  moved.songList.selectedIndex = 70;
-  moved.properties.strings[10] = "Directory title 70";
-  expect(!created.session->requiresResourceRefresh(moved),
-         "moving beyond the visible song-list window reuses the atlas "
-         "prepared for every title in the current directory");
+  reused.songList.selectedIndex = 70;
+  reused.properties.strings[10] = "title Directory 0";
+  MusicSelectSkinFrame unseen = reused;
+  unseen.serial = 3;
+  unseen.properties.strings[10] = "Directory \u03a9";
+  const std::size_t createdBefore = fixture.device()->createCalls;
+  RenderContext renderContext;
+  bool rendered = false;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(1);
+  do {
+    rendered = created.session->render(renderContext, unseen);
+    ++unseen.serial;
+    if (fixture.device()->createCalls > createdBefore) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  expect(!created.session->requiresResourceRefresh(reused) &&
+             !created.session->requiresResourceRefresh(unseen) && rendered &&
+             fixture.device()->createCalls == createdBefore + 1,
+         "music-select text updates only its affected atlas instead of "
+         "rebuilding the complete resource catalog for a new glyph");
 }
 
-void testMusicSelectLuaSessionRejectsRecursiveCustomEvents() {
+void testMusicSelectPreparesCallbackTextGlyphsIncrementally() {
+  ActivationFixture fixture(
+      {.skinType = 5,
+       .resourceBearing = true,
+       .musicSelectCallbackTextBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 96,
+  };
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  if (!created.session) {
+    expect(false, "music-select callback text fixture creates a session");
+    return;
+  }
+
+  const std::size_t createdBefore = fixture.device()->createCalls;
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  const bool firstRendered = created.session->render(renderContext, frame);
+  const bool residentSelectorSubmitted =
+      quadBackend.submitCalls != 0 &&
+      fixture.device()->createCalls == createdBefore;
+  bool rendered = firstRendered;
+  ++frame.serial;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(1);
+  do {
+    rendered = created.session->render(renderContext, frame);
+    ++frame.serial;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline &&
+           fixture.device()->createCalls == createdBefore);
+
+  expect(rendered && residentSelectorSubmitted &&
+             fixture.device()->createCalls == createdBefore + 1 &&
+             !hasDiagnostic(created.session->takeLastDiagnostics(),
+                            "skin.renderer.text.glyph"),
+         "a missing callback glyph leaves the resident selector submitted "
+         "while its affected atlas prepares incrementally");
+}
+
+void testMusicSelectStopsRetryingAnUnavailableCallbackFont() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectMissingCallbackFontBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 97,
+  };
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  if (!created.session) {
+    expect(false, "music-select unavailable callback font fixture creates");
+    return;
+  }
+
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  for (int index = 0; index < 8; ++index, ++frame.serial) {
+    (void)created.session->render(renderContext, frame);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  const auto diagnostics = created.session->takeLastDiagnostics();
+  expect(!hasDiagnostic(diagnostics, "skin.renderer.text.atlas") &&
+             std::ranges::any_of(diagnostics, [](const SkinDiagnostic &value) {
+               return value.code == "skin.resource.font_missing";
+             }),
+         "an unavailable optional callback font is reported once and omitted "
+         "without retrying the whole selector frame");
+}
+
+void testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 98,
+  };
+  auto context = fixture.musicSelectContext();
+  auto readerStarted = std::make_shared<std::promise<void>>();
+  const std::future<void> started = readerStarted->get_future();
+  auto announced = std::make_shared<std::atomic_bool>(false);
+  auto cancellationObserved = std::make_shared<std::atomic_bool>(false);
+  context.builtinImageReader =
+      [readerStarted, announced, cancellationObserved](
+          const fs::path &, std::vector<unsigned char> &, std::size_t,
+          std::string *, std::stop_token stop) {
+        if (!announced->exchange(true)) {
+          readerStarted->set_value();
+        }
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(300);
+        while (!stop.stop_requested() &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        cancellationObserved->store(stop.stop_requested());
+        return false;
+      };
+  auto created = MusicSelectSkinSession::create(std::move(request),
+                                                std::move(context));
+  MusicSelectSkinFrame frame;
+  frame.serial = 2;
+  frame.stageFile = "slow-stage.png";
+  RenderContext renderContext;
+  const bool startedRead = created.session &&
+                           created.session->render(renderContext, frame) &&
+                           started.wait_for(std::chrono::seconds(1)) ==
+                               std::future_status::ready;
+  created.session.reset();
+  expect(startedRead && cancellationObserved->load(),
+         "destroying a music-select session cancels its selected-artwork "
+         "read before the async future is joined");
+}
+
+void testMusicSelectLuaSessionContainsRecursiveCustomEventFailure() {
   ActivationFixture fixture(
       {.skinType = 5, .resultRecursiveEventExec = true});
   if (!fixture.ready()) return;
@@ -2792,11 +3227,11 @@ void testMusicSelectLuaSessionRejectsRecursiveCustomEvents() {
   MusicSelectSkinFrame frame;
   frame.serial = 1;
   expect(created.session != nullptr &&
-             !created.session->render(context, frame) &&
+             created.session->render(context, frame) &&
              hasDiagnostic(created.session->takeLastDiagnostics(),
                            "skin.music_select_session.custom_event_cycle"),
-         "recursive music-select custom events fail with a skin diagnostic "
-         "instead of exhausting the native stack");
+         "a recursive music-select custom event is contained without "
+         "failing the selector frame");
 }
 
 void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
@@ -6975,12 +7410,20 @@ int main(int argc, char **argv) {
   testPomyuLeadingBackslashPathRemainsCharacterRelative();
   testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks();
   testRequestedExternalGameplaySkinCreatesARealSession();
+  testMusicSelectSourceResolutionMatchesPinnedEnumLookup();
   testRequestedModernChicSessionPublishesChartListRows();
+  testRequestedLitoneMusicSelectSessionCreatesWithoutHostPolicyFailures();
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
+  testMusicSelectPreparationDefersRenderOwnedResources();
+  testMusicSelectMainStateWritesVolumesAndReadsCurrentInput();
+  testMusicSelectCompatibilityDoesNotAddHostResourcePolicies();
   testMusicSelectPublishesPointerCapturesAndTextFocus();
-  testMusicSelectPreparesEveryCurrentDirectoryTitle();
-  testMusicSelectLuaSessionRejectsRecursiveCustomEvents();
+  testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh();
+  testMusicSelectPreparesCallbackTextGlyphsIncrementally();
+  testMusicSelectStopsRetryingAnUnavailableCallbackFont();
+  testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
+  testMusicSelectLuaSessionContainsRecursiveCustomEventFailure();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
   testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();

@@ -592,9 +592,9 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
     expect(bar != nullptr && label != nullptr &&
                bar->vertices[0].x == 100.0F &&
                label->vertices[0].x == 105.0F &&
-               label->vertices[0].y == bar->vertices[0].y - 50.0F,
-           "position one offsets relative children by the bar height without "
-           "moving the bar image");
+               label->vertices[0].y == bar->vertices[0].y - 20.0F,
+           "the selected row index does not act as SkinBar's constructor "
+           "position");
   }
   expect(evaluated.interactionLayout.has_value(),
          "SkinBar publishes its immutable pointer layout");
@@ -612,6 +612,18 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
                hit->authoredOrdinal == 7,
            "position one leaves pointer geometry at the authored bar region");
   }
+
+  // JsonSelectSkinObjectLoader drops a failed nested child without dropping
+  // the SkinBar that owns it.  The valid bar image must stay visible.
+  model.model.objects[2].payload = SkinBlankObject{};
+  const auto omittedChild = evaluate(renderer, runtime, model, resources,
+                                     state, 2, 0, nullptr, std::nullopt,
+                                     nullptr, 1, false, nullptr, nullptr,
+                                     &frame);
+  expect(omittedChild.submitReady &&
+             omittedChild.submitReady->commands.size() == 1 &&
+             omittedChild.diagnostics.empty(),
+         "a failed optional SkinBar child does not suppress its chart row");
 }
 
 void testMusicSelectDistributionGraphLowersDescendingSourceSegments() {
@@ -2876,6 +2888,47 @@ void testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop() {
                quad.vertices[1].u == 0.14F,
            "built-in graph resolves the system image before the pinned rate crop");
   }
+}
+
+void testNegativeDestinationRendersPreparedSystemImage() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect region{.x = 0, .y = 0, .w = 64, .h = 32};
+  resources.addBuiltinImage(100, 31, region, 64, 32);
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "-100",
+       .payload = SkinBuiltinImageObject{.referenceId = 100},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 119, 100.0);
+  presented.presentation.frames.front().x = 25.0;
+  presented.presentation.frames.front().y = 40.0;
+  presented.presentation.frames.front().width = 128.0;
+  presented.presentation.frames.front().height = 64.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "a negative destination ID draws its available SkinSourceReference");
+  if (result.submitReady && result.submitReady->commands.size() == 1) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(
+        result.submitReady->commands.front().payload);
+    expect(quad.resource == 31 && quad.vertices[0].x == 25.0F &&
+               quad.vertices[1].x == 153.0F,
+           "a negative destination uses its authored geometry and prepared "
+           "system image");
+  }
+
+  FakeResources unavailable;
+  const auto missing =
+      evaluate(renderer, runtime, model, unavailable, state, 2);
+  expect(missing.submitReady && missing.submitReady->commands.empty() &&
+             missing.diagnostics.empty(),
+         "an unavailable negative SkinSourceReference is a valid empty draw");
 }
 
 void testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable() {
@@ -6576,6 +6629,7 @@ int main(int argc, char **argv) {
   testNonCardinalSliderDirectionDrawsWithoutMotion();
   testGraphCropsLeftOrBottomWithJavaTruncation();
   testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop();
+  testNegativeDestinationRendersPreparedSystemImage();
   testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable();
   testUnavailableBuiltinReferenceSkipsRateLookup();
   testExplicitSliderAndGraphRatesRemainUnclamped();

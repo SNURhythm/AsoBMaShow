@@ -88,9 +88,6 @@ void MusicSelectSkinErrorScene::init() {
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(12);
-  auto *back = makeButton("Back");
-  back->setOnClickListener([this] { backToIntro(); });
-  actions->addView(back);
   auto *settings = makeButton("Settings");
   settings->setOnClickListener([this] { openSettings(); });
   actions->addView(settings);
@@ -100,14 +97,10 @@ void MusicSelectSkinErrorScene::init() {
   layoutHeight_ = rendering::window_height;
 }
 
-void MusicSelectSkinErrorScene::backToIntro() {
-  context.sceneManager->changeScene("Intro");
-}
-
 void MusicSelectSkinErrorScene::openSettings() {
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
-      SceneReturnTarget::Registered("Intro")));
+      SceneReturnTarget::Retained(this)));
 }
 
 void MusicSelectSkinErrorScene::update(float) {

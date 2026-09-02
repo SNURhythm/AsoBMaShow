@@ -12,6 +12,9 @@
 
 #include <array>
 #include <filesystem>
+#include <future>
+#include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -40,9 +43,22 @@ struct MusicSelectSkinSessionContext {
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
   rendering::SkinQuadBatchBackend *quadBackend = nullptr;
-  SkinSafetyPolicy safetyPolicy{};
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   std::stop_token stop;
 };
+
+[[nodiscard]] constexpr SkinSafetyPolicy
+musicSelectSkinCompatibilityPolicy() noexcept {
+  // Pinned LuaSkinLoader selects SkinLuaAccessor(false), whose standard
+  // globals include SafeOsLib.  The sandbox constructor is a separate,
+  // explicitly requested loader mode and is not the type-5 selector path.
+  return SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility);
+}
+
+// JSONSkinLoader chooses a source Resolution by exact width/height match and
+// otherwise retains its HD default before constructing the selector Skin.
+[[nodiscard]] AuthoredSize
+musicSelectSkinSourceResolution(const BeatorajaSkinHeader &header) noexcept;
 
 struct MusicSelectSkinSessionCreateResult {
   std::unique_ptr<class MusicSelectSkinSession> session;
@@ -61,6 +77,47 @@ struct MusicSelectSkinAction {
   std::vector<int> arguments;
   double floatValue = 0.0;
   std::string stringValue;
+};
+
+// Loading a type-5 skin has two ownership domains. Lua/document decoding and
+// CPU resource planning may run before the selector's render loop starts;
+// movies and texture uploads must remain on the render-owner thread.
+struct MusicSelectSkinSessionPreparationContext {
+  SkinStorageRoots storageRoots;
+  SkinResourcePreparationService &resourcePreparation;
+  MusicSelectSkinFrame initialFrame;
+  SkinBuiltinImageReader builtinImageReader;
+  std::shared_ptr<LuaSkinAudioBackend> audioBackend;
+  std::optional<LuaSkinLegacyInputGeneration> initialLegacyInputGeneration;
+  std::stop_token stop;
+};
+
+struct MusicSelectSkinSessionPrepared {
+  GameplaySkinActivationRequest request;
+  SkinStorageRoots storageRoots;
+  LoadedGameplaySkinDocument document;
+  SkinResourceUploadPlan resourcePlan;
+  std::map<SkinObjectId, std::vector<std::string>> runtimeAtlasStrings;
+  std::map<int, std::filesystem::path> builtinImagePaths;
+  std::vector<MusicSelectSkinAction> initialActions;
+  SkinBuiltinImageReader builtinImageReader;
+  SkinSafetyPolicy safetyPolicy{};
+  std::stop_token stop;
+};
+
+struct MusicSelectSkinSessionPreparationResult {
+  std::optional<MusicSelectSkinSessionPrepared> prepared;
+  bool cancelled = false;
+  std::vector<SkinDiagnostic> diagnostics;
+};
+
+struct MusicSelectSkinSessionFinalizationContext {
+  SkinResourcePreparationService &resourcePreparation;
+  std::shared_ptr<SkinTextureDevice> textureDevice;
+  std::shared_ptr<SkinMovieDevice> movieDevice;
+  std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters;
+  rendering::SkinQuadBatchBackend *quadBackend = nullptr;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
 };
 
 struct MusicSelectSkinPointerResult {
@@ -91,8 +148,26 @@ struct MusicSelectSkinPointerTarget {
   std::optional<std::size_t> selectIndex;
 };
 
+struct MusicSelectBuiltinImagePatch {
+  std::map<int, std::filesystem::path> paths;
+  std::map<int, std::optional<image_decode::DecodedImageData>> images;
+};
+
+struct MusicSelectTextAtlasPatch {
+  std::map<SkinObjectId, std::vector<std::string>> runtimeStrings;
+  std::vector<SkinPreparedTextAtlasUpdate> atlases;
+  std::vector<SkinDiagnostic> diagnostics;
+  bool cancelled = false;
+};
+
 class MusicSelectSkinSession final {
 public:
+  static MusicSelectSkinSessionPreparationResult
+  prepare(GameplaySkinActivationRequest,
+          MusicSelectSkinSessionPreparationContext);
+  static MusicSelectSkinSessionCreateResult
+  finalize(MusicSelectSkinSessionPrepared,
+           MusicSelectSkinSessionFinalizationContext);
   static MusicSelectSkinSessionCreateResult
   create(GameplaySkinActivationRequest, MusicSelectSkinSessionContext);
   ~MusicSelectSkinSession();
@@ -141,7 +216,8 @@ private:
       SkinBuiltinImageReader, std::shared_ptr<SkinLiveResourceCounters>,
       rendering::SkinQuadBatchBackend *, SkinSafetyPolicy, ViewportSettings,
       std::stop_token,
-      std::vector<std::string>, std::map<int, std::filesystem::path>);
+      std::map<SkinObjectId, std::vector<std::string>>,
+      std::map<int, std::filesystem::path>);
 
   static LuaSkinEventExecutionResult executeHostEvent(
       void *, int, std::span<const int>) noexcept;
@@ -154,6 +230,9 @@ private:
                                        std::span<const int> resolutionPath = {});
   [[nodiscard]] bool queueFloatWriter(const SkinWriterInvocation &);
   [[nodiscard]] bool executeQueuedCallbacks(MusicSelectSkinStateBridge &);
+  void updateBuiltinImages(const MusicSelectSkinFrame &);
+  [[nodiscard]] bool
+  updateRuntimeTextAtlases(const MusicSelectSkinFrame &);
 
   std::uint64_t sessionSerial_ = 0;
   SkinProfileId profileId_;
@@ -187,8 +266,21 @@ private:
   std::map<int, std::int64_t> customTimerValues_;
   std::set<int> activeCustomTimerIds_;
   std::map<int, std::int64_t> customEventLastExecutionMicros_;
-  std::vector<std::string> preparedRuntimeStrings_;
+  std::map<SkinObjectId, std::vector<std::string>>
+      preparedRuntimeStringsByObject_;
+  std::map<SkinObjectId, std::vector<std::string>>
+      observedRuntimeStringsByObject_;
   std::map<int, std::filesystem::path> preparedBuiltinImagePaths_;
+  std::map<int, std::filesystem::path> pendingBuiltinImagePaths_;
+  std::stop_source builtinImagePatchStop_;
+  std::future<MusicSelectBuiltinImagePatch> pendingBuiltinImagePatch_;
+  std::map<SkinObjectId, std::vector<std::string>>
+      pendingRuntimeStringsByObject_;
+  std::set<SkinObjectId> pendingTextAtlasObjects_;
+  std::set<SkinObjectId> unavailableTextAtlasObjects_;
+  std::stop_source textAtlasPatchStop_;
+  std::future<MusicSelectTextAtlasPatch> pendingTextAtlasPatch_;
+  std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration_;
   std::int64_t currentEventMicros_ = 0;
   bool executingFrame_ = false;
 };

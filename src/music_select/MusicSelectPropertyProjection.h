@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+struct SkinGameplayChartGraphState;
+
 enum class MusicSelectRankingState {
   None,
   Access,
@@ -55,7 +57,6 @@ struct MusicSelectPropertyRuntimeSnapshot {
   std::string tableName;
   std::string tableLevel;
   std::string tableFullName;
-  std::string version;
   std::string irName;
   std::string irUserName;
   bool irOnline = false;
@@ -63,6 +64,9 @@ struct MusicSelectPropertyRuntimeSnapshot {
   bool stageFileAvailable = false;
   bool backBmpAvailable = false;
   bool bannerAvailable = false;
+  // This is SongData.getInformation() when the selected selector chart has
+  // completed Beatoraja's delayed BMS model load.
+  const SkinGameplayChartGraphState *selectedSongInformation = nullptr;
   PlayerScoreHistorySnapshot playerHistory;
   MusicSelectRankingSnapshot ranking;
 };

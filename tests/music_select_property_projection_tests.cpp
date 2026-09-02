@@ -3,6 +3,7 @@
 #include "music_select_runtime_ledger_assertions.h"
 
 #include "AssistOptionUtils.h"
+#include "scene/play/SkinGameplayGraphState.h"
 
 #include <cmath>
 #include <iostream>
@@ -148,7 +149,6 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
   runtime.tableName = "Table";
   runtime.tableLevel = "★12";
   runtime.tableFullName = "Table ★12";
-  runtime.version = "version";
   runtime.irName = "IR";
   runtime.irUserName = "IR Player";
   runtime.irOnline = true;
@@ -174,7 +174,8 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.strings.at(10) == "Title" &&
               values.strings.at(12) == "Title Subtitle" &&
               values.strings.at(16) == "Artist Sub Artist" &&
-              values.strings.at(1000) == "Root > Folder > ",
+              values.strings.at(1000) == "Root > Folder > " &&
+              values.strings.at(1010) == "beatoraja 0.8.9",
           "StringPropertyFactory values follow the selected SongData, "
           "selector, and target-list ring");
   require(values.booleans.at(2) && !values.booleans.at(1) &&
@@ -219,20 +220,20 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
               values.integers.at(84) == 10 &&
               values.integers.at(110) == 250 &&
               values.integers.at(114) == 10 &&
-              values.integers.at(350) == 430 &&
-              values.integers.at(351) == 25 &&
-              values.integers.at(352) == 40 &&
-              values.integers.at(353) == 5 &&
+              !values.integers.contains(350) &&
+              !values.integers.contains(351) &&
+              !values.integers.contains(352) &&
+              !values.integers.contains(353) &&
               values.integers.at(423) == 17 &&
               values.integers.at(424) == 19 &&
               values.integers.at(280) == 200 &&
               values.integers.at(284) == 20 &&
               values.integers.at(400) == 2 &&
-              values.integers.at(368) == 276 &&
+              !values.integers.contains(368) &&
               values.integers.at(425) == 35 &&
               values.integers.at(90) == 180 &&
               values.integers.at(91) == 120 &&
-              values.integers.at(92) == 150 &&
+              !values.integers.contains(92) &&
               values.integers.at(96) == 12 &&
               values.integers.at(102) == 80 &&
               values.integers.at(103) == 0 &&
@@ -462,11 +463,56 @@ void testProjectsDirectoryAndFinishedRanking() {
           "ranking position divides the offset by the remote total player count");
 }
 
+void testProjectsDelayedSelectedSongInformation() {
+  AppSettings settings;
+  MusicSelectBarManagerSnapshot bars;
+  (void)selectedSong(bars);
+  SkinGameplayChartGraphState information{
+      .mainBpm = 154.75,
+      .normalKeyNotes = 421,
+      .longKeyNotes = 34,
+      .normalScratchNotes = 27,
+      .longScratchNotes = 5,
+      .peakDensity = 17.42,
+      .endDensity = 9.05,
+      .averageDensity = 12.999,
+      .totalGauge = 313.75,
+  };
+  MusicSelectPropertyRuntimeSnapshot runtime;
+  runtime.selectedSongInformation = &information;
+  const auto values = projectMusicSelectProperties(settings, bars, runtime);
+  require(values.integers.at(92) == 154 &&
+              values.integers.at(350) == 421 &&
+              values.integers.at(351) == 34 &&
+              values.integers.at(352) == 27 &&
+              values.integers.at(353) == 5 &&
+              values.integers.at(360) == 17 &&
+              values.integers.at(361) == 42 &&
+              values.integers.at(362) == 9 &&
+              values.integers.at(363) == 5 &&
+              values.integers.at(364) == 12 &&
+              values.integers.at(365) == 99 &&
+              values.integers.at(368) == 313,
+          "delayed SongInformation replaces selected chart metadata with "
+          "Beatoraja's integer and decimal-part properties");
+  require(std::abs(values.floats.at(360) - static_cast<float>(17.42)) <
+                  0.000001 &&
+              std::abs(values.floats.at(362) - static_cast<float>(9.05)) <
+                  0.000001 &&
+              std::abs(values.floats.at(367) - static_cast<float>(12.999)) <
+                  0.000001 &&
+              std::abs(values.floats.at(368) - static_cast<float>(313.75)) <
+                  0.000001,
+          "delayed SongInformation uses Java float conversion for selector "
+          "density properties");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
   testProjectsSelectedSongAndPlayerConfiguration();
   testProjectsDirectoryAndFinishedRanking();
+  testProjectsDelayedSelectedSongInformation();
   testProjectsExactBarClassConditions();
   testProjectsCourseContract();
   testUnavailableSongRatesStayZeroWithoutNotes();

@@ -14,6 +14,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -201,6 +202,7 @@ public:
   }
   virtual std::int64_t timerProperty(const SkinBuiltinPropertySelector &) = 0;
   virtual bool setTimerProperty(int, std::int64_t) { return false; }
+  virtual bool setFloatProperty(int, double) { return false; }
   virtual std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept = 0;
   virtual std::span<const SkinProjectedLongNoteView>
@@ -255,6 +257,10 @@ struct SkinFrameInputs {
   // this immutable selector snapshot while ordinary objects continue through
   // the shared property bridge.
   const MusicSelectSongListFrame *musicSelectSongList = nullptr;
+  // Scalable type-5 fonts are prepared from each text value observed during
+  // the preceding frame. The session consumes this only to refresh the
+  // affected atlas; it does not alter property evaluation or draw order.
+  std::function<void(SkinObjectId, std::string_view)> observedTextValue;
 };
 
 [[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(

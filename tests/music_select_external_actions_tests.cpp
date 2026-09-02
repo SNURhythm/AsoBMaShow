@@ -201,9 +201,15 @@ void testRefreshPathUsesThePhysicalArchive() {
          std::filesystem::path("/charts/package.zip"));
 }
 
-void testTouchRowsSelectWithoutDesktopActivation() {
+void testTouchRowsUseTheSameActivationAsDesktopPointers() {
   assert(musicSelectPointerActivatesRow(MusicSelectPointerOrigin::Mouse));
-  assert(!musicSelectPointerActivatesRow(MusicSelectPointerOrigin::Touch));
+  assert(musicSelectPointerActivatesRow(MusicSelectPointerOrigin::Touch));
+  assert(!musicSelectPointerKeepsCenteredBar(
+      skin::MusicSelectBarKind::Folder));
+  assert(musicSelectPointerKeepsCenteredBar(
+      skin::MusicSelectBarKind::Song));
+  assert(musicSelectPointerKeepsCenteredBar(
+      skin::MusicSelectBarKind::Grade));
 }
 
 void testTouchGestureDefersBarTapAndConvertsVerticalDragToRows() {
@@ -242,7 +248,7 @@ int main() {
   testExplorerBranchPriority();
   testFolderAndDownloadSiteBranches();
   testRefreshPathUsesThePhysicalArchive();
-  testTouchRowsSelectWithoutDesktopActivation();
+  testTouchRowsUseTheSameActivationAsDesktopPointers();
   testTouchGestureDefersBarTapAndConvertsVerticalDragToRows();
   testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion();
   return 0;

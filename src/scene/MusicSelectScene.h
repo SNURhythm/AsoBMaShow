@@ -21,12 +21,18 @@
 
 #include <chrono>
 #include <array>
+#include <atomic>
+#include <future>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <stop_token>
 #include <vector>
 
 class BlockingOverlayView;
 class TextInputBox;
+struct SkinGameplayChartGraphState;
 class MusicSelectScene final : public Scene {
 public:
   MusicSelectScene(ApplicationContext &,
@@ -85,6 +91,11 @@ private:
   [[nodiscard]] bool
   activateSkin(skin::GameplaySkinActivationRequest);
   [[nodiscard]] bool reactivateSkinAfterSettings();
+  void buildSkinLoadingView();
+  void finalizeSkinPreparationIfReady();
+  void cancelSkinPreparation();
+  void updateSelectedChartAnalysis();
+  void cancelSelectedChartAnalysis();
   [[nodiscard]] TextInputBox *skinTextInputForSize(int);
   void beginSkinTextEditing(
       const skin::MusicSelectSkinPointerResult::StringFocus &);
@@ -140,11 +151,28 @@ private:
   MusicSelectToolbarView *toolbar_ = nullptr;
   BlockingOverlayView *searchOverlay_ = nullptr;
   TextInputBox *searchInput_ = nullptr;
+  View *errorView_ = nullptr;
   bool failed_ = false;
   bool launching_ = false;
   bool reactivateSkinOnResume_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
+  std::future<skin::MusicSelectSkinSessionPreparationResult>
+      skinPreparation_;
+  std::stop_source skinPreparationStop_;
+  View *skinLoadingView_ = nullptr;
+  struct SelectedChartAnalysis {
+    std::uint64_t generation = 0;
+    std::atomic_bool cancelled{false};
+    std::atomic_bool finished{false};
+    std::mutex mutex;
+    std::shared_ptr<const SkinGameplayChartGraphState> result;
+  };
+  std::shared_ptr<SelectedChartAnalysis> selectedChartAnalysis_;
+  std::uint64_t selectedChartAnalysisGeneration_ = 0;
+  std::shared_ptr<const SkinGameplayChartGraphState>
+      selectedChartInformation_;
+  bool selectedChartAnalysisStarted_ = false;
   TextInputBox *skinTextInput_ = nullptr;
   std::map<int, TextInputBox *> skinTextInputs_;
   std::optional<skin::SkinStringWriterId> activeSkinStringWriter_;

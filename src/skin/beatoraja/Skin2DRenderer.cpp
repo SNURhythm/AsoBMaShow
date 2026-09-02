@@ -3,6 +3,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "Skin2DRenderer.h"
+#include "LuaJValueCoercion.h"
 #include "SkinBpmGraphRenderer.h"
 #include "SkinCoverNormalization.h"
 #include "SkinGaugeGraphRenderer.h"
@@ -16,6 +17,7 @@
 #include <atomic>
 #include <bit>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <numeric>
@@ -53,6 +55,22 @@ template <typename T> struct ResolvedValue {
 
 int narrowingJavaInt(std::int64_t value) noexcept;
 int subtractingJavaInt(int left, int right) noexcept;
+
+bool usesLuaJCompatibilityCoercion(const SkinFrameInputs &inputs) noexcept {
+  return !inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit);
+}
+
+std::string coerceLuaJString(const LuaScalar &value) {
+  if (const auto *text = std::get_if<std::string>(&value)) return *text;
+  if (std::holds_alternative<std::nullptr_t>(value)) return "nil";
+  if (const auto *boolean = std::get_if<bool>(&value)) {
+    return *boolean ? "true" : "false";
+  }
+  if (const auto *integer = std::get_if<std::int64_t>(&value)) {
+    return std::to_string(*integer);
+  }
+  return std::to_string(std::get<double>(value));
+}
 
 std::optional<std::int64_t>
 coerceLuaNumericInteger(const LuaScalar &value, std::int64_t minimum,
@@ -449,9 +467,23 @@ ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
   const auto invoked =
       invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = false};
+    }
     return {.failure = *invoked.failure};
   }
-  if (!invoked.value || !std::holds_alternative<bool>(*invoked.value)) {
+  if (!invoked.value) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = false};
+    }
+    return {.failure =
+                diagnostic("skin.renderer.binding.type",
+                           "Boolean callback returned a non-boolean value.")};
+  }
+  if (usesLuaJCompatibilityCoercion(inputs)) {
+    return {.value = luaJToBoolean(*invoked.value)};
+  }
+  if (!std::holds_alternative<bool>(*invoked.value)) {
     return {.failure =
                 diagnostic("skin.renderer.binding.type",
                            "Boolean callback returned a non-boolean value.")};
@@ -462,11 +494,17 @@ ResolvedValue<bool> resolveBoolean(const SkinFrameInputs &inputs,
 ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
                                            const FrameLookupIndex &index,
                                            SkinIntegerPropertyId id) {
+  // SkinNumber keeps a null IntegerProperty when a Lua `value` has no
+  // `ref`.  SkinNumber.prepare passes Integer.MIN_VALUE in that case, which
+  // hides the number instead of rejecting the destination.
+  if (!id) {
+    return {.value = std::numeric_limits<std::int32_t>::min()};
+  }
   const auto *binding = findBinding(index.integers, id);
   if (!binding) {
     return {.failure = diagnostic(
-                "skin.renderer.binding.missing",
-                "Integer property binding is absent from the model.")};
+        "skin.renderer.binding.missing",
+        "Integer property binding is absent from the model.")};
   }
   if (const auto *builtin =
           std::get_if<SkinBuiltinPropertySelector>(&binding->source)) {
@@ -481,12 +519,21 @@ ResolvedValue<std::int64_t> resolveInteger(const SkinFrameInputs &inputs,
   const auto invoked =
       invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = 0};
+    }
     return {.failure = *invoked.failure};
   }
   if (!invoked.value) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = 0};
+    }
     return {.failure =
                 diagnostic("skin.renderer.binding.type",
                            "Integer callback returned no numeric value.")};
+  }
+  if (usesLuaJCompatibilityCoercion(inputs)) {
+    return {.value = static_cast<std::int64_t>(luaJToInt(*invoked.value))};
   }
   const auto value = coerceLuaNumericInteger(
       *invoked.value, std::numeric_limits<std::int32_t>::min(),
@@ -521,11 +568,20 @@ ResolvedValue<double> resolveFloat(const SkinFrameInputs &inputs,
   const auto invoked =
       invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = 0.0};
+    }
     return {.failure = *invoked.failure};
   }
   if (!invoked.value) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = 0.0};
+    }
     return {.failure = diagnostic("skin.renderer.binding.type",
                                   "Float callback returned no numeric value.")};
+  }
+  if (usesLuaJCompatibilityCoercion(inputs)) {
+    return {.value = luaJToFloat(*invoked.value)};
   }
   if (const auto *value = std::get_if<double>(&*invoked.value)) {
     return {.value = *value};
@@ -614,9 +670,23 @@ ResolvedValue<std::string> resolveString(const SkinFrameInputs &inputs,
   const auto invoked =
       invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = std::string{}};
+    }
     return {.failure = *invoked.failure};
   }
-  if (!invoked.value || !std::holds_alternative<std::string>(*invoked.value)) {
+  if (!invoked.value) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = std::string{}};
+    }
+    return {.failure =
+                diagnostic("skin.renderer.binding.type",
+                           "String callback returned a non-string value.")};
+  }
+  if (usesLuaJCompatibilityCoercion(inputs)) {
+    return {.value = coerceLuaJString(*invoked.value)};
+  }
+  if (!std::holds_alternative<std::string>(*invoked.value)) {
     return {.failure =
                 diagnostic("skin.renderer.binding.type",
                            "String callback returned a non-string value.")};
@@ -640,11 +710,20 @@ ResolvedValue<std::int64_t> resolveTimer(const SkinFrameInputs &inputs,
   const auto invoked =
       invokeCallback(inputs, std::get<LuaCallbackId>(binding->source));
   if (invoked.failure) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = std::numeric_limits<std::int64_t>::min()};
+    }
     return {.failure = *invoked.failure};
   }
   if (!invoked.value) {
+    if (usesLuaJCompatibilityCoercion(inputs)) {
+      return {.value = std::numeric_limits<std::int64_t>::min()};
+    }
     return {.failure = diagnostic("skin.renderer.binding.type",
                                   "Timer callback returned no numeric value.")};
+  }
+  if (usesLuaJCompatibilityCoercion(inputs)) {
+    return {.value = luaJToLong(*invoked.value)};
   }
   const auto value = coerceLuaNumericInteger(
       *invoked.value, std::numeric_limits<std::int64_t>::min(),
@@ -1162,6 +1241,9 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
                                           std::size_t maximumCodepoints) {
   TextLayoutInput result;
   result.value = std::move(value);
+  if (inputs.observedTextValue) {
+    inputs.observedTextValue(object.id, result.value);
+  }
   if (result.value.empty() && !(text.editable && text.writer)) {
     result.suppressed = true;
     return result;
@@ -1180,6 +1262,10 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
       (!result.atlas->bitmapFont &&
        (result.atlas->width <= 0 || result.atlas->height <= 0 ||
         result.atlas->layoutKind != SkinTextLayoutKind::Scalable))) {
+    if (!inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+      result.suppressed = true;
+      return result;
+    }
     result.failure =
         diagnostic("skin.renderer.text.atlas",
                    "Prepared text atlas or its fixed metrics are absent.");
@@ -1207,6 +1293,15 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
         !result.atlas->glyphs.contains(scalar)) {
       if (result.atlas->bitmapFont) {
         continue;
+      }
+      if (!inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
+        // SkinTextFont regenerates a scalable font after SkinText observes a
+        // new current value. Our owner-thread atlas replacement completes on
+        // a later selector frame, so omit only this transient run after
+        // recording it for that matching atlas.
+        result.suppressed = true;
+        result.codepoints.clear();
+        return result;
       }
       result.failure = diagnostic(
           "skin.renderer.text.glyph",
@@ -1634,7 +1729,7 @@ TextLoweringResult lowerText(const SkinFrameInputs &inputs,
       run.fallbackColorOverlays.push_back(std::move(overlay));
     }
   }
-  if (atlas.bitmapFont && atlas.bitmapFontType == 0 &&
+  if ((!atlas.bitmapFont || atlas.bitmapFontType == 0) &&
       (text.shadowOffsetX != 0.0 || text.shadowOffsetY != 0.0)) {
     const double authoredShadowX = text.shadowOffsetX;
     const double authoredShadowY = -text.shadowOffsetY;
@@ -3259,14 +3354,10 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
   if (songList.graph) {
     prepareAll(std::span<const SkinSongListPresentation>{&*songList.graph, 1});
   }
-  for (auto &[presentation, value] : prepared) {
-    (void)presentation;
-    result.failures.insert(result.failures.end(),
-                           std::make_move_iterator(value.failures.begin()),
-                           std::make_move_iterator(value.failures.end()));
-  }
-  if (!result.failures.empty() ||
-      (hasAuthoredOuterFrames && !outer.geometry)) {
+  // JsonSelectSkinObjectLoader constructs every SkinBar child independently.
+  // A null or unpreparable child is simply absent from that bar; it does not
+  // invalidate the SkinBar wrapper or the other children.
+  if (!result.failures.empty() || (hasAuthoredOuterFrames && !outer.geometry)) {
     return result;
   }
 
@@ -3283,7 +3374,6 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
     std::size_t barIndex = 0;
     double preparedX = 0.0;
     double preparedY = 0.0;
-    double barHeight = 0.0;
     double x = 0.0;
     double y = 0.0;
     AuthoredRect pointerRegion;
@@ -3306,7 +3396,6 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
     row.barIndex = logical.barIndex;
     row.preparedX = found->second.geometry->rect.x;
     row.preparedY = found->second.geometry->rect.y;
-    row.barHeight = found->second.geometry->rect.height;
     row.x = row.preparedX;
     row.y = row.preparedY;
     row.pointerRegion = found->second.geometry->rect;
@@ -3344,8 +3433,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
   for (auto &row : rows) {
     if (row.drawable) {
       row.x = static_cast<double>(truncatingJavaInt(row.x));
-      row.y = static_cast<double>(truncatingJavaInt(
-          row.y + (songList.center == 1 ? row.barHeight : 0.0)));
+      row.y = static_cast<double>(truncatingJavaInt(row.y));
     }
   }
 
@@ -3429,29 +3517,24 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
           command.family == MusicSelectBarDrawFamily::Level
               ? std::optional<std::int64_t>{command.value}
               : std::nullopt);
-      result.failures.insert(result.failures.end(),
-                             std::make_move_iterator(dynamic.failures.begin()),
-                             std::make_move_iterator(dynamic.failures.end()));
       if (!dynamic.geometry) {
         continue;
       }
-      translateMusicSelectGeometry(*dynamic.geometry,
-                                   row.x - row.preparedX,
-                                   row.y - row.preparedY -
-                                       (command.family ==
-                                                    MusicSelectBarDrawFamily::
-                                                        BarImage &&
-                                                songList.center == 1
-                                            ? row.barHeight
-                                            : 0.0));
+      if (command.family == MusicSelectBarDrawFamily::BarImage) {
+        translateMusicSelectGeometry(*dynamic.geometry,
+                                     row.x - row.preparedX,
+                                     row.y - row.preparedY);
+      } else {
+        // BarRenderer supplies the current bar origin when it draws a level.
+        // Level destinations are authored relative to that origin.
+        translateMusicSelectGeometry(*dynamic.geometry, row.x, row.y);
+      }
       if (image && dynamic.sprite && dynamic.spriteFrame) {
         auto lowered = lowerSpriteQuad(
             inputs, initial.object->id,
             outerDestination.presentation.authoredOrdinal, *dynamic.geometry,
             *dynamic.sprite, *dynamic.spriteFrame);
-        if (lowered.failure) {
-          result.failures.push_back(*lowered.failure);
-        } else if (lowered.command &&
+        if (!lowered.failure && lowered.command &&
                    !appendCommand(std::move(*lowered.command))) {
           result.failures.push_back(diagnostic(
               "skin.renderer.command.limit",
@@ -3462,9 +3545,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
         auto destination = fakeDestination(*presentation);
         auto lowered = lowerNumeric(inputs, *initial.object, destination,
                                     *dynamic.geometry, *dynamic.number);
-        if (lowered.failure) {
-          result.failures.push_back(*lowered.failure);
-        } else if (lowered.commands.size() >
+        if (!lowered.failure && lowered.commands.size() >
                    maximumCommands - result.commands.size()) {
           result.failures.push_back(diagnostic(
               "skin.renderer.command.limit",
@@ -3490,9 +3571,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
           inputs, initial.object->id,
           outerDestination.presentation.authoredOrdinal, geometry,
           *initial.sprite, *initial.spriteFrame);
-      if (lowered.failure) {
-        result.failures.push_back(*lowered.failure);
-      } else if (lowered.command &&
+      if (!lowered.failure && lowered.command &&
                  !appendCommand(std::move(*lowered.command))) {
         result.failures.push_back(diagnostic(
             "skin.renderer.command.limit",
@@ -3506,7 +3585,6 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
           inputs, *initial.object, *text, command.text,
           maximumGlyphs - std::min(maximumGlyphs, result.glyphCount));
       if (layout.failure) {
-        result.failures.push_back(*layout.failure);
         continue;
       }
       if (layout.suppressed) {
@@ -3515,9 +3593,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
       auto destination = fakeDestination(*presentation);
       auto lowered = lowerText(inputs, *initial.object, destination, geometry,
                                *text, layout);
-      if (lowered.failure) {
-        result.failures.push_back(*lowered.failure);
-      } else if (lowered.command &&
+      if (!lowered.failure && lowered.command &&
                  (result.commands.size() >= maximumCommands ||
                   lowered.glyphCount > maximumGlyphs - result.glyphCount)) {
         result.failures.push_back(diagnostic(
@@ -3555,9 +3631,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
             inputs, initial.object->id,
             outerDestination.presentation.authoredOrdinal, segment,
             graph->sprite, *frameRegion);
-        if (lowered.failure) {
-          result.failures.push_back(*lowered.failure);
-        } else if (lowered.command &&
+        if (!lowered.failure && lowered.command &&
                    !appendCommand(std::move(*lowered.command))) {
           result.failures.push_back(diagnostic(
               "skin.renderer.command.limit",
@@ -4274,6 +4348,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
       const auto *text = std::get_if<SkinTextObject>(&object->payload);
       const auto *slider = std::get_if<SkinSliderObject>(&object->payload);
       const auto *graph = std::get_if<SkinGraphObject>(&object->payload);
+      const auto *selectDistribution =
+          std::get_if<SkinSelectDistributionGraphObject>(&object->payload);
       const auto *noteDistribution =
           std::get_if<SkinNoteDistributionGraphObject>(&object->payload);
       const auto *gaugeGraph =
@@ -4314,6 +4390,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           std::get_if<SkinInvalidInGameplayObject>(&object->payload);
       const auto *blank = std::get_if<SkinBlankObject>(&object->payload);
       if (!image && !number && !floating && !text && !slider && !graph &&
+          !selectDistribution &&
           !noteDistribution && !gaugeGraph && !bpmGraph &&
           !timingVisualizer && !timingDistribution &&
           !hitErrorVisualizer &&
@@ -4328,11 +4405,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
 
-      // SkinSourceReference returns null for unavailable system images, and
-      // optional v1 widgets deliberately have no renderer yet.  Both are
-      // valid authored objects that prepare as an empty draw, never a frame
-      // failure or a built-in gameplay fallback trigger.
-      if (builtinImage || invalidInGameplay || blank) {
+      // Optional v1 widgets without renderers are valid empty draws.
+      if (invalidInGameplay || blank) {
         continue;
       }
 
@@ -4596,6 +4670,46 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         continue;
       }
 
+      if (builtinImage) {
+        if (!evaluated.geometry || evaluated.geometry->rgba[3] <= 0.0F) {
+          continue;
+        }
+        const auto source =
+            inputs.resources.builtinImageResource(builtinImage->referenceId);
+        if (!source) {
+          // SkinSourceReference#getImage returns null when the requested
+          // system image is unavailable, and SkinImage suppresses that draw.
+          continue;
+        }
+        const auto *resource = inputs.resources.find(*source);
+        if (resource == nullptr || resource->regionMappings.empty()) {
+          continue;
+        }
+        auto lowered = lowerPreparedQuad(
+            inputs, object->id, destination.presentation.authoredOrdinal,
+            *evaluated.geometry, *source, resource->width, resource->height,
+            resource->regionMappings.front().resolved);
+        if (lowered.failure) {
+          if (reportObjectFailure(result, *object, *lowered.failure)) {
+            return result;
+          }
+          continue;
+        }
+        if (lowered.command) {
+          if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
+            if (reportObjectFailure(
+                    result, *object,
+                    diagnostic("skin.renderer.command.limit",
+                               "Skin command buffer exceeds its fixed limit."))) {
+              return result;
+            }
+            continue;
+          }
+          buffer.commands.push_back(std::move(*lowered.command));
+        }
+        continue;
+      }
+
       if (practice) {
         if (!evaluated.geometry) {
           continue;
@@ -4765,6 +4879,73 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
               {.authoredOrdinal = destination.presentation.authoredOrdinal,
                .sourceObject = object->id,
                .payload = std::move(command)});
+        }
+        continue;
+      }
+
+      if (selectDistribution) {
+        // SkinDistributionGraph reads the currently selected DirectoryBar;
+        // a non-directory selection simply has no graph to draw.
+        if (!evaluated.geometry || evaluated.geometry->rgba[3] <= 0.0F ||
+            inputs.musicSelectSongList == nullptr) {
+          continue;
+        }
+        const auto &songList = *inputs.musicSelectSongList;
+        if (songList.selectedIndex >= songList.bars.size()) {
+          continue;
+        }
+        const auto &selectedBar = songList.bars[songList.selectedIndex];
+        if (!musicSelectIsDirectoryBarKind(selectedBar.kind)) {
+          continue;
+        }
+        const auto counts =
+            selectDistribution->type == SkinSelectDistributionGraphType::Normal
+                ? std::span<const int>(selectedBar.folderLampCounts)
+                : std::span<const int>(selectedBar.folderRankCounts);
+        const std::size_t stateCount = counts.size();
+        if (selectDistribution->sprite.resource == 0 ||
+            selectDistribution->sprite.frames.empty() ||
+            selectDistribution->sprite.frames.size() % stateCount != 0) {
+          continue;
+        }
+        const auto animated = selectAnimationFrame(
+            inputs, lookupIndex,
+            selectDistribution->sprite.frames.size() / stateCount,
+            selectDistribution->sprite.cycleMillis,
+            selectDistribution->sprite.timer);
+        if (animated.failure || animated.suppressed) {
+          continue;
+        }
+        const int total = std::accumulate(counts.begin(), counts.end(), 0);
+        if (total <= 0) {
+          continue;
+        }
+        int prior = 0;
+        for (std::size_t reversed = stateCount; reversed > 0; --reversed) {
+          const std::size_t state = reversed - 1;
+          const int count = counts[state];
+          if (count <= 0) {
+            prior += std::max(0, count);
+            continue;
+          }
+          auto segment = *evaluated.geometry;
+          segment.rect.x += segment.rect.width * prior / total;
+          segment.rect.width = segment.rect.width * count / total;
+          const auto &frame = selectDistribution->sprite.frames[
+              animated.frame * stateCount + state];
+          auto lowered = lowerSpriteQuad(
+              inputs, object->id, destination.presentation.authoredOrdinal,
+              segment, selectDistribution->sprite, frame);
+          if (lowered.failure) {
+            continue;
+          }
+          if (lowered.command) {
+            if (buffer.commands.size() >= skinFrameMaximumCommands(inputs)) {
+              break;
+            }
+            buffer.commands.push_back(std::move(*lowered.command));
+          }
+          prior += count;
         }
         continue;
       }

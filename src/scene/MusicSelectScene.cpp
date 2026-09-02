@@ -39,6 +39,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../skin/beatoraja/BgfxSkinTextureDevice.h"
 #include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
+#include "play/PlayfieldChartVisualModel.h"
 #endif
 
 #include <algorithm>
@@ -47,9 +48,11 @@
 #include <cctype>
 #include <cmath>
 #include <ctime>
+#include <limits>
 #include <memory>
 #include <ranges>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -430,6 +433,11 @@ std::int64_t MusicSelectScene::elapsedMicros() const {
 }
 
 void MusicSelectScene::selectedBarMoved() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  cancelSelectedChartAnalysis();
+  selectedChartInformation_.reset();
+  selectedChartAnalysisStarted_ = false;
+#endif
   const auto snapshot = bars_.snapshot();
   // Pinned MusicSelector retains rankingOffset across bar changes; only its
   // ranking-position writer mutates that field.
@@ -608,13 +616,16 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
   propertyRuntime.tableName = tableContext.name;
   propertyRuntime.tableLevel = tableContext.level;
   propertyRuntime.tableFullName = tableContext.fullName;
-  propertyRuntime.version = ASOBMASHOW_APPLICATION_VERSION;
   propertyRuntime.irName = context.settings.irProviders.empty()
                                ? std::string{}
                                : context.settings.irProviders.begin()->first;
   propertyRuntime.irUserName = context.irAccountNameSnapshot();
   propertyRuntime.irOnline = !propertyRuntime.irUserName.empty();
   propertyRuntime.ranking = ranking_;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  propertyRuntime.selectedSongInformation = selectedChartInformation_.get();
+  frame.gameplayGraph.chart = selectedChartInformation_;
+#endif
   if (rankingLoadAtMicros_ != -1) {
     propertyRuntime.ranking.pendingDurationMillis =
         (rankingLoadAtMicros_ - elapsedMicros()) / 1'000;
@@ -622,6 +633,15 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
     propertyRuntime.ranking.pendingDurationMillis = -1;
   }
   propertyRuntime.playerHistory = playerHistory_;
+  if (snapshot.selectedIndex < snapshot.rows.size()) {
+    const auto &selected = snapshot.rows[snapshot.selectedIndex];
+    if (selected.chart) {
+      const auto &record = *selected.chart;
+      const auto &meta = record.meta;
+      frame.stageFile = resolveChartAsset(record, meta.StageFile);
+      frame.banner = resolveChartAsset(record, meta.Banner);
+    }
+  }
   frame.properties =
       projectMusicSelectProperties(context.settings, snapshot, propertyRuntime);
   if (startInputMicros_) frame.properties.timers[1] = *startInputMicros_;
@@ -642,21 +662,78 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
           *rankingTimerMicros_[index];
     }
   }
-
-  if (snapshot.selectedIndex < snapshot.rows.size()) {
-    const auto &selected = snapshot.rows[snapshot.selectedIndex];
-    if (selected.chart) {
-      const auto &record = *selected.chart;
-      const auto &meta = record.meta;
-      frame.stageFile = resolveChartAsset(record, meta.StageFile);
-      frame.backBmp = resolveChartAsset(record, meta.BackBmp);
-      frame.banner = resolveChartAsset(record, meta.Banner);
-    }
-  }
   return frame;
 }
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+void MusicSelectScene::cancelSelectedChartAnalysis() {
+  ++selectedChartAnalysisGeneration_;
+  if (selectedChartAnalysis_ != nullptr) {
+    selectedChartAnalysis_->cancelled.store(true, std::memory_order_release);
+  }
+  selectedChartAnalysis_.reset();
+}
+
+void MusicSelectScene::updateSelectedChartAnalysis() {
+  if (selectedChartAnalysis_ != nullptr &&
+      selectedChartAnalysis_->finished.load(std::memory_order_acquire)) {
+    const auto analysis = std::exchange(selectedChartAnalysis_, {});
+    if (!analysis->cancelled.load(std::memory_order_acquire) &&
+        analysis->generation == selectedChartAnalysisGeneration_) {
+      std::scoped_lock lock(analysis->mutex);
+      selectedChartInformation_ = std::move(analysis->result);
+    }
+  }
+  if (selectedChartAnalysisStarted_ || selectedChartAnalysis_ != nullptr ||
+      launching_ ||
+      elapsedMicros() <= songBarChangeMicros_ + 350'000) {
+    return;
+  }
+
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song ||
+      !selected.presentation.exists || !selected.chart) {
+    return;
+  }
+
+  // MusicSelector starts this BMS model load after notesGraphDuration and
+  // does not retry it until another selected-bar transition.
+  selectedChartAnalysisStarted_ = true;
+  const auto path = selected.chart->meta.BmsPath;
+  const int longNoteMode =
+      long_note_mode::valueFromId(context.settings.selectedLnMode);
+  auto analysis = std::make_shared<SelectedChartAnalysis>();
+  analysis->generation = selectedChartAnalysisGeneration_;
+  selectedChartAnalysis_ = analysis;
+  // MusicSelector starts a detached model-load thread after its 350 ms
+  // debounce. A later bar move must not wait for that previous model before
+  // it can render the next selection; publication is gated by this mailbox's
+  // current selection generation instead.
+  std::thread([path, longNoteMode, analysis] {
+    std::shared_ptr<const SkinGameplayChartGraphState> result;
+    try {
+      auto chart = play_options::parseChart(
+          path, analysis->cancelled, "music-select chart information");
+      if (chart && !analysis->cancelled.load(std::memory_order_acquire)) {
+        applyEffectiveLongNoteModeToChart(*chart, longNoteMode);
+        auto model = buildPlayfieldChartVisualModel(*chart, longNoteMode);
+        if (!analysis->cancelled.load(std::memory_order_acquire)) {
+          result = std::make_shared<const SkinGameplayChartGraphState>(
+              std::move(model.skinGameplayGraph));
+        }
+      }
+    } catch (...) {
+    }
+    if (!analysis->cancelled.load(std::memory_order_acquire)) {
+      std::scoped_lock lock(analysis->mutex);
+      analysis->result = std::move(result);
+    }
+    analysis->finished.store(true, std::memory_order_release);
+  }).detach();
+}
+
 TextInputBox *MusicSelectScene::skinTextInputForSize(int requestedSize) {
   const int size = std::max(1, requestedSize);
   const auto existing = skinTextInputs_.find(size);
@@ -729,10 +806,8 @@ void MusicSelectScene::applySkinPointerResult(
       (void)bars_.select(clicked.id);
     }
     selectedBarMoved();
-  } else {
-    (void)bars_.select(clicked.id);
-    selectedBarMoved();
-    if (activate) launchSelected();
+  } else if (musicSelectPointerKeepsCenteredBar(clicked.kind) && activate) {
+    launchSelected();
   }
 }
 
@@ -1871,6 +1946,9 @@ void MusicSelectScene::executeEvent(
 
 void MusicSelectScene::update(float) {
   if (failed_) return;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  updateSelectedChartAnalysis();
+#endif
   if (irExternalUrlGeneration_ != 0 && irExternalUrlService_) {
     const auto snapshot = irExternalUrlService_->snapshot();
     if (snapshot.generation == irExternalUrlGeneration_ &&
@@ -1932,14 +2010,10 @@ void MusicSelectScene::update(float) {
 
 void MusicSelectScene::renderScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  finalizeSkinPreparationIfReady();
   if (failed_ || !skinSession_) return;
   ++frameSerial_;
   auto frame = makeFrame();
-  if (skinSession_->requiresResourceRefresh(frame) &&
-      !skinSession_->refreshResources(frame)) {
-    enterError(skinSession_->takeLastDiagnostics());
-    return;
-  }
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope batch(renderContext);
   if (!skinSession_->render(renderContext, frame)) {
@@ -1970,6 +2044,7 @@ void MusicSelectScene::enterError(
   }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
+  if (skinLoadingView_ != nullptr) skinLoadingView_->setVisible(false);
 #endif
   if (toolbar_) toolbar_->setVisible(false);
   buildErrorView();
@@ -2010,25 +2085,13 @@ void MusicSelectScene::buildErrorView() {
       root->addView(reasonView);
     }
   }
-  auto *actions = new View();
-  actions->setHeight(64)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
-      ->setGap(12);
-  auto *back = makeButton("Back");
-  back->setOnClickListener(
-      [this] { context.sceneManager->changeScene("Intro"); });
-  actions->addView(back);
   auto *settings = makeButton("Settings");
-  settings->setOnClickListener([this] {
-    context.sceneManager->changeScene(std::make_unique<SettingsScene>(
-        context, SettingsDestination::Profile,
-        SceneReturnTarget::Registered("Intro")));
-  });
-  actions->addView(settings);
-  root->addView(actions);
+  settings->setHeight(64);
+  settings->setOnClickListener([this] { openSettings(); });
+  root->addView(settings);
   root->applyYogaLayout();
   addView(root);
+  errorView_ = root;
 }
 
 void MusicSelectScene::openMusicPlayer() {
@@ -2083,8 +2146,80 @@ void MusicSelectScene::syncToolbar() {
 }
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+void MusicSelectScene::buildSkinLoadingView() {
+  if (skinLoadingView_ != nullptr) {
+    skinLoadingView_->setVisible(true);
+    return;
+  }
+  auto *root = new View(0, 0, rendering::window_width,
+                        rendering::window_height);
+  root->setPositionType(YGPositionTypeAbsolute);
+  root->setZIndex(10000);
+  root->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignCenter)
+      ->setJustifyContent(YGJustifyCenter)
+      ->setPadding(Edge::All, 32)
+      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+  auto *label = makeText("Loading music-select skin…", 28,
+                         ui_theme::textPrimary);
+  label->setHeight(56);
+  label->setAlign(TextView::CENTER);
+  root->addView(label);
+  root->applyYogaLayout();
+  addView(root);
+  skinLoadingView_ = root;
+}
+
+void MusicSelectScene::cancelSkinPreparation() {
+  skinPreparationStop_.request_stop();
+  if (!skinPreparation_.valid()) return;
+  try {
+    (void)skinPreparation_.get();
+  } catch (...) {
+  }
+}
+
+void MusicSelectScene::finalizeSkinPreparationIfReady() {
+  if (!skinPreparation_.valid() ||
+      skinPreparation_.wait_for(std::chrono::milliseconds::zero()) !=
+          std::future_status::ready) {
+    return;
+  }
+  auto prepared = skinPreparation_.get();
+  if (prepared.cancelled || skinPreparationStop_.stop_requested()) return;
+  auto diagnostics = std::move(prepared.diagnostics);
+  if (!prepared.prepared) {
+    enterError(std::move(diagnostics));
+    return;
+  }
+  auto finalized = skin::MusicSelectSkinSession::finalize(
+      std::move(*prepared.prepared),
+      {.resourcePreparation = *context.skinResourcePreparationService,
+       .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+       .liveResourceCounters = context.skinLiveResourceCounters,
+       .quadBackend = nullptr,
+       .captureLegacyInputGeneration = [this] {
+         return context.inputDeviceRegistry.legacyInputGeneration(
+             rendering::render_width, rendering::render_height);
+       }});
+  diagnostics.insert(
+      diagnostics.end(),
+      std::make_move_iterator(finalized.diagnostics.begin()),
+      std::make_move_iterator(finalized.diagnostics.end()));
+  if (!finalized.session) {
+    enterError(std::move(diagnostics));
+    return;
+  }
+  skinSession_ = std::move(finalized.session);
+  if (skinLoadingView_ != nullptr) skinLoadingView_->setVisible(false);
+}
+
 bool MusicSelectScene::activateSkin(
     skin::GameplaySkinActivationRequest request) {
+  cancelSkinPreparation();
+  skinSession_.reset();
+  failed_ = false;
+  if (errorView_ != nullptr) errorView_->setVisible(false);
   selectedSkinPath_ = musicSelectSkinEntryPath(request.activation.entry);
   if (!context.skinStorageRoots || !context.skinResourcePreparationService ||
       !context.skinLiveResourceCounters) {
@@ -2093,26 +2228,32 @@ bool MusicSelectScene::activateSkin(
         .message = "Music-select skin session services are unavailable."}});
     return false;
   }
-  auto initialFrame = makeFrame();
-  const auto safetyLevel = request.safetyLevel;
-  auto created = skin::MusicSelectSkinSession::create(
-      std::move(request),
-      {.storageRoots = *context.skinStorageRoots,
-       .resourcePreparation = *context.skinResourcePreparationService,
-       .initialFrame = std::move(initialFrame),
-       .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
-       .builtinImageReader = archive_file::readFileBounded,
-       .audioBackend = skin::createLuaSkinApplicationAudioBackend(
-           context.jukebox.audioRuntime(),
-           [this] { return context.settings.audioVideo.audio.masterVolume; },
-           {}, context.skinLiveResourceCounters),
-       .liveResourceCounters = context.skinLiveResourceCounters,
-       .safetyPolicy = skin::SkinSafetyPolicy(safetyLevel)});
-  if (!created.session) {
-    enterError(std::move(created.diagnostics));
-    return false;
-  }
-  skinSession_ = std::move(created.session);
+  skinPreparationStop_ = std::stop_source{};
+  const auto initialGeneration =
+      context.inputDeviceRegistry.legacyInputGeneration(
+          rendering::render_width, rendering::render_height);
+  auto preparationContext = skin::MusicSelectSkinSessionPreparationContext{
+      .storageRoots = *context.skinStorageRoots,
+      .resourcePreparation = *context.skinResourcePreparationService,
+      .initialFrame = makeFrame(),
+      .builtinImageReader = archive_file::readFileBounded,
+      .audioBackend = skin::createLuaSkinApplicationAudioBackend(
+          context.jukebox.audioRuntime(),
+          [this] { return context.settings.audioVideo.audio.masterVolume; },
+          {.maximumIdentities = std::numeric_limits<std::size_t>::max(),
+           .maximumEncodedBytes = std::numeric_limits<std::size_t>::max(),
+           .maximumDecodedBytes = std::numeric_limits<std::size_t>::max()},
+          context.skinLiveResourceCounters),
+      .initialLegacyInputGeneration = initialGeneration,
+      .stop = skinPreparationStop_.get_token()};
+  skinPreparation_ = std::async(
+      std::launch::async,
+      [request = std::move(request),
+       preparationContext = std::move(preparationContext)]() mutable {
+        return skin::MusicSelectSkinSession::prepare(
+            std::move(request), std::move(preparationContext));
+      });
+  buildSkinLoadingView();
   return true;
 }
 
@@ -2161,6 +2302,8 @@ void MusicSelectScene::cleanupScene() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
   skinTouchGesture_.cancel();
+  cancelSelectedChartAnalysis();
+  cancelSkinPreparation();
 #endif
   stopInputListening();
   if (rankingGeneration_ != 0 && context.irRankingService) {
@@ -2176,6 +2319,8 @@ void MusicSelectScene::cleanupScene() {
   previewAudio_.reset();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
+  skinLoadingView_ = nullptr;
+  selectedChartInformation_.reset();
   activeSkinStringWriter_.reset();
   skinTextInput_ = nullptr;
   skinTextInputs_.clear();
@@ -2184,5 +2329,6 @@ void MusicSelectScene::cleanupScene() {
   toolbar_ = nullptr;
   searchOverlay_ = nullptr;
   searchInput_ = nullptr;
+  errorView_ = nullptr;
   diagnostics_.clear();
 }

@@ -36,7 +36,16 @@ enum class MusicSelectPointerOrigin {
 
 [[nodiscard]] constexpr bool
 musicSelectPointerActivatesRow(MusicSelectPointerOrigin origin) {
-  return origin == MusicSelectPointerOrigin::Mouse;
+  return origin == MusicSelectPointerOrigin::Mouse ||
+         origin == MusicSelectPointerOrigin::Touch;
+}
+
+// BarRenderer hands the clicked Bar to MusicSelector.select. That method
+// changes the current directory only for DirectoryBar; every other click
+// starts playback from the manager's already centered bar.
+[[nodiscard]] constexpr bool
+musicSelectPointerKeepsCenteredBar(skin::MusicSelectBarKind kind) {
+  return !skin::musicSelectIsDirectoryBarKind(kind);
 }
 
 enum class MusicSelectTouchTarget : std::uint8_t {

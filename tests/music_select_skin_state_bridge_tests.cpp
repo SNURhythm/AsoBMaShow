@@ -6,6 +6,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <memory>
 #include <set>
 #include <string_view>
 
@@ -70,9 +71,8 @@ void testExactPropertyNamespacesAndAbsentValues() {
   const auto absentFloat = bridge.floatProperty(
       {.value = 8}, SkinFloatPropertyDomain::Rate);
   const auto absentString = bridge.stringProperty({.value = 1001});
-  require(absentInteger.supported &&
-              absentInteger.value == std::numeric_limits<std::int32_t>::min(),
-          "known absent Integer uses Integer.MIN_VALUE");
+  require(!absentInteger.supported,
+          "an unimplemented Integer factory slot remains absent");
   require(absentFloat.supported &&
               absentFloat.value == std::numeric_limits<float>::denorm_min(),
           "known absent Float uses Float.MIN_VALUE");
@@ -132,6 +132,30 @@ void testPublishedSongResourcesOverrideChartPathFlags() {
           "a chart path or selector backbmp declaration");
 }
 
+void testSelectedChartInformationPublishesSelectorGraphs() {
+  MusicSelectSkinFrame frame;
+  auto chart = std::make_shared<SkinGameplayChartGraphState>();
+  chart->mainBpm = 174.0;
+  chart->minimumBpm = 87.0;
+  chart->maximumBpm = 348.0;
+  chart->normalDistribution = {{{1, 2, 3, 4, 5, 6, 7}}};
+  chart->bpmSeries = {{.chartTimeMicros = 1'000'000,
+                       .bpm = 174.0,
+                       .scroll = 1.0,
+                       .bpmTimesScroll = 174.0,
+                       .graphSpeed = 174.0,
+                       .emitsGraphPoint = true}};
+  frame.gameplayGraph.chart = std::move(chart);
+  MusicSelectSkinStateBridge bridge(frame);
+  const auto graph = bridge.gameplayGraphState();
+  require(graph.normalDistribution.size() == 1 &&
+              graph.normalDistribution.front()[6] == 7 &&
+              graph.bpmSeries.size() == 1 && graph.mainBpm == 174.0 &&
+              graph.minimumBpm == 87.0 && graph.maximumBpm == 348.0,
+          "selector state exposes delayed SongInformation distribution and "
+          "BPM graph data to generic Beatoraja graph objects");
+}
+
 void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
   MusicSelectSkinFrame frame;
   MusicSelectSkinStateBridge local(frame);
@@ -163,6 +187,7 @@ int main(int argc, char **argv) {
   testUnknownPropertiesRemainUnsupported();
   testCustomTimerValuesOverrideTheFrameSnapshot();
   testPublishedSongResourcesOverrideChartPathFlags();
+  testSelectedChartInformationPublishesSelectorGraphs();
   testSkinTimerWritesUseBeatorajaCustomTimerRules();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_skin_state_bridge_tests", failures,

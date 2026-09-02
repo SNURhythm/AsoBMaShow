@@ -2703,6 +2703,21 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                             SkinBuiltinPropertySelector{std::string(name)}),
            "gameplay catalog admits each named BooleanPropertyFactory selector");
   }
+  for (const std::string_view name : {
+           "difficulty", "option1p", "open_download_site", "constant",
+           "keyassign1", "keyassign54", "keyassign+01",
+           "practice_item1", "practice_item16", "practice_item+01"}) {
+    expect(catalog.contains({.kind = SkinBindingKind::Event},
+                            SkinBuiltinPropertySelector{std::string(name)}),
+           "gameplay catalog admits every EventType and EventPattern name");
+  }
+  for (const std::string_view name : {
+           "keyassign0", "keyassign55", "practice_item0",
+           "practice_item17", "option1p_typo"}) {
+    expect(!catalog.contains({.kind = SkinBindingKind::Event},
+                             SkinBuiltinPropertySelector{std::string(name)}),
+           "gameplay catalog rejects names absent from EventFactory");
+  }
   for (const int id : {161, 162, 163, 164}) {
     expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
                              .integerDomain =

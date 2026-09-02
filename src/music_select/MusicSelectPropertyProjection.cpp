@@ -4,6 +4,7 @@
 #include "../LongNoteModeUtils.h"
 #include "../replay/ReplayOption.h"
 #include "../scene/MainMenuProfileSelections.h"
+#include "../scene/play/SkinGameplayGraphState.h"
 #include "../scene/play/PlayfieldVisualState.h"
 #include "../skin/beatoraja/BeatorajaTargetPropertyNames.h"
 
@@ -29,6 +30,7 @@ constexpr std::array<int, 11> kIrClearRateIds{
     203, 211, 205, 207, 213, 215, 217, 209, 219, 223, 225};
 constexpr std::array<int, 11> kIrClearRateAfterDotIds{
     230, 234, 231, 232, 235, 236, 237, 233, 238, 239, 240};
+constexpr std::string_view kPinnedBeatorajaVersion = "beatoraja 0.8.9";
 
 int modeFilterSkinNumber(std::string_view value) {
   // select/ModeFilter.java: declaration order is not its skin number.
@@ -127,6 +129,57 @@ int selectableNextRank(const ScoreBestSnapshot &score) {
   return nextRank == std::numeric_limits<int>::min()
              ? notes * 2 - score.score
              : nextRank;
+}
+
+std::int64_t javaDoubleToInt(double value) {
+  if (std::isnan(value)) return 0;
+  if (value >= static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::numeric_limits<int>::max();
+  }
+  if (value <= static_cast<double>(std::numeric_limits<int>::min())) {
+    return std::numeric_limits<int>::min();
+  }
+  return static_cast<int>(value);
+}
+
+void projectSongInformation(
+    Properties &out, const SkinGameplayChartGraphState &information) {
+  if (information.normalKeyNotes) {
+    out.integers[350] = *information.normalKeyNotes;
+  }
+  if (information.longKeyNotes) out.integers[351] = *information.longKeyNotes;
+  if (information.normalScratchNotes) {
+    out.integers[352] = *information.normalScratchNotes;
+  }
+  if (information.longScratchNotes) {
+    out.integers[353] = *information.longScratchNotes;
+  }
+  const auto integerPart = [](double value) {
+    return javaDoubleToInt(value);
+  };
+  const auto fractionalPart = [](double value) {
+    return javaDoubleToInt(value * 100.0) % 100;
+  };
+  if (information.peakDensity) {
+    out.integers[360] = integerPart(*information.peakDensity);
+    out.integers[361] = fractionalPart(*information.peakDensity);
+    out.floats[360] = static_cast<float>(*information.peakDensity);
+  }
+  if (information.endDensity) {
+    out.integers[362] = integerPart(*information.endDensity);
+    out.integers[363] = fractionalPart(*information.endDensity);
+    out.floats[362] = static_cast<float>(*information.endDensity);
+  }
+  if (information.averageDensity) {
+    out.integers[364] = integerPart(*information.averageDensity);
+    out.integers[365] = fractionalPart(*information.averageDensity);
+    out.floats[367] = static_cast<float>(*information.averageDensity);
+  }
+  if (information.totalGauge) {
+    out.integers[368] = integerPart(*information.totalGauge);
+    out.floats[368] = static_cast<float>(*information.totalGauge);
+  }
+  out.integers[92] = integerPart(information.mainBpm);
 }
 
 bool isPlayableBar(const MusicSelectBar &bar) {
@@ -519,21 +572,17 @@ void projectSelectedBar(Properties &out,
 
   out.integers[74] = meta.TotalNotes;
   out.integers[106] = meta.TotalNotes;
-  out.integers[350] = meta.TotalNotes - meta.TotalLongNotes -
-                      meta.TotalScratchNotes - meta.TotalBackSpinNotes;
-  out.integers[351] = meta.TotalLongNotes;
-  out.integers[352] = meta.TotalScratchNotes;
-  out.integers[353] = meta.TotalBackSpinNotes;
   out.integers[90] = static_cast<int>(meta.MaxBpm);
   out.integers[91] = static_cast<int>(meta.MinBpm);
-  out.integers[92] = static_cast<int>(meta.MostPrevalentBpm);
   out.integers[96] = static_cast<int>(meta.PlayLevel);
   out.integers[400] = meta.Rank;
-  out.integers[368] = static_cast<int>(meta.Total);
   out.integers[1163] = (meta.PlayLength / 1'000'000 / 60) % 60;
   out.integers[1164] = (meta.PlayLength / 1'000'000) % 60;
   out.imageIndexes[89] = favoriteIndex(record.songReviewFavorite, 1, 4);
   out.imageIndexes[90] = favoriteIndex(record.songReviewFavorite, 2, 8);
+  if (runtime.selectedSongInformation != nullptr) {
+    projectSongInformation(out, *runtime.selectedSongInformation);
+  }
 
   // FloatPropertyFactory.getLevelRate intentionally falls through all
   // recognized Mode cases in the pinned source, leaving maxLevel at 10.
@@ -617,7 +666,7 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
   out.strings[1001] = runtime.tableName;
   out.strings[1002] = runtime.tableLevel;
   out.strings[1003] = runtime.tableFullName;
-  out.strings[1010] = runtime.version;
+  out.strings[1010] = kPinnedBeatorajaVersion;
   out.strings[1020] = runtime.irName;
   out.strings[1021] = runtime.irUserName;
 
