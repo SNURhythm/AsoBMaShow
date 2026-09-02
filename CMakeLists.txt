@@ -2065,18 +2065,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_music_select_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    if (TARGET gameplay_skin_traits_tests)
-        add_test(NAME beatoraja_music_select_skin_ledger_evidence_contract
-            COMMAND ${Python3_EXECUTABLE}
-                    -m unittest
-                    tests/beatoraja_music_select_skin_ledger_evidence_tests.py -v)
-        set_tests_properties(beatoraja_music_select_skin_ledger_evidence_contract
-            PROPERTIES
-                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-                ENVIRONMENT
-                "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:gameplay_skin_traits_tests>"
-        )
-    endif()
     if (TARGET beatoraja_skin_model_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger
             COMMAND ${Python3_EXECUTABLE}
@@ -7192,6 +7180,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_skin_settings_tests)
     asobmashow_register_test(gameplay_skin_settings_presentation_tests)
     asobmashow_register_test(gameplay_skin_traits_tests)
+    add_test(NAME beatoraja_music_select_skin_ledger_evidence_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/beatoraja_music_select_skin_ledger_evidence_tests.py -v)
+    set_tests_properties(beatoraja_music_select_skin_ledger_evidence_contract
+        PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT
+            "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:gameplay_skin_traits_tests>"
+    )
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)

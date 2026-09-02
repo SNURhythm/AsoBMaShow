@@ -161,6 +161,19 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             self.cmake,
         )
 
+    def test_music_select_ledger_evidence_contract_is_registered_after_configure(self):
+        target_declaration = self.cmake.index(
+            "add_executable(gameplay_skin_traits_tests"
+        )
+        evidence_registration = self.cmake.index(
+            "add_test(NAME beatoraja_music_select_skin_ledger_evidence_contract"
+        )
+        self.assertGreater(
+            evidence_registration,
+            target_declaration,
+            "the evidence test must be registered only after its CMake target exists",
+        )
+
     def test_result_persistence_wrapper_ignores_inherited_cdpath(self):
         with tempfile.TemporaryDirectory() as temporary:
             Path(temporary, "scripts").mkdir()
