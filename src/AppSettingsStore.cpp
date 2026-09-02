@@ -819,7 +819,14 @@ AppSettings settingsFromJson(const json &document,
             settings.skinPlayer2RandomOption, diagnostics);
   readValue(document, "skinDoublePlayOption", settings.skinDoublePlayOption,
             diagnostics);
-  readValue(document, "skinBgaMode", settings.skinBgaMode, diagnostics);
+  if (document.contains("skinBgaMode")) {
+    readValue(document, "skinBgaMode", settings.skinBgaMode, diagnostics);
+  } else {
+    // The selector value was introduced after bgaEnabled. Preserve the
+    // existing profile setting's ON/OFF state rather than displaying ON for
+    // profiles that already disabled BGA.
+    settings.skinBgaMode = settings.bgaEnabled ? 0 : 2;
+  }
   readValue(document, "skinBgaExpandMode", settings.skinBgaExpandMode,
             diagnostics);
   readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,

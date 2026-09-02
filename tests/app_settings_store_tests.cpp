@@ -1329,6 +1329,7 @@ void testVersionFixturesAndNoRewrite() {
          "missing schema version migrates from v0");
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expectedV0.skinBgaMode = 2;
   expectedV0.hispeedAutoAdjust = false;
   expectedV0.showPastNotes = false;
   expectedV0.notesDisplayTimingMilliseconds = 0;

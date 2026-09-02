@@ -364,8 +364,14 @@ void MusicSelectScene::onResume() {
   }
 }
 
-void MusicSelectScene::reloadLibrary() {
+void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   if (!chartSession_) return;
+  const MusicSelectBarManagerSnapshot previous =
+      preserveDirectory ? bars_.snapshot() : MusicSelectBarManagerSnapshot{};
+  std::optional<MusicSelectBarId> previousSelection;
+  if (preserveDirectory && previous.selectedIndex < previous.rows.size()) {
+    previousSelection = previous.rows[previous.selectedIndex].id;
+  }
   const std::uint64_t loadedRevision =
       context.chartRepository.GetLibraryRevision();
   scoreCache_ = context.scoreRepository.LoadBestScores();
@@ -382,6 +388,17 @@ void MusicSelectScene::reloadLibrary() {
                    .sortId = context.settings.skinSortId});
   bars_.refresh(MusicSelectRepositoryProjection{}.projectRoot(
       repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
+  if (preserveDirectory) {
+    for (const auto &directoryId : previous.directory) {
+      const auto current = bars_.snapshot();
+      const auto found = std::ranges::find(current.rows, directoryId,
+                                           &MusicSelectBar::id);
+      if (found == current.rows.end()) break;
+      if (!found->childrenLoaded && !loadDirectoryChildren(*found)) break;
+      if (!bars_.select(directoryId) || !bars_.open(directoryId)) break;
+    }
+    if (previousSelection) (void)bars_.select(*previousSelection);
+  }
   syncResolvedFilters();
 }
 
@@ -1301,7 +1318,7 @@ void MusicSelectScene::search(std::string text) {
     return;
   }
   const auto &selectedText = searchHistory_.entries().back();
-  reloadLibrary();
+  reloadLibrary(false);
   (void)bars_.select({"search:" + selectedText});
   selectedBarMoved();
 }
@@ -1483,9 +1500,10 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
 
 void MusicSelectScene::launchSelectedDirectoryAutoplay() {
   if (launching_) return;
-  const auto snapshot = bars_.snapshot();
+  auto snapshot = bars_.snapshot();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
-  const auto &directory = snapshot.rows[snapshot.selectedIndex];
+  const auto directory = snapshot.rows[snapshot.selectedIndex];
+  if (!directory.childrenLoaded && !loadDirectoryChildren(directory)) return;
   MusicSelectBar playlist;
   playlist.title = directory.title;
   for (const auto &child : bars_.childrenOf(directory.id)) {

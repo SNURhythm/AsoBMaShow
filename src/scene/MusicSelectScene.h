@@ -51,7 +51,7 @@ protected:
   bool renderViewBeforeScene(const View *) const override { return false; }
 
 private:
-  void reloadLibrary();
+  void reloadLibrary(bool preserveDirectory = true);
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
   void selectedBarMoved();
