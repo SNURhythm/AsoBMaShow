@@ -1121,12 +1121,14 @@ void testRecentScoreImprovementsMatchScoreLogDayFolders(
   const auto path = root / "recent-score-improvements" / "score.db";
   ScoreRepository helper(path);
   auto save = [&](std::string_view chart, char hashDigit, int suffix,
-                  std::string timestamp, int score, int clearType) {
+                  std::string timestamp, int score, int clearType,
+                  int longNoteMode = long_note_mode::kLnValue) {
     auto pending = samplePendingScore(root, std::string(chart), suffix,
                                       std::move(timestamp));
     pending.score.chartSha256.assign(64, hashDigit);
     pending.score.score = score;
     pending.score.clearType = clearType;
+    pending.score.longNoteMode = longNoteMode;
     assert(helper.SaveProjectedScore(pending).status ==
            result_persistence::ProjectionStatus::Inserted);
   };
@@ -1140,12 +1142,17 @@ void testRecentScoreImprovementsMatchScoreLogDayFolders(
        kClearTypeNormalClearRank);
   save("update-b", 'd', 314, "2026-07-15 04:00:00", 20,
        kClearTypeEasyClearRank);
+  save("update-cn", 'e', 315, "2026-07-15 05:00:00", 40,
+       kClearTypeNormalClearRank, long_note_mode::kCnValue);
+  save("update-any", 'f', 316, "2026-07-15 06:00:00", 50,
+       kClearTypeHardClearRank, -1);
 
   auto db = openDatabase(path);
   const auto now = static_cast<std::int64_t>(queryInt(
       db.get(), "SELECT CAST(strftime('%s', '2026-07-15 12:00:00') AS INTEGER)"));
   db.reset();
-  const auto updates = helper.LoadRecentScoreImprovements(now);
+  const auto updates = helper.LoadRecentScoreImprovements(
+      now, long_note_mode::kLnValue);
   const std::string updateAHash(64, 'c');
   const std::string updateBHash(64, 'd');
   assert(updates.score[1].contains(updateAHash));
@@ -1154,6 +1161,10 @@ void testRecentScoreImprovementsMatchScoreLogDayFolders(
   assert(!updates.lamp[0].contains(updateAHash));
   assert(updates.score[0].contains(updateBHash) &&
          updates.lamp[0].contains(updateBHash));
+  assert(!updates.score[0].contains(std::string(64, 'e')) &&
+         !updates.lamp[0].contains(std::string(64, 'e')));
+  assert(updates.score[0].contains(std::string(64, 'f')) &&
+         updates.lamp[0].contains(std::string(64, 'f')));
 }
 
 void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(

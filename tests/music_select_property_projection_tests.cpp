@@ -245,7 +245,13 @@ void testProjectsCourseContract() {
   course.presentation = {.kind = skin::MusicSelectBarKind::Grade,
                          .exists = true,
                          .lamp = 6};
-  course.score = ScoreBestSnapshot{.clearType = kNoClearTypeRank};
+  course.score = ScoreBestSnapshot{.score = 1'450,
+                                   .maxScore = 2'000,
+                                   .playCount = 4,
+                                   .clearCount = 3,
+                                   .maxCombo = 612,
+                                   .badPoints = 40,
+                                   .clearType = kNoClearTypeRank};
   course.courseStages = {
       {.title = "One", .hasPath = true},
       {.title = std::nullopt, .hasPath = false},
@@ -272,6 +278,15 @@ void testProjectsCourseContract() {
   require(values.imageIndexes.at(370) == 0 &&
               !values.booleans.at(104),
           "GradeBar selected clear properties use the normal score instead of its aggregate lamp");
+  require(values.integers.at(71) == 1'450 &&
+              values.integers.at(72) == 2'000 &&
+              values.integers.at(75) == 612 &&
+              values.integers.at(76) == 40 &&
+              values.integers.at(77) == 4 &&
+              values.integers.at(78) == 3 &&
+              values.integers.at(102) == 72 &&
+              values.rates.at(110) == 0.725,
+          "GradeBar projects SelectableBar score values without SongData");
 }
 
 void testUnavailableSongRatesStayZeroWithoutNotes() {

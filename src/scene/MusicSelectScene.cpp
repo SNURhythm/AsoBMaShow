@@ -361,7 +361,7 @@ void MusicSelectScene::reloadLibrary() {
   clearRankCache_ = context.scoreRepository.LoadBestClearRanks();
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
   recentScoreImprovements_ = context.scoreRepository.LoadRecentScoreImprovements(
-      unixMillis() / 1'000);
+      unixMillis() / 1'000, query.selectedLongNoteMode);
   libraryRevision_ = loadedRevision;
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =

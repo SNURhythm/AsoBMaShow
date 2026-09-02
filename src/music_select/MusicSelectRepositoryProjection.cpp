@@ -342,10 +342,9 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
       values.reserve(node.records.size());
       for (const auto *record : node.records) values.push_back(*record);
       builder.aggregate(folder, values);
-    } else {
-      for (const auto &child : node.children) {
-        folder.children.push_back(addFolder(child));
-      }
+    }
+    for (const auto &child : node.children) {
+      folder.children.push_back(addFolder(child));
     }
     const auto id = folder.id;
     builder.result.bars.push_back(std::move(folder));

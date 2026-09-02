@@ -129,7 +129,7 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
     } else if (sqlText.starts_with("COMMIT")) {
       scanBatchSqlObservation->commits.fetch_add(1,
                                                   std::memory_order_relaxed);
-    } else if (sqlText.starts_with("REPLACE INTO chart_meta")) {
+    } else if (sqlText.starts_with("INSERT INTO chart_meta")) {
       std::lock_guard observationLock(scanBatchSqlObservation->mutex);
       scanBatchSqlObservation->chartMetaInsertExecutions.emplace_back(sqlText);
     }
@@ -292,6 +292,38 @@ void testScanBatchRetainsSessionStorage() {
   auto verification = repository.OpenSession();
   assert(verification.has_value());
   assert(verification->CountAllChartMeta() == 1);
+}
+
+void testScanBatchUpsertPreservesExistingAddDate() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto meta = chartMeta(temporary.path());
+  auto first = session->BeginScanBatch();
+  assert(first.has_value());
+  assert(first->UpsertChart(meta, std::nullopt));
+  assert(first->Commit());
+
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(), "UPDATE chart_meta SET add_date=123456"));
+  }
+  meta.Title = "Reindexed";
+  auto second = session->BeginScanBatch();
+  assert(second.has_value());
+  assert(second->UpsertChart(meta, std::nullopt));
+  assert(second->Commit());
+
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta({}, records);
+  assert(records.size() == 1);
+  assert(records.front().meta.Title == "Reindexed");
+  assert(records.front().addDateSeconds == 123456);
 }
 
 void testScanBatchReusesPreparedInsertAndTransaction() {
@@ -1401,6 +1433,7 @@ void testEntryUpsertPreservesOriginalDatabasePathKey() {
 int main() {
   testScanBatchCommitAndRollback();
   testScanBatchRetainsSessionStorage();
+  testScanBatchUpsertPreservesExistingAddDate();
   testScanBatchReusesPreparedInsertAndTransaction();
   testSessionRoundTripAndReadinessCost();
   testSelectChartMetaByPathsHydratesInInputOrder();

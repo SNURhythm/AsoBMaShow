@@ -107,7 +107,7 @@ bool pathIsInsideDirectory(const std::filesystem::path &path,
 }
 
 const char *insertChartMetaSql() {
-  return "REPLACE INTO chart_meta ("
+  return "INSERT INTO chart_meta ("
          "path,"
          "md5,"
          "sha256,"
@@ -185,7 +185,43 @@ const char *insertChartMetaSql() {
          "@most_prevalent_bpm,"
          "@source_priority,"
          "@source_archive_size"
-         ")";
+         ") ON CONFLICT(path) DO UPDATE SET "
+         "md5=excluded.md5,"
+         "sha256=excluded.sha256,"
+         "title=excluded.title,"
+         "subtitle=excluded.subtitle,"
+         "genre=excluded.genre,"
+         "artist=excluded.artist,"
+         "sub_artist=excluded.sub_artist,"
+         "folder=excluded.folder,"
+         "stage_file=excluded.stage_file,"
+         "banner=excluded.banner,"
+         "back_bmp=excluded.back_bmp,"
+         "preview=excluded.preview,"
+         "level=excluded.level,"
+         "difficulty=excluded.difficulty,"
+         "total=excluded.total,"
+         "has_total=excluded.has_total,"
+         "bpm=excluded.bpm,"
+         "max_bpm=excluded.max_bpm,"
+         "min_bpm=excluded.min_bpm,"
+         "length=excluded.length,"
+         "rank=excluded.rank,"
+         "player=excluded.player,"
+         "keys=excluded.keys,"
+         "total_notes=excluded.total_notes,"
+         "total_long_notes=excluded.total_long_notes,"
+         "total_scratch_notes=excluded.total_scratch_notes,"
+         "total_backspin_notes=excluded.total_backspin_notes,"
+         "ln_mode=excluded.ln_mode,"
+         "has_document=excluded.has_document,"
+         "has_bpm_stop=excluded.has_bpm_stop,"
+         "has_scroll_change=excluded.has_scroll_change,"
+         "total_landmine_notes=excluded.total_landmine_notes,"
+         "has_random_sequence=excluded.has_random_sequence,"
+         "most_prevalent_bpm=excluded.most_prevalent_bpm,"
+         "source_priority=excluded.source_priority,"
+         "source_archive_size=excluded.source_archive_size";
 }
 
 bool bindAndInsertChartMeta(

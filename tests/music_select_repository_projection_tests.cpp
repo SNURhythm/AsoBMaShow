@@ -206,12 +206,17 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
           "difficulty TableBar preserves repository identity and URL");
 
   const auto *folder = child(projection, physical, 0);
-  require(folder && folder->title == "A" && folder->children.size() == 2,
-          "FolderBar returns direct songs instead of nested folders");
+  require(folder && folder->title == "A" && folder->children.size() == 3,
+          "FolderBar preserves direct songs alongside nested folders");
   const auto *second = child(projection, folder, 0);
   const auto *first = child(projection, folder, 1);
+  const auto *nestedFolder = child(projection, folder, 2);
   require(second && first && second->title == "Second" &&
-              first->title == "First",
+              first->title == "First" && nestedFolder &&
+              nestedFolder->kind == skin::MusicSelectBarKind::Folder &&
+              nestedFolder->title == "sub" &&
+              nestedFolder->children.size() == 1 &&
+              child(projection, nestedFolder, 0)->title == "Nested",
           "physical SongBars deduplicate first SHA occurrence and reverse order");
   require(folder && folder->presentation.folderLampCounts[0] == 1 &&
               folder->presentation.folderLampCounts[7] == 2 &&

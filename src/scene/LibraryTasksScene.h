@@ -6,6 +6,7 @@
 #include <cstdint>
 
 class View;
+class ScrollView;
 
 class LibraryTasksScene final : public Scene {
 public:
@@ -25,6 +26,7 @@ private:
 
   SceneReturnTarget returnTarget_;
   View *rootLayout_ = nullptr;
+  ScrollView *taskScroll_ = nullptr;
   View *taskList_ = nullptr;
   std::uint64_t taskRevision_ = 0;
   int layoutWidth_ = -1;

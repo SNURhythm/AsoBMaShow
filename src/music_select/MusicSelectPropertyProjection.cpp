@@ -298,6 +298,40 @@ void projectRanking(Properties &out,
   }
 }
 
+void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
+  const int maximum = score.maxScore;
+  out.integers[71] = score.score;
+  out.integers[72] = maximum;
+  out.integers[75] = score.maxCombo.value_or(0);
+  out.integers[76] = score.badPoints.value_or(0);
+  out.integers[77] = score.playCount;
+  out.integers[78] = score.clearCount;
+  out.integers[79] = score.playCount - score.clearCount;
+  if (score.lastPlayedUnixSeconds) {
+    projectLastPlayed(out, *score.lastPlayedUnixSeconds);
+  }
+  out.integers[101] = score.score;
+  out.integers[102] = integerRate(score.score, maximum);
+  out.integers[103] = integerRateAfterDot(score.score, maximum);
+  out.integers[105] = score.maxCombo.value_or(0);
+  out.integers[150] = 0;
+  out.integers[170] = 0;
+  out.integers[171] = score.score;
+  out.integers[174] = score.maxCombo.value_or(0);
+  out.integers[177] = score.badPoints.value_or(0);
+  out.integers[183] = 0;
+  out.integers[184] = 0;
+  const double selectedRate = scoreRate(score.score, maximum);
+  out.rates[110] = selectedRate;
+  out.rates[111] = selectedRate;
+  out.rates[112] = 0.0;
+  out.rates[113] = 0.0;
+  out.floats[1102] = selectedRate;
+  out.floats[1115] = selectedRate;
+  out.floats[155] = selectedRate;
+  out.floats[183] = 0.0;
+}
+
 void projectSelectedBar(Properties &out,
                         const MusicSelectBarManagerSnapshot &bars,
                         const MusicSelectPropertyRuntimeSnapshot &runtime) {
@@ -360,6 +394,9 @@ void projectSelectedBar(Properties &out,
           counts[static_cast<std::size_t>(clearType)];
     }
     return;
+  }
+  if (selected->score) {
+    projectSelectableScore(out, *selected->score);
   }
   if (selected->rivalScore) {
     out.imageIndexes[371] =
@@ -434,40 +471,8 @@ void projectSelectedBar(Properties &out,
   out.rates[145] = 0.0;
   out.rates[147] = 0.0;
 
-  if (!selected->score) return;
-  const auto &score = *selected->score;
-  const int maximum = score.maxScore;
-  out.integers[71] = score.score;
-  out.integers[72] = maximum;
-  out.integers[75] = score.maxCombo.value_or(0);
-  out.integers[76] = score.badPoints.value_or(0);
-  out.integers[77] = score.playCount;
-  out.integers[78] = score.clearCount;
-  out.integers[79] = score.playCount - score.clearCount;
-  if (score.lastPlayedUnixSeconds) {
-    projectLastPlayed(out, *score.lastPlayedUnixSeconds);
-  }
-  out.integers[101] = score.score;
-  out.integers[102] = integerRate(score.score, maximum);
-  out.integers[103] = integerRateAfterDot(score.score, maximum);
-  out.integers[105] = score.maxCombo.value_or(0);
-  out.integers[150] = 0;
-  out.integers[170] = 0;
-  out.integers[171] = score.score;
-  out.integers[174] = score.maxCombo.value_or(0);
-  out.integers[177] = score.badPoints.value_or(0);
-  out.integers[183] = 0;
-  out.integers[184] = 0;
-  const double selectedRate = scoreRate(score.score, maximum);
-  out.rates[110] = selectedRate;
-  out.rates[111] = selectedRate;
-  out.rates[112] = 0.0;
-  out.rates[113] = 0.0;
-  out.floats[1102] = selectedRate;
-  out.floats[1115] = selectedRate;
-  out.floats[155] = selectedRate;
-  out.floats[183] = 0.0;
-  if (meta.TotalNotes > 0) {
+  if (selected->score && meta.TotalNotes > 0) {
+    const auto &score = *selected->score;
     for (int judgeIndex = 0; judgeIndex < 5; ++judgeIndex) {
       out.rates[140 + judgeIndex] =
           static_cast<double>(score.judgementCounts[

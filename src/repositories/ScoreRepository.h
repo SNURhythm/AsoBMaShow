@@ -123,7 +123,8 @@ public:
       int selectedLongNoteMode = 0);
   PlayerScoreHistorySnapshot LoadPlayerScoreHistory();
   RecentScoreImprovements
-  LoadRecentScoreImprovements(std::int64_t nowUnixSeconds);
+  LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
+                              int selectedLongNoteMode);
   std::optional<ScoreBestSnapshot> LoadBestClearScore(
       const bms_parser::ChartMeta &chartMeta,
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,

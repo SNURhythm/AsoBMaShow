@@ -4,6 +4,7 @@
 #include "../library/ChartLibraryTaskService.h"
 #include "../rendering/common.h"
 #include "../view/Button.h"
+#include "../view/ScrollView.h"
 #include "../view/TextView.h"
 #include "../view/UiTheme.h"
 
@@ -66,13 +67,15 @@ void LibraryTasksScene::buildView() {
   header->addView(title);
   rootLayout_->addView(header);
 
+  taskScroll_ = new ScrollView();
+  taskScroll_->setFlex(1)->setMinHeight(0);
   taskList_ = new View();
-  taskList_->setFlex(1)
-      ->setMinHeight(0)
+  taskList_
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(12);
-  rootLayout_->addView(taskList_);
+  taskScroll_->setContentView(taskList_);
+  rootLayout_->addView(taskScroll_);
   refreshTasks();
   rootLayout_->applyYogaLayout();
   layoutWidth_ = rendering::window_width;
@@ -122,6 +125,7 @@ void LibraryTasksScene::refreshTasks() {
     }
   }
   if (rootLayout_ != nullptr) rootLayout_->applyYogaLayout();
+  if (taskScroll_ != nullptr) taskScroll_->scrollToBottom();
 }
 
 void LibraryTasksScene::goBack() {
@@ -150,6 +154,7 @@ void LibraryTasksScene::update(float) {
     layoutHeight_ = rendering::window_height;
     rootLayout_->setSize(layoutWidth_, layoutHeight_);
     rootLayout_->applyYogaLayout();
+    if (taskScroll_ != nullptr) taskScroll_->refreshContentLayout();
   }
 }
 
@@ -157,5 +162,6 @@ void LibraryTasksScene::renderScene() {}
 
 void LibraryTasksScene::cleanupScene() {
   rootLayout_ = nullptr;
+  taskScroll_ = nullptr;
   taskList_ = nullptr;
 }
