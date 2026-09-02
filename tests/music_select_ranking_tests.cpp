@@ -82,10 +82,28 @@ void testProjectsServiceStateIntoBeatorajaRankingData() {
   expect(projected.state == MusicSelectRankingState::None,
          "a closed service is RankingData.NONE");
 }
+
+void testCacheIdentityIncludesIrAccountEvidence() {
+  ir::IrRankingRequest request{
+      .profileId = "profile",
+      .providerId = "provider",
+      .serverOrigin = "https://example.test",
+      .chart = {.keyMode = 7,
+                .chartMd5 = "md5",
+                .chartSha256 = "sha256",
+                .totalNotes = 1234},
+  };
+  const auto first = musicSelectRankingCacheKey(request, 11);
+  expect(first == musicSelectRankingCacheKey(request, 11),
+         "unchanged request and account evidence reuse ranking cache identity");
+  expect(first != musicSelectRankingCacheKey(request, 12),
+         "changed IR account evidence invalidates ranking cache identity");
+}
 } // namespace
 
 int main(int argc, char **argv) {
   testProjectsServiceStateIntoBeatorajaRankingData();
+  testCacheIdentityIncludesIrAccountEvidence();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_ranking_tests", failures,
       "music-select ranking assertion(s) failed",

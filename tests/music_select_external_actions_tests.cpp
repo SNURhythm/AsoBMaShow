@@ -160,6 +160,20 @@ void testRefreshPathUsesThePhysicalArchive() {
   assert(musicSelectRefreshPath(folder, splitArchive) ==
          std::filesystem::path("/charts/folder"));
 
+  MusicSelectBar archivedFolder{
+      .kind = skin::MusicSelectBarKind::Folder,
+      .directoryPath = "/charts/package.zip/nested"};
+  const auto splitFolderArchive = [](const std::filesystem::path &path,
+                                     std::filesystem::path &archive,
+                                     std::filesystem::path &inner) {
+    if (path != "/charts/package.zip/nested") return false;
+    archive = "/charts/package.zip";
+    inner = "nested";
+    return true;
+  };
+  assert(musicSelectRefreshPath(archivedFolder, splitFolderArchive) ==
+         std::filesystem::path("/charts/package.zip"));
+
   auto ordinary = song("/charts/folder/chart.bms", true);
   assert(musicSelectRefreshPath(ordinary, splitArchive) ==
          std::filesystem::path("/charts/folder"));
@@ -167,6 +181,11 @@ void testRefreshPathUsesThePhysicalArchive() {
   auto archived = song("/charts/package.zip/nested/chart.bms", true);
   assert(musicSelectRefreshPath(archived, splitArchive) ==
          std::filesystem::path("/charts/package.zip"));
+}
+
+void testTouchRowsSelectWithoutDesktopActivation() {
+  assert(musicSelectPointerActivatesRow(MusicSelectPointerOrigin::Mouse));
+  assert(!musicSelectPointerActivatesRow(MusicSelectPointerOrigin::Touch));
 }
 
 } // namespace
@@ -177,5 +196,6 @@ int main() {
   testExplorerBranchPriority();
   testFolderAndDownloadSiteBranches();
   testRefreshPathUsesThePhysicalArchive();
+  testTouchRowsSelectWithoutDesktopActivation();
   return 0;
 }

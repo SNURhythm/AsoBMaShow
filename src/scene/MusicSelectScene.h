@@ -26,6 +26,7 @@
 
 class BlockingOverlayView;
 class TextInputBox;
+enum class MusicSelectPointerOrigin;
 
 class MusicSelectScene final : public Scene {
 public:
@@ -90,7 +91,7 @@ private:
       const skin::MusicSelectSkinPointerResult::StringFocus &);
   void commitSkinTextEditing(const std::string &);
   void applySkinPointerResult(
-      const skin::MusicSelectSkinPointerResult &);
+      const skin::MusicSelectSkinPointerResult &, MusicSelectPointerOrigin);
   [[nodiscard]] bool queueSkinPointerEvent(SDL_Event &);
 #endif
 

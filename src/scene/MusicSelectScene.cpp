@@ -484,11 +484,8 @@ void MusicSelectScene::selectedBarMoved() {
                 .chartSha256 = meta.SHA256,
                 .totalNotes = meta.TotalNotes},
   };
-  rankingCacheKey_ = rankingRequest_->profileId + "\n" +
-                     rankingRequest_->providerId + "\n" +
-                     rankingRequest_->serverOrigin + "\n" +
-                     std::to_string(meta.KeyMode) + "\n" + meta.SHA256 +
-                     "\n" + std::to_string(meta.TotalNotes);
+  rankingCacheKey_ = musicSelectRankingCacheKey(
+      *rankingRequest_, irAccountEvidenceRevision_);
 
   std::int64_t delayMillis = kRankingDurationMillis;
   if (const auto cached = rankingCache_.find(rankingCacheKey_);
@@ -711,7 +708,8 @@ void MusicSelectScene::commitSkinTextEditing(const std::string &value) {
 }
 
 void MusicSelectScene::applySkinPointerResult(
-    const skin::MusicSelectSkinPointerResult &pointer) {
+    const skin::MusicSelectSkinPointerResult &pointer,
+    MusicSelectPointerOrigin origin) {
   if (pointer.focusedStringWriter) {
     beginSkinTextEditing(*pointer.focusedStringWriter);
   }
@@ -720,14 +718,19 @@ void MusicSelectScene::applySkinPointerResult(
   const auto snapshot = bars_.snapshot();
   if (*pointer.selectIndex >= snapshot.rows.size()) return;
   const auto &clicked = snapshot.rows[*pointer.selectIndex];
+  const bool activate = musicSelectPointerActivatesRow(origin);
   if (skin::musicSelectIsDirectoryBarKind(clicked.kind)) {
-    (void)bars_.open(clicked.id);
-    syncResolvedFilters();
+    if (activate) {
+      (void)bars_.open(clicked.id);
+      syncResolvedFilters();
+    } else {
+      (void)bars_.select(clicked.id);
+    }
     selectedBarMoved();
   } else {
     (void)bars_.select(clicked.id);
     selectedBarMoved();
-    launchSelected();
+    if (activate) launchSelected();
   }
 }
 
@@ -742,7 +745,7 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
                           point.x, point.y);
     const auto pointer = skinSession_->queuePointerDown(
         point, static_cast<int>(event.button.button) - 1, steadyMicros());
-    applySkinPointerResult(pointer);
+    applySkinPointerResult(pointer, MusicSelectPointerOrigin::Mouse);
     return pointer.consumed;
   }
   case SDL_MOUSEMOTION:
@@ -759,7 +762,7 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
                               point.y);
     const auto pointer =
         skinSession_->queuePointerDown(point, 0, steadyMicros());
-    applySkinPointerResult(pointer);
+    applySkinPointerResult(pointer, MusicSelectPointerOrigin::Touch);
     return pointer.consumed;
   }
   case SDL_FINGERMOTION: {

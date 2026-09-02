@@ -117,9 +117,14 @@ std::optional<std::filesystem::path>
 musicSelectRefreshPath(const MusicSelectBar &bar,
                        const MusicSelectArchivePathSplitter &splitArchive) {
   if (bar.kind == skin::MusicSelectBarKind::Folder) {
-    return bar.directoryPath.empty()
-               ? std::nullopt
-               : std::optional<std::filesystem::path>(bar.directoryPath);
+    if (bar.directoryPath.empty()) return std::nullopt;
+    std::filesystem::path archive;
+    std::filesystem::path inner;
+    if (splitArchive &&
+        splitArchive(bar.directoryPath, archive, inner)) {
+      return archive;
+    }
+    return bar.directoryPath;
   }
   if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart ||
       bar.chart->meta.BmsPath.empty()) {

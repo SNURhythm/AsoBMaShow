@@ -26,6 +26,16 @@ using MusicSelectArchivePathSplitter = std::function<bool(
     const std::filesystem::path &, std::filesystem::path &,
     std::filesystem::path &)>;
 
+enum class MusicSelectPointerOrigin {
+  Mouse,
+  Touch,
+};
+
+[[nodiscard]] constexpr bool
+musicSelectPointerActivatesRow(MusicSelectPointerOrigin origin) {
+  return origin == MusicSelectPointerOrigin::Mouse;
+}
+
 [[nodiscard]] std::vector<std::filesystem::path>
 musicSelectDocumentPaths(const MusicSelectBar &,
                          const MusicSelectArchiveDocumentResolver & = {});

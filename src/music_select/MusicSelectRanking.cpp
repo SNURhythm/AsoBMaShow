@@ -35,6 +35,17 @@ int beatorajaClearType(int rank) {
 }
 } // namespace
 
+std::string
+musicSelectRankingCacheKey(const ir::IrRankingRequest &request,
+                           std::uint64_t accountEvidenceRevision) {
+  return request.profileId + "\n" + request.providerId + "\n" +
+         request.serverOrigin + "\n" +
+         std::to_string(request.chart.keyMode) + "\n" +
+         request.chart.chartSha256 + "\n" +
+         std::to_string(request.chart.totalNotes) + "\n" +
+         std::to_string(accountEvidenceRevision);
+}
+
 MusicSelectRankingSnapshot
 projectMusicSelectRanking(const ir::IrRankingSnapshot &source, int offset) {
   MusicSelectRankingSnapshot result;
