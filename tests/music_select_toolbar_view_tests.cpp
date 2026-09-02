@@ -137,6 +137,11 @@ void testActionsModesAndDragPersist() {
   motion.motion.x = startX + 70;
   motion.motion.y = startY + 35;
   expect(!toolbar->handleEvents(motion), "active drag consumes pointer motion");
+  const int draggedX = toolbar->getX();
+  const int draggedY = toolbar->getY();
+  toolbar->setViewportSize(500, 300);
+  expect(toolbar->getX() == draggedX && toolbar->getY() == draggedY,
+         "per-frame viewport updates preserve in-progress drag placement");
   SDL_Event up{};
   up.type = SDL_MOUSEBUTTONUP;
   up.button.button = SDL_BUTTON_LEFT;

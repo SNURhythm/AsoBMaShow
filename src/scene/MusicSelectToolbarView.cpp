@@ -217,6 +217,10 @@ void MusicSelectToolbarView::persist() {
 void MusicSelectToolbarView::setViewportSize(int width, int height) {
   viewportWidth_ = width;
   viewportHeight_ = height;
+  if (mouseDragging_ || touchDragging_ != -1) {
+    place(static_cast<float>(getX()), static_cast<float>(getY()));
+    return;
+  }
   place(state_.hasPosition ? state_.x : kDefaultPosition,
         state_.hasPosition ? state_.y : kDefaultPosition);
 }
