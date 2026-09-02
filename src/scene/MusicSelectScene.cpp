@@ -850,6 +850,12 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
     const auto pointer =
         skinSession_->queuePointerDown(point, 0, steadyMicros());
     applySkinPointerResult(pointer, MusicSelectPointerOrigin::Touch);
+    // The authored text target has just created and focused the native input.
+    // Forward its initiating touch too, so platform text controls retain the
+    // same touch lifecycle as a directly touched TextInputBox.
+    if (pointer.focusedStringWriter && skinTextInput_ != nullptr) {
+      (void)skinTextInput_->handleEvents(event);
+    }
     if (target.kind == skin::MusicSelectSkinPointerTargetKind::Slider &&
         pointer.consumed) {
       (void)skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,

@@ -114,6 +114,31 @@ void testEmptyInputHasNoClearHitTarget() {
   input.onUnselected();
 }
 
+void testFocusedInputConsumesItsInitiatingTouch() {
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.setPositionNoLayout(450, 735, YGPositionTypeAbsolute);
+  input.applyYogaLayout();
+  input.setEditingText("needle");
+  input.beginEditing();
+
+  SDL_Event down{};
+  down.type = SDL_FINGERDOWN;
+  down.tfinger.type = SDL_FINGERDOWN;
+  down.tfinger.fingerId = 7;
+  down.tfinger.x = 570.0F / static_cast<float>(rendering::design_width);
+  down.tfinger.y = 757.0F / static_cast<float>(rendering::design_height);
+  expect(!input.handleEvents(down),
+         "a focused native text input consumes its initiating touch");
+
+  SDL_Event up = down;
+  up.type = SDL_FINGERUP;
+  up.tfinger.type = SDL_FINGERUP;
+  expect(!input.handleEvents(up),
+         "the initiating text touch keeps its matching release");
+  input.endEditing();
+}
+
 void testDeferredTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -176,6 +201,7 @@ int main() {
   testDefaultHorizontalPadding();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
+  testFocusedInputConsumesItsInitiatingTouch();
   testDeferredTextKeepsRasterizedLineHeight();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 

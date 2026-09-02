@@ -240,21 +240,37 @@ void testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion() {
   assert(gesture.end(11).accepted);
 }
 
-void testTouchGestureUsesAHorizontalLeftEdgeSwipeToGoBack() {
+void testTouchGestureUsesAHorizontalSwipeAnywhereToGoBack() {
   MusicSelectTouchGesture gesture;
-  assert(!gesture.begin(21, 0.25F, 0.50F,
-                        MusicSelectTouchTarget::Navigation));
-  assert(gesture.begin(21, 0.05F, 0.50F,
+  assert(gesture.begin(21, 0.25F, 0.50F,
                        MusicSelectTouchTarget::Navigation));
   const auto moved = gesture.move(21, 0.20F, 0.52F);
   assert(moved.accepted && !moved.sliderDrag && moved.rowDelta == 0);
   const auto release = gesture.end(21);
-  assert(release.accepted && !release.tap && release.goBack);
+  assert(release.accepted && !release.tap && !release.goBack);
 
-  assert(gesture.begin(22, 0.05F, 0.50F,
+  assert(gesture.begin(22, 0.25F, 0.50F,
                        MusicSelectTouchTarget::Navigation));
-  (void)gesture.move(22, 0.20F, 0.75F);
-  assert(!gesture.end(22).goBack);
+  const auto movedRight = gesture.move(22, 0.40F, 0.52F);
+  assert(movedRight.accepted && !movedRight.sliderDrag &&
+         movedRight.rowDelta == 0);
+  const auto rightRelease = gesture.end(22);
+  assert(rightRelease.accepted && !rightRelease.tap && rightRelease.goBack);
+
+  assert(gesture.begin(23, 0.25F, 0.50F,
+                       MusicSelectTouchTarget::Navigation));
+  (void)gesture.move(23, 0.40F, 0.75F);
+  assert(!gesture.end(23).goBack);
+}
+
+void testTouchGestureDoesNotTreatALeftwardSwipeAsBack() {
+  MusicSelectTouchGesture gesture;
+  assert(gesture.begin(24, 0.25F, 0.50F,
+                       MusicSelectTouchTarget::Navigation));
+  const auto moved = gesture.move(24, 0.10F, 0.52F);
+  assert(moved.accepted && !moved.sliderDrag && moved.rowDelta == 0);
+  const auto release = gesture.end(24);
+  assert(release.accepted && !release.goBack);
 }
 
 } // namespace
@@ -268,6 +284,7 @@ int main() {
   testTouchRowsUseTheSameActivationAsDesktopPointers();
   testTouchGestureDefersBarTapAndConvertsVerticalDragToRows();
   testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion();
-  testTouchGestureUsesAHorizontalLeftEdgeSwipeToGoBack();
+  testTouchGestureUsesAHorizontalSwipeAnywhereToGoBack();
+  testTouchGestureDoesNotTreatALeftwardSwipeAsBack();
   return 0;
 }

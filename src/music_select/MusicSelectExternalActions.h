@@ -70,17 +70,13 @@ struct MusicSelectTouchRelease {
 // The skinned selector has discrete Beatoraja bars rather than a native
 // RecyclerView. This capture converts a direct vertical swipe into those
 // discrete bar movements while retaining slider drags and tap selection. An
-// unclaimed right swipe beginning at the left edge navigates back one folder.
+// unclaimed right swipe navigates back one folder, independent of its origin.
 class MusicSelectTouchGesture final {
 public:
   [[nodiscard]] bool begin(std::int64_t finger, float normalizedX,
                            float normalizedY,
                            MusicSelectTouchTarget target) noexcept {
     if (finger_ || target == MusicSelectTouchTarget::None) return false;
-    if (target == MusicSelectTouchTarget::Navigation &&
-        normalizedX > kNavigationEdgeWidth) {
-      return false;
-    }
     finger_ = finger;
     target_ = target;
     navigationAnchorX_ = normalizedX;
@@ -136,7 +132,6 @@ public:
 
 private:
   static constexpr float kNormalizedRowStep = 0.04F;
-  static constexpr float kNavigationEdgeWidth = 0.10F;
   static constexpr float kNavigationDistance = 0.10F;
   std::optional<std::int64_t> finger_;
   MusicSelectTouchTarget target_ = MusicSelectTouchTarget::None;
