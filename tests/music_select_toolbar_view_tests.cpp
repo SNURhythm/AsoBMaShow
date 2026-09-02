@@ -42,6 +42,9 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
                                       std::vector<MusicSelectToolbarState> &saved) {
   return {
       .openMusicPlayer = [&] { actions.emplace_back("music"); },
+      .openChartViewer = [&] { actions.emplace_back("viewer"); },
+      .openChartRecords = [&] { actions.emplace_back("records"); },
+      .revealChart = [&] { actions.emplace_back("reveal"); },
       .openTasks = [&] { actions.emplace_back("tasks"); },
       .openIrUploads = [&] { actions.emplace_back("ir"); },
       .openSettings = [&] { actions.emplace_back("settings"); },
@@ -57,11 +60,12 @@ void testExpandedUsesOnlyExactFontAwesomeControls() {
       rendering::window_height);
   expect(toolbar != nullptr, "expanded state constructs a toolbar");
   const std::vector<std::uint32_t> expected = {
-      ui_icons::kDrag,      ui_icons::kMusic,    ui_icons::kTasks,
-      ui_icons::kIrUploads, ui_icons::kSettings, ui_icons::kCollapse,
+      ui_icons::kDrag,        ui_icons::kChartLine, ui_icons::kRecords,
+      ui_icons::kReveal,      ui_icons::kMusic,     ui_icons::kTasks,
+      ui_icons::kIrUploads,   ui_icons::kSettings,  ui_icons::kCollapse,
       ui_icons::kHide};
   expect(toolbar->controls().size() == expected.size(),
-         "expanded toolbar has drag plus six controls");
+         "expanded toolbar has drag plus chart and application controls");
   for (std::size_t index = 0;
        index < toolbar->controls().size() && index < expected.size(); ++index) {
     const auto &control = toolbar->controls()[index];
@@ -96,19 +100,38 @@ void testCollapsedAndHiddenShapes() {
          "hidden mode constructs no toolbar view or hit target");
 }
 
+void testExpandedToolbarWrapsWithinANarrowViewport() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved),
+                                                 500, 300);
+  toolbar->applyYogaLayout();
+  expect(toolbar->getWidth() <= 500 && toolbar->getHeight() > 64,
+         "expanded controls wrap instead of extending past a narrow viewport");
+
+  toolbar->setViewportSize(260, 300);
+  toolbar->applyYogaLayout();
+  expect(toolbar->getWidth() <= 260 && toolbar->getHeight() > 64,
+         "a narrower viewport reflows expanded controls within its bounds");
+}
+
 void testActionsModesAndDragPersist() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create(
-      {}, callbacks(actions, saved), 500, 300);
+      {}, callbacks(actions, saved), 800, 300);
   toolbar->applyYogaLayout();
+  toolbar->activateControl(MusicSelectToolbarControl::ChartViewer);
+  toolbar->activateControl(MusicSelectToolbarControl::ChartRecords);
+  toolbar->activateControl(MusicSelectToolbarControl::RevealChart);
   toolbar->activateControl(MusicSelectToolbarControl::MusicPlayer);
   toolbar->activateControl(MusicSelectToolbarControl::Tasks);
   toolbar->activateControl(MusicSelectToolbarControl::IrUploads);
   toolbar->activateControl(MusicSelectToolbarControl::Settings);
-  expect(actions == std::vector<std::string>({"music", "tasks", "ir",
+  expect(actions == std::vector<std::string>({"viewer", "records", "reveal",
+                                               "music", "tasks", "ir",
                                                "settings"}),
-         "toolbar exposes exactly the four approved application actions");
+         "toolbar exposes chart and application actions");
 
   toolbar->activateControl(MusicSelectToolbarControl::Collapse);
   View::dispatchDeferredEventCallbacks();
@@ -120,7 +143,7 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::Expand);
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Expanded &&
-             toolbar->controls().size() == 7,
+             toolbar->controls().size() == 10,
          "expand persists and rebuilds the toolbar");
 
   toolbar->applyYogaLayout();
@@ -139,7 +162,7 @@ void testActionsModesAndDragPersist() {
   expect(!toolbar->handleEvents(motion), "active drag consumes pointer motion");
   const int draggedX = toolbar->getX();
   const int draggedY = toolbar->getY();
-  toolbar->setViewportSize(500, 300);
+  toolbar->setViewportSize(800, 300);
   expect(toolbar->getX() == draggedX && toolbar->getY() == draggedY,
          "per-frame viewport updates preserve in-progress drag placement");
   SDL_Event up{};
@@ -162,7 +185,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
   std::vector<MusicSelectToolbarState> saved;
   auto toolbar = MusicSelectToolbarView::Create(
       {.mode = MusicSelectToolbarMode::Collapsed}, callbacks(actions, saved),
-      500, 300);
+      800, 300);
   toolbar->applyState({.mode = MusicSelectToolbarMode::Hidden});
   expect(!toolbar->getVisible() && toolbar->controls().empty() && saved.empty(),
          "returning from Settings hides the retained toolbar without saving "
@@ -172,7 +195,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
                        .x = 80.0F,
                        .y = 60.0F,
                        .hasPosition = true});
-  expect(toolbar->getVisible() && toolbar->controls().size() == 7 &&
+  expect(toolbar->getVisible() && toolbar->controls().size() == 10 &&
              toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");
@@ -190,6 +213,7 @@ int main() {
   }
   testExpandedUsesOnlyExactFontAwesomeControls();
   testCollapsedAndHiddenShapes();
+  testExpandedToolbarWrapsWithinANarrowViewport();
   testActionsModesAndDragPersist();
   testPersistedSettingsStateAppliesToAnExistingToolbar();
   rendering::UniformCache::getInstance().destroyAll();

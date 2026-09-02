@@ -214,30 +214,47 @@ void testTouchRowsUseTheSameActivationAsDesktopPointers() {
 
 void testTouchGestureDefersBarTapAndConvertsVerticalDragToRows() {
   MusicSelectTouchGesture gesture;
-  assert(gesture.begin(7, 0.50F, MusicSelectTouchTarget::Bar));
-  const auto belowThreshold = gesture.move(7, 0.48F);
+  assert(gesture.begin(7, 0.50F, 0.50F, MusicSelectTouchTarget::Bar));
+  const auto belowThreshold = gesture.move(7, 0.50F, 0.48F);
   assert(belowThreshold.accepted && belowThreshold.rowDelta == 0 &&
          !belowThreshold.sliderDrag);
-  const auto upwards = gesture.move(7, 0.39F);
+  const auto upwards = gesture.move(7, 0.50F, 0.39F);
   assert(upwards.accepted && upwards.rowDelta == 2 &&
          !upwards.sliderDrag);
   const auto release = gesture.end(7);
   assert(release.accepted && !release.tap);
 
-  assert(gesture.begin(8, 0.25F, MusicSelectTouchTarget::Bar));
+  assert(gesture.begin(8, 0.50F, 0.25F, MusicSelectTouchTarget::Bar));
   const auto tap = gesture.end(8);
   assert(tap.accepted && tap.tap);
 }
 
 void testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion() {
   MusicSelectTouchGesture gesture;
-  assert(gesture.begin(11, 0.20F, MusicSelectTouchTarget::Slider));
-  assert(!gesture.begin(12, 0.20F, MusicSelectTouchTarget::Bar));
-  assert(!gesture.move(12, 0.30F).accepted);
-  const auto slider = gesture.move(11, 0.30F);
+  assert(gesture.begin(11, 0.50F, 0.20F, MusicSelectTouchTarget::Slider));
+  assert(!gesture.begin(12, 0.50F, 0.20F, MusicSelectTouchTarget::Bar));
+  assert(!gesture.move(12, 0.50F, 0.30F).accepted);
+  const auto slider = gesture.move(11, 0.50F, 0.30F);
   assert(slider.accepted && slider.sliderDrag && slider.rowDelta == 0);
   assert(!gesture.end(12).accepted);
   assert(gesture.end(11).accepted);
+}
+
+void testTouchGestureUsesAHorizontalLeftEdgeSwipeToGoBack() {
+  MusicSelectTouchGesture gesture;
+  assert(!gesture.begin(21, 0.25F, 0.50F,
+                        MusicSelectTouchTarget::Navigation));
+  assert(gesture.begin(21, 0.05F, 0.50F,
+                       MusicSelectTouchTarget::Navigation));
+  const auto moved = gesture.move(21, 0.20F, 0.52F);
+  assert(moved.accepted && !moved.sliderDrag && moved.rowDelta == 0);
+  const auto release = gesture.end(21);
+  assert(release.accepted && !release.tap && release.goBack);
+
+  assert(gesture.begin(22, 0.05F, 0.50F,
+                       MusicSelectTouchTarget::Navigation));
+  (void)gesture.move(22, 0.20F, 0.75F);
+  assert(!gesture.end(22).goBack);
 }
 
 } // namespace
@@ -251,5 +268,6 @@ int main() {
   testTouchRowsUseTheSameActivationAsDesktopPointers();
   testTouchGestureDefersBarTapAndConvertsVerticalDragToRows();
   testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion();
+  testTouchGestureUsesAHorizontalLeftEdgeSwipeToGoBack();
   return 0;
 }

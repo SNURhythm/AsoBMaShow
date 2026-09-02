@@ -12,6 +12,9 @@ class TextView;
 
 enum class MusicSelectToolbarControl {
   Drag,
+  ChartViewer,
+  ChartRecords,
+  RevealChart,
   MusicPlayer,
   Tasks,
   IrUploads,
@@ -22,6 +25,9 @@ enum class MusicSelectToolbarControl {
 };
 
 struct MusicSelectToolbarCallbacks {
+  std::function<void()> openChartViewer;
+  std::function<void()> openChartRecords;
+  std::function<void()> revealChart;
   std::function<void()> openMusicPlayer;
   std::function<void()> openTasks;
   std::function<void()> openIrUploads;

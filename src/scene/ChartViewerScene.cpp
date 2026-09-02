@@ -2341,8 +2341,10 @@ ChartViewerScene::ChartViewerScene(
     std::optional<unsigned int> randomSeed,
     std::optional<std::string> randomPrng,
     std::optional<std::vector<int>> randomValues,
-    std::optional<practice::LaunchRequest> launchRequest)
-    : Scene(context), record(std::move(record)), randomSeed(randomSeed),
+    std::optional<practice::LaunchRequest> launchRequest,
+    SceneReturnTarget returnTarget)
+    : Scene(context), record(std::move(record)),
+      returnTarget_(std::move(returnTarget)), randomSeed(randomSeed),
       randomPrng(std::move(randomPrng)),
       pendingPracticeLaunchRequest(std::move(launchRequest)) {
   if (randomValues.has_value()) {
@@ -4659,7 +4661,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
 
 void ChartViewerScene::goBack() {
   stopListening();
-  context.sceneManager->changeScene("MainMenu", false);
+  (void)returnToScene(*context.sceneManager, returnTarget_);
 }
 
 std::vector<ChartViewerScene::RandomOption>

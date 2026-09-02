@@ -84,6 +84,9 @@ private:
   void search(std::string text);
   void enterError(std::vector<skin::SkinDiagnostic>);
   void buildErrorView();
+  void openChartViewer();
+  void openChartRecords();
+  void revealChart();
   void openMusicPlayer();
   void openTasks();
   void openIrUploads();

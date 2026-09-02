@@ -7,6 +7,8 @@
 #endif
 
 #include "IrUploadsScene.h"
+#include "ChartRecordsScene.h"
+#include "ChartViewerScene.h"
 #include "LibraryTasksScene.h"
 #include "MusicPlayerScene.h"
 #include "SceneManager.h"
@@ -754,6 +756,7 @@ void MusicSelectScene::beginSkinTextEditing(
   }
   skinTextInput_ = skinTextInputForSize(
       static_cast<int>(std::lround(focus.bounds.height)));
+  skinTextInput_->setEditingText(focus.currentValue);
   activeSkinStringWriter_ = focus.writer;
   const auto colorChannel = [](float value) {
     return static_cast<Uint8>(
@@ -834,15 +837,23 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
                               point.y);
     const auto target = skinSession_->pointerTargetAt(point);
     if (target.kind == skin::MusicSelectSkinPointerTargetKind::Bar) {
-      return skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.y,
+      return skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,
+                                     event.tfinger.y,
                                      MusicSelectTouchTarget::Bar);
+    }
+    if (target.kind == skin::MusicSelectSkinPointerTargetKind::None &&
+        skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,
+                                event.tfinger.y,
+                                MusicSelectTouchTarget::Navigation)) {
+      return true;
     }
     const auto pointer =
         skinSession_->queuePointerDown(point, 0, steadyMicros());
     applySkinPointerResult(pointer, MusicSelectPointerOrigin::Touch);
     if (target.kind == skin::MusicSelectSkinPointerTargetKind::Slider &&
         pointer.consumed) {
-      (void)skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.y,
+      (void)skinTouchGesture_.begin(event.tfinger.fingerId, event.tfinger.x,
+                                    event.tfinger.y,
                                     MusicSelectTouchTarget::Slider);
     }
     return pointer.consumed;
@@ -850,7 +861,8 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
   case SDL_FINGERMOTION: {
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
     const auto motion =
-        skinTouchGesture_.move(event.tfinger.fingerId, event.tfinger.y);
+        skinTouchGesture_.move(event.tfinger.fingerId, event.tfinger.x,
+                               event.tfinger.y);
     if (!motion.accepted) return false;
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                               point.y);
@@ -873,6 +885,10 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) return false;
     const auto release = skinTouchGesture_.end(event.tfinger.fingerId);
     if (!release.accepted) return false;
+    if (release.goBack) {
+      closeDirectory();
+      return true;
+    }
     if (release.tap) {
       rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x,
                                 point.y);
@@ -2296,6 +2312,40 @@ void MusicSelectScene::openMusicPlayer() {
       context, SceneReturnTarget::Retained(this)), true);
 }
 
+void MusicSelectScene::openChartViewer() {
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->solidArchive || selected.chart->unavailable ||
+      selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+  context.jukebox.stop();
+  context.sceneManager->changeScene(std::make_unique<ChartViewerScene>(
+      context, *selected.chart, std::nullopt, std::nullopt, std::nullopt,
+      std::nullopt, SceneReturnTarget::Retained(this)), true);
+}
+
+void MusicSelectScene::openChartRecords() {
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->solidArchive || selected.chart->unavailable ||
+      selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+  context.sceneManager->changeScene(std::make_unique<ChartRecordsScene>(
+      context, *selected.chart, SceneReturnTarget::Retained(this)), true);
+}
+
+void MusicSelectScene::revealChart() {
+  executeEvent({.kind = skin::MusicSelectSkinActionKind::Event,
+                .selector = {.value = 212},
+                .arguments = {0, 0}});
+}
+
 void MusicSelectScene::openTasks() {
   context.sceneManager->changeScene(std::make_unique<LibraryTasksScene>(
       context, SceneReturnTarget::Retained(this)), true);
@@ -2328,7 +2378,10 @@ void MusicSelectScene::syncToolbar() {
   }
   auto toolbar = MusicSelectToolbarView::Create(
       state,
-      {.openMusicPlayer = [this] { openMusicPlayer(); },
+      {.openChartViewer = [this] { openChartViewer(); },
+       .openChartRecords = [this] { openChartRecords(); },
+       .revealChart = [this] { revealChart(); },
+       .openMusicPlayer = [this] { openMusicPlayer(); },
        .openTasks = [this] { openTasks(); },
        .openIrUploads = [this] { openIrUploads(); },
        .openSettings = [this] { openSettings(); },

@@ -52,6 +52,7 @@ enum class MusicSelectTouchTarget : std::uint8_t {
   None,
   Bar,
   Slider,
+  Navigation,
 };
 
 struct MusicSelectTouchMotion {
@@ -63,27 +64,43 @@ struct MusicSelectTouchMotion {
 struct MusicSelectTouchRelease {
   bool accepted = false;
   bool tap = false;
+  bool goBack = false;
 };
 
 // The skinned selector has discrete Beatoraja bars rather than a native
 // RecyclerView. This capture converts a direct vertical swipe into those
-// discrete bar movements while retaining slider drags and tap selection.
+// discrete bar movements while retaining slider drags and tap selection. An
+// unclaimed right swipe beginning at the left edge navigates back one folder.
 class MusicSelectTouchGesture final {
 public:
-  [[nodiscard]] bool begin(std::int64_t finger, float normalizedY,
+  [[nodiscard]] bool begin(std::int64_t finger, float normalizedX,
+                           float normalizedY,
                            MusicSelectTouchTarget target) noexcept {
     if (finger_ || target == MusicSelectTouchTarget::None) return false;
+    if (target == MusicSelectTouchTarget::Navigation &&
+        normalizedX > kNavigationEdgeWidth) {
+      return false;
+    }
     finger_ = finger;
     target_ = target;
+    navigationAnchorX_ = normalizedX;
     rowAnchorY_ = normalizedY;
     dragged_ = false;
+    goBack_ = false;
     return true;
   }
 
   [[nodiscard]] MusicSelectTouchMotion
-  move(std::int64_t finger, float normalizedY) noexcept {
+  move(std::int64_t finger, float normalizedX, float normalizedY) noexcept {
     if (!finger_ || *finger_ != finger) return {};
     MusicSelectTouchMotion result{.accepted = true};
+    if (target_ == MusicSelectTouchTarget::Navigation) {
+      const float horizontalDistance = normalizedX - navigationAnchorX_;
+      const float verticalDistance = normalizedY - rowAnchorY_;
+      goBack_ = horizontalDistance >= kNavigationDistance &&
+                horizontalDistance > std::abs(verticalDistance);
+      return result;
+    }
     if (target_ == MusicSelectTouchTarget::Slider) {
       dragged_ = true;
       result.sliderDrag = true;
@@ -104,22 +121,29 @@ public:
   [[nodiscard]] MusicSelectTouchRelease end(std::int64_t finger) noexcept {
     if (!finger_ || *finger_ != finger) return {};
     const bool tap = target_ == MusicSelectTouchTarget::Bar && !dragged_;
+    const bool goBack = target_ == MusicSelectTouchTarget::Navigation && goBack_;
     finger_.reset();
     target_ = MusicSelectTouchTarget::None;
-    return {.accepted = true, .tap = tap};
+    goBack_ = false;
+    return {.accepted = true, .tap = tap, .goBack = goBack};
   }
 
   void cancel() noexcept {
     finger_.reset();
     target_ = MusicSelectTouchTarget::None;
+    goBack_ = false;
   }
 
 private:
   static constexpr float kNormalizedRowStep = 0.04F;
+  static constexpr float kNavigationEdgeWidth = 0.10F;
+  static constexpr float kNavigationDistance = 0.10F;
   std::optional<std::int64_t> finger_;
   MusicSelectTouchTarget target_ = MusicSelectTouchTarget::None;
+  float navigationAnchorX_ = 0.0F;
   float rowAnchorY_ = 0.0F;
   bool dragged_ = false;
+  bool goBack_ = false;
 };
 
 [[nodiscard]] std::vector<std::filesystem::path>

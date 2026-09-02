@@ -7,19 +7,25 @@
 #include "../view/UiTheme.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace {
 constexpr float kControlSize = 48.0F;
 constexpr float kGap = 6.0F;
 constexpr float kPadding = 8.0F;
-constexpr float kToolbarHeight = kControlSize + kPadding * 2.0F;
 constexpr float kDefaultPosition = 24.0F;
 
 std::uint32_t codepointFor(MusicSelectToolbarControl control) {
   switch (control) {
   case MusicSelectToolbarControl::Drag:
     return ui_icons::kDrag;
+  case MusicSelectToolbarControl::ChartViewer:
+    return ui_icons::kChartLine;
+  case MusicSelectToolbarControl::ChartRecords:
+    return ui_icons::kRecords;
+  case MusicSelectToolbarControl::RevealChart:
+    return ui_icons::kReveal;
   case MusicSelectToolbarControl::MusicPlayer:
     return ui_icons::kMusic;
   case MusicSelectToolbarControl::Tasks:
@@ -110,6 +116,9 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::Expand}
           : std::vector<MusicSelectToolbarControl>{
                 MusicSelectToolbarControl::Drag,
+                MusicSelectToolbarControl::ChartViewer,
+                MusicSelectToolbarControl::ChartRecords,
+                MusicSelectToolbarControl::RevealChart,
                 MusicSelectToolbarControl::MusicPlayer,
                 MusicSelectToolbarControl::Tasks,
                 MusicSelectToolbarControl::IrUploads,
@@ -117,12 +126,20 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::Collapse,
                 MusicSelectToolbarControl::Hide};
 
-  setWidth(kPadding * 2.0F + kControlSize * layout.size() +
-           kGap * (layout.size() - 1));
-  setHeight(kToolbarHeight);
+  const float availableWidth =
+      std::max(kControlSize, static_cast<float>(viewportWidth_) - kPadding * 2);
+  const std::size_t columns = std::clamp<std::size_t>(
+      static_cast<std::size_t>(
+          std::floor((availableWidth + kGap) / (kControlSize + kGap))),
+      1, layout.size());
+  const std::size_t rows = (layout.size() + columns - 1) / columns;
+  setWidth(kPadding * 2.0F + kControlSize * columns +
+           kGap * (columns - 1));
+  setHeight(kPadding * 2.0F + kControlSize * rows + kGap * (rows - 1));
   setPadding(Edge::All, kPadding);
   setGap(kGap);
   setFlexDirection(FlexDirection::Row);
+  setFlexWrap(YGWrapWrap);
   setAlignItems(YGAlignCenter);
   setThemedBackgroundColor(ui_theme::panelStrong);
   setThemedBorderColor(ui_theme::hairlineStrong);
@@ -160,6 +177,21 @@ void MusicSelectToolbarView::activateControl(
     MusicSelectToolbarControl control) {
   switch (control) {
   case MusicSelectToolbarControl::Drag:
+    break;
+  case MusicSelectToolbarControl::ChartViewer:
+    if (callbacks_.openChartViewer) {
+      callbacks_.openChartViewer();
+    }
+    break;
+  case MusicSelectToolbarControl::ChartRecords:
+    if (callbacks_.openChartRecords) {
+      callbacks_.openChartRecords();
+    }
+    break;
+  case MusicSelectToolbarControl::RevealChart:
+    if (callbacks_.revealChart) {
+      callbacks_.revealChart();
+    }
     break;
   case MusicSelectToolbarControl::MusicPlayer:
     if (callbacks_.openMusicPlayer) {
@@ -215,11 +247,16 @@ void MusicSelectToolbarView::persist() {
 }
 
 void MusicSelectToolbarView::setViewportSize(int width, int height) {
+  const bool layoutChanged =
+      viewportWidth_ != width || viewportHeight_ != height;
   viewportWidth_ = width;
   viewportHeight_ = height;
   if (mouseDragging_ || touchDragging_ != -1) {
     place(static_cast<float>(getX()), static_cast<float>(getY()));
     return;
+  }
+  if (layoutChanged) {
+    rebuild();
   }
   place(state_.hasPosition ? state_.x : kDefaultPosition,
         state_.hasPosition ? state_.y : kDefaultPosition);
