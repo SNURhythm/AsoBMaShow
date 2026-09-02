@@ -4,6 +4,7 @@
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
+#include "skin/beatoraja/MusicSelectSkinModelResolver.h"
 #include "skin/beatoraja/MusicSelectSkinStateBridge.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -161,6 +162,11 @@ void testConfiguredType5SongListPreservesEveryAuthoredValue() {
   require(decoded.model && decoded.model->header.type == 5 &&
               decoded.model->header.name == "Configured Select",
           "configured type-5 Lua table decodes");
+  require(std::ranges::none_of(decoded.diagnostics, [](const auto &value) {
+            return value.severity == DiagnosticSeverity::Error;
+          }),
+          "a text definition whose font cannot be resolved is silently "
+          "omitted like JsonSkinObjectLoader");
   if (!decoded.model || !decoded.model->songListDefinition) {
     require(false, "type-5 model retains its songlist definition");
     return;
@@ -216,6 +222,10 @@ void testConfiguredType5SongListPreservesEveryAuthoredValue() {
                        object.payload);
           }),
           "negative SongList graph definitions retain select semantics");
+  require(std::ranges::none_of(decoded.model->objects, [](const auto &object) {
+            return object.authoredName == "text-1";
+          }),
+          "the unresolved song-list text object is not materialized");
 }
 
 void testInstalledAcceptanceSkinsDecodeWhenRequested() {
@@ -330,7 +340,11 @@ void testInstalledAcceptanceSkinsDecodeWhenRequested() {
     if (!configured.value) continue;
     const auto decoded = decoder.decodeMusicSelect(
         *configured.value, {.runtime = *created.runtime, .builtins = {}});
-    if (!decoded.model) {
+    const bool hasErrorDiagnostic =
+        std::ranges::any_of(decoded.diagnostics, [](const auto &diagnostic) {
+          return diagnostic.severity == DiagnosticSeverity::Error;
+        });
+    if (!decoded.model || hasErrorDiagnostic) {
       for (const auto &diagnostic : decoded.diagnostics) {
         std::cerr << skin.package << ": " << diagnostic.code << ": "
                   << diagnostic.message << '\n';
@@ -338,6 +352,21 @@ void testInstalledAcceptanceSkinsDecodeWhenRequested() {
     }
     require(decoded.model.has_value(),
             skin.package + " configured type-5 table decodes");
+    require(!hasErrorDiagnostic,
+            skin.package + " configured type-5 table has no errors");
+    if (skin.package == "ModernChicAcceptance" && decoded.model) {
+      const auto resolved = MusicSelectSkinModelResolver{}.resolve(*decoded.model);
+      require(resolved.songList.has_value(),
+              "ModernChicAcceptance song list resolves");
+      if (resolved.songList) {
+        require(resolved.songList->listOn.size() == 17 &&
+                    std::ranges::all_of(resolved.songList->listOn,
+                                        [](const auto &presentation) {
+                                          return presentation.object != 0;
+                                        }),
+                "ModernChicAcceptance resolves all 17 chart-list bars");
+      }
+    }
   }
 }
 

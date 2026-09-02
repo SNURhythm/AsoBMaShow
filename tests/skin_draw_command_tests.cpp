@@ -569,6 +569,7 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
       imageObject(3, 200, false),
   };
   model.model.destinations = {destination(1, 7, 0.0)};
+  model.model.destinations.front().presentation.frames.clear();
   MusicSelectSongListFrame frame;
   frame.bars = {{.kind = MusicSelectBarKind::Song,
                  .title = "query",
@@ -579,7 +580,8 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
                                   false, nullptr, nullptr, &frame);
   expect(evaluated.submitReady.has_value() &&
              evaluated.submitReady->commands.size() == 2,
-         "SkinBar lowers the source-selected image-set state");
+         "SkinBar keeps its constructor destination when the authored "
+         "song-list wrapper has no destination frames");
   if (evaluated.submitReady && evaluated.submitReady->commands.size() == 2) {
     const auto *bar = std::get_if<SkinTexturedQuadCommand>(
         &evaluated.submitReady->commands[0].payload);

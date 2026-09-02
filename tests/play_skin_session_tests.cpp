@@ -266,8 +266,12 @@ public:
     return preflightReady;
   }
 
-  void submit(const rendering::SkinQuadBackendBatch &) override {
+  void submit(const rendering::SkinQuadBackendBatch &batch) override {
     ++submitCalls;
+    if (captureVertices) {
+      submittedVertices.insert(submittedVertices.end(), batch.vertices.begin(),
+                               batch.vertices.end());
+    }
     if (failNextAllocationAfterSubmit) {
       session_test_allocation_fault::failNext = true;
     }
@@ -275,6 +279,7 @@ public:
 
   bool preflightReady = true;
   bool failNextAllocationAfterSubmit = false;
+  bool captureVertices = false;
   std::size_t layoutPreflightCalls = 0;
   std::size_t samplerPreflightCalls = 0;
   std::size_t reserveCalls = 0;
@@ -283,6 +288,7 @@ public:
   std::size_t samplerCount = 0;
   std::size_t reservedVertices = 0;
   std::size_t reservedIndices = 0;
+  std::vector<rendering::SkinQuadGpuVertex> submittedVertices;
 };
 
 bool sameBgaFrame(const PreparedGameplayBgaFrame &left,
@@ -2485,6 +2491,139 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
   expect(created.session != nullptr && !created.cancelled && !hasError,
          "requested external gameplay skin creates a full configured session; "
          "unsupported optional visuals may remain visible as warnings");
+}
+
+void testRequestedModernChicSessionPublishesChartListRows() {
+  const char *acceptanceRoot =
+      std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
+  if (acceptanceRoot == nullptr || *acceptanceRoot == '\0') {
+    return;
+  }
+  const fs::path source = fs::path(acceptanceRoot) / "ModernChic";
+  expect(fs::is_directory(source),
+         "ModernChic acceptance root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+
+  TempDirectory temp;
+  SkinStorageRoots roots{
+      .visiblePackages = temp.root() / "visible",
+      .privateRevisions = temp.root() / "revisions",
+      .privateCatalog = temp.root() / "catalog",
+      .profileOverlays = temp.root() / "overlays",
+      .liveSources = true,
+  };
+  const auto package = normalizePackageId("ModernChicAcceptance").package;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "musicselect.luaskin").entry
+              : std::nullopt;
+  const auto profile =
+      makeSkinProfileId("77777777-7777-4777-8777-777777777777");
+  expect(package && entry && profile,
+         "ModernChic acceptance activation IDs normalize");
+  if (!package || !entry || !profile) {
+    return;
+  }
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(source, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "ModernChic acceptance package snapshots");
+  if (!snapshot.prepared) {
+    return;
+  }
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease.has_value() && publishError.empty(),
+         "ModernChic acceptance revision publishes");
+  if (!lease) {
+    return;
+  }
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  const auto validation = validator.validate(
+      lease->readView(), *entry, nullptr, {});
+  expect(validation.disposition ==
+                 SkinValidationDisposition::SelectableGameplay &&
+             validation.metadata && validation.metadata->skinType == 5 &&
+             validation.reconciledSettings &&
+             !validation.configurationDigest.empty(),
+         "ModernChic music-select entry validates");
+  if (validation.disposition !=
+          SkinValidationDisposition::SelectableGameplay ||
+      !validation.metadata || validation.metadata->skinType != 5 ||
+      !validation.reconciledSettings ||
+      validation.configurationDigest.empty()) {
+    return;
+  }
+
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  frame.elapsedMillis = 2'000;
+  frame.songList.elapsedMillis = 2'000;
+  frame.songList.selectedIndex = 8;
+  for (int index = 0; index < 17; ++index) {
+    frame.songList.bars.push_back(
+        {.kind = MusicSelectBarKind::Song,
+         .title = "Chart " + std::to_string(index),
+         .exists = true,
+         .difficulty = 2,
+         .level = 10});
+  }
+
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto movieDevice = std::make_shared<SessionMovieDevice>();
+  auto counters = std::make_shared<SkinLiveResourceCounters>();
+  auto audioState = std::make_shared<SessionAudioState>();
+  auto audio = std::make_shared<SessionAudioBackend>(audioState, counters);
+  SessionQuadBackend quadBackend;
+  quadBackend.captureVertices = true;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = {.revision = std::move(*lease),
+                      .entry = *entry,
+                      .reconciledSettings = *validation.reconciledSettings,
+                      .configurationDigest = validation.configurationDigest},
+       .profileId = *profile,
+       .sessionSerial = 97},
+      {.storageRoots = roots,
+       .resourcePreparation = resources,
+       .initialFrame = frame,
+       .textureDevice = std::move(device),
+       .movieDevice = std::move(movieDevice),
+       .audioBackend = std::move(audio),
+       .liveResourceCounters = std::move(counters),
+       .quadBackend = &quadBackend});
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << "ModernChic session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+    expect(false, "ModernChic music-select session creates");
+    return;
+  }
+
+  RenderContext renderContext;
+  const bool rendered = created.session->render(renderContext, frame);
+  const bool hasCenterBarVertex = std::ranges::any_of(
+      quadBackend.submittedVertices, [](const auto &vertex) {
+        return std::abs(vertex.x - 1125.0F) < 0.1F &&
+               vertex.y >= 505.0F && vertex.y <= 575.0F;
+      });
+  if (!rendered || !hasCenterBarVertex) {
+    std::cerr << "ModernChic chart-list probe: rendered=" << rendered
+              << " vertices=" << quadBackend.reservedVertices
+              << " center-bar-vertex=" << hasCenterBarVertex
+              << '\n';
+    for (const auto &diagnostic : created.session->takeLastDiagnostics()) {
+      std::cerr << "ModernChic render diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+  }
+  expect(rendered && hasCenterBarVertex,
+         "ModernChic renders and publishes its center chart-list row");
 }
 
 void testActivationRejectsAReconciledDigestMismatch() {
@@ -6826,6 +6965,7 @@ int main(int argc, char **argv) {
   testPomyuLeadingBackslashPathRemainsCharacterRelative();
   testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks();
   testRequestedExternalGameplaySkinCreatesARealSession();
+  testRequestedModernChicSessionPublishesChartListRows();
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
   testMusicSelectPublishesPointerCapturesAndTextFocus();

@@ -716,6 +716,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_skin_source_format_tests PRIVATE cxx_std_23)
 
+    add_executable(file_checksum_tests
+        tests/file_checksum_tests.cpp
+        src/FileChecksum.cpp
+    )
+    target_include_directories(file_checksum_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(file_checksum_tests PRIVATE cxx_std_23)
+
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         add_executable(play_skin_viewport_tests
             tests/play_skin_viewport_tests.cpp
@@ -1241,6 +1250,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
             src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
@@ -7167,6 +7177,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(gameplay_skin_source_format_tests)
+    asobmashow_register_test(file_checksum_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
     asobmashow_register_test(gameplay_skin_settings_tests)

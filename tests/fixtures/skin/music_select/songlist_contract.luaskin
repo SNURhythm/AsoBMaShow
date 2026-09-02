@@ -39,6 +39,7 @@ return {
   source = {{id = "atlas", path = "atlas.png"}},
   image = images,
   imageset = image_sets,
+  text = {{id = "text-1", font = "missing-font", size = 24, ref = 10}},
   value = {{id = "level-1", src = "atlas", x = 0, y = 30,
             w = 100, h = 10, divx = 10, divy = 1,
             digit = 2, ref = 100}},

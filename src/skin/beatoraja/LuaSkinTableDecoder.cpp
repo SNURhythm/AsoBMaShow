@@ -2720,7 +2720,8 @@ std::array<std::uint8_t, 4> parseTextColor(std::string_view value) {
 }
 
 bool makeTextObject(GameplayDecodeRequest &request,
-                    const RawSkinText &definition, SkinTextObject &output) {
+                    const RawSkinText &definition,
+                    std::optional<SkinTextObject> &output) {
   const auto normalized = normalizeSkinText(
       {.fontName = definition.font,
        .value = definition.value
@@ -2742,6 +2743,10 @@ bool makeTextObject(GameplayDecodeRequest &request,
        .authoredEditable = definition.editable},
       request.fonts);
   if (!normalized.text) {
+    if (normalized.error == SkinTextGraphNormalizationError::MissingFont) {
+      output.reset();
+      return true;
+    }
     request.result.diagnostics.push_back(
         diagnostic("skin_lua_model_text_invalid",
                    "Lua skin Text definition cannot be normalized"));
@@ -3357,11 +3362,15 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (text != request.texts.end()) {
-    SkinTextObject object;
+    std::optional<SkinTextObject> object;
     if (!makeTextObject(request, text->second, object)) {
       return false;
     }
-    output = std::move(object);
+    if (!object) {
+      ignored = true;
+      return true;
+    }
+    output = std::move(*object);
     return true;
   }
   if (graph != request.graphs.end()) {
@@ -3796,11 +3805,13 @@ bool materializeMusicSelectNestedDefinitions(
     if (definition == request.texts.end()) {
       return true;
     }
-    SkinTextObject object;
+    std::optional<SkinTextObject> object;
     if (!makeTextObject(request, definition->second, object)) {
       return false;
     }
-    append(name, std::move(object), definition->second.authoredIndex);
+    if (object) {
+      append(name, std::move(*object), definition->second.authoredIndex);
+    }
     return true;
   };
 

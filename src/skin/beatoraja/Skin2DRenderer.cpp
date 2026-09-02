@@ -3229,8 +3229,12 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
 
   // SkinBar.prepare calls its wrapper first, then prepares every nested object
   // in these exact field orders before BarRenderer calculates its 60 rows.
-  const auto outer =
-      resolveDestination(inputs, index, outerDestination.presentation);
+  const bool hasAuthoredOuterFrames =
+      !outerDestination.presentation.frames.empty();
+  const auto outer = hasAuthoredOuterFrames
+                         ? resolveDestination(
+                               inputs, index, outerDestination.presentation)
+                         : DestinationResolution{};
   result.failures.insert(result.failures.end(), outer.failures.begin(),
                          outer.failures.end());
   std::map<const SkinSongListPresentation *, PreparedMusicSelectPresentation>
@@ -3261,7 +3265,8 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
                            std::make_move_iterator(value.failures.begin()),
                            std::make_move_iterator(value.failures.end()));
   }
-  if (!result.failures.empty() || !outer.geometry) {
+  if (!result.failures.empty() ||
+      (hasAuthoredOuterFrames && !outer.geometry)) {
     return result;
   }
 
