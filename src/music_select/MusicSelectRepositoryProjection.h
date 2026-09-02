@@ -60,6 +60,14 @@ class MusicSelectRepositoryProjection final {
 public:
   [[nodiscard]] static MusicSelectRepositoryMetadata
   loadMetadata(ChartRepository::Session &, int selectedLongNoteMode);
+  [[nodiscard]] static std::optional<MusicSelectDifficultyTableSource>
+  loadTableMetadata(ChartRepository::Session &, int tableId,
+                    int selectedLongNoteMode);
+
+  [[nodiscard]] MusicSelectProjection
+  projectRoot(const MusicSelectRepositoryMetadata &,
+              std::span<const std::string> searches,
+              std::uint64_t repositoryRevision) const;
 
   [[nodiscard]] MusicSelectProjection
   project(MusicSelectRepositoryProjectionInput) const;

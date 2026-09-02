@@ -256,6 +256,7 @@ public:
     int CountSolidArchives();
     void SelectAllChartMeta(std::vector<bms_parser::ChartMeta> &chartMetas);
     std::vector<ChartFolderRecord> SelectFolderRecords();
+    std::vector<std::filesystem::path> SelectChartMetaFolders();
     void SelectFavoriteMusicTracks(std::vector<MusicTrackRecord> &tracks);
     int CountFavoriteCharts();
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);

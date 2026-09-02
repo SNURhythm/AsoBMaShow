@@ -354,6 +354,36 @@ bool MusicSelectBarManager::openSelected() {
   return bar != nullptr && open(bar->id);
 }
 
+bool MusicSelectBarManager::installChildren(
+    const MusicSelectBarId &directory, std::vector<MusicSelectBar> children) {
+  const auto parent = std::ranges::find(projection_.bars, directory,
+                                        &MusicSelectBar::id);
+  if (parent == projection_.bars.end() ||
+      !skin::musicSelectIsDirectoryBarKind(parent->kind)) {
+    return false;
+  }
+
+  std::vector<MusicSelectBarId> ids;
+  ids.reserve(children.size());
+  for (auto &child : children) {
+    ids.push_back(child.id);
+    const auto existing = std::ranges::find(projection_.bars, child.id,
+                                            &MusicSelectBar::id);
+    if (existing == projection_.bars.end()) {
+      projection_.bars.push_back(std::move(child));
+    } else {
+      *existing = std::move(child);
+    }
+  }
+
+  const auto replacement = std::ranges::find(projection_.bars, directory,
+                                              &MusicSelectBar::id);
+  if (replacement == projection_.bars.end()) return false;
+  replacement->children = std::move(ids);
+  replacement->childrenLoaded = true;
+  return true;
+}
+
 bool MusicSelectBarManager::openTransient(
     MusicSelectBar directory, std::vector<MusicSelectBar> children) {
   const auto *source = selected();

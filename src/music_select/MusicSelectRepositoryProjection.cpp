@@ -263,6 +263,114 @@ const MusicSelectBar *MusicSelectProjection::find(
   return found == bars.end() ? nullptr : &*found;
 }
 
+MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
+    const MusicSelectRepositoryMetadata &metadata,
+    std::span<const std::string> searches,
+    std::uint64_t repositoryRevision) const {
+  MusicSelectProjection result{.repositoryRevision = repositoryRevision};
+  std::vector<std::filesystem::path> physicalRoots;
+  for (const auto &entry : metadata.entries) {
+    const std::filesystem::path path(entry.path);
+    if (path.empty() ||
+        std::ranges::any_of(physicalRoots, [&](const auto &candidate) {
+          return pathAtOrInside(path, candidate);
+        })) {
+      continue;
+    }
+    std::erase_if(physicalRoots, [&](const auto &candidate) {
+      return pathAtOrInside(candidate, path);
+    });
+    physicalRoots.push_back(path.lexically_normal());
+  }
+  for (const auto &path : physicalRoots) {
+    const std::string title = path.filename().empty()
+                                  ? fspath_to_utf8(path)
+                                  : fspath_to_utf8(path.filename());
+    MusicSelectBar folder{
+        .id = {folderIdentity(path)},
+        .kind = skin::MusicSelectBarKind::Folder,
+        .title = title,
+        .directoryPath = path,
+        .presentation = {.kind = skin::MusicSelectBarKind::Folder,
+                         .title = title,
+                         .exists = true},
+        .selectable = true,
+        .sortable = true,
+        .childrenLoaded = false,
+    };
+    result.root.push_back(folder.id);
+    result.bars.push_back(std::move(folder));
+  }
+
+  MusicSelectBar localCourses{
+      .id = {"table:course"},
+      .kind = skin::MusicSelectBarKind::Table,
+      .title = "COURSE",
+      .presentation = {.kind = skin::MusicSelectBarKind::Table,
+                       .title = "COURSE",
+                       .exists = true},
+      .selectable = true,
+      .sortable = true,
+      .childrenLoaded = false,
+  };
+  result.root.push_back(localCourses.id);
+  result.bars.push_back(std::move(localCourses));
+
+  for (const auto &source : metadata.tables) {
+    MusicSelectBar table{
+        .id = {"table:" + std::to_string(source.info.id)},
+        .kind = skin::MusicSelectBarKind::Table,
+        .title = source.info.name,
+        .tableId = source.info.id,
+        .tableUrl = source.info.sourceUrl,
+        .presentation = {.kind = skin::MusicSelectBarKind::Table,
+                         .title = source.info.name,
+                         .exists = true},
+        .selectable = true,
+        .sortable = true,
+        .childrenLoaded = false,
+    };
+    result.root.push_back(table.id);
+    result.bars.push_back(std::move(table));
+  }
+
+  for (const auto &[id, title] :
+       {std::pair{"lamp-update", "LAMP UPDATE"},
+        std::pair{"score-update", "SCORE UPDATE"}}) {
+    MusicSelectBar container{
+        .id = {std::string("container:") + id},
+        .kind = skin::MusicSelectBarKind::Container,
+        .title = title,
+        .presentation = {.kind = skin::MusicSelectBarKind::Container,
+                         .title = title,
+                         .exists = true},
+        .selectable = true,
+        .sortable = true,
+        .childrenLoaded = false,
+    };
+    result.root.push_back(container.id);
+    result.bars.push_back(std::move(container));
+  }
+
+  for (const auto &text : searches) {
+    const std::string title = "Search : '" + text + "'";
+    MusicSelectBar search{
+        .id = {"search:" + text},
+        .kind = skin::MusicSelectBarKind::SearchWord,
+        .title = title,
+        .presentation = {.kind = skin::MusicSelectBarKind::SearchWord,
+                         .title = title,
+                         .exists = true},
+        .selectable = true,
+        .sortable = true,
+        .childrenLoaded = false,
+    };
+    result.root.push_back(search.id);
+    result.bars.push_back(std::move(search));
+  }
+  return result;
+}
+
 MusicSelectProjection MusicSelectRepositoryProjection::project(
     MusicSelectRepositoryProjectionInput input) const {
   ProjectionBuilder builder{.input = input,

@@ -420,6 +420,32 @@ void testProjectsRecentScoreImprovementCommandChildren() {
           "improved during the exact UTC day");
 }
 
+void testRootProjectionDefersDirectoryContents() {
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
+  metadata.tables.push_back(
+      {.info = {.id = 42, .name = "Satellite", .symbol = "sl"}});
+  const std::vector<std::string> searches{"needle"};
+
+  const auto projection = MusicSelectRepositoryProjection{}.projectRoot(
+      metadata, searches, 88);
+  const auto *folder = projection.find({"folder:/songs"});
+  const auto *table = projection.find({"table:42"});
+  const auto *search = projection.find({"search:needle"});
+  require(projection.repositoryRevision == 88 && folder && table && search &&
+              folder->children.empty() && table->children.empty() &&
+              search->children.empty() && !folder->childrenLoaded &&
+              !table->childrenLoaded && !search->childrenLoaded,
+          "root projection retains only unopened DirectoryBar descriptors");
+  require(std::ranges::none_of(projection.bars, [](const auto &bar) {
+            return bar.kind == skin::MusicSelectBarKind::Song ||
+                   bar.kind == skin::MusicSelectBarKind::Hash ||
+                   bar.kind == skin::MusicSelectBarKind::Grade ||
+                   bar.kind == skin::MusicSelectBarKind::Command;
+          }),
+          "root projection does not materialize table, command, or song children");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -432,6 +458,7 @@ int main(int argc, char **argv) {
   testProjectionOwnsItsRepositoryValues();
   testProjectsSearchHistoryAfterCommands();
   testProjectsRecentScoreImprovementCommandChildren();
+  testRootProjectionDefersDirectoryContents();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_repository_projection_tests", failures,
       "music-select repository projection assertion(s) failed",

@@ -173,6 +173,7 @@ struct MusicSelectBar {
   skin::MusicSelectBarFrame presentation;
   bool selectable = false;
   bool sortable = false;
+  bool childrenLoaded = true;
   bool showInvisibleCharts = false;
 };
 

@@ -1299,6 +1299,30 @@ ChartRepository::Session::SelectFolderRecords() {
   return records;
 }
 
+std::vector<std::filesystem::path>
+ChartRepository::Session::SelectChartMetaFolders() {
+  std::vector<std::filesystem::path> folders;
+  std::string query = "SELECT DISTINCT cm.folder FROM chart_meta cm WHERE ";
+  query += "cm.folder != '' AND ";
+  query += preferredChartPredicate("cm");
+  query += " ORDER BY cm.folder";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(impl_->database(), query, statement,
+                                    "selecting chart metadata folders",
+                                    logSqlErrorText)) {
+    return folders;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    std::filesystem::path path(
+        utf8_to_path_t(sqliteColumnString(statement.get(), 0)));
+    if (!path.empty()) {
+      chart_storage_identity::ToAbsolutePath(path);
+      folders.push_back(std::move(path));
+    }
+  }
+  return folders;
+}
+
 void ChartRepository::Session::SelectFavoriteMusicTracks(
     std::vector<MusicTrackRecord> &tracks) {
   selectFavoriteMusicTracks(impl_->database(), tracks);

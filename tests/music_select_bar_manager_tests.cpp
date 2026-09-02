@@ -134,6 +134,25 @@ void testRefreshRebindsStableSelection() {
           "revision replacement rebinds selection by stable bar identity");
 }
 
+void testInstallsDeferredDirectoryChildrenBeforeOpening() {
+  MusicSelectProjection projection;
+  projection.root = {{"folder:root"}};
+  projection.bars = {{.id = {"folder:root"},
+                     .kind = skin::MusicSelectBarKind::Folder,
+                     .title = "Root",
+                     .selectable = true,
+                     .sortable = true}};
+  MusicSelectBarManager manager(std::move(projection));
+  const MusicSelectBar song{.id = {"song:deferred"},
+                            .kind = skin::MusicSelectBarKind::Song,
+                            .title = "Deferred",
+                            .selectable = true};
+  require(manager.installChildren({"folder:root"}, {song}) &&
+              manager.openSelected() && manager.snapshot().rows.size() == 1 &&
+              manager.snapshot().rows.front().id == song.id,
+          "deferred DirectoryBar children install before the source opens it");
+}
+
 void testReplayAndHashCommandsUseSelectableSongState() {
   MusicSelectBar song{
       .kind = skin::MusicSelectBarKind::Song,
@@ -383,6 +402,7 @@ int main(int argc, char **argv) {
   testClickedDirectoryOpensWithoutMovingTheCenterSelection();
   testBarClassPredicatesDoNotDependOnChildren();
   testRefreshRebindsStableSelection();
+  testInstallsDeferredDirectoryChildrenBeforeOpening();
   testReplayAndHashCommandsUseSelectableSongState();
   testTableContextUsesOpenedTableAndHashTitles();
   testTransientDirectoryRestoresItsSourceBar();

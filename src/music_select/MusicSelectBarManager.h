@@ -46,6 +46,8 @@ public:
 
   [[nodiscard]] bool open(const MusicSelectBarId &);
   [[nodiscard]] bool openSelected();
+  [[nodiscard]] bool installChildren(const MusicSelectBarId &,
+                                     std::vector<MusicSelectBar>);
   [[nodiscard]] bool openTransient(MusicSelectBar directory,
                                    std::vector<MusicSelectBar> children);
   [[nodiscard]] bool close();

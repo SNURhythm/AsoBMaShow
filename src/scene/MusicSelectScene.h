@@ -9,6 +9,7 @@
 #include "../music_select/MusicSelectExternalActions.h"
 #include "../music_select/MusicSelectPreview.h"
 #include "../music_select/MusicSelectRanking.h"
+#include "../music_select/MusicSelectRepositoryProjection.h"
 #include "../music_select/MusicSelectSearchHistory.h"
 #include "../ir/IrRankingModels.h"
 #include "../ir/IrExternalUrlService.h"
@@ -72,6 +73,8 @@ private:
                           const MusicSelectBarManagerSnapshot &);
   void changeSelectedFavorite(bool song, int direction);
   void openSelected();
+  [[nodiscard]] bool openDirectory(const MusicSelectBar &);
+  [[nodiscard]] bool loadDirectoryChildren(const MusicSelectBar &);
   void openSameFolder();
   void copySelectedHash(bool sha256);
   void closeDirectory();
@@ -112,6 +115,8 @@ private:
   ScoreClearRankCache clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   RecentScoreImprovements recentScoreImprovements_;
+  bool recentScoreImprovementsLoaded_ = false;
+  MusicSelectRepositoryMetadata repositoryMetadata_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
   MusicSelectPreviewController previewController_;

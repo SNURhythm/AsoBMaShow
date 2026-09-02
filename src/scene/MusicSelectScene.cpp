@@ -51,6 +51,7 @@
 #include <limits>
 #include <memory>
 #include <ranges>
+#include <set>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -245,6 +246,18 @@ std::optional<MusicSelectCommandKey> commandKey(const SDL_KeyboardEvent &key) {
   default: return std::nullopt;
   }
 }
+
+std::vector<MusicSelectBar> projectionChildren(
+    const MusicSelectProjection &projection, const MusicSelectBarId &parent) {
+  std::vector<MusicSelectBar> result;
+  const auto *directory = projection.find(parent);
+  if (directory == nullptr) return result;
+  result.reserve(directory->children.size());
+  for (const auto &id : directory->children) {
+    if (const auto *child = projection.find(id)) result.push_back(*child);
+  }
+  return result;
+}
 } // namespace
 
 MusicSelectScene::MusicSelectScene(
@@ -355,59 +368,20 @@ void MusicSelectScene::reloadLibrary() {
   if (!chartSession_) return;
   const std::uint64_t loadedRevision =
       context.chartRepository.GetLibraryRevision();
-  std::vector<ChartMetaRecord> records;
-  ChartMetaQuery query;
-  query.selectedLongNoteMode =
-      long_note_mode::valueFromId(context.settings.selectedLnMode);
-  chartSession_->QueryChartMeta(query, records);
   scoreCache_ = context.scoreRepository.LoadBestScores();
-  clearRankCache_ = context.scoreRepository.LoadBestClearRanks();
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
-  recentScoreImprovements_ = context.scoreRepository.LoadRecentScoreImprovements(
-      unixMillis() / 1'000, query.selectedLongNoteMode);
+  recentScoreImprovements_ = {};
+  recentScoreImprovementsLoaded_ = false;
   libraryRevision_ = loadedRevision;
+  repositoryMetadata_ = MusicSelectRepositoryProjection::loadMetadata(
+      *chartSession_,
+      long_note_mode::valueFromId(context.settings.selectedLnMode));
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
                        context.settings.skinDifficultyFilterName,
                    .sortId = context.settings.skinSortId});
-  const auto metadata = MusicSelectRepositoryProjection::loadMetadata(
-      *chartSession_, query.selectedLongNoteMode);
-  std::vector<MusicSelectSearchSource> searches;
-  searches.reserve(searchHistory_.entries().size());
-  for (const auto &text : searchHistory_.entries()) {
-    ChartMetaQuery searchQuery;
-    searchQuery.keyword = text;
-    searchQuery.selectedLongNoteMode = query.selectedLongNoteMode;
-    MusicSelectSearchSource source{.text = text};
-    chartSession_->QueryChartMeta(searchQuery, source.records);
-    searches.push_back(std::move(source));
-  }
-  bars_.refresh(MusicSelectRepositoryProjection{}.project(
-      {.records = records,
-       .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
-         return scoreCache_.bestFor(meta, mode);
-       },
-       .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
-         return musicSelectExistingChartReplaySlots(
-             record, mode,
-             context.replayRepository.GetResolvedProfileRoot());
-       },
-       .courseScoresFor = [this](std::string_view courseKey, int courseId,
-                                 int mode, bool doublePlay) {
-         return context.scoreRepository.LoadCourseSelectorOptionScores(
-             courseKey, courseId, mode, doublePlay);
-       },
-       .courseReplayExistsFor = [this](const MusicSelectBar &bar, int mode) {
-         return musicSelectExistingCourseReplaySlots(
-             bar, mode,
-             context.replayRepository.GetResolvedProfileRoot());
-       },
-       .metadata = &metadata,
-       .searches = searches,
-       .recentScoreImprovements = &recentScoreImprovements_,
-       .modeFilter = context.settings.skinModeFilterName,
-       .selectedLongNoteMode = query.selectedLongNoteMode,
-       .repositoryRevision = libraryRevision_}));
+  bars_.refresh(MusicSelectRepositoryProjection{}.projectRoot(
+      repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
   syncResolvedFilters();
 }
 
@@ -800,7 +774,7 @@ void MusicSelectScene::applySkinPointerResult(
   const bool activate = musicSelectPointerActivatesRow(origin);
   if (skin::musicSelectIsDirectoryBarKind(clicked.kind)) {
     if (activate) {
-      (void)bars_.open(clicked.id);
+      (void)openDirectory(clicked);
       syncResolvedFilters();
     } else {
       (void)bars_.select(clicked.id);
@@ -953,12 +927,210 @@ void MusicSelectScene::openSelected() {
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (skin::musicSelectIsDirectoryBarKind(selected.kind)) {
-    (void)bars_.openSelected();
+    (void)openDirectory(selected);
     syncResolvedFilters();
     selectedBarMoved();
   } else {
     launchSelected();
   }
+}
+
+bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
+  if (!skin::musicSelectIsDirectoryBarKind(directory.kind)) return false;
+  if (!directory.childrenLoaded && !loadDirectoryChildren(directory)) {
+    return false;
+  }
+  return bars_.open(directory.id);
+}
+
+bool MusicSelectScene::loadDirectoryChildren(
+    const MusicSelectBar &directory) {
+  if (!chartSession_) return false;
+  const int selectedLongNoteMode =
+      long_note_mode::valueFromId(context.settings.selectedLnMode);
+  const auto inputFor = [this, selectedLongNoteMode](
+                            std::span<const ChartMetaRecord> records,
+                            const MusicSelectRepositoryMetadata *metadata = nullptr,
+                            std::span<const MusicSelectSearchSource> searches = {},
+                            const RecentScoreImprovements *improvements = nullptr) {
+    return MusicSelectRepositoryProjectionInput{
+        .records = records,
+        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
+          return scoreCache_.bestFor(meta, mode);
+        },
+        .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
+          return musicSelectExistingChartReplaySlots(
+              record, mode, context.replayRepository.GetResolvedProfileRoot());
+        },
+        .courseScoresFor = [this](std::string_view courseKey, int courseId,
+                                  int mode, bool doublePlay) {
+          return context.scoreRepository.LoadCourseSelectorOptionScores(
+              courseKey, courseId, mode, doublePlay);
+        },
+        .courseReplayExistsFor = [this](const MusicSelectBar &bar, int mode) {
+          return musicSelectExistingCourseReplaySlots(
+              bar, mode, context.replayRepository.GetResolvedProfileRoot());
+        },
+        .metadata = metadata,
+        .searches = searches,
+        .recentScoreImprovements = improvements,
+        .modeFilter = context.settings.skinModeFilterName,
+        .selectedLongNoteMode = selectedLongNoteMode,
+        .repositoryRevision = libraryRevision_};
+  };
+
+  std::vector<MusicSelectBar> children;
+  switch (directory.kind) {
+  case skin::MusicSelectBarKind::Folder: {
+    ChartMetaQuery query;
+    query.exactFolder = directory.directoryPath;
+    query.selectedLongNoteMode = selectedLongNoteMode;
+    std::vector<ChartMetaRecord> records;
+    chartSession_->QueryChartMeta(query, records);
+    if (!records.empty()) {
+      const auto projection =
+          MusicSelectRepositoryProjection{}.project(inputFor(records));
+      children = projectionChildren(projection, directory.id);
+      break;
+    }
+
+    std::set<std::filesystem::path> paths;
+    const auto parent = directory.directoryPath.lexically_normal();
+    for (const auto &record : repositoryMetadata_.folders) {
+      const auto candidate =
+          std::filesystem::path(record.path).lexically_normal();
+      const auto relative = candidate.lexically_relative(parent);
+      if (relative.empty() || relative.is_absolute()) continue;
+      const auto first = relative.begin();
+      if (first == relative.end() || *first == "." || *first == "..") {
+        continue;
+      }
+      paths.insert(parent / *first);
+    }
+    children.reserve(paths.size());
+    for (const auto &path : paths) {
+      std::int64_t addDateSeconds = 0;
+      if (const auto found = std::ranges::find_if(
+              repositoryMetadata_.folders, [&](const auto &record) {
+                return std::filesystem::path(record.path).lexically_normal() ==
+                       path;
+              });
+          found != repositoryMetadata_.folders.end()) {
+        addDateSeconds = found->addDateSeconds;
+      }
+      const std::string title = path.filename().empty()
+                                    ? fspath_to_utf8(path)
+                                    : fspath_to_utf8(path.filename());
+      children.push_back({
+          .id = {"folder:" + fspath_to_utf8(path)},
+          .kind = skin::MusicSelectBarKind::Folder,
+          .title = title,
+          .directoryPath = path,
+          .presentation = {.kind = skin::MusicSelectBarKind::Folder,
+                           .title = title,
+                           .exists = true,
+                           .addDateSeconds = addDateSeconds},
+          .selectable = true,
+          .sortable = true,
+          .childrenLoaded = false,
+      });
+    }
+    break;
+  }
+  case skin::MusicSelectBarKind::Table: {
+    if (directory.tableId == 0) break;
+    const auto table = MusicSelectRepositoryProjection::loadTableMetadata(
+        *chartSession_, directory.tableId, selectedLongNoteMode);
+    if (!table) return false;
+    MusicSelectRepositoryMetadata metadata;
+    metadata.tables.push_back(*table);
+    const auto projection = MusicSelectRepositoryProjection{}.project(
+        inputFor({}, &metadata));
+    children = projectionChildren(projection, directory.id);
+    for (auto &child : children) {
+      if (child.kind == skin::MusicSelectBarKind::Hash) {
+        child.childrenLoaded = false;
+      }
+    }
+    break;
+  }
+  case skin::MusicSelectBarKind::Hash: {
+    MusicSelectDifficultyTableSource table{
+        .info = {.id = directory.tableId}};
+    table.levels.push_back(
+        {.info = {.tableId = directory.tableId,
+                  .level = directory.tableLevel}});
+    ChartMetaQuery query;
+    query.tableId = directory.tableId;
+    query.tableLevel = directory.tableLevel;
+    query.selectedLongNoteMode = selectedLongNoteMode;
+    table.levels.front().records.clear();
+    chartSession_->QueryChartMeta(query, table.levels.front().records);
+    MusicSelectRepositoryMetadata metadata;
+    metadata.tables.push_back(std::move(table));
+    const auto projection = MusicSelectRepositoryProjection{}.project(
+        inputFor({}, &metadata));
+    children = projectionChildren(projection, directory.id);
+    break;
+  }
+  case skin::MusicSelectBarKind::Container: {
+    const bool lamp = directory.id.value == "container:lamp-update";
+    for (int day = 0; day < 30; ++day) {
+      const std::string title =
+          day == 0 ? "TODAY" : std::to_string(day) + "DAYS AGO";
+      children.push_back({
+          .id = {"command:" +
+                 std::string(lamp ? "lamp-update" : "score-update") +
+                 ":" + std::to_string(day)},
+          .kind = skin::MusicSelectBarKind::Command,
+          .title = title,
+          .presentation = {.kind = skin::MusicSelectBarKind::Command,
+                           .title = title,
+                           .exists = true},
+          .selectable = true,
+          .sortable = true,
+          .childrenLoaded = false,
+      });
+    }
+    break;
+  }
+  case skin::MusicSelectBarKind::Command: {
+    if (!recentScoreImprovementsLoaded_) {
+      recentScoreImprovements_ = context.scoreRepository.LoadRecentScoreImprovements(
+          unixMillis() / 1'000, selectedLongNoteMode);
+      recentScoreImprovementsLoaded_ = true;
+    }
+    std::vector<ChartMetaRecord> records;
+    ChartMetaQuery query;
+    query.selectedLongNoteMode = selectedLongNoteMode;
+    chartSession_->QueryChartMeta(query, records);
+    const auto projection = MusicSelectRepositoryProjection{}.project(
+        inputFor(records, nullptr, {}, &recentScoreImprovements_));
+    children = projectionChildren(projection, directory.id);
+    break;
+  }
+  case skin::MusicSelectBarKind::SearchWord: {
+    constexpr std::string_view prefix = "search:";
+    if (!directory.id.value.starts_with(prefix)) return false;
+    MusicSelectSearchSource source{
+        .text = directory.id.value.substr(prefix.size())};
+    ChartMetaQuery query;
+    query.keyword = source.text;
+    query.selectedLongNoteMode = selectedLongNoteMode;
+    chartSession_->QueryChartMeta(query, source.records);
+    const std::array<MusicSelectSearchSource, 1> searches{std::move(source)};
+    const auto projection = MusicSelectRepositoryProjection{}.project(
+        inputFor({}, nullptr, searches));
+    children = projectionChildren(projection, directory.id);
+    break;
+  }
+  case skin::MusicSelectBarKind::SameFolder:
+  case skin::MusicSelectBarKind::Song:
+  case skin::MusicSelectBarKind::Executable:
+  case skin::MusicSelectBarKind::Grade:
+  case skin::MusicSelectBarKind::RandomCourse: return false;
+  }
+  return bars_.installChildren(directory.id, std::move(children));
 }
 
 void MusicSelectScene::openSameFolder() {
@@ -1681,7 +1853,10 @@ void MusicSelectScene::applyInputAction(
     launchSelectedReplay(action.value);
     break;
   case MusicSelectInputActionKind::OpenFolder:
-    (void)bars_.openSelected();
+    if (const auto snapshot = bars_.snapshot();
+        snapshot.selectedIndex < snapshot.rows.size()) {
+      (void)openDirectory(snapshot.rows[snapshot.selectedIndex]);
+    }
     syncResolvedFilters();
     selectedBarMoved();
     break;

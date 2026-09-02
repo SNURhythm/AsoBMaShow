@@ -955,6 +955,10 @@ void testExactFolderQuery() {
 
   auto session = charts.OpenSession();
   assert(session.has_value());
+  const auto folders = session->SelectChartMetaFolders();
+  assert(folders == std::vector<std::filesystem::path>({
+                        "library/A", "library/A/nested", "library/B",
+                        "packs/pack.zip/A", "packs/pack.zip/B"}));
   auto aliased = chartMeta("library/C/../C");
   aliased.BmsPath = "library/C/aliased.bms";
   aliased.MD5 = "md5-aliased";
