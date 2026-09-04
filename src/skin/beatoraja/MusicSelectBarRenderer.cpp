@@ -206,9 +206,10 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
     row.x = static_cast<double>(static_cast<int>(row.x));
     // BarRenderer adds the SkinBar constructor position's bar height to the
     // origin used by every relative child. The bar image itself is drawn back
-    // at its authored destination by the lowering path.
+    // at its authored destination by the lowering path. Aso's type-5 Lua/JSON
+    // loader always constructs position 0, so no offset is applied.
     row.y = static_cast<double>(static_cast<int>(
-        row.y + (songList.center == 1 ? barHeights[row.row] : 0.0)));
+        row.y + (songList.position == 1 ? barHeights[row.row] : 0.0)));
   }
 
   const auto forEachDrawnRow = [&](auto &&action) {

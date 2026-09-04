@@ -3436,7 +3436,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
     if (row.drawable) {
       row.x = static_cast<double>(truncatingJavaInt(row.x));
       row.y = static_cast<double>(truncatingJavaInt(
-          row.y + (songList.center == 1 ? row.barHeight : 0.0)));
+          row.y + (songList.position == 1 ? row.barHeight : 0.0)));
     }
   }
 
@@ -3527,7 +3527,7 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
         translateMusicSelectGeometry(*dynamic.geometry,
                                      row.x - row.preparedX,
                                      row.y - row.preparedY -
-                                         (songList.center == 1
+                                         (songList.position == 1
                                               ? row.barHeight
                                               : 0.0));
       } else {

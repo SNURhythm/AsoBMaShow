@@ -498,6 +498,10 @@ struct SkinSongListPresentation {
 };
 
 struct SkinSongListObject {
+  // Beatoraja's SkinBar constructor position. The type-5 Lua and JSON select
+  // loaders always construct position 0, so Aso's supported select skins
+  // anchor relative children at the bar's top-left origin.
+  int position = 0;
   int center = 0;
   std::vector<int> clickable;
   std::vector<SkinSongListPresentation> listOff;

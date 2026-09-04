@@ -100,8 +100,10 @@ void testPinnedDrawOrderSlotsAndClassValues() {
           "bar classes map to pinned values and SameFolder remains no-draw");
   require(plan.rows[1].textSlot == 3,
           "exactly addDate plus 24 hours is still new");
-  require(plan.rows[1].y == 120.0,
-          "SkinBar position one anchors relative children above the bar");
+  require(plan.rows[1].y == 100.0,
+          "type-5 bar position zero anchors relative children at the origin");
+  require(plan.rows[1].x == 10.0,
+          "bar origin x is the authored destination x");
 
   const auto phase = [](MusicSelectBarDrawFamily family) {
     switch (family) {
@@ -144,6 +146,15 @@ void testPinnedDrawOrderSlotsAndClassValues() {
   require(!has(MusicSelectBarDrawFamily::Label, 5) &&
               !has(MusicSelectBarDrawFamily::Level, 7),
           "authored label and level entries beyond fixed slots are inert");
+}
+
+void testPositionOneAnchorsChildrenBelowTheBarOrigin() {
+  auto songList = completeSongList();
+  songList.position = 1;
+  auto frame = completeFrame();
+  const auto plan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(plan.rows[1].y == 120.0,
+          "SkinBar position one anchors relative children one bar height down");
 }
 
 void testTextFallbackAndNewBoundary() {
@@ -222,6 +233,7 @@ void testMovementInterpolatesTowardThePinnedAdjacentSlot() {
 
 int main(int argc, char **argv) {
   testPinnedDrawOrderSlotsAndClassValues();
+  testPositionOneAnchorsChildrenBelowTheBarOrigin();
   testTextFallbackAndNewBoundary();
   testUndefinedLongNoteUsesBeatorajaLnModeIndex();
   testClickableUsesAuthoredOrderAndInclusiveDestination();
