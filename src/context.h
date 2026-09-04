@@ -354,6 +354,8 @@ public:
             *profileSettingsPersistenceCoordinator,
             *profileSettingsPersistenceCoordinator, *skinCommitCoordinator,
             lifecycleClientId);
+        gameplaySkinLifecycle->setDecodeCacheEvictor(
+            [this] { skinResourcePreparationService->decodeCache().dropAll(); });
         gameplaySkinLifecycle->startAfterProfileInitialization(
             *activeProfileId);
         acquireGameplaySkinForNextChart = [this](int keyMode) {

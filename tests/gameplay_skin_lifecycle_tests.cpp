@@ -293,6 +293,10 @@ public:
             [this](SkinDiagnosticHistoryRecord record) {
               diagnostics.push_back(std::move(record));
             },
+        .dropDecodeCache =
+            [this] {
+              ++decodeCacheDropCalls;
+            },
     };
   }
 
@@ -473,6 +477,7 @@ public:
   int closeWriteCalls = 0;
   int detachCalls = 0;
   int acquireCalls = 0;
+  int decodeCacheDropCalls = 0;
   bool rejectInventory = false;
   bool rejectReconcile = false;
   bool rejectRescan = false;
@@ -970,6 +975,35 @@ void testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure() {
           "selected type-5 activation failure retains its entry and reason");
 }
 
+void testSwitchingSkinRevisionEvictsTheDecodeCache() {
+  LifecycleFake fake;
+  GameplaySkinLifecycle lifecycle(fake.dependencies());
+  lifecycle.startAfterProfileInitialization(fake.profile);
+  fake.completeReadiness(lifecycle);
+
+  auto first = lifecycle.acquireForNextChart();
+  require(first && first->activation.revision.revision().lowercaseSha256 ==
+                      fake.firstLease->revision().lowercaseSha256,
+          "the first skin acquisition resolves");
+  require(fake.decodeCacheDropCalls == 1,
+          "the first skin acquisition evicts the decode cache");
+
+  auto again = lifecycle.acquireForNextChart();
+  require(again && again->activation.revision.revision().lowercaseSha256 ==
+                       fake.firstLease->revision().lowercaseSha256,
+          "re-acquiring the same skin revision resolves");
+  require(fake.decodeCacheDropCalls == 1,
+          "acquiring the same skin revision does not evict again");
+
+  fake.currentLease = &*fake.secondLease;
+  auto second = lifecycle.acquireForNextChart();
+  require(second && second->activation.revision.revision().lowercaseSha256 ==
+                        fake.secondLease->revision().lowercaseSha256,
+          "switching to a different skin revision resolves");
+  require(fake.decodeCacheDropCalls == 2,
+          "switching to a different skin revision evicts the decode cache");
+}
+
 void testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest() {
   LifecycleFake fake;
   GameplaySkinLifecycle lifecycle(fake.dependencies());
@@ -1284,6 +1318,7 @@ int main() {
   testDisabledNextChartClearsThePreviousSessionIdentity();
   testNextChartAcquisitionUsesTheMatchingKeymodeTrait();
   testMusicSelectAcquisitionNeverFallsBackAfterSelectedFailure();
+  testSwitchingSkinRevisionEvictsTheDecodeCache();
   testWriterWaitsForViewportCommitAndRebasesOntoItsSuccessor();
   testViewportResetValidatesAllIdentityFieldsAndCoalescesLatest();
   testViewportResetRejectsEachStaleIdentityField();

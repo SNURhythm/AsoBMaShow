@@ -1027,6 +1027,7 @@ struct GameplaySkinLifecycle::Impl {
   GameplaySkinLifecycleDependencies deps;
   std::optional<SkinProfileId> activeProfile;
   std::optional<PlaySkinSessionIdentity> currentIdentity;
+  std::string lastSkinRevisionDigest;
   std::optional<WriterChain> writer;
   std::deque<PendingRevalidation> pendingRevalidations;
   std::map<std::uint64_t, PrepareOperation> prepareOperations;
@@ -1361,6 +1362,12 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
           .generation = chainGeneration, .identity = identity, .base = base});
       impl_->currentIdentity = identity;
     }
+    if (identity.revisionDigest != impl_->lastSkinRevisionDigest) {
+      impl_->lastSkinRevisionDigest = identity.revisionDigest;
+      if (impl_->deps.dropDecodeCache) {
+        impl_->deps.dropDecodeCache();
+      }
+    }
     return {.disposition = GameplaySkinAcquisitionDisposition::Ready,
             .request = GameplaySkinActivationRequest{
                 .sessionSerial = sessionSerial,
@@ -1380,6 +1387,11 @@ GameplaySkinLifecycle::acquireForSkinType(int skinType, bool chartBoundary) {
                     std::move(requestedConfigurationDigest),
                 .diagnostic = std::move(diagnostic)}};
   }
+}
+
+void GameplaySkinLifecycle::setDecodeCacheEvictor(
+    std::function<void()> evictor) {
+  impl_->deps.dropDecodeCache = std::move(evictor);
 }
 
 void GameplaySkinLifecycle::recordPresentationFailure(
