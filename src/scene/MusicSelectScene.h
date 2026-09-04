@@ -3,6 +3,8 @@
 #include "MusicSelectToolbarView.h"
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
+#include "ReplayRecordsModal.h"
+#include "../ReplayVideoExporter.h"
 #include "Scene.h"
 #include "../music_select/MusicSelectBarManager.h"
 #include "../music_select/MusicSelectEventController.h"
@@ -104,8 +106,23 @@ private:
   void updatePlayOptions(
       const std::function<void(main_menu_profile::Selections &)> &);
   void refreshPlayOptionsModal();
-  void showChartRecordsModal(const ChartMetaRecord &);
-  void loadChartRecordsModal(const ChartMetaRecord &);
+  ReplayRecordsModalCallbacks makeRecordsModalCallbacks();
+  std::vector<ResultRecordSummary>
+  loadRecordsForSelector(const ChartMetaRecord &);
+  void launchChartReplay(const ChartMetaRecord &,
+                         const ModernChartResultRecord &);
+  void launchCourseReplay(const ChartMetaRecord &,
+                          const ModernCourseResultRecord &);
+  void launchAutoPlay(const ChartMetaRecord &);
+  void launchChartReplayExport(const ChartMetaRecord &,
+                               const ModernChartResultRecord &,
+                               ReplayVideoExportOptions);
+  void launchCourseReplayExport(const ModernCourseResultRecord &,
+                                ReplayVideoExportOptions);
+  void launchAutoPlayExport(const ChartMetaRecord &,
+                            ReplayVideoExportOptions);
+  void applyRecordsExportProgress();
+  void applyRecordsExportResult();
   void showTasksModal();
   void refreshTasksModal();
   [[nodiscard]] std::string tasksModalTextSnapshot() const;
@@ -138,6 +155,16 @@ private:
   MusicSelectRepositoryMetadata repositoryMetadata_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
+  std::jthread recordsExportThread_;
+  std::atomic_bool recordsExportInProgress_{false};
+  struct PendingRecordsExportProgress {
+    double fraction = 0.0;
+    std::string message;
+  };
+  std::mutex recordsExportProgressMutex_;
+  std::optional<PendingRecordsExportProgress> pendingRecordsExportProgress_;
+  std::mutex recordsExportResultMutex_;
+  std::optional<ReplayVideoExportResult> pendingRecordsExportResult_;
   MusicSelectPreviewController previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
   MusicSelectSearchHistory searchHistory_;
@@ -178,10 +205,7 @@ private:
   View *modalLayer_ = nullptr;
   OverlayPortal *modalOverlayPortal_ = nullptr;
   std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal_;
-  BlockingOverlayView *chartRecordsModal_ = nullptr;
-  ResultRecordListView *chartRecordsView_ = nullptr;
-  TextView *chartRecordsTitle_ = nullptr;
-  TextView *chartRecordsEmptyText_ = nullptr;
+  std::unique_ptr<ReplayRecordsModal> recordsModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;
   std::uint64_t displayedTasksRevision_ = 0;

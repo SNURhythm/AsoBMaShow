@@ -902,6 +902,14 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
   }
 }
 
+EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  if (recordsModal_ != nullptr && recordsModal_->isVisible()) {
+    (void)recordsModal_->handleEvents(event);
+    return {};
+  }
+  return Scene::handleEvents(event);
+}
+
 void MainMenuScene::init() {
   // Initialize the scene
   chartSession =
@@ -1021,8 +1029,7 @@ void MainMenuScene::applyThemeChange() {
   refreshPlayOptionButtons();
   refreshAssistOptionButtons();
   refreshChartFilterButtons();
-  refreshReplayModalActions();
-  refreshReplayExportOptionButtons();
+  if (recordsModal_ != nullptr) recordsModal_->refresh();
   refreshFindBmsModal();
   refreshMusicModal();
   if (rootLayout != nullptr) {
@@ -1100,7 +1107,6 @@ void MainMenuScene::refreshTasksButton() {
 
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
-  replayDeleteConfirmation.cancel();
   revealContextMenu.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
@@ -1137,19 +1143,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
-  replayModalRoot = nullptr;
-  replayModalContentFrame = nullptr;
-  replayListContent = nullptr;
-  replayFilterSortContent = nullptr;
-  replayWatchOptionsContent = nullptr;
-  replayExportOptionsContent = nullptr;
-  replayExportProgressContent = nullptr;
-  replayDeleteConfirmationContent = nullptr;
-  replayExportProgressTrack = nullptr;
-  replayExportProgressFill = nullptr;
-  replayModalTitleText = nullptr;
-  replayExportProgressMessageText = nullptr;
-  replayExportProgressPercentText = nullptr;
+  recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
   playOptionsPanel = nullptr;
@@ -1238,55 +1232,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
-  replayListView = nullptr;
-  replayWatchButton = nullptr;
-  replayGBattleButton = nullptr;
-  replayModalResultButton = nullptr;
-  replayModalExportButton = nullptr;
-  replayShareButton = nullptr;
-  replayDeleteButton = nullptr;
-  replayDeleteCancelButton = nullptr;
-  replayDeleteConfirmButton = nullptr;
-  replayModalFilterButton = nullptr;
-  replayModalCloseButton = nullptr;
-  replayFps60Button = nullptr;
-  replayFps120Button = nullptr;
-  replayResolution1080Button = nullptr;
-  replayResolutionFullButton = nullptr;
-  replayResultIncludeButton = nullptr;
-  replayResultSkipButton = nullptr;
-  replayTouchShowButton = nullptr;
-  replayTouchHideButton = nullptr;
-  replayGhostShowButton = nullptr;
-  replayGhostHideButton = nullptr;
-  replayExportTouchShowButton = nullptr;
-  replayExportTouchHideButton = nullptr;
-  replayExportGhostShowButton = nullptr;
-  replayExportGhostHideButton = nullptr;
-  replayWatchButtonText = nullptr;
-  replayGBattleButtonText = nullptr;
-  replayModalResultButtonText = nullptr;
-  replayModalExportButtonText = nullptr;
-  replayShareButtonText = nullptr;
-  replayDeleteButtonText = nullptr;
-  replayDeleteCancelButtonText = nullptr;
-  replayDeleteConfirmButtonText = nullptr;
-  replayModalFilterButtonText = nullptr;
-  replayModalCloseButtonText = nullptr;
-  replayFps60ButtonText = nullptr;
-  replayFps120ButtonText = nullptr;
-  replayResolution1080ButtonText = nullptr;
-  replayResolutionFullButtonText = nullptr;
-  replayResultIncludeButtonText = nullptr;
-  replayResultSkipButtonText = nullptr;
-  replayTouchShowButtonText = nullptr;
-  replayTouchHideButtonText = nullptr;
-  replayGhostShowButtonText = nullptr;
-  replayGhostHideButtonText = nullptr;
-  replayExportTouchShowButtonText = nullptr;
-  replayExportTouchHideButtonText = nullptr;
-  replayExportGhostShowButtonText = nullptr;
-  replayExportGhostHideButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -1306,7 +1251,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
-  replayIrUploadFeedbackRevision = 0;
   replayIrObservedRevisions.clear();
   unzipInProgress = false;
   tasksModalOpenRequested = false;
@@ -1329,24 +1273,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartScoreRankDropdownOpen = false;
   chartDifficultyMinDropdownOpen = false;
   chartDifficultyMaxDropdownOpen = false;
-  visibleResultRecordSummaries.clear();
-  resultRecordSummaries.clear();
-  selectedResultRecordStableKey.reset();
   publishedResultRecordDiagnostic.clear();
-  replayRecordFilters = {};
-  selectedReplayIndex = -1;
-  selectedResultRecordSummary.reset();
-  replayExportSelection.reset();
-  selectedExportFps = 120;
-  selectedExportFullResolution = true;
-  selectedExportIncludeResultScreen = true;
-  selectedReplayRenderTouchPoints = true;
-  selectedReplayRenderGhosts = true;
-  replayExportProgressFraction = 0.0;
-  replayClearFilterButtons.clear();
-  replayPlayOptionFilterButtons.clear();
-  replayScoreRankFilterButtons.clear();
-  replaySortButtons.clear();
 
   appliedUiThemeMode = ui_theme::activeMode();
 
@@ -2002,7 +1929,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
 
-    showReplayListModal(*selectedMeta);
+    openReplayRecordsForSelection();
   });
   replayButtonSlot->addView(replayButton);
 
@@ -2157,7 +2084,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->addView(settingsButton);
   rootLayout->addView(right);
   buildPlayOptionsModal();
-  buildReplayModal();
+  recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
   buildParseLogModal();
   buildTasksModal();
   buildFindBmsModal();
@@ -3143,8 +3070,8 @@ void MainMenuScene::refreshIrRecordListIfNeeded() {
   if (!recordsNeedRefresh) {
     return;
   }
-  if (replayModalRoot != nullptr && replayModalRoot->getVisible()) {
-    reloadReplayRecordModels(true);
+  if (recordsModal_ != nullptr && recordsModal_->isVisible()) {
+    recordsModal_->reloadRecords(true);
   }
 }
 
@@ -6796,806 +6723,34 @@ void MainMenuScene::hidePlayOptionsModal() {
   playOptionsModal->hide();
 }
 
-void MainMenuScene::buildReplayModal() {
-  if (rootLayout == nullptr) {
+void MainMenuScene::openReplayRecordsForSelection() {
+  if (recordsModal_ == nullptr || recyclerView == nullptr) {
     return;
   }
-
-  constexpr float kModalPanelWidth = 760.0f;
-  constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
-  constexpr float kModalContentHeight = 418.0f;
-
-  replayModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
-                                            rendering::window_height);
-  replayModalRoot->setPositionType(YGPositionTypeAbsolute);
-  replayModalRoot->setPosition(Edge::Left, 0);
-  replayModalRoot->setPosition(Edge::Top, 0);
-  replayModalRoot->setZIndex(1000);
-  replayModalRoot->setVisible(false);
-  replayModalRoot->setFlexDirection(FlexDirection::Column);
-  replayModalRoot->setAlignItems(YGAlignCenter);
-  replayModalRoot->setJustifyContent(YGJustifyCenter);
-  replayModalRoot->setThemedBackgroundColor(ui_theme::scrim);
-
-  auto *panel = new View();
-  panel->setWidth(kModalPanelWidth)
-      ->setHeight(620)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setGap(14)
-      ->setPadding(Edge::All, 22)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(modalPanelBorder)
-      ->setBorderWidth(1);
-
-  auto *header = new View();
-  header->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
-      ->setGap(10)
-      ->setHeight(54);
-  replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  replayModalTitleText->setText("Records");
-  replayModalTitleText->setThemedColor(ui_theme::textPrimary);
-  replayModalTitleText->setHeight(54);
-  replayModalTitleText->setFlexGrow(1.0f);
-  replayModalTitleText->setFlexBasis(0.0f);
-  replayModalTitleText->setMinWidth(0.0f);
-  replayModalFilterButton =
-      makeModalIconButton(kIconFilter, 20, &replayModalFilterButtonText);
-  replayModalFilterButton->setWidth(54);
-  replayModalFilterButton->setHeight(54);
-  replayModalFilterButton->setFlexShrink(0.0f);
-  replayModalCloseButton =
-      makeModalIconButton(kIconXmark, 22, &replayModalCloseButtonText);
-  replayModalCloseButton->setWidth(54);
-  replayModalCloseButton->setHeight(54);
-  replayModalCloseButton->setFlexShrink(0.0f);
-  replayShareButton =
-      makeModalIconButton(kIconShare, 20, &replayShareButtonText);
-  replayShareButton->setWidth(54);
-  replayShareButton->setHeight(54);
-  replayShareButton->setFlexShrink(0.0f);
-  replayDeleteButton =
-      makeModalIconButton(kIconTrash, 20, &replayDeleteButtonText);
-  replayDeleteButton->setWidth(54);
-  replayDeleteButton->setHeight(54);
-  replayDeleteButton->setFlexShrink(0.0f);
-  header->addView(replayModalTitleText);
-  header->addView(replayShareButton);
-  header->addView(replayDeleteButton);
-  header->addView(replayModalFilterButton);
-  header->addView(replayModalCloseButton);
-  panel->addView(header);
-
-  replayModalContentFrame = new View();
-  replayModalContentFrame->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setFlexShrink(0);
-  panel->addView(replayModalContentFrame);
-
-  replayListContent = new View();
-  replayListContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setGap(10);
-  replayListView = new ResultRecordListView();
-  replayListView->onSelectionChanged = [this](int idx) {
-    selectReplayModalIndex(idx);
-    if (selectedReplayIsAutoPlay()) {
-      selectedReplayRenderTouchPoints = false;
-      selectedReplayRenderGhosts = false;
-      refreshReplayExportOptionButtons();
-    }
-    refreshReplayModalActions();
-  };
-  replayListView->onIrUploadRequested =
-      [this](const ResultRecordSummary &record) {
-        if (resultRecordActionTarget(record, ResultRecordAction::IrUpload) ==
-                ResultRecordActionTarget::ModernChart &&
-            record.modern.has_value()) {
-          startModernReplayIrUpload(*record.modern);
-        }
-      };
-  replayListView->onIrStatusFeedbackRequested =
-      [this](const ResultRecordSummary &record) {
-        publishReplayIrStatusFeedback(record.irState);
-      };
-  replayListView->setFlex(1);
-  replayListView->clearBackgroundColor();
-  replayListView->setThemedBorderColor(ui_theme::hairline);
-  replayListView->setBorderWidth(1);
-  replayListContent->addView(replayListView);
-  replayModalContentFrame->addView(replayListContent);
-
-  replayFilterSortContent = new View();
-  replayFilterSortContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight);
-  replayFilterSortContent->setVisible(false);
-
-  constexpr float kFilterScrollRightPadding = 12.0f;
-  constexpr float kFilterContentWidth =
-      kModalContentWidth - kFilterScrollRightPadding;
-  auto *filterScroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
-                                      static_cast<int>(kModalContentHeight));
-  filterScroll->setWidth(kModalContentWidth);
-  filterScroll->setHeight(kModalContentHeight);
-  filterScroll->setContentPadding(Edge::Right, kFilterScrollRightPadding);
-
-  auto *filterContent = new View();
-  filterContent->setFlexDirection(FlexDirection::Column);
-  filterContent->setAlignItems(YGAlignStretch);
-  filterContent->setGap(10);
-  filterContent->setWidth(kFilterContentWidth);
-
-  auto makeFilterButton = [](const std::string &label, int fontSize,
-                             TextView **textOut) {
-    auto *button = makeModalButton(label, fontSize, textOut);
-    button->setHeight(46);
-    button->setFlexGrow(1.0f);
-    button->setFlexBasis(0.0f);
-    button->setFlexShrink(1.0f);
-    return button;
-  };
-  auto addFilterButton = [&](View *&row, size_t &index, size_t columns,
-                             Button *button) {
-    if (index % columns == 0) {
-      row = makeModalOptionRow(46);
-      filterContent->addView(row);
-    }
-    if (row != nullptr) {
-      row->addView(button);
-    }
-    ++index;
-  };
-
-  filterContent->addView(makeModalLabel("Clear Mark"));
-  View *filterRow = nullptr;
-  size_t filterIndex = 0;
-  auto makeClearFilterButton = [this, &makeFilterButton](
-                                   const std::string &label,
-                                   std::optional<int> rank) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 15, &text);
-    button->setOnClickListener(
-        [this, rank]() { setReplayClearFilter(rank); });
-    replayClearFilterButtons.push_back({
-        .button = button,
-        .text = text,
-        .rank = rank,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 3,
-                  makeClearFilterButton("All", std::nullopt));
-  for (const auto &filter : kDifficultyClearMarkFilters) {
-    if (filter.rank == kNoClearTypeRank) {
-      continue;
-    }
-    addFilterButton(filterRow, filterIndex, 3,
-                    makeClearFilterButton(filter.label, filter.rank));
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
   }
-
-  filterContent->addView(makeModalLabel("Play Option"));
-  filterRow = nullptr;
-  filterIndex = 0;
-  auto makePlayOptionFilterButton = [this, &makeFilterButton](
-                                        const std::string &label,
-                                        std::optional<std::string> option) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 14, &text);
-    button->setOnClickListener(
-        [this, option]() { setReplayPlayOptionFilter(option); });
-    replayPlayOptionFilterButtons.push_back({
-        .button = button,
-        .text = text,
-        .option = option,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 4,
-                  makePlayOptionFilterButton("All", std::nullopt));
-  for (std::string_view option : play_options::kPlayOptions) {
-    const std::string optionName(option);
-    addFilterButton(filterRow, filterIndex, 4,
-                    makePlayOptionFilterButton(optionName, optionName));
+  const auto *selectedMeta = &recyclerView->get(selected);
+  const bool courseStartReplay =
+      selectedMeta->courseStart &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0;
+  if (selectedMeta->solidArchive || selectedMeta->unavailable ||
+      (!courseStartReplay && selectedMeta->meta.BmsPath.empty())) {
+    return;
   }
-
-  filterContent->addView(makeModalLabel("Score Rank"));
-  filterRow = nullptr;
-  filterIndex = 0;
-  auto makeScoreRankFilterButton = [this, &makeFilterButton](
-                                       const std::string &label,
-                                       std::optional<std::string> rank) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 16, &text);
-    button->setOnClickListener(
-        [this, rank]() { setReplayScoreRankFilter(rank); });
-    replayScoreRankFilterButtons.push_back({
-        .button = button,
-        .text = text,
-        .rank = rank,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 4,
-                  makeScoreRankFilterButton("All", std::nullopt));
-  constexpr std::array<const char *, 10> kScoreRankFilterLabels = {
-      "MAX", "MAX -", "AAA", "AA", "A", "B", "C", "D", "E", "F"};
-  for (const char *rank : kScoreRankFilterLabels) {
-    addFilterButton(filterRow, filterIndex, 4,
-                    makeScoreRankFilterButton(rank, std::string(rank)));
-  }
-
-  filterContent->addView(makeModalLabel("Sort"));
-  filterRow = nullptr;
-  filterIndex = 0;
-  auto makeSortButton = [this, &makeFilterButton](
-                            const std::string &label,
-                            ReplayRecordSortCriterion criterion) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 16, &text);
-    button->setOnClickListener(
-        [this, criterion]() { setReplaySortCriterion(criterion); });
-    replaySortButtons.push_back({
-        .button = button,
-        .text = text,
-        .criterion = criterion,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton("Newest", ReplayRecordSortCriterion::Newest));
-  addFilterButton(
-      filterRow, filterIndex, 2,
-      makeSortButton("Clear Mark", ReplayRecordSortCriterion::ClearMark));
-  addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton("Score", ReplayRecordSortCriterion::Score));
-  addFilterButton(
-      filterRow, filterIndex, 2,
-      makeSortButton("Max Combo", ReplayRecordSortCriterion::MaxCombo));
-
-  filterScroll->setContentView(filterContent);
-  replayFilterSortContent->addView(filterScroll);
-  replayModalContentFrame->addView(replayFilterSortContent);
-
-  replayWatchOptionsContent = new View();
-  replayWatchOptionsContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setGap(12);
-  replayWatchOptionsContent->setVisible(false);
-
-  replayWatchOptionsContent->addView(makeModalLabel("Watch Visualization"));
-  auto *replayTouchRow = makeModalOptionRow(52.0f);
-  auto *replayTouchLabel = makeModalLabel("Touch Points");
-  replayTouchLabel->setWidth(180);
-  replayTouchLabel->setHeight(52);
-  replayTouchLabel->setVAlign(TextView::MIDDLE);
-  replayTouchShowButton =
-      makeModalButton("Show", 18, &replayTouchShowButtonText);
-  replayTouchHideButton =
-      makeModalButton("Hide", 18, &replayTouchHideButtonText);
-  replayTouchShowButton->setFlex(1);
-  replayTouchHideButton->setFlex(1);
-  replayTouchShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayTouchHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = false;
-    refreshReplayExportOptionButtons();
-  });
-  replayTouchRow->addView(replayTouchLabel);
-  replayTouchRow->addView(replayTouchShowButton);
-  replayTouchRow->addView(replayTouchHideButton);
-  replayWatchOptionsContent->addView(replayTouchRow);
-  auto *replayGhostRow = makeModalOptionRow(52.0f);
-  auto *replayGhostLabel = makeModalLabel("Ghosts");
-  replayGhostLabel->setWidth(180);
-  replayGhostLabel->setHeight(52);
-  replayGhostLabel->setVAlign(TextView::MIDDLE);
-  replayGhostShowButton =
-      makeModalButton("Show", 18, &replayGhostShowButtonText);
-  replayGhostHideButton =
-      makeModalButton("Hide", 18, &replayGhostHideButtonText);
-  replayGhostShowButton->setFlex(1);
-  replayGhostHideButton->setFlex(1);
-  replayGhostShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayGhostHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = false;
-    refreshReplayExportOptionButtons();
-  });
-  replayGhostRow->addView(replayGhostLabel);
-  replayGhostRow->addView(replayGhostShowButton);
-  replayGhostRow->addView(replayGhostHideButton);
-  replayWatchOptionsContent->addView(replayGhostRow);
-  replayModalContentFrame->addView(replayWatchOptionsContent);
-
-  replayExportOptionsContent = new View();
-  replayExportOptionsContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setGap(6);
-  replayExportOptionsContent->setVisible(false);
-
-  replayExportOptionsContent->addView(makeModalLabel("Frame Rate"));
-  auto *fpsRow = makeModalOptionRow();
-  replayFps60Button = makeModalButton("60 fps", 20, &replayFps60ButtonText);
-  replayFps120Button = makeModalButton("120 fps", 20, &replayFps120ButtonText);
-  replayFps60Button->setFlex(1);
-  replayFps120Button->setFlex(1);
-  replayFps60Button->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFps = 60;
-    refreshReplayExportOptionButtons();
-  });
-  replayFps120Button->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFps = 120;
-    refreshReplayExportOptionButtons();
-  });
-  fpsRow->addView(replayFps60Button);
-  fpsRow->addView(replayFps120Button);
-  replayExportOptionsContent->addView(fpsRow);
-
-  replayExportOptionsContent->addView(makeModalLabel("Resolution"));
-  auto *resolutionRow = makeModalOptionRow();
-  replayResolution1080Button =
-      makeModalButton("1080p", 20, &replayResolution1080ButtonText);
-  replayResolutionFullButton =
-      makeModalButton("Full Resolution", 20, &replayResolutionFullButtonText);
-  replayResolution1080Button->setFlex(1);
-  replayResolutionFullButton->setFlex(1);
-  replayResolution1080Button->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFullResolution = false;
-    refreshReplayExportOptionButtons();
-  });
-  replayResolutionFullButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFullResolution = true;
-    refreshReplayExportOptionButtons();
-  });
-  resolutionRow->addView(replayResolution1080Button);
-  resolutionRow->addView(replayResolutionFullButton);
-  replayExportOptionsContent->addView(resolutionRow);
-
-  replayExportOptionsContent->addView(makeModalLabel("Result Screen"));
-  auto *resultRow = makeModalOptionRow();
-  replayResultIncludeButton =
-      makeModalButton("Include", 20, &replayResultIncludeButtonText);
-  replayResultSkipButton =
-      makeModalButton("Skip", 20, &replayResultSkipButtonText);
-  replayResultIncludeButton->setFlex(1);
-  replayResultSkipButton->setFlex(1);
-  replayResultIncludeButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportIncludeResultScreen = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayResultSkipButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportIncludeResultScreen = false;
-    refreshReplayExportOptionButtons();
-  });
-  resultRow->addView(replayResultIncludeButton);
-  resultRow->addView(replayResultSkipButton);
-  replayExportOptionsContent->addView(resultRow);
-
-  auto *exportTouchRow = makeModalOptionRow();
-  auto *exportTouchLabel = makeModalLabel("Touch Points");
-  exportTouchLabel->setWidth(180);
-  exportTouchLabel->setHeight(58);
-  exportTouchLabel->setVAlign(TextView::MIDDLE);
-  replayExportTouchShowButton =
-      makeModalButton("Show", 18, &replayExportTouchShowButtonText);
-  replayExportTouchHideButton =
-      makeModalButton("Hide", 18, &replayExportTouchHideButtonText);
-  replayExportTouchShowButton->setFlex(1);
-  replayExportTouchHideButton->setFlex(1);
-  replayExportTouchShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayExportTouchHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = false;
-    refreshReplayExportOptionButtons();
-  });
-  exportTouchRow->addView(exportTouchLabel);
-  exportTouchRow->addView(replayExportTouchShowButton);
-  exportTouchRow->addView(replayExportTouchHideButton);
-  replayExportOptionsContent->addView(exportTouchRow);
-
-  auto *exportGhostRow = makeModalOptionRow();
-  auto *exportGhostLabel = makeModalLabel("Ghosts");
-  exportGhostLabel->setWidth(180);
-  exportGhostLabel->setHeight(58);
-  exportGhostLabel->setVAlign(TextView::MIDDLE);
-  replayExportGhostShowButton =
-      makeModalButton("Show", 18, &replayExportGhostShowButtonText);
-  replayExportGhostHideButton =
-      makeModalButton("Hide", 18, &replayExportGhostHideButtonText);
-  replayExportGhostShowButton->setFlex(1);
-  replayExportGhostHideButton->setFlex(1);
-  replayExportGhostShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayExportGhostHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = false;
-    refreshReplayExportOptionButtons();
-  });
-  exportGhostRow->addView(exportGhostLabel);
-  exportGhostRow->addView(replayExportGhostShowButton);
-  exportGhostRow->addView(replayExportGhostHideButton);
-  replayExportOptionsContent->addView(exportGhostRow);
-  replayModalContentFrame->addView(replayExportOptionsContent);
-
-  replayExportProgressContent = new View();
-  replayExportProgressContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setGap(18);
-  replayExportProgressContent->setVisible(false);
-
-  replayExportProgressMessageText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  replayExportProgressMessageText->setText("Preparing export");
-  replayExportProgressMessageText->setColor(
-      ui_theme::sdl(ui_theme::textPrimary()));
-  replayExportProgressMessageText->setHeight(38);
-  replayExportProgressContent->addView(replayExportProgressMessageText);
-
-  replayExportProgressTrack = new View();
-  replayExportProgressTrack->setWidth(kModalContentWidth)
-      ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
-      ->setBorderWidth(1);
-  replayExportProgressFill = new View();
-  replayExportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      ui_theme::progressFill());
-  replayExportProgressTrack->addView(replayExportProgressFill);
-  replayExportProgressContent->addView(replayExportProgressTrack);
-
-  replayExportProgressPercentText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  replayExportProgressPercentText->setText("0%");
-  replayExportProgressPercentText->setColor(
-      ui_theme::sdl(ui_theme::textSecondary()));
-  replayExportProgressPercentText->setHeight(34);
-  replayExportProgressPercentText->setAlign(TextView::RIGHT);
-  replayExportProgressContent->addView(replayExportProgressPercentText);
-  replayModalContentFrame->addView(replayExportProgressContent);
-
-  replayDeleteConfirmationContent = new View();
-  replayDeleteConfirmationContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setGap(20);
-  replayDeleteConfirmationContent->setVisible(false);
-
-  auto *deleteQuestion =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 28);
-  deleteQuestion->setText("Delete this BRD replay file?");
-  deleteQuestion->setThemedColor(ui_theme::textPrimary);
-  deleteQuestion->setAlign(TextView::CENTER);
-  deleteQuestion->setHeight(44);
-  replayDeleteConfirmationContent->addView(deleteQuestion);
-
-  auto *deleteDetail = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  deleteDetail->setText(
-      "Result history will be kept. The BRD file and replay actions cannot "
-      "be restored.");
-  deleteDetail->setThemedColor(ui_theme::textSecondary);
-  deleteDetail->setAlign(TextView::CENTER);
-  deleteDetail->setWrap(true);
-  deleteDetail->setHeight(72);
-  replayDeleteConfirmationContent->addView(deleteDetail);
-
-  auto *deleteConfirmationActions = makeModalOptionRow();
-  deleteConfirmationActions->setJustifyContent(YGJustifyCenter);
-  replayDeleteCancelButton =
-      makeModalButton("Cancel", 20, &replayDeleteCancelButtonText);
-  replayDeleteConfirmButton =
-      makeModalButton("Delete Replay", 18, &replayDeleteConfirmButtonText);
-  replayDeleteCancelButton->setWidth(190);
-  replayDeleteConfirmButton->setWidth(210);
-  replayDeleteCancelButton->setOnClickListener(
-      [this]() { cancelReplayDeleteConfirmation(); });
-  replayDeleteConfirmButton->setOnClickListener(
-      [this]() { confirmSelectedReplayFileDelete(); });
-  styleThemedActionButton(
-      replayDeleteCancelButton, replayDeleteCancelButtonText, true,
-      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-      ui_theme::hairlineStrong);
-  styleThemedActionButton(
-      replayDeleteConfirmButton, replayDeleteConfirmButtonText, true,
-      ui_theme::warningAction, ui_theme::warningActionHover,
-      ui_theme::warningActionPressed, ui_theme::amber);
-  deleteConfirmationActions->addView(replayDeleteCancelButton);
-  deleteConfirmationActions->addView(replayDeleteConfirmButton);
-  replayDeleteConfirmationContent->addView(deleteConfirmationActions);
-  replayModalContentFrame->addView(replayDeleteConfirmationContent);
-
-  auto *footer = new View();
-  footer->setFlexDirection(FlexDirection::Row);
-  footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setGap(8);
-  footer->setHeight(58);
-
-  replayWatchButton = makeModalButton("Watch", 20, &replayWatchButtonText);
-  replayGBattleButton =
-      makeModalButton("G-BATTLE", 18, &replayGBattleButtonText);
-  replayModalResultButton =
-      makeModalButton("View Result", 18, &replayModalResultButtonText);
-  replayModalExportButton =
-      makeModalButton("Export Video", 18, &replayModalExportButtonText);
-  replayModalCloseButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress || replayLoadInProgress.load() ||
-        replayFileDocumentHandoff) {
-      return;
-    }
-    hideReplayModal();
-  });
-  replayShareButton->setOnClickListener(
-      [this]() { startSelectedReplayFileShare(); });
-  replayDeleteButton->setOnClickListener(
-      [this]() { showReplayDeleteConfirmation(); });
-  replayModalFilterButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (replayFilterSortContent != nullptr &&
-        replayFilterSortContent->getVisible()) {
-      replayModalTitleText->setText("Records");
-      replayFilterSortContent->setVisible(false);
-      replayListContent->setVisible(true);
-      replayListView->restoreSelection(selectedReplayIndex);
-      refreshReplayModalActions();
-      return;
-    }
-    showReplayFilterSortOptions();
-  });
-  replayWatchButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (!selectedResultRecordSummary.has_value()) {
-      return;
-    }
-    const auto target = resultRecordActionTarget(
-        *selectedResultRecordSummary, ResultRecordAction::Watch);
-    if (target == ResultRecordActionTarget::None) {
-      return;
-    }
-    if (replayWatchOptionsContent != nullptr &&
-        replayWatchOptionsContent->getVisible()) {
-      if (target == ResultRecordActionTarget::ModernCourse &&
-          selectedResultRecordSummary->modernCourse.has_value()) {
-        startModernCourseReplayPlayback(
-            replayModalChart, *selectedResultRecordSummary->modernCourse);
-      } else if (target == ResultRecordActionTarget::ModernChart &&
-                 selectedResultRecordSummary->modern.has_value()) {
-        startModernReplayPlayback(replayModalChart,
-                                  *selectedResultRecordSummary->modern);
-      } else if (target == ResultRecordActionTarget::AutoPlay) {
-        startAutoPlayPlayback(replayModalChart);
-      }
-      return;
-    }
-    replayModalTitleText->setText("Watch Options");
-    replayListContent->setVisible(false);
-    replayFilterSortContent->setVisible(false);
-    replayWatchOptionsContent->setVisible(true);
-    replayExportOptionsContent->setVisible(false);
-    replayExportProgressContent->setVisible(false);
-    refreshReplayExportOptionButtons();
-    refreshReplayModalActions();
-    replayModalRoot->applyYogaLayoutFromRoot();
-  });
-  replayGBattleButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (!selectedResultRecordSummary.has_value() ||
-        resultRecordActionTarget(*selectedResultRecordSummary,
-                                 ResultRecordAction::GBattle) !=
-            ResultRecordActionTarget::ModernChart) {
-      return;
-    }
-    if (selectedResultRecordSummary->modern.has_value()) {
-      startModernGBattlePlayback(replayModalChart,
-                                 *selectedResultRecordSummary->modern);
-    }
-  });
-  replayModalResultButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress ||
-        !selectedResultRecordSummary.has_value()) {
-      return;
-    }
-    const auto target = resultRecordActionTarget(
-        *selectedResultRecordSummary, ResultRecordAction::ResultRecall);
-    if (target == ResultRecordActionTarget::ModernCourse &&
-        selectedResultRecordSummary->modernCourse.has_value()) {
-      startModernCourseReplayResultRecall(
-          *selectedResultRecordSummary->modernCourse,
-          selectedResultRecordSummary->capabilities.retrySame);
-      return;
-    }
-    if (target == ResultRecordActionTarget::ModernChart &&
-        selectedResultRecordSummary->modern.has_value()) {
-      startModernReplayResultRecall(replayModalChart,
-                                    *selectedResultRecordSummary->modern);
-      return;
-    }
-    const auto *remoteIdentity = std::get_if<IrRemoteRecordId>(
-        &selectedResultRecordSummary->identity);
-    if (target != ResultRecordActionTarget::Remote ||
-        remoteIdentity == nullptr || !selectedResultRecordStableKey) {
-      return;
-    }
-    startRemoteResultRecall(*remoteIdentity, *selectedResultRecordStableKey);
-  });
-  replayModalExportButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (replayWatchOptionsContent != nullptr &&
-        replayWatchOptionsContent->getVisible()) {
-      return;
-    }
-    if (replayFilterSortContent != nullptr &&
-        replayFilterSortContent->getVisible()) {
-      return;
-    }
-    if (replayExportOptionsContent != nullptr &&
-        replayExportOptionsContent->getVisible()) {
-      if (!replayExportSelection.has_value()) {
-        return;
-      }
-      const ResultRecordSummary exportSelection =
-          replayExportSelection.value();
-      const auto target = resultRecordActionTarget(
-          exportSelection, ResultRecordAction::VideoExport);
-      const bool exportAutoPlay = exportSelection.autoPlay;
-      ReplayVideoExportOptions options;
-      options.fps = selectedExportFps;
-      options.includeResultScreen = selectedExportIncludeResultScreen;
-      options.renderTouchPoints =
-          exportAutoPlay ? false : selectedReplayRenderTouchPoints;
-      options.renderReplayGhosts =
-          exportAutoPlay ? false : selectedReplayRenderGhosts;
-      options.pacemakerTarget =
-          exportAutoPlay
-              ? pacemaker::kTargetOff
-              : pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
-      if (!selectedExportFullResolution) {
-        options.height = 1080;
-      }
-      if (target == ResultRecordActionTarget::ModernCourse &&
-          exportSelection.modernCourse.has_value()) {
-        startModernCourseReplayVideoExport(
-            *exportSelection.modernCourse, options);
-      } else if (target == ResultRecordActionTarget::ModernChart &&
-                 exportSelection.modern.has_value()) {
-        startModernReplayVideoExport(replayExportChart,
-                                     *exportSelection.modern, options);
-      } else if (target == ResultRecordActionTarget::AutoPlay) {
-        startAutoPlayVideoExport(replayExportChart, options);
-      }
-      return;
-    }
-    if (!selectedResultRecordSummary.has_value() ||
-        resultRecordActionTarget(*selectedResultRecordSummary,
-                                 ResultRecordAction::VideoExport) ==
-            ResultRecordActionTarget::None) {
-      return;
-    }
-    showReplayExportOptions();
-  });
-  footer->addView(replayWatchButton);
-  footer->addView(replayGBattleButton);
-  footer->addView(replayModalResultButton);
-  footer->addView(replayModalExportButton);
-  panel->addView(footer);
-
-  replayModalRoot->addView(panel);
-  rootLayout->addView(replayModalRoot);
-  refreshReplayExportOptionButtons();
-  refreshReplayModalActions();
+  replayIrObservedRevisions.clear();
+  recordsModal_->setTouchVisualizationEnabled(
+      context.settings.touchVisualizationEnabled);
+  recordsModal_->showChart(*selectedMeta);
+  setReplayButtonVisible(true);
 }
 
-void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
-  std::optional<std::string> preferredStableKey =
-      preserveViewState ? selectedResultRecordStableKey : std::nullopt;
-  const float previousScrollOffset =
-      preserveViewState && replayListView != nullptr
-          ? replayListView->scrollOffset
-          : 0.0F;
-
+std::vector<ResultRecordSummary>
+MainMenuScene::loadRecordsForModal(const ChartMetaRecord &record) {
   const bool courseReplayList =
-      replayModalChart.courseStart &&
+      record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
       (!activeFolder.courseKey.empty() || activeFolder.courseId > 0);
   std::vector<ReplaySummary> syntheticRecords;
@@ -7610,9 +6765,9 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       modernSummaries.push_back(makeLegacyCourseResultRecord(summary));
     }
   } else {
-    syntheticRecords.push_back(autoPlayReplaySummary(replayModalChart));
+    syntheticRecords.push_back(autoPlayReplaySummary(record));
     const auto legacy = context.replayRepository.ListLegacyChartSummaries(
-        replayModalChart.meta, kMaximumLegacyResultSummaryRows);
+        record.meta, kMaximumLegacyResultSummaryRows);
     modernSummaries.reserve(legacy.size());
     for (const LegacyChartResultSummary &summary : legacy) {
       modernSummaries.push_back(makeLegacyChartResultRecord(summary));
@@ -7624,10 +6779,10 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   std::unordered_map<std::string, ir::IrUploadRecord> irRecordsByAttempt;
   bool modernIrReadSucceeded = courseReplayList;
   if (!courseReplayList && irServerOrigin.has_value() &&
-      !replayModalChart.meta.SHA256.empty()) {
+      !record.meta.SHA256.empty()) {
     auto records = context.replayRepository.ListIrUploadRecordsForChart(
-        ir::kTachiProviderId, *irServerOrigin,
-        replayModalChart.meta.SHA256, kMaximumModernChartHistoryRows);
+        ir::kTachiProviderId, *irServerOrigin, record.meta.SHA256,
+        kMaximumModernChartHistoryRows);
     std::string irReadDiagnostic;
     if (records.status != ir::IrUploadRecordReadStatus::Loaded) {
       irReadDiagnostic =
@@ -7637,8 +6792,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
                     records.diagnostic;
     } else {
       irRecordsByAttempt.reserve(records.records.size());
-      for (auto &record : records.records) {
-        irRecordsByAttempt.emplace(record.attemptId, std::move(record));
+      for (auto &irRecord : records.records) {
+        irRecordsByAttempt.emplace(irRecord.attemptId, std::move(irRecord));
       }
       irReadDiagnostic = std::move(records.diagnostic);
     }
@@ -7690,9 +6845,9 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         archive_file::appendDebugLogLine(diagnostic);
       }
     }
-  } else if (!courseReplayList && !replayModalChart.meta.SHA256.empty()) {
+  } else if (!courseReplayList && !record.meta.SHA256.empty()) {
     const auto history = context.replayRepository.ListModernChartResults(
-        replayModalChart.meta.SHA256, kMaximumModernChartHistoryRows);
+        record.meta.SHA256, kMaximumModernChartHistoryRows);
     if (history.status == ModernChartHistoryReadStatus::Loaded) {
       modernSummaries.reserve(modernSummaries.size() + history.records.size());
       replay::ReplayFileActionService replayActions(context.replayRepository);
@@ -7700,8 +6855,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         const auto inspected = replayActions.probe(modern.replayFile);
         ir::IrRecordState irState = ir::IrRecordState::Hidden;
         std::optional<IrRemoteRecordId> linkedRemote;
-        const auto storedIr =
-            irRecordsByAttempt.find(modern.result.attemptId);
+        const auto storedIr = irRecordsByAttempt.find(modern.result.attemptId);
         if (storedIr != irRecordsByAttempt.end()) {
           const auto serviceStatus =
               context.irSubmissionService != nullptr
@@ -7714,8 +6868,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
             linkedRemote = IrRemoteRecordId{
                 .providerId = std::string(ir::kTachiProviderId),
                 .serverOrigin = *irServerOrigin,
-                .remoteScoreId =
-                    *storedIr->second.receiptRemoteScoreId,
+                .remoteScoreId = *storedIr->second.receiptRemoteScoreId,
             };
           }
         }
@@ -7750,8 +6903,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     } else if (irServerOrigin.has_value()) {
       mergeOrigin = *irServerOrigin;
       auto loaded = context.replayRepository.ListIrRemoteScoresForChart(
-          ir::kTachiProviderId, mergeOrigin, replayModalChart.meta.MD5,
-          replayModalChart.meta.SHA256);
+          ir::kTachiProviderId, mergeOrigin, record.meta.MD5,
+          record.meta.SHA256);
       if (loaded.status == ir::IrRemoteScoreReadOutcome::Status::Loaded) {
         remoteScores = std::move(loaded.scores);
         remoteReadSucceeded = true;
@@ -7781,7 +6934,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   }
 
   try {
-    resultRecordSummaries = mergeResultRecords(
+    auto merged = mergeResultRecords(
         syntheticRecords, modernSummaries,
         remoteReadSucceeded
             ? std::span<const ir::IrRemoteScore>(remoteScores)
@@ -7791,11 +6944,12 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         modernIrReadSucceeded) {
       publishedResultRecordDiagnostic.clear();
     }
+    return merged;
   } catch (...) {
-    resultRecordSummaries = mergeResultRecords(
+    auto merged = mergeResultRecords(
         syntheticRecords, modernSummaries,
-        std::span<const ir::IrRemoteScore>{},
-        ir::kTachiProviderId, std::string_view{});
+        std::span<const ir::IrRemoteScore>{}, ir::kTachiProviderId,
+        std::string_view{});
     const std::string diagnostic =
         "IR Records unavailable: remote score projection is invalid";
     if (diagnostic != publishedResultRecordDiagnostic) {
@@ -7803,278 +6957,75 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       SDL_Log("%s", diagnostic.c_str());
       archive_file::appendDebugLogLine(diagnostic);
     }
-  }
-
-  applyReplayRecordFilters(std::move(preferredStableKey));
-  if (preserveViewState && replayListView != nullptr) {
-    replayListView->scrollOffset = previousScrollOffset;
-    replayListView->rebindVisibleItems();
+    return merged;
   }
 }
 
-void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
-  if (replayModalRoot == nullptr || replayListView == nullptr) {
-    return;
-  }
-
-  replayModalChart = record;
-  replayExportSelection.reset();
-  replayIrUploadInProgress = false;
-  replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
-  replayDeleteConfirmation.cancel();
-
-  clearReplayModalSelection();
-  selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
-  selectedReplayRenderGhosts = true;
-  replayRecordFilters = {};
-  reloadReplayRecordModels(false);
-  setReplayButtonVisible(true);
-  replayModalTitleText->setText("Records");
-  replayListContent->setVisible(true);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(false);
-  replayModalRoot->setSize(rendering::window_width, rendering::window_height);
-  replayModalRoot->setVisible(true);
-  refreshReplayFilterSortButtons();
-  refreshReplayExportOptionButtons();
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::showReplayFilterSortOptions() {
-  if (replayModalRoot == nullptr || replayFilterSortContent == nullptr) {
-    return;
-  }
-  replayModalTitleText->setText("Filter / Sort");
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(true);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(false);
-  replayExportSelection.reset();
-  refreshReplayFilterSortButtons();
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::showReplayExportOptions() {
-  if (replayModalRoot == nullptr ||
-      !selectedResultRecordSummary.has_value() ||
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::VideoExport) ==
-          ResultRecordActionTarget::None) {
-    return;
-  }
-
-  replayExportSelection = selectedResultRecordSummary;
-  replayExportChart = replayModalChart;
-  replayModalTitleText->setText("Export Options");
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(true);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(false);
-  selectedExportFps = 120;
-  selectedExportFullResolution = true;
-  selectedExportIncludeResultScreen = true;
-  if (replayExportSelection->autoPlay) {
-    selectedReplayRenderTouchPoints = false;
-    selectedReplayRenderGhosts = false;
-  }
-  refreshReplayExportOptionButtons();
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::showReplayExportProgress(const std::string &title,
-                                             const std::string &message) {
-  if (replayModalRoot == nullptr) {
-    return;
-  }
-
-  replayModalTitleText->setText(title);
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(true);
-  replayDeleteConfirmationContent->setVisible(false);
-  updateReplayExportProgressUi(0.0, message);
-  replayModalRoot->setSize(rendering::window_width, rendering::window_height);
-  replayModalRoot->setVisible(true);
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::hideReplayModal() {
-  if (replayModalRoot == nullptr) {
-    return;
-  }
-  if (replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress || replayLoadInProgress.load()) {
-    return;
-  }
-  replayModalRoot->setVisible(false);
-  replayDeleteConfirmation.cancel();
-  if (replayDeleteConfirmationContent != nullptr) {
-    replayDeleteConfirmationContent->setVisible(false);
-  }
-  replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
-  clearReplayModalSelection();
-  replayExportSelection.reset();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Watch");
-  }
-  if (replayGBattleButtonText != nullptr) {
-    replayGBattleButtonText->setText("G-BATTLE");
-  }
-  if (replayModalResultButtonText != nullptr) {
-    replayModalResultButtonText->setText("View Result");
-  }
-  if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText("Export Video");
-  }
-}
-
-void MainMenuScene::startSelectedReplayFileShare() {
-  if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
-      replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress || replayDeleteConfirmation.active()) {
-    return;
-  }
-  const auto selection = replay::replayFileActionSelection(
-      *selectedResultRecordSummary, true);
-  if (!selection.request || !selection.shareVisible) {
+void MainMenuScene::shareReplayFile(
+    const replay::ReplayFileActionRequest &request) {
+  if (replayFileDocumentHandoff || replayExportInProgress.load() ||
+      replayResultRecallInProgress || replayIrUploadInProgress) {
     return;
   }
 
   replay::ReplayFileActionService actions(context.replayRepository);
-  auto prepared = actions.prepareShare(*selection.request);
+  auto prepared = actions.prepareShare(request);
   if (prepared.state != replay::ReplayFileActionState::Verified ||
       !prepared.share) {
     const std::string diagnostic = prepared.diagnostic.empty()
                                        ? "Replay file is unavailable to share."
                                        : prepared.diagnostic;
     SDL_Log("Replay share unavailable: %s", diagnostic.c_str());
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText(diagnostic);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setStatus(diagnostic);
+      recordsModal_->reloadRecords(true);
     }
-    reloadReplayRecordModels(true);
-    refreshReplayModalActions();
     return;
   }
 
-  PlatformDocumentExportRequest request{
+  PlatformDocumentExportRequest exportRequest{
       .localPath = prepared.share->sourcePath,
       .mimeType = "application/gzip",
       .suggestedName = prepared.share->suggestedFilename,
       .maxBytes = replay::kReplayLimits.maxCompressedBytes,
       .sourceLifetime = std::move(prepared.share->sourceLifetime)};
   replayFileDocumentHandoff =
-      platform_document_handoff::ExportDocumentAsync(std::move(request));
-  if (!replayFileDocumentHandoff) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText("Unable to open replay sharing.");
+      platform_document_handoff::ExportDocumentAsync(std::move(exportRequest));
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setDocumentHandoffActive(true);
+    if (!replayFileDocumentHandoff) {
+      recordsModal_->setStatus("Unable to open replay sharing.");
+    } else {
+      recordsModal_->setStatus("Choose where to share the BRD replay.");
     }
-  } else if (replayStatusText != nullptr) {
-    replayStatusText->setText("Choose where to share the BRD replay.");
-  }
-  refreshReplayModalActions();
-}
-
-void MainMenuScene::showReplayDeleteConfirmation() {
-  if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
-      replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress) {
-    return;
-  }
-  const auto selection = replay::replayFileActionSelection(
-      *selectedResultRecordSummary, true);
-  if (replayDeleteConfirmationContent == nullptr ||
-      !replayDeleteConfirmation.begin(selection)) {
-    return;
-  }
-
-  replayModalTitleText->setText("Confirm Replay Deletion");
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(true);
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::cancelReplayDeleteConfirmation() {
-  replayDeleteConfirmation.cancel();
-  if (replayDeleteConfirmationContent != nullptr) {
-    replayDeleteConfirmationContent->setVisible(false);
-  }
-  if (replayListContent != nullptr) {
-    replayListContent->setVisible(true);
-  }
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText("Records");
-  }
-  if (replayListView != nullptr) {
-    replayListView->restoreSelection(selectedReplayIndex);
-  }
-  refreshReplayModalActions();
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
   }
 }
 
-void MainMenuScene::confirmSelectedReplayFileDelete() {
+void MainMenuScene::removeReplayFile(
+    const replay::ReplayFileActionRequest &request) {
   if (replayFileDocumentHandoff || replayExportInProgress.load() ||
       replayResultRecallInProgress || replayIrUploadInProgress) {
     return;
   }
-  auto request = replayDeleteConfirmation.confirm();
-  if (!request) {
-    return;
-  }
-
-  if (replayDeleteConfirmationContent != nullptr) {
-    replayDeleteConfirmationContent->setVisible(false);
-  }
-  if (replayListContent != nullptr) {
-    replayListContent->setVisible(true);
-  }
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText("Records");
-  }
 
   replay::ReplayFileActionService actions(context.replayRepository);
-  const auto removed = actions.remove(*request);
+  const auto removed = actions.remove(request);
   if (removed.state == replay::ReplayFileActionState::UserDeleted) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText(
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setStatus(
           removed.cleanupPending
               ? "Replay hidden; file cleanup will retry at startup."
               : "Replay file deleted. Result history was kept.");
+      recordsModal_->reloadRecords(true);
     }
-    reloadReplayRecordModels(true);
   } else {
     const std::string diagnostic = removed.diagnostic.empty()
                                        ? "Replay file could not be deleted."
                                        : removed.diagnostic;
     SDL_Log("Replay delete failed: %s", diagnostic.c_str());
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText(diagnostic);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setStatus(diagnostic);
     }
-  }
-  refreshReplayModalActions();
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
   }
 }
 
@@ -8084,423 +7035,87 @@ void MainMenuScene::applyReplayFileDocumentHandoff() {
   }
   auto result = replayFileDocumentHandoff.takeResult();
   replayFileDocumentHandoff.close();
-  if (replayStatusText != nullptr && result) {
-    if (result->ok()) {
-      replayStatusText->setText("Replay BRD shared.");
-    } else if (result->cancelled()) {
-      replayStatusText->setText("Replay sharing cancelled.");
-    } else {
-      replayStatusText->setText(result->message.empty()
-                                    ? "Replay sharing failed."
-                                    : result->message);
-    }
-  }
-  refreshReplayModalActions();
-}
-
-void MainMenuScene::refreshReplayModalActions() {
-  const bool filterSortMode = replayFilterSortContent != nullptr &&
-                              replayFilterSortContent->getVisible();
-  const bool watchOptionsMode = replayWatchOptionsContent != nullptr &&
-                                replayWatchOptionsContent->getVisible();
-  const bool optionsMode = replayExportOptionsContent != nullptr &&
-                           replayExportOptionsContent->getVisible();
-  const bool progressMode = replayExportProgressContent != nullptr &&
-                            replayExportProgressContent->getVisible();
-  const bool deleteConfirmationMode =
-      replayDeleteConfirmationContent != nullptr &&
-      replayDeleteConfirmationContent->getVisible();
-  const bool exportInProgress = replayExportInProgress.load();
-  const bool resultRecallInProgress = replayResultRecallInProgress;
-  const bool irUploadInProgress = replayIrUploadInProgress;
-  const bool loadInProgress = replayLoadInProgress.load();
-  const bool modalOperationInProgress =
-      exportInProgress || resultRecallInProgress || irUploadInProgress ||
-      loadInProgress || static_cast<bool>(replayFileDocumentHandoff);
-  const auto fileActions = selectedResultRecordSummary.has_value()
-                               ? replay::replayFileActionSelection(
-                                     *selectedResultRecordSummary,
-                                     !modalOperationInProgress)
-                               : replay::ReplayFileActionSelection{};
-  const bool watchVisible =
-      selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !deleteConfirmationMode &&
-      !optionsMode && !progressMode &&
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::Watch) !=
-          ResultRecordActionTarget::None;
-  const bool gbattleVisible =
-      selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !watchOptionsMode && !optionsMode && !progressMode &&
-      !deleteConfirmationMode &&
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::GBattle) ==
-          ResultRecordActionTarget::ModernChart;
-  const ResultRecordRecallActionState resultAction =
-      resultRecordRecallActionState(
-          selectedResultRecordSummary,
-          !filterSortMode && !watchOptionsMode && !optionsMode &&
-              !progressMode && !deleteConfirmationMode,
-          modalOperationInProgress);
-  const bool resultVisible = resultAction.visible;
-  const bool exportVisible =
-      selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !watchOptionsMode && !progressMode && !deleteConfirmationMode &&
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::VideoExport) !=
-          ResultRecordActionTarget::None;
-
-  if (replayModalCloseButtonText != nullptr) {
-    replayModalCloseButtonText->setText(ui_icons::textForCodepoint(kIconXmark));
-  }
-  if (replayModalFilterButtonText != nullptr) {
-    replayModalFilterButtonText->setText(
-        ui_icons::textForCodepoint(kIconFilter));
-  }
-  if (replayShareButtonText != nullptr) {
-    replayShareButtonText->setText(ui_icons::textForCodepoint(kIconShare));
-  }
-  if (replayDeleteButtonText != nullptr) {
-    replayDeleteButtonText->setText(ui_icons::textForCodepoint(kIconTrash));
-  }
-  if (replayWatchButtonText != nullptr && !loadInProgress) {
-    replayWatchButtonText->setText("Watch");
-  }
-  if (replayGBattleButtonText != nullptr && !loadInProgress) {
-    replayGBattleButtonText->setText("G-BATTLE");
-  }
-  if (replayModalResultButtonText != nullptr) {
-    replayModalResultButtonText->setText(
-        resultRecallInProgress ? "Loading..." : "View Result");
-  }
-  if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText(exportInProgress ? "Exporting"
-                                                          : "Export Video");
-  }
-
-  if (replayModalFilterButton != nullptr) {
-    const bool filterVisible =
-        !watchOptionsMode && !optionsMode && !progressMode &&
-        !deleteConfirmationMode;
-    replayModalFilterButton->setVisible(filterVisible);
-    replayModalFilterButton->setWidth(filterVisible ? 54.0f : 0.0f);
-  }
-  if (replayShareButton != nullptr) {
-    const bool visible = fileActions.shareVisible && !deleteConfirmationMode;
-    replayShareButton->setVisible(visible);
-    replayShareButton->setWidth(visible ? 54.0F : 0.0F);
-  }
-  if (replayDeleteButton != nullptr) {
-    const bool visible = fileActions.deleteVisible && !deleteConfirmationMode;
-    replayDeleteButton->setVisible(visible);
-    replayDeleteButton->setWidth(visible ? 54.0F : 0.0F);
-  }
-  if (replayWatchButton != nullptr) {
-    replayWatchButton->setVisible(watchVisible);
-    replayWatchButton->setWidth(
-        watchVisible ? (watchOptionsMode ? 160.0F : 124.0F) : 0.0F);
-  }
-  if (replayGBattleButton != nullptr) {
-    replayGBattleButton->setVisible(gbattleVisible);
-    replayGBattleButton->setWidth(gbattleVisible ? 144.0F : 0.0F);
-  }
-  if (replayModalResultButton != nullptr) {
-    replayModalResultButton->setVisible(resultVisible);
-    replayModalResultButton->setWidth(resultVisible ? 142.0F : 0.0F);
-  }
-  if (replayModalExportButton != nullptr) {
-    replayModalExportButton->setVisible(exportVisible);
-    replayModalExportButton->setWidth(
-        exportVisible ? (optionsMode ? 160.0F : 142.0F) : 0.0F);
-  }
-
-  styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
-                          !modalOperationInProgress, ui_theme::control,
-                          ui_theme::controlHover, ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
-  styleThemedActionButton(
-      replayShareButton, replayShareButtonText,
-      fileActions.shareVisible && fileActions.enabled &&
-          !deleteConfirmationMode,
-      ui_theme::infoAction, ui_theme::infoActionHover,
-      ui_theme::infoActionPressed, ui_theme::accentBorder);
-  styleThemedActionButton(
-      replayDeleteButton, replayDeleteButtonText,
-      fileActions.deleteVisible && fileActions.enabled &&
-          !deleteConfirmationMode,
-      ui_theme::warningAction, ui_theme::warningActionHover,
-      ui_theme::warningActionPressed, ui_theme::amber);
-  if (replay_record_filters::hasActiveCriteria(replayRecordFilters) ||
-      filterSortMode) {
-    styleThemedActionButton(
-        replayModalFilterButton, replayModalFilterButtonText,
-        !watchOptionsMode && !optionsMode && !progressMode &&
-            !modalOperationInProgress,
-        ui_theme::primaryAction, ui_theme::primaryActionHover,
-        ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
-  } else {
-    styleThemedActionButton(
-        replayModalFilterButton, replayModalFilterButtonText,
-        !watchOptionsMode && !optionsMode && !progressMode &&
-            !modalOperationInProgress,
-        ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-        ui_theme::hairlineStrong);
-  }
-  styleThemedActionButton(replayWatchButton, replayWatchButtonText,
-                          watchVisible && !modalOperationInProgress,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
-  styleThemedActionButton(replayGBattleButton, replayGBattleButtonText,
-                          gbattleVisible && !modalOperationInProgress,
-                          ui_theme::warningAction,
-                          ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed, ui_theme::amber);
-  styleThemedActionButton(replayModalResultButton, replayModalResultButtonText,
-                          resultAction.enabled,
-                          ui_theme::successAction,
-                          ui_theme::successActionHover,
-                          ui_theme::successActionPressed, ui_theme::lime);
-  styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
-                          exportVisible && !modalOperationInProgress,
-                          ui_theme::violetAction, ui_theme::violetActionHover,
-                          ui_theme::violetActionPressed,
-                          ui_theme::violetActionHover);
-
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
-  }
-}
-
-void MainMenuScene::refreshReplayFilterSortButtons() {
-  for (const ReplayClearFilterButton &item : replayClearFilterButtons) {
-    styleOptionButton(item.button, item.text,
-                      item.rank == replayRecordFilters.clearMarkRank);
-  }
-  for (const ReplayOptionFilterButton &item : replayPlayOptionFilterButtons) {
-    const std::optional<std::string> normalized =
-        item.option.has_value()
-            ? std::optional<std::string>(
-                  play_options::normalizePlayOption(*item.option))
-            : std::nullopt;
-    styleOptionButton(item.button, item.text,
-                      normalized == replayRecordFilters.playOption);
-  }
-  for (const ReplayScoreRankFilterButton &item :
-       replayScoreRankFilterButtons) {
-    if (item.rank.has_value() && !replayScoreRankFilterAvailable()) {
-      styleThemedActionButton(item.button, item.text, false,
-                              ui_theme::control, ui_theme::controlHover,
-                              ui_theme::controlPressed,
-                              ui_theme::hairlineStrong);
-    } else {
-      styleOptionButton(item.button, item.text,
-                        item.rank == replayRecordFilters.scoreRank);
-    }
-  }
-  for (const ReplaySortButton &item : replaySortButtons) {
-    styleOptionButton(item.button, item.text,
-                      item.criterion == replayRecordFilters.sort);
-  }
-}
-
-void MainMenuScene::refreshReplayExportOptionButtons() {
-  const bool autoPlaySelection = selectedReplayIsAutoPlay();
-  if (autoPlaySelection) {
-    selectedReplayRenderTouchPoints = false;
-    selectedReplayRenderGhosts = false;
-  }
-
-  styleOptionButton(replayFps60Button, replayFps60ButtonText,
-                    selectedExportFps == 60);
-  styleOptionButton(replayFps120Button, replayFps120ButtonText,
-                    selectedExportFps == 120);
-  styleOptionButton(replayResolution1080Button, replayResolution1080ButtonText,
-                    !selectedExportFullResolution);
-  styleOptionButton(replayResolutionFullButton, replayResolutionFullButtonText,
-                    selectedExportFullResolution);
-  styleOptionButton(replayResultIncludeButton, replayResultIncludeButtonText,
-                    selectedExportIncludeResultScreen);
-  styleOptionButton(replayResultSkipButton, replayResultSkipButtonText,
-                    !selectedExportIncludeResultScreen);
-  if (autoPlaySelection) {
-    styleThemedActionButton(replayTouchShowButton, replayTouchShowButtonText,
-                            false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayTouchHideButton, replayTouchHideButtonText, true);
-    styleThemedActionButton(replayExportTouchShowButton,
-                            replayExportTouchShowButtonText, false,
-                            ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayExportTouchHideButton,
-                      replayExportTouchHideButtonText, true);
-    styleThemedActionButton(replayGhostShowButton, replayGhostShowButtonText,
-                            false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayGhostHideButton, replayGhostHideButtonText, true);
-    styleThemedActionButton(replayExportGhostShowButton,
-                            replayExportGhostShowButtonText, false,
-                            ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayExportGhostHideButton,
-                      replayExportGhostHideButtonText, true);
-    return;
-  }
-
-  styleOptionButton(replayTouchShowButton, replayTouchShowButtonText,
-                    selectedReplayRenderTouchPoints);
-  styleOptionButton(replayTouchHideButton, replayTouchHideButtonText,
-                    !selectedReplayRenderTouchPoints);
-  styleOptionButton(replayExportTouchShowButton,
-                    replayExportTouchShowButtonText,
-                    selectedReplayRenderTouchPoints);
-  styleOptionButton(replayExportTouchHideButton,
-                    replayExportTouchHideButtonText,
-                    !selectedReplayRenderTouchPoints);
-  styleOptionButton(replayGhostShowButton, replayGhostShowButtonText,
-                    selectedReplayRenderGhosts);
-  styleOptionButton(replayGhostHideButton, replayGhostHideButtonText,
-                    !selectedReplayRenderGhosts);
-  styleOptionButton(replayExportGhostShowButton,
-                    replayExportGhostShowButtonText,
-                    selectedReplayRenderGhosts);
-  styleOptionButton(replayExportGhostHideButton,
-                    replayExportGhostHideButtonText,
-                    !selectedReplayRenderGhosts);
-}
-
-void MainMenuScene::updateReplayExportProgressUi(double fraction,
-                                                 const std::string &message) {
-  replayExportProgressFraction = std::clamp(fraction, 0.0, 1.0);
-  const int displayedPercent =
-      static_cast<int>(std::lround(replayExportProgressFraction * 100.0));
-  if (replayExportProgressMessageText != nullptr) {
-    replayExportProgressMessageText->setText(message);
-  }
-  if (replayExportProgressPercentText != nullptr) {
-    replayExportProgressPercentText->setText(std::to_string(displayedPercent) +
-                                             "%");
-  }
-  if (replayExportProgressFill != nullptr) {
-    replayExportProgressFill->setWidthPercent(
-        static_cast<float>(displayedPercent));
-  }
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
-  }
-}
-
-void MainMenuScene::clearReplayModalSelection() {
-  selectedReplayIndex = -1;
-  selectedResultRecordSummary.reset();
-  selectedResultRecordStableKey.reset();
-}
-
-bool MainMenuScene::selectReplayModalIndex(int index) {
-  clearReplayModalSelection();
-  if (index < 0 ||
-      index >= static_cast<int>(visibleResultRecordSummaries.size())) {
-    return false;
-  }
-
-  selectedReplayIndex = index;
-  selectedResultRecordSummary =
-      visibleResultRecordSummaries[static_cast<std::size_t>(index)];
-  selectedResultRecordStableKey = selectedResultRecordSummary->stableKey();
-  return true;
-}
-
-void MainMenuScene::applyReplayRecordFilters(
-    std::optional<std::string> preferredStableKey) {
-  if (!preferredStableKey.has_value()) {
-    preferredStableKey = selectedResultRecordStableKey;
-  }
-
-  visibleResultRecordSummaries = replay_record_filters::apply(
-      resultRecordSummaries, replayRecordFilters);
-  if (replayListView != nullptr) {
-    replayListView->setResultRecords(visibleResultRecordSummaries);
-  }
-
-  clearReplayModalSelection();
-  int restoreIndex = -1;
-  if (preferredStableKey.has_value()) {
-    for (size_t i = 0; i < visibleResultRecordSummaries.size(); ++i) {
-      if (visibleResultRecordSummaries[i].stableKey() ==
-          *preferredStableKey) {
-        restoreIndex = static_cast<int>(i);
-        break;
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setDocumentHandoffActive(false);
+    if (result) {
+      if (result->ok()) {
+        recordsModal_->setStatus("Replay BRD shared.");
+      } else if (result->cancelled()) {
+        recordsModal_->setStatus("Replay sharing cancelled.");
+      } else {
+        recordsModal_->setStatus(result->message.empty()
+                                     ? "Replay sharing failed."
+                                     : result->message);
       }
     }
   }
-  if (restoreIndex >= 0) {
-    selectReplayModalIndex(restoreIndex);
-    if (replayListView != nullptr) {
-      replayListView->restoreSelection(restoreIndex);
-    }
-  }
-  refreshReplayModalActions();
 }
 
-void MainMenuScene::setReplayClearFilter(std::optional<int> rank) {
-  replayRecordFilters.clearMarkRank = rank;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-void MainMenuScene::setReplayPlayOptionFilter(
-    std::optional<std::string> option) {
-  replayRecordFilters.playOption =
-      option.has_value() ? std::optional<std::string>(
-                               play_options::normalizePlayOption(*option))
-                         : std::nullopt;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-void MainMenuScene::setReplayScoreRankFilter(
-    std::optional<std::string> rank) {
-  if (rank.has_value() && !replayScoreRankFilterAvailable()) {
-    return;
-  }
-  replayRecordFilters.scoreRank = rank;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-void MainMenuScene::setReplaySortCriterion(
-    ReplayRecordSortCriterion criterion) {
-  replayRecordFilters.sort = criterion;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-bool MainMenuScene::replayScoreRankFilterAvailable() const {
-  return replay_record_filters::supportsScoreRankFilter(
-      resultRecordSummaries);
-}
-
-bool MainMenuScene::selectedReplayIsAutoPlay() const {
-  if (replayExportOptionsContent != nullptr &&
-      replayExportOptionsContent->getVisible() &&
-      replayExportSelection.has_value()) {
-    return replayExportSelection->autoPlay;
-  }
-  return selectedResultRecordSummary.has_value() &&
-         selectedResultRecordSummary->autoPlay;
-}
-
-bool MainMenuScene::selectedReplayIsCourseReplay() const {
-  if (replayExportOptionsContent != nullptr &&
-      replayExportOptionsContent->getVisible() &&
-      replayExportSelection.has_value()) {
-    return replayExportSelection->course;
-  }
-  return selectedResultRecordSummary.has_value() &&
-         selectedResultRecordSummary->course;
+ReplayRecordsModalCallbacks MainMenuScene::makeRecordsModalCallbacks() {
+  ReplayRecordsModalCallbacks callbacks;
+  callbacks.loadRecords = [this](const ChartMetaRecord &record) {
+    return loadRecordsForModal(record);
+  };
+  callbacks.watchModernChart =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        startModernReplayPlayback(record, modern);
+      };
+  callbacks.watchModernCourse =
+      [this](const ChartMetaRecord &record,
+             const ModernCourseResultRecord &modern) {
+        startModernCourseReplayPlayback(record, modern);
+      };
+  callbacks.watchAutoPlay = [this](const ChartMetaRecord &record) {
+    startAutoPlayPlayback(record);
+  };
+  callbacks.gbattle =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        startModernGBattlePlayback(record, modern);
+      };
+  callbacks.recallModernChart =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        startModernReplayResultRecall(record, modern);
+      };
+  callbacks.recallModernCourse = [this](const ModernCourseResultRecord &modern,
+                                        bool retrySame) {
+    startModernCourseReplayResultRecall(modern, retrySame);
+  };
+  callbacks.recallRemote = [this](const IrRemoteRecordId &identity,
+                                  const std::string &selectedStableKey) {
+    startRemoteResultRecall(identity, selectedStableKey);
+  };
+  callbacks.exportModernChart =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern,
+             ReplayVideoExportOptions options) {
+        options.pacemakerTarget =
+            pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+        startModernReplayVideoExport(record, modern, options);
+      };
+  callbacks.exportModernCourse =
+      [this](const ModernCourseResultRecord &modern,
+             ReplayVideoExportOptions options) {
+        options.pacemakerTarget =
+            pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+        startModernCourseReplayVideoExport(modern, options);
+      };
+  callbacks.exportAutoPlay =
+      [this](const ChartMetaRecord &record, ReplayVideoExportOptions options) {
+        options.pacemakerTarget = pacemaker::kTargetOff;
+        startAutoPlayVideoExport(record, options);
+      };
+  callbacks.share = [this](const replay::ReplayFileActionRequest &request) {
+    shareReplayFile(request);
+  };
+  callbacks.remove = [this](const replay::ReplayFileActionRequest &request) {
+    removeReplayFile(request);
+  };
+  callbacks.irUpload = [this](const ModernChartResultRecord &modern) {
+    startModernReplayIrUpload(modern);
+  };
+  callbacks.irStatusFeedback = [this](ir::IrRecordState state) {
+    publishReplayIrStatusFeedback(state);
+  };
+  return callbacks;
 }
 
 bms_parser::ChartMeta
@@ -8568,9 +7183,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
 
   willStart.store(true);
   cancelActivePreviewLoading();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Loading...");
-  }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const audio::PlaybackRate autoPlayPlayback{
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
@@ -8606,7 +7219,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
           return failReplayLoad();
         }
 
-        hideReplayModal();
+        if (recordsModal_ != nullptr) recordsModal_->hide();
         changeToGameplayScene(
             chart, {
                          .startPosition = 0,
@@ -8643,13 +7256,13 @@ void MainMenuScene::startModernReplayPlayback(
 
   willStart.store(true);
   cancelActivePreviewLoading();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Loading...");
-  }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const std::string pacemakerTarget =
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
-  const bool renderTouchPoints = selectedReplayRenderTouchPoints;
-  const bool renderGhosts = selectedReplayRenderGhosts;
+  const bool renderTouchPoints =
+      recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
+  const bool renderGhosts =
+      recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
   retirePreviewLoadThread(true);
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), pacemakerTarget,
@@ -8716,7 +7329,7 @@ void MainMenuScene::startModernReplayPlayback(
                 applyReplayProvenanceToStartOptions(replayOptions,
                                                     *loaded.replayData);
                 context.jukebox.stop();
-                hideReplayModal();
+                if (recordsModal_ != nullptr) recordsModal_->hide();
                 changeToGameplayScene(chart, std::move(replayOptions));
                 willStart.store(false);
               });
@@ -8737,9 +7350,7 @@ void MainMenuScene::startModernGBattlePlayback(
 
   willStart.store(true);
   cancelActivePreviewLoading();
-  if (replayGBattleButtonText != nullptr) {
-    replayGBattleButtonText->setText("Loading...");
-  }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const GaugeType gaugeType = profileSelections.gaugeType;
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
   const GaugeType gaugeAutoShiftLowerBound =
@@ -8808,7 +7419,7 @@ void MainMenuScene::startModernGBattlePlayback(
                 }
                 auto recordData = loaded.replayData;
                 context.jukebox.stop();
-                hideReplayModal();
+                if (recordsModal_ != nullptr) recordsModal_->hide();
                 changeToGameplayScene(
                     chart, {
                                .startPosition = 0,
@@ -8857,11 +7468,11 @@ void MainMenuScene::startModernCourseReplayPlayback(
 
   willStart.store(true);
   cancelActivePreviewLoading();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Loading...");
-  }
-  const bool renderTouchPoints = selectedReplayRenderTouchPoints;
-  const bool renderGhosts = selectedReplayRenderGhosts;
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
+  const bool renderTouchPoints =
+      recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
+  const bool renderGhosts =
+      recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
   retirePreviewLoadThread(true);
   startReplayLoadWorker(
       [this, modern = std::move(modern), chartPaths = std::move(chartPaths),
@@ -8902,7 +7513,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
                 if (!warning.empty()) {
                   publishReplayLoadDiagnostic("course Watch warning", warning);
                 }
-                hideReplayModal();
+                if (recordsModal_ != nullptr) recordsModal_->hide();
                 startCourseReplayDirect(std::move(session));
                 willStart.store(false);
               });
@@ -9213,12 +7824,7 @@ void MainMenuScene::resetStartLoadingUi() {
 
 void MainMenuScene::resetReplayWatchLoadingUi() {
   willStart.store(false);
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Watch");
-  }
-  if (replayGBattleButtonText != nullptr) {
-    replayGBattleButtonText->setText("G-BATTLE");
-  }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
 }
 
 void MainMenuScene::publishReplayLoadDiagnostic(
@@ -9238,10 +7844,13 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
   const std::string safeDiagnostic = replayDiagnosticOr(diagnostic, fallback);
   publishReplayLoadDiagnostic(action, safeDiagnostic);
   resetReplayWatchLoadingUi();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setStatus(safeDiagnostic);
+    recordsModal_->reloadRecords(true);
+  }
   if (replayStatusText != nullptr) {
     replayStatusText->setText(safeDiagnostic);
   }
-  reloadReplayRecordModels(true);
   return true;
 }
 
@@ -9264,7 +7873,6 @@ void MainMenuScene::startReplayLoadWorker(
         }
         work(std::move(cancelled));
       });
-  refreshReplayModalActions();
 }
 
 void MainMenuScene::queueReplayLoadCompletion(
@@ -9290,6 +7898,7 @@ void MainMenuScene::applyReplayLoadCompletion() {
     replayLoadThread.join();
   }
   replayLoadInProgress.store(false, std::memory_order_release);
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
   completion();
 }
 
@@ -9302,6 +7911,7 @@ void MainMenuScene::stopReplayLoadWorker() {
     replayLoadThread.join();
   }
   replayLoadInProgress.store(false, std::memory_order_release);
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
   std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
   pendingReplayLoadCompletion = {};
 }
@@ -9334,7 +7944,10 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
     pendingReplayExportProgress.reset();
   }
-  showReplayExportProgress(progressTitle, progressMessage);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->showExportProgress(progressTitle, progressMessage);
+    recordsModal_->setStatus(statusMessage);
+  }
   if (replayStatusText != nullptr) {
     replayStatusText->setText(statusMessage);
   }
@@ -9360,7 +7973,9 @@ void MainMenuScene::startAutoPlayVideoExport(
 
 #if TARGET_OS_ANDROID
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    updateReplayExportProgressUi(progress.fraction, progress.message);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->updateExportProgress(progress.fraction, progress.message);
+    }
   };
 #else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
@@ -9478,7 +8093,9 @@ void MainMenuScene::startModernReplayVideoExport(
 
 #if TARGET_OS_ANDROID
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    updateReplayExportProgressUi(progress.fraction, progress.message);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->updateExportProgress(progress.fraction, progress.message);
+    }
   };
 #else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
@@ -9571,7 +8188,9 @@ void MainMenuScene::startModernCourseReplayVideoExport(
 
 #if TARGET_OS_ANDROID
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    updateReplayExportProgressUi(progress.fraction, progress.message);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->updateExportProgress(progress.fraction, progress.message);
+    }
   };
 #else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
@@ -9684,36 +8303,20 @@ void MainMenuScene::publishReplayIrStatusFeedback(
     return;
   }
 
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText(message);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->showIrFeedback(message);
   }
-  const std::uint64_t feedbackRevision = ++replayIrUploadFeedbackRevision;
-  defer(
-      [this, feedbackRevision]() {
-        if (feedbackRevision != replayIrUploadFeedbackRevision ||
-            replayIrUploadInProgress) {
-          return true;
-        }
-        if (replayModalRoot != nullptr && replayModalRoot->getVisible() &&
-            replayListContent != nullptr && replayListContent->getVisible() &&
-            replayModalTitleText != nullptr) {
-          replayModalTitleText->setText("Records");
-          replayModalRoot->applyYogaLayoutFromRoot();
-        }
-        return true;
-      },
-      1400, true);
 }
 
 void MainMenuScene::observeReplayIrServiceRevisions() {
-  if (replayModalRoot == nullptr || !replayModalRoot->getVisible() ||
-      replayListContent == nullptr || !replayListContent->getVisible() ||
+  if (recordsModal_ == nullptr || !recordsModal_->isVisible() ||
+      recordsModal_->records().empty() ||
       context.irSubmissionService == nullptr) {
     return;
   }
 
   bool reload = false;
-  for (const ResultRecordSummary &summary : resultRecordSummaries) {
+  for (const ResultRecordSummary &summary : recordsModal_->records()) {
     if (!summary.modern.has_value()) {
       continue;
     }
@@ -9729,7 +8332,7 @@ void MainMenuScene::observeReplayIrServiceRevisions() {
     reload = true;
   }
   if (reload) {
-    reloadReplayRecordModels(true);
+    recordsModal_->reloadRecords(true);
   }
 }
 
@@ -9764,11 +8367,10 @@ void MainMenuScene::startModernReplayIrUpload(
   }
 
   replayIrUploadInProgress = true;
-  ++replayIrUploadFeedbackRevision;
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText("Preparing IR...");
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setIrUploadInProgress(true);
+    recordsModal_->showIrFeedback("Preparing IR...");
   }
-  refreshReplayModalActions();
   cancelActivePreviewLoading();
 
   defer(
@@ -9823,35 +8425,17 @@ void MainMenuScene::startModernReplayIrUpload(
 void MainMenuScene::finishReplayIrUpload(std::string attemptId,
                                          std::string message) {
   replayIrUploadInProgress = false;
-  if (!attemptId.empty()) {
-    reloadReplayRecordModels(true);
-  }
-
   std::string safeMessage = ir::sanitizeDiagnostic(message);
   if (safeMessage.empty()) {
     safeMessage = "IR upload could not be queued.";
   }
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText(safeMessage);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setIrUploadInProgress(false);
+    if (!attemptId.empty()) {
+      recordsModal_->reloadRecords(true);
+    }
+    recordsModal_->showIrFeedback(safeMessage);
   }
-  refreshReplayModalActions();
-
-  const std::uint64_t feedbackRevision = ++replayIrUploadFeedbackRevision;
-  defer(
-      [this, feedbackRevision]() {
-        if (feedbackRevision != replayIrUploadFeedbackRevision ||
-            replayIrUploadInProgress) {
-          return true;
-        }
-        if (replayModalRoot != nullptr && replayModalRoot->getVisible() &&
-            replayListContent != nullptr && replayListContent->getVisible() &&
-            replayModalTitleText != nullptr) {
-          replayModalTitleText->setText("Records");
-          replayModalRoot->applyYogaLayoutFromRoot();
-        }
-        return true;
-      },
-      1400, true);
 }
 
 void MainMenuScene::startModernReplayResultRecall(
@@ -9862,7 +8446,7 @@ void MainMenuScene::startModernReplayResultRecall(
   }
 
   replayResultRecallInProgress = true;
-  refreshReplayModalActions();
+  if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   retirePreviewLoadThread(true);
   startReplayLoadWorker(
       [this, record, modern = std::move(modern)](
@@ -9974,7 +8558,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
   auto currentSelection = currentCourseSelectionFor(modern.result);
 
   replayResultRecallInProgress = true;
-  refreshReplayModalActions();
+  if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   cancelActivePreviewLoading();
   retirePreviewLoadThread(true);
   startReplayLoadWorker([this, modern = std::move(modern), retrySameAllowed,
@@ -10156,7 +8740,7 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
     return;
   }
   replayResultRecallInProgress = true;
-  refreshReplayModalActions();
+  if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   cancelActivePreviewLoading();
   defer(
       [this, identity = std::move(identity),
@@ -10171,9 +8755,11 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
             .selectedStableKey = std::move(selectedStableKey),
         };
         RemoteResultRecallCallbacks callbacks{
-            .selectionStillMatches = [this](const auto &candidate) {
+            .selectionStillMatches = [this](const RemoteResultRecallRequest &request) {
               return remoteResultRecallSelectionMatches(
-                  selectedResultRecordSummary, candidate);
+                  recordsModal_ != nullptr ? recordsModal_->selection()
+                                           : std::optional<ResultRecordSummary>{},
+                  request);
             },
             .loadExact = [this](const IrRemoteRecordId &candidate) {
               return context.replayRepository.LoadIrRemoteScore(
@@ -10205,23 +8791,19 @@ void MainMenuScene::finishReplayResultRecallFailure(std::string diagnostic) {
   SDL_Log("Saved result recall failed: %s",
           safeDiagnostic.empty() ? "result unavailable"
                                  : safeDiagnostic.c_str());
-  if (replayModalResultButtonText != nullptr) {
-    replayModalResultButtonText->setText("Result Unavailable");
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setResultRecallInProgress(false);
+    if (!safeDiagnostic.empty()) {
+      recordsModal_->setStatus(safeDiagnostic);
+    }
   }
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
-  }
-  defer(
-      [this]() {
-        replayResultRecallInProgress = false;
-        refreshReplayModalActions();
-        return true;
-      },
-      1400, true);
+  replayResultRecallInProgress = false;
 }
 
 void MainMenuScene::finishRemoteResultRecallFailure(std::string diagnostic) {
-  reloadReplayRecordModels(true);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->reloadRecords(true);
+  }
   finishReplayResultRecallFailure(std::move(diagnostic));
 }
 
@@ -10236,7 +8818,9 @@ void MainMenuScene::applyReplayExportProgress() {
     pendingReplayExportProgress.reset();
   }
 
-  updateReplayExportProgressUi(progress->fraction, progress->message);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->updateExportProgress(progress->fraction, progress->message);
+  }
 }
 
 void MainMenuScene::applyReplayExportResult() {
@@ -10282,17 +8866,15 @@ void MainMenuScene::applyReplayExportResult() {
           result->message, "Replay export failed."));
     }
   }
-  if (replayExportProgressContent != nullptr &&
-      replayExportProgressContent->getVisible()) {
-    replayModalTitleText->setText("Records");
-    replayExportProgressContent->setVisible(false);
-    replayExportOptionsContent->setVisible(false);
-    replayListContent->setVisible(true);
-    replayExportSelection.reset();
-    if (replayListView != nullptr) {
-      replayListView->restoreSelection(selectedReplayIndex);
-    }
-    refreshReplayModalActions();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setExportInProgress(false);
+    recordsModal_->returnToList(
+        result->success
+            ? (result->message == "Saved to Photos" ? "Saved" : "Exported")
+            : (result->message == "No Chart"
+                   ? "No Chart"
+                   : replayDiagnosticOr(result->message,
+                                        "Replay export failed.")));
   }
 
   if (result->success) {
@@ -10332,6 +8914,9 @@ void MainMenuScene::update(float dt) {
   applyReplayFileDocumentHandoff();
   applyParseLogDocumentHandoff();
   observeReplayIrServiceRevisions();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->update();
+  }
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
@@ -10368,8 +8953,8 @@ void MainMenuScene::renderScene() {
       safe.left != lastSafeLeft || safe.bottom != lastSafeBottom ||
       safe.right != lastSafeRight;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->setSize(rendering::window_width, rendering::window_height);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->resize(rendering::window_width, rendering::window_height);
   }
   if (playOptionsModalRoot != nullptr) {
     playOptionsModalRoot->setSize(rendering::window_width,
@@ -10424,7 +9009,6 @@ void MainMenuScene::cleanupScene() {
   playOptionsModal.reset();
   replayFileDocumentHandoff.close();
   parseLogDocumentHandoff.close();
-  replayDeleteConfirmation.cancel();
   cancelActivePreviewLoading();
   stopReplayLoadWorker();
   context.profileSwitchBlockers.scene = nullptr;
@@ -10486,19 +9070,7 @@ void MainMenuScene::cleanupScene() {
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
-  replayModalRoot = nullptr;
-  replayModalContentFrame = nullptr;
-  replayListContent = nullptr;
-  replayFilterSortContent = nullptr;
-  replayWatchOptionsContent = nullptr;
-  replayExportOptionsContent = nullptr;
-  replayExportProgressContent = nullptr;
-  replayDeleteConfirmationContent = nullptr;
-  replayExportProgressTrack = nullptr;
-  replayExportProgressFill = nullptr;
-  replayModalTitleText = nullptr;
-  replayExportProgressMessageText = nullptr;
-  replayExportProgressPercentText = nullptr;
+  recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
   musicModalRoot = nullptr;
@@ -10581,55 +9153,6 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
-  replayListView = nullptr;
-  replayWatchButton = nullptr;
-  replayGBattleButton = nullptr;
-  replayModalResultButton = nullptr;
-  replayModalExportButton = nullptr;
-  replayShareButton = nullptr;
-  replayDeleteButton = nullptr;
-  replayDeleteCancelButton = nullptr;
-  replayDeleteConfirmButton = nullptr;
-  replayModalFilterButton = nullptr;
-  replayModalCloseButton = nullptr;
-  replayFps60Button = nullptr;
-  replayFps120Button = nullptr;
-  replayResolution1080Button = nullptr;
-  replayResolutionFullButton = nullptr;
-  replayResultIncludeButton = nullptr;
-  replayResultSkipButton = nullptr;
-  replayTouchShowButton = nullptr;
-  replayTouchHideButton = nullptr;
-  replayGhostShowButton = nullptr;
-  replayGhostHideButton = nullptr;
-  replayExportTouchShowButton = nullptr;
-  replayExportTouchHideButton = nullptr;
-  replayExportGhostShowButton = nullptr;
-  replayExportGhostHideButton = nullptr;
-  replayWatchButtonText = nullptr;
-  replayGBattleButtonText = nullptr;
-  replayModalResultButtonText = nullptr;
-  replayModalExportButtonText = nullptr;
-  replayShareButtonText = nullptr;
-  replayDeleteButtonText = nullptr;
-  replayDeleteCancelButtonText = nullptr;
-  replayDeleteConfirmButtonText = nullptr;
-  replayModalFilterButtonText = nullptr;
-  replayModalCloseButtonText = nullptr;
-  replayFps60ButtonText = nullptr;
-  replayFps120ButtonText = nullptr;
-  replayResolution1080ButtonText = nullptr;
-  replayResolutionFullButtonText = nullptr;
-  replayResultIncludeButtonText = nullptr;
-  replayResultSkipButtonText = nullptr;
-  replayTouchShowButtonText = nullptr;
-  replayTouchHideButtonText = nullptr;
-  replayGhostShowButtonText = nullptr;
-  replayGhostHideButtonText = nullptr;
-  replayExportTouchShowButtonText = nullptr;
-  replayExportTouchHideButtonText = nullptr;
-  replayExportGhostShowButtonText = nullptr;
-  replayExportGhostHideButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -10650,7 +9173,6 @@ void MainMenuScene::cleanupScene() {
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
   unzipInProgress = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
@@ -10665,25 +9187,8 @@ void MainMenuScene::cleanupScene() {
   displayedLibraryTasksButtonText.clear();
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
-  visibleResultRecordSummaries.clear();
-  resultRecordSummaries.clear();
-  selectedResultRecordStableKey.reset();
   publishedResultRecordDiagnostic.clear();
-  replayRecordFilters = {};
-  selectedReplayIndex = -1;
-  selectedResultRecordSummary.reset();
-  replayExportSelection.reset();
-  selectedExportFps = 120;
-  selectedExportFullResolution = true;
-  selectedExportIncludeResultScreen = true;
-  selectedReplayRenderTouchPoints = true;
-  selectedReplayRenderGhosts = true;
-  replayExportProgressFraction = 0.0;
   playOptionsPanel = nullptr;
-  replayClearFilterButtons.clear();
-  replayPlayOptionFilterButtons.clear();
-  replayScoreRankFilterButtons.clear();
-  replaySortButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;

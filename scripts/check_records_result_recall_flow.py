@@ -4,10 +4,13 @@ import sys
 root = Path(sys.argv[1])
 header = (root / "src/scene/MainMenuScene.h").read_text()
 source = (root / "src/scene/MainMenuScene.cpp").read_text()
-combined = header + source
+modal_source = (root / "src/scene/ReplayRecordsModal.cpp").read_text()
+modal_header = (root / "src/scene/ReplayRecordsModal.h").read_text()
+combined = header + source + modal_header + modal_source
 
 required = [
-    "replayModalResultButton",
+    "Button *resultButton_ = nullptr;",
+    "modal->resultButton_ = resultButton;",
     "replayResultRecallInProgress",
     'makeModalButton("View Result"',
     "resultRecordActionTarget(",

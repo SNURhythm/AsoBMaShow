@@ -4647,6 +4647,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(replay_records_modal_tests
+        tests/replay_records_modal_tests.cpp
+        src/scene/ReplayRecordsModal.cpp
+        src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayFileActionSelection.cpp
+        src/scene/RemoteResultRecallController.cpp
+        src/ScoreProvenance.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/bms_parser.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/ScrollView.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(replay_records_modal_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_records_modal_tests PRIVATE cxx_std_23)
+    target_link_libraries(replay_records_modal_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(ir_upload_candidate_list_view_tests
         tests/ir_upload_candidate_list_view_tests.cpp
         src/view/DecodedImageCache.cpp
@@ -7314,6 +7345,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests
         ir_uploads_controller_tests
+        replay_records_modal_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()

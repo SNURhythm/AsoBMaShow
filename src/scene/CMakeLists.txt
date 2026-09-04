@@ -23,6 +23,7 @@ target_sources(main PRIVATE
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
     RemoteResultRecallController.cpp
+    ReplayRecordsModal.cpp
     ResultPresentationModel.cpp
     SceneManager.cpp
     SceneReturnTarget.cpp

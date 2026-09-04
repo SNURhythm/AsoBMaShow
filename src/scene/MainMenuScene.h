@@ -36,6 +36,7 @@
 #include "MainMenuLibrary.h"
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
+#include "ReplayRecordsModal.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -66,6 +67,7 @@ public:
   void init() override;
   void onPause() override;
   void onResume() override;
+  EventHandleResult handleEvents(SDL_Event &event) override;
 
   void update(float dt) override;
   void renderScene() override;
@@ -106,7 +108,6 @@ private:
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
-  std::uint64_t replayIrUploadFeedbackRevision = 0;
   std::unordered_map<std::string, std::uint64_t> replayIrObservedRevisions;
   std::atomic_bool unzipInProgress = false;
   std::atomic_bool tasksModalOpenRequested = false;
@@ -194,6 +195,7 @@ private:
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
   std::unique_ptr<ContextMenuView> revealContextMenu;
+  std::unique_ptr<ReplayRecordsModal> recordsModal_;
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   ChartFilterPanelView *chartFilterPanel = nullptr;
@@ -226,19 +228,6 @@ private:
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
-  View *replayModalRoot = nullptr;
-  View *replayModalContentFrame = nullptr;
-  View *replayListContent = nullptr;
-  View *replayFilterSortContent = nullptr;
-  View *replayWatchOptionsContent = nullptr;
-  View *replayExportOptionsContent = nullptr;
-  View *replayExportProgressContent = nullptr;
-  View *replayDeleteConfirmationContent = nullptr;
-  View *replayExportProgressTrack = nullptr;
-  View *replayExportProgressFill = nullptr;
-  TextView *replayModalTitleText = nullptr;
-  TextView *replayExportProgressMessageText = nullptr;
-  TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   PlayOptionsPanelView *playOptionsPanel = nullptr;
@@ -328,55 +317,6 @@ private:
   Button *readyPlayOptionsButton = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
-  ResultRecordListView *replayListView = nullptr;
-  Button *replayWatchButton = nullptr;
-  Button *replayGBattleButton = nullptr;
-  Button *replayModalResultButton = nullptr;
-  Button *replayModalExportButton = nullptr;
-  Button *replayShareButton = nullptr;
-  Button *replayDeleteButton = nullptr;
-  Button *replayDeleteCancelButton = nullptr;
-  Button *replayDeleteConfirmButton = nullptr;
-  Button *replayModalFilterButton = nullptr;
-  Button *replayModalCloseButton = nullptr;
-  Button *replayFps60Button = nullptr;
-  Button *replayFps120Button = nullptr;
-  Button *replayResolution1080Button = nullptr;
-  Button *replayResolutionFullButton = nullptr;
-  Button *replayResultIncludeButton = nullptr;
-  Button *replayResultSkipButton = nullptr;
-  Button *replayTouchShowButton = nullptr;
-  Button *replayTouchHideButton = nullptr;
-  Button *replayGhostShowButton = nullptr;
-  Button *replayGhostHideButton = nullptr;
-  Button *replayExportTouchShowButton = nullptr;
-  Button *replayExportTouchHideButton = nullptr;
-  Button *replayExportGhostShowButton = nullptr;
-  Button *replayExportGhostHideButton = nullptr;
-  TextView *replayWatchButtonText = nullptr;
-  TextView *replayGBattleButtonText = nullptr;
-  TextView *replayModalResultButtonText = nullptr;
-  TextView *replayModalExportButtonText = nullptr;
-  TextView *replayShareButtonText = nullptr;
-  TextView *replayDeleteButtonText = nullptr;
-  TextView *replayDeleteCancelButtonText = nullptr;
-  TextView *replayDeleteConfirmButtonText = nullptr;
-  TextView *replayModalFilterButtonText = nullptr;
-  TextView *replayModalCloseButtonText = nullptr;
-  TextView *replayFps60ButtonText = nullptr;
-  TextView *replayFps120ButtonText = nullptr;
-  TextView *replayResolution1080ButtonText = nullptr;
-  TextView *replayResolutionFullButtonText = nullptr;
-  TextView *replayResultIncludeButtonText = nullptr;
-  TextView *replayResultSkipButtonText = nullptr;
-  TextView *replayTouchShowButtonText = nullptr;
-  TextView *replayTouchHideButtonText = nullptr;
-  TextView *replayGhostShowButtonText = nullptr;
-  TextView *replayGhostHideButtonText = nullptr;
-  TextView *replayExportTouchShowButtonText = nullptr;
-  TextView *replayExportTouchHideButtonText = nullptr;
-  TextView *replayExportGhostShowButtonText = nullptr;
-  TextView *replayExportGhostHideButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
     std::filesystem::path outputPath;
@@ -474,51 +414,11 @@ private:
   bool chartDifficultyMinDropdownOpen = false;
   bool chartDifficultyMaxDropdownOpen = false;
   std::optional<int> chartDifficultyRangeTableId;
-  std::vector<ResultRecordSummary> resultRecordSummaries;
-  std::vector<ResultRecordSummary> visibleResultRecordSummaries;
-  std::optional<std::string> selectedResultRecordStableKey;
-  std::optional<ResultRecordSummary> selectedResultRecordSummary;
   std::string publishedResultRecordDiagnostic;
-  ReplayRecordFilters replayRecordFilters;
-  ChartMetaRecord replayModalChart;
-  std::optional<ResultRecordSummary> replayExportSelection;
   platform_document_handoff::PlatformDocumentHandoffOperation
       replayFileDocumentHandoff;
   platform_document_handoff::PlatformDocumentHandoffOperation
       parseLogDocumentHandoff;
-  replay::ReplayFileDeleteConfirmation replayDeleteConfirmation;
-  ChartMetaRecord replayExportChart;
-  int selectedReplayIndex = -1;
-  int selectedExportFps = 120;
-  bool selectedExportFullResolution = true;
-  bool selectedExportIncludeResultScreen = true;
-  bool selectedReplayRenderTouchPoints = true;
-  bool selectedReplayRenderGhosts = true;
-  double replayExportProgressFraction = 0.0;
-  struct ReplayClearFilterButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::optional<int> rank;
-  };
-  struct ReplayOptionFilterButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::optional<std::string> option;
-  };
-  struct ReplayScoreRankFilterButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::optional<std::string> rank;
-  };
-  struct ReplaySortButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    ReplayRecordSortCriterion criterion = ReplayRecordSortCriterion::Newest;
-  };
-  std::vector<ReplayClearFilterButton> replayClearFilterButtons;
-  std::vector<ReplayOptionFilterButton> replayPlayOptionFilterButtons;
-  std::vector<ReplayScoreRankFilterButton> replayScoreRankFilterButtons;
-  std::vector<ReplaySortButton> replaySortButtons;
   main_menu_profile::Selections profileSelections;
   bool profileSelectionsInitialized = false;
   struct EffectivePlayOptionSelection {
@@ -725,40 +625,17 @@ private:
   void buildPlayOptionsModal();
   void showPlayOptionsModal();
   void hidePlayOptionsModal();
-  void buildReplayModal();
-  void showReplayListModal(const ChartMetaRecord &record);
-  void reloadReplayRecordModels(bool preserveViewState);
-  void showReplayFilterSortOptions();
-  void showReplayExportOptions();
-  void showReplayExportProgress(const std::string &title = "Exporting Replay",
-                                const std::string &message =
-                                    "Preparing export");
-  void hideReplayModal();
-  void refreshReplayModalActions();
-  void startSelectedReplayFileShare();
-  void showReplayDeleteConfirmation();
-  void cancelReplayDeleteConfirmation();
-  void confirmSelectedReplayFileDelete();
+  void openReplayRecordsForSelection();
+  void shareReplayFile(const replay::ReplayFileActionRequest &request);
+  void removeReplayFile(const replay::ReplayFileActionRequest &request);
   void applyReplayFileDocumentHandoff();
-  void refreshReplayFilterSortButtons();
-  void refreshReplayExportOptionButtons();
-  void updateReplayExportProgressUi(double fraction,
-                                    const std::string &message);
-  void clearReplayModalSelection();
-  bool selectReplayModalIndex(int index);
-  void applyReplayRecordFilters(
-      std::optional<std::string> preferredStableKey = std::nullopt);
-  void setReplayClearFilter(std::optional<int> rank);
-  void setReplayPlayOptionFilter(std::optional<std::string> option);
-  void setReplayScoreRankFilter(std::optional<std::string> rank);
-  void setReplaySortCriterion(ReplayRecordSortCriterion criterion);
-  bool replayScoreRankFilterAvailable() const;
+  ReplayRecordsModalCallbacks makeRecordsModalCallbacks();
+  std::vector<ResultRecordSummary>
+  loadRecordsForModal(const ChartMetaRecord &record);
   bool beginReplayExport(const std::string &progressTitle,
                          const std::string &progressMessage,
                          const std::string &statusMessage);
   void queueReplayExportResult(const ReplayVideoExportResult &result);
-  bool selectedReplayIsAutoPlay() const;
-  bool selectedReplayIsCourseReplay() const;
   bms_parser::ChartMeta
   replayLoadMetaForRecord(const ChartMetaRecord &record) const;
   ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;

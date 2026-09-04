@@ -6,17 +6,21 @@ root = (Path(sys.argv[1]) if len(sys.argv) > 1
 repository = (root / "src/repositories/ReplayRepositoryModernResults.cpp").read_text()
 header = (root / "src/scene/MainMenuScene.h").read_text()
 menu = (root / "src/scene/MainMenuScene.cpp").read_text()
+modal = (root / "src/scene/ReplayRecordsModal.cpp").read_text()
 result_view = (root / "src/view/ResultRecordListView.h").read_text()
 
 observer_start = menu.index("void MainMenuScene::observeReplayIrServiceRevisions()")
 observer_end = menu.index("\nvoid MainMenuScene::startModernReplayIrUpload", observer_start)
 observer = menu[observer_start:observer_end]
-reload_start = menu.index("void MainMenuScene::reloadReplayRecordModels(")
-reload_end = menu.index("\nvoid MainMenuScene::showReplayListModal", reload_start)
-reload = menu[reload_start:reload_end]
-filter_start = menu.index("void MainMenuScene::applyReplayRecordFilters(")
-filter_end = menu.index("\nvoid MainMenuScene::setReplayClearFilter", filter_start)
-filter_restore = menu[filter_start:filter_end]
+loader_start = menu.index("MainMenuScene::loadRecordsForModal(")
+loader_end = menu.index("\nvoid MainMenuScene::shareReplayFile(", loader_start)
+loader = menu[loader_start:loader_end]
+filter_start = modal.index("void ReplayRecordsModal::applyFilters(")
+filter_end = modal.index("\nvoid ReplayRecordsModal::refreshActions", filter_start)
+filter_restore = modal[filter_start:filter_end]
+reload_start = modal.index("void ReplayRecordsModal::reloadRecords(")
+reload_end = modal.index("\nvoid ReplayRecordsModal::setExportInProgress", reload_start)
+modal_reload = modal[reload_start:reload_end]
 
 required = {
     "repository": [
@@ -28,7 +32,7 @@ required = {
     "header": [
         "std::unordered_map<std::string, std::uint64_t> "
         "replayIrObservedRevisions",
-        "ResultRecordListView *replayListView",
+        "std::unique_ptr<ReplayRecordsModal> recordsModal_",
     ],
     "menu": [
         "recordActivityFor(ir::IrActiveRequestKind activeRequest)",
@@ -36,26 +40,27 @@ required = {
         "activeReplayIrServerOrigin()",
     ],
     "observer": [
-        "replayModalRoot->getVisible()",
-        "replayListContent->getVisible()",
+        "recordsModal_->isVisible()",
         "context.irSubmissionService->status(",
         "replayIrObservedRevisions",
         "status.revision",
-        "reloadReplayRecordModels(true)",
+        "recordsModal_->reloadRecords(true)",
     ],
-    "reload": [
+    "loader": [
         "ListIrUploadRecordsForChart(",
         "irRecordsByAttempt",
         "resolvedState(",
         "recordActivityFor(serviceStatus.activeRequest)",
+    ],
+    "modal_reload": [
         "previousScrollOffset",
         "preferredStableKey",
-        "applyReplayRecordFilters(std::move(preferredStableKey))",
+        "applyFilters(std::move(preferredStableKey))",
     ],
     "filter_restore": [
         "preferredStableKey",
-        "visibleResultRecordSummaries",
-        "replayListView->restoreSelection",
+        "visibleRecords_",
+        "list_->restoreSelection",
     ],
     "result_view": [
         "summary.isRemote() ? ir::IrRecordState::Uploaded",
@@ -71,7 +76,8 @@ texts = {
     "header": header,
     "menu": menu,
     "observer": observer,
-    "reload": reload,
+    "loader": loader,
+    "modal_reload": modal_reload,
     "filter_restore": filter_restore,
     "result_view": result_view,
 }
