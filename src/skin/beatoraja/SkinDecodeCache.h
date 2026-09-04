@@ -14,6 +14,7 @@ namespace skin {
 // pixels instead of re-decoding them on every start.
 struct SkinDecodeCacheEntry {
   std::map<std::string, image_decode::DecodedImageData, std::less<>> fontPages;
+  std::map<std::string, std::size_t, std::less<>> pageEncodedBytes;
   std::map<std::string, image_decode::DecodedImageData, std::less<>> skinImages;
   std::size_t decodedBytes = 0;
 };

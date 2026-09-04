@@ -2769,9 +2769,10 @@ void testBitmapFontPagesAreCachedAcrossDecodeRuns() {
        .model = model,
        .configuration = configuration});
   const auto cached = service.decodeCache().entry(revisionKey);
-  expect(firstPlan.plan && cached != nullptr && !cached->fontPages.empty(),
+  expect(firstPlan.plan && cached != nullptr && !cached->fontPages.empty() &&
+             !cached->pageEncodedBytes.empty(),
          "the first decode run decodes the bitmap font pages and stores them "
-         "in the app-level decode cache");
+         "with their encoded byte sizes in the app-level decode cache");
   if (!firstPlan.plan) return;
   const int decodesAfterFirst = fontDecodes.load();
 
@@ -2785,6 +2786,8 @@ void testBitmapFontPagesAreCachedAcrossDecodeRuns() {
   expect(secondPlan.plan &&
              secondCached != nullptr &&
              secondCached->fontPages.size() == cached->fontPages.size() &&
+             secondCached->pageEncodedBytes.size() ==
+                 cached->pageEncodedBytes.size() &&
              fontDecodes.load() == decodesAfterFirst &&
              secondPlan.plan->atlases.size() == firstPlan.plan->atlases.size() &&
              secondPlan.plan->atlases.front().glyphs.size() ==
@@ -2795,6 +2798,109 @@ void testBitmapFontPagesAreCachedAcrossDecodeRuns() {
                  firstPlan.plan->atlases.front().key,
          "the second decode run reuses the cached font pages without "
          "re-decoding and produces the identical font atlas");
+}
+
+void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source =
+      temporary.root / "visible" / "CachedBudgetConsistencyFixture";
+  const fs::path resources = source / "entry/resources";
+  fs::create_directories(resources);
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
+      resources / "fixture.fnt");
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png",
+      resources / "page.png");
+
+  const auto package =
+      *skin::normalizePackageId("CachedBudgetConsistencyFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "cached budget fixture creates a live revision");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease && publishError.empty(),
+         "cached budget fixture publishes a lease");
+  if (!lease) return;
+  auto leasedFs = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(leasedFs.fileSystem != nullptr,
+         "cached budget fixture creates an entry-aware filesystem");
+  if (!leasedFs.fileSystem) return;
+
+  skin::BeatorajaSkinConfiguration configuration;
+  const auto model =
+      singleFontModel("resources/fixture.fnt", true, "AV\xF0\x9F\x99\x82");
+  std::atomic_int fontDecodes = 0;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        if (stop.stop_requested()) return std::nullopt;
+        ++fontDecodes;
+        return image_decode::decodeImageMemory(
+            encoded,
+            {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
+             .maximumEncodedBytes =
+                 skin::SkinResourcePolicy::maximumEncodedBytes,
+             .maximumDecodedBytes = skin::SkinResourcePolicy::maximumImageBytes,
+             .stop = stop});
+      });
+  const std::string revisionKey = lease->revision().lowercaseSha256;
+
+  const std::size_t descriptorBytes = fs::file_size(resources / "fixture.fnt");
+  const std::size_t pageBytes = fs::file_size(resources / "page.png");
+  // Budget admits the descriptor but rejects the page bytes, so the face must
+  // be rejected with skin.resource.encoded_limit on every load.
+  skin::setSkinResourceAccountingLimitsForTesting(
+      descriptorBytes + pageBytes - 1U, /*maximumAtlasSessionBytes=*/3'200);
+  struct ResetAccountingLimits {
+    ~ResetAccountingLimits() {
+      skin::resetSkinResourceAccountingLimitsForTesting();
+    }
+  } resetAccountingLimits;
+
+  const auto firstPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(!firstPlan.plan,
+         "a cold run with an insufficient encoded budget rejects the face");
+  const auto cached = service.decodeCache().entry(revisionKey);
+  expect(cached == nullptr || cached->fontPages.empty(),
+         "a face rejected on the encoded budget must not populate the "
+         "app-level decode cache");
+
+  const auto secondPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(!secondPlan.plan,
+         "a warm run rejects the face exactly as the cold run did, because the "
+         "cached page would have been charged the same encoded bytes");
+  const auto secondCached = service.decodeCache().entry(revisionKey);
+  expect(secondCached == nullptr || secondCached->fontPages.empty(),
+         "the warm rejection also leaves the decode cache empty");
 }
 
 int main() {
@@ -2811,6 +2917,7 @@ int main() {
   testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   testBitmapFontPagesAreCachedAcrossDecodeRuns();
+  testBitmapFontCachedPagesChargeEncodedBudgetConsistently();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
   return 0;

@@ -950,7 +950,17 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
           const auto found = cached->fontPages.find(combined);
           if (found != cached->fontPages.end()) {
             preparedPage.pixels = found->second;
-            newlyAccountedPages.insert(combined);
+            // Reconstruct the encoded-bytes charge for this page so a warm
+            // run accounts it identically to the cold run that first decoded
+            // it. Without this the page would bypass the per-session
+            // encoded-budget charge below and a face rejected cold could be
+            // accepted warm (inconsistent per-load budgets).
+            if (const auto encodedBytes =
+                    cached->pageEncodedBytes.find(combined);
+                encodedBytes != cached->pageEncodedBytes.end()) {
+              cache.pageEncodedBytes.insert_or_assign(combined,
+                                                      encodedBytes->second);
+            }
             continue;
           }
         }
@@ -1019,10 +1029,6 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       const auto [decoded, _] =
           cache.pages.emplace(pending.path, *waited.image);
       prepared.pages[pending.page].pixels = decoded->second;
-      if (decodeCache != nullptr) {
-        decodeCache->mutableEntry(files.revision().lowercaseSha256)
-            .fontPages.emplace(pending.path, *waited.image);
-      }
     }
     if (!usableFace) {
       for (const auto &pending : pendingPages) coordinator.cancel(pending.ticket);
@@ -1050,6 +1056,25 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
     if (!usableFace) {
       if (primary) return std::nullopt;
       continue;
+    }
+    // Only persist pages into the app-level decode cache after the session
+    // encoded-budget accounting above has charged them. Caching earlier (in
+    // the waitTake loop) would let a face that is rejected cold on
+    // encoded_limit be served warm with no charge, making the same skin+policy
+    // pass warm but fail cold.
+    if (decodeCache != nullptr) {
+      auto &entry =
+          decodeCache->mutableEntry(files.revision().lowercaseSha256);
+      for (const auto &page : prepared.pages) {
+        if (!page.pixels || page.physicalKey.empty()) continue;
+        if (const auto encodedBytes =
+                cache.pageEncodedBytes.find(page.physicalKey);
+            encodedBytes != cache.pageEncodedBytes.end()) {
+          entry.pageEncodedBytes.insert_or_assign(page.physicalKey,
+                                                  encodedBytes->second);
+        }
+        entry.fontPages.emplace(page.physicalKey, *page.pixels);
+      }
     }
     if ((prepared.font.lr2Font ||
          !prepared.font.auxiliaryMetricsComplete) &&
