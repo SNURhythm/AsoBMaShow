@@ -106,7 +106,11 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
            "Updating difficulty table");
   std::atomic_bool interrupted = false;
   const DifficultyTableImportCheckpoint checkpoint = [&] {
-    const bool resumed = waitForResume() && !stopToken.stop_requested();
+    // Non-blocking pause probe: abort to Paused when gameplay pauses instead
+    // of blocking this thread in waitForResume until gameplay ends.
+    const bool resumed =
+        !stopToken.stop_requested() &&
+        !(dependencies_.pauseRequested && dependencies_.pauseRequested());
     if (!resumed) interrupted.store(true, std::memory_order_release);
     return resumed;
   };
@@ -213,14 +217,20 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   if (!waitForResume() || stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
-  seedDefaultDifficultyTablesIfNeeded(*session, stopToken, progress,
-                                      waitForResume);
+  bool tableImportInterrupted = false;
+  const auto seedCompleted = seedDefaultDifficultyTablesIfNeeded(
+      *session, stopToken, progress, waitForResume);
+  tableImportInterrupted = tableImportInterrupted || !seedCompleted;
   if (!waitForResume() || stopToken.stop_requested()) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
-  bool tableImportInterrupted = false;
   const DifficultyTableImportCheckpoint tableImportCheckpoint = [&] {
-    const bool resumed = waitForResume() && !stopToken.stop_requested();
+    // Non-blocking: a gameplay pause must abort the import to Paused rather
+    // than hold the single library thread in waitForResume (which only clears
+    // when gameplay ends). The framework re-runs the task after resume.
+    const bool resumed =
+        !stopToken.stop_requested() &&
+        !(dependencies_.pauseRequested && dependencies_.pauseRequested());
     tableImportInterrupted = tableImportInterrupted || !resumed;
     return resumed;
   };
@@ -312,14 +322,14 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   return {.detail = "Complete"};
 }
 
-void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
+bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     ChartRepository::Session &session, const std::stop_token &stopToken,
     const TaskProgressCallback &progress,
     const TaskPauseCallback &waitForResume) {
   if ((dependencies_.defaultDifficultyTablesSeeded &&
        dependencies_.defaultDifficultyTablesSeeded()) ||
       stopToken.stop_requested()) {
-    return;
+    return true;
   }
 
   constexpr int totalTables =
@@ -329,7 +339,10 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
   bool allSucceeded = true;
   bool interrupted = false;
   const DifficultyTableImportCheckpoint checkpoint = [&] {
-    if (stopToken.stop_requested() || !waitForResume()) {
+    // Non-blocking pause probe: abort to Paused when gameplay pauses instead
+    // of blocking this thread in waitForResume until gameplay ends.
+    if (stopToken.stop_requested() ||
+        (dependencies_.pauseRequested && dependencies_.pauseRequested())) {
       interrupted = true;
       return false;
     }
@@ -341,7 +354,7 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
   };
   for (int i = 0; i < totalTables; ++i) {
     if (!checkpoint()) {
-      return;
+      return false;
     }
     const char *url = kDefaultDifficultyTableUrls[i];
     progress({.current = i,
@@ -363,7 +376,7 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
         },
         checkpoint, pauseRequested);
     if (interrupted || stopToken.stop_requested()) {
-      return;
+      return false;
     }
     if (ok) {
       ++successfulTables;
@@ -375,7 +388,7 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
   }
 
   if (interrupted || stopToken.stop_requested()) {
-    return;
+    return false;
   }
   if (allSucceeded && dependencies_.setDefaultDifficultyTablesSeeded) {
     dependencies_.setDefaultDifficultyTablesSeeded(true);
@@ -386,6 +399,7 @@ void ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
   if (successfulTables > 0 && dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
+  return true;
 }
 
 TaskRunResult ChartLibraryOperations::runDownloadedIndex(

@@ -62,7 +62,7 @@ private:
   TaskRunResult runAndroidImport(const TaskRequest &, const std::stop_token &,
                                  const TaskProgressCallback &,
                                  const TaskPauseCallback &);
-  void seedDefaultDifficultyTablesIfNeeded(
+  bool seedDefaultDifficultyTablesIfNeeded(
       ChartRepository::Session &, const std::stop_token &,
       const TaskProgressCallback &, const TaskPauseCallback &);
   static const char *progressStageText(ChartScanProgressStage) noexcept;

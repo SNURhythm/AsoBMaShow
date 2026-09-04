@@ -82,13 +82,15 @@ readChartIdentity(const std::filesystem::path &chartPath) {
 
 chart_library_tasks::ChartLibraryOperationsDependencies
 dependencies(ChartRepository &repository, const std::filesystem::path &root,
-             bool &reloadRequested) {
+             bool &reloadRequested,
+             std::function<bool()> pauseProbe = {}) {
   return {
       .repository = repository,
       .tablesDirectory = root / "tables",
       .defaultDifficultyTablesSeeded = [] { return true; },
       .setDefaultDifficultyTablesSeeded = [](bool) {},
       .saveSettings = [] { return true; },
+      .pauseRequested = std::move(pauseProbe),
       .requestReload = [&](bool includeFolders) {
         reloadRequested = includeFolders;
       },
@@ -385,7 +387,8 @@ void testRefreshPausesInsideDefaultTableSeeding() {
   bool gameplayPaused = false;
   int importCalls = 0;
   int saveCalls = 0;
-  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  auto deps = dependencies(repository, temporary.path(), reloadRequested,
+                           [&] { return gameplayPaused; });
   deps.defaultDifficultyTablesSeeded = [&] { return seeded; };
   deps.setDefaultDifficultyTablesSeeded = [&](bool value) { seeded = value; };
   deps.saveSettings = [&] {
@@ -412,7 +415,7 @@ void testRefreshPausesInsideDefaultTableSeeding() {
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
        .title = "Refresh Library"},
       std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
-      [&] { return !gameplayPaused; });
+      [] { return true; });
 
   expect(result.disposition ==
              chart_library_tasks::TaskRunDisposition::Paused,
@@ -432,7 +435,8 @@ void testRefreshPausesInsideLocalTableImport() {
   bool reloadRequested = false;
   bool gameplayPaused = false;
   int importerCheckpoints = 0;
-  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  auto deps = dependencies(repository, temporary.path(), reloadRequested,
+                           [&] { return gameplayPaused; });
   deps.importDifficultyTablesFromDirectory =
       [&](ChartRepository::Session &, const std::filesystem::path &,
           const DifficultyTableImportCheckpoint &checkpoint) {
@@ -447,7 +451,7 @@ void testRefreshPausesInsideLocalTableImport() {
       {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
        .title = "Refresh Library"},
       std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
-      [&] { return !gameplayPaused; });
+      [&] { return true; });
 
   expect(result.disposition ==
              chart_library_tasks::TaskRunDisposition::Paused,
@@ -500,8 +504,10 @@ void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
   ChartRepository repository(temporary.path() / "chart.db");
   expect(repository.EnsureReady(), "pausable table repository is ready");
   bool reloadRequested = false;
+  bool paused = false;
   int importerCheckpoints = 0;
-  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  auto deps = dependencies(repository, temporary.path(), reloadRequested,
+                           [&] { return paused; });
   deps.updateDifficultyTableFromSourceUrl =
       [&](ChartRepository::Session &, int, std::string *,
           const DifficultyTableImportCheckpoint &checkpoint,
@@ -509,21 +515,21 @@ void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
         ++importerCheckpoints;
         if (!checkpoint()) return false;
         ++importerCheckpoints;
+        paused = true;
         return checkpoint();
       };
   chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
-  int pauseCalls = 0;
   const auto result = operations.run(
       {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
        .title = "Update Difficulty Table",
        .tableId = 47},
       std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
-      [&] { return ++pauseCalls < 3; });
+      [] { return true; });
 
   expect(result.disposition ==
              chart_library_tasks::TaskRunDisposition::Paused,
          "an interrupted in-progress import returns a paused task");
-  expect(importerCheckpoints == 2 && pauseCalls == 3,
+  expect(importerCheckpoints == 2,
          "the running importer receives the shared task pause checkpoint");
   expect(!reloadRequested,
          "a paused difficulty-table update does not publish a reload");
