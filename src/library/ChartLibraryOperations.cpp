@@ -154,7 +154,13 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
 
   bool checkpointPaused = false;
   auto checkpoint = [&] {
-    const bool resumed = waitForResume();
+    // Non-blocking pause probe: abort to Paused when gameplay pauses instead
+    // of blocking the single library thread in waitForResume (which only
+    // clears when gameplay ends). The framework re-runs the task after
+    // resume.
+    const bool resumed =
+        !stopToken.stop_requested() &&
+        !(dependencies_.pauseRequested && dependencies_.pauseRequested());
     checkpointPaused = checkpointPaused || !resumed;
     return resumed;
   };
@@ -295,7 +301,13 @@ TaskRunResult ChartLibraryOperations::runRefresh(
 
   bool checkpointPaused = false;
   auto checkpoint = [&] {
-    const bool resumed = waitForResume();
+    // Non-blocking pause probe: abort to Paused when gameplay pauses instead
+    // of blocking the single library thread in waitForResume (which only
+    // clears when gameplay ends). The framework re-runs the task after
+    // resume.
+    const bool resumed =
+        !stopToken.stop_requested() &&
+        !(dependencies_.pauseRequested && dependencies_.pauseRequested());
     checkpointPaused = checkpointPaused || !resumed;
     return resumed;
   };
@@ -439,7 +451,13 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
 
   bool checkpointPaused = false;
   auto checkpoint = [&] {
-    const bool resumed = waitForResume();
+    // Non-blocking pause probe: abort to Paused when gameplay pauses instead
+    // of blocking the single library thread in waitForResume (which only
+    // clears when gameplay ends). The framework re-runs the task after
+    // resume.
+    const bool resumed =
+        !stopToken.stop_requested() &&
+        !(dependencies_.pauseRequested && dependencies_.pauseRequested());
     checkpointPaused = checkpointPaused || !resumed;
     return resumed;
   };
