@@ -1435,70 +1435,112 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       record.meta.BmsPath.empty()) {
     return;
   }
-  launching_ = true;
-  std::atomic_bool cancelled = false;
-  auto chart = play_options::parseChart(record.meta, cancelled,
-                                        "music-select start");
-  if (!chart || cancelled) {
-    launching_ = false;
-    return;
-  }
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
-  play_options::PlayOptionReplayInfo playInfo;
-  if (!play_options::applyPlayOptionModifier(
-          *chart, selections.playOption, std::nullopt, 0, playInfo.option,
-          playInfo.seed, "music-select")) {
-    launching_ = false;
-    return;
-  }
-  if (chart->Meta.IsDP) {
-    const auto player2 = replay::beatorajaReplayOptionName(
-        context.settings.skinPlayer2RandomOption);
-    if (!player2 || !play_options::applyPlayOptionModifier(
-                        *chart, std::string(*player2), std::nullopt, 1,
-                        playInfo.option2, playInfo.seed2, "music-select")) {
-      launching_ = false;
-      return;
-    }
-  }
-  int lnMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
-  if (lnMode == 0) lnMode = long_note_mode::valueFromId(selections.longNoteMode);
-  applyEffectiveLongNoteModeToChart(*chart, lnMode);
-  context.jukebox.stop();
-  context.jukebox.loadChart(*chart, true, cancelled);
-  if (cancelled) {
-    launching_ = false;
-    return;
-  }
   const auto tableContext = musicSelectTableContextForLaunch(snapshot);
-  StartOptions options{
-      .startPosition = 0,
-      .autoKeySound = !context.settings.inputKeysoundEnabled,
-      .autoPlay = autoplay,
-      .gaugeType = selections.gaugeType,
-      .gaugeAutoShift = selections.gaugeAutoShift,
-      .gaugeAutoShiftLowerBound = selections.gaugeAutoShiftLowerBound,
-      .playOption = playInfo.option,
-      .playOptionSeed = playInfo.seed,
-      .playOption2 = playInfo.option2,
-      .playOption2Seed = playInfo.seed2,
-      .doublePlayFlip = context.settings.skinDoublePlayOption == 1,
-      .longNoteMode = lnMode,
-      .assistOption = selections.assistOption,
-      .pacemakerTarget = selections.pacemakerTarget,
-      .tableName = tableContext.name,
-      .tableLevel = tableContext.level,
-      .practiceMode = practice,
-      .playback = {.percent = context.settings.selectedPlaybackRatePercent,
-                   .mode = context.settings.selectedPlaybackMode},
-      .clubMode = context.settings.gameplayClubModeEnabled,
-      .returnScene = this,
-      .ruleset = selections.ruleset};
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(chart),
-                                      std::move(options)),
-      true);
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const bool doublePlayFlip = context.settings.skinDoublePlayOption == 1;
+  const audio::PlaybackRate playback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode};
+  const bool clubMode = context.settings.gameplayClubModeEnabled;
+
+  launching_ = true;
+  if (launchThread_.joinable()) {
+    launchThread_.join();
+  }
+  launchCancelled_.store(false, std::memory_order_release);
+  launchThread_ = std::jthread(
+      [this, record, selections, autoKeySound, doublePlayFlip, playback,
+       clubMode, practice, autoplay, tableContext]() mutable {
+        auto resetLaunching = [this]() {
+          defer([this]() {
+            launching_ = false;
+            return true;
+          }, 0, true);
+        };
+        std::atomic_bool cancelled = false;
+        auto chart = play_options::parseChart(record.meta, cancelled,
+                                              "music-select start");
+        if (!chart || cancelled ||
+            launchCancelled_.load(std::memory_order_acquire)) {
+          resetLaunching();
+          return;
+        }
+        play_options::PlayOptionReplayInfo playInfo;
+        if (!play_options::applyPlayOptionModifier(
+                *chart, selections.playOption, std::nullopt, 0,
+                playInfo.option, playInfo.seed, "music-select")) {
+          resetLaunching();
+          return;
+        }
+        if (chart->Meta.IsDP) {
+          const auto player2 = replay::beatorajaReplayOptionName(
+              context.settings.skinPlayer2RandomOption);
+          if (!player2 ||
+              !play_options::applyPlayOptionModifier(
+                  *chart, std::string(*player2), std::nullopt, 1,
+                  playInfo.option2, playInfo.seed2, "music-select")) {
+            resetLaunching();
+            return;
+          }
+        }
+        int lnMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
+        if (lnMode == 0) {
+          lnMode = long_note_mode::valueFromId(selections.longNoteMode);
+        }
+        applyEffectiveLongNoteModeToChart(*chart, lnMode);
+        if (launchCancelled_.load(std::memory_order_acquire)) {
+          resetLaunching();
+          return;
+        }
+        defer(
+            [this,
+             preparedChart =
+                 std::make_shared<std::unique_ptr<bms_parser::Chart>>(
+                     std::move(chart)),
+             playInfo = std::move(playInfo), lnMode, selections, autoKeySound,
+             doublePlayFlip, playback, clubMode, practice, autoplay,
+             tableContext]() mutable {
+              if (!launching_) {
+                return true;
+              }
+              context.jukebox.stop();
+              std::atomic_bool loadCancelled = false;
+              (void)context.jukebox.loadChart(**preparedChart, true,
+                                              loadCancelled);
+              StartOptions options{
+                  .startPosition = 0,
+                  .autoKeySound = autoKeySound,
+                  .autoPlay = autoplay,
+                  .gaugeType = selections.gaugeType,
+                  .gaugeAutoShift = selections.gaugeAutoShift,
+                  .gaugeAutoShiftLowerBound =
+                      selections.gaugeAutoShiftLowerBound,
+                  .playOption = playInfo.option,
+                  .playOptionSeed = playInfo.seed,
+                  .playOption2 = playInfo.option2,
+                  .playOption2Seed = playInfo.seed2,
+                  .doublePlayFlip = doublePlayFlip,
+                  .longNoteMode = lnMode,
+                  .assistOption = selections.assistOption,
+                  .pacemakerTarget = selections.pacemakerTarget,
+                  .tableName = tableContext.name,
+                  .tableLevel = tableContext.level,
+                  .practiceMode = practice,
+                  .playback = playback,
+                  .clubMode = clubMode,
+                  .returnScene = this,
+                  .ruleset = selections.ruleset};
+              context.sceneManager->changeScene(
+                  std::make_unique<GamePlayScene>(context, std::move(*preparedChart),
+                                                  std::move(options)),
+                  true);
+              launching_ = false;
+              return true;
+            },
+            0, true);
+      });
 }
 
 void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
@@ -3351,6 +3393,11 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  launchCancelled_.store(true, std::memory_order_release);
+  if (launchThread_.joinable()) {
+    launchThread_.request_stop();
+    launchThread_.join();
+  }
   if (searchInput_ != nullptr) searchInput_->endEditing();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();

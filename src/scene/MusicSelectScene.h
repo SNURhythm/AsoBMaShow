@@ -169,6 +169,11 @@ private:
   std::jthread recordsExportThread_;
   MusicSelectPreviewController previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
+  // The launch parse runs off the UI thread so a large archive chart does not
+  // freeze the selector between Start and the gameplay scene. Completion is
+  // published on the next deferred pass.
+  std::jthread launchThread_;
+  std::atomic_bool launchCancelled_{false};
   MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;
