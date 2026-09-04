@@ -903,6 +903,17 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
     const MusicSelectSkinFrame &frame) {
   const auto strings = musicSelectRuntimeAtlasStrings(
       model_, frame, observedRuntimeStringsByObject_);
+  // Union the newly required titles with the corpus already resident in the
+  // live atlas. The replacement atlas therefore keeps every previously drawn
+  // glyph, so titles from the prior directory remain visible while the patch
+  // builds and the new directory's titles appear the moment it lands instead
+  // of blanking for the whole async window.
+  RuntimeStringsByObject unionStrings = preparedRuntimeStringsByObject_;
+  for (const auto &[object, values] : strings) {
+    for (const auto &value : values) {
+      appendRuntimeString(unionStrings, object, value);
+    }
+  }
   const auto missingObjects = [&] {
     std::set<SkinObjectId> result;
     for (const auto &[object, values] : strings) {
@@ -910,7 +921,7 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
         continue;
       }
       const auto *atlas = resources_ ? resources_->findTextAtlasForObject(object)
-                                     : nullptr;
+                                      : nullptr;
       if (atlas == nullptr ||
           std::ranges::any_of(values, [&](const std::string &value) {
             return !atlasContainsText(*atlas, value);
@@ -924,7 +935,7 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
   if (pendingTextAtlasPatch_.valid()) {
     if (pendingTextAtlasPatch_.wait_for(std::chrono::milliseconds(0)) !=
         std::future_status::ready) {
-      if (strings != pendingRuntimeStringsByObject_) {
+      if (unionStrings != pendingRuntimeStringsByObject_) {
         textAtlasPatchStop_.request_stop();
       }
       return missingObjects().empty();
@@ -933,7 +944,8 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
     pendingRuntimeStringsByObject_.clear();
     textAtlasPatchStop_ = std::stop_source{};
     const auto targetObjects = std::exchange(pendingTextAtlasObjects_, {});
-    if (!patch.cancelled && patch.runtimeStrings == strings && resources_) {
+    if (!patch.cancelled && patch.runtimeStrings == unionStrings &&
+        resources_) {
       diagnostics_.insert(
           diagnostics_.end(),
           std::make_move_iterator(patch.diagnostics.begin()),
@@ -966,14 +978,15 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
   if (pendingTextAtlasPatch_.valid()) {
     return false;
   }
-  pendingRuntimeStringsByObject_ = strings;
+  pendingRuntimeStringsByObject_ = unionStrings;
   pendingTextAtlasObjects_ = missing;
   pendingTextAtlasPatch_ = std::async(
       std::launch::async,
       [revision = revision_.clone(), entry = entry_, model = model_,
        configuration = configuration_, storageRoots = storageRoots_,
        profileId = profileId_, preparation = resourcePreparation_,
-       safetyPolicy = safetyPolicy_, runtimeStrings = std::move(strings),
+       safetyPolicy = safetyPolicy_,
+       runtimeStrings = std::move(unionStrings),
        targetObjects = missing, stop = textAtlasPatchStop_.get_token()] mutable {
         return prepareTextAtlasPatch(
             std::move(revision), std::move(entry), std::move(model),
