@@ -1297,11 +1297,11 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
       if (!inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
         // SkinTextFont regenerates a scalable font after SkinText observes a
         // new current value. Our owner-thread atlas replacement completes on
-        // a later selector frame, so omit only this transient run after
-        // recording it for that matching atlas.
-        result.suppressed = true;
-        result.codepoints.clear();
-        return result;
+        // a later selector frame, so the glyph is transiently absent. Omit
+        // only that glyph rather than the whole run: suppressing the run
+        // makes bar titles blink out for the frame(s) while the atlas patch
+        // builds, which reads as flicker during folder transitions.
+        continue;
       }
       result.failure = diagnostic(
           "skin.renderer.text.glyph",

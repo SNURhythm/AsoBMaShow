@@ -228,7 +228,6 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     return result;
   }
   const int primaryAscent = TTF_FontAscent(opened.front().font);
-  const int layoutAscent = primaryAscent - capHeight;
   const int outline = static_cast<int>(std::ceil(key.outlineWidth));
   const bool outlineActive = key.outlineRgba[3] != 0;
   const bool shadowActive = key.shadowRgba[3] != 0;
@@ -452,7 +451,6 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     SDL_UnlockSurface(surface);
     SDL_FreeSurface(surface);
-    const int selectedFaceAscent = TTF_FontAscent(opened[faceIndex].font);
     GlyphBitmap glyph{
         .codepoint = codepoint,
         .face = faceIndex,
@@ -462,10 +460,12 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         .width = glyphWidth,
         .height = glyphHeight,
         .padding = glyphPadding,
-        .layoutOffsetY =
-            hasPixels ? layoutAscent + maxY - contentHeight -
-                            selectedFaceAscent - glyphPadding
-                      : 0,
+        // The renderer anchors the baseline at the destination top edge. A
+        // glyph's ink top must land at baseline + maxY (its own bearing above
+        // the baseline), matching Beatoraja's BitmapFont layout. This is the
+        // cropped content height minus the bearing, without any cap-height or
+        // face-ascent adjustment.
+        .layoutOffsetY = hasPixels ? maxY - contentHeight - glyphPadding : 0,
         .contentWidth = contentWidth,
         .contentHeight = contentHeight,
         .alpha = std::move(alpha)};

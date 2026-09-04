@@ -2033,10 +2033,9 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     expect(firstAtlas.id == 1 && secondAtlas.id == 2 && firstAtlas.key.pointSize == 16 &&
                secondAtlas.key.pointSize == 24 && firstAtlas.glyphs.contains(U'日') &&
                firstAtlas.glyphs.contains(U'4') && firstAtlas.glyphs.at(U'A').region.x > 0 &&
-               firstAtlas.capHeight > 0 &&
-               firstAGlyph.layoutOffsetY == firstAGlyph.bearingY -
-                                                  firstAGlyph.region.h -
-                                                  firstAtlas.capHeight &&
+firstAtlas.capHeight > 0 &&
+                firstAGlyph.layoutOffsetY == firstAGlyph.bearingY -
+                                                   firstAGlyph.region.h &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width > 0.0 &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width < 1.0 && styledColor &&
                signikaAtlas != planned.plan->atlases.end() && signikaAtlas->kerning.contains({U'A', U'V'}) &&

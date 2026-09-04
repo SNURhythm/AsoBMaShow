@@ -505,7 +505,8 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          bool markProcessedNotes = false,
          const PlaySkinViewport *requestedViewport = nullptr,
          const SkinPreparedMovieView *movies = nullptr,
-         const MusicSelectSongListFrame *musicSelectSongList = nullptr) {
+         const MusicSelectSongListFrame *musicSelectSongList = nullptr,
+         skin::SkinSafetyPolicy safetyPolicy = skin::SkinSafetyPolicy()) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto defaultViewport = viewport();
@@ -523,6 +524,7 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .runtime = &runtime.runtime(),
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
+                                 .safetyPolicy = safetyPolicy,
                                  .gaugeRandomSource = gaugeRandomSource,
                                  .musicSelectSongList = musicSelectSongList});
 }
@@ -549,6 +551,7 @@ void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
       .object = 3,
       .destination = destination(3, 2, 5.0).presentation};
   SkinSongListObject songList{
+      .position = 1,
       .center = 1,
       .clickable = {1},
       .listOn = {{}, barPresentation},
@@ -1818,20 +1821,20 @@ PreparedSkinTextAtlas verticalAtlas() {
                                  .bearingX = -1,
                                  .bearingY = 14,
                                  .advance = 13,
-                                 .layoutOffsetY = -14});
+                                 .layoutOffsetY = -2});
   atlas.glyphs.emplace(U'g', SkinPreparedGlyphMetrics{
                                  .region = {.x = 25, .y = 5, .w = 13, .h = 20},
                                  .bearingX = -1,
                                  .bearingY = 10,
                                  .advance = 11,
-                                 .layoutOffsetY = -22});
+                                 .layoutOffsetY = -10});
   atlas.glyphs.emplace(
       U'\u00c9',
       SkinPreparedGlyphMetrics{.region = {.x = 45, .y = 5, .w = 13, .h = 24},
                                .bearingX = -1,
                                .bearingY = 20,
                                .advance = 10,
-                               .layoutOffsetY = -16});
+                               .layoutOffsetY = -4});
   return atlas;
 }
 
@@ -2361,14 +2364,44 @@ void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
   if (run.glyphs.size() != 4) {
     return;
   }
-  expect(run.glyphs[0].vertices[0].y == 614.0F,
-         "cap glyph subtracts cap height from the destination-top baseline");
-  expect(run.glyphs[1].vertices[0].y == 622.0F,
-         "descender uses its taller prepared bitmap below the baseline");
-  expect(run.glyphs[2].vertices[0].y == 616.0F,
-         "diacritic bearing can extend above the cap-height line");
-  expect(run.glyphs[3].vertices[0].y == 634.0F,
-         "second hard line applies one prepared line-height step");
+expect(run.glyphs[0].vertices[0].y == 602.0F,
+         "cap glyph ink sits on the destination-top baseline at its own bearing");
+  expect(run.glyphs[1].vertices[0].y == 610.0F,
+          "descender keeps its taller bitmap on the same baseline");
+  expect(run.glyphs[2].vertices[0].y == 604.0F,
+          "diacritic bearing can extend above the cap-height line");
+  expect(run.glyphs[3].vertices[0].y == 622.0F,
+          "second hard line applies one prepared line-height step");
+}
+
+void testSelectorCompatibilitySkipsTransientlyMissingGlyphs() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(2, avAtlas());
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(2, false);
+  std::get<SkinTextObject>(text.payload).literal = "AZ";
+  model.model.objects = {std::move(text)};
+  model.model.destinations = {destination(2, 20, 60.0)};
+  // BeatorajaCompatibility does not enforce LuaDecoderLimit, so a transiently
+  // absent glyph (while the selector atlas patch builds) must render the
+  // available glyphs instead of suppressing the whole run.
+  const auto result = evaluate(
+      renderer, runtime, model, resources, state, 1, 0, nullptr, std::nullopt,
+      nullptr, 1, false, nullptr, nullptr, nullptr,
+      skin::SkinSafetyPolicy(skin::SkinSafetyLevel::BeatorajaCompatibility));
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "selector text with a transiently missing glyph still lowers");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto *run = std::get_if<SkinGlyphRunCommand>(
+      &result.submitReady->commands.front().payload);
+  expect(run != nullptr && run->glyphs.size() == 1 &&
+             run->glyphs[0].codepoint == U'A',
+         "the available glyph renders and the transiently missing one is skipped");
 }
 
 void testMissingTextGlyphHonorsCriticalityWithoutPartialCommands() {
@@ -6619,6 +6652,7 @@ int main(int argc, char **argv) {
   testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();
   testTextVerticalPlacementMatchesPinnedBitmapFontBaseline();
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
+  testSelectorCompatibilitySkipsTransientlyMissingGlyphs();
   testFalseDestinationSkipsTextValueCallback();
   testTextGlyphLimitFailsBeforePublishingACommand();
   testTextAlignmentWrappingAndShrinkUsePreparedAdvances();
