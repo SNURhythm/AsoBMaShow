@@ -1,5 +1,7 @@
 #include "../LuaGameplaySkinFeature.h"
 
+#include "../../StartupTiming.h"
+
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 
 #include "Skin2DRenderer.h"
@@ -22,6 +24,7 @@
 #include <memory>
 #include <numeric>
 #include <ranges>
+#include <sstream>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -1306,6 +1309,13 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
       result.failure = diagnostic(
           "skin.renderer.text.glyph",
           "Text property contains a glyph absent from the prepared atlas.");
+      std::ostringstream rendererNote;
+      rendererNote << "renderer suppressed text object " << object.id
+                   << " (atlas glyphs=" << result.atlas->glyphs.size()
+                   << " atlasId=" << result.atlas->id
+                   << ") missing U+" << std::hex << static_cast<unsigned>(scalar)
+                   << std::dec << " value='" << result.value << "'";
+      StartupTiming::instance().note(rendererNote.str());
       result.codepoints.clear();
       return result;
     }

@@ -739,6 +739,11 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
 
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
+    std::string runtimeDebug = "runtimeStrings:";
+    for (const auto &s : runtimeStrings) {
+      runtimeDebug += " [" + s + "]";
+    }
+    StartupTiming::instance().note(runtimeDebug);
     std::map<int, std::filesystem::path> builtinImagePaths;
     const auto addBuiltinPath = [&](int reference,
                                     const std::filesystem::path &path) {

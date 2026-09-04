@@ -56,6 +56,20 @@ void StartupTiming::mark(const char *stage) {
   }
 }
 
+void StartupTiming::note(const std::string &line) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_) {
+    return;
+  }
+  auto path = Utils::GetDocumentsPath() / "startup-timings.log";
+  std::error_code error;
+  std::filesystem::create_directories(path.parent_path(), error);
+  if (std::FILE *file = std::fopen(path.string().c_str(), "a")) {
+    std::fprintf(file, "  note: %s\n", line.c_str());
+    std::fclose(file);
+  }
+}
+
 void StartupTiming::finishFirstFrame() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!active_) {

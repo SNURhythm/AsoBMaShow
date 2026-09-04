@@ -1,4 +1,6 @@
 #include "SkinResourceCatalog.h"
+
+#include "../../StartupTiming.h"
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
 #include "../package/SkinPackageTypes.h"
@@ -3375,6 +3377,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       }
     }
   }
+  StartupTiming::instance().mark("decodeAndPlan: image decodes finished");
   const auto fontRequests = collectFontAtlasRequests(
       input.model, uses, input.fileSystem, input.configuration,
       input.requiredRuntimeStrings, input.requiredRuntimeStringsByObject,
@@ -3396,6 +3399,21 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
         remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_,
         this);
+    {
+      std::ostringstream fontNote;
+      fontNote << "font request object";
+      for (const SkinObjectId object : request.objects) {
+        fontNote << " " << object;
+      }
+      fontNote << " codepoints=" << request.codepoints.size()
+               << " built=" << (built && built->atlas ? "yes" : "no");
+      StartupTiming::instance().note(fontNote.str());
+    }
+    StartupTiming::instance().mark(
+        ("decodeAndPlan: font atlas done (" +
+         std::to_string(plan.atlases.size()) + "/" +
+         std::to_string(fontRequests.size()) + ")")
+            .c_str());
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -3427,7 +3445,9 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
   // Chart-owned images are optional SkinSourceReference inputs. Prepare them
   // only from the budget left after package-critical images/fonts so an
   // oversized stage file cannot starve the authored skin resources.
+  StartupTiming::instance().mark("decodeAndPlan: font atlases done");
   if (!prepareChartBuiltinImages()) return result;
+  StartupTiming::instance().mark("decodeAndPlan: chart builtins done");
   if (std::ranges::any_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; })) return result;
   {
     std::lock_guard lock(serviceMutex_);

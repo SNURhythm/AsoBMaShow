@@ -21,6 +21,10 @@ public:
   // Appends a stage marker with the micros elapsed since beginSession.
   void mark(const char *stage);
 
+  // Appends a free-form debug line to the current session log (no elapsed
+  // prefix). Used for diagnostic evidence during startup-path debugging.
+  void note(const std::string &line);
+
   void finishFirstFrame();
 
 private:
