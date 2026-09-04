@@ -1599,7 +1599,9 @@ bool GamePlayScene::enterPracticeMenu() {
                         options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   state->isPlaying = false;
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
+  StartupTiming::instance().mark("prepare playback start, skin create begins");
   acquireGameplaySkinForAttempt();
+  StartupTiming::instance().mark("skin create done");
   if (presentation == nullptr) {
     return false;
   }
@@ -2747,6 +2749,7 @@ void GamePlayScene::cancelGameplaySkinPreparation() noexcept {
 }
 
 void GamePlayScene::init() {
+  StartupTiming::instance().mark("GamePlayScene init start");
   context.profileGameplayActive.store(true, std::memory_order_release);
   profileGameplayBlockerActive = true;
   context.jukebox.setEmbeddedBgaBrightnessPercent(
@@ -2807,6 +2810,7 @@ void GamePlayScene::init() {
   }
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+  StartupTiming::instance().mark("init build playfield chart visual model");
   activePersistedScore = context.scoreRepository.LoadChartScoreHistory(
       chart->Meta, options.longNoteMode);
   activeRivalScore.reset();
@@ -2824,6 +2828,7 @@ void GamePlayScene::init() {
     };
   }
   activePlayerScoreHistory = context.scoreRepository.LoadPlayerScoreHistory();
+  StartupTiming::instance().mark("init load score history");
   playfieldSongReviewFavorite = 0;
   playfieldChartHasDocument = false;
   if (auto chartSession = context.chartRepository.OpenSession()) {
@@ -2850,6 +2855,7 @@ void GamePlayScene::init() {
       .replayGhostsEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
   });
+  StartupTiming::instance().mark("built-in presentation created");
   builtInPresentation = builtIn.get();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto coordinator = std::make_unique<PlayfieldPresentationCoordinator>(
@@ -3435,13 +3441,16 @@ bool GamePlayScene::reset() {
       getVisualTimeMicros(initialGameplayTimeMicros),
       preparationIndicatorActive(initialRawSongTimeMicros),
       practiceCountInActive(initialRawSongTimeMicros), true);
+  StartupTiming::instance().mark("play start, skin create begins");
   acquireGameplaySkinForAttempt();
+  StartupTiming::instance().mark("play start skin create done");
   if (playbackInitializationFailed) {
     return false;
   }
   updateSkinResetLayoutVisibility();
 #endif
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  StartupTiming::instance().mark("jukebox play");
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
