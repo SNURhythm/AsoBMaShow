@@ -884,6 +884,34 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
           std::move(code), std::move(message)));
     };
     prepared.pages.resize(prepared.font.pagePaths.size());
+    // Only decode the pages that actually carry glyphs from the requested
+    // corpus. LITONE12-style BMFonts declare hundreds of pages (a single
+    // Select title font has 289) but a gameplay session only touches a small
+    // glyph subset, so decoding every page up front is the dominant load
+    // cost. Pages without a needed glyph stay absent (.available=false) and
+    // are never read from disk.
+    std::vector<unsigned char> neededPages(prepared.font.pagePaths.size(), 0);
+    if (!prepared.font.lr2Font) {
+      const auto markPage = [&](char32_t codepoint) {
+        const auto found = prepared.font.glyphs.find(codepoint);
+        if (found != prepared.font.glyphs.end() &&
+            found->second.page >= 0 &&
+            static_cast<std::size_t>(found->second.page) <
+                neededPages.size()) {
+          neededPages[static_cast<std::size_t>(found->second.page)] = 1;
+        }
+      };
+      for (const char32_t codepoint : request.codepoints) {
+        markPage(codepoint);
+      }
+      // Always keep the pages for the missing-glyph candidates so a fallback
+      // substitution can still be rasterized from an actually-declared glyph.
+      constexpr std::u32string_view missing =
+          U"\u25a1\u25a2\u2610\u25a0?";
+      for (const char32_t codepoint : missing) {
+        markPage(codepoint);
+      }
+    }
     struct PendingPage {
       std::size_t page = 0;
       std::string path;
@@ -898,12 +926,18 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       if (pagePath.empty() && prepared.font.lr2Font) {
         continue;
       }
+      auto &preparedPage = prepared.pages[pageIndex];
+      preparedPage.physicalKey = "";
+      if (!prepared.font.lr2Font &&
+          neededPages[pageIndex] == 0) {
+        // Page not needed by the requested corpus; leave it absent.
+        continue;
+      }
       std::ranges::replace(pagePath, '\\', '/');
       const auto combined =
           (std::filesystem::path(face.path).parent_path() / pagePath)
               .lexically_normal()
               .generic_string();
-      auto &preparedPage = prepared.pages[pageIndex];
       preparedPage.physicalKey = combined;
       auto decoded = cache.pages.find(combined);
       if (decoded == cache.pages.end()) {
