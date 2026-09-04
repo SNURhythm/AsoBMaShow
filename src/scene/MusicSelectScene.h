@@ -76,6 +76,10 @@ private:
   void launchSelected(bool autoplay = false, bool practice = false);
   void launchCourse(const MusicSelectBar &, bool autoplay);
   void launchSelectedDirectoryAutoplay();
+  void startPreloadForSelection();
+  [[nodiscard]] bool reusePreloadedChart(
+      const ChartMetaRecord &, bms_parser::Chart *&,
+      play_options::PlayOptionReplayInfo &, int &lnMode);
   void launchSelectedReplay(int slot);
   void launchCourseReplay(const MusicSelectBar &, int slot,
                           const MusicSelectBarManagerSnapshot &);
@@ -174,6 +178,14 @@ private:
   // published on the next deferred pass.
   std::jthread launchThread_;
   std::atomic_bool launchCancelled_{false};
+  // Background preload of the selected chart's parse + jukebox load so Start
+  // is near-instant even for a heavy archive chart. Mirrors MainMenu's
+  // preview-reuse: the preload runs while browsing, and launch reuses it.
+  std::jthread preloadThread_;
+  std::atomic_bool preloadCancelled_{false};
+  mutable std::mutex preloadMutex_;
+  std::unique_ptr<bms_parser::Chart> preloadedChart_;
+  std::filesystem::path preloadedPath_;
   MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;

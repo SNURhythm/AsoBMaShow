@@ -468,6 +468,9 @@ void MusicSelectScene::selectedBarMoved() {
   selectedChartAnalysisStarted_ = false;
 #endif
   const auto snapshot = bars_.snapshot();
+  // Preload the newly selected chart (parse + jukebox) in the background so a
+  // heavy archive chart is ready by the time the user presses Start.
+  startPreloadForSelection();
   // Pinned MusicSelector retains rankingOffset across bar changes; only its
   // ranking-position writer mutates that field.
   selectedReplay_ =
@@ -1419,6 +1422,92 @@ void MusicSelectScene::closeDirectory() {
   }
 }
 
+void MusicSelectScene::startPreloadForSelection() {
+  const auto snapshot = bars_.snapshot();
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  const auto &selected = snapshot.rows[snapshot.selectedIndex];
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->solidArchive || selected.chart->unavailable ||
+      selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+  const auto record = *selected.chart;
+  {
+    std::lock_guard<std::mutex> lock(preloadMutex_);
+    if (fspath_to_path_t(preloadedPath_) ==
+        fspath_to_path_t(record.meta.BmsPath)) {
+      return;  // already preloaded (or in flight) for this chart
+    }
+    preloadedPath_ = record.meta.BmsPath;
+  }
+  if (preloadThread_.joinable()) {
+    preloadCancelled_.store(true, std::memory_order_release);
+    preloadThread_.request_stop();
+    preloadThread_.join();
+  }
+  preloadCancelled_.store(false, std::memory_order_release);
+  preloadThread_ = std::jthread(
+      [this, record]() mutable {
+        std::atomic_bool cancelled = false;
+        auto chart = play_options::parseChart(record.meta, cancelled,
+                                              "music-select preload");
+        if (!chart || cancelled ||
+            preloadCancelled_.load(std::memory_order_acquire)) {
+          return;
+        }
+        context.jukebox.stop();
+        (void)context.jukebox.loadChart(*chart, true, cancelled);
+        if (cancelled || preloadCancelled_.load(std::memory_order_acquire)) {
+          return;
+        }
+        std::lock_guard<std::mutex> lock(preloadMutex_);
+        if (fspath_to_path_t(preloadedPath_) !=
+            fspath_to_path_t(record.meta.BmsPath)) {
+          return;  // selection moved on
+        }
+        preloadedChart_ = std::move(chart);
+      });
+}
+
+bool MusicSelectScene::reusePreloadedChart(
+    const ChartMetaRecord &record, bms_parser::Chart *&chart,
+    play_options::PlayOptionReplayInfo &playInfo, int &lnMode) {
+  std::unique_ptr<bms_parser::Chart> cached;
+  {
+    std::lock_guard<std::mutex> lock(preloadMutex_);
+    if (preloadedChart_ == nullptr ||
+        fspath_to_path_t(preloadedPath_) !=
+            fspath_to_path_t(record.meta.BmsPath)) {
+      return false;
+    }
+    cached = std::move(preloadedChart_);
+    preloadedPath_.clear();
+  }
+  const auto selections =
+      main_menu_profile::Selections::fromSettings(context.settings);
+  if (!play_options::applyPlayOptionModifier(
+          *cached, selections.playOption, std::nullopt, 0, playInfo.option,
+          playInfo.seed, "music-select")) {
+    return false;
+  }
+  if (cached->Meta.IsDP) {
+    const auto player2 = replay::beatorajaReplayOptionName(
+        context.settings.skinPlayer2RandomOption);
+    if (!player2 || !play_options::applyPlayOptionModifier(
+                        *cached, std::string(*player2), std::nullopt, 1,
+                        playInfo.option2, playInfo.seed2, "music-select")) {
+      return false;
+    }
+  }
+  lnMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
+  if (lnMode == 0) {
+    lnMode = long_note_mode::valueFromId(selections.longNoteMode);
+  }
+  applyEffectiveLongNoteModeToChart(*cached, lnMode);
+  chart = cached.release();
+  return true;
+}
+
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   if (launching_) return;
   const auto snapshot = bars_.snapshot();
@@ -1445,7 +1534,61 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       .mode = context.settings.selectedPlaybackMode};
   const bool clubMode = context.settings.gameplayClubModeEnabled;
 
+  // Reuse the background-preloaded chart (parse + jukebox already done) so
+  // Start is near-instant for a chart the user had selected while browsing.
+  bms_parser::Chart *preparedChartRaw = nullptr;
+  play_options::PlayOptionReplayInfo preloadedPlayInfo;
+  int preloadedLnMode = 0;
+  if (reusePreloadedChart(record, preparedChartRaw, preloadedPlayInfo,
+                          preloadedLnMode)) {
+    // Stop the preload thread before gameplay starts so it cannot keep
+    // touching the jukebox while GamePlayScene uses it.
+    if (preloadThread_.joinable()) {
+      preloadCancelled_.store(true, std::memory_order_release);
+      preloadThread_.request_stop();
+      preloadThread_.join();
+    }
+    if (!launching_) {
+      launching_ = true;
+      StartOptions options{
+          .startPosition = 0,
+          .autoKeySound = autoKeySound,
+          .autoPlay = autoplay,
+          .gaugeType = selections.gaugeType,
+          .gaugeAutoShift = selections.gaugeAutoShift,
+          .gaugeAutoShiftLowerBound = selections.gaugeAutoShiftLowerBound,
+          .playOption = preloadedPlayInfo.option,
+          .playOptionSeed = preloadedPlayInfo.seed,
+          .playOption2 = preloadedPlayInfo.option2,
+          .playOption2Seed = preloadedPlayInfo.seed2,
+          .doublePlayFlip = doublePlayFlip,
+          .longNoteMode = preloadedLnMode,
+          .assistOption = selections.assistOption,
+          .pacemakerTarget = selections.pacemakerTarget,
+          .tableName = tableContext.name,
+          .tableLevel = tableContext.level,
+          .practiceMode = practice,
+          .playback = playback,
+          .clubMode = clubMode,
+          .returnScene = this,
+          .ruleset = selections.ruleset};
+      context.sceneManager->changeScene(
+          std::make_unique<GamePlayScene>(context, std::unique_ptr<
+                                                  bms_parser::Chart>(
+                                                  preparedChartRaw),
+                                          std::move(options)),
+          true);
+      launching_ = false;
+    }
+    return;
+  }
+
   launching_ = true;
+  if (preloadThread_.joinable()) {
+    preloadCancelled_.store(true, std::memory_order_release);
+    preloadThread_.request_stop();
+    preloadThread_.join();
+  }
   if (launchThread_.joinable()) {
     launchThread_.join();
   }
@@ -3400,6 +3543,16 @@ void MusicSelectScene::cleanupScene() {
   if (launchThread_.joinable()) {
     launchThread_.request_stop();
     launchThread_.join();
+  }
+  preloadCancelled_.store(true, std::memory_order_release);
+  if (preloadThread_.joinable()) {
+    preloadThread_.request_stop();
+    preloadThread_.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(preloadMutex_);
+    preloadedChart_.reset();
+    preloadedPath_.clear();
   }
   if (searchInput_ != nullptr) searchInput_->endEditing();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
