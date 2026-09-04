@@ -4328,6 +4328,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -4379,6 +4380,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -5346,6 +5348,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -5526,6 +5529,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -5711,6 +5715,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
