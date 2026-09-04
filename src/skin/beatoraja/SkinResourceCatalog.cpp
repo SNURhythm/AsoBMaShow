@@ -947,24 +947,21 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       preparedPage.physicalKey = combined;
       auto decoded = cache.pages.find(combined);
       if (decoded == cache.pages.end()) {
-        if (const auto cached =
-                decodeCache != nullptr
-                    ? decodeCache->entry(files.revision().lowercaseSha256)
-                    : nullptr;
-            cached != nullptr) {
-          const auto found = cached->fontPages.find(combined);
-          if (found != cached->fontPages.end()) {
-            preparedPage.pixels = found->second;
+        if (decodeCache != nullptr) {
+          if (auto cachedPage = decodeCache->findFontPage(
+                  files.revision().lowercaseSha256, combined);
+              cachedPage) {
+            preparedPage.pixels = *cachedPage;
             // Reconstruct the encoded-bytes charge for this page so a warm
             // run accounts it identically to the cold run that first decoded
             // it. Without this the page would bypass the per-session
             // encoded-budget charge below and a face rejected cold could be
             // accepted warm (inconsistent per-load budgets).
-            if (const auto encodedBytes =
-                    cached->pageEncodedBytes.find(combined);
-                encodedBytes != cached->pageEncodedBytes.end()) {
+            if (auto encodedBytes = decodeCache->findFontPageEncodedBytes(
+                    files.revision().lowercaseSha256, combined);
+                encodedBytes) {
               cache.pageEncodedBytes.insert_or_assign(combined,
-                                                      encodedBytes->second);
+                                                      *encodedBytes);
             }
             continue;
           }
@@ -1068,17 +1065,16 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
     // encoded_limit be served warm with no charge, making the same skin+policy
     // pass warm but fail cold.
     if (decodeCache != nullptr) {
-      auto &entry =
-          decodeCache->mutableEntry(files.revision().lowercaseSha256);
       for (const auto &page : prepared.pages) {
         if (!page.pixels || page.physicalKey.empty()) continue;
-        if (const auto encodedBytes =
-                cache.pageEncodedBytes.find(page.physicalKey);
-            encodedBytes != cache.pageEncodedBytes.end()) {
-          entry.pageEncodedBytes.insert_or_assign(page.physicalKey,
-                                                  encodedBytes->second);
+        std::optional<std::size_t> encodedBytes;
+        if (const auto found = cache.pageEncodedBytes.find(page.physicalKey);
+            found != cache.pageEncodedBytes.end()) {
+          encodedBytes = found->second;
         }
-        entry.fontPages.emplace(page.physicalKey, *page.pixels);
+        decodeCache->storeFontPage(files.revision().lowercaseSha256,
+                                   page.physicalKey, *page.pixels,
+                                   encodedBytes);
       }
     }
     if ((prepared.font.lr2Font ||
@@ -2974,16 +2970,13 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
                                  contentDigest;
     std::optional<image_decode::DecodedImageData> decoded;
     bool fromAppCache = false;
-    if (const auto skinCache = decodeCache_.entry(revisionKey);
-        skinCache != nullptr) {
-      if (const auto found = skinCache->skinImages.find(imageKey);
-          found != skinCache->skinImages.end()) {
-        decoded = found->second;
-        fromAppCache = true;
+    if (auto cachedImage = decodeCache_.findSkinImage(revisionKey, imageKey);
+        cachedImage) {
+      decoded = *cachedImage;
+      fromAppCache = true;
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
-        recordSkinImageAppCacheHit();
+      recordSkinImageAppCacheHit();
 #endif
-      }
     }
     if (!decoded) {
       const std::string key = plan.revision.revision().lowercaseSha256 + ":" +
@@ -3056,8 +3049,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     // dependent. Both runs read the file and charge the same encoded bytes, so
     // a warm hit reconstructs the identical budget as the cold run.
     if (!fromAppCache) {
-      decodeCache_.mutableEntry(revisionKey)
-          .skinImages.emplace(imageKey, *decoded);
+      decodeCache_.storeSkinImage(revisionKey, imageKey, *decoded);
     }
   }
   const auto fontRequests = collectFontAtlasRequests(

@@ -1,3 +1,4 @@
+#include "FileChecksum.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/beatoraja/SkinMovieCatalog.h"
 #include "skin/beatoraja/SkinBitmapFontParser.h"
@@ -2768,9 +2769,16 @@ void testBitmapFontPagesAreCachedAcrossDecodeRuns() {
        .fileSystem = *leasedFs.fileSystem,
        .model = model,
        .configuration = configuration});
-  const auto cached = service.decodeCache().entry(revisionKey);
-  expect(firstPlan.plan && cached != nullptr && !cached->fontPages.empty() &&
-             !cached->pageEncodedBytes.empty(),
+  const std::string pageKey =
+      (leasedFs.fileSystem->skinDirectory() / "resources" / "page.png")
+          .lexically_normal()
+          .generic_string();
+  expect(firstPlan.plan &&
+             service.decodeCache().findFontPage(revisionKey, pageKey)
+                 .has_value() &&
+             service.decodeCache()
+                 .findFontPageEncodedBytes(revisionKey, pageKey)
+                 .has_value(),
          "the first decode run decodes the bitmap font pages and stores them "
          "with their encoded byte sizes in the app-level decode cache");
   if (!firstPlan.plan) return;
@@ -2782,12 +2790,12 @@ void testBitmapFontPagesAreCachedAcrossDecodeRuns() {
        .fileSystem = *leasedFs.fileSystem,
        .model = model,
        .configuration = configuration});
-  const auto secondCached = service.decodeCache().entry(revisionKey);
   expect(secondPlan.plan &&
-             secondCached != nullptr &&
-             secondCached->fontPages.size() == cached->fontPages.size() &&
-             secondCached->pageEncodedBytes.size() ==
-                 cached->pageEncodedBytes.size() &&
+             service.decodeCache().findFontPage(revisionKey, pageKey)
+                 .has_value() &&
+             service.decodeCache()
+                 .findFontPageEncodedBytes(revisionKey, pageKey)
+                 .has_value() &&
              fontDecodes.load() == decodesAfterFirst &&
              secondPlan.plan->atlases.size() == firstPlan.plan->atlases.size() &&
              secondPlan.plan->atlases.front().glyphs.size() ==
@@ -2884,8 +2892,15 @@ void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
        .configuration = configuration});
   expect(!firstPlan.plan,
          "a cold run with an insufficient encoded budget rejects the face");
-  const auto cached = service.decodeCache().entry(revisionKey);
-  expect(cached == nullptr || cached->fontPages.empty(),
+  const std::string pageKey =
+      (leasedFs.fileSystem->skinDirectory() / "resources" / "page.png")
+          .lexically_normal()
+          .generic_string();
+  expect(!service.decodeCache().findFontPage(revisionKey, pageKey)
+                  .has_value() &&
+             !service.decodeCache()
+                  .findFontPageEncodedBytes(revisionKey, pageKey)
+                  .has_value(),
          "a face rejected on the encoded budget must not populate the "
          "app-level decode cache");
 
@@ -2898,8 +2913,11 @@ void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
   expect(!secondPlan.plan,
          "a warm run rejects the face exactly as the cold run did, because the "
          "cached page would have been charged the same encoded bytes");
-  const auto secondCached = service.decodeCache().entry(revisionKey);
-  expect(secondCached == nullptr || secondCached->fontPages.empty(),
+  expect(!service.decodeCache().findFontPage(revisionKey, pageKey)
+                  .has_value() &&
+             !service.decodeCache()
+                  .findFontPageEncodedBytes(revisionKey, pageKey)
+                  .has_value(),
          "the warm rejection also leaves the decode cache empty");
 }
 
@@ -2969,8 +2987,17 @@ void testSkinImagesAreCachedAcrossDecodeRuns() {
        .fileSystem = *leasedFs.fileSystem,
        .model = model,
        .configuration = configuration});
-  const auto cached = service.decodeCache().entry(revisionKey);
-  expect(firstPlan.plan && cached != nullptr && !cached->skinImages.empty(),
+  std::string digestError;
+  const std::string contentDigest =
+      *file_checksum::sha256File(resources / "fixture.png", digestError);
+  const std::string imageKey =
+      (leasedFs.fileSystem->skinDirectory() / "resources" / "fixture.png")
+          .lexically_normal()
+          .generic_string() +
+      ":" + contentDigest;
+  expect(firstPlan.plan &&
+             service.decodeCache().findSkinImage(revisionKey, imageKey)
+                 .has_value(),
          "the first decode run decodes the skin image and stores it in the "
          "app-level decode cache");
   if (!firstPlan.plan) return;
