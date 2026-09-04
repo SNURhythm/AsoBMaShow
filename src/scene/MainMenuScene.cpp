@@ -1,4 +1,5 @@
 #include "MainMenuScene.h"
+#include "../StartupTiming.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
 #include "../BmsChartFile.h"
@@ -4097,6 +4098,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   if (willStart.exchange(true)) {
     return;
   }
+  StartupTiming::instance().beginSession();
+  StartupTiming::instance().mark("main menu start press");
 
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
@@ -7918,6 +7921,7 @@ void MainMenuScene::stopReplayLoadWorker() {
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
+  StartupTiming::instance().mark("main menu parse + jukebox ready, changing scene");
   if (options.replayData == nullptr) {
     options.clubMode = context.settings.gameplayClubModeEnabled;
   }

@@ -4,6 +4,8 @@
 
 #include "GamePlayScene.h"
 
+#include "../../StartupTiming.h"
+
 #include "../../BeatorajaScoreMetrics.h"
 #include "GameplayBmsResourceAvailability.h"
 #include "GamePlayStartup.h"
@@ -5763,6 +5765,7 @@ void GamePlayScene::renderScene() {
   if (playbackInitializationFailed) {
     return;
   }
+  StartupTiming::instance().finishFirstFrame();
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope uiBatchScope(renderContext);
   pauseLayout->setSize(rendering::window_width, rendering::window_height);

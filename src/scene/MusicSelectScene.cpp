@@ -1,5 +1,6 @@
 #include "MusicSelectScene.h"
 
+#include "../StartupTiming.h"
 #include "../PlatformOpen.h"
 
 #if defined(__ANDROID__)
@@ -1519,6 +1520,8 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     return;
   }
   if (!selected.chart) return;
+  StartupTiming::instance().beginSession();
+  StartupTiming::instance().mark("selector start press");
   const auto record = *selected.chart;
   if (record.unavailable || record.solidArchive ||
       record.meta.BmsPath.empty()) {
@@ -1548,6 +1551,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       preloadThread_.request_stop();
       preloadThread_.join();
     }
+    StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
     if (!launching_) {
       launching_ = true;
       StartOptions options{
@@ -1655,6 +1659,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
               if (!launching_) {
                 return true;
               }
+              StartupTiming::instance().mark("parse + jukebox load done, changing scene");
               StartOptions options{
                   .startPosition = 0,
                   .autoKeySound = autoKeySound,
