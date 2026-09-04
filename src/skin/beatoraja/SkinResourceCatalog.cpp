@@ -2896,6 +2896,20 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     return true;
   };
 
+  struct PendingImageDecode {
+    image_decode::ImageDecodeCoordinator::Ticket ticket = 0;
+    std::string key;
+    std::string revisionKey;
+    std::string imageKey;
+    SkinResourceId resourceId = 0;
+    ResourceUse use;
+    std::string candidatePath;
+    std::vector<SkinResourceId> aliasIds;
+    std::vector<ResourceUse> aliasUses;
+  };
+  std::vector<PendingImageDecode> pendingImages;
+  std::map<std::string, std::size_t, std::less<>> pendingImageIndexByPath;
+
   for (const SkinResourceDefinition &definition : input.model.model.resources) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     const auto *resource = std::get_if<SkinImageResource>(&definition);
@@ -2916,7 +2930,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
         *configured.path, *configured.path);
     if (!candidate.normalizedVirtualPath) { result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical)); continue; }
     if (skinResourcePathIsMovie(*candidate.normalizedVirtualPath)) continue;
-    if (const auto found = unique.find(*candidate.normalizedVirtualPath); found != unique.end()) {
+    const std::string candidatePath = *candidate.normalizedVirtualPath;
+    if (const auto found = unique.find(candidatePath); found != unique.end()) {
       auto &image=plan.images[found->second];
       std::vector<SkinSourceRect> regions;
       std::vector<SkinResolvedRegion> mappings;
@@ -2938,6 +2953,24 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       }
       continue;
     }
+    if (const auto pendingFound = pendingImageIndexByPath.find(candidatePath);
+        pendingFound != pendingImageIndexByPath.end()) {
+      // Charge the logical resource now (like the unique-hit alias path) so a
+      // distributed overage is still rejected while decode is queued.
+      if (!session.addImage(/*physicalResources=*/0,
+                            /*logicalResources=*/1,
+                            /*encodedBytes=*/0, /*decodedBytes=*/0,
+                            /*regions=*/0)) {
+        result.diagnostics.push_back(useDiagnostic(
+            "skin.resource.session_limit", "skin.resource.session_limit",
+            "resource session aggregate exceeds policy", use->second.critical));
+        continue;
+      }
+      auto &pending = pendingImages[pendingFound->second];
+      pending.aliasIds.push_back(resource->id);
+      pending.aliasUses.push_back(use->second);
+      continue;
+    }
     const auto read = input.fileSystem.readResolvedResource(
         *candidate.normalizedVirtualPath,
         skinResourceLimit(input.safetyPolicy,
@@ -2954,6 +2987,11 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
           "resource session aggregate exceeds policy", use->second.critical));
       continue;
     }
+    // Commit the encoded charge so a distributed/physical overage is rejected
+    // before this resource's decode is queued, mirroring the serial path's
+    // per-resource accumulation.
+    session = candidateSession;
+    plan.decodedBytes = session.decodedBytes();
     const std::string revisionKey =
         plan.revision.revision().lowercaseSha256;
     file_checksum::Sha256 digest;
@@ -2996,39 +3034,40 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
              .maximumDecodedBytes = skinResourceLimit(
                  input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
              .encoded = std::move(owned)});
-        const auto waited = coordinator_.waitTake(ticket, input.stop);
-        if (waited.state == image_decode::ImageDecodeWaitState::Cancelled ||
-            waited.state == image_decode::ImageDecodeWaitState::Stopped ||
-            cancellationRequested(input.stop)) {
-          result.cancelled = true;
-          return result;
-        }
-        if (waited.state == image_decode::ImageDecodeWaitState::Ready &&
-            waited.image) {
-          decoded = waited.image;
-        }
-        if (!decoded) {
-          result.diagnostics.push_back(useDiagnostic(
-              "skin.resource.image_decode_failed",
-              "skin.resource.image_decode_failed",
-              "image decode failed during planning", use->second.critical));
-          continue;
-        }
-        {
-          std::lock_guard lock(serviceMutex_);
-          if (state_ != State::Running || stop_.stop_requested()) { result.cancelled = true; return result; }
-          cache_.put(key, *decoded);
-        }
+        // Queue the ticket without waiting so all image decodes run in
+        // parallel on the coordinator's workers; finalize happens in the
+        // wait pass after the loop.
+        pendingImages.push_back({
+            .ticket = ticket,
+            .key = key,
+            .revisionKey = revisionKey,
+            .imageKey = imageKey,
+            .resourceId = resource->id,
+            .use = use->second,
+            .candidatePath = candidatePath,
+        });
+        pendingImageIndexByPath.emplace(candidatePath,
+                                        pendingImages.size() - 1);
+        continue;
       }
     }
+    // Cache hit (app or service cache): finalize inline with the same
+    // accounting and plan writes as the deferred wait pass.
     if (!skinResourceDimensionsAllowed(decoded->width, decoded->height,
                                        decoded->byteSize(),
-                                       input.safetyPolicy)) { result.diagnostics.push_back(useDiagnostic("skin.resource.session_limit", "skin.resource.session_limit", "decoded resource bytes exceed the session policy", use->second.critical)); continue; }
+                                       input.safetyPolicy)) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.session_limit", "skin.resource.session_limit",
+          "decoded resource bytes exceed the session policy",
+          use->second.critical));
+      continue;
+    }
     std::vector<SkinSourceRect> regions;
     std::vector<SkinResolvedRegion> mappings;
-    if (!resolveRegions(use->second, decoded->width, decoded->height,
-                        regions, &mappings, result.diagnostics,
-                        input.safetyPolicy)) continue;
+    if (!resolveRegions(use->second, decoded->width, decoded->height, regions,
+                        &mappings, result.diagnostics, input.safetyPolicy)) {
+      continue;
+    }
     if (!candidateSession.addImage(/*physicalResources=*/0,
                                    /*logicalResources=*/0,
                                    /*encodedBytes=*/0, decoded->byteSize(),
@@ -3041,15 +3080,96 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     session = candidateSession;
     plan.decodedBytes = session.decodedBytes();
     unique.emplace(*candidate.normalizedVirtualPath, plan.images.size());
-    plan.images.push_back({.id=resource->id, .pixels=*decoded, .regions=std::move(regions), .regionMappings=std::move(mappings)});
-    // Only persist into the app-level decode cache after the session
-    // accounting above has charged the encoded and decoded bytes. Caching
-    // earlier would let a resource rejected on the encoded/decoded budget be
-    // served warm with no charge, making per-load budgets load-order
-    // dependent. Both runs read the file and charge the same encoded bytes, so
-    // a warm hit reconstructs the identical budget as the cold run.
+    plan.images.push_back({.id = resource->id,
+                           .pixels = *decoded,
+                           .regions = std::move(regions),
+                           .regionMappings = std::move(mappings)});
     if (!fromAppCache) {
       decodeCache_.storeSkinImage(revisionKey, imageKey, *decoded);
+    }
+  }
+  // Wait for every queued image decode and finalize it. The coordinator
+  // decoded the images in parallel while this thread queued them, so each
+  // wait resolves promptly.
+  for (const auto &pending : pendingImages) {
+    if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
+    const auto waited = coordinator_.waitTake(pending.ticket, input.stop);
+    if (waited.state == image_decode::ImageDecodeWaitState::Cancelled ||
+        waited.state == image_decode::ImageDecodeWaitState::Stopped ||
+        cancellationRequested(input.stop)) {
+      result.cancelled = true;
+      return result;
+    }
+    if (waited.state != image_decode::ImageDecodeWaitState::Ready ||
+        !waited.image) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.image_decode_failed",
+          "skin.resource.image_decode_failed",
+          "image decode failed during planning", pending.use.critical));
+      continue;
+    }
+    auto decoded = *waited.image;
+    {
+      std::lock_guard lock(serviceMutex_);
+      if (state_ != State::Running || stop_.stop_requested()) {
+        result.cancelled = true;
+        return result;
+      }
+      cache_.put(pending.key, decoded);
+    }
+    if (!skinResourceDimensionsAllowed(decoded.width, decoded.height,
+                                       decoded.byteSize(),
+                                       input.safetyPolicy)) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.session_limit", "skin.resource.session_limit",
+          "decoded resource bytes exceed the session policy",
+          pending.use.critical));
+      continue;
+    }
+    SkinResourceSessionAccounting candidateSession = session;
+    std::vector<SkinSourceRect> regions;
+    std::vector<SkinResolvedRegion> mappings;
+    if (!resolveRegions(pending.use, decoded.width, decoded.height, regions,
+                        &mappings, result.diagnostics, input.safetyPolicy)) {
+      continue;
+    }
+    if (!candidateSession.addImage(/*physicalResources=*/0,
+                                   /*logicalResources=*/0,
+                                   /*encodedBytes=*/0, decoded.byteSize(),
+                                   regions.size())) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.session_limit", "skin.resource.session_limit",
+          "resource session aggregate exceeds policy", pending.use.critical));
+      continue;
+    }
+    session = candidateSession;
+    plan.decodedBytes = session.decodedBytes();
+    unique.emplace(pending.candidatePath, plan.images.size());
+    plan.images.push_back({.id = pending.resourceId,
+                           .pixels = decoded,
+                           .regions = std::move(regions),
+                           .regionMappings = std::move(mappings)});
+    decodeCache_.storeSkinImage(pending.revisionKey, pending.imageKey,
+                                plan.images.back().pixels);
+    for (std::size_t aliasIndex = 0; aliasIndex < pending.aliasIds.size();
+         ++aliasIndex) {
+      auto &image = plan.images.back();
+      std::vector<SkinSourceRect> aliasRegions;
+      std::vector<SkinResolvedRegion> aliasMappings;
+      if (resolveRegions(pending.aliasUses[aliasIndex], image.pixels.width,
+                         image.pixels.height, aliasRegions, &aliasMappings,
+                         result.diagnostics, input.safetyPolicy)) {
+        if (session.addImage(/*physicalResources=*/0,
+                             /*logicalResources=*/0,
+                             /*encodedBytes=*/0, /*decodedBytes=*/0,
+                             aliasRegions.size())) {
+          image.aliases.push_back(pending.aliasIds[aliasIndex]);
+          image.aliasRegions.emplace(pending.aliasIds[aliasIndex],
+                                     std::move(aliasRegions));
+          image.aliasRegionMappings.emplace(pending.aliasIds[aliasIndex],
+                                            std::move(aliasMappings));
+        }
+      }
     }
   }
   const auto fontRequests = collectFontAtlasRequests(
