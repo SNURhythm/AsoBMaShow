@@ -239,10 +239,13 @@ void testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs() {
              built.atlas->glyphs.contains(U'A') &&
              !built.atlas->glyphs.contains(U'B') &&
              !built.atlas->glyphs.contains(U'X') &&
-             built.atlas->kerning.empty(),
+             built.atlas->kerning.empty() &&
+             built.atlas->glyphs.at(U'A').layoutOffsetY == -10,
          "bitmap pages remain separate, an unavailable fallback page is "
          "skipped, actual first-page metrics replace the failed auxiliary "
-         "scan, and a glyph without a replacement is simply absent");
+         "scan, a glyph without a replacement is simply absent, and the "
+         "baseline offset is the glyph's yOffset plus its ink height "
+         "(Beatoraja BitmapFont layout)");
 
   auto secondPageFont = *primary.font;
   secondPageFont.pagePaths = {"wide-a.png", "wide-b.png"};
@@ -2033,9 +2036,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
     expect(firstAtlas.id == 1 && secondAtlas.id == 2 && firstAtlas.key.pointSize == 16 &&
                secondAtlas.key.pointSize == 24 && firstAtlas.glyphs.contains(U'日') &&
                firstAtlas.glyphs.contains(U'4') && firstAtlas.glyphs.at(U'A').region.x > 0 &&
-firstAtlas.capHeight > 0 &&
+               firstAtlas.capHeight > 0 &&
                 firstAGlyph.layoutOffsetY == firstAGlyph.bearingY -
-                                                   firstAGlyph.region.h &&
+                                                   firstAGlyph.region.h -
+                                                   firstAtlas.capHeight &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width > 0.0 &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width < 1.0 && styledColor &&
                signikaAtlas != planned.plan->atlases.end() && signikaAtlas->kerning.contains({U'A', U'V'}) &&

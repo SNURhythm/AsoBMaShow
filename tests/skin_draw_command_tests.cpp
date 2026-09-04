@@ -1821,20 +1821,20 @@ PreparedSkinTextAtlas verticalAtlas() {
                                  .bearingX = -1,
                                  .bearingY = 14,
                                  .advance = 13,
-                                 .layoutOffsetY = -2});
+                                 .layoutOffsetY = -14});
   atlas.glyphs.emplace(U'g', SkinPreparedGlyphMetrics{
                                  .region = {.x = 25, .y = 5, .w = 13, .h = 20},
                                  .bearingX = -1,
                                  .bearingY = 10,
                                  .advance = 11,
-                                 .layoutOffsetY = -10});
+                                 .layoutOffsetY = -22});
   atlas.glyphs.emplace(
       U'\u00c9',
       SkinPreparedGlyphMetrics{.region = {.x = 45, .y = 5, .w = 13, .h = 24},
                                .bearingX = -1,
                                .bearingY = 20,
                                .advance = 10,
-                               .layoutOffsetY = -4});
+                               .layoutOffsetY = -16});
   return atlas;
 }
 
@@ -2364,14 +2364,14 @@ void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
   if (run.glyphs.size() != 4) {
     return;
   }
-expect(run.glyphs[0].vertices[0].y == 602.0F,
-         "cap glyph ink sits on the destination-top baseline at its own bearing");
-  expect(run.glyphs[1].vertices[0].y == 610.0F,
-          "descender keeps its taller bitmap on the same baseline");
-  expect(run.glyphs[2].vertices[0].y == 604.0F,
-          "diacritic bearing can extend above the cap-height line");
-  expect(run.glyphs[3].vertices[0].y == 622.0F,
-          "second hard line applies one prepared line-height step");
+expect(run.glyphs[0].vertices[0].y == 614.0F,
+         "cap glyph subtracts cap height from the destination-top baseline");
+  expect(run.glyphs[1].vertices[0].y == 622.0F,
+         "descender uses its taller prepared bitmap below the baseline");
+  expect(run.glyphs[2].vertices[0].y == 616.0F,
+         "diacritic bearing can extend above the cap-height line");
+  expect(run.glyphs[3].vertices[0].y == 634.0F,
+         "second hard line applies one prepared line-height step");
 }
 
 void testSelectorCompatibilitySkipsTransientlyMissingGlyphs() {

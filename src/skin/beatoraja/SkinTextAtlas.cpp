@@ -228,6 +228,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     return result;
   }
   const int primaryAscent = TTF_FontAscent(opened.front().font);
+  const int layoutAscent = primaryAscent - capHeight;
   const int outline = static_cast<int>(std::ceil(key.outlineWidth));
   const bool outlineActive = key.outlineRgba[3] != 0;
   const bool shadowActive = key.shadowRgba[3] != 0;
@@ -451,6 +452,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     SDL_UnlockSurface(surface);
     SDL_FreeSurface(surface);
+    const int selectedFaceAscent = TTF_FontAscent(opened[faceIndex].font);
     GlyphBitmap glyph{
         .codepoint = codepoint,
         .face = faceIndex,
@@ -460,12 +462,10 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         .width = glyphWidth,
         .height = glyphHeight,
         .padding = glyphPadding,
-        // The renderer anchors the baseline at the destination top edge. A
-        // glyph's ink top must land at baseline + maxY (its own bearing above
-        // the baseline), matching Beatoraja's BitmapFont layout. This is the
-        // cropped content height minus the bearing, without any cap-height or
-        // face-ascent adjustment.
-        .layoutOffsetY = hasPixels ? maxY - contentHeight - glyphPadding : 0,
+        .layoutOffsetY =
+            hasPixels ? layoutAscent + maxY - contentHeight -
+                            selectedFaceAscent - glyphPadding
+                      : 0,
         .contentWidth = contentWidth,
         .contentHeight = contentHeight,
         .alpha = std::move(alpha)};
@@ -772,6 +772,11 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     const auto &glyph = *selected.glyph;
     const int yOffsetAdjust =
         representativeYOffset(faces[selected.face].font) - primaryYOffset;
+    // The renderer anchors the baseline at the destination top edge and
+    // treats the authored rect as bottom-origin. A BMFont glyph's ink top
+    // sits `yOffset` below that baseline, so its bottom edge is
+    // `yOffset + region.h` below the baseline. Placing the rect bottom there
+    // mirrors Beatoraja's BitmapFont layout exactly.
     metrics.emplace(
         codepoint,
         SkinPreparedGlyphMetrics{
@@ -779,9 +784,8 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
             .bearingX = glyph.xOffset,
             .bearingY = -glyph.yOffset,
             .advance = glyph.xAdvance,
-            .layoutOffsetY = faces.front().font.base -
-                             faces.front().font.lineHeight - glyph.region.h -
-                             glyph.yOffset + yOffsetAdjust,
+            .layoutOffsetY = -glyph.yOffset - yOffsetAdjust -
+                             glyph.region.h,
             .page = pageIndices[selected.face]
                                [static_cast<std::size_t>(glyph.page)],
             .bitmapFontType = faces[selected.face].font.resource.type});
