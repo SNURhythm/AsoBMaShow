@@ -1490,7 +1490,14 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           lnMode = long_note_mode::valueFromId(selections.longNoteMode);
         }
         applyEffectiveLongNoteModeToChart(*chart, lnMode);
-        if (launchCancelled_.load(std::memory_order_acquire)) {
+        // The jukebox load (archive extraction + audio/BGA decode) is the
+        // chart-dependent cost and can take seconds for a heavy chart. Run it
+        // off the UI thread like the parse; the selector's only jukebox use
+        // during launching_ is this load (preview uses its own audio
+        // service), so it cannot race the UI thread.
+        context.jukebox.stop();
+        (void)context.jukebox.loadChart(*chart, true, cancelled);
+        if (cancelled || launchCancelled_.load(std::memory_order_acquire)) {
           resetLaunching();
           return;
         }
@@ -1505,10 +1512,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
               if (!launching_) {
                 return true;
               }
-              context.jukebox.stop();
-              std::atomic_bool loadCancelled = false;
-              (void)context.jukebox.loadChart(**preparedChart, true,
-                                              loadCancelled);
               StartOptions options{
                   .startPosition = 0,
                   .autoKeySound = autoKeySound,
