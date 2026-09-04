@@ -811,7 +811,8 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
     const SkinSafetyPolicy &safetyPolicy, std::stop_token stop,
     BitmapFontPreparationCache &cache,
     BitmapFontAccountingIdentities &requestAccounting,
-    image_decode::ImageDecodeCoordinator &coordinator) {
+    image_decode::ImageDecodeCoordinator &coordinator,
+    SkinDecodeCache *decodeCache) {
   std::vector<SkinTextAtlasBitmapFace> result;
   result.reserve(request.resolvedFaces.size());
   for (std::size_t faceIndex = 0; faceIndex < request.resolvedFaces.size();
@@ -941,6 +942,18 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       preparedPage.physicalKey = combined;
       auto decoded = cache.pages.find(combined);
       if (decoded == cache.pages.end()) {
+        if (const auto cached =
+                decodeCache != nullptr
+                    ? decodeCache->entry(files.revision().lowercaseSha256)
+                    : nullptr;
+            cached != nullptr) {
+          const auto found = cached->fontPages.find(combined);
+          if (found != cached->fontPages.end()) {
+            preparedPage.pixels = found->second;
+            newlyAccountedPages.insert(combined);
+            continue;
+          }
+        }
         const auto read = files.readResolvedResource(
             combined,
             skinResourceLimit(safetyPolicy,
@@ -1006,6 +1019,10 @@ std::optional<std::vector<SkinTextAtlasBitmapFace>> readBitmapFontFaces(
       const auto [decoded, _] =
           cache.pages.emplace(pending.path, *waited.image);
       prepared.pages[pending.page].pixels = decoded->second;
+      if (decodeCache != nullptr) {
+        decodeCache->mutableEntry(files.revision().lowercaseSha256)
+            .fontPages.emplace(pending.path, *waited.image);
+      }
     }
     if (!usableFace) {
       for (const auto &pending : pendingPages) coordinator.cancel(pending.ticket);
@@ -1067,12 +1084,14 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
     BitmapFontPreparationCache &cache,
     BitmapFontAccountingIdentities &requestAccounting,
     std::size_t &remainingScalableFontPaintAttemptWork,
-    image_decode::ImageDecodeCoordinator &coordinator) {
+    image_decode::ImageDecodeCoordinator &coordinator,
+    SkinDecodeCache *decodeCache) {
   if (request.resolvedFaces.empty()) return std::nullopt;
   if (request.font.bitmap) {
     const auto faces = readBitmapFontFaces(
         request, files, session, diagnostics, cancellationRequested,
-        safetyPolicy, stop, cache, requestAccounting, coordinator);
+        safetyPolicy, stop, cache, requestAccounting, coordinator,
+        decodeCache);
     if (!faces) return std::nullopt;
     return buildSkinBitmapTextAtlas(id, request.key, *faces,
                                     request.codepoints, request.pairs,
@@ -2602,7 +2621,7 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
-        remainingScalableFontPaintAttemptWork, coordinator_);
+        remainingScalableFontPaintAttemptWork, coordinator_, nullptr);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -2988,7 +3007,7 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
-        remainingScalableFontPaintAttemptWork, coordinator_);
+        remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -3084,7 +3103,7 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
-        remainingScalableFontPaintAttemptWork, coordinator_);
+        remainingScalableFontPaintAttemptWork, coordinator_, nullptr);
     if (cancellationRequested(input.stop)) {
       result.cancelled = true;
       return result;

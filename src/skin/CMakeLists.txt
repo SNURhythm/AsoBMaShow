@@ -84,6 +84,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinMovieCatalog.cpp
         beatoraja/SkinMovieCatalogFrame.cpp
         beatoraja/SkinResourceCatalog.cpp
+        beatoraja/SkinDecodeCache.cpp
         beatoraja/SkinTextAtlas.cpp
     )
 else()

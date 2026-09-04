@@ -1,4 +1,4 @@
-#include "skin/beatoraja/SkinDecodeCache.h"
+#include "SkinDecodeCache.h"
 
 namespace skin {
 

@@ -3,6 +3,7 @@
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
 #include "PomyuCharaResource.h"
+#include "SkinDecodeCache.h"
 #include "SkinGeneratedTexture.h"
 #include "SkinLiveResourceCounters.h"
 #include "../SkinSafetyPolicy.h"
@@ -321,6 +322,7 @@ public:
   SkinTextAtlasPreparationResult
   prepareTextAtlasUpdates(SkinTextAtlasPreparationInputs);
   void shutdown() noexcept;
+  [[nodiscard]] SkinDecodeCache &decodeCache() noexcept { return decodeCache_; }
 private:
   enum class State { Running, Stopping, Stopped };
   bool beginCall();
@@ -331,6 +333,7 @@ private:
   image_decode::DecodedImageCache cache_;
   Decoder decoder_;
   image_decode::ImageDecodeCoordinator coordinator_;
+  SkinDecodeCache decodeCache_;
   State state_ = State::Running;
   std::stop_source stop_;
   std::size_t activeCalls_ = 0;

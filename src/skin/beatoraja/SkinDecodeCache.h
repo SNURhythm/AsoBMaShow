@@ -1,6 +1,6 @@
 #pragma once
 
-#include "view/DecodedImageCache.h"
+#include "../../view/DecodedImageCache.h"
 
 #include <cstddef>
 #include <map>
