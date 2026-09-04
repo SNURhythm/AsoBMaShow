@@ -156,6 +156,8 @@ void setSkinResourceAccountingLimitsForTesting(
 void resetSkinResourceAccountingLimitsForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourceCommittedEncodedBytesForTesting() noexcept;
+void resetSkinImageAppCacheHitsForTesting() noexcept;
+[[nodiscard]] std::size_t skinImageAppCacheHitsForTesting() noexcept;
 #endif
 
 // The authored rectangle is the stable command-side identity. Resolution is

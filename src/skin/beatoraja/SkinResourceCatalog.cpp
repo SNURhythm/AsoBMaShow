@@ -337,6 +337,11 @@ std::atomic_size_t maximumSessionEncodedBytesForTesting{
 std::atomic_size_t maximumAtlasSessionBytesForTesting{
     std::numeric_limits<std::size_t>::max()};
 std::atomic_size_t committedEncodedBytesForTesting{0};
+std::atomic_size_t skinImageAppCacheHitCountForTesting{0};
+
+void recordSkinImageAppCacheHit() noexcept {
+  skinImageAppCacheHitCountForTesting.fetch_add(1, std::memory_order_relaxed);
+}
 
 void recordRegionIdentityCheck() noexcept {
   regionIdentityChecksForTesting.fetch_add(1, std::memory_order_relaxed);
@@ -1236,6 +1241,14 @@ void resetSkinResourceAccountingLimitsForTesting() noexcept {
 
 std::size_t skinResourceCommittedEncodedBytesForTesting() noexcept {
   return committedEncodedBytesForTesting.load(std::memory_order_relaxed);
+}
+
+void resetSkinImageAppCacheHitsForTesting() noexcept {
+  skinImageAppCacheHitCountForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinImageAppCacheHitsForTesting() noexcept {
+  return skinImageAppCacheHitCountForTesting.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -2967,6 +2980,9 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
           found != skinCache->skinImages.end()) {
         decoded = found->second;
         fromAppCache = true;
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+        recordSkinImageAppCacheHit();
+#endif
       }
     }
     if (!decoded) {

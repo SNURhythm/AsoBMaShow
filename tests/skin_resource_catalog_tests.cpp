@@ -2962,6 +2962,7 @@ void testSkinImagesAreCachedAcrossDecodeRuns() {
       });
   const std::string revisionKey = lease->revision().lowercaseSha256;
 
+  skin::resetSkinImageAppCacheHitsForTesting();
   const auto firstPlan = service.decodeAndPlan(
       {.revision = lease->clone(),
        .entry = entry,
@@ -2983,13 +2984,14 @@ void testSkinImagesAreCachedAcrossDecodeRuns() {
        .configuration = configuration});
   expect(secondPlan.plan &&
              imageDecodes.load() == decodesAfterFirst &&
+             skin::skinImageAppCacheHitsForTesting() >= 1 &&
              secondPlan.plan->images.size() == firstPlan.plan->images.size() &&
              secondPlan.plan->images.front().pixels.width ==
                  firstPlan.plan->images.front().pixels.width &&
              secondPlan.plan->images.front().pixels.height ==
                  firstPlan.plan->images.front().pixels.height &&
              secondPlan.plan->decodedBytes == firstPlan.plan->decodedBytes,
-         "the second decode run reuses the cached skin image without "
+         "the second decode run reuses the cached image without "
          "re-decoding and charges the same decoded budget as the cold run");
 }
 
