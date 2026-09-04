@@ -702,6 +702,14 @@ bool isPinnedBeatorajaBooleanPropertyId(int selector) noexcept {
 SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
   static const auto entries = makeCatalog();
   static constexpr auto ranges = std::to_array<SkinBuiltinBindingCatalogRange>({
+      // IntegerPropertyFactory's two 65,536-entry caches make every selector
+      // in 0..65535 loadable in Beatoraja, but the catalog intentionally
+      // admits only selectors with an implemented source property.  An
+      // unlisted in-domain selector decodes to an absent binding (the decoder
+      // mirrors the upstream null-property case), so the skin still loads
+      // instead of becoming a catalog error; adding the blanket cache ranges
+      // back would admit slots Aso neither renders nor supplies a sentinel
+      // for and would reverse the play/music-select bridge admission contract.
       {.type = {.kind = SkinBindingKind::TimerProperty},
        .first = 0,
        .last = std::numeric_limits<int>::max()},
