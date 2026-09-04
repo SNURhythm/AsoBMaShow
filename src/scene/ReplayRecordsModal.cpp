@@ -255,6 +255,7 @@ ReplayRecordsModal::Create(View *parent,
       ->setHeight(kModalContentHeight)
       ->setGap(10);
   auto *list = new ResultRecordListView();
+  list->setIrUploadAvailable(static_cast<bool>(modal->callbacks_.irUpload));
   list->onSelectionChanged = [raw = modal.get()](int idx) {
     raw->select(idx);
   };
@@ -1336,13 +1337,23 @@ void ReplayRecordsModal::refreshActions() {
           ? replay::replayFileActionSelection(
                 *selected_, !modalOperationInProgress)
           : replay::ReplayFileActionSelection{};
+  // Owners may omit a callback for an action they do not support.  Presenting
+  // a control for an absent callback would look enabled but do nothing, so
+  // suppress those controls entirely instead.
+  const bool shareAvailable = static_cast<bool>(callbacks_.share);
+  const bool removeAvailable = static_cast<bool>(callbacks_.remove);
+  const bool recallAvailable =
+      static_cast<bool>(callbacks_.recallModernChart) ||
+      static_cast<bool>(callbacks_.recallModernCourse) ||
+      static_cast<bool>(callbacks_.recallRemote);
   const bool watchVisible =
       selected_.has_value() && !filterSortMode && !deleteConfirmationMode &&
       !optionsMode && !progressMode &&
       resultRecordActionTarget(*selected_, ResultRecordAction::Watch) !=
           ResultRecordActionTarget::None;
   const bool gbattleVisible =
-      selected_.has_value() && !filterSortMode && !watchOptionsMode &&
+      selected_.has_value() && static_cast<bool>(callbacks_.gbattle) &&
+      !filterSortMode && !watchOptionsMode &&
       !optionsMode && !progressMode && !deleteConfirmationMode &&
       resultRecordActionTarget(*selected_, ResultRecordAction::GBattle) ==
           ResultRecordActionTarget::ModernChart;
@@ -1351,7 +1362,7 @@ void ReplayRecordsModal::refreshActions() {
           selected_, !filterSortMode && !watchOptionsMode && !optionsMode &&
                          !progressMode && !deleteConfirmationMode,
           modalOperationInProgress);
-  const bool resultVisible = resultAction.visible;
+  const bool resultVisible = recallAvailable && resultAction.visible;
   const bool exportVisible =
       selected_.has_value() && !filterSortMode && !watchOptionsMode &&
       !progressMode && !deleteConfirmationMode &&
@@ -1393,12 +1404,14 @@ void ReplayRecordsModal::refreshActions() {
     filterButton_->setWidth(filterVisible ? 54.0f : 0.0f);
   }
   if (shareButton_ != nullptr) {
-    const bool visible = fileActions.shareVisible && !deleteConfirmationMode;
+    const bool visible =
+        shareAvailable && fileActions.shareVisible && !deleteConfirmationMode;
     shareButton_->setVisible(visible);
     shareButton_->setWidth(visible ? 54.0F : 0.0F);
   }
   if (deleteButton_ != nullptr) {
-    const bool visible = fileActions.deleteVisible && !deleteConfirmationMode;
+    const bool visible =
+        removeAvailable && fileActions.deleteVisible && !deleteConfirmationMode;
     deleteButton_->setVisible(visible);
     deleteButton_->setWidth(visible ? 54.0F : 0.0F);
   }
@@ -1430,13 +1443,13 @@ void ReplayRecordsModal::refreshActions() {
                           ui_theme::controlHover, ui_theme::controlPressed,
                           ui_theme::hairlineStrong);
   styleThemedActionButton(shareButton_, shareButtonText_,
-                          fileActions.shareVisible && fileActions.enabled &&
-                              !deleteConfirmationMode,
+                          shareAvailable && fileActions.shareVisible &&
+                              fileActions.enabled && !deleteConfirmationMode,
                           ui_theme::infoAction, ui_theme::infoActionHover,
                           ui_theme::infoActionPressed, ui_theme::accentBorder);
   styleThemedActionButton(deleteButton_, deleteButtonText_,
-                          fileActions.deleteVisible && fileActions.enabled &&
-                              !deleteConfirmationMode,
+                          removeAvailable && fileActions.deleteVisible &&
+                              fileActions.enabled && !deleteConfirmationMode,
                           ui_theme::warningAction, ui_theme::warningActionHover,
                           ui_theme::warningActionPressed, ui_theme::amber);
   if (replay_record_filters::hasActiveCriteria(filters_) || filterSortMode) {
