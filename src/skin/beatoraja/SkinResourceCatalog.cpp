@@ -1111,7 +1111,8 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
     BitmapFontAccountingIdentities &requestAccounting,
     std::size_t &remainingScalableFontPaintAttemptWork,
     image_decode::ImageDecodeCoordinator &coordinator,
-    SkinDecodeCache *decodeCache) {
+    SkinDecodeCache *decodeCache,
+    SkinResourcePreparationService *textAtlasCacheOwner) {
   if (request.resolvedFaces.empty()) return std::nullopt;
   if (request.font.bitmap) {
     const auto faces = readBitmapFontFaces(
@@ -1123,6 +1124,18 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
                                     request.codepoints, request.pairs,
                                     safetyPolicy);
   }
+  const std::string contentKey = scalableTextAtlasContentKey(
+      request.key, request.codepoints, request.pairs, safetyPolicy);
+  if (textAtlasCacheOwner != nullptr) {
+    if (auto cached = textAtlasCacheOwner->findCachedTextAtlas(
+            files.revision().lowercaseSha256, contentKey);
+        cached) {
+      SkinTextAtlasBuildResult result;
+      result.atlas = *cached;
+      result.atlas->id = id;
+      return result;
+    }
+  }
   const auto faces = readFontFaces(request, files, session, diagnostics,
                                    cancellationRequested, safetyPolicy);
   if (!faces) return std::nullopt;
@@ -1132,13 +1145,42 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
         remainingScalableFontPaintAttemptWork -= work;
         return true;
       };
-  return buildSkinTextAtlas(id, request.key, *faces, request.codepoints,
-                            request.pairs, safetyPolicy,
-                            std::min(
-                                session.remainingScalableFontPaintBlendOperations(),
-                                remainingScalableFontPaintAttemptWork),
-                            cancellationRequested, reservePaintAttemptWork);
+  ScalableGlyphCacheAccessor glyphCache;
+  if (textAtlasCacheOwner != nullptr) {
+    const std::string revisionKey = files.revision().lowercaseSha256;
+    const SkinTextAtlasKey glyphKeyBase = request.key;
+    const SkinSafetyPolicy glyphPolicy = safetyPolicy;
+    glyphCache.find =
+        [textAtlasCacheOwner, revisionKey, glyphKeyBase, glyphPolicy](
+            char32_t codepoint) {
+          return textAtlasCacheOwner->findCachedGlyph(
+              revisionKey,
+              scalableGlyphKey(glyphKeyBase, codepoint, glyphPolicy));
+        };
+    glyphCache.store =
+        [textAtlasCacheOwner, revisionKey, glyphKeyBase, glyphPolicy](
+            char32_t codepoint, SkinPreparedGlyphBitmap glyph) {
+          textAtlasCacheOwner->storeCachedGlyph(
+              revisionKey,
+              scalableGlyphKey(glyphKeyBase, codepoint, glyphPolicy),
+              std::move(glyph));
+        };
+  }
+  auto built = buildSkinTextAtlas(id, request.key, *faces, request.codepoints,
+                                  request.pairs, safetyPolicy,
+                                  std::min(
+                                      session.remainingScalableFontPaintBlendOperations(),
+                                      remainingScalableFontPaintAttemptWork),
+                                  cancellationRequested, reservePaintAttemptWork,
+                                  textAtlasCacheOwner != nullptr ? &glyphCache
+                                                                 : nullptr);
+  if (built.atlas && textAtlasCacheOwner != nullptr) {
+    textAtlasCacheOwner->storeCachedTextAtlas(
+        files.revision().lowercaseSha256, contentKey, *built.atlas);
+  }
+  return built;
 }
+
 
 struct AtlasAccountingDelta {
   std::size_t decodedBytes = 0;
@@ -1184,6 +1226,64 @@ std::optional<AtlasAccountingDelta> atlasAccountingDelta(
   return result;
 }
 }
+
+void appendScalableBigEndian(std::string &serialized, std::uint64_t value) {
+  for (int shift = 56; shift >= 0; shift -= 8) {
+    serialized.push_back(
+        static_cast<char>((value >> static_cast<unsigned>(shift)) & 0xffU));
+  }
+}
+
+void appendScalableAtlasKeyFields(std::string &serialized,
+                                  const SkinTextAtlasKey &key,
+                                  const SkinSafetyPolicy &safetyPolicy) {
+  serialized.append("ASOBMASHOW-SCALABLE-ATLAS-V1");
+  appendScalableBigEndian(serialized, key.font);
+  appendScalableBigEndian(serialized, key.pointSize);
+  appendScalableBigEndian(serialized, std::bit_cast<std::uint64_t>(key.outlineWidth));
+  appendScalableBigEndian(serialized, std::bit_cast<std::uint64_t>(key.shadowOffsetX));
+  appendScalableBigEndian(serialized, std::bit_cast<std::uint64_t>(key.shadowOffsetY));
+  appendScalableBigEndian(serialized, std::bit_cast<std::uint64_t>(key.shadowSmoothness));
+  serialized.push_back(static_cast<char>(key.outlineRgba[0]));
+  serialized.push_back(static_cast<char>(key.outlineRgba[1]));
+  serialized.push_back(static_cast<char>(key.outlineRgba[2]));
+  serialized.push_back(static_cast<char>(key.outlineRgba[3]));
+  serialized.push_back(static_cast<char>(key.shadowRgba[0]));
+  serialized.push_back(static_cast<char>(key.shadowRgba[1]));
+  serialized.push_back(static_cast<char>(key.shadowRgba[2]));
+  serialized.push_back(static_cast<char>(key.shadowRgba[3]));
+  appendScalableBigEndian(serialized, key.fallbackChainDigest.size());
+  serialized.append(key.fallbackChainDigest);
+  serialized.push_back(
+      safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit) ? '1'
+                                                                     : '0');
+}
+
+std::string scalableTextAtlasContentKey(
+    const SkinTextAtlasKey &key, const std::set<char32_t> &codepoints,
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    const SkinSafetyPolicy &safetyPolicy) {
+  std::string serialized;
+  appendScalableAtlasKeyFields(serialized, key, safetyPolicy);
+  for (const char32_t codepoint : codepoints) {
+    appendScalableBigEndian(serialized, codepoint);
+  }
+  for (const auto &[left, right] : pairs) {
+    appendScalableBigEndian(serialized, left);
+    appendScalableBigEndian(serialized, right);
+  }
+  return file_checksum::sha256(serialized);
+}
+
+std::string scalableGlyphKey(const SkinTextAtlasKey &key, char32_t codepoint,
+                             const SkinSafetyPolicy &safetyPolicy) {
+  std::string serialized;
+  appendScalableAtlasKeyFields(serialized, key, safetyPolicy);
+  appendScalableBigEndian(serialized, codepoint);
+  return serialized;
+}
+
+
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 void resetSkinResourceRegionIdentityChecksForTesting() noexcept {
   regionIdentityChecksForTesting.store(0, std::memory_order_relaxed);
@@ -2525,6 +2625,108 @@ void SkinResourcePreparationService::shutdown() noexcept {
   serviceCv_.notify_all();
 }
 
+namespace {
+std::size_t scalableAtlasByteSize(const SkinPreparedGlyphAtlas &atlas) noexcept {
+  std::size_t total = atlas.pixels.byteSize();
+  for (const auto &page : atlas.pages) {
+    if (page.pixels) total += page.pixels->byteSize();
+  }
+  return total;
+}
+
+// Eviction cap for the rasterized scalable-atlas cache. Each atlas page is up
+// to 1024x1024 RGBA (4 MiB), so the cap is large enough for a whole skin's
+// style corpus but bounded against unbounded per-chart growth. A routine skin
+// change already drops every entry via dropTextAtlasCache.
+constexpr std::size_t kMaximumTextAtlasCacheBytes = 128U * 1024U * 1024U;
+// Eviction cap for the per-glyph rasterization cache. Raw glyph alphas are
+// small (glyph-area bytes), so this is generous but bounded against unbounded
+// per-chart codepoint accumulation.
+constexpr std::size_t kMaximumGlyphCacheBytes = 64U * 1024U * 1024U;
+}
+
+std::shared_ptr<const SkinPreparedGlyphAtlas>
+SkinResourcePreparationService::findCachedTextAtlas(
+    std::string_view revisionKey, std::string_view contentKey) const {
+  std::shared_lock lock(textAtlasCacheMutex_);
+  const auto foundRevision = textAtlasCache_.find(revisionKey);
+  if (foundRevision == textAtlasCache_.end()) {
+    return nullptr;
+  }
+  const auto found = foundRevision->second.find(contentKey);
+  if (found == foundRevision->second.end()) {
+    return nullptr;
+  }
+  return found->second;
+}
+
+void SkinResourcePreparationService::storeCachedTextAtlas(
+    std::string revisionKey, std::string contentKey,
+    SkinPreparedGlyphAtlas atlas) {
+  const std::size_t bytes = scalableAtlasByteSize(atlas);
+  auto stored = std::make_shared<const SkinPreparedGlyphAtlas>(
+      std::move(atlas));
+  std::unique_lock lock(textAtlasCacheMutex_);
+  auto &entries = textAtlasCache_[std::move(revisionKey)];
+  const auto previous = entries.find(contentKey);
+  if (previous != entries.end() && previous->second) {
+    const std::size_t previousBytes =
+        scalableAtlasByteSize(*previous->second);
+    textAtlasCacheBytes_ =
+        textAtlasCacheBytes_ > previousBytes ? textAtlasCacheBytes_ - previousBytes
+                                             : 0;
+  }
+  entries.insert_or_assign(std::move(contentKey), std::move(stored));
+  textAtlasCacheBytes_ += bytes;
+  if (textAtlasCacheBytes_ > kMaximumTextAtlasCacheBytes) {
+    textAtlasCache_.clear();
+    textAtlasCacheBytes_ = 0;
+  }
+}
+
+void SkinResourcePreparationService::dropTextAtlasCache() noexcept {
+  std::unique_lock lock(textAtlasCacheMutex_);
+  textAtlasCache_.clear();
+  textAtlasCacheBytes_ = 0;
+  glyphCache_.clear();
+  glyphCacheBytes_ = 0;
+}
+
+std::optional<SkinPreparedGlyphBitmap>
+SkinResourcePreparationService::findCachedGlyph(
+    std::string_view revisionKey, std::string_view glyphKey) const {
+  std::shared_lock lock(textAtlasCacheMutex_);
+  const auto foundRevision = glyphCache_.find(revisionKey);
+  if (foundRevision == glyphCache_.end()) {
+    return std::nullopt;
+  }
+  const auto found = foundRevision->second.find(glyphKey);
+  if (found == foundRevision->second.end()) {
+    return std::nullopt;
+  }
+  return found->second;
+}
+
+void SkinResourcePreparationService::storeCachedGlyph(
+    std::string revisionKey, std::string glyphKey,
+    SkinPreparedGlyphBitmap glyph) {
+  const std::size_t bytes = glyph.alpha.size();
+  std::unique_lock lock(textAtlasCacheMutex_);
+  auto &entries = glyphCache_[std::move(revisionKey)];
+  const auto previous = entries.find(glyphKey);
+  if (previous != entries.end()) {
+    const std::size_t previousBytes = previous->second.alpha.size();
+    glyphCacheBytes_ =
+        glyphCacheBytes_ > previousBytes ? glyphCacheBytes_ - previousBytes : 0;
+  }
+  entries.insert_or_assign(std::move(glyphKey), std::move(glyph));
+  glyphCacheBytes_ += bytes;
+  if (glyphCacheBytes_ > kMaximumGlyphCacheBytes) {
+    glyphCache_.clear();
+    glyphCacheBytes_ = 0;
+  }
+}
+
 SkinResourceValidationResult SkinResourcePreparationService::validateResources(
     SkinResourceValidationInputs input) {
   SkinResourceValidationResult result;
@@ -2655,7 +2857,8 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
-        remainingScalableFontPaintAttemptWork, coordinator_, nullptr);
+        remainingScalableFontPaintAttemptWork, coordinator_, nullptr,
+        nullptr);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -3191,7 +3394,8 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
-        remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_);
+        remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_,
+        this);
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -3287,7 +3491,8 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
-        remainingScalableFontPaintAttemptWork, coordinator_, nullptr);
+        remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_,
+        this);
     if (cancellationRequested(input.stop)) {
       result.cancelled = true;
       return result;

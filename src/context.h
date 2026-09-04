@@ -355,7 +355,10 @@ public:
             *profileSettingsPersistenceCoordinator, *skinCommitCoordinator,
             lifecycleClientId);
         gameplaySkinLifecycle->setDecodeCacheEvictor(
-            [this] { skinResourcePreparationService->decodeCache().dropAll(); });
+            [this] {
+              skinResourcePreparationService->decodeCache().dropAll();
+              skinResourcePreparationService->dropTextAtlasCache();
+            });
         gameplaySkinLifecycle->startAfterProfileInitialization(
             *activeProfileId);
         acquireGameplaySkinForNextChart = [this](int keyMode) {

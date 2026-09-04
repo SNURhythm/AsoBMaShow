@@ -505,13 +505,23 @@ void testScalableFontOutlineWorkIsBounded() {
          .outlineRgba = {255, 0, 0, 255},
          .outlineWidth = 2.0},
         faces, std::set<char32_t>{U'A', U'\U0010ffff'}, {});
-    expect(!lateGlyphFailure.atlas &&
-               lateGlyphFailure.error ==
-                   "font atlas has an unsupported glyph",
-           "a late unsupported glyph rejects the whole scalable atlas");
+    expect(lateGlyphFailure.atlas.has_value(),
+           "an unsupported codepoint falls back to the synthetic missing "
+           "glyph box instead of rejecting the whole scalable atlas");
+    if (lateGlyphFailure.atlas) {
+      const auto missingBox =
+          lateGlyphFailure.atlas->glyphs.find(U'\U0010ffff');
+      const auto provided =
+          lateGlyphFailure.atlas->glyphs.find(U'A');
+      expect(missingBox != lateGlyphFailure.atlas->glyphs.end() &&
+                 provided != lateGlyphFailure.atlas->glyphs.end(),
+             "the fallback atlas keeps both the provided glyph and the "
+             "synthetic box for the unsupported codepoint");
+    }
   }
-  expect(skin::skinTextAtlasPaintBlendOperationsForTesting() == 0,
-         "repeated late glyph rejection performs no outline blending");
+  expect(skin::skinTextAtlasPaintBlendOperationsForTesting() > 0,
+         "the synthetic missing-glyph box participates in atlas outline "
+         "blending");
 
   std::size_t remainingAttemptWork =
       skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations;
@@ -568,6 +578,50 @@ void testScalableFontOutlineWorkIsBounded() {
              cancelled.error == "font atlas preparation cancelled" &&
              cancellationChecks == 2,
          "scalable outline painting observes deterministic mid-glyph cancellation");
+
+  const skin::SkinTextAtlasKey cachedKey{
+      .font = 1,
+      .pointSize = 24,
+      .fallbackChainDigest = "glyph-cache-fixture",
+      .outlineRgba = {255, 0, 0, 255},
+      .outlineWidth = 2.0};
+  std::map<std::string, skin::SkinPreparedGlyphBitmap> glyphStore;
+  skin::ScalableGlyphCacheAccessor glyphCache{
+      .find = [&glyphStore](char32_t codepoint) {
+        const auto found = glyphStore.find(
+            "U" + std::to_string(static_cast<unsigned>(codepoint)));
+        return found == glyphStore.end()
+                   ? std::optional<skin::SkinPreparedGlyphBitmap>{}
+                   : std::optional<skin::SkinPreparedGlyphBitmap>{found->second};
+      },
+      .store = [&glyphStore](char32_t codepoint,
+                             skin::SkinPreparedGlyphBitmap glyph) {
+        glyphStore.emplace(
+            "U" + std::to_string(static_cast<unsigned>(codepoint)),
+            std::move(glyph));
+      }};
+  const auto firstCorpus =
+      skin::buildSkinTextAtlas(15, cachedKey, faces, std::set<char32_t>{U'A'},
+                               {}, skin::SkinSafetyPolicy{},
+                               skin::SkinResourcePolicy::
+                                   maximumScalableFontPaintBlendOperations,
+                               {}, {}, &glyphCache);
+  skin::resetSkinTextAtlasGlyphCacheHitsForTesting();
+  const auto secondCorpus = skin::buildSkinTextAtlas(
+      16, cachedKey, faces,
+      std::set<char32_t>{U'A', U'B', U'\U0010ffff'}, {},
+      skin::SkinSafetyPolicy{},
+      skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations, {},
+      {}, &glyphCache);
+  expect(firstCorpus.atlas && secondCorpus.atlas &&
+             secondCorpus.atlas->glyphs.contains(U'A') &&
+             secondCorpus.atlas->glyphs.contains(U'B') &&
+             secondCorpus.atlas->glyphs.contains(U'\U0010ffff'),
+         "a second scalable atlas reuses cached glyphs and rasterizes only "
+         "the new codepoints");
+  expect(skin::skinTextAtlasGlyphCacheHitsForTesting() == 1,
+         "the shared 'A' glyph is served from the per-glyph cache on the "
+         "second atlas build");
 }
 
 void testSharedSessionAccountingRejectsDistributedAggregateOverages() {
@@ -1312,8 +1366,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   const auto unknownGlyphModel =
       singleFontModel("resources/fixture.ttf", true, "\xF4\x8F\xBF\xBF");
   const auto unknownGlyph = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unknownGlyphModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
-  expect(!unknownGlyph.valid && hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
-         "unknown live text glyphs fail synchronously before resource publication");
+  expect(unknownGlyph.valid &&
+             !hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
+         "a live text glyph missing from the face falls back to the synthetic "
+         "missing-glyph box instead of rejecting the atlas");
   const auto compatibleUnknownGlyph = service.validateResources(
       {.revision = snapshot.prepared->readView(),
        .entry = entry,
@@ -1465,11 +1521,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
        .model = bgaOnlyModel,
        .configuration = configuration,
        .practiceMode = true});
-  expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
-             practiceBgaPlan.plan->textAtlasesByObject.contains(17) &&
-             skin::skinResourcePlatformAssetReadsForTesting() == 2,
-         "a BGA with no Practice object prepares the legacy fallback font "
-         "only for a fixed Practice-mode session");
+expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
+              practiceBgaPlan.plan->textAtlasesByObject.contains(17) &&
+              skin::skinResourcePlatformAssetReadsForTesting() == 1,
+         "a BGA with no Practice object reuses the rasterized practice-font "
+         "atlas from the cache without re-reading the system font");
 
   positivePracticeModel.model.objects.push_back(
       {.id = 18,
@@ -1486,7 +1542,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   expect(authoredPracticeBgaPlan.plan &&
              authoredPracticeBgaPlan.plan->atlases.empty() &&
              authoredPracticeBgaPlan.plan->textAtlasesByObject.empty() &&
-             skin::skinResourcePlatformAssetReadsForTesting() == 2,
+             skin::skinResourcePlatformAssetReadsForTesting() == 1,
          "an authored positive-item Practice object suppresses the BGA "
          "legacy fallback plan");
   positivePracticePlan.plan.reset();

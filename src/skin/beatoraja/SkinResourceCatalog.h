@@ -21,6 +21,7 @@
 #include <optional>
 #include <span>
 #include <set>
+#include <shared_mutex>
 #include <stop_token>
 #include <string_view>
 #include <thread>
@@ -231,6 +232,37 @@ struct SkinPreparedGlyphAtlas {
   int margin = 0;
   std::size_t paintBlendOperations = 0;
 };
+// A single rasterized scalable glyph (raw anti-aliased alpha plus metrics)
+// independent of the atlas page layout. Caching these lets a chart attempt
+// reuse the skin corpus glyphs already rasterized for a previous chart and
+// rasterize only the new chart's runtime-string codepoints.
+struct SkinPreparedGlyphBitmap {
+  char32_t codepoint = 0;
+  std::size_t face = 0;
+  int bearingX = 0;
+  int bearingY = 0;
+  int advance = 0;
+  int width = 0;
+  int height = 0;
+  int padding = 0;
+  int layoutOffsetY = 0;
+  int contentWidth = 0;
+  int contentHeight = 0;
+  std::size_t opaquePixels = 0;
+  std::vector<unsigned char> alpha;
+};
+// Content digest of everything that determines a rasterized scalable atlas
+// (or a single cached glyph): the atlas key, the codepoint/pair corpus, and
+// whether the allocation guard is active (it changes style handling). The
+// caller namespaces the digest by skin revision, which covers the font file
+// bytes.
+[[nodiscard]] std::string scalableTextAtlasContentKey(
+    const SkinTextAtlasKey &key, const std::set<char32_t> &codepoints,
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    const SkinSafetyPolicy &safetyPolicy);
+[[nodiscard]] std::string scalableGlyphKey(const SkinTextAtlasKey &key,
+                                           char32_t codepoint,
+                                           const SkinSafetyPolicy &safetyPolicy);
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
   SkinSafetyPolicy safetyPolicy{};
@@ -325,6 +357,22 @@ public:
   prepareTextAtlasUpdates(SkinTextAtlasPreparationInputs);
   void shutdown() noexcept;
   [[nodiscard]] SkinDecodeCache &decodeCache() noexcept { return decodeCache_; }
+  // Rasterized scalable-font atlases are the most expensive resource to build
+  // and are re-requested per chart attempt with chart-specific runtime-string
+  // corpora. Cache them by a content digest of the atlas key and corpus so a
+  // repeat attempt (or a chart that shares the same glyph corpus) skips the
+  // FreeType rasterization entirely. Shared_ptr values copy out cheaply.
+  [[nodiscard]] std::shared_ptr<const SkinPreparedGlyphAtlas>
+  findCachedTextAtlas(std::string_view revisionKey,
+                      std::string_view contentKey) const;
+  void storeCachedTextAtlas(std::string revisionKey, std::string contentKey,
+                            SkinPreparedGlyphAtlas atlas);
+  void dropTextAtlasCache() noexcept;
+  [[nodiscard]] std::optional<SkinPreparedGlyphBitmap>
+  findCachedGlyph(std::string_view revisionKey,
+                  std::string_view glyphKey) const;
+  void storeCachedGlyph(std::string revisionKey, std::string glyphKey,
+                        SkinPreparedGlyphBitmap glyph);
 private:
   enum class State { Running, Stopping, Stopped };
   bool beginCall();
@@ -336,6 +384,18 @@ private:
   Decoder decoder_;
   image_decode::ImageDecodeCoordinator coordinator_;
   SkinDecodeCache decodeCache_;
+  mutable std::shared_mutex textAtlasCacheMutex_;
+  std::map<std::string,
+           std::map<std::string, std::shared_ptr<const SkinPreparedGlyphAtlas>,
+                    std::less<>>,
+           std::less<>>
+      textAtlasCache_;
+  std::size_t textAtlasCacheBytes_ = 0;
+  std::map<std::string,
+           std::map<std::string, SkinPreparedGlyphBitmap, std::less<>>,
+           std::less<>>
+      glyphCache_;
+  std::size_t glyphCacheBytes_ = 0;
   State state_ = State::Running;
   std::stop_source stop_;
   std::size_t activeCalls_ = 0;

@@ -26,6 +26,16 @@ struct SkinTextAtlasFontBytes {
   std::vector<std::byte> encoded;
 };
 
+// Optional per-glyph rasterization cache consulted during scalable atlas
+// building. The callbacks are keyed by (revision, atlas key, codepoint), so a
+// chart attempt reuses the glyphs already rasterized for a previous chart and
+// rasterizes only the new chart's runtime-string codepoints.
+struct ScalableGlyphCacheAccessor {
+  std::function<std::optional<skin::SkinPreparedGlyphBitmap>(char32_t)>
+      find;
+  std::function<void(char32_t, skin::SkinPreparedGlyphBitmap)> store;
+};
+
 struct SkinTextAtlasBitmapPage {
   std::string physicalKey;
   std::optional<image_decode::DecodedImageData> pixels;
@@ -56,12 +66,15 @@ struct SkinTextAtlasBuildResult {
     std::size_t maximumPaintBlendOperations =
         SkinResourcePolicy::maximumScalableFontPaintBlendOperations,
     const std::function<bool()> &cancellationRequested = {},
-    const std::function<bool(std::size_t)> &reservePaintBlendOperations = {});
+    const std::function<bool(std::size_t)> &reservePaintBlendOperations = {},
+    const ScalableGlyphCacheAccessor *glyphCache = nullptr);
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 void resetSkinTextAtlasPaintBlendOperationsForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinTextAtlasPaintBlendOperationsForTesting() noexcept;
+void resetSkinTextAtlasGlyphCacheHitsForTesting() noexcept;
+[[nodiscard]] std::size_t skinTextAtlasGlyphCacheHitsForTesting() noexcept;
 #endif
 
 [[nodiscard]] SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(

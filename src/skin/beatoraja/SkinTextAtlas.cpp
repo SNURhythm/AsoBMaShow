@@ -85,23 +85,11 @@ struct OpenFace {
   OpenFace(OpenFace &&other) noexcept : font(std::exchange(other.font, nullptr)) {}
   OpenFace &operator=(OpenFace &&other) noexcept { std::swap(font, other.font); return *this; }
 };
-struct GlyphBitmap {
-  char32_t codepoint = 0;
-  std::size_t face = 0;
-  int bearingX = 0;
-  int bearingY = 0;
-  int advance = 0;
-  int width = 0;
-  int height = 0;
-  int padding = 0;
-  int layoutOffsetY = 0;
-  int contentWidth = 0;
-  int contentHeight = 0;
-  std::vector<unsigned char> alpha;
-};
+using GlyphBitmap = skin::SkinPreparedGlyphBitmap;
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 std::atomic_size_t paintBlendOperationsForTesting{0};
+std::atomic_size_t glyphCacheHitsForTesting{0};
 #endif
 
 void alphaOver(unsigned char *destination, const std::array<std::uint8_t, 4> color,
@@ -134,6 +122,14 @@ void resetSkinTextAtlasPaintBlendOperationsForTesting() noexcept {
 std::size_t skinTextAtlasPaintBlendOperationsForTesting() noexcept {
   return paintBlendOperationsForTesting.load(std::memory_order_relaxed);
 }
+
+void resetSkinTextAtlasGlyphCacheHitsForTesting() noexcept {
+  glyphCacheHitsForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::size_t skinTextAtlasGlyphCacheHitsForTesting() noexcept {
+  return glyphCacheHitsForTesting.load(std::memory_order_relaxed);
+}
 #endif
 
 SkinTextAtlasBuildResult buildSkinTextAtlas(
@@ -144,7 +140,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     SkinSafetyPolicy safetyPolicy,
     std::size_t maximumPaintBlendOperations,
     const std::function<bool()> &cancellationRequested,
-    const std::function<bool(std::size_t)> &reservePaintBlendOperations) {
+    const std::function<bool(std::size_t)> &reservePaintBlendOperations,
+    const ScalableGlyphCacheAccessor *glyphCache) {
   SkinTextAtlasBuildResult result;
   if (!safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
     // Pinned SkinTextFont does not apply the bitmap-font distance-field paint
@@ -270,16 +267,38 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     return shadowActive ? "font paint work exceeds atlas preparation limit"
                         : "font outline work exceeds atlas preparation limit";
   };
-  for (char32_t codepoint : codepoints) {
-    if (cancellationRequested && cancellationRequested()) {
-      result.error = "font atlas preparation cancelled";
-      return result;
+  const auto chargeGlyph = [&](std::size_t opaquePixelsIn,
+                               std::size_t glyphBytesIn) {
+    if (operationsPerOpaquePixel != 0 &&
+        (paintBlendOperations > maximumPaintBlendOperations ||
+         opaquePixelsIn >
+             (maximumPaintBlendOperations - paintBlendOperations) /
+                 operationsPerOpaquePixel)) {
+      result.error = paintLimitError();
+      return false;
     }
-    if (codepoint == U'\n' || codepoint == U'\r') continue;
+    paintBlendOperations += opaquePixelsIn * operationsPerOpaquePixel;
+    if (glyphBytesIn > skinResourceLimit(
+                           safetyPolicy,
+                           SkinResourcePolicy::maximumAtlasBytes) -
+                           temporaryGlyphBytes) {
+      result.error = "font temporary glyph bytes exceed atlas limit";
+      return false;
+    }
+    temporaryGlyphBytes += glyphBytesIn;
+    return true;
+  };
+  const auto rasterizeGlyph = [&](char32_t codepoint)
+      -> std::optional<GlyphBitmap> {
+    if (codepoint == U'\n' || codepoint == U'\r') return std::nullopt;
     std::size_t faceIndex = opened.size();
     char32_t sourceCodepoint = codepoint;
     for (std::size_t index = 0; index < opened.size(); ++index)
-      if (TTF_GlyphIsProvided32(opened[index].font, static_cast<Uint32>(codepoint))) { faceIndex = index; break; }
+      if (TTF_GlyphIsProvided32(opened[index].font,
+                                static_cast<Uint32>(codepoint))) {
+        faceIndex = index;
+        break;
+      }
     if (faceIndex == opened.size() &&
         !safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
       constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
@@ -295,11 +314,12 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         if (faceIndex != opened.size()) break;
       }
     }
-    if (faceIndex == opened.size() &&
-        safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
-      result.error = "font atlas has an unsupported glyph";
-      return result;
-    }
+    // Unsupported codepoints (commonly from chart runtime strings such as the
+    // title or artist) fall back to the synthetic missing-glyph box below
+    // instead of rejecting the whole atlas. Rejecting here made legitimate
+    // charts with a single exotic character drop every value-bearing text
+    // object rendered by the face, and also discarded the glyphs rasterized
+    // before the offending codepoint on every attempt.
     const bool syntheticMissing = faceIndex == opened.size();
     if (syntheticMissing) faceIndex = 0;
     int minX = 0, maxX = 0, minY = 0, maxY = 0, advance = 0;
@@ -315,13 +335,18 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
                    opened[faceIndex].font,
                    static_cast<Uint32>(sourceCodepoint), &minX, &maxX, &minY,
                    &maxY, &advance) != 0) {
-      result.error = "font glyph metrics failed"; return result;
+      result.error = "font glyph metrics failed";
+      return std::nullopt;
     }
-    const int padding = std::max({2, outline + 1, std::abs(shadowX) + smoothRadius + 1, std::abs(shadowY) + smoothRadius + 1});
-    const auto estimatedWidth = static_cast<std::int64_t>(maxX) - minX + 2LL * padding;
-    const auto estimatedHeight = static_cast<std::int64_t>(maxY) - minY + 2LL * padding;
-    const std::size_t maximumAtlasBytes = skinResourceLimit(
-        safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
+    const int padding = std::max(
+        {2, outline + 1, std::abs(shadowX) + smoothRadius + 1,
+         std::abs(shadowY) + smoothRadius + 1});
+    const auto estimatedWidth =
+        static_cast<std::int64_t>(maxX) - minX + 2LL * padding;
+    const auto estimatedHeight =
+        static_cast<std::int64_t>(maxY) - minY + 2LL * padding;
+    const std::size_t maximumAtlasBytes =
+        skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
     if (estimatedWidth <= 0 || estimatedHeight <= 0 ||
         estimatedWidth > skinResourceDimensionLimit(safetyPolicy) ||
         estimatedHeight > skinResourceDimensionLimit(safetyPolicy) ||
@@ -329,7 +354,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
                 static_cast<std::uint64_t>(estimatedHeight) *
                 4U >
             maximumAtlasBytes - temporaryGlyphBytes) {
-      result.error = "font glyph metrics exceed atlas preparation limits"; return result;
+      result.error = "font glyph metrics exceed atlas preparation limits";
+      return std::nullopt;
     }
     SDL_Surface *surface = nullptr;
     if (syntheticMissing) {
@@ -360,17 +386,29 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       SDL_Surface *raw = TTF_RenderGlyph32_Blended(
           opened[faceIndex].font, static_cast<Uint32>(sourceCodepoint),
           SDL_Color{255,255,255,255});
-      if (!raw) { result.error = "font glyph rasterization failed"; return result; }
+      if (!raw) {
+        result.error = "font glyph rasterization failed";
+        return std::nullopt;
+      }
       surface = SDL_ConvertSurfaceFormat(raw, SDL_PIXELFORMAT_RGBA32, 0);
       SDL_FreeSurface(raw);
     }
-    if (!surface) { result.error = "font glyph conversion failed"; return result; }
+    if (!surface) {
+      result.error = "font glyph conversion failed";
+      return std::nullopt;
+    }
     if (surface->w <= 0 || surface->h <= 0 ||
         surface->w > skinResourceDimensionLimit(safetyPolicy) ||
         surface->h > skinResourceDimensionLimit(safetyPolicy)) {
-      SDL_FreeSurface(surface); result.error = "font glyph dimensions exceed limits"; return result;
+      SDL_FreeSurface(surface);
+      result.error = "font glyph dimensions exceed limits";
+      return std::nullopt;
     }
-    if (SDL_LockSurface(surface) != 0) { SDL_FreeSurface(surface); result.error = "font glyph surface lock failed"; return result; }
+    if (SDL_LockSurface(surface) != 0) {
+      SDL_FreeSurface(surface);
+      result.error = "font glyph surface lock failed";
+      return std::nullopt;
+    }
     const auto *pixels = static_cast<const unsigned char *>(surface->pixels);
     int alphaMinX = surface->w;
     int alphaMinY = surface->h;
@@ -382,7 +420,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         SDL_UnlockSurface(surface);
         SDL_FreeSurface(surface);
         result.error = "font atlas preparation cancelled";
-        return result;
+        return std::nullopt;
       }
       for (int x = 0; x < surface->w; ++x) {
         const unsigned char alpha =
@@ -398,17 +436,6 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         alphaMaxY = std::max(alphaMaxY, y);
       }
     }
-    if (operationsPerOpaquePixel != 0 &&
-        (paintBlendOperations > maximumPaintBlendOperations ||
-         opaquePixels >
-             (maximumPaintBlendOperations - paintBlendOperations) /
-                 operationsPerOpaquePixel)) {
-      SDL_UnlockSurface(surface);
-      SDL_FreeSurface(surface);
-      result.error = paintLimitError();
-      return result;
-    }
-    paintBlendOperations += opaquePixels * operationsPerOpaquePixel;
     const bool hasPixels = alphaMaxX >= alphaMinX && alphaMaxY >= alphaMinY;
     const int glyphPadding = hasPixels ? padding : 0;
     const int contentWidth =
@@ -422,18 +449,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       SDL_UnlockSurface(surface);
       SDL_FreeSurface(surface);
       result.error = "font cropped glyph dimensions exceed limits";
-      return result;
+      return std::nullopt;
     }
-    const std::size_t glyphBytes = static_cast<std::size_t>(glyphWidth) *
-                                   static_cast<std::size_t>(glyphHeight) * 4U;
-    if (glyphBytes > skinResourceLimit(
-                         safetyPolicy,
-                         SkinResourcePolicy::maximumAtlasBytes) -
-                         temporaryGlyphBytes) {
-      SDL_UnlockSurface(surface);
-      SDL_FreeSurface(surface); result.error = "font temporary glyph bytes exceed atlas limit"; return result;
-    }
-    temporaryGlyphBytes += glyphBytes;
     std::vector<unsigned char> alpha(
         static_cast<std::size_t>(contentWidth) * contentHeight, 0);
     for (int y = alphaMinY; hasPixels && y <= alphaMaxY; ++y) {
@@ -441,7 +458,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         SDL_UnlockSurface(surface);
         SDL_FreeSurface(surface);
         result.error = "font atlas preparation cancelled";
-        return result;
+        return std::nullopt;
       }
       for (int x = alphaMinX; x <= alphaMaxX; ++x) {
         alpha[static_cast<std::size_t>(y - alphaMinY) * contentWidth +
@@ -453,7 +470,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     SDL_UnlockSurface(surface);
     SDL_FreeSurface(surface);
     const int selectedFaceAscent = TTF_FontAscent(opened[faceIndex].font);
-    GlyphBitmap glyph{
+    return GlyphBitmap{
         .codepoint = codepoint,
         .face = faceIndex,
         .bearingX = hasPixels ? minX : 0,
@@ -468,8 +485,37 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
                       : 0,
         .contentWidth = contentWidth,
         .contentHeight = contentHeight,
+        .opaquePixels = opaquePixels,
         .alpha = std::move(alpha)};
-    glyphs.push_back(std::move(glyph));
+  };
+  for (char32_t codepoint : codepoints) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
+    if (codepoint == U'\n' || codepoint == U'\r') continue;
+    if (glyphCache != nullptr) {
+      if (auto cached = glyphCache->find(codepoint); cached) {
+        const std::size_t glyphBytes =
+            static_cast<std::size_t>(cached->width) *
+            static_cast<std::size_t>(cached->height) * 4U;
+        if (!chargeGlyph(cached->opaquePixels, glyphBytes)) return result;
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+        glyphCacheHitsForTesting.fetch_add(1, std::memory_order_relaxed);
+#endif
+        glyphs.push_back(std::move(*cached));
+        continue;
+      }
+    }
+    auto glyph = rasterizeGlyph(codepoint);
+    if (!glyph) return result;
+    const std::size_t glyphBytes = static_cast<std::size_t>(glyph->width) *
+                                   static_cast<std::size_t>(glyph->height) * 4U;
+    if (!chargeGlyph(glyph->opaquePixels, glyphBytes)) return result;
+    if (glyphCache != nullptr) {
+      glyphCache->store(codepoint, *glyph);
+    }
+    glyphs.push_back(std::move(*glyph));
   }
   // FreeTypeFontGenerator's pinned incremental packer is 1024x1024 and adds
   // pages as required. Retain that page boundary instead of turning a second
