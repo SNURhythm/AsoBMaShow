@@ -280,6 +280,17 @@ void testTouchGestureGoesBackFromBarRowsWithoutScrolling() {
   assert(rowRelease.accepted && !rowRelease.tap && !rowRelease.goBack);
 }
 
+void testScrollingGestureIsNotPromotedToGoBack() {
+  MusicSelectTouchGesture gesture;
+  assert(gesture.begin(41, 0.25F, 0.50F, MusicSelectTouchTarget::Bar));
+  const auto scrolled = gesture.move(41, 0.27F, 0.40F);
+  assert(scrolled.accepted && scrolled.rowDelta > 0 && !scrolled.sliderDrag);
+  const auto drifted = gesture.move(41, 0.55F, 0.42F);
+  assert(drifted.accepted && drifted.rowDelta >= 0);
+  const auto release = gesture.end(41);
+  assert(release.accepted && !release.goBack && !release.tap);
+}
+
 void testTouchGestureDoesNotTreatALeftwardSwipeAsBack() {
   MusicSelectTouchGesture gesture;
   assert(gesture.begin(24, 0.25F, 0.50F,
@@ -303,6 +314,7 @@ int main() {
   testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion();
   testTouchGestureUsesAHorizontalSwipeAnywhereToGoBack();
   testTouchGestureGoesBackFromBarRowsWithoutScrolling();
+  testScrollingGestureIsNotPromotedToGoBack();
   testTouchGestureDoesNotTreatALeftwardSwipeAsBack();
   return 0;
 }

@@ -71,7 +71,9 @@ struct MusicSelectTouchRelease {
 // RecyclerView. This capture converts a direct vertical swipe into those
 // discrete bar movements while retaining slider drags and tap selection. An
 // unclaimed right-dominant swipe navigates back one folder whether it began
-// on a bar row or empty space; only slider drags keep their own control.
+// on a bar row or empty space; only slider drags keep their own control. Once
+// a finger has actually scrolled rows, the gesture is locked as a scroll and
+// never promoted to go-back.
 class MusicSelectTouchGesture final {
 public:
   [[nodiscard]] bool begin(std::int64_t finger, float normalizedX,
@@ -97,15 +99,18 @@ public:
       return result;
     }
     // A horizontal-dominant swipe goes back regardless of whether it began on
-    // a bar row or empty space. Once it is recognized, suppress row scrolling
-    // for the rest of the gesture so a back swipe never also walks the list.
-    const float horizontalDistance = normalizedX - navigationAnchorX_;
-    const float verticalDistance = normalizedY - rowAnchorY_;
-    if (horizontalDistance >= kNavigationDistance &&
-        horizontalDistance > std::abs(verticalDistance)) {
-      goBack_ = true;
-      dragged_ = true;
-      return result;
+    // a bar row or empty space. Once the finger has already scrolled rows, it
+    // is locked as a scroll: a later horizontal drift is never promoted to
+    // go-back. Slider drags keep their own control above.
+    if (!scrolling_) {
+      const float horizontalDistance = normalizedX - navigationAnchorX_;
+      const float verticalDistance = normalizedY - rowAnchorY_;
+      if (horizontalDistance >= kNavigationDistance &&
+          horizontalDistance > std::abs(verticalDistance)) {
+        goBack_ = true;
+        dragged_ = true;
+        return result;
+      }
     }
     while (normalizedY <= rowAnchorY_ - kNormalizedRowStep) {
       ++result.rowDelta;
@@ -116,6 +121,7 @@ public:
       rowAnchorY_ += kNormalizedRowStep;
     }
     dragged_ = dragged_ || result.rowDelta != 0;
+    scrolling_ = scrolling_ || result.rowDelta != 0;
     return result;
   }
 
@@ -126,6 +132,7 @@ public:
     finger_.reset();
     target_ = MusicSelectTouchTarget::None;
     goBack_ = false;
+    scrolling_ = false;
     return {.accepted = true, .tap = tap, .goBack = goBack};
   }
 
@@ -133,6 +140,7 @@ public:
     finger_.reset();
     target_ = MusicSelectTouchTarget::None;
     goBack_ = false;
+    scrolling_ = false;
   }
 
 private:
@@ -144,6 +152,7 @@ private:
   float rowAnchorY_ = 0.0F;
   bool dragged_ = false;
   bool goBack_ = false;
+  bool scrolling_ = false;
 };
 
 [[nodiscard]] std::vector<std::filesystem::path>
