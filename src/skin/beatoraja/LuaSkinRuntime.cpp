@@ -562,6 +562,7 @@ enum class BindingLookupFailure : std::uint8_t {
   None,
   Missing,
   InvalidType,
+  InvalidNumber,
   SourceTooLarge,
   WorkLimit,
   CallbackLimit,
@@ -701,9 +702,48 @@ bool chargeBindingLookupWork(BindingSourceLookupRequest &request,
   return true;
 }
 
+bool luaJNumericStringSyntax(std::string_view text) noexcept {
+  while (!text.empty() && text.front() == ' ') {
+    text.remove_prefix(1);
+  }
+  while (!text.empty() && text.back() == ' ') {
+    text.remove_suffix(1);
+  }
+  if (text.empty()) {
+    return false;
+  }
+  // LuaJ's custom parser truncates its decimal fallback at 64 bytes. Keep the
+  // shared safe subset instead of reproducing trailing-garbage acceptance.
+  if (text.size() > 64) {
+    return false;
+  }
+  if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+    return std::ranges::all_of(text.substr(2), [](char value) noexcept {
+      return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') ||
+             (value >= 'A' && value <= 'F');
+    });
+  }
+  return std::ranges::all_of(text, [](char value) noexcept {
+    return (value >= '0' && value <= '9') || value == '+' || value == '-' ||
+           value == '.' || value == 'e' || value == 'E';
+  });
+}
+
 void storeNumericBinding(lua_State *state, int index,
                          BindingSourceLookupRequest &request) noexcept {
   const double numeric = static_cast<double>(lua_tonumber(state, index));
+  // Runtime/resource boundaries keep LuaJ's wrapped integer coercion only for
+  // native numeric selectors (the music-select event path needs e.g.
+  // 4294967295 -> -1). Non-finite values always fail closed, and numeric
+  // strings additionally stay within the portable LuaJ/LuaJIT int range so a
+  // matching string never silently wraps.
+  if (!std::isfinite(numeric) ||
+      (lua_type(state, index) == LUA_TSTRING &&
+       (numeric < static_cast<double>(std::numeric_limits<int>::min()) ||
+        numeric > static_cast<double>(std::numeric_limits<int>::max())))) {
+    request.failure = BindingLookupFailure::InvalidNumber;
+    return;
+  }
   request.source = luaJToInt(numeric);
 }
 
@@ -781,7 +821,9 @@ int lookupBindingSourceArgument(lua_State *state) {
     if (!chargeBindingLookupWork(*request, size)) {
       return 0;
     }
-    if (request->limits.numericFactoryAvailable && lua_isnumber(state, -1)) {
+    if (request->limits.numericFactoryAvailable &&
+        luaJNumericStringSyntax(std::string_view(text, size)) &&
+        lua_isnumber(state, -1)) {
       storeNumericBinding(state, -1, *request);
       return 0;
     }
@@ -1202,6 +1244,12 @@ LuaValueHandle::lookupBindingSource(const LuaValuePath &path,
     return {.failure =
                 makeDiagnostic("skin_lua_allocator_limit_exceeded",
                                "Lua binding source could not be retained"),
+            .workBytes = request.workBytes};
+  case BindingLookupFailure::InvalidNumber:
+    return {.failure = makeDiagnostic(
+                "skin_lua_binding_number_invalid",
+                "Numeric binding source is outside the portable integer "
+                "range"),
             .workBytes = request.workBytes};
   case BindingLookupFailure::InvalidType:
   case BindingLookupFailure::None:
