@@ -155,7 +155,6 @@ private:
   MusicSelectRepositoryMetadata repositoryMetadata_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
-  std::jthread recordsExportThread_;
   std::atomic_bool recordsExportInProgress_{false};
   struct PendingRecordsExportProgress {
     double fraction = 0.0;
@@ -165,6 +164,9 @@ private:
   std::optional<PendingRecordsExportProgress> pendingRecordsExportProgress_;
   std::mutex recordsExportResultMutex_;
   std::optional<ReplayVideoExportResult> pendingRecordsExportResult_;
+  // Declared after the mutexes and result state it guards so reverse-order
+  // member destruction joins the worker before those guards are torn down.
+  std::jthread recordsExportThread_;
   MusicSelectPreviewController previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
   MusicSelectSearchHistory searchHistory_;

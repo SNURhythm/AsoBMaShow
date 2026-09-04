@@ -2487,6 +2487,9 @@ void MusicSelectScene::launchChartReplay(
   context.jukebox.stop();
   context.jukebox.loadChart(*loaded.chart, true, cancelled);
   if (cancelled) {
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setLoadInProgress(false);
+    }
     launching_ = false;
     return;
   }
@@ -2507,7 +2510,10 @@ void MusicSelectScene::launchChartReplay(
       .returnScene = this,
   };
   applyReplayProvenanceToStartOptions(options, *loaded.replayData);
-  if (recordsModal_ != nullptr) recordsModal_->hide();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setLoadInProgress(false);
+    recordsModal_->hide();
+  }
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(loaded.chart),
                                       std::move(options)),
@@ -3379,6 +3385,11 @@ void MusicSelectScene::cleanupScene() {
   searchInput_ = nullptr;
   modalOverlayPortal_ = nullptr;
   modalLayer_ = nullptr;
+  if (recordsExportThread_.joinable()) {
+    SDL_Log("Joining recordsExportThread");
+    recordsExportThread_.request_stop();
+    recordsExportThread_.join();
+  }
   recordsModal_.reset();
   tasksModal_ = nullptr;
   tasksModalText_ = nullptr;
