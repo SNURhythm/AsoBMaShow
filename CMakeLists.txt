@@ -5318,6 +5318,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
@@ -5496,6 +5497,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/MusicSelectSkinSession.cpp
             src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/ResultSkinSession.cpp
@@ -5681,6 +5683,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp

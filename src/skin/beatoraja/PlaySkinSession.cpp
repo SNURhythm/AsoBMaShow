@@ -1,5 +1,7 @@
 #include "PlaySkinSession.h"
 
+#include "../../StartupTiming.h"
+
 #include "GameplaySkinDocumentLoader.h"
 #include "GameplaySkinBuiltinCatalog.h"
 #include "GameplaySkinSourceFormat.h"
@@ -709,6 +711,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Document,
                                  loadingMicros(documentStarted));
+    StartupTiming::instance().mark("skin create: document load done");
     if (audioActivity) {
       result.loadingTelemetry.resources.audioDecodes =
           audioActivity->activityCounters().loadsSucceeded;
@@ -764,6 +767,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::ResourcePreparation,
                                  loadingMicros(resourceStarted));
+    StartupTiming::instance().mark("skin create: decodeAndPlan done");
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);
     if (planned.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
@@ -798,6 +802,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Movie,
                                  loadingMicros(movieStarted));
+    StartupTiming::instance().mark("skin create: movie prep done");
     appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
     if (preparedMovies.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
@@ -827,6 +832,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Upload,
                                  loadingMicros(uploadStarted));
+    StartupTiming::instance().mark("skin create: upload done");
     appendMovedDiagnostics(result.diagnostics, uploaded.diagnostics);
     if (!uploaded.catalog || hasErrors(result.diagnostics)) {
       return finish();
