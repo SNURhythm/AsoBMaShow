@@ -70,7 +70,8 @@ struct MusicSelectTouchRelease {
 // The skinned selector has discrete Beatoraja bars rather than a native
 // RecyclerView. This capture converts a direct vertical swipe into those
 // discrete bar movements while retaining slider drags and tap selection. An
-// unclaimed right swipe navigates back one folder, independent of its origin.
+// unclaimed right-dominant swipe navigates back one folder whether it began
+// on a bar row or empty space; only slider drags keep their own control.
 class MusicSelectTouchGesture final {
 public:
   [[nodiscard]] bool begin(std::int64_t finger, float normalizedX,
@@ -90,16 +91,20 @@ public:
   move(std::int64_t finger, float normalizedX, float normalizedY) noexcept {
     if (!finger_ || *finger_ != finger) return {};
     MusicSelectTouchMotion result{.accepted = true};
-    if (target_ == MusicSelectTouchTarget::Navigation) {
-      const float horizontalDistance = normalizedX - navigationAnchorX_;
-      const float verticalDistance = normalizedY - rowAnchorY_;
-      goBack_ = horizontalDistance >= kNavigationDistance &&
-                horizontalDistance > std::abs(verticalDistance);
-      return result;
-    }
     if (target_ == MusicSelectTouchTarget::Slider) {
       dragged_ = true;
       result.sliderDrag = true;
+      return result;
+    }
+    // A horizontal-dominant swipe goes back regardless of whether it began on
+    // a bar row or empty space. Once it is recognized, suppress row scrolling
+    // for the rest of the gesture so a back swipe never also walks the list.
+    const float horizontalDistance = normalizedX - navigationAnchorX_;
+    const float verticalDistance = normalizedY - rowAnchorY_;
+    if (horizontalDistance >= kNavigationDistance &&
+        horizontalDistance > std::abs(verticalDistance)) {
+      goBack_ = true;
+      dragged_ = true;
       return result;
     }
     while (normalizedY <= rowAnchorY_ - kNormalizedRowStep) {
@@ -116,8 +121,8 @@ public:
 
   [[nodiscard]] MusicSelectTouchRelease end(std::int64_t finger) noexcept {
     if (!finger_ || *finger_ != finger) return {};
+    const bool goBack = goBack_;
     const bool tap = target_ == MusicSelectTouchTarget::Bar && !dragged_;
-    const bool goBack = target_ == MusicSelectTouchTarget::Navigation && goBack_;
     finger_.reset();
     target_ = MusicSelectTouchTarget::None;
     goBack_ = false;

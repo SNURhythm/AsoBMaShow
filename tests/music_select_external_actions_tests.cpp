@@ -263,6 +263,23 @@ void testTouchGestureUsesAHorizontalSwipeAnywhereToGoBack() {
   assert(!gesture.end(23).goBack);
 }
 
+void testTouchGestureGoesBackFromBarRowsWithoutScrolling() {
+  MusicSelectTouchGesture gesture;
+  // Right-dominant swipe beginning on a bar: go back, and do not walk rows.
+  assert(gesture.begin(31, 0.25F, 0.50F, MusicSelectTouchTarget::Bar));
+  const auto moved = gesture.move(31, 0.40F, 0.56F);
+  assert(moved.accepted && moved.rowDelta == 0 && !moved.sliderDrag);
+  const auto release = gesture.end(31);
+  assert(release.accepted && !release.tap && release.goBack);
+
+  // Vertical-dominant drag on a bar still converts to rows and never backs up.
+  assert(gesture.begin(32, 0.25F, 0.50F, MusicSelectTouchTarget::Bar));
+  const auto scrolled = gesture.move(32, 0.27F, 0.38F);
+  assert(scrolled.accepted && scrolled.rowDelta > 0 && !scrolled.sliderDrag);
+  const auto rowRelease = gesture.end(32);
+  assert(rowRelease.accepted && !rowRelease.tap && !rowRelease.goBack);
+}
+
 void testTouchGestureDoesNotTreatALeftwardSwipeAsBack() {
   MusicSelectTouchGesture gesture;
   assert(gesture.begin(24, 0.25F, 0.50F,
@@ -285,6 +302,7 @@ int main() {
   testTouchGestureDefersBarTapAndConvertsVerticalDragToRows();
   testTouchGestureCapturesOnlyItsFingerAndRoutesSliderMotion();
   testTouchGestureUsesAHorizontalSwipeAnywhereToGoBack();
+  testTouchGestureGoesBackFromBarRowsWithoutScrolling();
   testTouchGestureDoesNotTreatALeftwardSwipeAsBack();
   return 0;
 }
