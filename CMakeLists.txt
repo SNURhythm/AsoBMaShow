@@ -4390,6 +4390,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
         target_link_libraries(skin_resource_catalog_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
 
+        add_executable(skin_decode_cache_tests
+            tests/skin_decode_cache_tests.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
+        )
+        target_include_directories(skin_decode_cache_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_decode_cache_tests PRIVATE cxx_std_23)
+        target_link_libraries(skin_decode_cache_tests PRIVATE
+            ${COMMON_LIBS} bgfx yogacore
+        )
+
         add_executable(skin_live_resource_counters_tests
             tests/skin_live_resource_counters_tests.cpp
         )
@@ -7358,6 +7370,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         # from whether the main target happened to copy assets into its output.
         set_tests_properties(skin_resource_catalog_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
+    if (TARGET skin_decode_cache_tests)
+        asobmashow_register_test(skin_decode_cache_tests)
     endif()
     if (TARGET skin_live_resource_counters_tests)
         asobmashow_register_test(skin_live_resource_counters_tests)
