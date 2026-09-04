@@ -127,6 +127,13 @@ createChartDatabase(const std::filesystem::path &databasePath) {
       "total_backspin_notes INTEGER,"
       "ln_mode INTEGER NOT NULL DEFAULT 0,"
       "has_document INTEGER NOT NULL DEFAULT 0,"
+      "has_bpm_stop INTEGER NOT NULL DEFAULT 0,"
+      "has_scroll_change INTEGER NOT NULL DEFAULT 0,"
+      "add_date INTEGER NOT NULL DEFAULT 0,"
+      "total_landmine_notes INTEGER NOT NULL DEFAULT 0,"
+      "has_random_sequence INTEGER NOT NULL DEFAULT 0,"
+      "most_prevalent_bpm REAL NOT NULL DEFAULT 0,"
+      "has_bga INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")");
