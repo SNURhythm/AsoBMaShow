@@ -2903,6 +2903,96 @@ void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
          "the warm rejection also leaves the decode cache empty");
 }
 
+void testSkinImagesAreCachedAcrossDecodeRuns() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source =
+      temporary.root / "visible" / "CachedSkinImagesFixture";
+  const fs::path resources = source / "entry/resources";
+  fs::create_directories(resources);
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+      resources / "fixture.png");
+
+  const auto package =
+      *skin::normalizePackageId("CachedSkinImagesFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "cached skin images fixture creates a live revision");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease && publishError.empty(),
+         "cached skin images fixture publishes a lease");
+  if (!lease) return;
+  auto leasedFs = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(leasedFs.fileSystem != nullptr,
+         "cached skin images fixture creates an entry-aware filesystem");
+  if (!leasedFs.fileSystem) return;
+
+  skin::BeatorajaSkinConfiguration configuration;
+  const auto model = singleImageModel("resources/fixture.png");
+  std::atomic_int imageDecodes = 0;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        if (stop.stop_requested()) return std::nullopt;
+        ++imageDecodes;
+        return image_decode::decodeImageMemory(
+            encoded,
+            {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
+             .maximumEncodedBytes =
+                 skin::SkinResourcePolicy::maximumEncodedBytes,
+             .maximumDecodedBytes = skin::SkinResourcePolicy::maximumImageBytes,
+             .stop = stop});
+      });
+  const std::string revisionKey = lease->revision().lowercaseSha256;
+
+  const auto firstPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  const auto cached = service.decodeCache().entry(revisionKey);
+  expect(firstPlan.plan && cached != nullptr && !cached->skinImages.empty(),
+         "the first decode run decodes the skin image and stores it in the "
+         "app-level decode cache");
+  if (!firstPlan.plan) return;
+  const int decodesAfterFirst = imageDecodes.load();
+
+  const auto secondPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(secondPlan.plan &&
+             imageDecodes.load() == decodesAfterFirst &&
+             secondPlan.plan->images.size() == firstPlan.plan->images.size() &&
+             secondPlan.plan->images.front().pixels.width ==
+                 firstPlan.plan->images.front().pixels.width &&
+             secondPlan.plan->images.front().pixels.height ==
+                 firstPlan.plan->images.front().pixels.height &&
+             secondPlan.plan->decodedBytes == firstPlan.plan->decodedBytes,
+         "the second decode run reuses the cached skin image without "
+         "re-decoding and charges the same decoded budget as the cold run");
+}
+
 int main() {
   testBitmapFontDescriptorParsingMatchesPinnedSources();
   testInstalledSelectorBmFontsWhenRequested();
@@ -2918,6 +3008,7 @@ int main() {
   testSecurePreparationLeaseAliasAndCatalogLifetime();
   testBitmapFontPagesAreCachedAcrossDecodeRuns();
   testBitmapFontCachedPagesChargeEncodedBudgetConsistently();
+  testSkinImagesAreCachedAcrossDecodeRuns();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
   return 0;

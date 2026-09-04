@@ -2945,50 +2945,71 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
           "resource session aggregate exceeds policy", use->second.critical));
       continue;
     }
+    const std::string revisionKey =
+        plan.revision.revision().lowercaseSha256;
     file_checksum::Sha256 digest;
     digest.update(std::span<const std::byte>(read.bytes.data(),
                                              read.bytes.size()));
-    const std::string key = plan.revision.revision().lowercaseSha256 + ":" +
-                            *candidate.normalizedVirtualPath + ":" +
-                            digest.finalHex();
+    const std::string contentDigest = digest.finalHex();
+    // Skin-owned images (unlike per-chart builtin images) are cached by
+    // revision+path+content digest so a later chart attempt with an unchanged
+    // revision and file reuses the decoded pixels. Including the content
+    // digest means a live resource edit within the same revision still
+    // re-decodes instead of serving stale pixels; only the expensive decode is
+    // cached, while the cheap read and hash still run on every plan.
+    const std::string imageKey = *candidate.normalizedVirtualPath + ":" +
+                                 contentDigest;
     std::optional<image_decode::DecodedImageData> decoded;
-    { std::lock_guard lock(serviceMutex_); decoded = cache_.get(key); }
-    if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
+    bool fromAppCache = false;
+    if (const auto skinCache = decodeCache_.entry(revisionKey);
+        skinCache != nullptr) {
+      if (const auto found = skinCache->skinImages.find(imageKey);
+          found != skinCache->skinImages.end()) {
+        decoded = found->second;
+        fromAppCache = true;
+      }
+    }
     if (!decoded) {
-      auto owned = std::make_shared<const std::vector<std::byte>>(
-          std::move(read.bytes));
-      const auto ticket = coordinator_.request(
-          {.key = key,
-           .path = {},
-           .maximumDimension =
-               skinResourceDimensionLimit(input.safetyPolicy),
-           .maximumEncodedBytes = skinResourceLimit(
-               input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes),
-           .maximumDecodedBytes = skinResourceLimit(
-               input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
-           .encoded = std::move(owned)});
-      const auto waited = coordinator_.waitTake(ticket, input.stop);
-      if (waited.state == image_decode::ImageDecodeWaitState::Cancelled ||
-          waited.state == image_decode::ImageDecodeWaitState::Stopped ||
-          cancellationRequested(input.stop)) {
-        result.cancelled = true;
-        return result;
-      }
-      if (waited.state == image_decode::ImageDecodeWaitState::Ready &&
-          waited.image) {
-        decoded = waited.image;
-      }
+      const std::string key = plan.revision.revision().lowercaseSha256 + ":" +
+                              imageKey;
+      { std::lock_guard lock(serviceMutex_); decoded = cache_.get(key); }
+      if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
       if (!decoded) {
-        result.diagnostics.push_back(useDiagnostic(
-            "skin.resource.image_decode_failed",
-            "skin.resource.image_decode_failed",
-            "image decode failed during planning", use->second.critical));
-        continue;
-      }
-      {
-        std::lock_guard lock(serviceMutex_);
-        if (state_ != State::Running || stop_.stop_requested()) { result.cancelled = true; return result; }
-        cache_.put(key, *decoded);
+        auto owned = std::make_shared<const std::vector<std::byte>>(
+            std::move(read.bytes));
+        const auto ticket = coordinator_.request(
+            {.key = key,
+             .path = {},
+             .maximumDimension =
+                 skinResourceDimensionLimit(input.safetyPolicy),
+             .maximumEncodedBytes = skinResourceLimit(
+                 input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes),
+             .maximumDecodedBytes = skinResourceLimit(
+                 input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
+             .encoded = std::move(owned)});
+        const auto waited = coordinator_.waitTake(ticket, input.stop);
+        if (waited.state == image_decode::ImageDecodeWaitState::Cancelled ||
+            waited.state == image_decode::ImageDecodeWaitState::Stopped ||
+            cancellationRequested(input.stop)) {
+          result.cancelled = true;
+          return result;
+        }
+        if (waited.state == image_decode::ImageDecodeWaitState::Ready &&
+            waited.image) {
+          decoded = waited.image;
+        }
+        if (!decoded) {
+          result.diagnostics.push_back(useDiagnostic(
+              "skin.resource.image_decode_failed",
+              "skin.resource.image_decode_failed",
+              "image decode failed during planning", use->second.critical));
+          continue;
+        }
+        {
+          std::lock_guard lock(serviceMutex_);
+          if (state_ != State::Running || stop_.stop_requested()) { result.cancelled = true; return result; }
+          cache_.put(key, *decoded);
+        }
       }
     }
     if (!skinResourceDimensionsAllowed(decoded->width, decoded->height,
@@ -3012,6 +3033,16 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     plan.decodedBytes = session.decodedBytes();
     unique.emplace(*candidate.normalizedVirtualPath, plan.images.size());
     plan.images.push_back({.id=resource->id, .pixels=*decoded, .regions=std::move(regions), .regionMappings=std::move(mappings)});
+    // Only persist into the app-level decode cache after the session
+    // accounting above has charged the encoded and decoded bytes. Caching
+    // earlier would let a resource rejected on the encoded/decoded budget be
+    // served warm with no charge, making per-load budgets load-order
+    // dependent. Both runs read the file and charge the same encoded bytes, so
+    // a warm hit reconstructs the identical budget as the cold run.
+    if (!fromAppCache) {
+      decodeCache_.mutableEntry(revisionKey)
+          .skinImages.emplace(imageKey, *decoded);
+    }
   }
   const auto fontRequests = collectFontAtlasRequests(
       input.model, uses, input.fileSystem, input.configuration,
