@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
+#include "../library/ChartLibraryPlatform.h"
 #include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../view/ScrollView.h"
@@ -261,6 +262,7 @@ void SettingsScene::init() {
 void SettingsScene::update(float dt) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();
+  applyPendingSoundSetFolderPick();
 #endif
   if (audioVideoSession != nullptr) {
     const bool hadPreview = audioVideoSession->hasDisplayPreview();

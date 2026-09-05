@@ -4,6 +4,8 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 namespace chart_library_tasks {
@@ -15,6 +17,48 @@ namespace chart_library_platform {
 void clearFolderAccess();
 void refreshFolderAccess(const std::vector<ChartEntry> &entries);
 std::filesystem::path resolveFolderEntryPath(const ChartEntry &entry);
+
+// Result of a platform folder pick for an app-owned settings folder. `path`
+// is a resolved absolute filesystem path (on Android it may be a SAF tree
+// root), and `bookmark` carries the access token needed to re-access the
+// folder after relaunch: an iOS security-scoped bookmark or an Android SAF
+// tree URI.
+struct SoundSetFolderPick {
+  std::string path;
+  std::string bookmark;
+  bool succeed = false;
+};
+
+// Off-main-thread folder picker for the music-select sound-set folder. iOS
+// requires the native picker to run off the main thread, so request() spawns a
+// fresh std::jthread (guarded by an active flag) and the result is consumed by
+// a later poll on the main thread — the same pattern as FolderActionService's
+// picker thread. Desktop has no gate-less picker here and is a no-op.
+class SoundSetFolderPicker final {
+public:
+  SoundSetFolderPicker();
+  ~SoundSetFolderPicker();
+  SoundSetFolderPicker(const SoundSetFolderPicker &) = delete;
+  SoundSetFolderPicker &operator=(const SoundSetFolderPicker &) = delete;
+  SoundSetFolderPicker(SoundSetFolderPicker &&) = delete;
+  SoundSetFolderPicker &operator=(SoundSetFolderPicker &&) = delete;
+
+  // Launches the platform folder picker off the main thread. Ignored while a
+  // pick is active or a result awaits consume.
+  void request();
+
+  // True while the native picker is displayed (a pick is genuinely in flight).
+  // False once the pick thread publishes a result that awaits consume(), so the
+  // main-thread consumer can fall through to consume() on the next poll.
+  [[nodiscard]] bool active() const noexcept;
+
+  // Consumes a finished pick; returns std::nullopt when no result is pending.
+  [[nodiscard]] std::optional<SoundSetFolderPick> consume() noexcept;
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 
 class FolderActionService final {
 public:

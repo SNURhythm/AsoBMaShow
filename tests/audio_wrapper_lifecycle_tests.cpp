@@ -39,6 +39,19 @@ bool decodeAudioBytesToPCM(const path_t &, const std::vector<unsigned char> &,
   return false;
 }
 
+bool decodeAudioBytesToPCMBounded(const path_t &,
+                                  const std::vector<unsigned char> &,
+                                  std::vector<short> &, SF_INFO &,
+                                  std::atomic<bool> &, std::size_t) {
+  return false;
+}
+
+bool decodeSkinSoundBundleAware(const path_t &, std::vector<short> &, SF_INFO &,
+                                std::atomic<bool> &, AudioDecodeLimits,
+                                std::stop_token) {
+  return false;
+}
+
 namespace {
 
 using namespace std::chrono_literals;

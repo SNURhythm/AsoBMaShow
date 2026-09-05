@@ -52,8 +52,17 @@ musicSelectSystemSoundPath(
     for (const std::string_view extension : kBeatorajaSoundExtensions) {
       const auto candidate = root / std::filesystem::path(std::string(base) +
                                                           std::string(extension));
-      std::error_code error;
-      if (std::filesystem::is_regular_file(candidate, error)) {
+      if (candidate.is_absolute()) {
+        std::error_code error;
+        if (std::filesystem::is_regular_file(candidate, error)) {
+          return candidate;
+        }
+      } else {
+        // Bundle-relative candidates (e.g. the bundled `assets/` root on
+        // iOS/macOS) are not visible to std::filesystem::is_regular_file
+        // inside the sandbox even though the bundle-aware SDL read succeeds.
+        // Return the candidate without a filesystem preflight and let the
+        // loader warn only when the load actually fails.
         return candidate;
       }
     }

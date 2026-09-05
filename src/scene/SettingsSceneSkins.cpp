@@ -4,6 +4,7 @@
 
 #include "GameplaySkinSettingsController.h"
 #include "GameplaySkinSettingsPresentation.h"
+#include "../library/ChartLibraryPlatform.h"
 #include "../skin/SkinTargetTraits.h"
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../view/BlockingOverlayView.h"
@@ -322,6 +323,29 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
   gameplaySkinControlsBuiltDisabled = false;
+}
+
+void SettingsScene::applyPendingSoundSetFolderPick() {
+  if (soundSetFolderPicker == nullptr) {
+    return;
+  }
+  if (soundSetFolderPicker->active()) {
+    return;
+  }
+  const auto pick = soundSetFolderPicker->consume();
+  if (!pick || !pick->succeed || pick->path.empty()) {
+    return;
+  }
+  context.settings.skinSelectSoundSetPath = pick->path;
+  context.settings.skinSelectSoundSetBookmark = pick->bookmark;
+  if (skinSelectSoundSetInput != nullptr) {
+    skinSelectSoundSetInput->setEditingText(pick->path);
+  }
+  gameplaySkinUiMessage = "Sound set folder updated: " + pick->path;
+  if (gameplaySkinUiMessageText != nullptr) {
+    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+  }
+  persistSettings();
 }
 
 void SettingsScene::updateGameplaySkinSettingsController() {
@@ -920,8 +944,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
        {.label = "Hidden",
         .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
         .action = [setToolbarHidden] { setToolbarHidden(true); }}}));
-  // Typed path because the app has no folder-picker widget; empty keeps the
-  // bundled assets fallback. Resolution happens live in MusicSelectScene.
+  // Typed path (advanced fallback on every platform) because desktop has no
+  // gate-less picker; empty keeps the bundled assets fallback. Resolution
+  // happens live in MusicSelectScene.
   auto *soundSetRow = new View();
   soundSetRow->setFlexDirection(FlexDirection::Row);
   soundSetRow->setFlexWrap(YGWrapWrap);
@@ -939,10 +964,31 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   soundSetInput->onEditingFinished(
       [this, soundSetInput](const std::string &) {
         context.settings.skinSelectSoundSetPath = soundSetInput->getText();
+        context.settings.skinSelectSoundSetBookmark.clear();
         lastLayoutWidth = -1;
         persistSettings();
       });
   soundSetRow->addView(soundSetInput);
+  skinSelectSoundSetInput = soundSetInput;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  // The native folder picker is the primary affordance on iOS/Android (it is
+  // also the only way to obtain the security-scoped bookmark / SAF tree URI
+  // that lets the app re-access the folder after relaunch). It runs off the
+  // main thread and the result is committed by applyPendingSoundSetFolderPick
+  // on the next scene update.
+  if (soundSetFolderPicker == nullptr) {
+    soundSetFolderPicker =
+        std::make_unique<chart_library_platform::SoundSetFolderPicker>();
+  }
+  soundSetRow->addView(makeGameplaySkinAction(
+      metrics, "Pick...", ordinaryActionsEnabled,
+      [this]() {
+        if (soundSetFolderPicker != nullptr) {
+          soundSetFolderPicker->request();
+        }
+      },
+      ui_theme::cyan()));
+#endif
   overview->addView(soundSetRow);
   auto *safetyRow = new View();
   safetyRow->setFlexDirection(FlexDirection::Row);

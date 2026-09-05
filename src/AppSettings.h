@@ -264,6 +264,10 @@ public:
   // Beatoraja extension order. Empty = bundled default unchanged. It is a
   // plain path string and is not length-clamped like the skin property enums.
   std::string skinSelectSoundSetPath;
+  // Platform access token for the picked sound-set folder so it stays
+  // reachable after relaunch: an iOS security-scoped bookmark or an Android
+  // SAF tree URI. Empty for desktop or when the path needs no token.
+  std::string skinSelectSoundSetBookmark;
   // Remaining selector-owned Config/PlayerConfig values. These retain the
   // pinned source's integer domains because the native settings model cannot
   // losslessly represent BGA AUTO or every DP option.

@@ -2,9 +2,14 @@
 
 #include "../StartupTiming.h"
 #include "../PlatformOpen.h"
+#include "../targets.h"
 
 #if defined(__ANDROID__)
 #include "../AndroidNatives.h"
+#endif
+
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "../iOSNatives.hpp"
 #endif
 
 #include "IrUploadsScene.h"
@@ -460,8 +465,38 @@ void MusicSelectScene::init() {
   std::vector<std::filesystem::path> selectSoundRoots;
   const auto configuredSet =
       musicSelectSoundSetRoot(context.settings.skinSelectSoundSetPath);
-  if (!configuredSet.empty()) {
-    selectSoundRoots.push_back(configuredSet);
+  // Re-access a user-picked sound-set folder after relaunch before building
+  // the search roots: iOS security-scoped bookmarks must be started (and kept
+  // for the scene's lifetime), and Android SAF tree roots must be re-registered
+  // so their files can be read again.
+  std::filesystem::path selectSoundSetRootPath = configuredSet;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (!configuredSet.empty() &&
+      !context.settings.skinSelectSoundSetBookmark.empty()) {
+    std::string resolvedPath;
+    std::string errorMessage;
+    soundSetFolderAccessHandle_ = StartIOSSecurityScopedResource(
+        fspath_to_utf8(configuredSet),
+        context.settings.skinSelectSoundSetBookmark, resolvedPath,
+        errorMessage);
+    if (!errorMessage.empty()) {
+      SDL_Log("Failed to re-open the sound-set folder for %s: %s",
+              fspath_to_utf8(configuredSet).c_str(), errorMessage.c_str());
+    }
+    if (!resolvedPath.empty()) {
+      selectSoundSetRootPath = std::filesystem::path(resolvedPath);
+    }
+  }
+#elif TARGET_OS_ANDROID
+  if (!configuredSet.empty() &&
+      !context.settings.skinSelectSoundSetBookmark.empty() &&
+      IsAndroidTreePath(configuredSet)) {
+    RegisterAndroidChartFolder(configuredSet,
+                               context.settings.skinSelectSoundSetBookmark);
+  }
+#endif
+  if (!selectSoundSetRootPath.empty()) {
+    selectSoundRoots.push_back(selectSoundSetRootPath);
   }
   selectSoundRoots.emplace_back(kSkinSoundAssetRoot);
   // The looping SELECT system sound doubles as the preview fallback
@@ -3874,6 +3909,12 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 
 void MusicSelectScene::cleanupScene() {
   launchCancelled_.store(true, std::memory_order_release);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (soundSetFolderAccessHandle_ != nullptr) {
+    StopIOSSecurityScopedResource(soundSetFolderAccessHandle_);
+    soundSetFolderAccessHandle_ = nullptr;
+  }
+#endif
   if (launchThread_.joinable()) {
     launchThread_.request_stop();
     launchThread_.join();

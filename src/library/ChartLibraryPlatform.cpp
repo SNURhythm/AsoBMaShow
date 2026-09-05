@@ -9,7 +9,9 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <thread>
+#include <utility>
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -292,6 +294,93 @@ bool FolderActionService::active() const noexcept {
 #else
   return false;
 #endif
+}
+
+struct SoundSetFolderPicker::Impl {
+  std::jthread pickerThread;
+  std::atomic_bool pickerActive = false;
+  std::atomic_bool resultReady = false;
+  std::mutex resultMutex;
+  SoundSetFolderPick pendingResult;
+
+  void pickOnBackgroundThread(const std::stop_token &stopToken) {
+    struct Reset {
+      std::atomic_bool &active;
+      ~Reset() { active.store(false); }
+    } reset{pickerActive};
+    SoundSetFolderPick result;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    std::string error;
+    if (PickIOSFolder(result.path, result.bookmark, error)) {
+      result.succeed = true;
+    } else if (!error.empty()) {
+      SDL_Log("Failed to pick the music-select sound-set folder: %s",
+              error.c_str());
+    }
+#elif TARGET_OS_ANDROID
+    std::filesystem::path folder;
+    std::string treeUri;
+    std::string error;
+    if (PickAndroidChartFolder(folder, treeUri, error)) {
+      result.path = fspath_to_utf8(folder);
+      result.bookmark = treeUri;
+      result.succeed = true;
+    } else if (!error.empty()) {
+      SDL_Log("Failed to pick the music-select sound-set folder: %s",
+              error.c_str());
+    }
+#endif
+    if (stopToken.stop_requested()) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(resultMutex);
+      pendingResult = std::move(result);
+      resultReady.store(true, std::memory_order_release);
+    }
+  }
+};
+
+SoundSetFolderPicker::SoundSetFolderPicker()
+    : impl_(std::make_unique<Impl>()) {}
+
+SoundSetFolderPicker::~SoundSetFolderPicker() {
+  if (impl_ != nullptr && impl_->pickerThread.joinable()) {
+    impl_->pickerThread.request_stop();
+    impl_->pickerThread.join();
+  }
+}
+
+void SoundSetFolderPicker::request() {
+  if (impl_ == nullptr) return;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  if (impl_->resultReady.load(std::memory_order_acquire) ||
+      impl_->pickerActive.exchange(true)) {
+    return;
+  }
+  if (impl_->pickerThread.joinable()) {
+    impl_->pickerThread.join();
+  }
+  impl_->pickerThread = std::jthread(
+      [state = impl_.get()](const std::stop_token &stopToken) {
+        state->pickOnBackgroundThread(stopToken);
+      });
+#endif
+}
+
+bool SoundSetFolderPicker::active() const noexcept {
+  if (impl_ == nullptr) return false;
+  return impl_->pickerActive.load(std::memory_order_acquire);
+}
+
+std::optional<SoundSetFolderPick> SoundSetFolderPicker::consume() noexcept {
+  if (impl_ == nullptr ||
+      !impl_->resultReady.load(std::memory_order_acquire)) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::mutex> lock(impl_->resultMutex);
+  impl_->resultReady.store(false, std::memory_order_release);
+  return std::move(impl_->pendingResult);
 }
 
 } // namespace chart_library_platform
