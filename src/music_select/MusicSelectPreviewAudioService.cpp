@@ -15,7 +15,6 @@ public:
   explicit Impl(MusicSelectPreviewAudioService::AudioPort port,
                 std::filesystem::path defaultPath)
       : port_(std::move(port)), defaultPath_(std::move(defaultPath)) {
-    audio::diag::SelectAudioLog("[bgm] ctor default=" + defaultPath_.string());
     worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
     // Beatoraja's PreviewThread starts the looping SELECT BGM the moment the
     // worker starts (PreviewMusicProcessor.java:79-81); queue that initial
@@ -102,11 +101,6 @@ private:
                                   std::to_string(serial));
 
       const std::filesystem::path target = requested.value_or(defaultPath_);
-      audio::diag::SelectAudioLog(
-          "[bgm] woke requested=" +
-          std::string(requested ? requested->string() : "(nullopt)") +
-          " default=" + defaultPath_.string() + " empty=" +
-          (target.empty() ? "1" : "0"));
       if (target.empty()) {
         port_.stop();
         playingPath.reset();

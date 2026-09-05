@@ -508,7 +508,8 @@ void MusicSelectScene::init() {
           .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
   audio::diag::SelectAudioLog("[bgm] scene default=" + selectBgm.string());
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
-      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm));
+      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm),
+      selectBgm);
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
       selectSoundRoots,
       musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
