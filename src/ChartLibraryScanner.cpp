@@ -1758,6 +1758,22 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return ChartScanResult{.completed = finalized};
   }
 
+  // Deterministic ordering. The scan signature and the archive checkpoint
+  // resume both depend on these orders; directory iteration (especially over
+  // iOS File Provider Storage) is not stable across runs, so without sorting
+  // a mid-refresh quit would compute a different signature on restart and
+  // discard the checkpoint, forcing a full re-parse. Sort the diffs once by
+  // full virtual path first: downstream batch construction then yields sorted
+  // per-archive inner paths, so only the archive order needs a separate sort.
+  const auto orderingStart = std::chrono::steady_clock::now();
+  const auto diffPathKey = [](const ScanDiff &diff) {
+    return checkpointPathTextForDb(diff.path);
+  };
+  std::stable_sort(diffs.begin(), diffs.end(),
+                   [&](const ScanDiff &left, const ScanDiff &right) {
+                     return diffPathKey(left) < diffPathKey(right);
+                   });
+
   std::vector<ScanDiff> individualDiffs;
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, ArchiveParseBatch> archiveBatches;
@@ -1792,55 +1808,22 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
-  // Deterministic ordering. The scan signature and the archive checkpoint
-  // resume both depend on these orders; directory iteration (especially over
-  // iOS File Provider Storage) is not stable across runs, so without sorting
-  // a mid-refresh quit would compute a different signature on restart and
-  // discard the checkpoint, forcing a full re-parse.
-  const auto orderingStart = std::chrono::steady_clock::now();
-  std::ranges::sort(individualDiffs, {}, [](const ScanDiff &diff) {
-    return checkpointPathTextForDb(diff.path);
+  // diffs are sorted by full virtual path, so each archive's inner paths are
+  // already in deterministic order. Only the archive order itself needs a
+  // deterministic sort (by archive path) for the signature.
+  std::ranges::sort(archiveBatchOrder, [&](const path_t &left, const path_t &right) {
+    const auto leftIt = archiveBatches.find(left);
+    const auto rightIt = archiveBatches.find(right);
+    const std::string leftKey =
+        leftIt != archiveBatches.end()
+            ? checkpointPathTextForDb(leftIt->second.archivePath)
+            : checkpointPathTextForDb(left);
+    const std::string rightKey =
+        rightIt != archiveBatches.end()
+            ? checkpointPathTextForDb(rightIt->second.archivePath)
+            : checkpointPathTextForDb(right);
+    return leftKey < rightKey;
   });
-  std::map<std::string, path_t> sortedArchiveOrder;
-  for (const auto &archiveKey : archiveBatchOrder) {
-    const auto batchIt = archiveBatches.find(archiveKey);
-    if (batchIt == archiveBatches.end()) {
-      sortedArchiveOrder.emplace(
-          checkpointPathTextForDb(archiveKey), archiveKey);
-      continue;
-    }
-    sortedArchiveOrder.emplace(
-        checkpointPathTextForDb(batchIt->second.archivePath), archiveKey);
-    // Sort inner entries deterministically and keep parallel arrays aligned.
-    ArchiveParseBatch &batch = batchIt->second;
-    std::vector<std::size_t> innerOrder(batch.innerPaths.size());
-    for (std::size_t i = 0; i < innerOrder.size(); ++i) innerOrder[i] = i;
-    std::ranges::sort(innerOrder, [&](std::size_t left, std::size_t right) {
-      return checkpointInnerPathText(batch.innerPaths[left]) <
-             checkpointInnerPathText(batch.innerPaths[right]);
-    });
-    ArchiveParseBatch sorted;
-    sorted.archivePath = batch.archivePath;
-    sorted.innerPaths.reserve(batch.innerPaths.size());
-    sorted.parseAttempted.reserve(batch.parseAttempted.size());
-    sorted.hasDocument.reserve(batch.hasDocument.size());
-    sorted.preparedMetas.reserve(batch.preparedMetas.size());
-    for (const std::size_t index : innerOrder) {
-      sorted.innerPaths.push_back(std::move(batch.innerPaths[index]));
-      sorted.parseAttempted.push_back(batch.parseAttempted[index]);
-      sorted.hasDocument.push_back(batch.hasDocument[index]);
-      sorted.preparedMetas.push_back(
-          std::move(batch.preparedMetas[index]));
-    }
-    batch = std::move(sorted);
-  }
-  std::vector<path_t> originalArchiveOrder = std::move(archiveBatchOrder);
-  archiveBatchOrder.clear();
-  archiveBatchOrder.reserve(originalArchiveOrder.size());
-  for (auto &[ignored, archiveKey] : sortedArchiveOrder) {
-    (void)ignored;
-    archiveBatchOrder.push_back(std::move(archiveKey));
-  }
   const auto orderingMillis =
       std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now() - orderingStart)
