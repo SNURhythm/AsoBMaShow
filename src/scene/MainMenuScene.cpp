@@ -35,6 +35,7 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
+#include "ChartPreloadWorker.h"
 #include "DecideLoadingOverlay.h"
 #include "../view/PlayOptionsPanelView.h"
 #include "../view/TextView.h"
@@ -1524,6 +1525,81 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       0, 0, rendering::window_width, rendering::window_height, {});
   decideOverlay_->setVisible(false);
   overlayPortal->present(decideOverlay_);
+  previewWorker_ = new ChartPreloadWorker();
+  previewWorker_->setOnIdle([this]() {
+    bool shouldStopPreviewAudio = false;
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      if (pendingStopAndClearSelectedChartAfterPreview) {
+        pendingStopAndClearSelectedChartAfterPreview = false;
+        shouldStopPreviewAudio = true;
+      }
+    }
+    if (shouldStopPreviewAudio) {
+      stopAndClearSelectedChart();
+    }
+  });
+  previewWorker_->configure(
+      [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
+        const auto &meta = request.meta;
+        const auto isCancelled = [&cancelled, this, &meta]() {
+          return cancelled.load(std::memory_order_relaxed) ||
+                 previewWorker_->superseded(
+                     fspath_to_utf8(meta.BmsPath));
+        };
+        SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          if (isCancelled()) {
+            return;
+          }
+          this->context.jukebox.stop();
+        }
+        SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
+        std::unique_ptr<bms_parser::Chart> chart;
+        try {
+          chart = play_options::parseChart(meta.BmsPath, cancelled, "preview");
+        } catch (const std::exception &e) {
+          SDL_Log("Preview parse failed %s: %s",
+                  fspath_to_utf8(meta.BmsPath).c_str(), e.what());
+          archive_file::appendDebugLogLine(
+              "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) +
+              ": " + e.what());
+          return;
+        }
+        if (isCancelled()) {
+          return;
+        }
+        SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
+        if (chart == nullptr) {
+          SDL_Log("Chart is null");
+          archive_file::appendDebugLogLine("Preview chart is null: " +
+                                           fspath_to_utf8(meta.BmsPath));
+          return;
+        }
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          if (isCancelled()) {
+            return;
+          }
+          if (this->context.jukebox.hasLoadedResources()) {
+            this->context.jukebox.reloadChartResources(*chart, true, cancelled);
+          } else {
+            this->context.jukebox.loadChart(*chart, true, cancelled);
+          }
+          if (isCancelled()) {
+            return;
+          }
+          setSelectedChart(std::move(chart), true);
+          if (isCancelled()) {
+            clearSelectedChart();
+            return;
+          }
+          if (!willStart.load()) {
+            this->context.jukebox.play();
+          }
+        }
+      });
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -7614,176 +7690,50 @@ void MainMenuScene::clearSelectedChart() {
 
 void MainMenuScene::schedulePreviewLoad(bms_parser::ChartMeta meta) {
   {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
-  previewLoadDebouncer.schedule(
-      kPreviewDebounceDelay,
-      [this, meta = std::move(meta)](const DebounceToken &previewToken) {
-        if (willStart.load() || previewToken.cancelled()) {
-          return;
-        }
-        startPreviewLoadThread(meta, previewToken);
-      });
-}
-
-void MainMenuScene::startPreviewLoadThread(
-    bms_parser::ChartMeta meta, DebounceToken previewToken) {
-  if (loadThread.joinable()) {
+  if (previewWorker_ == nullptr) {
     return;
   }
-
-  auto cancelToken = std::make_shared<std::atomic_bool>(false);
-  auto finishedToken = std::make_shared<std::atomic_bool>(false);
-  previewLoadCancelToken = cancelToken;
-  previewLoadFinishedToken = finishedToken;
-  loadThread = std::thread([this, meta = std::move(meta), cancelToken,
-                            finishedToken, previewToken]() {
-    auto markFinished = makeScopeExit([finishedToken]() {
-      finishedToken->store(true, std::memory_order_release);
-    });
-    auto isCancelled = [cancelToken, previewToken]() {
-      return cancelToken->load(std::memory_order_relaxed) ||
-             previewToken.cancelled();
-    };
-    SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
-
-    {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
-      if (isCancelled()) {
-        return;
-      }
-      context.jukebox.stop();
-    }
-    SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
-    std::unique_ptr<bms_parser::Chart> chart;
-    try {
-      chart = play_options::parseChart(meta.BmsPath, *cancelToken, "preview");
-    } catch (const std::exception &e) {
-      SDL_Log("Preview parse failed %s: %s",
-              fspath_to_utf8(meta.BmsPath).c_str(), e.what());
-      archive_file::appendDebugLogLine(
-          "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
-          e.what());
-      return;
-    }
-    if (isCancelled()) {
-      return;
-    }
-    SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
-    if (chart == nullptr) {
-      SDL_Log("Chart is null");
-      archive_file::appendDebugLogLine("Preview chart is null: " +
-                                       fspath_to_utf8(meta.BmsPath));
-      return;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
-      if (isCancelled()) {
-        return;
-      }
-      if (context.jukebox.hasLoadedResources()) {
-        context.jukebox.reloadChartResources(*chart, true, *cancelToken);
-      } else {
-        context.jukebox.loadChart(*chart, true, *cancelToken);
-      }
-      if (isCancelled()) {
-        return;
-      }
-      setSelectedChart(std::move(chart), true);
-      if (isCancelled()) {
-        clearSelectedChart();
-        return;
-      }
-      if (!willStart.load()) {
-        context.jukebox.play();
-      }
-    }
-  });
+  ChartMetaRecord record;
+  record.meta = std::move(meta);
+  previewWorker_->request(record);
 }
 
 void MainMenuScene::cancelActivePreviewLoading() {
-  previewLoadDebouncer.cancel();
-  if (previewLoadCancelToken != nullptr) {
-    previewLoadCancelToken->store(true, std::memory_order_release);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
   }
 }
 
 void MainMenuScene::retirePreviewLoadThread(bool stopPreviewAudioWhenDone) {
   cancelActivePreviewLoading();
   {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
     if (stopPreviewAudioWhenDone) {
       pendingStopAndClearSelectedChartAfterPreview = true;
     }
-    if (loadThread.joinable()) {
-      SDL_Log("Retiring preview thread");
-      retiredPreviewLoadThreads.push_back(RetiredPreviewLoadThread{
-          .thread = std::move(loadThread),
-          .finished = previewLoadFinishedToken != nullptr
-                          ? previewLoadFinishedToken
-                          : std::make_shared<std::atomic_bool>(true),
-      });
-    }
   }
-  previewLoadCancelToken = std::make_shared<std::atomic_bool>(true);
-  previewLoadFinishedToken = std::make_shared<std::atomic_bool>(true);
-  reapRetiredPreviewLoadThreads();
 }
 
 void MainMenuScene::reapRetiredPreviewLoadThreads() {
-  std::vector<RetiredPreviewLoadThread> finishedThreads;
-  bool shouldStopPreviewAudio = false;
-  {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
-    auto it = retiredPreviewLoadThreads.begin();
-    while (it != retiredPreviewLoadThreads.end()) {
-      const bool finished =
-          it->finished == nullptr ||
-          it->finished->load(std::memory_order_acquire);
-      if (!finished) {
-        ++it;
-        continue;
-      }
-      finishedThreads.push_back(std::move(*it));
-      it = retiredPreviewLoadThreads.erase(it);
-    }
-
-    if (pendingStopAndClearSelectedChartAfterPreview &&
-        retiredPreviewLoadThreads.empty()) {
-      pendingStopAndClearSelectedChartAfterPreview = false;
-      shouldStopPreviewAudio = true;
-    }
-  }
-
-  for (auto &retiredThread : finishedThreads) {
-    if (retiredThread.thread.joinable()) {
-      SDL_Log("Joining finished preview thread");
-      retiredThread.thread.join();
-    }
-  }
-  if (shouldStopPreviewAudio) {
-    stopAndClearSelectedChart();
-  }
+  // The shared worker has no retirement list; audio stop-after-idle is
+  // handled by onIdle. This shim is retained so existing call sites compile.
 }
 
 void MainMenuScene::joinRetiredPreviewLoadThreads() {
-  std::vector<RetiredPreviewLoadThread> retiredThreads;
+  // The shared worker is joined via previewWorker_->stop(); call sites that
+  // previously joined retired threads now rely on that single join.
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
   bool shouldStopPreviewAudio = false;
   {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
-    retiredThreads.swap(retiredPreviewLoadThreads);
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
     if (pendingStopAndClearSelectedChartAfterPreview) {
       pendingStopAndClearSelectedChartAfterPreview = false;
       shouldStopPreviewAudio = true;
-    }
-  }
-
-  for (auto &retiredThread : retiredThreads) {
-    if (retiredThread.thread.joinable()) {
-      SDL_Log("Joining retired preview thread");
-      retiredThread.thread.join();
     }
   }
   if (shouldStopPreviewAudio) {
@@ -7793,10 +7743,6 @@ void MainMenuScene::joinRetiredPreviewLoadThreads() {
 
 void MainMenuScene::cancelPreviewLoading(bool stopPreviewAudio) {
   cancelActivePreviewLoading();
-  if (loadThread.joinable()) {
-    SDL_Log("Joining preview thread");
-    loadThread.join();
-  }
   joinRetiredPreviewLoadThreads();
   if (stopPreviewAudio) {
     stopAndClearSelectedChart();
@@ -8922,7 +8868,6 @@ void MainMenuScene::applyReplayExportResult() {
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
-  previewLoadDebouncer.update();
   reapRetiredPreviewLoadThreads();
   refreshScoreClearRanksIfNeeded();
   refreshIrRecordListIfNeeded();
@@ -9071,6 +9016,10 @@ void MainMenuScene::cleanupScene() {
     overlayPortal->dismiss(decideOverlay_);
     delete decideOverlay_;
     decideOverlay_ = nullptr;
+  }
+  if (previewWorker_ != nullptr) {
+    delete previewWorker_;
+    previewWorker_ = nullptr;
   }
   overlayPortal = nullptr;
   jacketView = nullptr;

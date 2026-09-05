@@ -40,6 +40,7 @@
 class BlockingOverlayView;
 class OverlayPortal;
 class DecideLoadingOverlay;
+class ChartPreloadWorker;
 class ResultRecordListView;
 class TextInputBox;
 class TextView;
@@ -79,8 +80,6 @@ private:
   void launchCourse(const MusicSelectBar &, bool autoplay);
   void launchSelectedDirectoryAutoplay();
   void startPreloadForSelection();
-  void ensurePreloadWorker();
-  void preloadWorkerLoop(std::stop_token stop);
   void stopPreloadWorker();
   void showDecideOverlay(const ChartMetaRecord &record);
   void hideDecideOverlay();
@@ -187,14 +186,11 @@ private:
   std::atomic_bool launchCancelled_{false};
   // Background preload of the selected chart's parse + jukebox load so Start
   // is near-instant even for a heavy archive chart. A single worker thread
-  // lives for the scene and processes the latest selection request, so
-  // scrolling never joins a previous in-flight load on the UI thread (which
-  // would block every bar move while a heavy load finished).
-  std::jthread preloadThread_;
-  std::atomic_bool preloadStop_{false};
+  // lives for the scene and processes the latest selection request (debounced
+  // and latest-wins), so scrolling never joins a previous in-flight load on
+  // the UI thread.
+  ChartPreloadWorker *preloadWorker_ = nullptr;
   mutable std::mutex preloadMutex_;
-  std::condition_variable preloadCv_;
-  std::optional<ChartMetaRecord> preloadRequest_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
   std::filesystem::path preloadedPath_;
   MusicSelectSearchHistory searchHistory_;

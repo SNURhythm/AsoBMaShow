@@ -52,6 +52,7 @@ class DropdownView;
 class OverlayPortal;
 class BlockingOverlayView;
 class DecideLoadingOverlay;
+class ChartPreloadWorker;
 class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
@@ -84,17 +85,10 @@ private:
   std::atomic_bool selectedChartReusableForStart = false;
 
   std::thread loadThread;
-  struct RetiredPreviewLoadThread {
-    std::thread thread;
-    std::shared_ptr<std::atomic_bool> finished;
-  };
-  std::shared_ptr<std::atomic_bool> previewLoadCancelToken =
-      std::make_shared<std::atomic_bool>(false);
-  std::shared_ptr<std::atomic_bool> previewLoadFinishedToken =
-      std::make_shared<std::atomic_bool>(true);
-  Debouncer previewLoadDebouncer;
-  std::vector<RetiredPreviewLoadThread> retiredPreviewLoadThreads;
-  std::mutex retiredPreviewLoadThreadsMutex;
+  // Preview chart loading runs on the shared ChartPreloadWorker (single
+  // scene-lifetime thread, debounced and latest-wins) so a selection change
+  // never spawns or joins a per-selection thread on the UI thread.
+  ChartPreloadWorker *previewWorker_ = nullptr;
   std::mutex previewJukeboxLoadMutex;
   bool pendingStopAndClearSelectedChartAfterPreview = false;
   std::jthread findBmsThread;

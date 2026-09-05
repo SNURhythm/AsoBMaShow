@@ -4182,6 +4182,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(skin_decode_cache_tests
             tests/skin_decode_cache_tests.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
+            src/view/DecodedImageCache.cpp
         )
         target_include_directories(skin_decode_cache_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -4301,6 +4302,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     if(APPLE)
         target_link_libraries(decide_loading_overlay_tests PRIVATE iconv)
+    endif()
+    add_executable(chart_preload_worker_tests
+        tests/chart_preload_worker_tests.cpp
+        src/scene/ChartPreloadWorker.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(chart_preload_worker_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_preload_worker_tests PRIVATE cxx_std_23)
+    target_link_libraries(chart_preload_worker_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(chart_preload_worker_tests PRIVATE iconv)
     endif()
     add_executable(dropdown_view_tests
         tests/dropdown_view_tests.cpp
@@ -7057,6 +7074,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         image_file_decoder_tests
         image_view_fade_tests
         decide_loading_overlay_tests
+        chart_preload_worker_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests

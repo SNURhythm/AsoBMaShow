@@ -1,5 +1,6 @@
 target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
+    ChartPreloadWorker.cpp
     ChartRecordsScene.cpp
     ChartViewerScene.cpp
     CourseGameplaySessionBuilder.cpp

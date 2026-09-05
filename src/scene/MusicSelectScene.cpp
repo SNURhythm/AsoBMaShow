@@ -38,6 +38,7 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/OverlayPortal.h"
+#include "ChartPreloadWorker.h"
 #include "DecideLoadingOverlay.h"
 #include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
@@ -372,6 +373,30 @@ void MusicSelectScene::init() {
       0, 0, rendering::window_width, rendering::window_height, {});
   decideOverlay_->setVisible(false);
   modalOverlayPortal_->present(decideOverlay_);
+  preloadWorker_ = new ChartPreloadWorker();
+  preloadWorker_->configure(
+      [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
+        auto chart = play_options::parseChart(request.meta, cancelled,
+                                              "music-select preload");
+        if (!chart || cancelled.load(std::memory_order_relaxed) ||
+            preloadWorker_->superseded(
+                fspath_to_utf8(request.meta.BmsPath))) {
+          return;
+        }
+        context.jukebox.stop();
+        (void)context.jukebox.loadChart(*chart, true, cancelled);
+        if (cancelled.load(std::memory_order_relaxed) ||
+            preloadWorker_->superseded(
+                fspath_to_utf8(request.meta.BmsPath))) {
+          return;
+        }
+        std::lock_guard<std::mutex> lock(preloadMutex_);
+        if (fspath_to_path_t(preloadedPath_) !=
+            fspath_to_path_t(request.meta.BmsPath)) {
+          return;  // selection moved on
+        }
+        preloadedChart_ = std::move(chart);
+      });
   addView(modalLayer_);
   startInputListening();
 }
@@ -1449,97 +1474,33 @@ void MusicSelectScene::startPreloadForSelection() {
     return;
   }
   const auto record = *selected.chart;
-  const path_t recordPath = fspath_to_path_t(record.meta.BmsPath);
   {
     std::lock_guard<std::mutex> lock(preloadMutex_);
-    // Already preloaded, or a request for this chart is in flight.
-    if (preloadRequest_ &&
-        fspath_to_path_t(preloadRequest_->meta.BmsPath) == recordPath) {
-      return;
-    }
-    if (fspath_to_path_t(preloadedPath_) == recordPath &&
+    if (fspath_to_path_t(preloadedPath_) ==
+            fspath_to_path_t(record.meta.BmsPath) &&
         preloadedChart_ != nullptr &&
-        fspath_to_path_t(preloadedChart_->Meta.BmsPath) == recordPath) {
+        fspath_to_path_t(preloadedChart_->Meta.BmsPath) ==
+            fspath_to_path_t(record.meta.BmsPath)) {
       return;  // this exact chart is already preloaded
     }
-    // Selection changed to a different chart (or the previous preload was
-    // superseded). Invalidate the stale result immediately so reuse can never
-    // pair a previously-loaded chart with the current selection.
+    // Selection changed to a different chart. Invalidate the stale result
+    // immediately so reuse can never pair a previously-loaded chart with the
+    // current selection.
     preloadedChart_.reset();
     preloadedPath_ = record.meta.BmsPath;
-    preloadRequest_ = record;
   }
-  ensurePreloadWorker();
-  preloadCv_.notify_one();
-}
-
-void MusicSelectScene::ensurePreloadWorker() {
-  if (preloadThread_.joinable()) {
-    return;
-  }
-  {
-    std::lock_guard<std::mutex> lock(preloadMutex_);
-    preloadStop_.store(false, std::memory_order_release);
-  }
-  preloadThread_ = std::jthread(
-      [this](std::stop_token stop) { preloadWorkerLoop(std::move(stop)); });
-}
-
-void MusicSelectScene::preloadWorkerLoop(std::stop_token stop) {
-  const auto superseded = [&]() {
-    std::unique_lock<std::mutex> lock(preloadMutex_);
-    return stop.stop_requested() ||
-           preloadStop_.load(std::memory_order_acquire) ||
-           preloadRequest_.has_value();
-  };
-  while (true) {
-    ChartMetaRecord request;
-    {
-      std::unique_lock<std::mutex> lock(preloadMutex_);
-      preloadCv_.wait(lock, [&] {
-        return stop.stop_requested() ||
-               preloadStop_.load(std::memory_order_acquire) ||
-               preloadRequest_.has_value();
-      });
-      if (stop.stop_requested() ||
-          preloadStop_.load(std::memory_order_acquire)) {
-        return;
-      }
-      request = std::move(*preloadRequest_);
-      preloadRequest_.reset();
-    }
-    std::atomic_bool cancelled = false;
-    auto chart = play_options::parseChart(request.meta, cancelled,
-                                          "music-select preload");
-    if (!chart || cancelled.load(std::memory_order_relaxed) ||
-        superseded()) {
-      continue;
-    }
-    context.jukebox.stop();
-    (void)context.jukebox.loadChart(*chart, true, cancelled);
-    if (cancelled.load(std::memory_order_relaxed) || superseded()) {
-      continue;
-    }
-    std::lock_guard<std::mutex> lock(preloadMutex_);
-    if (fspath_to_path_t(preloadedPath_) !=
-        fspath_to_path_t(request.meta.BmsPath)) {
-      continue;  // selection moved on
-    }
-    preloadedChart_ = std::move(chart);
+  if (preloadWorker_ != nullptr) {
+    preloadWorker_->request(record);
   }
 }
 
 void MusicSelectScene::stopPreloadWorker() {
-  {
-    std::lock_guard<std::mutex> lock(preloadMutex_);
-    preloadStop_.store(true, std::memory_order_release);
-    preloadRequest_.reset();
+  if (preloadWorker_ != nullptr) {
+    preloadWorker_->stop();
   }
-  preloadCv_.notify_all();
-  if (preloadThread_.joinable()) {
-    preloadThread_.request_stop();
-    preloadThread_.join();
-  }
+  std::lock_guard<std::mutex> lock(preloadMutex_);
+  preloadedChart_.reset();
+  preloadedPath_.clear();
 }
 
 void MusicSelectScene::showDecideOverlay(const ChartMetaRecord &record) {
@@ -1573,7 +1534,6 @@ bool MusicSelectScene::reusePreloadedChart(
     }
     cached = std::move(preloadedChart_);
     preloadedPath_.clear();
-    preloadRequest_.reset();
   }
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
@@ -3639,6 +3599,10 @@ void MusicSelectScene::cleanupScene() {
     std::lock_guard<std::mutex> lock(preloadMutex_);
     preloadedChart_.reset();
     preloadedPath_.clear();
+  }
+  if (preloadWorker_ != nullptr) {
+    delete preloadWorker_;
+    preloadWorker_ = nullptr;
   }
   if (searchInput_ != nullptr) searchInput_->endEditing();
   if (decideOverlay_ != nullptr) {
