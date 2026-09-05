@@ -1,5 +1,6 @@
 #include "SkinResourceCatalog.h"
 
+#include "../../ArchiveFile.h"
 #include "../../StartupTiming.h"
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
@@ -12,6 +13,7 @@
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include <algorithm>
+#include <chrono>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -1138,8 +1140,16 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
       return result;
     }
   }
+  const auto facesStart = std::chrono::steady_clock::now();
   const auto faces = readFontFaces(request, files, session, diagnostics,
                                    cancellationRequested, safetyPolicy);
+  const auto facesMillis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::steady_clock::now() - facesStart)
+                               .count();
+  if (facesMillis >= 5) {
+    StartupTiming::instance().note(
+        "font faces read took " + std::to_string(facesMillis) + "ms");
+  }
   if (!faces) return std::nullopt;
   const auto reservePaintAttemptWork =
       [&remainingScalableFontPaintAttemptWork](std::size_t work) {
