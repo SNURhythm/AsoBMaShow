@@ -110,23 +110,43 @@ def swept_tone(n_samples, f0, f1, amp, harmonics=1, vib_depth=0.0, vib_rate=0.0)
 def make_select():
     n = SR * 2  # exactly 2.000 s -> seamless loop
     out = [0.0] * n
-    # Cmaj9-ish warm pad; every partial is integer Hz so its cycles are integral.
-    pad = [
-        (66, 0.30),   # C2 sub
-        (131, 0.34),  # C3
-        (330, 0.24),  # E4
-        (392, 0.18),  # G4
-        (494, 0.10),  # B4
-        (587, 0.05),  # D5
+    # A calm, melodic select BGM: a soft warm chord bed with a gentle arpeggio
+    # on top. No tremolo and no detune beating (both were disorienting), and
+    # every sustained partial is integer Hz so the 2.0 s loop is seamless.
+    #
+    # Chord bed (Cmaj6-ish, wide and soft): every tone is integer Hz -> integer
+    # cycles over the buffer, so it sustains seamlessly.
+    bed = [
+        (131, 0.16),  # C3
+        (196, 0.12),  # G3
+        (330, 0.10),  # E4
+        (440, 0.06),  # A4
     ]
     for i in range(n):
         t = i / SR
         s = 0.0
-        for f, amp in pad:
+        for f, amp in bed:
             s += partial(t, f, amp)
-            s += partial(t, f, amp * 0.4, detune_hz=1.0)  # subtle chorus
-        tremolo = 0.72 + 0.28 * math.sin(2 * math.pi * 0.5 * t - math.pi / 2)
-        out[i] = s * tremolo
+        out[i] = s
+    # Arpeggio (calm harp/music-box motif). Each note is plucked with a soft
+    # attack and release so it starts and ends near zero, keeping the loop
+    # click-free. Frequencies are integer Hz.
+    notes = [
+        (0.00, 330, 0.22),  # E4
+        (0.35, 523, 0.18),  # C5
+        (0.70, 440, 0.16),  # A4
+        (1.05, 392, 0.16),  # G4
+        (1.40, 330, 0.14),  # E4
+        (1.70, 587, 0.12),  # D5
+    ]
+    for start, freq, amp in notes:
+        onset = int(start * SR)
+        for i in range(onset, n):
+            t = (i - onset) / SR
+            attack = min(1.0, t / 0.015)
+            release = min(1.0, (0.30 - t) / 0.12)
+            env = max(0.0, attack * release)
+            out[i] += amp * math.sin(2 * math.pi * freq * t) * env
     return out
 
 
