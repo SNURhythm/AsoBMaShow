@@ -381,3 +381,50 @@ Expected: PASS.
 git add src/AppSettings.h src/AppSettings.cpp src/AppSettingsStore.cpp src/audio/SkinSystemSoundService.h src/audio/SkinSystemSoundService.cpp src/scene/MusicSelectScene.cpp src/scene/SettingsSceneSkins.cpp tests/music_select_system_sound_tests.cpp tests/app_settings_store_tests.cpp docs/skin-compat/beatoraja-music-select-gaps.md
 git commit -m "feat: configurable music select sound set with full extension support"
 ```
+
+## Task 7: Bundle-aware skin-sound loading + platform folder picker for the sound set
+
+**Files:**
+- Modify: `src/audio/AudioWrapper.cpp`
+- Modify: `src/scene/MusicSelectScene.cpp`
+- Modify: `src/scene/SettingsSceneSkins.cpp`
+- Modify: `src/AppSettings.h`
+- Modify: `src/AppSettingsStore.cpp`
+- Modify: `src/library/ChartLibraryPlatform.h`
+- Modify: `src/library/ChartLibraryPlatform.cpp`
+- Modify: `src/iOSNatives.mm` (only if a bookmark resumption helper is needed)
+- Modify: `src/AndroidNatives.h` (only if a wrapped SAF folder-pick for app-owned folders is needed)
+- Modify: `tests/audio_wrapper_lifecycle_tests.cpp` (or a new focused test)
+- Modify: `docs/skin-compat/beatoraja-music-select-gaps.md`
+
+**Root cause (from debugging):** The bundled select sounds are silent on iPad because the audio load path (`AudioWrapper::loadSkinSound` → `asobmashow::audio::openSoundFile` → libsndfile `sf_open`) opens the literal filesystem path `assets/select.wav`. On iOS there is no chdir and no bundle resource-path resolution, so that relative path does not exist in the sandbox; the same is true inside a macOS `.app` bundle (app chdir's to `Contents/MacOS`, assets live in `Contents/Resources/assets`). Fonts and skin images render because they read via `SDL_RWFromFile` (bundle-aware: SDL maps to `[NSBundle mainBundle] pathForResource` on iOS), but libsndfile `sf_open` is a plain filesystem open.
+
+**Established patterns to reuse (already in the codebase):**
+- `SkinResourceCatalog::readPlatformAsset` (`src/skin/beatoraja/SkinResourceCatalog.cpp:90-127`) reads an asset via `SDL_RWFromFile`.
+- `Jukebox` loads chart audio as `loadSoundFromMemory(path, bytes, isCancelled)` (`src/audio/Jukebox.cpp:2410` etc.) — a bytes path.
+- `AudioWrapper::decodeAudioBytesToPCM` (`decoder.h:22`) decodes bytes via `sf_open_virtual`.
+- iOS folder pick: `PickIOSFolder` (`src/iOSNatives.mm:2627`) + security-scoped bookmark; used by `chart_library_platform::FolderActionService::requestAddFolder` (`src/library/ChartLibraryPlatform.cpp:207`) on a background thread.
+- Android folder pick: `PickAndroidChartFolder` (`src/AndroidNatives.cpp:850`) + tree URI; used at `ChartLibraryPlatform.cpp:232`.
+- A `std::jthread` picker-active guard pattern in `ChartLibraryPlatform.cpp:203-244`.
+
+**Root-cause fix (bundle-aware decode):** Make `AudioWrapper::loadSkinSound`/the skin-sound load in `MusicSelectScene` read the asset bytes via `SDL_RWFromFile` (bundle-aware) and decode from memory (`decodeAudioBytesToPCM`), instead of only `sf_open` on the literal path. Fall back to the existing `sf_open` path if the SDL read returns nothing (covers real user files with absolute paths). Keep the current warning behavior and the `loadSkinSound` return shape (`audio::SkinSoundLoadResult`).
+
+**Folder-picker fix:** `AppSettings::skinSelectSoundSetPath` is currently a typed-path input (`SettingsSceneSkins.cpp`, "Sound set folder"). Replace the typed input with a button that launches the platform folder picker (reusing the `FolderActionService` picker pattern) and persists the picked path (and, on iOS, the security-scoped bookmark needed to re-access it after app relaunch; on Android, the SAF tree URI if the folder is not a plain absolute path). Keep the typed input as an advanced fallback (the app must still support entering a path on desktop, and iOS path fields are near-useless — the button is the primary affordance).
+
+- [ ] **Step 1: Write failing tests**
+  - `loadSkinSound`-decode: a fake/bytes-based decoder asserts a `.wav` byte buffer (matching our generated WAV format) decodes to PCM; the bundle-aware read path is exercised with a temp SDL-visible file (or an injected read callback).
+  - A focused `SkinSystemSoundService` test that the resolution preflight no longer relies on `std::filesystem::is_regular_file` alone when the path is bundle-relative (the player must attempt the bundle read).
+  - Settings-store: the `skinSelectSoundSetPath` round-trip continues to work; a new bookmarked-path field round-trips.
+- [ ] **Step 2: Run and observe the failing decode**
+  Run: `cmake --build cmake-build-debug --target audio_wrapper_lifecycle_tests -j 6` and the focused new test; expect the byte-decode or bundle-read assertion to fail.
+- [ ] **Step 3: Implement bundle-aware load**
+  Add a bytes-based skin-sound load (may reuse `decodeAudioBytesToPCM`) and route `MusicSelectSkinSoundPlayer`/`MusicSelectPreviewBgmPlayer` through it; keep `sf_open` as fallback. Do not break the existing `loadSoundFromMemory`/chart-audio paths.
+- [ ] **Step 4: Implement the folder-picker setting**
+  Add a "Sound set folder" button in `SettingsSceneSkins` that launches the platform picker on a background thread (reuse `pickFolderFor...` pattern), persists the path (+ iOS bookmark / Android tree URI as needed), and updates the resolution roots. Keep the typed-path input as fallback.
+- [ ] **Step 5: Run and commit**
+  Run the focused tests + `main` build + `music_select_*` suite; commit.
+
+```bash
+git add src/audio/AudioWrapper.cpp src/scene/MusicSelectScene.cpp src/scene/SettingsSceneSkins.cpp src/AppSettings.h src/AppSettingsStore.cpp src/library/ChartLibraryPlatform.h src/library/ChartLibraryPlatform.cpp src/iOSNatives.mm src/AndroidNatives.h tests/audio_wrapper_lifecycle_tests.cpp docs/skin-compat/beatoraja-music-select-gaps.md
+git commit -m "feat: load bundled sounds via bundle-aware read and pick sound set folder"
+```
