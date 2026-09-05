@@ -298,6 +298,10 @@ public:
     bool ClearEntries();
     ChartScanSnapshot LoadScanSnapshot(
         ChartScanSnapshotLoad load = ChartScanSnapshotLoad::Full);
+    // Loads only the identity columns (path + md5 + sha256) for every stored
+    // chart, for the scanner's reconcile pass. Cheaper than LoadScanSnapshot
+    // on a large library because the full metadata row is not materialized.
+    std::vector<ChartScanReconcileIdentity> LoadScanReconcileIdentities();
     std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();

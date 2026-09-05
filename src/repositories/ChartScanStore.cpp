@@ -466,7 +466,10 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
   ChartScanSnapshot snapshot;
   if (load == ChartScanSnapshotLoad::Full) {
     chart_repository_detail::SelectAllChartMeta(database, snapshot.charts);
+  }
 
+  if (load == ChartScanSnapshotLoad::Full ||
+      load == ChartScanSnapshotLoad::Reconcile) {
     SqliteStatementHandle solidStatement;
     if (prepareSqliteStatementLogged(
             database, "SELECT path FROM solid_archives", solidStatement,
@@ -1225,6 +1228,27 @@ int ChartRepository::Session::ScanBatch::ChangedCount() const {
 ChartScanSnapshot ChartRepository::Session::LoadScanSnapshot(
     ChartScanSnapshotLoad load) {
   return loadScanSnapshot(impl_->database(), load);
+}
+
+std::vector<ChartScanReconcileIdentity>
+ChartRepository::Session::LoadScanReconcileIdentities() {
+  std::vector<ChartScanReconcileIdentity> identities;
+  sqlite3 *database = impl_->database();
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          database, "SELECT path, md5, sha256 FROM chart_meta", statement,
+          "selecting chart scan reconcile identities", logSqlErrorText)) {
+    return identities;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    identities.push_back({
+        .path = storedPathFromDatabase(
+            sqliteColumnString(statement.get(), 0)),
+        .md5 = normalizedHash(sqliteColumnString(statement.get(), 1)),
+        .sha256 = normalizedHash(sqliteColumnString(statement.get(), 2)),
+    });
+  }
+  return identities;
 }
 
 std::optional<ChartRepository::Session::ScanBatch>

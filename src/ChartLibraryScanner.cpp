@@ -113,6 +113,13 @@ bool parsedChartMetaHasStableIdentity(const bms_parser::ChartMeta &meta) {
          canonical_digest::isCanonicalLowerHex(sha256, 64);
 }
 
+bool reconcileIdentityHasStableIdentity(
+    const ChartScanReconcileIdentity &identity) {
+  return !identity.path.empty() &&
+         canonical_digest::isCanonicalLowerHex(identity.md5, 32) &&
+         canonical_digest::isCanonicalLowerHex(identity.sha256, 64);
+}
+
 bool parsedChartMetaLooksInsertable(const bms_parser::ChartMeta &meta) {
   return parsedChartMetaHasStableIdentity(meta) &&
          (meta.TotalNotes > 0 || meta.TotalLandmineNotes > 0);
@@ -527,8 +534,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   const auto scanSnapshotLoadStart = scanPhaseStart();
   ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
-      reconcileExisting ? ChartScanSnapshotLoad::Full
+      reconcileExisting ? ChartScanSnapshotLoad::Reconcile
                         : ChartScanSnapshotLoad::CheckpointOnly);
+  // The reconcile pass only needs each stored chart's identity (path + md5 +
+  // sha256), so load those lightweight records instead of full metadata rows.
+  std::vector<ChartScanReconcileIdentity> storedChartIdentities;
+  if (reconcileExisting) {
+    storedChartIdentities = session.LoadScanReconcileIdentities();
+  }
   scanPhaseEnd("load-scan-snapshot", scanSnapshotLoadStart);
   if (reconcileMode == ReconcileMode::Scoped) {
     const auto pathOutsideScope = [&](const std::filesystem::path &path) {
@@ -536,8 +549,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         return pathAtOrInsideRoot(path, root);
       });
     };
-    std::erase_if(scanSnapshot.charts, [&](const auto &chart) {
-      return pathOutsideScope(chart.BmsPath);
+    std::erase_if(storedChartIdentities, [&](const auto &identity) {
+      return pathOutsideScope(identity.path);
     });
     std::erase_if(scanSnapshot.solidArchives, [&](const auto &archive) {
       return pathOutsideScope(archive.path);
@@ -548,8 +561,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   }
   const ChartScanCheckpoint checkpoint =
       scanSnapshot.checkpoint.value_or(ChartScanCheckpoint{});
-  std::vector<bms_parser::ChartMeta> chartMetas =
-      std::move(scanSnapshot.charts);
 
   struct ScanDiff {
     std::filesystem::path path;
@@ -590,10 +601,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::unordered_map<path_t, int> knownArchiveChartCounts;
   std::unordered_map<path_t, int> storedArchiveChartCounts;
   std::unordered_set<path_t> scannedArchivePaths;
-  diffs.reserve(chartMetas.size());
-  documentFlagUpdates.reserve(chartMetas.size());
-  sourcePreferenceRefreshPaths.reserve(chartMetas.size());
-  cachedSourcePreferenceUpdates.reserve(chartMetas.size());
+  diffs.reserve(storedChartIdentities.size());
+  documentFlagUpdates.reserve(storedChartIdentities.size());
+  sourcePreferenceRefreshPaths.reserve(storedChartIdentities.size());
+  cachedSourcePreferenceUpdates.reserve(storedChartIdentities.size());
 
   auto archiveScanKey = [](const std::filesystem::path &archivePath) {
     return fspath_to_path_t(archivePath.lexically_normal());
@@ -648,23 +659,23 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                                         .dateSeconds = dateSeconds});
   };
 
-  for (const auto &chartMeta : chartMetas) {
+  for (const auto &identity : storedChartIdentities) {
     if (shouldStop()) {
       return {};
     }
-    if (!parsedChartMetaHasStableIdentity(chartMeta)) {
-      diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
+    if (!reconcileIdentityHasStableIdentity(identity)) {
+      diffs.push_back({.path = identity.path, .deleted = true});
       continue;
     }
 
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    const bool liveArchivePath = archive_file::splitVirtualPath(
-        chartMeta.BmsPath, archivePath, innerPath);
+    const bool liveArchivePath =
+        archive_file::splitVirtualPath(identity.path, archivePath, innerPath);
     std::filesystem::path storedArchivePathValue;
     std::filesystem::path storedInnerPath;
     const bool storedArchivePath = splitStoredArchiveVirtualPath(
-        chartMeta.BmsPath, storedArchivePathValue, storedInnerPath);
+        identity.path, storedArchivePathValue, storedInnerPath);
     if (storedArchivePath) {
       ++storedArchiveChartCounts[archiveScanKey(storedArchivePathValue)];
     }
@@ -681,9 +692,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             archiveState.cache.archiveSize == archiveState.archiveSize &&
             archiveState.cache.mtimeNs == archiveState.mtimeNs &&
             archiveState.cache.chartCount >= 0) {
-          knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
+          knownChartPaths.insert(fspath_to_path_t(identity.path));
           cachedSourcePreferenceUpdates.push_back({
-              .path = chartMeta.BmsPath,
+              .path = identity.path,
               .priority = archiveState.cache.solid ? 2 : 1,
               .archiveSize = static_cast<std::uint64_t>(
                   std::max<std::int64_t>(0, archiveState.archiveSize)),
@@ -693,11 +704,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
     }
 
-    if (archive_file::exists(chartMeta.BmsPath)) {
-      knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
-      sourcePreferenceRefreshPaths.push_back(chartMeta.BmsPath);
+    if (archive_file::exists(identity.path)) {
+      knownChartPaths.insert(fspath_to_path_t(identity.path));
+      sourcePreferenceRefreshPaths.push_back(identity.path);
     } else {
-      diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
+      diffs.push_back({.path = identity.path, .deleted = true});
     }
   }
 
