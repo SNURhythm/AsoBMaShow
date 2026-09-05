@@ -501,15 +501,35 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   };
 
+  using ScanClock = std::chrono::steady_clock;
+  auto scanPhaseStart = []() { return ScanClock::now(); };
+  auto scanPhaseEnd = [&](const char *phase, ScanClock::time_point start) {
+    const auto phaseMillis =
+        std::chrono::duration_cast<std::chrono::milliseconds>(ScanClock::now() -
+                                                              start)
+            .count();
+    SDL_Log("Chart scan phase: %s took %lld ms", phase,
+            static_cast<long long>(phaseMillis));
+    archive_file::appendDebugLogLine(std::string("Chart scan phase: ") +
+                                     phase + " took " +
+                                     std::to_string(phaseMillis) + " ms");
+  };
+  auto scanPhase = [&](const char *phase) {
+    archive_file::appendDebugLogLine(std::string("Chart scan phase begin: ") +
+                                     phase);
+  };
+
   reportProgress(0, static_cast<int>(std::max<std::size_t>(roots.size(), 1)),
                  ChartScanProgressStage::Preparing);
   if (shouldStop()) {
     return {};
   }
 
+  const auto scanSnapshotLoadStart = scanPhaseStart();
   ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
       reconcileExisting ? ChartScanSnapshotLoad::Full
                         : ChartScanSnapshotLoad::CheckpointOnly);
+  scanPhaseEnd("load-scan-snapshot", scanSnapshotLoadStart);
   if (reconcileMode == ReconcileMode::Scoped) {
     const auto pathOutsideScope = [&](const std::filesystem::path &path) {
       return std::ranges::none_of(roots, [&](const auto &root) {
@@ -1482,6 +1502,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   int scannedRootCount = 0;
   bool traversalHealthy = true;
+  const auto folderTraversalStart = scanPhaseStart();
   const int rootCount =
       static_cast<int>(std::max<std::size_t>(roots.size(), 1));
   for (const auto &root : roots) {
@@ -1629,6 +1650,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   }
   traversalHealthy =
       traversalHealthy && discoveryHealthy.load(std::memory_order_relaxed);
+  scanPhaseEnd("folder-traversal-and-entity-prep", folderTraversalStart);
+  const auto reconcileDiffBuildStart = scanPhaseStart();
+  scanPhase("reconcile-diff-build");
 
   for (auto &preparedSlot : preparedEntities) {
     if (!preparedSlot.has_value()) {
@@ -1727,6 +1751,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   reportProgress(rootCount, rootCount,
                  ChartScanProgressStage::PreparingUpdates);
+  scanPhaseEnd("reconcile-diff-build", reconcileDiffBuildStart);
   archive_file::appendDebugLogLine(
       "Preparing updates: diffs=" + std::to_string(diffs.size()) +
       " documentFlagUpdates=" + std::to_string(documentFlagUpdates.size()) +
@@ -2094,6 +2119,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         "Folder synchronization complete in " + std::to_string(syncMillis) +
         "ms.");
   }
+  const auto reconcileLoopStart = scanPhaseStart();
+  scanPhase("reconcile-update-loops");
   std::vector<std::filesystem::path> upsertedChartPaths;
   std::uint64_t completedFlushRequest = 0;
 
@@ -2290,6 +2317,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     recordStorageResult(scanBatch->UpdateChartHasDocument(path, hasDocument));
   }
+  scanPhaseEnd("reconcile-update-loops", reconcileLoopStart);
+  const auto individualParseStart = scanPhaseStart();
+  scanPhase("individual-chart-parse");
 
   auto individualParseWorkerCount = [](std::size_t fileCount) {
     return static_cast<std::size_t>(parallel_worker_count(fileCount));
@@ -2431,6 +2461,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   }
 
+  scanPhaseEnd("individual-chart-parse", individualParseStart);
+  const auto archiveScheduleStart = scanPhaseStart();
+  scanPhase("archive-schedule-and-stream");
   if (!shouldStop() && !archiveBatchOrder.empty() &&
       (!resumePlan.valid || !resumePlan.archivePhase)) {
     const std::filesystem::path lastPath = individualDiffs.empty()
@@ -3133,6 +3166,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           " files=" + std::to_string(deliveredCharts));
     }
   }
+  scanPhaseEnd("archive-schedule-and-stream", archiveScheduleStart);
   if (shouldStop()) {
     archiveParseScheduler->cancel();
   } else {
