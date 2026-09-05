@@ -1758,22 +1758,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return ChartScanResult{.completed = finalized};
   }
 
-  // Deterministic ordering. The scan signature and the archive checkpoint
-  // resume both depend on these orders; directory iteration (especially over
-  // iOS File Provider Storage) is not stable across runs, so without sorting
-  // a mid-refresh quit would compute a different signature on restart and
-  // discard the checkpoint, forcing a full re-parse. Sort the diffs once by
-  // full virtual path first: downstream batch construction then yields sorted
-  // per-archive inner paths, so only the archive order needs a separate sort.
+  // Archive ordering. The scan signature hashes only roots and archive path +
+  // size + mtime (not the per-archive inner paths or the individual diffs), so
+  // only the archive order must be deterministic: a checkpoint survives a
+  // restart only if both runs project the same archive sequence. Directory
+  // iteration (especially over iOS File Provider Storage) is not stable across
+  // runs, so sort the archives by path. Per-archive inner paths are collected
+  // from the archive's own entry listing, which is deterministic for an
+  // unchanged archive, so no per-diff or per-inner-path sorting is needed.
   const auto orderingStart = std::chrono::steady_clock::now();
-  const auto diffPathKey = [](const ScanDiff &diff) {
-    return checkpointPathTextForDb(diff.path);
-  };
-  std::stable_sort(diffs.begin(), diffs.end(),
-                   [&](const ScanDiff &left, const ScanDiff &right) {
-                     return diffPathKey(left) < diffPathKey(right);
-                   });
-
   std::vector<ScanDiff> individualDiffs;
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, ArchiveParseBatch> archiveBatches;
@@ -1808,9 +1801,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
-  // diffs are sorted by full virtual path, so each archive's inner paths are
-  // already in deterministic order. Only the archive order itself needs a
-  // deterministic sort (by archive path) for the signature.
+  // Sort the archive order by path so the checkpoint signature (which hashes
+  // archives in this order) and the archive resume indexes stay deterministic.
   std::ranges::sort(archiveBatchOrder, [&](const path_t &left, const path_t &right) {
     const auto leftIt = archiveBatches.find(left);
     const auto rightIt = archiveBatches.find(right);
