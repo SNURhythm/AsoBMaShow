@@ -3406,10 +3406,42 @@ std::size_t pruneArchiveIndexCacheImpl(
     return 0;
   }
   std::unordered_set<std::string> liveArchiveKeys;
+  std::unordered_set<std::uint64_t> liveArchiveHashes;
   liveArchiveKeys.reserve(liveArchivePaths.size());
+  liveArchiveHashes.reserve(liveArchivePaths.size());
   for (const auto &path : liveArchivePaths) {
-    liveArchiveKeys.insert(archiveKey(path));
+    const std::string key = archiveKey(path);
+    liveArchiveKeys.insert(key);
+    liveArchiveHashes.insert(fnv1a64(key));
   }
+  const auto parseHashFromFileName = [](const std::string &fileName)
+      -> std::optional<std::uint64_t> {
+    constexpr std::string_view prefix = "archive-index-";
+    constexpr std::string_view suffix = ".idx";
+    if (fileName.size() != prefix.size() + 16 + suffix.size() ||
+        fileName.compare(0, prefix.size(), prefix) != 0 ||
+        fileName.compare(fileName.size() - suffix.size(), suffix.size(),
+                         suffix) != 0) {
+      return std::nullopt;
+    }
+    std::uint64_t value = 0;
+    const std::size_t hexStart = prefix.size();
+    for (std::size_t i = 0; i < 16; ++i) {
+      const char character = fileName[hexStart + i];
+      const unsigned digit =
+          (character >= '0' && character <= '9')
+              ? static_cast<unsigned>(character - '0')
+              : (character >= 'a' && character <= 'f')
+                    ? static_cast<unsigned>(character - 'a' + 10)
+                    : 16;
+      if (digit >= 16) {
+        return std::nullopt;
+      }
+      value = (value << 4) | digit;
+    }
+    return value;
+  };
+
   std::size_t removed = 0;
   std::error_code error;
   std::filesystem::directory_iterator iterator(
@@ -3423,6 +3455,19 @@ std::size_t pruneArchiveIndexCacheImpl(
     }
     const std::filesystem::path filePath = iterator->path();
     if (filePath.extension() != ".idx") {
+      continue;
+    }
+    const auto fileNameHash =
+        parseHashFromFileName(filePath.filename().string());
+    if (fileNameHash.has_value() &&
+        !liveArchiveHashes.contains(*fileNameHash)) {
+      // The file name encodes a hash no live archive produces, so the key
+      // cannot match; remove it without reading the stored key.
+      std::error_code removeError;
+      std::filesystem::remove(filePath, removeError);
+      if (!removeError) {
+        ++removed;
+      }
       continue;
     }
     std::ifstream file(filePath, std::ios::binary);
@@ -3465,38 +3510,65 @@ bool writeCachedIndexToDisk(const std::string &key,
     return false;
   }
   const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
-  std::ofstream file(filePath, std::ios::binary | std::ios::trunc);
-  if (!file) {
+  const auto serialize = [&](std::ostream &stream) {
+    auto writeU64 = [&](std::uint64_t value) {
+      stream.write(reinterpret_cast<const char *>(&value), sizeof(value));
+    };
+    auto writeU8 = [&](std::uint8_t value) {
+      stream.write(reinterpret_cast<const char *>(&value), sizeof(value));
+    };
+    writeU8(2);  // format version
+    writeU64(key.size());
+    stream.write(key.data(), static_cast<std::streamsize>(key.size()));
+    writeU64(static_cast<std::uint64_t>(index.size));
+    writeU64(static_cast<std::uint64_t>(
+        index.mtime.time_since_epoch().count()));
+    writeU8(static_cast<std::uint8_t>(index.backend));
+    writeU8(index.sevenZipFormat);
+    writeU64(index.entries.size());
+    for (const auto &entry : index.entries) {
+      const std::string pathText = entry.path.generic_string();
+      writeU64(pathText.size());
+      stream.write(pathText.data(),
+                   static_cast<std::streamsize>(pathText.size()));
+      writeU8(entry.directory ? 1 : 0);
+      writeU64(entry.size);
+      writeU64(entry.order);
+      writeU64(static_cast<std::uint64_t>(entry.offset));
+      writeU8(entry.solid ? 1 : 0);
+    }
+    stream.flush();
+    return stream.good();
+  };
+  // Write to a temporary sibling and rename atomically so a crash mid-write
+  // never leaves a partial file that future reads would have to re-validate
+  // and rebuild.
+  std::filesystem::path tmpPath = filePath;
+  tmpPath += ".tmp";
+  {
+    std::ofstream file(tmpPath, std::ios::binary | std::ios::trunc);
+    if (!file) {
+      return false;
+    }
+    if (!serialize(file)) {
+      std::error_code removeError;
+      std::filesystem::remove(tmpPath, removeError);
+      return false;
+    }
+  }
+  std::filesystem::rename(tmpPath, filePath, error);
+  if (!error) {
+    return true;
+  }
+  // Some filesystems cannot atomically replace an existing file; fall back
+  // to a direct write so the cache still persists.
+  std::ofstream direct(filePath, std::ios::binary | std::ios::trunc);
+  if (!direct) {
+    std::error_code removeError;
+    std::filesystem::remove(tmpPath, removeError);
     return false;
   }
-  auto writeU64 = [&](std::uint64_t value) {
-    file.write(reinterpret_cast<const char *>(&value), sizeof(value));
-  };
-  auto writeU8 = [&](std::uint8_t value) {
-    file.write(reinterpret_cast<const char *>(&value), sizeof(value));
-  };
-  writeU8(2);  // format version
-  writeU64(key.size());
-  file.write(key.data(), static_cast<std::streamsize>(key.size()));
-  writeU64(static_cast<std::uint64_t>(index.size));
-  writeU64(static_cast<std::uint64_t>(
-      index.mtime.time_since_epoch().count()));
-  writeU8(static_cast<std::uint8_t>(index.backend));
-  writeU8(index.sevenZipFormat);
-  writeU64(index.entries.size());
-  for (const auto &entry : index.entries) {
-    const std::string pathText = entry.path.generic_string();
-    writeU64(pathText.size());
-    file.write(pathText.data(),
-               static_cast<std::streamsize>(pathText.size()));
-    writeU8(entry.directory ? 1 : 0);
-    writeU64(entry.size);
-    writeU64(entry.order);
-    writeU64(static_cast<std::uint64_t>(entry.offset));
-    writeU8(entry.solid ? 1 : 0);
-  }
-  file.flush();
-  return file.good();
+  return serialize(direct);
 }
 
 std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
@@ -3507,6 +3579,12 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
     return nullptr;
   }
   const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
+  std::error_code sizeError;
+  const std::uintmax_t fileBytes =
+      std::filesystem::file_size(filePath, sizeError);
+  if (sizeError || fileBytes == 0) {
+    return nullptr;
+  }
   std::ifstream file(filePath, std::ios::binary);
   if (!file) {
     return nullptr;
@@ -3525,6 +3603,7 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
   const std::uint8_t version = readU8();
   const std::uint64_t storedKeyLen = readU64();
   if (!file.good() || version != 2 ||
+      storedKeyLen > fileBytes ||
       storedKeyLen > (1024ull * 1024ull * 1024ull)) {
     return nullptr;
   }
@@ -3545,13 +3624,17 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
   index->backend = static_cast<ArchiveIndexBackend>(readU8());
   index->sevenZipFormat = readU8();
   const std::uint64_t entryCount = readU64();
-  if (!file.good()) {
+  // Each serialized entry needs at least 34 bytes beyond the variable-length
+  // path, so a count much larger than the file can hold is malformed and
+  // would otherwise allow an unbounded allocation from a corrupt file.
+  if (!file.good() || entryCount > (fileBytes / 34ull)) {
     return nullptr;
   }
   index->entries.reserve(static_cast<std::size_t>(entryCount));
   for (std::uint64_t i = 0; i < entryCount; ++i) {
     const std::uint64_t pathLen = readU64();
-    if (!file.good() || pathLen > (1024ull * 1024ull * 1024ull)) {
+    if (!file.good() || pathLen > fileBytes ||
+        pathLen > (1024ull * 1024ull * 1024ull)) {
       return nullptr;
     }
     std::string pathText(static_cast<std::size_t>(pathLen), '\0');
@@ -7323,8 +7406,18 @@ std::size_t pruneArchiveIndexCache(
 }
 
 void clearArchiveIndexCacheForTesting() {
-  std::lock_guard<std::mutex> lock(gIndexMutex);
-  gIndexCache.clear();
+  {
+    std::lock_guard<std::mutex> lock(gIndexMutex);
+    gIndexCache.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
+    gIndexBuildInFlight.clear();
+    gIndexBuildActive.clear();
+    gIndexBuildDone.clear();
+    gIndexBuildFailed.clear();
+  }
+  setArchiveIndexCacheDirectory({});
 }
 
 bool hasSupportedArchiveExtension(const std::filesystem::path &path) {

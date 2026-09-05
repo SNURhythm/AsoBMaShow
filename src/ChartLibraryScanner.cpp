@@ -1792,9 +1792,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       (void)exception;
       traversalHealthy = false;
     }
-    bool finalized = traversalHealthy && session.ClearScanCheckpoint();
-    if (finalized && reconcileMode == ReconcileMode::Full) {
-      finalized = session.ClearChartMetadataRebuildRequired();
+    bool finalized = traversalHealthy;
+    if (reconcileMode == ReconcileMode::Full) {
+      finalized = finalized && session.ClearScanCheckpoint();
+      if (finalized) {
+        finalized = session.ClearChartMetadataRebuildRequired();
+      }
     }
     return ChartScanResult{.completed = finalized};
   }
@@ -2208,12 +2211,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto archiveDeleteProtectedByCheckpoint =
       [&](const std::filesystem::path &archivePath) {
-        if (!resumePlan.valid || !resumePlan.archivePhase) {
+        if (resumePlan.valid && !resumePlan.archivePhase) {
           return false;
         }
         const path_t archiveKey = archiveScanKey(archivePath);
-        if (resumePlan.protectedArchiveKeys.find(archiveKey) !=
-            resumePlan.protectedArchiveKeys.end()) {
+        if (resumePlan.valid &&
+            resumePlan.protectedArchiveKeys.find(archiveKey) !=
+                resumePlan.protectedArchiveKeys.end()) {
           return true;
         }
         // Protect every archive whose (path, size, mtime) identity is already
@@ -2481,6 +2485,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (!recordStorageResult(scanBatch->CommitForProgress())) {
         break;
       }
+      acknowledgeFlushRequest(pendingFlushRequest());
     }
   }
 
@@ -3224,14 +3229,19 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   acknowledgeFlushRequest(pendingFlushRequest());
   bool committed = storageHealthy && traversalHealthy && commitSucceeded;
   if (!stopRequested(stopToken) && committed) {
-    bool finalized = session.ClearScanCheckpoint();
-    if (finalized && reconcileMode == ReconcileMode::Full) {
-      finalized = session.ClearChartMetadataRebuildRequired();
+    bool finalized = true;
+    if (reconcileMode == ReconcileMode::Full) {
+      finalized = session.ClearScanCheckpoint();
+      if (finalized) {
+        finalized = session.ClearChartMetadataRebuildRequired();
+      }
     }
     committed = finalized;
     // Drop persisted archive index files for archives that are no longer
-    // present, so the disk cache does not grow with removed archives.
-    if (committed) {
+    // present, so the disk cache does not grow with removed archives. Only a
+    // full-library refresh has a complete live path set; a scoped refresh
+    // would otherwise delete index files for archives outside its scope.
+    if (committed && reconcileMode == ReconcileMode::Full) {
       const std::size_t pruned = archive_file::pruneArchiveIndexCache(
           liveArchivePaths);
       if (pruned > 0) {

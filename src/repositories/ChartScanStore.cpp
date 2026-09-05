@@ -789,11 +789,14 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
   SqliteStatementHandle deleteStatement;
   if (!prepareSqliteStatementLogged(
           impl_->database(),
-          "DELETE FROM chart_meta WHERE path LIKE ? ESCAPE '\\'",
+          "DELETE FROM chart_meta WHERE path LIKE ? ESCAPE '\\' "
+          "AND SUBSTR(path, 1, ?) = ?",
           deleteStatement, "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
   bindSqliteText(deleteStatement.get(), 1, pattern);
+  sqlite3_bind_int(deleteStatement.get(), 2, static_cast<int>(prefix.size()));
+  bindSqliteText(deleteStatement.get(), 3, prefix);
   if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
     logSqlError("deleting archive chart", impl_->database());
     return false;
@@ -1004,9 +1007,10 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
   if (!prepareSqliteStatementLogged(
           impl_->database(),
           "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
-          "WHERE path LIKE ? ESCAPE '\\' AND (source_priority IS NULL OR "
-          "source_priority != ? OR source_archive_size IS NULL OR "
-          "source_archive_size != ?)",
+          "WHERE path LIKE ? ESCAPE '\\' "
+          "AND SUBSTR(path, 1, ?) = ? "
+          "AND (source_priority IS NULL OR source_priority != ? OR "
+          "source_archive_size IS NULL OR source_archive_size != ?)",
           statement, "preparing archive source preference update",
           logSqlErrorText)) {
     return false;
@@ -1015,8 +1019,10 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
   sqlite3_bind_int(statement.get(), 1, priority);
   sqlite3_bind_int64(statement.get(), 2, clampedArchiveSize);
   bindSqliteText(statement.get(), 3, pattern);
-  sqlite3_bind_int(statement.get(), 4, priority);
-  sqlite3_bind_int64(statement.get(), 5, clampedArchiveSize);
+  sqlite3_bind_int(statement.get(), 4, static_cast<int>(prefix.size()));
+  bindSqliteText(statement.get(), 5, prefix);
+  sqlite3_bind_int(statement.get(), 6, priority);
+  sqlite3_bind_int64(statement.get(), 7, clampedArchiveSize);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("updating archive chart source preference", impl_->database());
     return false;

@@ -553,6 +553,7 @@ void testArchiveIndexPersistsAcrossColdCacheRestart() {
   // persisted index file should be reloaded from disk (same size/mtime),
   // reproducing the same entry count without rebuilding from the archive.
   archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
   std::vector<archive_file::Entry> reloadedEntries;
   assert(archive_file::listEntries(archivePath, reloadedEntries, &error));
   assert(reloadedEntries.size() == kEntryCount);
@@ -567,6 +568,7 @@ void testArchiveIndexPersistsAcrossColdCacheRestart() {
       touchError);
   assert(!touchError);
   archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
   std::vector<archive_file::Entry> rebuiltEntries;
   assert(archive_file::listEntries(archivePath, rebuiltEntries, &error));
   assert(rebuiltEntries.size() == kEntryCount);
@@ -616,9 +618,84 @@ void testArchiveIndexPrunesOrphanedCacheFiles() {
 
   // The surviving archive still reloads from disk after clearing memory.
   archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
   std::vector<archive_file::Entry> reloaded;
   assert(archive_file::listEntries(keepArchive, reloaded, &error));
   assert(reloaded.size() == 1);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testCorruptIndexEntryCountIsRejected() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "corrupt-count.zip";
+  writeStoredZip(archivePath, {"folder/a.bms", "folder/b.bms"});
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  std::string error;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 2);
+
+  std::filesystem::path cacheFile;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    std::error_code typeError;
+    if (entry.is_regular_file(typeError) && !typeError &&
+        entry.path().extension() == ".idx") {
+      cacheFile = entry.path();
+      break;
+    }
+  }
+  assert(!cacheFile.empty());
+
+  std::ifstream input(cacheFile, std::ios::binary);
+  assert(input);
+  std::string bytes((std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+  input.close();
+  // Layout: version(1) + keyLen(8) + key + size(8) + mtime(8) + backend(1) +
+  // sevenZipFormat(1) + entryCount(8). Overwrite the entry count with a value
+  // far larger than the file could ever hold; the loader must reject it
+  // instead of allocating an unbounded entry vector.
+  assert(bytes.size() >= 1 + 8 + 8 + 8 + 1 + 1 + 8);
+  const std::uint64_t keyLen =
+      static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[1])) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[2])) << 8) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[3])) << 16) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[4])) << 24) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[5])) << 32) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[6])) << 40) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[7])) << 48) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[8])) << 56);
+  const std::size_t entryCountOffset = 1 + 8 + static_cast<std::size_t>(keyLen) +
+                                       8 + 8 + 1 + 1;
+  assert(entryCountOffset + 8 <= bytes.size());
+  bytes[entryCountOffset + 0] = '\xff';
+  bytes[entryCountOffset + 1] = '\xff';
+  bytes[entryCountOffset + 2] = '\xff';
+  bytes[entryCountOffset + 3] = '\xff';
+  bytes[entryCountOffset + 4] = '\xff';
+  bytes[entryCountOffset + 5] = '\xff';
+  bytes[entryCountOffset + 6] = '\xff';
+  bytes[entryCountOffset + 7] = '\xff';
+  {
+    std::ofstream output(cacheFile, std::ios::binary | std::ios::trunc);
+    assert(output);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    output.close();
+  }
+
+  // A corrupt index is discarded and the archive is re-listed instead of
+  // crashing on an unbounded reserve.
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  entries.clear();
+  error.clear();
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 2);
 
   archive_file::setArchiveIndexCacheDirectory({});
   archive_file::clearArchiveIndexCacheForTesting();
@@ -655,6 +732,7 @@ int main() {
   testFullUnzipHonorsPauseDuringExtraction();
   testArchiveIndexPersistsAcrossColdCacheRestart();
   testArchiveIndexPrunesOrphanedCacheFiles();
+  testCorruptIndexEntryCountIsRejected();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

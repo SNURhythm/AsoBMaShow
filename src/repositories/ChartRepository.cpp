@@ -406,6 +406,7 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
       "DROP TABLE IF EXISTS solid_archives",
       "DROP TABLE IF EXISTS archive_scan_cache",
       "DROP TABLE IF EXISTS chart_scan_checkpoint",
+      "DROP TABLE IF EXISTS chart_scan_completed_archive",
       "DROP TABLE IF EXISTS folder",
   };
   for (const auto *query : queries) {
@@ -1471,6 +1472,11 @@ static bool clearChartMeta(sqlite3 *db) {
   changed = sqlite3_changes(db) > 0 || changed;
   if (!execSql(db, "DELETE FROM chart_scan_checkpoint",
                "clearing chart scan checkpoint")) {
+    return false;
+  }
+  changed = sqlite3_changes(db) > 0 || changed;
+  if (!execSql(db, "DELETE FROM chart_scan_completed_archive",
+               "clearing completed archive records")) {
     return false;
   }
   changed = sqlite3_changes(db) > 0 || changed;

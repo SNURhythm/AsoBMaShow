@@ -51,6 +51,31 @@ private:
   std::filesystem::path path_;
 };
 
+class TestChartRepository : public ChartRepository {
+public:
+  explicit TestChartRepository(std::filesystem::path databasePath)
+      : ChartRepository(std::move(databasePath)) {
+    static std::atomic<unsigned long long> sequence{0};
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    cacheDirectory_ = std::filesystem::temp_directory_path() /
+                      ("asobmashow-chart-index-cache-" +
+                       std::to_string(nonce) + "-" +
+                       std::to_string(sequence.fetch_add(1)));
+    std::error_code ignored;
+    std::filesystem::create_directories(cacheDirectory_, ignored);
+    archive_file::setArchiveIndexCacheDirectory(cacheDirectory_);
+  }
+
+  ~TestChartRepository() {
+    std::error_code ignored;
+    std::filesystem::remove_all(cacheDirectory_, ignored);
+  }
+
+private:
+  std::filesystem::path cacheDirectory_;
+};
+
 void setMetadataRebuildRequired(const std::filesystem::path &databasePath,
                                 bool required) {
   sqlite3 *database = nullptr;
@@ -288,7 +313,7 @@ void testBasicNoOpAndDeleteScan() {
   const auto root = temporary.path() / "library";
   const auto chartPath = writeChart(root, "sample", "Repository Scanner");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -336,7 +361,7 @@ void testSequenceFeaturesMatchBeatorajaSongData() {
           << "#00204:01\n";
   }
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -363,7 +388,7 @@ void testFolderRecordsMatchBeatorajaFolderTraversal() {
   writeChart(hiddenChild, "hidden", "Hidden Child Chart");
   writeChart(nestedFolder, "nested", "Nested Folder Chart");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   seedFolderRecord(repository.DatabasePath(), directSongFolder, 0, 1);
   auto session = repository.OpenSession();
@@ -426,7 +451,7 @@ void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {
     std::ofstream(nested / "notes.txt") << "nested documentation";
   }
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -451,7 +476,7 @@ void testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope() {
        {"documented/README.TXT", "chart documentation"},
        {"undocumented/chart.bms", chartText("Undocumented Archive Chart")}});
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -482,7 +507,7 @@ void testKnownChartRefreshesFolderTextDocumentFlag() {
   const auto root = temporary.path() / "library";
   const auto chart = writeChart(root, "known", "Known Document Chart");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -514,7 +539,7 @@ void testAddedDirectoryScanPreservesUnrelatedMissingChart() {
   const auto existing = writeChart(existingRoot, "existing", "Existing");
   writeChart(addedRoot, "added", "Added");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -547,7 +572,7 @@ void testAddedArchivePathIsIndexed() {
       temporary.path() / "downloaded.zip",
       {{"inside.bms", chartText("Downloaded Archive")}});
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -579,7 +604,7 @@ void testFullScanSkipsOnlyFindBmsPrivateStorageDirectory() {
   writeChart(downloadRoot / ".asobmashow-transactions-user", "legitimate",
              "Legitimate Similar Name");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -603,7 +628,7 @@ void testStopAndPauseBeforeWork() {
   const auto root = temporary.path() / "library";
   writeChart(root, "sample", "Stopped Scanner");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -643,7 +668,7 @@ void testArchiveCheckpointResumeSurvivesArchiveOrderChanges() {
   writeArchiveWith("gamma-1.zip", "Archive1", kChartsPerCompleteArchive);
   writeArchiveWith("gamma-2.zip", "Archive2", kChartsInPartialArchive);
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -853,7 +878,7 @@ void testStorageFailureLeavesNoChart() {
   writeChart(root, "sample", "Denied Scanner");
   ScopedInsertDenial denial;
 
-  ChartRepository repository(databasePath);
+  TestChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -877,7 +902,7 @@ void testRebuildFlagClearFailureDoesNotReportCompletedScan() {
   std::filesystem::create_directories(root);
   ScopedMetadataRebuildStateWriteDenial denial;
 
-  ChartRepository repository(databasePath);
+  TestChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -898,7 +923,7 @@ void testMissingFullScanRootPreservesMetadataRebuildState() {
   const auto root = temporary.path() / "disconnected-library";
   const auto databasePath = temporary.path() / "chart.db";
 
-  ChartRepository repository(databasePath);
+  TestChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -917,7 +942,7 @@ void testAddedScanStorageFailureDoesNotQualifyExistingChart() {
   const auto root = temporary.path() / "library";
   writeChart(root, "sample", "Existing Scanner");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   ChartLibraryScanner scanner;
   {
@@ -944,7 +969,7 @@ void testAddedScanParseFailureDoesNotQualifyExistingChart() {
   const auto root = temporary.path() / "library";
   const auto chartPath = writeChart(root, "sample", "Existing Parser");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -968,7 +993,7 @@ void testAddedScanParseFailureDoesNotQualifyExistingChart() {
 
 void testArchiveChartCountReportsStorageReadFailure() {
   TempDirectory temporary;
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   ScopedChartReadDenial denial;
   auto session = repository.OpenSession();
@@ -992,7 +1017,7 @@ void testDeleteChartsInArchiveRemovesOnlyArchiveCharts() {
       {{"pack/inside.bms", chartText("Archive Inside")}});
   writeChart(root / "prefix%_other", "loose", "Loose Chart");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1041,7 +1066,7 @@ void testArchiveStorageFailureDoesNotWriteCache() {
       root / "denied.zip", {{"inside.bms", chartText("Denied Archive")}});
   ScopedInsertDenial denial;
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1064,7 +1089,7 @@ void testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce() {
   const auto archiveB = writeZip(root / "30-archive.zip",
                                  {{"inside-b.bms", chartText("Archive B")}});
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1086,7 +1111,7 @@ void testArchiveIndexProgressFollowsFolderTraversal() {
   writeZip(root / "progress.zip",
            {{"inside.bms", chartText("Progress Archive")}});
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1132,7 +1157,7 @@ void testManySmallArchivesPreserveDiscoveryOrderAndCache() {
     expectedArchiveByTitle.emplace(title, archivePath.filename().string());
   }
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1171,7 +1196,7 @@ void testNormalArchiveScanDoesNotRecountStoredRows() {
   }
 
   ScopedPostInsertChartPathReadCounter readCounter;
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1199,7 +1224,7 @@ void testMultiEntryArchivePreservesPreparedResultOrderAndCache() {
                 {"gamma/third.bms", chartText("Third Archive Entry")},
                 {"readme.txt", "not a chart"}});
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1238,7 +1263,7 @@ void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
                 {"second.bms", chartText("Resume Archive Second")},
                 {"third.bms", chartText("Resume Archive Third")}});
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1280,7 +1305,7 @@ void testMidArchiveCheckpointResumePreservesValidCacheCount() {
   const auto archivePath =
       writeZip(root / "mid-archive-resume.zip", files);
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1338,7 +1363,7 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   const auto archivePath =
       writeZip(root / "failed-resume.zip", files);
 
-  ChartRepository repository(databasePath);
+  TestChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1396,7 +1421,7 @@ void testUnreadableArchivePreservesMetadataRebuildState() {
   const auto archivePath = root / "unreadable.zip";
   std::ofstream(archivePath, std::ios::binary) << "not an archive";
 
-  ChartRepository repository(databasePath);
+  TestChartRepository repository(databasePath);
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1432,7 +1457,7 @@ void testStopAtPreparingUpdatesCancelsArchivePrefetch() {
   const auto secondArchive =
       writeZip(root / "cancel-second.zip", makeFiles("second"));
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1466,7 +1491,7 @@ void testLargeSingleArchivePreservesAllChartResults() {
   }
   const auto archivePath = writeZip(root / "large-single-archive.zip", files);
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1507,7 +1532,7 @@ void testMultipleLargeArchivesPrefetchDuringPreparation() {
   const auto secondArchive =
       writeZip(root / "continuous-second.zip", makeFiles("second", "Second"));
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1557,7 +1582,7 @@ void testArchiveResultApplicationOverlapsLaterArchiveStreaming() {
   const auto secondArchive =
       writeZip(root / "ordered-drain-second.zip", secondFiles);
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1633,7 +1658,7 @@ void testArchiveResultApplicationOverlapsItsOwnStreaming() {
   const auto secondArchive =
       writeZip(root / "same-archive-overlap-second.zip", secondFiles);
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1698,7 +1723,7 @@ void testArchiveInspectionUsesMultipleEntityWorkers() {
                              {{"readme.txt", "not a chart"}}));
   }
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1745,7 +1770,7 @@ void testConcurrentPauseInterruptionStopsScanCleanly() {
                "Interrupted " + std::to_string(index));
   }
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1795,7 +1820,7 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
   const auto ordinaryB = writeChart(root, "20-ordinary-b", "Ordinary B");
   const auto ordinaryC = writeChart(root, "30-ordinary-c", "Ordinary C");
 
-  ChartRepository repository(temporary.path() / "chart.db");
+  TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
@@ -1840,6 +1865,151 @@ void testBlockedArchiveDoesNotDelayLaterOrdinaryEntities() {
   assert(session->LoadScanSnapshot().archiveCache.size() == 1);
 }
 
+void testClearChartMetaThenRescanRepopulatesLibrary() {
+  constexpr int kChartsPerArchive = 25;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto writeArchiveWith = [&](const std::string &name,
+                                    const std::string &prefix,
+                                    int chartCount) {
+    std::vector<std::pair<std::string, std::string>> files;
+    for (int chartIndex = 0; chartIndex < chartCount; ++chartIndex) {
+      files.emplace_back("chart-" + std::to_string(chartIndex) + ".bms",
+                         chartText(prefix + " " + std::to_string(chartIndex)));
+    }
+    return writeZip(root / name, std::move(files));
+  };
+
+  writeArchiveWith("alpha-0.zip", "Alpha 0", kChartsPerArchive);
+  writeArchiveWith("alpha-1.zip", "Alpha 1", kChartsPerArchive);
+  writeArchiveWith("alpha-2.zip", "Alpha 2", kChartsPerArchive);
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  // Interrupt during the third archive so the first two are recorded as
+  // completed by identity in chart_scan_completed_archive.
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  int parsingCurrent = 0;
+  (void)scanner.Scan(
+      *session, {root}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parsingCurrent = progress.current;
+        }
+      },
+      nullptr,
+      [&]() -> std::uint64_t {
+        return parsingCurrent >= (2 * kChartsPerArchive + 10) ? 1 : 0;
+      },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        stop.request_stop();
+      });
+  const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
+  assert(interrupted.completedArchives.size() == 2);
+  assert(session->CountAllChartMeta() > 0);
+
+  // Manual library rebuild: clearing chart metadata must also clear the
+  // completed-archive markers, or the next scan skips every unchanged
+  // archive (path/size/mtime match) and the library appears empty.
+  assert(session->ClearChartMeta());
+  assert(session->CountAllChartMeta() == 0);
+
+  (void)scanner.Scan(*session, {root});
+  assert(session->CountAllChartMeta() == 3 * kChartsPerArchive);
+}
+
+void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
+  constexpr int kChartsPerArchive = 25;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto folderA = root / "a";
+  const auto folderB = root / "b";
+  const auto folderC = root / "c";
+  std::filesystem::create_directories(folderA);
+  std::filesystem::create_directories(folderB);
+  std::filesystem::create_directories(folderC);
+  const auto writeArchiveIn = [&](const std::filesystem::path &directory,
+                                  const std::string &name,
+                                  const std::string &prefix,
+                                  int chartCount) {
+    std::vector<std::pair<std::string, std::string>> files;
+    for (int chartIndex = 0; chartIndex < chartCount; ++chartIndex) {
+      files.emplace_back("chart-" + std::to_string(chartIndex) + ".bms",
+                         chartText(prefix + " " + std::to_string(chartIndex)));
+    }
+    return writeZip(directory / name, std::move(files));
+  };
+  writeArchiveIn(folderA, "alpha-0.zip", "Alpha 0", kChartsPerArchive);
+  writeArchiveIn(folderB, "alpha-1.zip", "Alpha 1", kChartsPerArchive);
+  writeArchiveIn(folderC, "alpha-2.zip", "Alpha 2", kChartsPerArchive);
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  const auto cachedIndexCount = [&]() {
+    std::size_t count = 0;
+    for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+      std::error_code error;
+      if (entry.is_regular_file(error) && !error &&
+          entry.path().extension() == ".idx") {
+        ++count;
+      }
+    }
+    return count;
+  };
+
+  // Interrupt during the third archive so the first two are recorded as
+  // completed for the whole library.
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  int parsingCurrent = 0;
+  (void)scanner.Scan(
+      *session, {root}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parsingCurrent = progress.current;
+        }
+      },
+      nullptr,
+      [&]() -> std::uint64_t {
+        return parsingCurrent >= (2 * kChartsPerArchive + 10) ? 1 : 0;
+      },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        stop.request_stop();
+      });
+  const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
+  assert(interrupted.completedArchives.size() == 2);
+  const std::size_t indexCountBefore = cachedIndexCount();
+  assert(indexCountBefore >= 1);
+
+  // A scoped refresh of a single folder must not wipe the full library's
+  // completed-archive markers nor drop the still-present sibling archives'
+  // persisted index files.
+  const ChartScanResult scoped =
+      scanner.ScanScopedWithResult(*session, {folderC});
+  assert(scoped.completed);
+  const ChartScanSnapshot scopedSnapshot = session->LoadScanSnapshot();
+  assert(scopedSnapshot.completedArchives.size() == 3);
+  assert(cachedIndexCount() == indexCountBefore);
+
+  // The scoped archive is fully parsed and out-of-scope archives keep their
+  // charts.
+  assert(session->CountAllChartMeta() == 3 * kChartsPerArchive);
+}
+
 } // namespace
 
 int main() {
@@ -1879,5 +2049,7 @@ int main() {
   testArchiveInspectionUsesMultipleEntityWorkers();
   testConcurrentPauseInterruptionStopsScanCleanly();
   testBlockedArchiveDoesNotDelayLaterOrdinaryEntities();
+  testClearChartMetaThenRescanRepopulatesLibrary();
+  testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles();
   return 0;
 }
