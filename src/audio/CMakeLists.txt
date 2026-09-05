@@ -4,4 +4,5 @@ target_sources(main PRIVATE AudioBackend.cpp AudioDeviceManager.cpp AudioMix.cpp
                             GameplayBgaMissStateTracker.cpp Jukebox.cpp
                             MusicPlayerService.cpp MusicPlaylist.cpp
                             NativeMusicPlayer.cpp PrepMetronomeSound.cpp
+                            SelectAudioDiagnostics.cpp
                             SkinSystemSoundService.cpp)

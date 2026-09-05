@@ -1266,6 +1266,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_preview_tests PRIVATE cxx_std_23)
+        if(TARGET SDL2::SDL2)
+            target_link_libraries(music_select_preview_tests PRIVATE SDL2::SDL2)
+        elseif(TARGET SDL2::SDL2-static)
+            target_link_libraries(music_select_preview_tests PRIVATE SDL2::SDL2-static)
+        endif()
         add_executable(music_select_system_sound_tests
             tests/music_select_system_sound_tests.cpp
             src/audio/SkinSystemSoundService.cpp

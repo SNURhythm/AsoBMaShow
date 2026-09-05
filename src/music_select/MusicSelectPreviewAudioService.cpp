@@ -1,5 +1,7 @@
 #include "MusicSelectPreview.h"
 
+#include <SDL2/SDL.h>
+
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -93,7 +95,10 @@ private:
         continue;
       }
 
+      SDL_Log("[select-audio] worker play target=%s",
+              target.string().c_str());
       const bool ok = port_.play(target, true, cancellation, stop);
+      SDL_Log("[select-audio] worker play result=%d", ok ? 1 : 0);
       bool stale = cancellation->load(std::memory_order_acquire);
       {
         std::lock_guard lock(mutex_);
