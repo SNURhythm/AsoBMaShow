@@ -7971,6 +7971,18 @@ bool readFileBounded(const std::filesystem::path &path,
     }
     return false;
   }
+  // Read through the offset-based random-access batch reader (miniz ZIP seek,
+  // unarr RAR4, or 7-Zip index) so a single entry is decompressed without
+  // streaming through the whole archive. The libarchive fallback below stays
+  // only for formats the fast backends cannot index.
+  std::vector<FileData> files;
+  std::string batchError;
+  if (readArchiveEntries(archivePath, {entry->path}, files, &batchError,
+                         [stop] { return !stop.stop_requested(); }) &&
+      files.size() == 1 && files.front().bytes.size() <= maximumBytes) {
+    bytes = std::move(files.front().bytes);
+    return true;
+  }
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   return readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
                           [stop] { return !stop.stop_requested(); },

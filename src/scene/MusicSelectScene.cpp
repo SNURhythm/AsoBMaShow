@@ -376,6 +376,7 @@ void MusicSelectScene::init() {
   preloadWorker_ = new ChartPreloadWorker();
   preloadWorker_->configure(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
+        StartupTiming::instance().mark("preload worker start");
         auto chart = play_options::parseChart(request.meta, cancelled,
                                               "music-select preload");
         if (!chart || cancelled.load(std::memory_order_relaxed) ||
@@ -383,6 +384,7 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
+        StartupTiming::instance().mark("preload parse done, jukebox load begins");
         context.jukebox.stop();
         (void)context.jukebox.loadChart(*chart, true, cancelled);
         if (cancelled.load(std::memory_order_relaxed) ||
@@ -390,6 +392,7 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
+        StartupTiming::instance().mark("preload jukebox load done");
         std::lock_guard<std::mutex> lock(preloadMutex_);
         if (fspath_to_path_t(preloadedPath_) !=
             fspath_to_path_t(request.meta.BmsPath)) {
