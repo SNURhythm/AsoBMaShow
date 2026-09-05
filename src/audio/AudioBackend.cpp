@@ -1,5 +1,7 @@
 #include "AudioBackend.h"
 
+#include "SelectAudioDiagnostics.h"
+
 #include "../targets.h"
 
 #include <miniaudio.h>
@@ -116,7 +118,12 @@ public:
 
 #if TARGET_OS_IPHONE
     ma_context_config contextConfig = ma_context_config_init();
-    contextConfig.coreaudio.sessionCategory = ma_ios_session_category_ambient;
+    // AVAudioSessionCategoryPlayback ignores the iPad's Silent/Mute switch, so
+    // select SEs, BGM, previews, and gameplay keysounds are always audible.
+    // The previous Ambient category (like SoloAmbient) is muted whenever the
+    // device's ringer/side switch or Control Center mute is on, which the select
+    // screen's sounds (and the looping BGM) depend on.
+    contextConfig.coreaudio.sessionCategory = ma_ios_session_category_playback;
     contextConfig.coreaudio.sessionCategoryOptions =
         ma_ios_session_category_option_mix_with_others;
     const ma_result result =
@@ -124,6 +131,8 @@ public:
 #else
     const ma_result result = ma_device_init(nullptr, &config, &device_);
 #endif
+    audio::diag::SelectAudioLog("miniaudio init result=" +
+                                std::string(ma_result_description(result)));
     if (result != MA_SUCCESS) {
       errorMessage = std::string("Miniaudio device initialization failed: ") +
                      ma_result_description(result);
