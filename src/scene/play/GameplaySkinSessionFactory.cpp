@@ -154,6 +154,7 @@ createGameplaySkinSession(GameplaySkinSessionServices services,
         .storageRoots = *services.storageRoots,
         .resourcePreparation = *services.resourcePreparation,
         .builtinImageReader = std::move(services.builtinImageReader),
+        .builtinImageBatchReader = std::move(services.builtinImageBatchReader),
         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
         .httpTransport = services.createHttpTransport
                              ? services.createHttpTransport(services.stop)

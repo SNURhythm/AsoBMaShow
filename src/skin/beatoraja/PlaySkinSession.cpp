@@ -767,6 +767,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                          PlayfieldGameplayMode::Practice,
          .builtinImagePaths = std::move(builtinImagePaths),
          .builtinImageReader = std::move(context.builtinImageReader),
+         .builtinImageBatchReader = std::move(context.builtinImageBatchReader),
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     (void)recordSkinLoadingPhase(result.loadingTelemetry,

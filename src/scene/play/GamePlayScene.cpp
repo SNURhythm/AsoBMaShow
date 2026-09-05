@@ -165,6 +165,82 @@ gameplaySkinSessionServices(ApplicationContext &context) {
               context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
+          .builtinImageBatchReader =
+              [](const std::vector<std::filesystem::path> &paths,
+                 std::vector<skin::SkinBuiltinImageBatch> &out,
+                 std::stop_token stop) {
+                // Group archive entries per archive and read them in one
+                // offset-based pass (fast random access) instead of a
+                // per-image stream, which for an audio-heavy archived chart
+                // decompressed the whole archive once per image.
+                std::map<std::string,
+                         std::vector<std::pair<int, std::filesystem::path>>>
+                    byArchive;
+                std::vector<std::pair<int, std::filesystem::path>> plain;
+                for (std::size_t i = 0; i < paths.size(); ++i) {
+                  const int reference =
+                      i == 0 ? 100 : (i == 1 ? 101 : 102);
+                  std::filesystem::path archivePath, innerPath;
+                  if (archive_file::splitVirtualPath(paths[i], archivePath,
+                                                     innerPath)) {
+                    byArchive[archivePath.generic_string()].emplace_back(
+                        reference, innerPath);
+                  } else {
+                    plain.emplace_back(reference, paths[i]);
+                  }
+                }
+                for (const auto &[reference, path] : plain) {
+                  std::vector<unsigned char> bytes;
+                  std::string readError;
+                  if (archive_file::readFileBounded(
+                          path, bytes, 32U * 1024U * 1024U, &readError, stop)) {
+                    out.push_back({.reference = reference,
+                                   .bytes = std::move(bytes)});
+                  }
+                }
+                for (const auto &[archive, items] : byArchive) {
+                  std::vector<std::filesystem::path> innerPaths;
+                  for (const auto &[reference, inner] : items) {
+                    (void)reference;
+                    innerPaths.push_back(inner);
+                  }
+                  std::vector<archive_file::FileData> files;
+                  std::string batchError;
+                  if (archive_file::readArchiveEntries(
+                          std::filesystem::path(archive), innerPaths, files,
+                          &batchError,
+                          [&stop] { return !stop.stop_requested(); })) {
+                    for (const auto &file : files) {
+                      for (const auto &[reference, inner] : items) {
+                        if (file.path == inner) {
+                          out.push_back(
+                              {.reference = reference,
+                               .bytes = std::move(file.bytes)});
+                          break;
+                        }
+                      }
+                    }
+                  }
+                  // A target missed by the batch falls back to per-file.
+                  for (const auto &[reference, inner] : items) {
+                    const auto already =
+                        std::ranges::any_of(out, [reference](const auto &item) {
+                          return item.reference == reference;
+                        });
+                    if (already) continue;
+                    std::vector<unsigned char> bytes;
+                    std::string readError;
+                    if (archive_file::readFileBounded(
+                            archive_file::makeVirtualPath(
+                                std::filesystem::path(archive), inner),
+                            bytes, 32U * 1024U * 1024U, &readError, stop)) {
+                      out.push_back({.reference = reference,
+                                     .bytes = std::move(bytes)});
+                    }
+                  }
+                }
+                return true;
+              },
           .liveResourceCounters = context.skinLiveResourceCounters,
           .createHttpTransport = [](std::stop_token stop) {
             return skin::createLuaSkinProductionHttpTransport(stop);

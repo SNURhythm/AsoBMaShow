@@ -69,6 +69,7 @@ struct PlaySkinSessionContext {
   SkinStorageRoots storageRoots;
   SkinResourcePreparationService &resourcePreparation;
   SkinBuiltinImageReader builtinImageReader;
+  SkinBuiltinImageBatchReader builtinImageBatchReader;
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinMovieDevice> movieDevice;
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;

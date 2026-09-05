@@ -1,6 +1,5 @@
 #include "SkinResourceCatalog.h"
 
-#include "../../ArchiveFile.h"
 #include "../../StartupTiming.h"
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
@@ -3031,14 +3030,12 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
     plan.images.push_back(std::move(image));
   }
 
-  const auto prepareChartBuiltinImages = [&]() -> bool {
+const auto prepareChartBuiltinImages = [&]() -> bool {
     // Chart-owned stage/back/banner images are optional SkinSourceReference
-    // inputs. They are read as a batched set: archive entries go through the
-    // fast offset-based archive reader (one pass per archive) instead of a
-    // per-image libarchive stream, which for an audio-heavy archived chart
-    // repeatedly decompressed the whole archive once per image. Decoded
-    // results are cached by path+content so a later chart attempt skips both
-    // the read and the decode.
+    // inputs. Reads go through the injected reader; when a batch reader is
+    // available, archive entries are read in one offset-based pass per
+    // archive instead of a per-image stream. Decoded results are cached by
+    // path+content so a later chart attempt skips both the read and decode.
     struct WantedBuiltin {
       int reference = 0;
       std::filesystem::path virtualPath;
@@ -3062,65 +3059,29 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       return input.builtinImageReader(virtualPath, encoded, maximumEncodedBytes,
                                       &readError, input.stop);
     };
-    std::map<int, std::filesystem::path> virtualPathByReference;
     std::map<int, std::vector<unsigned char>> encodedByReference;
-    std::vector<std::pair<int, std::filesystem::path>> plain;
-    std::map<std::string, std::vector<std::pair<int, std::filesystem::path>>>
-        byArchive;
+    std::map<int, std::filesystem::path> virtualPathByReference;
     for (const auto &item : wanted) {
       virtualPathByReference.emplace(item.reference, item.virtualPath);
-      std::filesystem::path archivePath, innerPath;
-      if (archive_file::splitVirtualPath(item.virtualPath, archivePath,
-                                         innerPath)) {
-        byArchive[archivePath.generic_string()].emplace_back(item.reference,
-                                                             innerPath);
-      } else {
-        plain.emplace_back(item.reference, item.virtualPath);
+    }
+    if (input.builtinImageBatchReader) {
+      std::vector<std::filesystem::path> paths;
+      for (const auto &item : wanted) {
+        paths.push_back(item.virtualPath);
+      }
+      std::vector<SkinBuiltinImageBatch> batch;
+      if (input.builtinImageBatchReader(paths, batch, input.stop)) {
+        for (const auto &item : batch) {
+          encodedByReference.emplace(item.reference, std::move(item.bytes));
+        }
       }
     }
-    for (const auto &[reference, path] : plain) {
+    for (const auto &item : wanted) {
+      if (encodedByReference.contains(item.reference)) continue;
       std::vector<unsigned char> encoded;
-      if (readOne(path, encoded) && encoded.size() <= maximumEncodedBytes) {
-        encodedByReference[reference] = std::move(encoded);
-      }
-    }
-    for (const auto &[archivePath, items] : byArchive) {
-      std::vector<std::filesystem::path> innerPaths;
-      for (const auto &[reference, inner] : items) {
-        (void)reference;
-        innerPaths.push_back(inner);
-      }
-      std::vector<archive_file::FileData> files;
-      std::string batchError;
-      const bool ok = archive_file::readArchiveEntries(
-          std::filesystem::path(archivePath), innerPaths, files, &batchError,
-          [&input]() { return !input.stop.stop_requested(); });
-      if (cancellationRequested(input.stop)) {
-        result.cancelled = true;
-        return false;
-      }
-      if (ok) {
-        for (const auto &file : files) {
-          for (const auto &[reference, inner] : items) {
-            if (file.path == inner) {
-              encodedByReference[reference] = file.bytes;
-              break;
-            }
-          }
-        }
-      }
-      // A missing target (batch miss, case-only path difference, or fallback
-      // path) falls back to the per-file reader on the reconstructed virtual
-      // path so an optional chart image is never silently dropped.
-      for (const auto &[reference, inner] : items) {
-        if (encodedByReference.contains(reference)) continue;
-        std::vector<unsigned char> encoded;
-        if (readOne(archive_file::makeVirtualPath(
-                        std::filesystem::path(archivePath), inner),
-                    encoded) &&
-            encoded.size() <= maximumEncodedBytes) {
-          encodedByReference[reference] = std::move(encoded);
-        }
+      if (readOne(item.virtualPath, encoded) &&
+          encoded.size() <= maximumEncodedBytes) {
+        encodedByReference[item.reference] = std::move(encoded);
       }
     }
     if (cancellationRequested(input.stop)) {

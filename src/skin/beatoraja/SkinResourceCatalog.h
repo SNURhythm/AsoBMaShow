@@ -42,11 +42,18 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumSessionEncodedBytes = 128U * 1024U * 1024U;
   static constexpr int maximumDimension = 8192;
   static constexpr std::size_t maximumImageBytes = 128U * 1024U * 1024U;
-  static constexpr std::size_t maximumSessionDecodedBytes = 256U * 1024U * 1024U;
+  // Full-featured skins (e.g. LITONE12) legitimately decode hundreds of
+  // megabytes of RGBA across images and large bitmap-font atlas pages. The
+  // shared session budget must admit real skins while still bounding runaway
+  // allocation from a hostile or broken skin.
+  static constexpr std::size_t maximumSessionDecodedBytes = 512U * 1024U * 1024U;
   static constexpr std::size_t maximumAtlases = 64;
   static constexpr std::size_t maximumTextAtlasUses = 8'192;
   static constexpr std::size_t maximumAtlasBytes = 32U * 1024U * 1024U;
-  static constexpr std::size_t maximumAtlasSessionBytes = 128U * 1024U * 1024U;
+  // Large bitmap-font atlas pages (a single LITONE12 title/artist atlas is
+  // tens of megabytes) exceed a 128 MiB aggregate quickly. Sized to admit
+  // full skins while keeping a hard ceiling on atlas texture memory.
+  static constexpr std::size_t maximumAtlasSessionBytes = 512U * 1024U * 1024U;
   static constexpr std::size_t maximumGeneratedTextures = 512;
   static constexpr std::size_t maximumGeneratedSessionBytes =
       128U * 1024U * 1024U;
@@ -294,6 +301,14 @@ struct SkinResourceValidationResult { bool valid = false; bool cancelled = false
 using SkinBuiltinImageReader = std::function<bool(
     const std::filesystem::path &, std::vector<unsigned char> &,
     std::size_t, std::string *, std::stop_token)>;
+// A single decoded-or-encoded chart builtin image returned by a batch reader.
+struct SkinBuiltinImageBatch {
+  int reference = 0;
+  std::vector<unsigned char> bytes;
+};
+using SkinBuiltinImageBatchReader = std::function<bool(
+    const std::vector<std::filesystem::path> &,
+    std::vector<SkinBuiltinImageBatch> &, std::stop_token)>;
 struct SkinResourcePreparationInputs {
   SkinRevisionLease revision;
   SkinEntryId entry;
@@ -306,6 +321,7 @@ struct SkinResourcePreparationInputs {
   bool practiceMode = false;
   std::map<int, std::filesystem::path> builtinImagePaths;
   SkinBuiltinImageReader builtinImageReader;
+  SkinBuiltinImageBatchReader builtinImageBatchReader;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };

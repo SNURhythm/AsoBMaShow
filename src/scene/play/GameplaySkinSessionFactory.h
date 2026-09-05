@@ -107,6 +107,7 @@ struct GameplaySkinSessionServices {
   const skin::SkinStorageRoots *storageRoots = nullptr;
   skin::SkinResourcePreparationService *resourcePreparation = nullptr;
   skin::SkinBuiltinImageReader builtinImageReader;
+  skin::SkinBuiltinImageBatchReader builtinImageBatchReader;
   std::shared_ptr<skin::SkinLiveResourceCounters> liveResourceCounters;
   std::function<std::unique_ptr<skin::LuaSkinHttpTransport>(std::stop_token)>
       createHttpTransport;
