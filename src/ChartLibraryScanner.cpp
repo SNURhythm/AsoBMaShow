@@ -2955,7 +2955,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         terminalResult.has_value() && terminalResult->complete &&
         parsedInBatch == batch.innerPaths.size() && !shouldStop();
     if (terminalResult.has_value() && !terminalResult->complete) {
-      traversalHealthy = false;
+      // A single archive that cannot be read (encrypted, passphrase-locked,
+      // corrupt, or an unsupported entry) must not poison the whole library
+      // refresh. Skip it: its charts are simply not added this scan and will
+      // be discovered on a later successful pass. Only storage/DB-level
+      // failures set archiveStorageHealthy=false.
       if (!terminalResult->errorMessage.empty()) {
         SDL_Log("Failed to read charts from archive %s: %s",
                 archiveText.c_str(), terminalResult->errorMessage.c_str());
