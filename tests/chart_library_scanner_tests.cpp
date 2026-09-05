@@ -1594,6 +1594,35 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   assert(!metadataRebuildRequired(databasePath));
 }
 
+void testNoScanWorkAcknowledgesPendingFlushRequest() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto archivePath =
+      writeZip(root / "stable.zip", {{"one.bms", chartText("Stable")}});
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {archivePath}) > 0);
+
+  // A second scan over an unchanged library finds no work (every chart is
+  // already known, archive cache is valid): a pending flush request from the
+  // UI still has to be acknowledged so the caller's completion signal arrives.
+  std::uint64_t flushCompleted = 0;
+  const ChartScanResult result = scanner.ScanWithResult(
+      *session, {archivePath}, nullptr, nullptr, nullptr,
+      []() -> std::uint64_t { return 7; },
+      [&](std::uint64_t request) {
+        if (request > flushCompleted) {
+          flushCompleted = request;
+        }
+      });
+  assert(result.completed);
+  assert(flushCompleted >= 7);
+}
+
 void testUnreadableArchivePreservesMetadataRebuildState() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2223,6 +2252,7 @@ int main() {
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
   testArchiveStreamFailurePreservesCheckpointPrefix();
+  testNoScanWorkAcknowledgesPendingFlushRequest();
   testUnreadableArchivePreservesMetadataRebuildState();
   testStopAtPreparingUpdatesCancelsArchivePrefetch();
   testLargeSingleArchivePreservesAllChartResults();

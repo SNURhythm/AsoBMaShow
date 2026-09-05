@@ -1756,6 +1756,24 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     entityScheduler.cancel();
     return {};
   }
+
+  std::uint64_t completedFlushRequest = 0;
+  auto pendingFlushRequest = [&]() -> std::uint64_t {
+    if (flushRequestCallback == nullptr) {
+      return 0;
+    }
+    return flushRequestCallback();
+  };
+  auto acknowledgeFlushRequest = [&](std::uint64_t request) {
+    if (request == 0 || request <= completedFlushRequest) {
+      return;
+    }
+    completedFlushRequest = request;
+    if (flushCompleteCallback != nullptr) {
+      flushCompleteCallback(request);
+    }
+  };
+
   const bool noScanWork =
       diffs.empty() && documentFlagUpdates.empty() &&
       sourcePreferenceRefreshPaths.empty() &&
@@ -1769,6 +1787,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       (void)exception;
       traversalHealthy = false;
     }
+    // No work was produced, but a pending flush request (e.g. a UI-requested
+    // durable state) must still be acknowledged so the caller's completion
+    // signal arrives; nothing needs to be committed because there were no
+    // changes.
+    acknowledgeFlushRequest(pendingFlushRequest());
     bool finalized = traversalHealthy;
     if (reconcileMode == ReconcileMode::Full) {
       finalized = finalized && session.ClearScanCheckpoint();
@@ -2079,7 +2102,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   const auto reconcileLoopStart = scanPhaseStart();
   scanPhase("reconcile-update-loops");
   std::vector<std::filesystem::path> upsertedChartPaths;
-  std::uint64_t completedFlushRequest = 0;
 
   auto makeCheckpoint = [&](const std::string &signature,
                             const std::string &phase, std::size_t nextIndex,
@@ -2105,7 +2127,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return nextCheckpoint;
   };
 
-  auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
+  auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) -> bool {
     if (!recordStorageResult(
             scanBatch->CheckpointAndContinue(nextCheckpoint))) {
       archive_file::appendDebugLogLine(
@@ -2113,24 +2135,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           nextCheckpoint.phase +
           " nextIndex=" + std::to_string(nextCheckpoint.nextIndex) +
           " subIndex=" + std::to_string(nextCheckpoint.subIndex));
+      return false;
     }
-  };
-
-  auto pendingFlushRequest = [&]() -> std::uint64_t {
-    if (flushRequestCallback == nullptr) {
-      return 0;
-    }
-    return flushRequestCallback();
-  };
-
-  auto acknowledgeFlushRequest = [&](std::uint64_t request) {
-    if (request == 0 || request <= completedFlushRequest) {
-      return;
-    }
-    completedFlushRequest = request;
-    if (flushCompleteCallback != nullptr) {
-      flushCompleteCallback(request);
-    }
+    return true;
   };
 
   auto checkpointSaveRequest = [&](bool force) -> std::optional<std::uint64_t> {
@@ -2143,8 +2150,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto saveCheckpointForFlush = [&](const ChartScanCheckpoint &nextCheckpoint,
                                     std::uint64_t request) {
-    saveCheckpoint(nextCheckpoint);
-    acknowledgeFlushRequest(request);
+    if (saveCheckpoint(nextCheckpoint)) {
+      acknowledgeFlushRequest(request);
+    }
   };
 
   auto archiveDeleteProtectedByCheckpoint =
@@ -3155,7 +3163,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   if (stopRequested(stopToken)) {
     interrupted.store(true, std::memory_order_relaxed);
   }
-  acknowledgeFlushRequest(pendingFlushRequest());
   bool committed = storageHealthy && traversalHealthy && commitSucceeded;
   if (!stopRequested(stopToken) && committed) {
     bool finalized = true;
@@ -3206,6 +3213,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             " orphaned archive index cache files after library refresh.");
       }
     }
+  }
+  if (committed) {
+    acknowledgeFlushRequest(pendingFlushRequest());
   }
   if (!committed) {
     upsertedChartPaths.clear();

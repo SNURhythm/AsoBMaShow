@@ -509,6 +509,10 @@ struct CachedIndex {
 };
 
 std::mutex gIndexMutex;
+// NOTE: gIndexCache is intentionally unbounded (one full entry list per
+// archive indexed this process, bounded by library size). An LRU eviction of
+// least-recently-used archive indexes is a possible follow-up if memory
+// becomes a concern on very large libraries.
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
 
 // Directory for persisting archive entry indexes across app restarts. Empty
@@ -3510,6 +3514,14 @@ std::size_t pruneArchiveIndexCacheImpl(
       if (!removeError) {
         ++removed;
       }
+      continue;
+    }
+    // A live archive's ".idx.tmp" may be mid-write (writeCachedIndexToDisk
+    // holds no lock against prune), so its header may be partial and
+    // unreadable. Never remove a live archive's temp file here; the writer
+    // cleans it up itself, and only truly orphaned temps (no live hash) are
+    // removed above.
+    if (orphanTmpIndex && fileNameHash.has_value()) {
       continue;
     }
     std::ifstream file(filePath, std::ios::binary);
