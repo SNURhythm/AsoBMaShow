@@ -1465,6 +1465,67 @@ void testRunningMidBufferStopAndRateTransitionDoesNotJump() {
   }
 }
 
+void testStoppedClockStillMixesSystemSoundWhileBgmStaysSilent() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  require(wrapper.stopSounds().success &&
+              wrapper.startDevice().success,
+          "stopped-clock fixture begins with a started device");
+
+  // Load a system-bus voice and enqueue it while the gameplay clock is
+  // stopped. The select screen never starts the clock, so before this fix the
+  // callback discarded every System voice to silence.
+  const path_t systemSound = PATH("stopped-clock-system");
+  require(wrapper.loadGeneratedSound(systemSound,
+                                     std::vector<short>(44100, 123), 1, 44100),
+          "system voice loads for the stopped-clock fixture");
+  require(wrapper.playSound(systemSound, audio::Bus::System),
+          "system voice enqueues while the gameplay clock is stopped");
+
+  std::vector<std::int16_t> output(512 * 2, 0);
+  control->renderCallback(output.data(), 512, 2, control->renderUserData);
+  bool anyNonZero = false;
+  for (const auto sample : output) {
+    if (sample != 0) {
+      anyNonZero = true;
+      break;
+    }
+  }
+  require(anyNonZero,
+          "bus System output is audible while the gameplay clock is stopped");
+
+  // A pure Bgm voice must stay silent with the clock stopped (gameplay pause).
+  // Use a fresh wrapper so the looping System voice from above cannot leak into
+  // the Bgm-only assertion.
+  Stopwatch bgmStopwatch;
+  auto bgmControl = std::make_shared<FactoryControl>();
+  AudioWrapper bgmWrapper(
+      &bgmStopwatch,
+      std::make_unique<FakeConfigurableFactory>(bgmControl));
+  require(bgmWrapper.stopSounds().success &&
+              bgmWrapper.startDevice().success,
+          "stopped-clock bgm wrapper begins with a started device");
+  const path_t bgm = PATH("stopped-clock-bgm");
+  require(bgmWrapper.loadGeneratedSound(bgm, std::vector<short>(44100, 123), 1,
+                                        44100) &&
+              bgmWrapper.playSound(bgm, audio::Bus::Bgm),
+          "bgm voice loads for the stopped-clock fixture");
+  std::vector<std::int16_t> bgmOutput(512 * 2, 0);
+  bgmControl->renderCallback(bgmOutput.data(), 512, 2,
+                             bgmControl->renderUserData);
+  bool bgmNonZero = false;
+  for (const auto sample : bgmOutput) {
+    if (sample != 0) {
+      bgmNonZero = true;
+      break;
+    }
+  }
+  require(!bgmNonZero,
+          "bus Bgm stays silent while the gameplay clock is stopped");
+}
+
 void testWallInterpolationUsesTheRatePublishedWithItsAnchor() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -2306,6 +2367,7 @@ int main() {
     testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock();
     testPausedMidBufferRateTransitionPreservesPublishedPosition();
     testRunningMidBufferStopAndRateTransitionDoesNotJump();
+    testStoppedClockStillMixesSystemSoundWhileBgmStaysSilent();
     testWallInterpolationUsesTheRatePublishedWithItsAnchor();
     testClockAnchorReaderWaitsForACompleteGeneration();
     testNativeTimestampClampsToPublishedAudioBuffer();

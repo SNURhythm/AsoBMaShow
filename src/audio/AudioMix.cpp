@@ -831,7 +831,7 @@ void ActivateScheduledSounds(AudioCallbackState &state,
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
-                     int playbackRatePercent) {
+                     int playbackRatePercent, MixScope scope) {
   constexpr float kMixHeadroom = 0.9f;
   if (outputChannels <= 0 ||
       mixBuffer.size() < static_cast<size_t>(frameCount) * outputChannels) {
@@ -848,6 +848,14 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
     if (soundData == nullptr || soundData->channels <= 0 ||
         sourceFrame >= soundData->outputFrameCount) {
       removeActiveSoundAt(state, soundIndex);
+      continue;
+    }
+
+    // When only system sounds are allowed (the gameplay clock is stopped and
+    // BGM/keysounds must not resume), leave the non-system voices active but do
+    // not advance or mix them.
+    if (scope == MixScope::SystemOnly && playingSound.bus != Bus::System) {
+      ++soundIndex;
       continue;
     }
 
