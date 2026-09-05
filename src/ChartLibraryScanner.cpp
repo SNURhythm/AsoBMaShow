@@ -337,26 +337,6 @@ std::string checkpointInnerPathText(const std::filesystem::path &path) {
   return path.lexically_normal().generic_string();
 }
 
-void fnv1aAppend(std::uint64_t &hash, const std::string &text) {
-  constexpr std::uint64_t kPrime = 1099511628211ull;
-  for (const unsigned char ch : text) {
-    hash ^= ch;
-    hash *= kPrime;
-  }
-  hash ^= 0xffu;
-  hash *= kPrime;
-}
-
-std::string stableHashHex(std::uint64_t value) {
-  constexpr char kHex[] = "0123456789abcdef";
-  std::string text(16, '0');
-  for (int i = 15; i >= 0; --i) {
-    text[i] = kHex[value & 0xfu];
-    value >>= 4u;
-  }
-  return text;
-}
-
 std::optional<archive_file::SourcePreference>
 archiveBatchSourcePreference(const std::filesystem::path &archivePath,
                              std::optional<bool> solidHint) {
@@ -1802,14 +1782,16 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return ChartScanResult{.completed = finalized};
   }
 
-  // Archive ordering. The scan signature hashes only roots and archive path +
-  // size + mtime (not the per-archive inner paths or the individual diffs), so
-  // only the archive order must be deterministic: a checkpoint survives a
-  // restart only if both runs project the same archive sequence. Directory
-  // iteration (especially over iOS File Provider Storage) is not stable across
-  // runs, so sort the archives by path. Per-archive inner paths are collected
-  // from the archive's own entry listing, which is deterministic for an
-  // unchanged archive, so no per-diff or per-inner-path sorting is needed.
+  // Archive ordering. The archive order must be deterministic so an
+  // interrupted scan can resume by archive identity across restarts: a
+  // checkpoint survives a restart only if both runs project the same archive
+  // sequence. Directory iteration (especially over iOS File Provider Storage)
+  // is not stable across runs, so sort the archives by path. Per-archive inner
+  // paths are collected from the archive's own entry listing, which is
+  // deterministic for an unchanged archive, so no per-diff or per-inner-path
+  // sorting is needed. The stored scan_signature is informational only (the
+  // resume decision is made on archive identity plus subIndex); a fixed
+  // literal is written and nothing validates it.
   const auto orderingStart = std::chrono::steady_clock::now();
   std::vector<ScanDiff> individualDiffs;
   std::vector<path_t> archiveBatchOrder;
@@ -1845,8 +1827,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
-  // Sort the archive order by path so the checkpoint signature (which hashes
-  // archives in this order) and the archive resume indexes stay deterministic.
+  // Sort the archive order by path so the archive resume indexes stay
+  // deterministic across runs (the scan signature is informational only).
   std::ranges::sort(archiveBatchOrder, [&](const path_t &left, const path_t &right) {
     const auto leftIt = archiveBatches.find(left);
     const auto rightIt = archiveBatches.find(right);
@@ -1879,69 +1861,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   parseTotal = std::max(parseTotal, 1);
   int parseCurrent = 0;
 
-  auto computeScanSignature = [&](std::size_t, std::size_t archiveStart) {
-    constexpr std::uint64_t kOffset = 14695981039346656037ull;
-    std::uint64_t hash = kOffset;
-    fnv1aAppend(hash, "chart-scan-archives-v1");
-
-    std::vector<std::string> rootKeys;
-    rootKeys.reserve(roots.size());
-    for (const auto &root : roots) {
-      std::string rootKey = checkpointPathTextForDb(root);
-      std::int64_t size = 0;
-      std::int64_t mtimeNs = 0;
-      if (archiveFileState(root, size, mtimeNs)) {
-        rootKey += "|file|";
-        rootKey += std::to_string(size);
-        rootKey += "|";
-        rootKey += std::to_string(mtimeNs);
-      } else {
-        std::error_code error;
-        const bool directory = std::filesystem::is_directory(root, error);
-        if (error) {
-          rootKey += "|unknown";
-        } else {
-          rootKey += directory ? "|dir" : "|missing";
-        }
-      }
-      rootKeys.push_back(std::move(rootKey));
-    }
-    std::sort(rootKeys.begin(), rootKeys.end());
-    fnv1aAppend(hash, "roots");
-    fnv1aAppend(hash, std::to_string(rootKeys.size()));
-    for (const auto &rootKey : rootKeys) {
-      fnv1aAppend(hash, rootKey);
-    }
-
-    // The individual (regular-file) diffs are idempotent and cheap to redo on
-    // restart, so they are not checkpointed and need no signature contribution.
-    // Only archives are checkpoint-resumed; the signature just needs to detect
-    // whether any archive changed (path, size, or mtime), not the per-chart
-    // inner-path corpus.
-    fnv1aAppend(hash, "archives");
-    archiveStart = std::min(archiveStart, archiveBatchOrder.size());
-    fnv1aAppend(hash, std::to_string(archiveBatchOrder.size() - archiveStart));
-    for (std::size_t i = archiveStart; i < archiveBatchOrder.size(); ++i) {
-      const auto &archiveKey = archiveBatchOrder[i];
-      const auto batchIt = archiveBatches.find(archiveKey);
-      if (batchIt == archiveBatches.end()) {
-        continue;
-      }
-      const ArchiveParseBatch &batch = batchIt->second;
-      fnv1aAppend(hash, checkpointPathTextForDb(batch.archivePath));
-      std::int64_t archiveSize = 0;
-      std::int64_t mtimeNs = 0;
-      if (archiveFileState(batch.archivePath, archiveSize, mtimeNs)) {
-        fnv1aAppend(hash, std::to_string(archiveSize));
-        fnv1aAppend(hash, std::to_string(mtimeNs));
-      } else {
-        fnv1aAppend(hash, "missing");
-      }
-    }
-    return stableHashHex(hash);
-  };
-
-  const std::string scanSignature = computeScanSignature(0, 0);
+  const std::string kArchiveCheckpointSignature = "chart-scan-archives-v1";
   struct ResumePlan {
     bool valid = false;
     bool archivePhase = false;
@@ -2045,7 +1965,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     resumePlan.valid = true;
     resumePlan.archivePhase = true;
-    resumePlan.individualStart = individualDiffs.size();
+    // The individual (regular-file) diffs are recomputed fresh every run and
+    // are idempotent (parseAttempted skips already-committed charts), so always
+    // process them from index 0 on a resume instead of skipping them because a
+    // stale archive-phase checkpoint is present.
+    resumePlan.individualStart = 0;
     resumePlan.archiveStart = resumeStart;
     resumePlan.archiveSubStart = 0;
 
@@ -2078,10 +2002,24 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
     }
 
+    // Individual diffs are always reprocessed from index 0 on a resume (see
+    // individualStart = 0 above); parseCurrent must not pre-count them, or the
+    // individual loop would double-count and overshoot parseTotal.
+    // Completed archives that sort after the resume point are skipped (not
+    // parsed) by the archive loop, so their inner-path counts are already-done
+    // baseline too; without them progress would plateau below parseTotal on a
+    // successful commit.
+    std::size_t skippedCompletedInnerCount = 0;
+    for (std::size_t i = resumeStart; i < archiveBatchOrder.size(); ++i) {
+      const auto batchIt = archiveBatches.find(archiveBatchOrder[i]);
+      if (batchIt != archiveBatches.end() &&
+          archiveBatchFinished(batchIt->second).has_value()) {
+        skippedCompletedInnerCount += batchIt->second.innerPaths.size();
+      }
+    }
     const std::size_t resumedCount =
-        individualDiffs.size() +
         archiveBatchInnerCountBefore(resumeStart) +
-        resumePlan.archiveSubStart;
+        skippedCompletedInnerCount + resumePlan.archiveSubStart;
     parseCurrent = static_cast<int>(std::min<std::size_t>(
         resumedCount, static_cast<std::size_t>(parseTotal)));
     return true;
@@ -2098,7 +2036,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   } else if (checkpoint.found) {
     resumeStart = 0;
     resumePlan = ResumePlan{};
-    session.ClearScanCheckpoint();
+    // Only a full-library scan may wipe the resume state. A scoped/added scan
+    // operates on a subset of roots and would otherwise destroy the whole
+    // library's completed-archive markers on a stale checkpoint row.
+    if (reconcileMode == ReconcileMode::Full) {
+      session.ClearScanCheckpoint();
+    }
     archive_file::appendDebugLogLine(
         "Discarded stale chart scan checkpoint before parsing.");
   }
@@ -2438,6 +2381,28 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   const std::size_t individualStartIndex =
       resumePlan.valid ? resumePlan.individualStart : 0;
+  std::size_t lastCommitDiffIndex = individualStartIndex;
+  // Commit periodically so individually-parsed charts are durable even if the
+  // app is killed mid-scan. On restart the diffs are recomputed and any
+  // already-committed charts become no-ops; no resume position is needed.
+  // Gate on the number of diffs consumed since the last commit (not a modulo
+  // of the stride-quantized diff index, whose first multiple of the interval
+  // could land orders of magnitude late). Applies to both the delete and the
+  // parse paths so a delete-heavy individual phase cannot run one unbounded
+  // transaction. Returns false when the commit failed and the caller should
+  // stop.
+  auto maybeCommitForProgress = [&](std::size_t diffIndex) {
+    if (shouldStop() ||
+        diffIndex - lastCommitDiffIndex < kIndividualCommitInterval) {
+      return true;
+    }
+    lastCommitDiffIndex = diffIndex;
+    if (!recordStorageResult(scanBatch->CommitForProgress())) {
+      return false;
+    }
+    acknowledgeFlushRequest(pendingFlushRequest());
+    return true;
+  };
   for (std::size_t diffIndex = individualStartIndex;
        diffIndex < individualDiffs.size();) {
     const auto &diff = individualDiffs[diffIndex];
@@ -2450,6 +2415,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       recordStorageResult(scanBatch->DeleteChart(diff.path));
       ++parseCurrent;
       diffIndex = diffIndex + 1;
+      if (!maybeCommitForProgress(diffIndex)) {
+        break;
+      }
       continue;
     }
 
@@ -2478,14 +2446,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       ++parseCurrent;
     }
     diffIndex = batchEnd;
-    // Commit periodically so individually-parsed charts are durable even if
-    // the app is killed mid-scan. On restart the diffs are recomputed and any
-    // already-committed charts become no-ops; no resume position is needed.
-    if (!shouldStop() && (diffIndex % kIndividualCommitInterval == 0)) {
-      if (!recordStorageResult(scanBatch->CommitForProgress())) {
-        break;
-      }
-      acknowledgeFlushRequest(pendingFlushRequest());
+    if (!maybeCommitForProgress(diffIndex)) {
+      break;
     }
   }
 
@@ -2500,7 +2462,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const auto checkpointRequest = checkpointSaveRequest(true);
     if (checkpointRequest.has_value()) {
       saveCheckpointForFlush(
-          makeCheckpoint(computeScanSignature(individualDiffs.size(), 0),
+          makeCheckpoint(kArchiveCheckpointSignature,
                          kScanCheckpointPhaseArchive, 0, 0, lastPath, {}, ""),
           *checkpointRequest);
     }
@@ -2934,6 +2896,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       archive_file::appendDebugLogLine(
           "Skipping already-completed archive batch: " +
           fspath_to_utf8(batch.archivePath));
+      if (!(resumePlan.valid && resumePlan.archivePhase)) {
+        // Without a validated archive checkpoint there is no pre-count of
+        // these already-done inner paths (validateArchiveCheckpoint's count
+        // covers exactly the checkpoint case), so count them here or progress
+        // would plateau below parseTotal on a successful commit.
+        parseCurrent += static_cast<int>(batch.innerPaths.size());
+      }
       continue;
     }
     archive_file::appendDebugLogLine(
@@ -2975,7 +2944,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (checkpointRequest.has_value()) {
         saveCheckpointForFlush(
             makeCheckpoint(
-                computeScanSignature(individualDiffs.size(), archiveIndex + 1),
+                kArchiveCheckpointSignature,
                 kScanCheckpointPhaseArchive, 0, 0, lastPath, batch.archivePath,
                 lastInnerPath),
             *checkpointRequest);
@@ -3079,7 +3048,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           if (checkpointRequest.has_value()) {
             saveCheckpointForFlush(
                 makeCheckpoint(
-                    computeScanSignature(individualDiffs.size(), archiveIndex),
+                    kArchiveCheckpointSignature,
                     kScanCheckpointPhaseArchive, 0, parsedInBatch,
                     parsed.chartPath, batch.archivePath,
                     checkpointInnerPathText(parsed.innerPath)),
@@ -3136,6 +3105,26 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
               "Failed to remove partially streamed DB chart batch: " +
               archiveText);
         }
+        // The delete above may have removed rows a mid-archive checkpoint
+        // already committed for this archive. Reset the resume position to the
+        // start of the archive so a later resume (if the app dies before the
+        // next checkpoint) re-parses the whole archive instead of assuming
+        // rows [0, subIndex) still exist. Write the reset into the same open
+        // transaction as the delete so a kill between the two cannot leave a
+        // stale higher-subIndex checkpoint durably overstating row count.
+        const ChartScanCheckpoint resetCheckpoint = makeCheckpoint(
+            kArchiveCheckpointSignature, kScanCheckpointPhaseArchive, 0, 0,
+            std::filesystem::path(), batch.archivePath, "");
+        if (recordStorageResult(
+                scanBatch->SaveCheckpointInPlace(resetCheckpoint))) {
+          if (const auto failedArchiveCheckpointRequest =
+                  checkpointSaveRequest(true);
+              failedArchiveCheckpointRequest.has_value()) {
+            acknowledgeFlushRequest(*failedArchiveCheckpointRequest);
+          }
+        } else {
+          archiveStorageHealthy = false;
+        }
       }
     }
 
@@ -3181,7 +3170,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (checkpointRequest.has_value()) {
         saveCheckpointForFlush(
             makeCheckpoint(
-                computeScanSignature(individualDiffs.size(), archiveIndex + 1),
+                kArchiveCheckpointSignature,
                 kScanCheckpointPhaseArchive, 0, 0, lastPath, batch.archivePath,
                 lastInnerPath),
             *checkpointRequest);
@@ -3239,9 +3228,36 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     committed = finalized;
     // Drop persisted archive index files for archives that are no longer
     // present, so the disk cache does not grow with removed archives. Only a
-    // full-library refresh has a complete live path set; a scoped refresh
-    // would otherwise delete index files for archives outside its scope.
-    if (committed && reconcileMode == ReconcileMode::Full) {
+    // Full scan that actually traversed every configured library entry has a
+    // complete live path set; a Full refresh over a sub-folder or import
+    // destination would otherwise delete index files for archives outside its
+    // scope. Skipping the prune is always safe (the cache is simply left for a
+    // later full-library pass).
+    const std::vector<ChartEntry> effectiveEntries =
+        session.SelectEffectiveEntries();
+    // Coverage uses the normalized DB path text (the same identity archive keys
+    // and checkpoints use) rather than a filesystem-relative comparison, so it
+    // still matches when the scan roots are platform-resolved differently from
+    // the stored entry path (e.g. iOS security-scoped containers). An entry is
+    // covered when it equals a root or starts with a root plus a separator;
+    // any uncovered entry conservatively skips the prune.
+    const bool fullLibraryCoverage = std::ranges::all_of(
+        effectiveEntries, [&](const ChartEntry &entry) {
+          const std::string entryText = checkpointPathTextForDb(entry.path);
+          const char separator =
+              static_cast<char>(std::filesystem::path::preferred_separator);
+          return std::ranges::any_of(roots, [&](const auto &root) {
+            const std::string rootText = checkpointPathTextForDb(root);
+            if (entryText == rootText) {
+              return true;
+            }
+            return entryText.size() > rootText.size() &&
+                   entryText.compare(0, rootText.size(), rootText) == 0 &&
+                   entryText[rootText.size()] == separator;
+          });
+        });
+    if (committed && reconcileMode == ReconcileMode::Full &&
+        fullLibraryCoverage) {
       const std::size_t pruned = archive_file::pruneArchiveIndexCache(
           liveArchivePaths);
       if (pruned > 0) {

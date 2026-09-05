@@ -156,6 +156,8 @@ void appendDebugLogLine(const std::string &message);
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer);
+void resetSingleFlightWaiterCountForTesting();
+std::uint32_t singleFlightWaiterCountForTesting();
 #endif
 std::uint64_t debugLogRevision();
 std::vector<std::string> debugLogLines();

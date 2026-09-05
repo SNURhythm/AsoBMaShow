@@ -3,6 +3,7 @@
 #include "../src/ChartLibraryScanner.h"
 #include "../src/Utils.h"
 #include "../src/repositories/ChartRepository.h"
+#include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/sqlite3.h"
 
 #include <archive_entry.h>
@@ -105,6 +106,39 @@ bool metadataRebuildRequired(const std::filesystem::path &databasePath) {
   assert(sqlite3_finalize(statement) == SQLITE_OK);
   assert(sqlite3_close(database) == SQLITE_OK);
   return required;
+}
+
+struct StoredChartColumns {
+  bool exists = false;
+  int sourcePriority = 0;
+  std::int64_t sourceArchiveSize = 0;
+};
+
+StoredChartColumns readStoredChartColumns(
+    const std::filesystem::path &databasePath,
+    const std::filesystem::path &chartPath) {
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  sqlite3_stmt *statement = nullptr;
+  assert(sqlite3_prepare_v2(
+             database,
+             "SELECT path, source_priority, source_archive_size "
+             "FROM chart_meta WHERE path = ?",
+             -1, &statement, nullptr) == SQLITE_OK);
+  const std::string storedPath =
+      chart_storage_identity::StoredPathText(chartPath);
+  assert(sqlite3_bind_text(statement, 1, storedPath.c_str(),
+                           static_cast<int>(storedPath.size()),
+                           SQLITE_TRANSIENT) == SQLITE_OK);
+  StoredChartColumns result;
+  if (sqlite3_step(statement) == SQLITE_ROW) {
+    result.exists = true;
+    result.sourcePriority = sqlite3_column_int(statement, 1);
+    result.sourceArchiveSize = sqlite3_column_int64(statement, 2);
+  }
+  assert(sqlite3_finalize(statement) == SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+  return result;
 }
 
 void seedFolderRecord(const std::filesystem::path &databasePath,
@@ -713,6 +747,62 @@ void testArchiveCheckpointResumeSurvivesArchiveOrderChanges() {
   assert(!session->LoadScanSnapshot().checkpoint.has_value());
 }
 
+void testResumeWithArchiveCheckpointStillProcessesIndividualDiffs() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  const auto archivePath =
+      writeZip(root / "resume-archive.zip",
+               {{"inside.bms", chartText("Resume Archive Inside")}});
+  const auto existingLoose = writeChart(root, "existing-loose",
+                                        "Existing Loose Chart");
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  // Stop during the scan so an archive-phase checkpoint is saved while the
+  // scan is incomplete. The loose regular-file diff is committed by the
+  // checkpoint's transaction commit; the archive charts are not yet present.
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  (void)scanner.Scan(
+      *session, {root}, &stopToken, nullptr, nullptr,
+      []() -> std::uint64_t { return 1; },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        stop.request_stop();
+      });
+  const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
+  assert(interrupted.checkpoint.has_value());
+  assert(interrupted.checkpoint->phase == "archive");
+  assert(session->CountAllChartMeta() == 1);
+
+  // Add a new loose chart and remove the old loose chart after the
+  // interruption. A resume with an archive-phase checkpoint must still apply
+  // these individual diffs instead of skipping the whole individual phase.
+  const auto newLoose = writeChart(root, "new-loose", "New Loose Chart");
+  std::error_code removeError;
+  std::filesystem::remove(existingLoose, removeError);
+  assert(!removeError);
+
+  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  assert(result.completed);
+  assert(result.committed);
+  std::vector<bms_parser::ChartMeta> charts;
+  session->SelectAllChartMeta(charts);
+  std::set<std::string> titles;
+  for (const auto &meta : charts) {
+    titles.insert(meta.Title);
+  }
+  assert(titles.count("New Loose Chart") == 1);
+  assert(titles.count("Existing Loose Chart") == 0);
+  assert(titles.count("Resume Archive Inside") == 1);
+  assert(!session->LoadScanSnapshot().checkpoint.has_value());
+}
+
 std::atomic_bool denyChartInsert{false};
 
 int denyChartInsertAuthorizer(void *, int action, const char *first,
@@ -1057,6 +1147,79 @@ void testDeleteChartsInArchiveRemovesOnlyArchiveCharts() {
   session->SelectAllChartMeta(remaining);
   assert(remaining.size() == 1);
   assert(remaining.front().Title == "Loose Chart");
+}
+
+void testUpdateSourcePreferenceInArchiveTargetsOnlyArchiveCharts() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  // Two charts live inside the archive's virtual path under a nested inner
+  // folder; a sibling directory sharing the archive's textual prefix must not
+  // have its preference touched. The archive name carries special characters
+  // (% # and a space) so the bounded range scan is exercised on a raw prefix.
+  const auto archivePath = writeZip(
+      root / "special-%# prefix.zip",
+      {{"pack/one.bms", chartText("Archive One")},
+       {"pack/two.bms", chartText("Archive Two")}});
+  writeChart(root / "special-%# prefix-other", "loose", "Loose Chart");
+
+  const auto databasePath = temporary.path() / "chart.db";
+  TestChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+
+  assert(batch->UpsertArchiveCache({.path = archivePath,
+                                    .solid = false,
+                                    .uncompressedSize = 0,
+                                    .fileCount = 2,
+                                    .chartCount = 2}));
+  const std::filesystem::path archiveChartOne = archive_file::makeVirtualPath(
+      archivePath, std::filesystem::path("pack/one.bms"));
+  const std::filesystem::path archiveChartTwo = archive_file::makeVirtualPath(
+      archivePath, std::filesystem::path("pack/two.bms"));
+  const std::filesystem::path looseChartPath =
+      (root / "special-%# prefix-other" / "loose.bms").lexically_normal();
+  const auto addChart = [&](const std::filesystem::path &chartPath,
+                            const std::string &title,
+                            const std::string &hash) {
+    bms_parser::ChartMeta chart;
+    chart.BmsPath = chartPath;
+    chart.MD5 = hash;
+    chart.SHA256 = hash + hash;
+    chart.Title = title;
+    assert(batch->UpsertChart(chart, std::nullopt, false, {}));
+  };
+  addChart(archiveChartOne, "Archive One", "aabbccddeeff00112233445566778899");
+  addChart(archiveChartTwo, "Archive Two", "bbccddeeff00112233445566778899aa");
+  addChart(looseChartPath, "Loose Chart", "ffeeddccbbaa99887766554433221100");
+  assert(batch->Commit());
+
+  assert(session->CountAllChartMeta() == 3);
+  auto updateBatch = session->BeginScanBatch();
+  assert(updateBatch.has_value());
+  assert(updateBatch->UpdateSourcePreferenceInArchive(archivePath, 1, 4096));
+  assert(updateBatch->Commit());
+
+  const StoredChartColumns one =
+      readStoredChartColumns(databasePath, archiveChartOne);
+  const StoredChartColumns two =
+      readStoredChartColumns(databasePath, archiveChartTwo);
+  const StoredChartColumns loose =
+      readStoredChartColumns(databasePath, looseChartPath);
+  assert(one.exists);
+  assert(one.sourcePriority == 1);
+  assert(one.sourceArchiveSize == 4096);
+  assert(two.exists);
+  assert(two.sourcePriority == 1);
+  assert(two.sourceArchiveSize == 4096);
+  // The sibling directory sharing the archive path's textual prefix is not
+  // part of the archive scope; its preference keeps the default inserted value.
+  assert(loose.exists);
+  assert(loose.sourcePriority == 0);
+  assert(loose.sourceArchiveSize == 0);
 }
 
 void testArchiveStorageFailureDoesNotWriteCache() {
@@ -2024,6 +2187,7 @@ int main() {
   testFullScanSkipsOnlyFindBmsPrivateStorageDirectory();
   testStopAndPauseBeforeWork();
   testArchiveCheckpointResumeSurvivesArchiveOrderChanges();
+  testResumeWithArchiveCheckpointStillProcessesIndividualDiffs();
   testStorageFailureLeavesNoChart();
   testRebuildFlagClearFailureDoesNotReportCompletedScan();
   testMissingFullScanRootPreservesMetadataRebuildState();
@@ -2031,6 +2195,7 @@ int main() {
   testAddedScanParseFailureDoesNotQualifyExistingChart();
   testArchiveChartCountReportsStorageReadFailure();
   testDeleteChartsInArchiveRemovesOnlyArchiveCharts();
+  testUpdateSourcePreferenceInArchiveTargetsOnlyArchiveCharts();
   testArchiveStorageFailureDoesNotWriteCache();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testArchiveIndexProgressFollowsFolderTraversal();

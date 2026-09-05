@@ -230,9 +230,11 @@ public:
       bool UpdateSourcePreference(
           const ChartSourcePreferenceUpdate &update);
       // Sets source_priority/source_archive_size for every chart under the
-      // given archive in one UPDATE (the path column is a PRIMARY KEY, so the
-      // LIKE range scan uses the index). All charts in an archive share the
-      // same preference, so this replaces per-chart UPDATEs on a large library.
+      // given archive in one UPDATE. The path column is a PRIMARY KEY, so a
+      // bounded range scan (path >= prefix AND path < upper) seeks into the
+      // index instead of a LIKE scan over the whole table. All charts in an
+      // archive share the same preference, so this replaces per-chart UPDATEs
+      // on a large library.
       bool UpdateSourcePreferenceInArchive(
           const std::filesystem::path &archivePath, int priority,
           std::uint64_t archiveSize);
@@ -247,6 +249,13 @@ public:
       bool RecordCompletedArchive(const std::filesystem::path &archivePath,
                                   std::int64_t size, std::int64_t mtimeNs);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
+      // Upserts the checkpoint row into the current open scan transaction
+      // without committing it, so a state reset and the delete it accompanies
+      // are committed atomically at the next commit point. CheckpointAndContinue
+      // commits first, so a kill between a delete and the subsequent reset
+      // checkpoint could leave a stale checkpoint overstating durable rows;
+      // this path removes that window.
+      bool SaveCheckpointInPlace(const ChartScanCheckpoint &checkpoint);
       // Commits the current scan transaction and starts a fresh one, so
       // progress (e.g. regular-file parses) becomes durable without recording a
       // resume checkpoint. Safe to call repeatedly; used for periodic commits

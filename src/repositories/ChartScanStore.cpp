@@ -45,6 +45,25 @@ sqlite3_int64 clampSqlInteger(std::uint64_t value) {
              : static_cast<sqlite3_int64>(value);
 }
 
+// Lexicographic successor of a binary string: increment the last byte that is
+// not 0xFF and truncate any trailing 0xFF bytes. This yields the upper bound
+// of the prefix interval [input, bound): every string that has `input` as a
+// prefix compares strictly less than the bound under memcmp ordering. (It is
+// not the literal immediate successor, which would be input + '\0'.) Returns
+// an empty string when every byte is 0xFF, meaning no finite bound exists.
+std::string sqliteLexicographicSuccessor(const std::string &text) {
+  std::string upper = text;
+  for (std::size_t i = upper.size(); i > 0; --i) {
+    unsigned char &byte = reinterpret_cast<unsigned char &>(upper[i - 1]);
+    if (byte != 0xFF) {
+      ++byte;
+      upper.resize(i);
+      return upper;
+    }
+  }
+  return std::string();
+}
+
 sqlite3_int64 fileTimeToSqlNs(std::filesystem::file_time_type time) {
   const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
                          time.time_since_epoch())
@@ -772,31 +791,33 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
   }
   // Archive chart rows are stored under the virtual path
   // archivePath/innerPath, normalized by StoredPathText the same way as the
-  // archive path itself. Delete them with a single indexed LIKE range scan
-  // instead of scanning every chart_meta row per reindexed archive.
+  // archive path itself. Delete them with a single bounded range scan on the
+  // path PRIMARY KEY (path >= prefix AND path < upper) instead of a LIKE scan
+  // that SQLite cannot index-seek.
   std::string prefix = chart_storage_identity::StoredPathText(archivePath);
   prefix += std::filesystem::path::preferred_separator;
-  std::string escapedPrefix;
-  escapedPrefix.reserve(prefix.size());
-  for (const char character : prefix) {
-    if (character == '%' || character == '_' || character == '\\') {
-      escapedPrefix += '\\';
-    }
-    escapedPrefix += character;
+  const std::string upper = sqliteLexicographicSuccessor(prefix);
+
+  std::string sql = "DELETE FROM chart_meta WHERE path >= ? ";
+  if (!upper.empty()) {
+    sql += "AND path < ? ";
   }
-  const std::string pattern = escapedPrefix + "%";
+  sql += "AND SUBSTR(path, 1, ?) = ?";
 
   SqliteStatementHandle deleteStatement;
   if (!prepareSqliteStatementLogged(
-          impl_->database(),
-          "DELETE FROM chart_meta WHERE path LIKE ? ESCAPE '\\' "
-          "AND SUBSTR(path, 1, ?) = ?",
-          deleteStatement, "preparing archive chart delete", logSqlErrorText)) {
+          impl_->database(), sql, deleteStatement,
+          "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
-  bindSqliteText(deleteStatement.get(), 1, pattern);
-  sqlite3_bind_int(deleteStatement.get(), 2, static_cast<int>(prefix.size()));
-  bindSqliteText(deleteStatement.get(), 3, prefix);
+  int bindIndex = 1;
+  bindSqliteText(deleteStatement.get(), bindIndex++, prefix);
+  if (!upper.empty()) {
+    bindSqliteText(deleteStatement.get(), bindIndex++, upper);
+  }
+  sqlite3_bind_int(deleteStatement.get(), bindIndex++,
+                   static_cast<int>(prefix.size()));
+  bindSqliteText(deleteStatement.get(), bindIndex++, prefix);
   if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
     logSqlError("deleting archive chart", impl_->database());
     return false;
@@ -990,39 +1011,41 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
   }
   // Charts inside an archive are stored under archivePath/innerPath,
   // normalized by StoredPathText the same way as the archive path itself, so
-  // one indexed LIKE range scan updates the whole archive's preference.
+  // one bounded range scan on the path PRIMARY KEY updates the whole archive's
+  // preference without a LIKE scan that SQLite cannot index-seek.
   std::string prefix = chart_storage_identity::StoredPathText(archivePath);
   prefix += std::filesystem::path::preferred_separator;
-  std::string escapedPrefix;
-  escapedPrefix.reserve(prefix.size());
-  for (const char character : prefix) {
-    if (character == '%' || character == '_' || character == '\\') {
-      escapedPrefix += '\\';
-    }
-    escapedPrefix += character;
+  const std::string upper = sqliteLexicographicSuccessor(prefix);
+
+  std::string sql =
+      "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
+      "WHERE path >= ? ";
+  if (!upper.empty()) {
+    sql += "AND path < ? ";
   }
-  const std::string pattern = escapedPrefix + "%";
+  sql += "AND SUBSTR(path, 1, ?) = ? "
+         "AND (source_priority IS NULL OR source_priority != ? OR "
+         "source_archive_size IS NULL OR source_archive_size != ?)";
 
   SqliteStatementHandle statement;
-  if (!prepareSqliteStatementLogged(
-          impl_->database(),
-          "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
-          "WHERE path LIKE ? ESCAPE '\\' "
-          "AND SUBSTR(path, 1, ?) = ? "
-          "AND (source_priority IS NULL OR source_priority != ? OR "
-          "source_archive_size IS NULL OR source_archive_size != ?)",
-          statement, "preparing archive source preference update",
-          logSqlErrorText)) {
+  if (!prepareSqliteStatementLogged(impl_->database(), sql, statement,
+                                    "preparing archive source preference update",
+                                    logSqlErrorText)) {
     return false;
   }
   const sqlite3_int64 clampedArchiveSize = clampSqlInteger(archiveSize);
-  sqlite3_bind_int(statement.get(), 1, priority);
-  sqlite3_bind_int64(statement.get(), 2, clampedArchiveSize);
-  bindSqliteText(statement.get(), 3, pattern);
-  sqlite3_bind_int(statement.get(), 4, static_cast<int>(prefix.size()));
-  bindSqliteText(statement.get(), 5, prefix);
-  sqlite3_bind_int(statement.get(), 6, priority);
-  sqlite3_bind_int64(statement.get(), 7, clampedArchiveSize);
+  int bindIndex = 1;
+  sqlite3_bind_int(statement.get(), bindIndex++, priority);
+  sqlite3_bind_int64(statement.get(), bindIndex++, clampedArchiveSize);
+  bindSqliteText(statement.get(), bindIndex++, prefix);
+  if (!upper.empty()) {
+    bindSqliteText(statement.get(), bindIndex++, upper);
+  }
+  sqlite3_bind_int(statement.get(), bindIndex++,
+                   static_cast<int>(prefix.size()));
+  bindSqliteText(statement.get(), bindIndex++, prefix);
+  sqlite3_bind_int(statement.get(), bindIndex++, priority);
+  sqlite3_bind_int64(statement.get(), bindIndex++, clampedArchiveSize);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("updating archive chart source preference", impl_->database());
     return false;
@@ -1250,6 +1273,14 @@ bool ChartRepository::Session::ScanBatch::CheckpointAndContinue(
   const bool transactionStarted = impl_->beginTransaction();
   impl_->ready = transactionStarted;
   return checkpointSaved && transactionStarted;
+}
+
+bool ChartRepository::Session::ScanBatch::SaveCheckpointInPlace(
+    const ChartScanCheckpoint &checkpoint) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  return upsertScanCheckpoint(impl_->database(), checkpoint);
 }
 
 bool ChartRepository::Session::ScanBatch::CommitForProgress() {

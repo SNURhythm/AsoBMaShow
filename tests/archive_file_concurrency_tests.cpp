@@ -336,6 +336,163 @@ void testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce() {
   assert(bytes.empty());
 }
 
+void writeStoredZipContents(const std::filesystem::path &path,
+                            const std::string &entryPath,
+                            const std::string &contents) {
+  auto writer = makeArchiveWriteHandle();
+  assert(writer);
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
+         ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
+         ARCHIVE_OK);
+
+  ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+  assert(entry);
+  archive_entry_set_pathname(entry.get(), entryPath.c_str());
+  archive_entry_set_filetype(entry.get(), AE_IFREG);
+  archive_entry_set_perm(entry.get(), 0644);
+  archive_entry_set_size(entry.get(),
+                         static_cast<la_int64_t>(contents.size()));
+  assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+  assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+         static_cast<la_ssize_t>(contents.size()));
+  assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+std::uint32_t readLeU32(const unsigned char *bytes) {
+  return static_cast<std::uint32_t>(bytes[0]) |
+         (static_cast<std::uint32_t>(bytes[1]) << 8u) |
+         (static_cast<std::uint32_t>(bytes[2]) << 16u) |
+         (static_cast<std::uint32_t>(bytes[3]) << 24u);
+}
+
+void writeLeU32(unsigned char *bytes, std::uint32_t value) {
+  bytes[0] = static_cast<unsigned char>(value & 0xffu);
+  bytes[1] = static_cast<unsigned char>((value >> 8u) & 0xffu);
+  bytes[2] = static_cast<unsigned char>((value >> 16u) & 0xffu);
+  bytes[3] = static_cast<unsigned char>((value >> 24u) & 0xffu);
+}
+
+// Rewrites the declared uncompressed size in the central directory of a stored
+// ZIP entry to a value smaller than the actual content, simulating a lying
+// central directory that under-reports an entry's real uncompressed output.
+// Both the archive index and the bounded extraction stat are built from the
+// central directory, so this is the field that must lie to trip the
+// streaming-bound enforcement rather than the pre-gate size check.
+bool understateZipUncompressedSizes(const std::filesystem::path &path,
+                                    const std::string &entryPath,
+                                    std::uint32_t newUncompressedSize) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return false;
+  }
+  std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)),
+                                   std::istreambuf_iterator<char>());
+  input.close();
+  const std::vector<unsigned char> name(entryPath.begin(), entryPath.end());
+
+  constexpr std::uint32_t kCentralDirectorySignature = 0x02014b50u;
+  std::size_t patchedEntries = 0;
+  for (std::size_t offset = 0;
+       (offset = static_cast<std::size_t>(std::search(
+                     bytes.begin() + offset, bytes.end(), name.begin(),
+                     name.end()) -
+                 bytes.begin())) < bytes.size();
+       ++offset) {
+    if (offset < 46 ||
+        readLeU32(&bytes[offset - 46]) != kCentralDirectorySignature ||
+        offset - 46 + 28 > bytes.size()) {
+      // The local header and other name occurrences are skipped; only the
+      // central directory entry carries the declared uncompressed size.
+      if (offset + 1 >= bytes.size()) {
+        break;
+      }
+      continue;
+    }
+    writeLeU32(&bytes[offset - 46 + 24], newUncompressedSize);
+    ++patchedEntries;
+  }
+  if (patchedEntries != 1) {
+    return false;
+  }
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output) {
+    return false;
+  }
+  output.write(reinterpret_cast<const char *>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  output.close();
+  return true;
+}
+
+void testZipBoundedReadStreamsFullInBoundsEntry() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "streamed-full.zip";
+  const std::string payload = "0123456789abcdef-golden-bounded-payload";
+  writeStoredZipContents(archivePath, "content.bin", payload);
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "content.bin"), bytes,
+      payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+
+  bytes.clear();
+  error.clear();
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "content.bin"), bytes, 4096,
+      &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+}
+
+void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "lied-central-dir.zip";
+  const std::string content = "abcdefghijklmnopqrstuvwxyz012345";
+  writeStoredZipContents(archivePath, "lied.bin", content);
+  assert(content.size() > 7);
+  assert(understateZipUncompressedSizes(archivePath, "lied.bin", 7));
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  // The indexed size (7) is within the limit, so the pre-gate passes and the
+  // bound must be enforced during bounded extraction; a truncated or oversized
+  // buffer must not be handed back as a successful read.
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "lied.bin"), bytes, 7,
+      &error));
+  assert(bytes.empty());
+  assert(!error.empty());
+}
+
+void testBoundedReadRejectsOversizedSevenZipEntry() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "bounded.7z";
+  const std::string payload = "seven zip bounded read regression payload 12345";
+  writeSevenZip(archivePath, payload);
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "readme.txt"), bytes,
+      payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+
+  bytes.clear();
+  error.clear();
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "readme.txt"), bytes,
+      payload.size() - 1U, &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+}
+
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
   TempDirectory temporary;
   const auto firstPath = temporary.path() / "first.7z";
@@ -701,6 +858,89 @@ void testCorruptIndexEntryCountIsRejected() {
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
+void testSingleFlightWaitersDoNotEachReindexAfterFailedBuild() {
+  constexpr int kWorkerCount = 6;
+  TempDirectory temporary;
+  // A file that pretends to be a ZIP but cannot be indexed: every build
+  // attempt fails, which is what the single-flight waiters must observe
+  // instead of each queueing its own full index build.
+  const auto archivePath = temporary.path() / "broken.zip";
+  {
+    std::ofstream file(archivePath, std::ios::binary);
+    file << "not a real zip archive payload";
+  }
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::resetSingleFlightWaiterCountForTesting();
+
+  struct Gate {
+    std::mutex mutex;
+    std::condition_variable cv;
+    int arrived = 0;
+    bool builderInsideBuild = false;
+  };
+  Gate gate;
+
+  // Only the single-flight builder thread reaches a pause callback while
+  // inside the index build body. Hold it there until every non-builder worker
+  // is deterministically registered inside the single-flight wait (counted by
+  // the production test hook), then abort the build. No timing heuristic: the
+  // build cannot finish while the callback is blocked, so once the waiter
+  // count is complete no worker can still fall through to a second build.
+  auto pauseCallback = [&] {
+    std::unique_lock<std::mutex> lock(gate.mutex);
+    gate.builderInsideBuild = true;
+    gate.cv.notify_all();
+    const bool allWaitersRegistered = gate.cv.wait_for(
+        lock, 10s, [&] {
+          return archive_file::singleFlightWaiterCountForTesting() >=
+                 static_cast<std::uint32_t>(kWorkerCount - 1);
+        });
+    return allWaitersRegistered;
+  };
+
+  std::vector<std::atomic_bool> results(kWorkerCount);
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkerCount);
+  for (int index = 0; index < kWorkerCount; ++index) {
+    workers.emplace_back([&, index] {
+      {
+        std::unique_lock<std::mutex> lock(gate.mutex);
+        ++gate.arrived;
+        gate.cv.notify_all();
+      }
+      std::vector<archive_file::Entry> entries;
+      std::string error;
+      const bool listed = archive_file::listEntries(archivePath, entries,
+                                                    &error, pauseCallback);
+      results[index].store(listed, std::memory_order_release);
+    });
+  }
+
+  {
+    std::unique_lock<std::mutex> lock(gate.mutex);
+    gate.cv.wait(lock, [&] {
+      return gate.builderInsideBuild && gate.arrived == kWorkerCount;
+    });
+  }
+  for (auto &worker : workers) {
+    worker.join();
+  }
+  for (int index = 0; index < kWorkerCount; ++index) {
+    assert(!results[index].load(std::memory_order_acquire));
+  }
+
+  // The one aborting builder logged the index attempt; no waiter re-indexed.
+  const auto logLines = archive_file::debugLogLines();
+  const std::string archiveName = archivePath.filename().string();
+  const std::size_t indexAttempts = std::count_if(
+      logLines.begin(), logLines.end(), [&](const std::string &line) {
+        return line.find("Indexing archive:") != std::string::npos &&
+               line.find(archiveName) != std::string::npos;
+      });
+  assert(indexAttempts == 1);
+}
+
 void testDebugLogRetainsNewestThousandLines() {
   for (int index = 0; index <= 1000; ++index) {
     archive_file::appendDebugLogLine("retention-marker-" +
@@ -726,6 +966,12 @@ int main() {
   testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
   testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce();
   testIndependentSevenZipCacheMissesOpenConcurrently();
+  // Deliberately registered after the 7-Zip index-count assertion above:
+  // these bounded-read tests index real archives, which would otherwise pollute
+  // that assertion's retained debug-log window.
+  testZipBoundedReadStreamsFullInBoundsEntry();
+  testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
+  testBoundedReadRejectsOversizedSevenZipEntry();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
@@ -733,6 +979,7 @@ int main() {
   testArchiveIndexPersistsAcrossColdCacheRestart();
   testArchiveIndexPrunesOrphanedCacheFiles();
   testCorruptIndexEntryCountIsRejected();
+  testSingleFlightWaitersDoNotEachReindexAfterFailedBuild();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }
