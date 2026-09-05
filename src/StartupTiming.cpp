@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <set>
 #include <string>
 #include <sstream>
 
@@ -27,6 +28,7 @@ void StartupTiming::beginSession() {
   ++session_;
   start_ = now;
   active_ = true;
+  notedKeys_.clear();
   std::ostringstream line;
   line << "=== session " << session_ << " start button press ===";
   auto path = Utils::GetDocumentsPath() / "startup-timings.log";
@@ -59,6 +61,23 @@ void StartupTiming::mark(const char *stage) {
 void StartupTiming::note(const std::string &line) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!active_) {
+    return;
+  }
+  auto path = Utils::GetDocumentsPath() / "startup-timings.log";
+  std::error_code error;
+  std::filesystem::create_directories(path.parent_path(), error);
+  if (std::FILE *file = std::fopen(path.string().c_str(), "a")) {
+    std::fprintf(file, "  note: %s\n", line.c_str());
+    std::fclose(file);
+  }
+}
+
+void StartupTiming::noteOnce(const char *key, const std::string &line) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_) {
+    return;
+  }
+  if (!notedKeys_.insert(key).second) {
     return;
   }
   auto path = Utils::GetDocumentsPath() / "startup-timings.log";

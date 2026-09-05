@@ -1248,6 +1248,12 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
     inputs.observedTextValue(object.id, result.value);
   }
   if (result.value.empty() && !(text.editable && text.writer)) {
+    std::ostringstream emptyNote;
+    emptyNote << "renderer text object " << object.id
+              << " value empty, suppressed (hasValue="
+              << (text.value ? "yes" : "no") << ")";
+    StartupTiming::instance().noteOnce(
+        ("emptytext:" + std::to_string(object.id)).c_str(), emptyNote.str());
     result.suppressed = true;
     return result;
   }
@@ -1265,6 +1271,14 @@ TextLayoutInput prepareTextLayoutForValue(const SkinFrameInputs &inputs,
       (!result.atlas->bitmapFont &&
        (result.atlas->width <= 0 || result.atlas->height <= 0 ||
         result.atlas->layoutKind != SkinTextLayoutKind::Scalable))) {
+    std::ostringstream atlasNote;
+    atlasNote << "renderer text object " << object.id << " atlas unavailable"
+              << " (id="
+              << (result.atlas ? result.atlas->id : 0)
+              << " bitmap=" << (result.atlas && result.atlas->bitmapFont)
+              << " value='" << result.value << "')";
+    StartupTiming::instance().noteOnce(
+        ("noatlas:" + std::to_string(object.id)).c_str(), atlasNote.str());
     if (!inputs.safetyPolicy.enforces(SkinSafetyGuard::LuaDecoderLimit)) {
       result.suppressed = true;
       return result;
@@ -1342,6 +1356,13 @@ TextLayoutInput prepareTextLayout(const SkinFrameInputs &inputs,
   if (text.value) {
     auto resolved = resolveString(inputs, index, *text.value);
     if (resolved.failure) {
+      std::ostringstream resolveNote;
+      resolveNote << "renderer text object " << object.id
+                  << " string property resolve failed: "
+                  << resolved.failure->message;
+      StartupTiming::instance().noteOnce(
+          ("resolvefail:" + std::to_string(object.id)).c_str(),
+          resolveNote.str());
       return {.failure = *resolved.failure};
     }
     value = std::move(*resolved.value);

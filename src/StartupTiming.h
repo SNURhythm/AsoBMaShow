@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <mutex>
+#include <set>
 #include <string>
 
 // Records stage timestamps for the chart-start → first-frame path so a hang
@@ -25,6 +26,10 @@ public:
   // prefix). Used for diagnostic evidence during startup-path debugging.
   void note(const std::string &line);
 
+  // Appends line once per session for a given key. Used to report renderer
+  // conditions that fire every frame without flooding the log.
+  void noteOnce(const char *key, const std::string &line);
+
   void finishFirstFrame();
 
 private:
@@ -35,4 +40,5 @@ private:
   std::chrono::steady_clock::time_point start_{};
   bool active_ = false;
   std::size_t session_ = 0;
+  std::set<std::string> notedKeys_;
 };
