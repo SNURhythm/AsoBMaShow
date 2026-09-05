@@ -2207,6 +2207,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         return archiveIdentityCompleted(archivePath);
       };
 
+  const auto loopSourcePrefRefreshStart = scanPhaseStart();
   for (const auto &path : sourcePreferenceRefreshPaths) {
     if (shouldStop()) {
       break;
@@ -2218,7 +2219,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .archiveSize = preference.archiveSize,
     }));
   }
+  scanPhaseEnd("loop-source-preference-refresh", loopSourcePrefRefreshStart);
 
+  const auto loopCachedSourcePrefStart = scanPhaseStart();
   for (const auto &update : cachedSourcePreferenceUpdates) {
     if (shouldStop()) {
       break;
@@ -2239,7 +2242,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .archiveSize = update.archiveSize,
     }));
   }
+  scanPhaseEnd("loop-cached-source-preference", loopCachedSourcePrefStart);
 
+  const auto loopStaleSolidArchivesStart = scanPhaseStart();
   for (const auto &path : staleSolidArchives) {
     if (shouldStop()) {
       break;
@@ -2247,7 +2252,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     recordStorageResult(scanBatch->DeleteSolidArchive(path));
     recordStorageResult(scanBatch->DeleteArchiveCache(path));
   }
+  scanPhaseEnd("loop-stale-solid-archives", loopStaleSolidArchivesStart);
 
+  const auto loopReindexedArchivesStart = scanPhaseStart();
   for (const auto &path : reindexedArchives) {
     if (shouldStop()) {
       break;
@@ -2260,7 +2267,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     recordStorageResult(scanBatch->DeleteChartsInArchive(path));
   }
+  scanPhaseEnd("loop-reindexed-archives", loopReindexedArchivesStart);
 
+  const auto loopArchiveCacheDiffsStart = scanPhaseStart();
   for (const auto &diff : archiveCacheDiffs) {
     if (shouldStop()) {
       break;
@@ -2273,7 +2282,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .chartCount = diff.chartCount,
     }));
   }
+  scanPhaseEnd("loop-archive-cache-diffs", loopArchiveCacheDiffsStart);
 
+  const auto loopSolidArchiveDiffsStart = scanPhaseStart();
   for (const auto &diff : solidArchiveDiffs) {
     if (shouldStop()) {
       break;
@@ -2289,6 +2300,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       recordStorageResult(scanBatch->DeleteSolidArchive(diff.path));
     }
   }
+  scanPhaseEnd("loop-solid-archive-diffs", loopSolidArchiveDiffsStart);
 
   auto insertIndividualChartMeta = [&](ParsedChartMetadata &parsed,
                                        bool hasDocument) -> bool {
@@ -2303,6 +2315,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return true;
   };
 
+  const auto loopDocumentFlagStart = scanPhaseStart();
   for (const auto &[path, hasDocument] : documentFlagUpdates) {
     if (shouldStop()) {
       break;
@@ -2317,6 +2330,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     recordStorageResult(scanBatch->UpdateChartHasDocument(path, hasDocument));
   }
+  scanPhaseEnd("loop-document-flag-updates", loopDocumentFlagStart);
   scanPhaseEnd("reconcile-update-loops", reconcileLoopStart);
   const auto individualParseStart = scanPhaseStart();
   scanPhase("individual-chart-parse");
