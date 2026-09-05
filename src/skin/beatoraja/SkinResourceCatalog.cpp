@@ -3530,6 +3530,19 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
                                         built->atlas->kerning.size(),
                                         delta->physicalResources,
                                         built->atlas->paintBlendOperations)) {
+      {
+        std::ostringstream rejectNote;
+        rejectNote << "font atlas REJECTED for object";
+        for (const SkinObjectId object : request.objects) {
+          rejectNote << " " << object;
+        }
+        rejectNote << " decoded=" << (delta ? delta->decodedBytes : 0)
+                   << " glyphs=" << built->atlas->glyphs.size()
+                   << " pairs=" << built->atlas->kerning.size()
+                   << " phys=" << (delta ? delta->physicalResources : 0)
+                   << " sessionDecoded=" << fontSession.decodedBytes();
+        StartupTiming::instance().note(rejectNote.str());
+      }
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
       continue;
     }
