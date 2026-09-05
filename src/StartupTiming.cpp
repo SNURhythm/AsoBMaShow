@@ -60,9 +60,6 @@ void StartupTiming::mark(const char *stage) {
 
 void StartupTiming::note(const std::string &line) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_) {
-    return;
-  }
   auto path = Utils::GetDocumentsPath() / "startup-timings.log";
   std::error_code error;
   std::filesystem::create_directories(path.parent_path(), error);
@@ -74,9 +71,6 @@ void StartupTiming::note(const std::string &line) {
 
 void StartupTiming::noteOnce(const char *key, const std::string &line) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_) {
-    return;
-  }
   if (!notedKeys_.insert(key).second) {
     return;
   }
