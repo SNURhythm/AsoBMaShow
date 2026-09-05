@@ -3,6 +3,7 @@
 #include "../../view/DecodedImageCache.h"
 
 #include <cstddef>
+#include <deque>
 #include <map>
 #include <optional>
 #include <shared_mutex>
@@ -27,9 +28,19 @@ struct SkinDecodeCacheEntry {
 // cache is safe for concurrent access without the caller serializing on the
 // owning service. DecodedImageData is shared_ptr-backed, so all values are
 // copied out cheaply and no raw pointer or reference escapes a lock.
+//
+// The cache is bounded: decoded RGBA retained here lives in CPU memory even
+// after the GPU texture exists, so entries beyond the budget are evicted
+// (oldest-stored first per revision) to mirror Beatoraja's ResourcePool
+// generation disposal rather than retaining the whole skin's decoded corpus
+// until the next skin change.
 class SkinDecodeCache {
 public:
   using Key = std::string; // lowercased revision sha256
+
+  explicit SkinDecodeCache(
+      std::size_t byteBudget = SkinDecodeCache::kDefaultByteBudget)
+      : byteBudget_(byteBudget) {}
 
   [[nodiscard]] std::optional<image_decode::DecodedImageData>
   findSkinImage(std::string_view revisionKey, std::string_view imageKey) const;
@@ -47,10 +58,21 @@ public:
 
   void dropAll();
   [[nodiscard]] std::size_t decodedBytes() const noexcept;
+  [[nodiscard]] std::size_t byteBudget() const noexcept {
+    return byteBudget_;
+  }
 
 private:
+  void evictIfOverBudgetLocked();
+  void touchLocked(std::string_view revisionKey,
+                   std::string_view entryKey) const;
+
+  static constexpr std::size_t kDefaultByteBudget = 96U * 1024U * 1024U;
+  std::size_t byteBudget_;
   mutable std::shared_mutex mutex_;
   std::map<Key, SkinDecodeCacheEntry, std::less<>> entries_;
+  // Per (revision, entry) storage order for oldest-first eviction.
+  mutable std::deque<std::pair<Key, std::string>> order_;
 };
 
 } // namespace skin
