@@ -1919,6 +1919,16 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const std::size_t nextIndex =
         static_cast<std::size_t>(checkpoint.nextIndex);
     const std::size_t subIndex = static_cast<std::size_t>(checkpoint.subIndex);
+    archive_file::appendDebugLogLine(
+        "Validating archive checkpoint: nextIndex=" +
+        std::to_string(nextIndex) + " subIndex=" + std::to_string(subIndex) +
+        " archiveBatchOrder=" + std::to_string(archiveBatchOrder.size()) +
+        " ckptArchivePath=" +
+        (checkpoint.archivePath.empty()
+             ? "(empty)"
+             : fspath_to_utf8(checkpoint.archivePath)) +
+        " ckptSize=" + std::to_string(checkpoint.archiveSize) +
+        " ckptMtime=" + std::to_string(checkpoint.archiveMtimeNs));
     if (nextIndex > archiveBatchOrder.size()) {
       return false;
     }
@@ -2024,6 +2034,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   }
 
   auto scanBatch = session.BeginScanBatch();
+  archive_file::appendDebugLogLine(
+      scanBatch.has_value()
+          ? "Chart scan batch begun."
+          : "Chart scan batch begin failed.");
   if (!scanBatch.has_value()) {
     entityScheduler.cancel();
     return {};
@@ -2039,8 +2053,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     scannedFolders.push_back(node);
   }
   if (!folderScanRoots.empty()) {
+    archive_file::appendDebugLogLine(
+        "Synchronizing folders: roots=" +
+        std::to_string(folderScanRoots.size()) + " nodes=" +
+        std::to_string(folderScanNodes.size()));
     recordStorageResult(
         scanBatch->SynchronizeFolders(scannedFolders, folderScanRoots));
+    archive_file::appendDebugLogLine(
+        "Folder synchronization complete.");
   }
   std::vector<std::filesystem::path> upsertedChartPaths;
   std::uint64_t completedFlushRequest = 0;
