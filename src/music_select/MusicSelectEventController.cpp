@@ -183,6 +183,10 @@ MusicSelectEventOutcome MusicSelectEventController::execute(
     break;
   }
   case 13:
+    // No dedicated key-config surface exists yet (ruling: it would slot
+    // here). Until then keyconfig shares the Settings destination.
+    effect(outcome, Effect::OpenSettings);
+    break;
   case 14: effect(outcome, Effect::OpenSettings); break;
   case 15: effect(outcome, Effect::Play); break;
   case 16: effect(outcome, Effect::Autoplay); break;

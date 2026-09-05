@@ -59,6 +59,7 @@ enum class MusicSelectControlKey {
   Num3,
   Num4,
   Num5,
+  Num6,
   Num7,
   Num8,
   Num9,
@@ -132,6 +133,7 @@ enum class MusicSelectInputActionKind {
   CloseFolder,
   SelectedBarMoved,
   SongBarChangeTimer,
+  OpenSettings,
   ExitApplication,
 };
 

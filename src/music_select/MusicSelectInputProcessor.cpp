@@ -146,6 +146,8 @@ std::vector<MusicSelectInputAction> MusicSelectInputProcessor::process(
   if (control(input, MusicSelectControlKey::Num1)) emitEvent(out, 11);
   if (control(input, MusicSelectControlKey::Num2)) emitEvent(out, 12);
   if (control(input, MusicSelectControlKey::Num3)) emitEvent(out, 308);
+  if (control(input, MusicSelectControlKey::Num6))
+    emit(out, MusicSelectInputActionKind::OpenSettings);
 
   const bool num5 = controlHeld(input, MusicSelectControlKey::Num5);
   if (!input.start && !input.select && !num5) {

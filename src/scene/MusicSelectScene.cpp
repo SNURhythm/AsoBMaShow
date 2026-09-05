@@ -59,6 +59,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <ctime>
 #include <limits>
 #include <memory>
@@ -68,12 +69,168 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kSkinSoundAssetRoot = "assets";
 constexpr std::int64_t kRankingDurationMillis = 5'000;
 constexpr std::int64_t kRankingReloadDurationMillis = 10 * 60 * 1'000;
+
+// Default playback for the select system-SE service: lazily loads each sound
+// through AudioWrapper::{loadSkinSound,playSkinSound} (the same skin-sound path
+// the preview service uses) and caches the loaded handle per path.
+class MusicSelectSkinSoundPlayer {
+public:
+  explicit MusicSelectSkinSoundPlayer(AudioWrapper *audio) : audio_(audio) {}
+
+  ~MusicSelectSkinSoundPlayer() {
+    if (!audio_) return;
+    for (const auto &[path, handle] : handles_) {
+      audio_->stopSkinSound(audio::SkinSoundHandle{handle});
+      audio_->disposeSkinSound(audio::SkinSoundHandle{handle});
+    }
+  }
+
+  void operator()(const std::filesystem::path &path) {
+    if (!audio_) return;
+    const auto key = fspath_to_path_t(path);
+    if (const auto found = handles_.find(key); found != handles_.end()) {
+      audio_->playSkinSound(audio::SkinSoundHandle{found->second}, 1.0F, false);
+      return;
+    }
+    std::atomic<bool> cancelled{false};
+    const auto loaded = audio_->loadSkinSound(
+        key, cancelled, std::numeric_limits<std::size_t>::max(),
+        std::numeric_limits<std::size_t>::max());
+    if (!loaded.handle) return;
+    if (!audio_->playSkinSound(*loaded.handle, 1.0F, false)) {
+      audio_->disposeSkinSound(*loaded.handle);
+      return;
+    }
+    handles_.emplace(key, loaded.handle->value);
+  }
+
+private:
+  AudioWrapper *audio_;
+  std::unordered_map<path_t, std::uint64_t> handles_;
+};
+
+skin::SkinSystemSoundService::Playback
+musicSelectSkinSoundPlayback(AudioWrapper &audio) {
+  auto player = std::make_shared<MusicSelectSkinSoundPlayer>(&audio);
+  return [player](const std::filesystem::path &path) { (*player)(path); };
+}
+
+// User-configured music-select sound-set directory, trimmed. Empty when unset
+// or blank so the search-roots span never carries an empty entry; callers then
+// keep the bundled `assets/` root as the fallback.
+std::filesystem::path musicSelectSoundSetRoot(const std::string &configured) {
+  const auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
+  const auto first =
+      std::find_if_not(configured.begin(), configured.end(), isSpace);
+  if (first == configured.end()) {
+    return {};
+  }
+  const auto last =
+      std::find_if_not(configured.rbegin(), configured.rend(), isSpace).base();
+  return std::filesystem::path(std::string(first, last));
+}
+
+// Previews the chart and the looping select BGM through the same AudioWrapper
+// skin-sound path as the system-SE player. The default handle stays loaded so
+// returning to the select BGM is instant; preview sounds are disposed as soon
+// as they stop so the session keeps only the default decoded
+// (PreviewMusicProcessor.java:97-101, symmetric fade approximated).
+class MusicSelectPreviewBgmPlayer {
+public:
+  explicit MusicSelectPreviewBgmPlayer(AudioWrapper *audio,
+                                       std::filesystem::path defaultPath)
+      : audio_(audio), defaultKey_(fspath_to_path_t(defaultPath)) {}
+
+  ~MusicSelectPreviewBgmPlayer() {
+    stopCurrent();
+    if (audio_ && defaultHandle_) {
+      audio_->disposeSkinSound(*defaultHandle_);
+    }
+  }
+
+  bool play(const std::filesystem::path &path, bool loop,
+            const std::shared_ptr<std::atomic_bool> &cancellation,
+            std::stop_token stop) {
+    if (!audio_) return false;
+    stopCurrent();
+    const auto key = fspath_to_path_t(path);
+    const bool isDefault = (key == defaultKey_);
+    audio::SkinSoundHandle handle;
+    if (isDefault && defaultHandle_) {
+      handle = *defaultHandle_;
+    } else {
+      const auto loaded = audio_->loadSkinSound(
+          key, *cancellation, std::numeric_limits<std::size_t>::max(),
+          std::numeric_limits<std::size_t>::max(), stop);
+      if (!loaded.handle) {
+        // A superseded request is cancelled mid-load and expected to fail; only
+        // warn on a genuine load failure (e.g. the bundled default BGM missing)
+        // so navigation back-and-forth never spams the log.
+        if (!cancellation->load(std::memory_order_acquire) &&
+            !stop.stop_requested()) {
+          SDL_Log("Music-select skin sound failed to load: %s",
+                  fspath_to_utf8(path).c_str());
+        }
+        return false;
+      }
+      handle = *loaded.handle;
+      if (isDefault) defaultHandle_ = handle;
+    }
+    if (cancellation->load(std::memory_order_acquire) ||
+        stop.stop_requested()) {
+      (void)audio_->disposeSkinSound(handle);
+      if (isDefault) defaultHandle_.reset();
+      return false;
+    }
+    if (!audio_->playSkinSound(handle, 1.0F, loop)) {
+      (void)audio_->disposeSkinSound(handle);
+      if (isDefault) defaultHandle_.reset();
+      return false;
+    }
+    playingHandle_ = handle;
+    playingKey_ = key;
+    return true;
+  }
+
+  void stopCurrent() {
+    if (!audio_ || !playingHandle_) return;
+    (void)audio_->stopSkinSound(*playingHandle_);
+    if (playingKey_ != defaultKey_) {
+      (void)audio_->disposeSkinSound(*playingHandle_);
+    }
+    playingHandle_.reset();
+    playingKey_ = {};
+  }
+
+private:
+  AudioWrapper *audio_;
+  path_t defaultKey_;
+  std::optional<audio::SkinSoundHandle> defaultHandle_;
+  std::optional<audio::SkinSoundHandle> playingHandle_;
+  path_t playingKey_{};
+};
+
+MusicSelectPreviewAudioService::AudioPort
+musicSelectPreviewAudioPort(AudioWrapper &audio,
+                            const std::filesystem::path &defaultPath) {
+  auto player =
+      std::make_shared<MusicSelectPreviewBgmPlayer>(&audio, defaultPath);
+  return {.play =
+              [player](const std::filesystem::path &path, bool loop,
+                       const std::shared_ptr<std::atomic_bool> &cancellation,
+                       std::stop_token stop) {
+                return player->play(path, loop, cancellation, std::move(stop));
+              },
+          .stop = [player]() { player->stopCurrent(); }};
+}
 
 std::int64_t unixMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -244,6 +401,7 @@ std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
   case SDLK_3: return MusicSelectControlKey::Num3;
   case SDLK_4: return MusicSelectControlKey::Num4;
   case SDLK_5: return MusicSelectControlKey::Num5;
+  case SDLK_6: return MusicSelectControlKey::Num6;
   case SDLK_7: return MusicSelectControlKey::Num7;
   case SDLK_8: return MusicSelectControlKey::Num8;
   case SDLK_9: return MusicSelectControlKey::Num9;
@@ -297,8 +455,26 @@ MusicSelectScene::MusicSelectScene(
 
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
+  // Search the user-configured sound-set folder (when set) before the bundled
+  // `assets/` root, resolving each sound across Beatoraja's extension order.
+  std::vector<std::filesystem::path> selectSoundRoots;
+  const auto configuredSet =
+      musicSelectSoundSetRoot(context.settings.skinSelectSoundSetPath);
+  if (!configuredSet.empty()) {
+    selectSoundRoots.push_back(configuredSet);
+  }
+  selectSoundRoots.emplace_back(kSkinSoundAssetRoot);
+  // The looping SELECT system sound doubles as the preview fallback
+  // (MusicSelector.java:173-174 setDefault(getSound(SELECT))).
+  const auto selectBgm =
+      skin::musicSelectSystemSoundPath(
+          selectSoundRoots, skin::MusicSelectSystemSound::Select)
+          .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
-      context.jukebox.audioRuntime());
+      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm));
+  systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
+      selectSoundRoots,
+      musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
   sortIndex_ = sourceSortIndex(context.settings.skinSortId);
   inputProcessor_ = MusicSelectInputProcessor(
       {.layout = musicSelectKeyLayoutForConfig(
@@ -412,7 +588,9 @@ void MusicSelectScene::onPause() {
 #endif
   stopInputListening();
   previewController_.reset();
-  if (previewAudio_) previewAudio_->switchTo(std::nullopt);
+  // Pausing stops preview audio entirely; Beatoraja does not resume the select
+  // BGM while the scene is covered.
+  if (previewAudio_) previewAudio_->silence();
   if (irExternalUrlGeneration_ != 0 && irExternalUrlService_) {
     irExternalUrlService_->close(irExternalUrlGeneration_);
   }
@@ -519,6 +697,9 @@ void MusicSelectScene::selectedBarMoved() {
       previewSelection(snapshot, context.settings.archiveChartPreviewEnabled),
       songBarChangeMicros_);
   if (previewMove.stopAudio && previewAudio_) {
+    // Leaving a song folder returns to the looping select BGM: pinned
+    // Beatoraja drops the preview but the selector keeps the SELECT sound
+    // running, so route through the default rather than going silent.
     previewAudio_->switchTo(std::nullopt);
   }
 
@@ -1087,7 +1268,9 @@ bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
   if (!directory.childrenLoaded && !loadDirectoryChildren(directory)) {
     return false;
   }
-  return bars_.open(directory.id);
+  const bool opened = bars_.open(directory.id);
+  if (opened && systemSound_) systemSound_->playFolderOpen();
+  return opened;
 }
 
 bool MusicSelectScene::loadDirectoryChildren(
@@ -1455,6 +1638,7 @@ void MusicSelectScene::search(std::string text) {
 
 void MusicSelectScene::closeDirectory() {
   if (bars_.close()) {
+    if (systemSound_) systemSound_->playFolderClose();
     syncResolvedFilters();
     selectedBarMoved();
   } else {
@@ -1653,6 +1837,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       record.meta.BmsPath.empty()) {
     return;
   }
+  if (systemSound_) systemSound_->playDecide();
   showDecideOverlay(record);
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
@@ -2261,6 +2446,9 @@ void MusicSelectScene::applyInputAction(
     bars_.move(true, action.value, action.deadlineMillis);
     selectedBarMoved();
     break;
+  case MusicSelectInputActionKind::ScratchSound:
+    if (systemSound_) systemSound_->playScratch();
+    break;
   case MusicSelectInputActionKind::MovePrevious:
     bars_.move(false, action.value, action.deadlineMillis);
     selectedBarMoved();
@@ -2351,6 +2539,9 @@ void MusicSelectScene::applyInputAction(
   case MusicSelectInputActionKind::ExitApplication:
     context.quitFlag.store(true);
     break;
+  case MusicSelectInputActionKind::OpenSettings:
+    openSettings();
+    break;
   default:
     break;
   }
@@ -2403,6 +2594,9 @@ void MusicSelectScene::executeEvent(
     case MusicSelectEventEffectKind::RefreshBars:
       reloadLibrary();
       selectedBarMoved();
+      break;
+    case MusicSelectEventEffectKind::OptionChangeSound:
+      if (systemSound_) systemSound_->playOptionChange();
       break;
     case MusicSelectEventEffectKind::OpenSettings:
       openSettings();
@@ -2654,7 +2848,9 @@ void MusicSelectScene::enterError(
   failed_ = true;
   stopInputListening();
   previewController_.reset();
-  if (previewAudio_) previewAudio_->switchTo(std::nullopt);
+  // Error/teardown silences preview audio entirely rather than resuming the
+  // select BGM.
+  if (previewAudio_) previewAudio_->silence();
   if (searchInput_ != nullptr) searchInput_->endEditing();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();

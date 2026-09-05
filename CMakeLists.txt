@@ -1260,11 +1260,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(music_select_preview_tests
             tests/music_select_preview_tests.cpp
             src/music_select/MusicSelectPreview.cpp
+            src/music_select/MusicSelectPreviewAudioService.cpp
         )
         target_include_directories(music_select_preview_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_preview_tests PRIVATE cxx_std_23)
+        add_executable(music_select_system_sound_tests
+            tests/music_select_system_sound_tests.cpp
+            src/audio/SkinSystemSoundService.cpp
+        )
+        target_include_directories(music_select_system_sound_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_system_sound_tests PRIVATE cxx_std_23)
         add_executable(music_select_search_history_tests
             tests/music_select_search_history_tests.cpp
             src/music_select/MusicSelectSearchHistory.cpp
@@ -4182,6 +4191,38 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(skin_resource_catalog_tests PRIVATE cxx_std_23)
         target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
         target_link_libraries(skin_resource_catalog_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
+        add_executable(skin_movie_catalog_types_tests
+            tests/skin_movie_catalog_types_tests.cpp
+            src/MinizBridge.c
+            src/view/DecodedImageCache.cpp
+            src/view/ImageDecodeCoordinator.cpp
+            src/view/ImageFileDecoder.cpp
+            src/view/SdlTtfRuntime.cpp
+            src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
+            src/skin/beatoraja/SkinMovieCatalogFrame.cpp
+            src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
+            src/skin/beatoraja/SkinTextAtlas.cpp
+        )
+        if(APPLE)
+            target_sources(skin_movie_catalog_types_tests PRIVATE src/skin/package/SkinAliasDetectorApple.mm)
+        endif()
+        target_include_directories(skin_movie_catalog_types_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(skin_movie_catalog_types_tests PRIVATE cxx_std_23)
+        target_compile_definitions(skin_movie_catalog_types_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
+        target_link_libraries(skin_movie_catalog_types_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
         add_executable(skin_decode_cache_tests
             tests/skin_decode_cache_tests.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
@@ -7104,6 +7145,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         set_tests_properties(skin_resource_catalog_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     endif()
+    if (TARGET skin_movie_catalog_types_tests)
+        asobmashow_register_test(skin_movie_catalog_types_tests)
+        set_tests_properties(skin_movie_catalog_types_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
     if (TARGET skin_decode_cache_tests)
         asobmashow_register_test(skin_decode_cache_tests)
     endif()
@@ -7148,6 +7194,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_preview_tests)
         asobmashow_register_test(music_select_preview_tests)
+    endif()
+    if (TARGET music_select_system_sound_tests)
+        asobmashow_register_test(music_select_system_sound_tests)
     endif()
     if (TARGET music_select_search_history_tests)
         asobmashow_register_test(music_select_search_history_tests)

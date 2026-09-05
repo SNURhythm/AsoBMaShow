@@ -1,11 +1,7 @@
 #include "MusicSelectPreview.h"
 
-#include "../audio/AudioWrapper.h"
-#include "../path.h"
-
 #include <atomic>
 #include <condition_variable>
-#include <limits>
 #include <mutex>
 #include <stop_token>
 #include <thread>
@@ -13,8 +9,18 @@
 
 class MusicSelectPreviewAudioService::Impl {
 public:
-  explicit Impl(AudioWrapper &audio) : audio_(&audio) {
+  explicit Impl(MusicSelectPreviewAudioService::AudioPort port,
+                std::filesystem::path defaultPath)
+      : port_(std::move(port)), defaultPath_(std::move(defaultPath)) {
     worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
+    // Beatoraja's PreviewThread starts the looping SELECT BGM the moment the
+    // worker starts (PreviewMusicProcessor.java:79-81); queue that initial
+    // switch so the switchTo(nullopt) dedupe cannot swallow the default.
+    {
+      std::lock_guard lock(mutex_);
+      ++requestSerial_;
+    }
+    condition_.notify_one();
   }
 
   ~Impl() {
@@ -41,10 +47,23 @@ public:
     condition_.notify_one();
   }
 
+void silence() {
+    std::lock_guard lock(mutex_);
+    // An empty path is distinct from the nullopt "play default" state, so the
+    // worker maps an empty target to a stop with no subsequent default playback.
+    const std::filesystem::path emptyPath;
+    if (requestedPath_ == emptyPath) return;
+    if (loadCancellation_) {
+      loadCancellation_->store(true, std::memory_order_release);
+    }
+    requestedPath_ = emptyPath;
+    ++requestSerial_;
+    condition_.notify_one();
+  }
+
 private:
   void run(std::stop_token stop) {
     std::uint64_t observedSerial = 0;
-    std::optional<audio::SkinSoundHandle> playing;
     std::optional<std::filesystem::path> playingPath;
     while (!stop.stop_requested()) {
       std::optional<std::filesystem::path> requested;
@@ -62,53 +81,38 @@ private:
         loadCancellation_ = cancellation;
       }
 
-      if (requested == playingPath) {
+      const std::filesystem::path target = requested.value_or(defaultPath_);
+      if (target.empty()) {
+        port_.stop();
+        playingPath.reset();
         observedSerial = serial;
         continue;
       }
-      if (playing) {
-        (void)audio_->stopSkinSound(*playing);
-        (void)audio_->disposeSkinSound(*playing);
-        playing.reset();
-        playingPath.reset();
-      }
-      if (!requested) {
+      if (playingPath && *playingPath == target) {
         observedSerial = serial;
         continue;
       }
 
-      const auto loaded = audio_->loadSkinSound(
-          fspath_to_path_t(*requested), *cancellation,
-          std::numeric_limits<std::size_t>::max(),
-          std::numeric_limits<std::size_t>::max(), stop);
+      const bool ok = port_.play(target, true, cancellation, stop);
       bool stale = cancellation->load(std::memory_order_acquire);
       {
         std::lock_guard lock(mutex_);
         stale = stale || requestSerial_ != serial;
         if (loadCancellation_ == cancellation) loadCancellation_.reset();
       }
-      if (!loaded.handle) {
-        observedSerial = serial;
-        continue;
+      if (ok && !stale && !stop.stop_requested()) {
+        playingPath = target;
+      } else {
+        playingPath.reset();
       }
-      if (stale || stop.stop_requested() ||
-          !audio_->playSkinSound(*loaded.handle, 1.0F, true)) {
-        (void)audio_->disposeSkinSound(*loaded.handle);
-        observedSerial = serial;
-        continue;
-      }
-      playing = loaded.handle;
-      playingPath = std::move(requested);
       observedSerial = serial;
     }
 
-    if (playing) {
-      (void)audio_->stopSkinSound(*playing);
-      (void)audio_->disposeSkinSound(*playing);
-    }
+    port_.stop();
   }
 
-  AudioWrapper *audio_ = nullptr;
+  AudioPort port_;
+  std::filesystem::path defaultPath_;
   std::mutex mutex_;
   std::condition_variable condition_;
   std::optional<std::filesystem::path> requestedPath_;
@@ -118,8 +122,8 @@ private:
 };
 
 MusicSelectPreviewAudioService::MusicSelectPreviewAudioService(
-    AudioWrapper &audio)
-    : impl_(std::make_unique<Impl>(audio)) {}
+    AudioPort port, std::filesystem::path defaultPath)
+    : impl_(std::make_unique<Impl>(std::move(port), std::move(defaultPath))) {}
 
 MusicSelectPreviewAudioService::~MusicSelectPreviewAudioService() = default;
 
@@ -127,3 +131,5 @@ void MusicSelectPreviewAudioService::switchTo(
     std::optional<std::filesystem::path> path) {
   impl_->switchTo(std::move(path));
 }
+
+void MusicSelectPreviewAudioService::silence() { impl_->silence(); }

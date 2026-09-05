@@ -423,6 +423,38 @@ void testPlayerConfigurationSkinStringsRoundTrip() {
          "PlayerConfig string values survive settings persistence verbatim");
 }
 
+void testSkinSelectSoundSetPathRoundTrips() {
+  TempDirectory temp;
+  const auto path = temp.path() / "skin-select-sound-set.json";
+  AppSettings defaults;
+  expect(defaults.skinSelectSoundSetPath.empty(),
+         "the music-select sound-set folder defaults empty, keeping the "
+         "bundled assets fallback");
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, defaults, error),
+         "default sound-set folder saves: " + error);
+  const auto emptyLoaded = AppSettingsStore::Load(path);
+  expect(emptyLoaded.status == AppSettingsLoadStatus::Loaded &&
+             emptyLoaded.settings.skinSelectSoundSetPath.empty(),
+         "an empty sound-set folder round-trips as empty");
+
+  AppSettings configured;
+  configured.skinSelectSoundSetPath =
+      "/Users/example/Downloads/Skins/ModernChic/Sound";
+  expect(AppSettingsStore::Save(path, configured, error),
+         "configured sound-set folder saves: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinSelectSoundSetPath ==
+                 configured.skinSelectSoundSetPath,
+         "the configured sound-set folder survives a JSON round trip");
+  expect(readFile(path).find("\"skinSelectSoundSetPath\": "
+                             "\"/Users/example/Downloads/Skins/ModernChic/"
+                             "Sound\"") != std::string::npos,
+         "saved JSON contains the sound-set path");
+}
+
 void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
   TempDirectory temp;
   const auto path = temp.path() / "music-select-input.json";
@@ -561,6 +593,7 @@ void testPlayerConfigurationSkinStringsAreBounded() {
   direct.skinTargetList.assign(
       AppSettings::kMaximumSkinTargetListEntries + 50, "target");
   direct.skinTargetList.front() = oversized;
+  direct.skinSelectSoundSetPath = oversized;
   direct.sanitize();
   std::size_t directTargetBytes = 0;
   for (const auto &target : direct.skinTargetList) {
@@ -580,6 +613,9 @@ void testPlayerConfigurationSkinStringsAreBounded() {
                           AppSettings::kMaximumSkinPropertyStringBytes;
                  }),
          "sanitization bounds every per-frame PlayerConfig skin string");
+  expect(direct.skinSelectSoundSetPath == oversized,
+         "the sound-set folder is a plain path string that sanitization does "
+         "not clamp");
 
   TempDirectory temp;
   const auto path = temp.path() / "bounded-player-config-strings.json";
@@ -597,6 +633,7 @@ void testPlayerConfigurationSkinStringsAreBounded() {
       {"skinChartReplicationMode", oversized},
       {"skinTargetId", oversized},
       {"skinTargetList", std::move(targetList)},
+      {"skinSelectSoundSetPath", oversized},
   };
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
@@ -608,9 +645,11 @@ void testPlayerConfigurationSkinStringsAreBounded() {
              loaded.settings.skinTargetId == "MAX" &&
              loaded.settings.skinTargetList.size() <=
                  AppSettings::kMaximumSkinTargetListEntries &&
+             loaded.settings.skinSelectSoundSetPath == oversized &&
              hasDiagnostic(loaded.diagnostics, "skinTargetList", "limit"),
          "settings decode rejects oversized PlayerConfig strings before "
-         "copying them into the runtime settings object");
+         "copying them into the runtime settings object while retaining the "
+         "plain sound-set path string");
 }
 
 void testSkinTargetSelectionsSurviveRestart() {
@@ -1629,6 +1668,7 @@ int main() {
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
+  testSkinSelectSoundSetPathRoundTrips();
   testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds();
   testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds();
   testConfiguredTargetListSkinStringsRoundTrip();
