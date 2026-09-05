@@ -975,11 +975,23 @@ void testStorageFailureLeavesNoChart() {
   setMetadataRebuildRequired(databasePath, true);
   denyChartInsert.store(true, std::memory_order_relaxed);
 
+  // A pending flush request must NOT be acknowledged when the scan fails to
+  // commit: the caller's completion signal would otherwise claim durable
+  // state that was never written.
+  std::uint64_t flushCompleted = 0;
   ChartLibraryScanner scanner;
-  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  const ChartScanResult result = scanner.ScanWithResult(
+      *session, {root}, nullptr, nullptr, nullptr,
+      []() -> std::uint64_t { return 7; },
+      [&](std::uint64_t request) {
+        if (request > flushCompleted) {
+          flushCompleted = request;
+        }
+      });
   assert(result.changedCount == 0);
   assert(!result.completed);
   assert(!result.committed);
+  assert(flushCompleted == 0);
   assert(session->CountAllChartMeta() == 0);
   denyChartInsert.store(false, std::memory_order_relaxed);
   assert(metadataRebuildRequired(databasePath));
@@ -1594,22 +1606,25 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   assert(!metadataRebuildRequired(databasePath));
 }
 
-void testNoScanWorkAcknowledgesPendingFlushRequest() {
+void testUnmodifiedRescanAcknowledgesPendingFlushRequest() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
-  const auto archivePath =
-      writeZip(root / "stable.zip", {{"one.bms", chartText("Stable")}});
+  std::filesystem::create_directories(root);
+  // An archive whose scan cache is already valid produces no diffs on a
+  // rescan (no new or removed charts), so the scan commits without real work;
+  // a pending flush request from the UI still has to be acknowledged so the
+  // caller's completion signal arrives.
+  const auto archivePath = writeZip(root / "empty.zip", {});
 
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
   assert(session.has_value());
   ChartLibraryScanner scanner;
-  assert(scanner.Scan(*session, {archivePath}) > 0);
+  assert(scanner.Scan(*session, {archivePath}) >= 0);
+  const ChartScanSnapshot first = session->LoadScanSnapshot();
+  assert(first.archiveCache.size() == 1);
 
-  // A second scan over an unchanged library finds no work (every chart is
-  // already known, archive cache is valid): a pending flush request from the
-  // UI still has to be acknowledged so the caller's completion signal arrives.
   std::uint64_t flushCompleted = 0;
   const ChartScanResult result = scanner.ScanWithResult(
       *session, {archivePath}, nullptr, nullptr, nullptr,
@@ -1620,6 +1635,7 @@ void testNoScanWorkAcknowledgesPendingFlushRequest() {
         }
       });
   assert(result.completed);
+  assert(result.committed);
   assert(flushCompleted >= 7);
 }
 
@@ -2252,7 +2268,7 @@ int main() {
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
   testArchiveStreamFailurePreservesCheckpointPrefix();
-  testNoScanWorkAcknowledgesPendingFlushRequest();
+  testUnmodifiedRescanAcknowledgesPendingFlushRequest();
   testUnreadableArchivePreservesMetadataRebuildState();
   testStopAtPreparingUpdatesCancelsArchivePrefetch();
   testLargeSingleArchivePreservesAllChartResults();
