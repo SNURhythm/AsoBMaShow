@@ -3056,7 +3056,10 @@ void GamePlayScene::init() {
   presentationEventFanout = ownedPresentationEventFanout.get();
   std::string musicStopError;
   context.musicPlayer.Stop(musicStopError);
-  context.jukebox.stop();
+  // The chart's audio was already loaded and scheduled (preload worker or
+  // launch thread); keep the audio device open so play() short-circuits the
+  // multi-hundred-ms device start instead of stopping and re-opening it.
+  (void)context.jukebox.stopKeepDevice();
   if (shouldEnterPracticeMenu()) {
     if (!enterPracticeMenu()) {
       return;

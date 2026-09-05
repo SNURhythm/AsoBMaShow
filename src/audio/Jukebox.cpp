@@ -4547,6 +4547,36 @@ void Jukebox::leavePlaybackStopped() {
   }
 }
 
+audio::playback::BackendOperationResult Jukebox::stopKeepDevice() {
+  std::lock_guard<std::mutex> playGuard(playThreadLock);
+  jukebox_lifecycle::SessionState lifecycleState{
+      .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
+      .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
+      .positionMutex = seekLock,
+      .audioCursor = audioCursor,
+      .bmpCursor = bmpCursor,
+      .bmpLayerCursor = bmpLayerCursor,
+      .currentBga = currentBga,
+      .currentBmpLayer = currentBmpLayer,
+  };
+  const auto stopped = jukebox_lifecycle::StopPlaybackKeepDevice(
+      audio, "Jukebox::stopKeepDevice", lifecycleState,
+      [this] { wakeScheduler(); });
+  if (!stopped.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
+    return stopped;
+  }
+  if (playThread.joinable())
+    playThread.join();
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+  for (auto &videoPlayer : videoPlayerTable) {
+    videoPlayer.second->stop();
+  }
+  return {.success = true};
+}
+
 audio::playback::BackendOperationResult Jukebox::stop() {
   std::lock_guard<std::mutex> playGuard(playThreadLock);
   jukebox_lifecycle::SessionState lifecycleState{

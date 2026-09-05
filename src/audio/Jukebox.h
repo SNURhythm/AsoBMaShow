@@ -209,6 +209,9 @@ public:
   resolveRealtimeKeySound(int wav) const;
   audio::playback::BackendOperationResult play(long long startMicros = 0);
   audio::playback::BackendOperationResult stop();
+  // Stops the playback session but keeps the audio device open, so a later
+  // play() for the same loaded chart short-circuits the device start.
+  audio::playback::BackendOperationResult stopKeepDevice();
   void render();
   bool hasActiveVisuals() const;
   long long getScheduledAudioEndMicros();

@@ -1137,8 +1137,13 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
       SkinTextAtlasBuildResult result;
       result.atlas = *cached;
       result.atlas->id = id;
+      StartupTiming::instance().note(
+          "atlas cache HIT key=" + contentKey.substr(0, 12));
       return result;
     }
+    StartupTiming::instance().note(
+        "atlas cache MISS key=" + contentKey.substr(0, 12) +
+        " revision=" + files.revision().lowercaseSha256.substr(0, 12));
   }
   const auto facesStart = std::chrono::steady_clock::now();
   const auto faces = readFontFaces(request, files, session, diagnostics,
