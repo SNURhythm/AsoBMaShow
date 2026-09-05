@@ -41,10 +41,10 @@ chart_recall_end = source.index(
     chart_recall_start)
 chart_recall = source[chart_recall_start:chart_recall_end]
 missing += ["chart-recall:" + token for token in [
-    "retirePreviewLoadThread(true);",
+    "pendingStopAndClearSelectedChartAfterPreview = true;",
     "startReplayLoadWorker(",
     "queueReplayLoadCompletion(",
-    "joinRetiredPreviewLoadThreads()",
+    "previewWorker_->stop();",
     "LoadModernChartResultByAttempt(",
     "result_recall::BuildChartResult(",
 ] if token not in chart_recall]
@@ -54,11 +54,11 @@ course_recall_end = source.index(
     "\nvoid MainMenuScene::startRemoteResultRecall", course_recall_start)
 course_recall = source[course_recall_start:course_recall_end]
 missing += ["course-recall:" + token for token in [
-    "cancelActivePreviewLoading();",
-    "retirePreviewLoadThread(true);",
+    "previewWorker_->cancel();",
+    "pendingStopAndClearSelectedChartAfterPreview = true;",
     "startReplayLoadWorker(",
     "queueReplayLoadCompletion(",
-    "joinRetiredPreviewLoadThreads()",
+    "previewWorker_->stop();",
     "LoadModernCourseResultByAttempt(",
     "result_recall::BuildCourseResult(",
     ".savedResultBrowsing = true",

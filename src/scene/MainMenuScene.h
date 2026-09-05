@@ -17,7 +17,6 @@
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
-#include "../utils/Debouncer.h"
 #include "../view/ImageView.h"
 #include "../view/ContextMenuView.h"
 #include "../view/ResultRecordListView.h"
@@ -84,7 +83,6 @@ private:
   std::atomic_bool selectedChartMediaReady = false;
   std::atomic_bool selectedChartReusableForStart = false;
 
-  std::thread loadThread;
   // Preview chart loading runs on the shared ChartPreloadWorker (single
   // scene-lifetime thread, debounced and latest-wins) so a selection change
   // never spawns or joins a per-selection thread on the UI thread.
@@ -522,14 +520,6 @@ private:
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();
-  void schedulePreviewLoad(bms_parser::ChartMeta meta);
-  void startPreviewLoadThread(bms_parser::ChartMeta meta,
-                              DebounceToken previewToken);
-  void cancelActivePreviewLoading();
-  void retirePreviewLoadThread(bool stopPreviewAudioWhenDone);
-  void reapRetiredPreviewLoadThreads();
-  void joinRetiredPreviewLoadThreads();
-  void cancelPreviewLoading(bool stopPreviewAudio);
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo
   selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
