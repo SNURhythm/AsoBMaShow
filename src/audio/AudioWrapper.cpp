@@ -416,7 +416,8 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   audio::playback::DrainRealtimeCommands(state);
   audio::playback::DrainCommands(state);
 
-  if (!userData->stopwatch->isRunning()) {
+  const bool clockRunning = userData->stopwatch->isRunning();
+  if (!clockRunning && state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
     return;
   }
@@ -430,10 +431,17 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           ? userData->playbackRatePercent->load(std::memory_order_acquire)
           : 100;
 
-  const long long bufferStartMicros = beginAudioClockBuffer(
-      userData, frameCount, sampleRate, playbackRatePercent);
-  audio::playback::ActivateScheduledSounds(state, bufferStartMicros, sampleRate,
-                                           frameCount, playbackRatePercent);
+  long long bufferStartMicros = 0;
+  const audio::playback::MixScope mixScope =
+      clockRunning ? audio::playback::MixScope::AllBuses
+                   : audio::playback::MixScope::SystemOnly;
+  if (clockRunning) {
+    bufferStartMicros = beginAudioClockBuffer(
+        userData, frameCount, sampleRate, playbackRatePercent);
+    audio::playback::ActivateScheduledSounds(state, bufferStartMicros,
+                                             sampleRate, frameCount,
+                                             playbackRatePercent);
+  }
 
   if (state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -460,7 +468,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           : 1.0f;
   audio::playback::MixActiveSounds(
       state, std::span<float>(mixBuffer, requiredSamples), frameCount,
-      outputChannels, bgmGain, keysoundGain, playbackRatePercent);
+      outputChannels, bgmGain, keysoundGain, playbackRatePercent, mixScope);
 
   // Apply Effects
   if (userData->bassFilter) {

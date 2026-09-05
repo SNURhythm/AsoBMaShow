@@ -3964,7 +3964,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioBackend.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp
+        src/Utils.cpp
         src/path.cpp
         src/utils/Stopwatch.cpp
     )

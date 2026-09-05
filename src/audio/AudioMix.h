@@ -132,6 +132,16 @@ struct AudioCallbackState {
 
 namespace audio::playback {
 
+enum class MixScope : std::uint8_t {
+  // Mix every active bus (Bgm, Keysound, System). Used while the gameplay
+  // clock is running.
+  AllBuses,
+  // Mix only Bus::System voices, skipping Bgm/Keysound. Used while the
+  // gameplay clock is stopped so select SEs / BGM / previews remain audible
+  // without resuming gameplay audio.
+  SystemOnly,
+};
+
 struct OutputRateCandidate {
   SoundData *soundData = nullptr;
   std::vector<short> outputData;
@@ -218,6 +228,7 @@ void ActivateScheduledSounds(AudioCallbackState &state,
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
-                     int playbackRatePercent);
+                     int playbackRatePercent,
+                     MixScope scope = MixScope::AllBuses);
 
 } // namespace audio::playback
