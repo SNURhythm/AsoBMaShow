@@ -70,6 +70,11 @@ struct PlaySkinSessionContext {
   SkinResourcePreparationService &resourcePreparation;
   SkinBuiltinImageReader builtinImageReader;
   SkinBuiltinImageBatchReader builtinImageBatchReader;
+  // Shared decoded-image cache for chart assets (stage/back/banner) reused
+  // between selector/decide display and the gameplay skin.
+  image_decode::DecodedImageCache *builtinImageCache = nullptr;
+  std::function<std::string(const std::filesystem::path &)>
+      builtinImageCacheKey;
   std::shared_ptr<SkinTextureDevice> textureDevice;
   std::shared_ptr<SkinMovieDevice> movieDevice;
   std::unique_ptr<LuaSkinHttpTransport> httpTransport;

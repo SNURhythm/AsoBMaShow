@@ -108,6 +108,11 @@ struct GameplaySkinSessionServices {
   skin::SkinResourcePreparationService *resourcePreparation = nullptr;
   skin::SkinBuiltinImageReader builtinImageReader;
   skin::SkinBuiltinImageBatchReader builtinImageBatchReader;
+  // Shared decoded-image cache for chart assets (stage/back/banner) reused
+  // between selector/decide display and the gameplay skin.
+  image_decode::DecodedImageCache *builtinImageCache = nullptr;
+  std::function<std::string(const std::filesystem::path &)>
+      builtinImageCacheKey;
   std::shared_ptr<skin::SkinLiveResourceCounters> liveResourceCounters;
   std::function<std::unique_ptr<skin::LuaSkinHttpTransport>(std::stop_token)>
       createHttpTransport;

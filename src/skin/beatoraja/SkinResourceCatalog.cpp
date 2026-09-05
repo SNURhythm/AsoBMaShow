@@ -3110,7 +3110,21 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
           "builtin:" + virtualPathByReference.at(reference).generic_string() +
           ":" + digest.finalHex();
       std::optional<image_decode::DecodedImageData> decoded;
-      {
+      // Reuse an image already decoded for selector/decide display (the same
+      // archive entry, keyed by content identity) instead of re-decoding it.
+      bool fromSharedCache = false;
+      if (input.builtinImageCache && input.builtinImageCacheKey) {
+        const std::string sharedKey =
+            input.builtinImageCacheKey(
+                virtualPathByReference.at(reference));
+        decoded = input.builtinImageCache->get(sharedKey);
+        fromSharedCache = decoded.has_value();
+      }
+      if (cancellationRequested(input.stop)) {
+        result.cancelled = true;
+        return false;
+      }
+      if (!decoded) {
         std::lock_guard lock(serviceMutex_);
         decoded = cache_.get(cacheKey);
       }
@@ -3133,7 +3147,22 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
         if (decoded) {
           std::lock_guard lock(serviceMutex_);
           cache_.put(cacheKey, *decoded);
+          if (input.builtinImageCache && input.builtinImageCacheKey) {
+            input.builtinImageCache->put(
+                input.builtinImageCacheKey(
+                    virtualPathByReference.at(reference)),
+                *decoded);
+          }
         }
+      }
+      if (decoded && !fromSharedCache && input.builtinImageCache &&
+          input.builtinImageCacheKey) {
+        // A shared-cache miss that hit the service cache: still seed the
+        // shared cache so the display path can reuse it.
+        input.builtinImageCache->put(
+            input.builtinImageCacheKey(
+                virtualPathByReference.at(reference)),
+            *decoded);
       }
       if (!decoded ||
           !skinResourceDimensionsAllowed(decoded->width, decoded->height,

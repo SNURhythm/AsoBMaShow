@@ -768,6 +768,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .builtinImagePaths = std::move(builtinImagePaths),
          .builtinImageReader = std::move(context.builtinImageReader),
          .builtinImageBatchReader = std::move(context.builtinImageBatchReader),
+         .builtinImageCache = context.builtinImageCache,
+         .builtinImageCacheKey = context.builtinImageCacheKey,
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     (void)recordSkinLoadingPhase(result.loadingTelemetry,

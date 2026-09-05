@@ -55,7 +55,7 @@ void DecideLoadingOverlay::rebuild() {
   if (!stageFileResourcePath_.empty()) {
     auto *stage = new ImageView(0, 0, 512, 288);
     stage->setMargin(Edge::Bottom, 24);
-    stage->setImageAsync(stageFileResourcePath_);
+    stage->setImageAsyncShared(stageFileResourcePath_);
     content->addView(stage);
   }
 

@@ -322,6 +322,15 @@ struct SkinResourcePreparationInputs {
   std::map<int, std::filesystem::path> builtinImagePaths;
   SkinBuiltinImageReader builtinImageReader;
   SkinBuiltinImageBatchReader builtinImageBatchReader;
+  // Shared decoded-image cache (e.g. ImageView's chart cache) so the skin
+  // reuses a stage/back/banner image already decoded for selector/decide
+  // display instead of re-reading and re-decoding the same archive entry.
+  image_decode::DecodedImageCache *builtinImageCache = nullptr;
+  // Returns the shared-cache key for a chart asset path. The caller supplies
+  // it (the skin layer must not depend on ArchiveFile); the key must match
+  // what the display path stored under.
+  std::function<std::string(const std::filesystem::path &)>
+      builtinImageCacheKey;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };

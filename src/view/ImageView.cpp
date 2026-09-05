@@ -572,6 +572,11 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
   currentImageHeight = cache.height;
   if (storeCache) {
     (void)imageCache.put(key, cache);
+    if (sharedChartImagePath_ &&
+        fspath_to_path_t(*sharedChartImagePath_) ==
+            fspath_to_path_t(path)) {
+      (void)imageCache.put(chartImageCacheKey(path), cache);
+    }
   }
   return true;
 }
@@ -740,6 +745,74 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
       asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
   return false;
 }
+image_decode::DecodedImageCache &ImageView::sharedDecodedImageCache() {
+  return imageCache;
+}
+
+std::string ImageView::chartImageCacheKey(const path_t &path) {
+  return "chartimage:" + imageCacheSourceKey(path);
+}
+
+std::optional<image_decode::DecodedImageData>
+ImageView::findChartImage(const path_t &path) {
+  return imageCache.get(chartImageCacheKey(path));
+}
+
+bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
+  resetDroppedAsyncRequest();
+  if (asyncTicket != 0 &&
+      imageDecodeCoordinator().hasFailed(asyncTicket)) {
+    cancelAsyncRequest();
+  }
+  // Full-source resolution: no target resize, so the decoded pixels are also
+  // usable as the gameplay skin's full-res builtin image.
+  const std::string key = imageAsyncCacheKey(path, 0, 0);
+  sharedChartImagePath_ = path;
+  asyncImageBound = true;
+  asyncTargetWidth = 0;
+  asyncTargetHeight = 0;
+  if (currentImageKey == key) {
+    if (applyCachedTexture(path, key)) {
+      asyncImagePending = false;
+      return true;
+    }
+    if (!bgfx::isValid(texture)) {
+      applyCachedThumbnail(path, key);
+    }
+    if (asyncTicket == 0) {
+      asyncTicket = imageDecodeCoordinator().request(
+          {.key = key,
+           .path = std::filesystem::path(path),
+           .targetWidth = 0,
+           .targetHeight = 0,
+           .priority = prioritize});
+    }
+    asyncImagePending =
+        asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
+    return false;
+  }
+
+  cancelAsyncRequest();
+  if (currentImagePath != path) {
+    freeTexture();
+  }
+  currentImageKey = key;
+  currentImagePath = path;
+  if (applyCachedTexture(path, key)) {
+    asyncImagePending = false;
+    return true;
+  }
+  applyCachedThumbnail(path, key);
+  asyncTicket = imageDecodeCoordinator().request(
+      {.key = key,
+       .path = std::filesystem::path(path),
+       .targetWidth = 0,
+       .targetHeight = 0,
+       .priority = prioritize});
+  asyncImagePending =
+      asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
+  return false;
+}
 void ImageView::freeImage() {
   cancelAsyncRequest();
   currentImageKey.clear();
@@ -748,6 +821,7 @@ void ImageView::freeImage() {
   asyncTargetWidth = 0;
   asyncTargetHeight = 0;
   asyncImagePending = false;
+  sharedChartImagePath_.reset();
   freeTexture();
 }
 ImageView *ImageView::setFade(ImageFadeDirection direction, float strength) {

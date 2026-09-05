@@ -165,6 +165,11 @@ gameplaySkinSessionServices(ApplicationContext &context) {
               context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
+          .builtinImageCache = &ImageView::sharedDecodedImageCache(),
+          .builtinImageCacheKey =
+              [](const std::filesystem::path &path) {
+                return ImageView::chartImageCacheKey(path);
+              },
           .builtinImageBatchReader =
               [](const std::vector<std::filesystem::path> &paths,
                  std::vector<skin::SkinBuiltinImageBatch> &out,
