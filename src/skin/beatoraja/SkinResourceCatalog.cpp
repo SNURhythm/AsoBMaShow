@@ -1,5 +1,6 @@
 #include "SkinResourceCatalog.h"
 
+#include "../../ArchiveFile.h"
 #include "../../StartupTiming.h"
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
@@ -3031,50 +3032,146 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
   }
 
   const auto prepareChartBuiltinImages = [&]() -> bool {
+    // Chart-owned stage/back/banner images are optional SkinSourceReference
+    // inputs. They are read as a batched set: archive entries go through the
+    // fast offset-based archive reader (one pass per archive) instead of a
+    // per-image libarchive stream, which for an audio-heavy archived chart
+    // repeatedly decompressed the whole archive once per image. Decoded
+    // results are cached by path+content so a later chart attempt skips both
+    // the read and the decode.
+    struct WantedBuiltin {
+      int reference = 0;
+      std::filesystem::path virtualPath;
+    };
+    std::vector<WantedBuiltin> wanted;
     for (const int reference : {100, 101, 102}) {
       if (!uses.builtinImages.contains(reference)) continue;
       const auto path = input.builtinImagePaths.find(reference);
       if (path == input.builtinImagePaths.end() || path->second.empty()) {
         continue;
       }
-      if (!input.builtinImageReader) {
-        continue;
-      }
-      std::ostringstream builtinNote;
-      builtinNote << "builtin reference " << reference << " path "
-                  << path->second.generic_string();
-      StartupTiming::instance().note(builtinNote.str());
-      const std::size_t maximumEncodedBytes = skinResourceLimit(
-          input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
-      std::vector<unsigned char> encoded;
+      if (!input.builtinImageReader) continue;
+      wanted.push_back({reference, path->second});
+    }
+    if (wanted.empty()) return true;
+    const std::size_t maximumEncodedBytes = skinResourceLimit(
+        input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
+    const auto readOne = [&](const std::filesystem::path &virtualPath,
+                             std::vector<unsigned char> &encoded) {
       std::string readError;
-      const bool read = input.builtinImageReader(
-          path->second, encoded, maximumEncodedBytes, &readError, input.stop);
+      return input.builtinImageReader(virtualPath, encoded, maximumEncodedBytes,
+                                      &readError, input.stop);
+    };
+    std::map<int, std::filesystem::path> virtualPathByReference;
+    std::map<int, std::vector<unsigned char>> encodedByReference;
+    std::vector<std::pair<int, std::filesystem::path>> plain;
+    std::map<std::string, std::vector<std::pair<int, std::filesystem::path>>>
+        byArchive;
+    for (const auto &item : wanted) {
+      virtualPathByReference.emplace(item.reference, item.virtualPath);
+      std::filesystem::path archivePath, innerPath;
+      if (archive_file::splitVirtualPath(item.virtualPath, archivePath,
+                                         innerPath)) {
+        byArchive[archivePath.generic_string()].emplace_back(item.reference,
+                                                             innerPath);
+      } else {
+        plain.emplace_back(item.reference, item.virtualPath);
+      }
+    }
+    for (const auto &[reference, path] : plain) {
+      std::vector<unsigned char> encoded;
+      if (readOne(path, encoded) && encoded.size() <= maximumEncodedBytes) {
+        encodedByReference[reference] = std::move(encoded);
+      }
+    }
+    for (const auto &[archivePath, items] : byArchive) {
+      std::vector<std::filesystem::path> innerPaths;
+      for (const auto &[reference, inner] : items) {
+        (void)reference;
+        innerPaths.push_back(inner);
+      }
+      std::vector<archive_file::FileData> files;
+      std::string batchError;
+      const bool ok = archive_file::readArchiveEntries(
+          std::filesystem::path(archivePath), innerPaths, files, &batchError,
+          [&input]() { return !input.stop.stop_requested(); });
       if (cancellationRequested(input.stop)) {
         result.cancelled = true;
         return false;
       }
-      if (!read || encoded.size() > maximumEncodedBytes) continue;
+      if (ok) {
+        for (const auto &file : files) {
+          for (const auto &[reference, inner] : items) {
+            if (file.path == inner) {
+              encodedByReference[reference] = file.bytes;
+              break;
+            }
+          }
+        }
+      } else {
+        // Fast batch reader is unavailable for this format; fall back to the
+        // per-file reader on the reconstructed virtual path.
+        for (const auto &[reference, inner] : items) {
+          std::vector<unsigned char> encoded;
+          if (readOne(archive_file::makeVirtualPath(
+                          std::filesystem::path(archivePath), inner),
+                      encoded) &&
+              encoded.size() <= maximumEncodedBytes) {
+            encodedByReference[reference] = std::move(encoded);
+          }
+        }
+      }
+    }
+    if (cancellationRequested(input.stop)) {
+      result.cancelled = true;
+      return false;
+    }
+    for (const auto &[reference, encoded] : encodedByReference) {
+      std::ostringstream builtinNote;
+      builtinNote << "builtin reference " << reference << " bytes "
+                  << encoded.size();
+      StartupTiming::instance().note(builtinNote.str());
       SkinResourceSessionAccounting candidateSession = session;
       if (!candidateSession.addImage(
               /*physicalResources=*/1, /*logicalResources=*/1,
-              encoded.size(), /*decodedBytes=*/0,
-              /*regions=*/0)) {
+              encoded.size(), /*decodedBytes=*/0, /*regions=*/0)) {
         result.diagnostics.push_back(warning(
             "skin.resource.builtin_image_unavailable",
             "chart built-in image exceeds the session resource policy"));
         continue;
       }
-      auto decoded = image_decode::decodeImageMemory(
-          std::as_bytes(std::span(encoded)),
-          {.maximumDimension = skinResourceDimensionLimit(input.safetyPolicy),
-           .maximumEncodedBytes = maximumEncodedBytes,
-           .maximumDecodedBytes = skinResourceLimit(
-               input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
-           .stop = input.stop});
+      file_checksum::Sha256 digest;
+      digest.update(std::span<const std::byte>(
+          reinterpret_cast<const std::byte *>(encoded.data()),
+          encoded.size()));
+      const std::string cacheKey =
+          "builtin:" + virtualPathByReference.at(reference).generic_string() +
+          ":" + digest.finalHex();
+      std::optional<image_decode::DecodedImageData> decoded;
+      {
+        std::lock_guard lock(serviceMutex_);
+        decoded = cache_.get(cacheKey);
+      }
       if (cancellationRequested(input.stop)) {
         result.cancelled = true;
         return false;
+      }
+      if (!decoded) {
+        decoded = image_decode::decodeImageMemory(
+            std::as_bytes(std::span(encoded)),
+            {.maximumDimension = skinResourceDimensionLimit(input.safetyPolicy),
+             .maximumEncodedBytes = maximumEncodedBytes,
+             .maximumDecodedBytes = skinResourceLimit(
+                 input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
+             .stop = input.stop});
+        if (cancellationRequested(input.stop)) {
+          result.cancelled = true;
+          return false;
+        }
+        if (decoded) {
+          std::lock_guard lock(serviceMutex_);
+          cache_.put(cacheKey, *decoded);
+        }
       }
       if (!decoded ||
           !skinResourceDimensionsAllowed(decoded->width, decoded->height,
