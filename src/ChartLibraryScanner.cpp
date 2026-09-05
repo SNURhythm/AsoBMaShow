@@ -43,8 +43,8 @@ namespace {
 using asobmshow::bms_metadata::normalizedHash;
 
 constexpr int kArchiveParseCheckpointInterval = 100;
-constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr std::size_t kIndividualParseBatchSize = 512;
+constexpr std::size_t kIndividualCommitInterval = 1000;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
 constexpr std::size_t kArchiveParseResultChunkSize =
     kArchiveParseMaxInFlightFiles;
@@ -1843,11 +1843,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   parseTotal = std::max(parseTotal, 1);
   int parseCurrent = 0;
 
-  auto computeScanSignature = [&](std::size_t individualStart,
-                                  std::size_t archiveStart) {
+  auto computeScanSignature = [&](std::size_t, std::size_t archiveStart) {
     constexpr std::uint64_t kOffset = 14695981039346656037ull;
     std::uint64_t hash = kOffset;
-    fnv1aAppend(hash, "chart-scan-v1");
+    fnv1aAppend(hash, "chart-scan-archives-v1");
 
     std::vector<std::string> rootKeys;
     rootKeys.reserve(roots.size());
@@ -1878,15 +1877,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       fnv1aAppend(hash, rootKey);
     }
 
-    fnv1aAppend(hash, "individual");
-    individualStart = std::min(individualStart, individualDiffs.size());
-    fnv1aAppend(hash, std::to_string(individualDiffs.size() - individualStart));
-    for (std::size_t i = individualStart; i < individualDiffs.size(); ++i) {
-      const auto &diff = individualDiffs[i];
-      fnv1aAppend(hash, diff.deleted ? "d" : "u");
-      fnv1aAppend(hash, checkpointPathTextForDb(diff.path));
-    }
-
+    // The individual (regular-file) diffs are idempotent and cheap to redo on
+    // restart, so they are not checkpointed and need no signature contribution.
+    // Only archives are checkpoint-resumed; the signature just needs to detect
+    // whether any archive changed (path, size, or mtime), not the per-chart
+    // inner-path corpus.
     fnv1aAppend(hash, "archives");
     archiveStart = std::min(archiveStart, archiveBatchOrder.size());
     fnv1aAppend(hash, std::to_string(archiveBatchOrder.size() - archiveStart));
@@ -1905,10 +1900,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         fnv1aAppend(hash, std::to_string(mtimeNs));
       } else {
         fnv1aAppend(hash, "missing");
-      }
-      fnv1aAppend(hash, std::to_string(batch.innerPaths.size()));
-      for (const auto &innerPath : batch.innerPaths) {
-        fnv1aAppend(hash, checkpointInnerPathText(innerPath));
       }
     }
     return stableHashHex(hash);
@@ -2382,16 +2373,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                      ChartScanProgressStage::RemovingDeleted);
       recordStorageResult(scanBatch->DeleteChart(diff.path));
       ++parseCurrent;
-      const std::size_t nextIndex = diffIndex + 1;
-      const auto checkpointRequest = checkpointSaveRequest(
-          nextIndex % kIndividualParseCheckpointInterval == 0);
-      if (checkpointRequest.has_value()) {
-        saveCheckpointForFlush(
-            makeCheckpoint(computeScanSignature(nextIndex, 0),
-                           kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
-            *checkpointRequest);
-      }
-      diffIndex = nextIndex;
+      diffIndex = diffIndex + 1;
       continue;
     }
 
@@ -2418,17 +2400,16 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                                   individualDiffs[currentIndex].hasDocument);
       }
       ++parseCurrent;
-      const std::size_t nextIndex = currentIndex + 1;
-      const auto checkpointRequest = checkpointSaveRequest(
-          nextIndex % kIndividualParseCheckpointInterval == 0);
-      if (checkpointRequest.has_value()) {
-        saveCheckpointForFlush(
-            makeCheckpoint(computeScanSignature(nextIndex, 0),
-                           kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
-            *checkpointRequest);
-      }
     }
     diffIndex = batchEnd;
+    // Commit periodically so individually-parsed charts are durable even if
+    // the app is killed mid-scan. On restart the diffs are recomputed and any
+    // already-committed charts become no-ops; no resume position is needed.
+    if (!shouldStop() && (diffIndex % kIndividualCommitInterval == 0)) {
+      if (!recordStorageResult(scanBatch->CommitForProgress())) {
+        break;
+      }
+    }
   }
 
   if (!shouldStop() && !archiveBatchOrder.empty() &&

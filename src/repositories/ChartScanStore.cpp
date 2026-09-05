@@ -1095,6 +1095,16 @@ bool ChartRepository::Session::ScanBatch::CheckpointAndContinue(
   return checkpointSaved && transactionStarted;
 }
 
+bool ChartRepository::Session::ScanBatch::CommitForProgress() {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed ||
+      !impl_->commitTransaction()) {
+    return false;
+  }
+  const bool transactionStarted = impl_->beginTransaction();
+  impl_->ready = transactionStarted;
+  return transactionStarted;
+}
+
 bool ChartRepository::Session::ScanBatch::Commit() {
   if (impl_ == nullptr || !impl_->ready || impl_->committed ||
       !impl_->commitTransaction()) {

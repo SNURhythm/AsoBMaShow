@@ -234,6 +234,11 @@ public:
       std::optional<int>
       CountChartsInArchive(const std::filesystem::path &path);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
+      // Commits the current scan transaction and starts a fresh one, so
+      // progress (e.g. regular-file parses) becomes durable without recording a
+      // resume checkpoint. Safe to call repeatedly; used for periodic commits
+      // that do not need a saved position.
+      bool CommitForProgress();
       bool Commit();
       int ChangedCount() const;
 
