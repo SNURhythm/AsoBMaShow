@@ -15,6 +15,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace archive_file {
@@ -142,6 +143,12 @@ void setCachePathNormalizer(CachePathNormalizer normalizer);
 // app restarts. If empty, disk persistence is disabled (indexes stay in
 // memory only). Must be called before any archive indexing.
 void setArchiveIndexCacheDirectory(std::filesystem::path directory);
+// Removes persisted archive index files whose archive no longer exists on
+// disk. liveArchivePaths should list the archives currently present (their
+// keys are derived with the same path normalization used when writing).
+// Returns the number of files removed.
+std::size_t pruneArchiveIndexCache(
+    const std::vector<std::filesystem::path> &liveArchivePaths);
 // Test-only: drops all in-memory archive indexes so the next lookup reloads
 // from disk (or rebuilds). Not used in production paths.
 void clearArchiveIndexCacheForTesting();

@@ -575,6 +575,55 @@ void testArchiveIndexPersistsAcrossColdCacheRestart() {
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
+void testArchiveIndexPrunesOrphanedCacheFiles() {
+  TempDirectory temporary;
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  const auto keepArchive = temporary.path() / "keep.zip";
+  const auto removedArchive = temporary.path() / "removed.zip";
+  writeStoredZip(keepArchive, {"keep/a.bms"});
+  writeStoredZip(removedArchive, {"removed/a.bms"});
+
+  std::string error;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(keepArchive, entries, &error));
+  assert(archive_file::listEntries(removedArchive, entries, &error));
+
+  // Both archives have cache files.
+  std::size_t before = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    if (entry.is_regular_file()) {
+      ++before;
+    }
+  }
+  assert(before == 2);
+
+  // Prune with only the still-present archive listed: removed.zip's cache file
+  // is dropped, keep.zip's is retained.
+  const std::size_t pruned =
+      archive_file::pruneArchiveIndexCache({keepArchive});
+  assert(pruned == 1);
+
+  std::size_t after = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    if (entry.is_regular_file()) {
+      ++after;
+    }
+  }
+  assert(after == 1);
+
+  // The surviving archive still reloads from disk after clearing memory.
+  archive_file::clearArchiveIndexCacheForTesting();
+  std::vector<archive_file::Entry> reloaded;
+  assert(archive_file::listEntries(keepArchive, reloaded, &error));
+  assert(reloaded.size() == 1);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
 void testDebugLogRetainsNewestThousandLines() {
   for (int index = 0; index <= 1000; ++index) {
     archive_file::appendDebugLogLine("retention-marker-" +
@@ -605,6 +654,7 @@ int main() {
   testDeltaFilteredSevenZipUsesSdk();
   testFullUnzipHonorsPauseDuringExtraction();
   testArchiveIndexPersistsAcrossColdCacheRestart();
+  testArchiveIndexPrunesOrphanedCacheFiles();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

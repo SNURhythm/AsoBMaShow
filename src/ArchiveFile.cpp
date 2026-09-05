@@ -3396,6 +3396,63 @@ std::filesystem::path archiveIndexCacheFilePath(const std::string &key) {
          ("archive-index-" + hex64(fnv1a64(key)) + ".idx");
 }
 
+// Internal implementation of pruneArchiveIndexCache; kept in the anonymous
+// namespace because it uses anonymous helpers (archiveKey). The public
+// entry point below delegates to this.
+std::size_t pruneArchiveIndexCacheImpl(
+    const std::vector<std::filesystem::path> &liveArchivePaths) {
+  const std::filesystem::path directory = archiveIndexCacheDirectory();
+  if (directory.empty()) {
+    return 0;
+  }
+  std::unordered_set<std::string> liveArchiveKeys;
+  liveArchiveKeys.reserve(liveArchivePaths.size());
+  for (const auto &path : liveArchivePaths) {
+    liveArchiveKeys.insert(archiveKey(path));
+  }
+  std::size_t removed = 0;
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(
+      directory, std::filesystem::directory_options::skip_permission_denied,
+      error);
+  for (const auto end = std::filesystem::directory_iterator();
+       !error && iterator != end; iterator.increment(error)) {
+    std::error_code typeError;
+    if (!iterator->is_regular_file(typeError) || typeError) {
+      continue;
+    }
+    const std::filesystem::path filePath = iterator->path();
+    if (filePath.extension() != ".idx") {
+      continue;
+    }
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file) {
+      continue;
+    }
+    std::uint8_t version = 0;
+    file.read(reinterpret_cast<char *>(&version), sizeof(version));
+    std::uint64_t keyLen = 0;
+    file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+    bool shouldRemove = true;
+    if (file.good() && version == 2 &&
+        keyLen <= (1024ull * 1024ull * 1024ull)) {
+      std::string storedKey(static_cast<std::size_t>(keyLen), '\0');
+      file.read(storedKey.data(), static_cast<std::streamsize>(keyLen));
+      if (file.good() && liveArchiveKeys.contains(storedKey)) {
+        shouldRemove = false;
+      }
+    }
+    if (shouldRemove) {
+      std::error_code removeError;
+      std::filesystem::remove(filePath, removeError);
+      if (!removeError) {
+        ++removed;
+      }
+    }
+  }
+  return removed;
+}
+
 bool writeCachedIndexToDisk(const std::string &key,
                             const CachedIndex &index) {
   const std::filesystem::path directory = archiveIndexCacheDirectory();
@@ -3418,6 +3475,9 @@ bool writeCachedIndexToDisk(const std::string &key,
   auto writeU8 = [&](std::uint8_t value) {
     file.write(reinterpret_cast<const char *>(&value), sizeof(value));
   };
+  writeU8(2);  // format version
+  writeU64(key.size());
+  file.write(key.data(), static_cast<std::streamsize>(key.size()));
   writeU64(static_cast<std::uint64_t>(index.size));
   writeU64(static_cast<std::uint64_t>(
       index.mtime.time_since_epoch().count()));
@@ -3462,6 +3522,17 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
     return value;
   };
   auto index = std::make_shared<CachedIndex>();
+  const std::uint8_t version = readU8();
+  const std::uint64_t storedKeyLen = readU64();
+  if (!file.good() || version != 2 ||
+      storedKeyLen > (1024ull * 1024ull * 1024ull)) {
+    return nullptr;
+  }
+  std::string storedKey(static_cast<std::size_t>(storedKeyLen), '\0');
+  file.read(storedKey.data(), static_cast<std::streamsize>(storedKeyLen));
+  if (!file.good() || storedKey != key) {
+    return nullptr;
+  }
   const std::uint64_t storedSize = readU64();
   const std::uint64_t storedMtime = readU64();
   if (!file.good() ||
@@ -7244,6 +7315,11 @@ void setArchiveIndexCacheDirectory(std::filesystem::path directory) {
 std::filesystem::path archiveIndexCacheDirectory() {
   std::lock_guard<std::mutex> lock(gIndexCacheDirectoryMutex);
   return gArchiveIndexCacheDirectory;
+}
+
+std::size_t pruneArchiveIndexCache(
+    const std::vector<std::filesystem::path> &liveArchivePaths) {
+  return pruneArchiveIndexCacheImpl(liveArchivePaths);
 }
 
 void clearArchiveIndexCacheForTesting() {

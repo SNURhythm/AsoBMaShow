@@ -585,6 +585,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::unordered_map<path_t, ArchiveCacheDiff> pendingArchiveCacheDiffs;
   std::vector<std::filesystem::path> staleSolidArchives;
   std::vector<std::filesystem::path> reindexedArchives;
+  std::vector<std::filesystem::path> liveArchivePaths;
   std::unordered_set<path_t> knownChartPaths;
   std::unordered_map<path_t, int> knownArchiveChartCounts;
   std::unordered_map<path_t, int> storedArchiveChartCounts;
@@ -1414,6 +1415,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       discoveryHealthy.store(false, std::memory_order_relaxed);
       return;
     }
+    liveArchivePaths.push_back(archivePath);
 
     const std::string archiveText = fspath_to_utf8(archivePath);
     const auto cacheIt = archiveCacheByPath.find(archiveKey);
@@ -3220,6 +3222,17 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       finalized = session.ClearChartMetadataRebuildRequired();
     }
     committed = finalized;
+    // Drop persisted archive index files for archives that are no longer
+    // present, so the disk cache does not grow with removed archives.
+    if (committed) {
+      const std::size_t pruned = archive_file::pruneArchiveIndexCache(
+          liveArchivePaths);
+      if (pruned > 0) {
+        archive_file::appendDebugLogLine(
+            "Pruned " + std::to_string(pruned) +
+            " orphaned archive index cache files after library refresh.");
+      }
+    }
   }
   if (!committed) {
     upsertedChartPaths.clear();
