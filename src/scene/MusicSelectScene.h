@@ -6,6 +6,7 @@
 #include "ReplayRecordsModal.h"
 #include "../ReplayVideoExporter.h"
 #include "Scene.h"
+#include "../audio/SkinSystemSoundService.h"
 #include "../music_select/MusicSelectBarManager.h"
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
@@ -180,6 +181,7 @@ private:
   std::jthread recordsExportThread_;
   MusicSelectPreviewController previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
+  std::unique_ptr<skin::SkinSystemSoundService> systemSound_;
   // The launch parse runs off the UI thread so a large archive chart does not
   // freeze the selector between Start and the gameplay scene. Completion is
   // published on the next deferred pass.

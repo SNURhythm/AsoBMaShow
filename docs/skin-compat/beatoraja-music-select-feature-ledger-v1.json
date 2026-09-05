@@ -9150,6 +9150,42 @@
       }
     },
     {
+      "id": "select.sound.effect.option-change",
+      "status": "implemented",
+      "implementation": "src/audio/SkinSystemSoundService.cpp;src/scene/MusicSelectScene.cpp",
+      "tests": "tests/music_select_system_sound_tests.cpp",
+      "assertion": {
+        "runner": "music_select_system_sound_tests"
+      }
+    },
+    {
+      "id": "select.sound.effect.scratch",
+      "status": "implemented",
+      "implementation": "src/audio/SkinSystemSoundService.cpp;src/scene/MusicSelectScene.cpp",
+      "tests": "tests/music_select_system_sound_tests.cpp",
+      "assertion": {
+        "runner": "music_select_system_sound_tests"
+      }
+    },
+    {
+      "id": "select.sound.folder-close",
+      "status": "implemented",
+      "implementation": "src/audio/SkinSystemSoundService.cpp;src/scene/MusicSelectScene.cpp",
+      "tests": "tests/music_select_system_sound_tests.cpp",
+      "assertion": {
+        "runner": "music_select_system_sound_tests"
+      }
+    },
+    {
+      "id": "select.sound.folder-open",
+      "status": "implemented",
+      "implementation": "src/audio/SkinSystemSoundService.cpp;src/scene/MusicSelectScene.cpp",
+      "tests": "tests/music_select_system_sound_tests.cpp",
+      "assertion": {
+        "runner": "music_select_system_sound_tests"
+      }
+    },
+    {
       "id": "select.target.music-select",
       "status": "implemented",
       "implementation": "src/skin/SkinTargetTraits.h",

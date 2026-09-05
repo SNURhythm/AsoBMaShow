@@ -59,6 +59,7 @@
 #include <atomic>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <ctime>
 #include <limits>
 #include <memory>
@@ -68,12 +69,59 @@
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace {
 constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kSkinSoundAssetRoot = "assets";
 constexpr std::int64_t kRankingDurationMillis = 5'000;
 constexpr std::int64_t kRankingReloadDurationMillis = 10 * 60 * 1'000;
+
+// Default playback for the select system-SE service: lazily loads each sound
+// through AudioWrapper::{loadSkinSound,playSkinSound} (the same skin-sound path
+// the preview service uses) and caches the loaded handle per path.
+class MusicSelectSkinSoundPlayer {
+public:
+  explicit MusicSelectSkinSoundPlayer(AudioWrapper *audio) : audio_(audio) {}
+
+  ~MusicSelectSkinSoundPlayer() {
+    if (!audio_) return;
+    for (const auto &[path, handle] : handles_) {
+      audio_->stopSkinSound(audio::SkinSoundHandle{handle});
+      audio_->disposeSkinSound(audio::SkinSoundHandle{handle});
+    }
+  }
+
+  void operator()(const std::filesystem::path &path) {
+    if (!audio_) return;
+    const auto key = fspath_to_path_t(path);
+    if (const auto found = handles_.find(key); found != handles_.end()) {
+      audio_->playSkinSound(audio::SkinSoundHandle{found->second}, 1.0F, false);
+      return;
+    }
+    std::atomic<bool> cancelled{false};
+    const auto loaded = audio_->loadSkinSound(
+        key, cancelled, std::numeric_limits<std::size_t>::max(),
+        std::numeric_limits<std::size_t>::max());
+    if (!loaded.handle) return;
+    if (!audio_->playSkinSound(*loaded.handle, 1.0F, false)) {
+      audio_->disposeSkinSound(*loaded.handle);
+      return;
+    }
+    handles_.emplace(key, loaded.handle->value);
+  }
+
+private:
+  AudioWrapper *audio_;
+  std::unordered_map<path_t, std::uint64_t> handles_;
+};
+
+skin::SkinSystemSoundService::Playback
+musicSelectSkinSoundPlayback(AudioWrapper &audio) {
+  auto player = std::make_shared<MusicSelectSkinSoundPlayer>(&audio);
+  return [player](const std::filesystem::path &path) { (*player)(path); };
+}
 
 std::int64_t unixMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -299,6 +347,9 @@ void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
       context.jukebox.audioRuntime());
+  systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
+      kSkinSoundAssetRoot,
+      musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
   sortIndex_ = sourceSortIndex(context.settings.skinSortId);
   inputProcessor_ = MusicSelectInputProcessor(
       {.layout = musicSelectKeyLayoutForConfig(
@@ -1087,7 +1138,9 @@ bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
   if (!directory.childrenLoaded && !loadDirectoryChildren(directory)) {
     return false;
   }
-  return bars_.open(directory.id);
+  const bool opened = bars_.open(directory.id);
+  if (opened && systemSound_) systemSound_->playFolderOpen();
+  return opened;
 }
 
 bool MusicSelectScene::loadDirectoryChildren(
@@ -1455,6 +1508,7 @@ void MusicSelectScene::search(std::string text) {
 
 void MusicSelectScene::closeDirectory() {
   if (bars_.close()) {
+    if (systemSound_) systemSound_->playFolderClose();
     syncResolvedFilters();
     selectedBarMoved();
   } else {
@@ -2261,6 +2315,9 @@ void MusicSelectScene::applyInputAction(
     bars_.move(true, action.value, action.deadlineMillis);
     selectedBarMoved();
     break;
+  case MusicSelectInputActionKind::ScratchSound:
+    if (systemSound_) systemSound_->playScratch();
+    break;
   case MusicSelectInputActionKind::MovePrevious:
     bars_.move(false, action.value, action.deadlineMillis);
     selectedBarMoved();
@@ -2403,6 +2460,9 @@ void MusicSelectScene::executeEvent(
     case MusicSelectEventEffectKind::RefreshBars:
       reloadLibrary();
       selectedBarMoved();
+      break;
+    case MusicSelectEventEffectKind::OptionChangeSound:
+      if (systemSound_) systemSound_->playOptionChange();
       break;
     case MusicSelectEventEffectKind::OpenSettings:
       openSettings();

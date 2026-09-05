@@ -1265,6 +1265,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_preview_tests PRIVATE cxx_std_23)
+        add_executable(music_select_system_sound_tests
+            tests/music_select_system_sound_tests.cpp
+            src/audio/SkinSystemSoundService.cpp
+        )
+        target_include_directories(music_select_system_sound_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_system_sound_tests PRIVATE cxx_std_23)
         add_executable(music_select_search_history_tests
             tests/music_select_search_history_tests.cpp
             src/music_select/MusicSelectSearchHistory.cpp
@@ -7182,6 +7190,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_preview_tests)
         asobmashow_register_test(music_select_preview_tests)
+    endif()
+    if (TARGET music_select_system_sound_tests)
+        asobmashow_register_test(music_select_system_sound_tests)
     endif()
     if (TARGET music_select_search_history_tests)
         asobmashow_register_test(music_select_search_history_tests)

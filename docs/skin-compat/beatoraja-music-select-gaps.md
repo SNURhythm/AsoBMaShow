@@ -54,7 +54,7 @@ Connecting that plumbing to the type-5 pipeline was left behind:
 |---|------|-----------|------------------|----------------------|
 | 1 | Movie sources in type-5 skins | VERIFIED COVERED: shared `SkinMovieCatalog::resolveMovies` promotes a movie-extension image resource to `SkinMovieResource`; `SkinResourceCatalog` skips movie paths at image-decode time | `JSONSkinLoader` treats `image` paths whose extension is a movie extension as movies | Covered by shared promotion, proven by `tests/skin_movie_catalog_types_tests` |
 | 2 | Chart background (BGA) on select | Only setting mutation for play | Select scene composites its media behind the skin | `MusicSelectScene::renderScene` + compositor |
-| 3 | Option/scratch/folder SE | Effects emitted but never played | `OPTION_*`, `SCRATCH`, `FOLDER_OPEN/CLOSE` play system sounds | `MusicSelectScene` audio wiring |
+| 3 | Option/scratch/folder SE | WIRED: `OptionChangeSound`/`ScratchSound`/folder open-close play through `SkinSystemSoundService` | `OPTION_*`, `SCRATCH`, `FOLDER_OPEN/CLOSE` play system sounds | `MusicSelectScene` audio wiring |
 | 4 | Select BGM + decide sound | None | `SELECT` looped, `DECIDE` on start | Preview service default path |
 | 5 | Preview without `#PREVIEW` | Plays silence | Fades back to `SELECT` | See #4 |
 | 6 | `SongPreview` config | Ignored (always loop) | `NONE`/`ONCE`/`LOOP` | Settings + preview service |
@@ -110,6 +110,21 @@ skin layout over a songlist/background asset; the chart's own BGA is mainly a
 gameplay media) and, if so, run it through the existing BGA views.
 
 ### 3. Select sound effects are structured but never played
+
+**FIXED/WIRED.** `MusicSelectScene` now owns a `SkinSystemSoundService`
+(`src/audio/SkinSystemSoundService.{h,cpp}`) created in `init()`. The
+`OptionChangeSound` effect plays the `OPTION_CHANGE` sound, the
+`ScratchSound` input action plays `SCRATCH`, a successful `openDirectory`
+plays `FOLDER_OPEN`, and a successful `closeDirectory` plays `FOLDER_CLOSE`.
+Playback goes through the same `AudioWrapper` skin-sound APIs as the preview
+service (`loadSkinSound` + `playSkinSound`); the service resolves each intent
+to its pinned Beatoraja filename under the injected asset root and skips (with
+a warning) when a file is missing, so the scene never fails. Routing is proven
+by `tests/music_select_system_sound_tests.cpp` and ledger rows
+`select.sound.effect.option-change`, `select.sound.effect.scratch`,
+`select.sound.folder-open`, `select.sound.folder-close`. `OPTION_OPEN` /
+`OPTION_CLOSE` service entry points exist but the panel open-close wiring is
+left to the pending input-branch closure.
 
 The controller and input processor *emit* the source SE intents; the scene
 drops them all.
