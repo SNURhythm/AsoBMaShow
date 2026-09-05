@@ -106,47 +106,83 @@ def swept_tone(n_samples, f0, f1, amp, harmonics=1, vib_depth=0.0, vib_rate=0.0)
     return out
 
 
-# ---------------------------------------------------------------- select
-def make_select():
-    n = SR * 2  # exactly 2.000 s -> seamless loop
+# ---------------------------------------------------------------- select BGM
+# A ~10 s menu piece with a smooth jazz-lite chord progression. Each chord is
+# voiced across the bass, mid, and top and given a soft attack/release so chord
+# changes and the loop point stay click-free. No tremolo, no detune beating.
+
+EQ = {
+    "A1": 55.00, "C1": 32.70, "C2": 65.41, "D2": 73.42, "F2": 87.31,
+    "G2": 98.00, "A2": 110.00, "B2": 123.47,
+    "C3": 130.81, "D3": 146.83,
+    "E3": 164.81, "F3": 174.61, "G3": 196.00, "A3": 220.00, "B3": 246.94,
+    "C4": 261.63, "D4": 293.66, "E4": 329.63, "F4": 349.23, "G4": 392.00,
+    "A4": 440.00, "B4": 493.88, "C5": 523.25, "D5": 587.33, "E5": 659.26,
+}
+
+SELECT_SECONDS = 10
+
+
+def make_chord(start_sec, duration_sec, bass, voices, melody):
+    """A chord: soft bass + mid voices, plus a plucked melody on top."""
+    n = SR * SELECT_SECONDS
     out = [0.0] * n
-    # A calm, melodic select BGM: a soft warm chord bed with a gentle arpeggio
-    # on top. No tremolo and no detune beating (both were disorienting), and
-    # every sustained partial is integer Hz so the 2.0 s loop is seamless.
-    #
-    # Chord bed (Cmaj6-ish, wide and soft): every tone is integer Hz -> integer
-    # cycles over the buffer, so it sustains seamlessly.
-    bed = [
-        (131, 0.16),  # C3
-        (196, 0.12),  # G3
-        (330, 0.10),  # E4
-        (440, 0.06),  # A4
+    onset = int(start_sec * SR)
+    end = min(n, onset + int(duration_sec * SR))
+
+    def chord_env(t, t_end):
+        attack = min(1.0, t / 0.05)
+        release = min(1.0, (t_end - t) / 0.15)
+        return max(0.0, attack * release)
+
+    t_end = duration_sec
+    for i in range(onset, end):
+        t = (i - onset) / SR
+        env = chord_env(t, t_end)
+        s = 0.0
+        s += 0.16 * math.sin(2 * math.pi * EQ[bass] * t)
+        for f, amp in voices:
+            s += amp * math.sin(2 * math.pi * EQ[f] * t)
+        out[i] += s * env
+    # Plucked melody notes on top.
+    for m_start, note, amp in melody:
+        m_onset = onset + int(m_start * SR)
+        for i in range(m_onset, end):
+            t = (i - m_onset) / SR
+            attack = min(1.0, t / 0.015)
+            release = min(1.0, (0.45 - t) / 0.12)
+            env = max(0.0, attack * release)
+            out[i] += amp * math.sin(2 * math.pi * EQ[note] * t) * env
+    return out
+
+
+def make_select():
+    n = SR * SELECT_SECONDS
+    out = [0.0] * n
+    # Cool, mellow progression (Cmaj9 -> Am9 -> Fmaj7 -> Dm9) with light
+    # extensions and a gentle melody, resolving so the loop returns to Cmaj9.
+    sections = [
+        make_chord(0.0, 2.5, "C2",
+                   [("C3", 0.10), ("G3", 0.08), ("B3", 0.06), ("E4", 0.05), ("D4", 0.04)],
+                   [(0.2, "E4", 0.16), (0.9, "G4", 0.12), (1.6, "B4", 0.10), (2.1, "D5", 0.09)]),
+        make_chord(2.5, 2.5, "A1",
+                   [("A2", 0.10), ("E3", 0.08), ("C4", 0.06), ("G4", 0.05), ("B3", 0.05)],
+                   [(2.7, "C4", 0.12), (3.4, "E4", 0.12), (4.1, "G4", 0.10), (4.6, "B4", 0.08)]),
+        make_chord(5.0, 2.5, "F2",
+                   [("F3", 0.10), ("A3", 0.08), ("C4", 0.07), ("E4", 0.06)],
+                   [(5.2, "A4", 0.12), (5.9, "C5", 0.10), (6.6, "E5", 0.08), (7.1, "A4", 0.08)]),
+        make_chord(7.5, 2.5, "D2",
+                   [("D3", 0.10), ("A3", 0.08), ("C4", 0.06), ("F4", 0.05), ("E4", 0.05)],
+                   [(7.7, "F4", 0.10), (8.4, "A4", 0.10), (9.1, "C5", 0.08), (9.5, "D5", 0.08)]),
     ]
     for i in range(n):
-        t = i / SR
-        s = 0.0
-        for f, amp in bed:
-            s += partial(t, f, amp)
-        out[i] = s
-    # Arpeggio (calm harp/music-box motif). Each note is plucked with a soft
-    # attack and release so it starts and ends near zero, keeping the loop
-    # click-free. Frequencies are integer Hz.
-    notes = [
-        (0.00, 330, 0.22),  # E4
-        (0.35, 523, 0.18),  # C5
-        (0.70, 440, 0.16),  # A4
-        (1.05, 392, 0.16),  # G4
-        (1.40, 330, 0.14),  # E4
-        (1.70, 587, 0.12),  # D5
-    ]
-    for start, freq, amp in notes:
-        onset = int(start * SR)
-        for i in range(onset, n):
-            t = (i - onset) / SR
-            attack = min(1.0, t / 0.015)
-            release = min(1.0, (0.30 - t) / 0.12)
-            env = max(0.0, attack * release)
-            out[i] += amp * math.sin(2 * math.pi * freq * t) * env
+        for section in sections:
+            out[i] += section[i]
+    # Master fade-in/out so the 10 s loop point is smooth.
+    fade = int(0.4 * SR)
+    for i in range(fade):
+        out[i] *= i / fade
+        out[n - 1 - i] *= i / fade
     return out
 
 
