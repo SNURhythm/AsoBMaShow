@@ -1260,6 +1260,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(music_select_preview_tests
             tests/music_select_preview_tests.cpp
             src/music_select/MusicSelectPreview.cpp
+            src/music_select/MusicSelectPreviewAudioService.cpp
         )
         target_include_directories(music_select_preview_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src

@@ -55,9 +55,9 @@ Connecting that plumbing to the type-5 pipeline was left behind:
 | 1 | Movie sources in type-5 skins | VERIFIED COVERED: shared `SkinMovieCatalog::resolveMovies` promotes a movie-extension image resource to `SkinMovieResource`; `SkinResourceCatalog` skips movie paths at image-decode time | `JSONSkinLoader` treats `image` paths whose extension is a movie extension as movies | Covered by shared promotion, proven by `tests/skin_movie_catalog_types_tests` |
 | 2 | Chart background (BGA) on select | Only setting mutation for play | Select scene composites its media behind the skin | `MusicSelectScene::renderScene` + compositor |
 | 3 | Option/scratch/folder SE | WIRED: `OptionChangeSound`/`ScratchSound`/folder open-close play through `SkinSystemSoundService` | `OPTION_*`, `SCRATCH`, `FOLDER_OPEN/CLOSE` play system sounds | `MusicSelectScene` audio wiring |
-| 4 | Select BGM + decide sound | None | `SELECT` looped, `DECIDE` on start | Preview service default path |
-| 5 | Preview without `#PREVIEW` | Plays silence | Fades back to `SELECT` | See #4 |
-| 6 | `SongPreview` config | Ignored (always loop) | `NONE`/`ONCE`/`LOOP` | Settings + preview service |
+| 4 | Select BGM + decide sound | ADDRESSED: looping SELECT default in the preview service, `DECIDE` on launch | `SELECT` looped, `DECIDE` on start | Preview service default path |
+| 5 | Preview without `#PREVIEW` | ADDRESSED: falls back to `SELECT` | Fades back to `SELECT` | See #4 |
+| 6 | `SongPreview` config | Gap (no user setting): previews always loop, gated only by `archiveChartPreviewEnabled` | `NONE`/`ONCE`/`LOOP` | Settings + preview service |
 | 7 | `Num6` | Unmapped | Opens CONFIG | `controlKey()` + control-key set |
 | 8 | Open skin-config key | Unmapped | Opens `SKINCONFIG` | Input binding |
 | 9 | `keyconfig` vs `skinconfig` events | Both open Settings | Distinct destinations (13/14) | Event controller + scene |
@@ -169,34 +169,40 @@ effects; play `GUIDESE_*` when the selected chart's guide is on.
 
 ### 4. No default select BGM, and no decide sound
 
-Beatoraja's `PreviewMusicProcessor` is initialized with the looping
-`SELECT` system sound as its default fallback
-(`MusicSelector.java:173-174`, `PreviewMusicProcessor.java:41-43,79-81`), and
-`MusicSelector.render()` starts it on `prepare()` and on bar move
-(`:188`, `:613-615`). AsoBMaShow's `MusicSelectPreviewAudioService` has no
-default music: it plays the preview file or leaves the worker idle
-(`MusicSelectPreviewAudioService.cpp:75-78`).
-
-Similarly, `MusicSelectScene::launchSelected` shows the decide overlay
-(`showDecideOverlay`, `:1656`) without the source `DECIDE` sound.
+**FIXED/WIRED.** `MusicSelectPreviewAudioService` now takes an injectable
+`AudioPort` (play/stop) plus a default path and keeps the looping `SELECT`
+system sound as its fallback: the worker starts it when the select screen opens
+(`PreviewThread` plays the default on thread start,
+`PreviewMusicProcessor.java:79-81`) and an empty preview switch routes back to
+it. `MusicSelectScene::launchSelected` plays `DECIDE` through
+`SkinSystemSoundService` (`decide.wav`). The scene wires the
+AudioWrapper-backed port (`MusicSelectPreviewBgmPlayer` in
+`MusicSelectScene.cpp`), which caches the default handle so returning to the
+select BGM is instant. The default asset resolves to the same `assets/select.wav`
+as `SkinSystemSoundService::Select`; when the file is missing the worker idles
+and nothing fails.
 
 ### 5. Preview with no `#PREVIEW` is silent (Beatoraja fades to select BGM)
 
-`MusicSelectPreviewController::update` returns `nullopt` for an empty preview
-path (`MusicSelectPreview.cpp:44-47`), so the scene switches audio to nothing
-(`MusicSelectScene.cpp:2630-2633`). Pinned behavior falls back to the default
-select BGM and fades volume on stop (`PreviewMusicProcessor.java:85-101,
-115-133`). With gap #4 fixed, empty preview naturally routes to `SELECT`.
+**ADDRESSED.** `MusicSelectPreviewController::update` returns `nullopt` for an
+empty preview path (`MusicSelectPreview.cpp:44-47`), and the preview service now
+routes a `nullopt` switch to its looping default select BGM
+(`MusicSelectPreviewAudioService.cpp`). The pinned fade-back over ~150 ms is
+approximated by a simple switch to the default (the worker is one
+request-serial + cancellation thread; `AudioWrapper` has no per-skin-sound
+volume/fade helper), matching the ruling. With gap #4 fixed, empty preview
+naturally routes to `SELECT`.
 
 ### 6. `SongPreview` mode is not modeled
 
 Beatoraja's `Config.SongPreview` is `NONE`/`ONCE`/`LOOP`
 (`MusicSelector.java:204`) and the preview volume follows
-`AudioConfig.systemvolume`. AsoBMaShow hard-codes loop with volume `1.0`
-(`MusicSelectPreviewAudioService.cpp:95`:
-`playSkinSound(*handle, 1.0F, true)`), and only models
-`archiveChartPreviewEnabled` (archive suppression) in the scene
-(`MusicSelectScene.cpp:191-198`). The setting is not exposed or honored.
+`AudioConfig.systemvolume`. AsoBMaShow continues to loop previews at gain `1.0`
+(`MusicSelectPreviewAudioService` passes `loop=true`), and models no new
+setting: previews are gated only by the existing `archiveChartPreviewEnabled`
+(which suppresses archive-chart previews and therefore defers those charts to
+the select BGM), matching the task ruling. `NONE`/`ONCE` and `systemvolume`
+honoring remain the un-surfaced part of this gap.
 
 ### 7. `Num6` is unmapped
 
@@ -269,9 +275,10 @@ reused.
    `AudioWrapper` skin-sound path; handle `OptionChangeSound`, `ScratchSound`,
    add `FolderOpenSound`/`FolderCloseSound`/`OptionOpenSound`/`OptionCloseSound`
    effects; play `GUIDESE_*` from the persisted `guideSoundEffects` setting.
-3. **Default select BGM + preview parity** — `SELECT` default in the preview
-   service, fade-back on preview end, `DECIDE` on launch, and `SongPreview`
-   `NONE/ONCE/LOOP` + `systemvolume` honoring.
+3. **Default select BGM + preview parity** — done: `SELECT` default in the
+   preview service (injectable `AudioPort` + default path), fallback to the
+   default on empty preview, `DECIDE` on launch. Remaining from this slice:
+   `SongPreview` `NONE/ONCE/LOOP` + `systemvolume` honoring (see gap #6).
 4. **Input/event branches** — add `Num6` (`SDLK_6`) → Settings; add open
    skin-configuration handling or record it as an explicit non-goal; decide the
    `keyconfig`/`skinconfig` split.

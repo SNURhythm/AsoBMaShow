@@ -123,6 +123,90 @@ musicSelectSkinSoundPlayback(AudioWrapper &audio) {
   return [player](const std::filesystem::path &path) { (*player)(path); };
 }
 
+// Previews the chart and the looping select BGM through the same AudioWrapper
+// skin-sound path as the system-SE player. The default handle stays loaded so
+// returning to the select BGM is instant; preview sounds are disposed as soon
+// as they stop so the session keeps only the default decoded
+// (PreviewMusicProcessor.java:97-101, symmetric fade approximated).
+class MusicSelectPreviewBgmPlayer {
+public:
+  explicit MusicSelectPreviewBgmPlayer(AudioWrapper *audio,
+                                       std::filesystem::path defaultPath)
+      : audio_(audio), defaultKey_(fspath_to_path_t(defaultPath)) {}
+
+  ~MusicSelectPreviewBgmPlayer() {
+    stopCurrent();
+    if (audio_ && defaultHandle_) {
+      audio_->disposeSkinSound(*defaultHandle_);
+    }
+  }
+
+  bool play(const std::filesystem::path &path, bool loop,
+            const std::shared_ptr<std::atomic_bool> &cancellation,
+            std::stop_token stop) {
+    if (!audio_) return false;
+    stopCurrent();
+    const auto key = fspath_to_path_t(path);
+    const bool isDefault = (key == defaultKey_);
+    audio::SkinSoundHandle handle;
+    if (isDefault && defaultHandle_) {
+      handle = *defaultHandle_;
+    } else {
+      const auto loaded = audio_->loadSkinSound(
+          key, *cancellation, std::numeric_limits<std::size_t>::max(),
+          std::numeric_limits<std::size_t>::max(), stop);
+      if (!loaded.handle) return false;
+      handle = *loaded.handle;
+      if (isDefault) defaultHandle_ = handle;
+    }
+    if (cancellation->load(std::memory_order_acquire) ||
+        stop.stop_requested()) {
+      (void)audio_->disposeSkinSound(handle);
+      if (isDefault) defaultHandle_.reset();
+      return false;
+    }
+    if (!audio_->playSkinSound(handle, 1.0F, loop)) {
+      (void)audio_->disposeSkinSound(handle);
+      if (isDefault) defaultHandle_.reset();
+      return false;
+    }
+    playingHandle_ = handle;
+    playingKey_ = key;
+    return true;
+  }
+
+  void stopCurrent() {
+    if (!audio_ || !playingHandle_) return;
+    (void)audio_->stopSkinSound(*playingHandle_);
+    if (playingKey_ != defaultKey_) {
+      (void)audio_->disposeSkinSound(*playingHandle_);
+    }
+    playingHandle_.reset();
+    playingKey_ = {};
+  }
+
+private:
+  AudioWrapper *audio_;
+  path_t defaultKey_;
+  std::optional<audio::SkinSoundHandle> defaultHandle_;
+  std::optional<audio::SkinSoundHandle> playingHandle_;
+  path_t playingKey_{};
+};
+
+MusicSelectPreviewAudioService::AudioPort
+musicSelectPreviewAudioPort(AudioWrapper &audio,
+                            const std::filesystem::path &defaultPath) {
+  auto player =
+      std::make_shared<MusicSelectPreviewBgmPlayer>(&audio, defaultPath);
+  return {.play =
+              [player](const std::filesystem::path &path, bool loop,
+                       const std::shared_ptr<std::atomic_bool> &cancellation,
+                       std::stop_token stop) {
+                return player->play(path, loop, cancellation, std::move(stop));
+              },
+          .stop = [player]() { player->stopCurrent(); }};
+}
+
 std::int64_t unixMillis() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -345,8 +429,14 @@ MusicSelectScene::MusicSelectScene(
 
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
+  // The looping SELECT system sound doubles as the preview fallback
+  // (MusicSelector.java:173-174 setDefault(getSound(SELECT))).
+  const auto selectBgm =
+      std::filesystem::path{kSkinSoundAssetRoot} /
+      std::string(
+          skin::musicSelectSystemSoundFilename(skin::MusicSelectSystemSound::Select));
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
-      context.jukebox.audioRuntime());
+      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm));
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
       kSkinSoundAssetRoot,
       musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
@@ -1707,6 +1797,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       record.meta.BmsPath.empty()) {
     return;
   }
+  if (systemSound_) systemSound_->playDecide();
   showDecideOverlay(record);
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
