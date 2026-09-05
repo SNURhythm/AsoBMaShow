@@ -51,6 +51,15 @@ bool ChartPreloadWorker::superseded(std::string_view path) const {
          fspath_to_path_t(pending_->meta.BmsPath) != fspath_to_path_t(path);
 }
 
+bool ChartPreloadWorker::isRequesting(std::string_view path) const {
+  std::unique_lock<std::mutex> lock(mutex_);
+  if (pending_ &&
+      fspath_to_path_t(pending_->meta.BmsPath) == fspath_to_path_t(path)) {
+    return true;
+  }
+  return inFlightPath_.has_value() && *inFlightPath_ == fspath_to_path_t(path);
+}
+
 void ChartPreloadWorker::setOnIdle(std::function<void()> onIdle) {
   onIdle_ = std::move(onIdle);
 }

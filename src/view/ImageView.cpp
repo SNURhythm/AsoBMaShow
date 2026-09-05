@@ -40,6 +40,10 @@
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kArchivedThumbnailMaxDimension = 256;
+// Shared chart stage/back/banner images are display-and-skin backgrounds; a
+// bounded decode dimension keeps the load fast and the shared cache small
+// while still giving the gameplay skin a full-screen-quality texture.
+constexpr int kSharedChartImageMaxDimension = 2048;
 constexpr int kImageMaximumDimension =
     static_cast<int>(std::numeric_limits<std::uint16_t>::max());
 constexpr std::size_t kImageMaximumEncodedBytes = 32U * 1024U * 1024U;
@@ -764,8 +768,9 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
       imageDecodeCoordinator().hasFailed(asyncTicket)) {
     cancelAsyncRequest();
   }
-  // Full-source resolution: no target resize, so the decoded pixels are also
-  // usable as the gameplay skin's full-res builtin image.
+  // Decode once at a bounded full-quality dimension (no display-space resize)
+  // so the same pixels are usable as the gameplay skin's builtin image, and
+  // the load is fast for a multi-megabyte stage image.
   const std::string key = imageAsyncCacheKey(path, 0, 0);
   sharedChartImagePath_ = path;
   asyncImageBound = true;
@@ -785,6 +790,7 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
            .path = std::filesystem::path(path),
            .targetWidth = 0,
            .targetHeight = 0,
+           .maximumDimension = kSharedChartImageMaxDimension,
            .priority = prioritize});
     }
     asyncImagePending =
@@ -808,6 +814,7 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
        .path = std::filesystem::path(path),
        .targetWidth = 0,
        .targetHeight = 0,
+       .maximumDimension = kSharedChartImageMaxDimension,
        .priority = prioritize});
   asyncImagePending =
       asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);

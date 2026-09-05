@@ -77,6 +77,7 @@ private:
   void stopInputListening();
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
+  void tryCompletePendingPreloadLaunch();
   void launchCourse(const MusicSelectBar &, bool autoplay);
   void launchSelectedDirectoryAutoplay();
   void startPreloadForSelection();
@@ -193,6 +194,15 @@ private:
   mutable std::mutex preloadMutex_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
   std::filesystem::path preloadedPath_;
+  // When Start is pressed while the preload worker is still loading the same
+  // chart, keep the worker running and launch from its result instead of
+  // stopping it and re-doing parse + jukebox from scratch.
+  struct PendingPreloadLaunch {
+    ChartMetaRecord record;
+    bool autoplay = false;
+    bool practice = false;
+  };
+  std::optional<PendingPreloadLaunch> pendingLaunch_;
   MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;

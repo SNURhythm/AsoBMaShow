@@ -4,6 +4,8 @@
 #include "../view/TextView.h"
 #include "../view/ImageView.h"
 
+#include <SDL2/SDL.h>
+#include <chrono>
 #include <cstdio>
 #include <vector>
 
@@ -55,7 +57,19 @@ void DecideLoadingOverlay::rebuild() {
   if (!stageFileResourcePath_.empty()) {
     auto *stage = new ImageView(0, 0, 512, 288);
     stage->setMargin(Edge::Bottom, 24);
+    const auto stageLoadStarted = std::chrono::steady_clock::now();
     stage->setImageAsyncShared(stageFileResourcePath_);
+    if (stage->imageWidth() > 0 || stage->imageHeight() > 0) {
+      const auto stageLoadMillis = std::chrono::duration_cast<
+                                       std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() -
+                                       stageLoadStarted)
+                                       .count();
+      if (stageLoadMillis >= 100) {
+        SDL_Log("Decide stage image loaded in %lld ms",
+                static_cast<long long>(stageLoadMillis));
+      }
+    }
     content->addView(stage);
   }
 

@@ -58,6 +58,11 @@ public:
   // a stop was requested or a different request has been queued since.
   [[nodiscard]] bool superseded(std::string_view path) const;
 
+  // Returns true when a request for this path is queued or currently being
+  // processed. A caller can use this to wait for a preload to finish instead
+  // of re-doing the work itself.
+  [[nodiscard]] bool isRequesting(std::string_view path) const;
+
   void setOnIdle(std::function<void()> onIdle);
 
 private:

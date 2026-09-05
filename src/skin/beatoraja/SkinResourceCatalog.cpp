@@ -3036,6 +3036,10 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     // available, archive entries are read in one offset-based pass per
     // archive instead of a per-image stream. Decoded results are cached by
     // path+content so a later chart attempt skips both the read and decode.
+    // Builtin chart images are display/skin backgrounds; a bounded decode
+    // dimension keeps the load fast and matches the shared chart-image cache
+    // so the skin reuses pixels already decoded for the decide overlay.
+    constexpr int kBuiltinChartImageMaxDimension = 2048;
     struct WantedBuiltin {
       int reference = 0;
       std::filesystem::path virtualPath;
@@ -3135,7 +3139,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       if (!decoded) {
         decoded = image_decode::decodeImageMemory(
             std::as_bytes(std::span(encoded)),
-            {.maximumDimension = skinResourceDimensionLimit(input.safetyPolicy),
+            {.maximumDimension = kBuiltinChartImageMaxDimension,
              .maximumEncodedBytes = maximumEncodedBytes,
              .maximumDecodedBytes = skinResourceLimit(
                  input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),

@@ -1519,6 +1519,70 @@ void MusicSelectScene::hideDecideOverlay() {
   }
 }
 
+void MusicSelectScene::tryCompletePendingPreloadLaunch() {
+  if (!launching_ || !pendingLaunch_.has_value()) {
+    return;
+  }
+  const PendingPreloadLaunch pending = std::move(*pendingLaunch_);
+  pendingLaunch_.reset();
+  const auto &record = pending.record;
+  bms_parser::Chart *preparedChartRaw = nullptr;
+  play_options::PlayOptionReplayInfo preloadedPlayInfo;
+  int preloadedLnMode = 0;
+  if (!reusePreloadedChart(record, preparedChartRaw, preloadedPlayInfo,
+                          preloadedLnMode)) {
+    // The preload worker finished without publishing this chart (parse
+    // failure, superseded, or cancelled). Fall back to the launch thread so
+    // the launch is not dropped silently.
+    launching_ = false;
+    launchSelected(pending.autoplay, pending.practice);
+    return;
+  }
+  // Stop the preload worker before gameplay starts so it cannot keep touching
+  // the jukebox while GamePlayScene uses it.
+  stopPreloadWorker();
+  StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
+  const auto selections =
+      main_menu_profile::Selections::fromSettings(context.settings);
+  const auto snapshot = bars_.snapshot();
+  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
+  const bool autoKeySound = !context.settings.inputKeysoundEnabled;
+  const bool doublePlayFlip = context.settings.skinDoublePlayOption == 1;
+  const audio::PlaybackRate playback{
+      .percent = context.settings.selectedPlaybackRatePercent,
+      .mode = context.settings.selectedPlaybackMode};
+  const bool clubMode = context.settings.gameplayClubModeEnabled;
+  StartOptions options{
+      .startPosition = 0,
+      .autoKeySound = autoKeySound,
+      .autoPlay = pending.autoplay,
+      .gaugeType = selections.gaugeType,
+      .gaugeAutoShift = selections.gaugeAutoShift,
+      .gaugeAutoShiftLowerBound = selections.gaugeAutoShiftLowerBound,
+      .playOption = preloadedPlayInfo.option,
+      .playOptionSeed = preloadedPlayInfo.seed,
+      .playOption2 = preloadedPlayInfo.option2,
+      .playOption2Seed = preloadedPlayInfo.seed2,
+      .doublePlayFlip = doublePlayFlip,
+      .longNoteMode = preloadedLnMode,
+      .assistOption = selections.assistOption,
+      .pacemakerTarget = selections.pacemakerTarget,
+      .tableName = tableContext.name,
+      .tableLevel = tableContext.level,
+      .practiceMode = pending.practice,
+      .playback = playback,
+      .clubMode = clubMode,
+      .returnScene = this,
+      .ruleset = selections.ruleset};
+  context.sceneManager->changeScene(
+      std::make_unique<GamePlayScene>(context, std::unique_ptr<
+                                                  bms_parser::Chart>(
+                                                  preparedChartRaw),
+                                      std::move(options)),
+      true);
+  launching_ = false;
+}
+
 bool MusicSelectScene::reusePreloadedChart(
     const ChartMetaRecord &record, bms_parser::Chart *&chart,
     play_options::PlayOptionReplayInfo &playInfo, int &lnMode) {
@@ -1635,6 +1699,18 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           true);
       launching_ = false;
     }
+    return;
+  }
+
+  // Start was pressed before the preload finished but the worker is still
+  // loading this exact chart: keep it running (don't re-do the parse + jukebox
+  // load) and launch from its result when it lands. The decide overlay stays
+  // up while the load completes.
+  if (!launching_ && preloadWorker_ != nullptr &&
+      preloadWorker_->isRequesting(fspath_to_utf8(record.meta.BmsPath))) {
+    launching_ = true;
+    pendingLaunch_ = PendingPreloadLaunch{record, autoplay, practice};
+    StartupTiming::instance().mark("waiting for in-flight preload to complete");
     return;
   }
 
@@ -2465,6 +2541,7 @@ void MusicSelectScene::executeEvent(
 
 void MusicSelectScene::update(float) {
   if (failed_) return;
+  tryCompletePendingPreloadLaunch();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateSelectedChartAnalysis();
 #endif
