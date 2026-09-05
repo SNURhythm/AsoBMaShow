@@ -981,6 +981,59 @@ void testArchiveChartCountReportsStorageReadFailure() {
               .has_value());
 }
 
+void testDeleteChartsInArchiveRemovesOnlyArchiveCharts() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  // Archive chart lives in a nested inner folder; a sibling directory with a
+  // name that shares the archive's prefix must not be affected.
+  const auto archivePath = writeZip(
+      root / "prefix%_.zip",
+      {{"pack/inside.bms", chartText("Archive Inside")}});
+  writeChart(root / "prefix%_other", "loose", "Loose Chart");
+
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  auto batch = session->BeginScanBatch();
+  assert(batch.has_value());
+
+  assert(batch->UpsertArchiveCache({.path = archivePath,
+                                    .solid = false,
+                                    .uncompressedSize = 0,
+                                    .fileCount = 1,
+                                    .chartCount = 1}));
+  bms_parser::ChartMeta archiveChart;
+  archiveChart.BmsPath = archive_file::makeVirtualPath(
+      archivePath, std::filesystem::path("pack/inside.bms"));
+  archiveChart.MD5 = "aabbccddeeff00112233445566778899";
+  archiveChart.SHA256 = "00112233445566778899aabbccddeeff"
+                        "00112233445566778899aabbccddeeff";
+  archiveChart.Title = "Archive Inside";
+  assert(batch->UpsertChart(archiveChart, std::nullopt, false, {}));
+
+  bms_parser::ChartMeta looseChart;
+  looseChart.BmsPath = (root / "prefix%_other" / "loose.bms").lexically_normal();
+  looseChart.MD5 = "ffeeddccbbaa99887766554433221100";
+  looseChart.SHA256 = "ffeeddccbbaa99887766554433221100"
+                      "ffeeddccbbaa99887766554433221100";
+  looseChart.Title = "Loose Chart";
+  assert(batch->UpsertChart(looseChart, std::nullopt, false, {}));
+  assert(batch->Commit());
+
+  assert(session->CountAllChartMeta() == 2);
+  auto deleteBatch = session->BeginScanBatch();
+  assert(deleteBatch.has_value());
+  assert(deleteBatch->DeleteChartsInArchive(archivePath));
+  assert(deleteBatch->Commit());
+  assert(session->CountAllChartMeta() == 1);
+  std::vector<bms_parser::ChartMeta> remaining;
+  session->SelectAllChartMeta(remaining);
+  assert(remaining.size() == 1);
+  assert(remaining.front().Title == "Loose Chart");
+}
+
 void testArchiveStorageFailureDoesNotWriteCache() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -1807,6 +1860,7 @@ int main() {
   testAddedScanStorageFailureDoesNotQualifyExistingChart();
   testAddedScanParseFailureDoesNotQualifyExistingChart();
   testArchiveChartCountReportsStorageReadFailure();
+  testDeleteChartsInArchiveRemovesOnlyArchiveCharts();
   testArchiveStorageFailureDoesNotWriteCache();
   testMixedOrdinaryAndArchiveEntitiesIndexExactlyOnce();
   testArchiveIndexProgressFollowsFolderTraversal();

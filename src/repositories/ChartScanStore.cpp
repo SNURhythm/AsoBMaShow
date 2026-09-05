@@ -767,42 +767,36 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
-  std::vector<std::filesystem::path> chartPaths;
-  SqliteStatementHandle selectStatement;
-  if (!prepareSqliteStatementLogged(
-          impl_->database(), "SELECT path FROM chart_meta", selectStatement,
-          "selecting archive chart paths", logSqlErrorText)) {
-    return false;
+  // Archive chart rows are stored under the virtual path
+  // archivePath/innerPath, normalized by StoredPathText the same way as the
+  // archive path itself. Delete them with a single indexed LIKE range scan
+  // instead of scanning every chart_meta row per reindexed archive.
+  std::string prefix = chart_storage_identity::StoredPathText(archivePath);
+  prefix += std::filesystem::path::preferred_separator;
+  std::string escapedPrefix;
+  escapedPrefix.reserve(prefix.size());
+  for (const char character : prefix) {
+    if (character == '%' || character == '_' || character == '\\') {
+      escapedPrefix += '\\';
+    }
+    escapedPrefix += character;
   }
-  while (sqlite3_step(selectStatement.get()) == SQLITE_ROW) {
-    chartPaths.push_back(
-        storedPathFromDatabase(sqliteColumnString(selectStatement.get(), 0)));
-  }
+  const std::string pattern = escapedPrefix + "%";
 
   SqliteStatementHandle deleteStatement;
   if (!prepareSqliteStatementLogged(
-          impl_->database(), "DELETE FROM chart_meta WHERE path = ?",
+          impl_->database(),
+          "DELETE FROM chart_meta WHERE path LIKE ? ESCAPE '\\'",
           deleteStatement, "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
-  bool changed = false;
-  const auto target = archivePath.lexically_normal();
-  for (const auto &path : chartPaths) {
-    if (!pathIsInsideDirectory(path, target)) {
-      continue;
-    }
-    sqlite3_reset(deleteStatement.get());
-    sqlite3_clear_bindings(deleteStatement.get());
-    bindSqliteText(deleteStatement.get(), 1,
-                   chart_storage_identity::StoredPathText(path));
-    if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
-      logSqlError("deleting archive chart", impl_->database());
-      return false;
-    }
-    if (!changed && sqlite3_changes(impl_->database()) > 0) {
-      changed = true;
-      ++impl_->changedCount;
-    }
+  bindSqliteText(deleteStatement.get(), 1, pattern);
+  if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
+    logSqlError("deleting archive chart", impl_->database());
+    return false;
+  }
+  if (sqlite3_changes(impl_->database()) > 0) {
+    impl_->noteChanged();
   }
   return true;
 }
