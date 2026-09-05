@@ -326,6 +326,20 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
   if (!result.completed) {
+    SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
+                 "Chart library refresh failed: completed=%d committed=%d "
+                 "changed=%d stop=%d pause=%d",
+                 static_cast<int>(result.completed),
+                 static_cast<int>(result.committed), result.changedCount,
+                 static_cast<int>(stopToken.stop_requested()),
+                 static_cast<int>(checkpointPaused));
+    archive_file::appendDebugLogLine(
+        "Chart library refresh failed: completed=" +
+        std::to_string(result.completed) + " committed=" +
+        std::to_string(result.committed) + " changed=" +
+        std::to_string(result.changedCount) + " stop=" +
+        std::to_string(stopToken.stop_requested()) + " pause=" +
+        std::to_string(checkpointPaused));
     throw std::runtime_error("Failed to refresh chart library");
   }
   if (dependencies_.requestReload) {
