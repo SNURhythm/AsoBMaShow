@@ -4277,7 +4277,13 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
         std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
         schedulerWakeCv.wait_for(
             waitLock,
-            std::chrono::microseconds(kSchedulerMaxIdleSleepMicros));
+            std::chrono::microseconds(kSchedulerMaxIdleSleepMicros),
+            [this] {
+              // End the idle sleep when the scheduler is told to stop (so a
+              // play/load join exits promptly) or playback resumes.
+              return !schedulerActive.load(std::memory_order_acquire) ||
+                     isPlaying.load(std::memory_order_acquire);
+            });
         prevTimestamp = Clock::now();
         continue;
       }

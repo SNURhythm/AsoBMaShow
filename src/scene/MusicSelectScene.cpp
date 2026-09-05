@@ -1531,6 +1531,14 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
   int preloadedLnMode = 0;
   if (!reusePreloadedChart(record, preparedChartRaw, preloadedPlayInfo,
                           preloadedLnMode)) {
+    // If the worker is still loading this chart, keep waiting (the decide
+    // overlay stays up) instead of re-entering launchSelected, which would
+    // begin a fresh startup session every frame.
+    if (preloadWorker_ != nullptr &&
+        preloadWorker_->isRequesting(fspath_to_utf8(record.meta.BmsPath))) {
+      pendingLaunch_ = pending;
+      return;
+    }
     // The preload worker finished without publishing this chart (parse
     // failure, superseded, or cancelled). Fall back to the launch thread so
     // the launch is not dropped silently.
