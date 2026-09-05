@@ -3040,6 +3040,10 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
       if (!input.builtinImageReader) {
         continue;
       }
+      std::ostringstream builtinNote;
+      builtinNote << "builtin reference " << reference << " path "
+                  << path->second.generic_string();
+      StartupTiming::instance().note(builtinNote.str());
       const std::size_t maximumEncodedBytes = skinResourceLimit(
           input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
       std::vector<unsigned char> encoded;
