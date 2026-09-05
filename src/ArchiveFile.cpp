@@ -3528,12 +3528,16 @@ std::size_t pruneArchiveIndexCacheImpl(
     if (!file) {
       continue;
     }
+    std::error_code sizeError;
+    const std::uintmax_t fileBytes =
+        std::filesystem::file_size(filePath, sizeError);
     std::uint8_t version = 0;
     file.read(reinterpret_cast<char *>(&version), sizeof(version));
     std::uint64_t keyLen = 0;
     file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
     bool shouldRemove = true;
     if (file.good() && version == 2 &&
+        (!sizeError && keyLen <= fileBytes) &&
         keyLen <= (1024ull * 1024ull * 1024ull)) {
       std::string storedKey(static_cast<std::size_t>(keyLen), '\0');
       file.read(storedKey.data(), static_cast<std::streamsize>(keyLen));
@@ -3774,14 +3778,12 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   // Single-flight: if another thread is already building this archive's index,
   // wait for it and reuse the result instead of rebuilding. The first caller
   // to reach here becomes the builder.
-  bool isBuilder = false;
   for (;;) {
     std::unique_lock<std::mutex> buildLock(gIndexBuildMutex);
     if (!gIndexBuildActive[key]) {
       gIndexBuildActive[key] = true;
       gIndexBuildDone[key] = false;
       gIndexBuildFailed[key] = false;
-      isBuilder = true;
       break;
     }
     auto &inflightCv = gIndexBuildInFlight[key];
@@ -3823,7 +3825,6 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     gIndexBuildActive[key] = true;
     gIndexBuildDone[key] = false;
     gIndexBuildFailed[key] = false;
-    isBuilder = true;
     break;
   }
 

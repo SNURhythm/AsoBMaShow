@@ -802,7 +802,6 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
   if (!upper.empty()) {
     sql += "AND path < ? ";
   }
-  sql += "AND SUBSTR(path, 1, ?) = ?";
 
   SqliteStatementHandle deleteStatement;
   if (!prepareSqliteStatementLogged(
@@ -815,9 +814,6 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
   if (!upper.empty()) {
     bindSqliteText(deleteStatement.get(), bindIndex++, upper);
   }
-  sqlite3_bind_int(deleteStatement.get(), bindIndex++,
-                   static_cast<int>(prefix.size()));
-  bindSqliteText(deleteStatement.get(), bindIndex++, prefix);
   if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
     logSqlError("deleting archive chart", impl_->database());
     return false;
@@ -1023,8 +1019,7 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
   if (!upper.empty()) {
     sql += "AND path < ? ";
   }
-  sql += "AND SUBSTR(path, 1, ?) = ? "
-         "AND (source_priority IS NULL OR source_priority != ? OR "
+  sql += "AND (source_priority IS NULL OR source_priority != ? OR "
          "source_archive_size IS NULL OR source_archive_size != ?)";
 
   SqliteStatementHandle statement;
@@ -1041,9 +1036,6 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
   if (!upper.empty()) {
     bindSqliteText(statement.get(), bindIndex++, upper);
   }
-  sqlite3_bind_int(statement.get(), bindIndex++,
-                   static_cast<int>(prefix.size()));
-  bindSqliteText(statement.get(), bindIndex++, prefix);
   sqlite3_bind_int(statement.get(), bindIndex++, priority);
   sqlite3_bind_int64(statement.get(), bindIndex++, clampedArchiveSize);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
