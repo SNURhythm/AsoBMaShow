@@ -1259,8 +1259,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(course_gameplay_session_builder_tests PRIVATE cxx_std_23)
         add_executable(music_select_preview_tests
             tests/music_select_preview_tests.cpp
+            src/audio/SelectAudioDiagnostics.cpp
             src/music_select/MusicSelectPreview.cpp
             src/music_select/MusicSelectPreviewAudioService.cpp
+            src/Utils.cpp
+            src/path.cpp
         )
         target_include_directories(music_select_preview_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src

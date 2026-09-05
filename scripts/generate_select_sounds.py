@@ -130,95 +130,55 @@ def make_select():
     return out
 
 
-# ---------------------------------------------------------------- decide
+# ---------------------------------------------------------------- tick SEs
+# The built-in select sound effects are all simple, unobtrusive ticks, but each
+# action gets its own pitch/decay so they stay recognizable (a single identical
+# click for every event is monotonous). `pitch` is the fundamental Hz and `tau`
+# the decay; a quick transient is layered on top for a crisp attack.
+def make_tick(pitch_hz, tau, duration=0.06):
+    n = int(duration * SR)
+    out = [0.0] * n
+    for i in range(n):
+        t = i / SR
+        attack = min(1.0, t / 0.001)
+        out[i] = 0.6 * math.sin(2 * math.pi * pitch_hz * t) * attack * exp_env(t, tau)
+        out[i] += 0.25 * math.sin(2 * math.pi * pitch_hz * 2 * t) * attack * exp_env(t, tau * 0.6)
+    return lin_fade_out(out)
+
+
 def make_decide():
-    n = int(0.6 * SR)
-    out = [0.0] * n
-    for i in range(n):  # low thock for weight
-        t = i / SR
-        out[i] += 0.5 * math.sin(2 * math.pi * 82 * t) * exp_env(t, 0.14)
-    notes = [(0.00, 523, 0.5), (0.07, 784, 0.5), (0.14, 1046, 0.55)]  # C5 G5 C6
-    for start, f, amp in notes:
-        off = int(start * SR)
-        end = min(n, off + int(0.18 * SR))
-        for i in range(off, end):
-            t = (i - off) / SR
-            out[i] += amp * math.sin(2 * math.pi * f * t) * min(1.0, t / 0.004) * exp_env(t, 0.10)
-    for i in range(int(0.16 * SR), n):  # bright sustain on top
-        t = (i - int(0.16 * SR)) / SR
-        out[i] += 0.16 * math.sin(2 * math.pi * 2093 * t) * min(1.0, t / 0.006) * exp_env(t, 0.25)
-    return lin_fade_out(out)
+    # Firm, slightly long confirm tick.
+    return make_tick(1040, 0.020, 0.09)
 
 
-# ---------------------------------------------------------------- folder open
 def make_folder_open():
-    n = int(0.40 * SR)
-    tone = swept_tone(n, 220, 1760, 0.5, harmonics=2, vib_depth=18, vib_rate=30)
-    noise = swept_noise(n, 400, 3200, 0.45)
-    return lin_fade_out([tone[i] + noise[i] for i in range(n)])
+    # Higher, brighter open tick.
+    return make_tick(1900, 0.014)
 
 
-# ---------------------------------------------------------------- folder close
 def make_folder_close():
-    n = int(0.35 * SR)
-    tone = swept_tone(n, 1400, 160, 0.55, harmonics=2)
-    noise = swept_noise(n, 3000, 400, 0.4)
-    out = [tone[i] + noise[i] for i in range(n)]
-    for i in range(int(0.16 * SR), n):  # damped thump at the end
-        t = (i - int(0.16 * SR)) / SR
-        out[i] += 0.35 * math.sin(2 * math.pi * 90 * t) * exp_env(t, 0.05)
-    return lin_fade_out(out)
+    # Lower, softer close tick.
+    return make_tick(820, 0.018)
 
 
-# ---------------------------------------------------------------- option change
 def make_option_change():
-    n = int(0.12 * SR)
-    out = [0.0] * n
-    for i in range(n):
-        t = i / SR
-        out[i] += 0.55 * math.sin(2 * math.pi * 1568 * t) * min(1.0, t / 0.0015) * exp_env(t, 0.030)
-        out[i] += 0.22 * math.sin(2 * math.pi * 3136 * t) * min(1.0, t / 0.0015) * exp_env(t, 0.020)
-        out[i] += 0.18 * math.sin(2 * math.pi * 196 * t) * min(1.0, t / 0.003) * exp_env(t, 0.045)
-    return lin_fade_out(out)
+    # Quick middle tick for option cycling.
+    return make_tick(1320, 0.012)
 
 
-# ---------------------------------------------------------------- option open
 def make_option_open():
-    n = int(0.40 * SR)
-    noise = swept_noise(n, 500, 2400, 0.4)
-    dyad = [0.0] * n
-    for i in range(n):
-        t = i / SR
-        dyad[i] = (0.18 * math.sin(2 * math.pi * 523 * t) +
-                   0.14 * math.sin(2 * math.pi * 784 * t)) * min(1.0, t / 0.008) * exp_env(t, 0.22)
-    return lin_fade_out([noise[i] + dyad[i] for i in range(n)])
+    # Mid-high tick for opening an option panel.
+    return make_tick(1500, 0.015)
 
 
-# ---------------------------------------------------------------- option close
 def make_option_close():
-    n = int(0.30 * SR)
-    noise = swept_noise(n, 2400, 500, 0.38)
-    dyad = [0.0] * n
-    for i in range(n):
-        t = i / SR
-        dyad[i] = (0.16 * math.sin(2 * math.pi * 392 * t) +
-                   0.12 * math.sin(2 * math.pi * 330 * t)) * min(1.0, t / 0.006) * exp_env(t, 0.18)
-    return lin_fade_out([noise[i] + dyad[i] for i in range(n)])
+    # Mid-low tick for closing an option panel.
+    return make_tick(980, 0.016)
 
 
-# ---------------------------------------------------------------- scratch
 def make_scratch():
-    n = int(0.5 * SR)
-    stops = [(0.0, 300, 900), (0.15, 900, 350), (0.30, 350, 800)]
-    out = []
-    for _start, f0, f1 in stops:
-        out.extend(swept_tone(int(0.15 * SR), f0, f1, 0.6, harmonics=3,
-                              vib_depth=40, vib_rate=45))
-    out = out[:n]
-    noise = swept_noise(len(out), 800, 4000, 0.3)
-    for i in range(len(out)):
-        out[i] += noise[i]
-    return lin_fade_out(out)
+    # Sharp, fast-decay tick for scratch input.
+    return make_tick(1750, 0.009)
 
 
 WRITERS = [
