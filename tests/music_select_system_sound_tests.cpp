@@ -249,6 +249,37 @@ void testServiceIntegrationRoutsConfiguredOggThroughPlayback() {
          "the service routes a configured-set .ogg to the playback boundary");
 }
 
+void testBundleRelativeRootSkipsFilesystemPreflight() {
+  // `assets` is a bundle-relative root on iOS/macOS where
+  // std::filesystem::is_regular_file cannot see sandbox assets. The resolver
+  // must return the candidate so the loader attempts the bundle-aware SDL read
+  // and warns only when that actually fails; the filesystem preflight runs
+  // only for absolute paths.
+  const std::vector<std::filesystem::path> roots{"assets"};
+  const auto select = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::Select);
+  expect(select && *select == std::filesystem::path("assets") / "select.wav",
+         "a bundle-relative root returns its select.wav candidate without a "
+         "filesystem existence preflight");
+  const auto scratch = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::Scratch);
+  expect(scratch &&
+             *scratch == std::filesystem::path("assets") / "scratch.wav",
+         "a bundle-relative root returns every pinned candidate so the "
+         "bundle-aware loader can attempt it");
+}
+
+void testRelativeSetStillPrefersConfiguredRootOverBundled() {
+  // Two relative roots keep honoring search-root order: the configured set
+  // wins even though neither root is filesystem-visible on the runner.
+  const std::vector<std::filesystem::path> roots{"configured-set", "assets"};
+  const auto select = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::FolderOpen);
+  expect(select &&
+             *select == std::filesystem::path("configured-set") / "f-open.wav",
+         "relative search roots keep their configured-then-bundled order");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -264,6 +295,8 @@ int main(int argc, char **argv) {
   testEachBeatorajaExtensionResolvesAlone();
   testMissingEverywhereReturnsNulloptWithWarningAndNoPlayback();
   testServiceIntegrationRoutsConfiguredOggThroughPlayback();
+  testBundleRelativeRootSkipsFilesystemPreflight();
+  testRelativeSetStillPrefersConfiguredRootOverBundled();
   return music_select_skin_ledger_evidence::finish(
       argc, argv, "music_select_system_sound_tests", failures,
       {"select.sound.effect.option-change", "select.sound.effect.scratch",

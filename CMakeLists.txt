@@ -3968,6 +3968,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(audio_wrapper_lifecycle_tests PRIVATE cxx_std_23)
     target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
+    add_executable(skin_sound_bundle_decode_tests
+        tests/skin_sound_bundle_decode_tests.cpp
+        src/audio/decoder.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(skin_sound_bundle_decode_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(skin_sound_bundle_decode_tests PRIVATE cxx_std_23)
+    target_compile_definitions(skin_sound_bundle_decode_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(skin_sound_bundle_decode_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(skin_sound_bundle_decode_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(skin_sound_bundle_decode_tests PRIVATE shell32 ole32)
+    endif()
     add_executable(jukebox_restore_tests
         tests/jukebox_restore_tests.cpp
         src/ArchiveFile.cpp
@@ -7024,6 +7046,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
     asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
+    asobmashow_register_test(skin_sound_bundle_decode_tests foundation_av_skin_sound_bundle_decode)
+    set_tests_properties(foundation_av_skin_sound_bundle_decode PROPERTIES TIMEOUT 15)
     asobmashow_register_test(audio_device_manager_tests foundation_av_audio_device)
     asobmashow_register_test(jukebox_restore_tests foundation_av_jukebox_restore)
     set_tests_properties(foundation_av_jukebox_restore PROPERTIES TIMEOUT 30)

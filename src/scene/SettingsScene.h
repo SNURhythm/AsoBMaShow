@@ -62,6 +62,10 @@ class Chart;
 class Note;
 } // namespace bms_parser
 
+namespace chart_library_platform {
+class SoundSetFolderPicker;
+} // namespace chart_library_platform
+
 #include "../input/IRhythmControl.h"
 #include "../input/InputTypes.h"
 #include "SettingsSceneInputRebuild.h"
@@ -321,6 +325,9 @@ private:
   bool gameplaySkinControlsBuiltDisabled = false;
   TextView *gameplaySkinStatusText = nullptr;
   TextView *gameplaySkinUiMessageText = nullptr;
+  TextInputBox *skinSelectSoundSetInput = nullptr;
+  std::unique_ptr<chart_library_platform::SoundSetFolderPicker>
+      soundSetFolderPicker;
   TextView *gameplaySkinConfigurationDigestText = nullptr;
   View *gameplaySkinSafetyOverlayRoot = nullptr;
   View *gameplaySkinBusyOverlayRoot = nullptr;
@@ -499,6 +506,7 @@ private:
       const skin::GameplaySkinSettingsSnapshot &snapshot);
   void ensureGameplaySkinBusyOverlay(
       const skin::GameplaySkinSettingsSnapshot &snapshot);
+  void applyPendingSoundSetFolderPick();
   [[nodiscard]] skin::ConfigOffset
   gameplaySkinOffsetForEntry(const skin::SkinEntryId &entry,
                              const std::string &name) const;

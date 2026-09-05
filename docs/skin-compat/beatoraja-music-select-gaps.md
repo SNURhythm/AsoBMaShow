@@ -195,13 +195,25 @@ through the same search as the SEs — `musicSelectSystemSoundPath` checks the
 user-configured sound-set folder (when set) first, then the bundled `assets/`
 root, in Beatoraja extension order `.wav, .flac, .ogg, .mp3` — so a set shipping
 `select.ogg`/`decide.flac` (e.g. ModernChic's `Sound/`) is honored. The folder
-is configured in the Music Select settings section as a **typed path**: the app
-has no folder-picker widget, so the user must paste/copy the folder's absolute
-path. A stock checkout now also has bundled defaults: the repo ships
+is configured in the Music Select settings section: on iOS/Android a native
+**Pick...** button launches the platform folder picker (off the main thread)
+and persists the picked path plus its access token (an iOS security-scoped
+bookmark / Android SAF tree URI in `skinSelectSoundSetBookmark`) so the folder
+is re-accessible after relaunch; the row keeps a typed path that works on every
+platform, so desktop/mac keeps the typed input as its only affordance. A stock
+checkout now also has bundled defaults: the repo ships
 `assets/select.wav` and `assets/decide.wav` (plus all eight select SEs) generated
 deterministically by `scripts/generate_select_sounds.py` (pure-Python DSP, no
 third-party deps, select is a seamless 2.0 s loop), so the default load never
-fails on a fresh install. Pause and
+fails on a fresh install. Bundled and user sound-set assets are now loaded via a
+**bundle-aware read** (`decodeSkinSoundBundleAware`: `AudioWrapper::loadSkinSound`
+→ byte read through `SDL_RWFromFile`, which resolves relative `assets/*.wav`
+paths against the app bundle on iOS/macOS, decoded from memory, falling back to
+the plain `sf_open` path for archives and absolute-path user files), so the
+default sounds play inside the iOS sandbox and inside a macOS `.app` bundle
+instead of only from the repo working copy. This is a deploy-time fix for iOS:
+an existing iPad install must be rebuilt/reinstalled to pick up the bundled
+sounds. Pause and
 error/teardown silence preview audio explicitly
 (`MusicSelectPreviewAudioService::silence`, used by
 `MusicSelectScene::onPause`/`enterError`) instead of resuming the select BGM;

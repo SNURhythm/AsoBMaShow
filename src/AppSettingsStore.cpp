@@ -604,6 +604,7 @@ json settingsToJson(const AppSettings &settings) {
       {"skinMusicSelectMaxSearchBarCount",
        settings.skinMusicSelectMaxSearchBarCount},
       {"skinSelectSoundSetPath", settings.skinSelectSoundSetPath},
+      {"skinSelectSoundSetBookmark", settings.skinSelectSoundSetBookmark},
       {"skinPlayer2RandomOption", settings.skinPlayer2RandomOption},
       {"skinDoublePlayOption", settings.skinDoublePlayOption},
       {"skinBgaMode", settings.skinBgaMode},
@@ -818,6 +819,8 @@ AppSettings settingsFromJson(const json &document,
             settings.skinMusicSelectMaxSearchBarCount, diagnostics);
   readValue(document, "skinSelectSoundSetPath",
             settings.skinSelectSoundSetPath, diagnostics);
+  readValue(document, "skinSelectSoundSetBookmark",
+            settings.skinSelectSoundSetBookmark, diagnostics);
   readValue(document, "skinPlayer2RandomOption",
             settings.skinPlayer2RandomOption, diagnostics);
   readValue(document, "skinDoublePlayOption", settings.skinDoublePlayOption,

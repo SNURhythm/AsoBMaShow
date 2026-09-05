@@ -430,6 +430,8 @@ void testSkinSelectSoundSetPathRoundTrips() {
   expect(defaults.skinSelectSoundSetPath.empty(),
          "the music-select sound-set folder defaults empty, keeping the "
          "bundled assets fallback");
+  expect(defaults.skinSelectSoundSetBookmark.empty(),
+         "the music-select sound-set bookmark defaults empty");
 
   std::string error;
   expect(AppSettingsStore::Save(path, defaults, error),
@@ -442,17 +444,26 @@ void testSkinSelectSoundSetPathRoundTrips() {
   AppSettings configured;
   configured.skinSelectSoundSetPath =
       "/Users/example/Downloads/Skins/ModernChic/Sound";
+  configured.skinSelectSoundSetBookmark =
+      "/////AQAAAA4AAAACAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAQAAAAAB4AAAAA";
   expect(AppSettingsStore::Save(path, configured, error),
          "configured sound-set folder saves: " + error);
   const auto loaded = AppSettingsStore::Load(path);
   expect(loaded.status == AppSettingsLoadStatus::Loaded &&
              loaded.settings.skinSelectSoundSetPath ==
-                 configured.skinSelectSoundSetPath,
-         "the configured sound-set folder survives a JSON round trip");
+                 configured.skinSelectSoundSetPath &&
+             loaded.settings.skinSelectSoundSetBookmark ==
+                 configured.skinSelectSoundSetBookmark,
+         "the configured sound-set path and bookmark survive a JSON round "
+         "trip");
   expect(readFile(path).find("\"skinSelectSoundSetPath\": "
                              "\"/Users/example/Downloads/Skins/ModernChic/"
                              "Sound\"") != std::string::npos,
          "saved JSON contains the sound-set path");
+  expect(readFile(path).find("\"skinSelectSoundSetBookmark\": "
+                             "\"/////AQAAAA4AAAACAAQAAAAEAAAAAAAAAAAAAAAAAAAA"
+                             "AAAQAAAAAB4AAAAA\"") != std::string::npos,
+         "saved JSON contains the sound-set bookmark");
 }
 
 void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {

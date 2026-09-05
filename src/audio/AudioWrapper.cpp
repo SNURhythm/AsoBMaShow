@@ -1000,7 +1000,7 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
     if (privateSound == nullptr) {
       std::vector<short> pcmData;
       SF_INFO sfInfo{};
-      if (!decodeAudioToPCMBounded(
+      if (!decodeSkinSoundBundleAware(
               path, pcmData, sfInfo, isCancelled,
               {.maximumEncodedBytes = maximumEncodedBytes,
                .maximumPcmSamples = remainingDecodedSamples},
