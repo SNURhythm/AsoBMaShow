@@ -1797,6 +1797,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   // iOS File Provider Storage) is not stable across runs, so without sorting
   // a mid-refresh quit would compute a different signature on restart and
   // discard the checkpoint, forcing a full re-parse.
+  const auto orderingStart = std::chrono::steady_clock::now();
   std::ranges::sort(individualDiffs, {}, [](const ScanDiff &diff) {
     return checkpointPathTextForDb(diff.path);
   });
@@ -1840,6 +1841,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     (void)ignored;
     archiveBatchOrder.push_back(std::move(archiveKey));
   }
+  const auto orderingMillis =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - orderingStart)
+          .count();
+  archive_file::appendDebugLogLine(
+      "Deterministic ordering took " + std::to_string(orderingMillis) +
+      "ms for " + std::to_string(individualDiffs.size()) + " individual diffs and " +
+      std::to_string(archiveBatchOrder.size()) + " archive batches.");
 
   int parseTotal = static_cast<int>(individualDiffs.size());
   for (const auto &archiveKey : archiveBatchOrder) {
@@ -2106,10 +2115,16 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         "Synchronizing folders: roots=" +
         std::to_string(folderScanRoots.size()) + " nodes=" +
         std::to_string(folderScanNodes.size()));
+    const auto syncStart = std::chrono::steady_clock::now();
     recordStorageResult(
         scanBatch->SynchronizeFolders(scannedFolders, folderScanRoots));
+    const auto syncMillis =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - syncStart)
+            .count();
     archive_file::appendDebugLogLine(
-        "Folder synchronization complete.");
+        "Folder synchronization complete in " + std::to_string(syncMillis) +
+        "ms.");
   }
   std::vector<std::filesystem::path> upsertedChartPaths;
   std::uint64_t completedFlushRequest = 0;
