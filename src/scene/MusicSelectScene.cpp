@@ -1436,18 +1436,23 @@ void MusicSelectScene::startPreloadForSelection() {
     return;
   }
   const auto record = *selected.chart;
+  const path_t recordPath = fspath_to_path_t(record.meta.BmsPath);
   {
     std::lock_guard<std::mutex> lock(preloadMutex_);
     // Already preloaded, or a request for this chart is in flight.
     if (preloadRequest_ &&
-        fspath_to_path_t(preloadRequest_->meta.BmsPath) ==
-            fspath_to_path_t(record.meta.BmsPath)) {
+        fspath_to_path_t(preloadRequest_->meta.BmsPath) == recordPath) {
       return;
     }
-    if (fspath_to_path_t(preloadedPath_) ==
-        fspath_to_path_t(record.meta.BmsPath)) {
-      return;
+    if (fspath_to_path_t(preloadedPath_) == recordPath &&
+        preloadedChart_ != nullptr &&
+        fspath_to_path_t(preloadedChart_->Meta.BmsPath) == recordPath) {
+      return;  // this exact chart is already preloaded
     }
+    // Selection changed to a different chart (or the previous preload was
+    // superseded). Invalidate the stale result immediately so reuse can never
+    // pair a previously-loaded chart with the current selection.
+    preloadedChart_.reset();
     preloadedPath_ = record.meta.BmsPath;
     preloadRequest_ = record;
   }
@@ -1530,13 +1535,19 @@ bool MusicSelectScene::reusePreloadedChart(
   std::unique_ptr<bms_parser::Chart> cached;
   {
     std::lock_guard<std::mutex> lock(preloadMutex_);
+    // The optimistic preloadedPath_ is set as soon as a selection changes;
+    // only reuse when the actual loaded chart matches the requested one so a
+    // stale preload can never pair the wrong chart/audio with this selection.
     if (preloadedChart_ == nullptr ||
         fspath_to_path_t(preloadedPath_) !=
+            fspath_to_path_t(record.meta.BmsPath) ||
+        fspath_to_path_t(preloadedChart_->Meta.BmsPath) !=
             fspath_to_path_t(record.meta.BmsPath)) {
       return false;
     }
     cached = std::move(preloadedChart_);
     preloadedPath_.clear();
+    preloadRequest_.reset();
   }
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
