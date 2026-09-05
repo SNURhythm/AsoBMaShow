@@ -38,6 +38,7 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/OverlayPortal.h"
+#include "DecideLoadingOverlay.h"
 #include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -367,6 +368,10 @@ void MusicSelectScene::init() {
   modalOverlayPortal_->setPosition(Edge::Top, 0);
   modalOverlayPortal_->setZIndex(2000);
   modalLayer_->addView(modalOverlayPortal_);
+  decideOverlay_ = new DecideLoadingOverlay(
+      0, 0, rendering::window_width, rendering::window_height, {});
+  decideOverlay_->setVisible(false);
+  modalOverlayPortal_->present(decideOverlay_);
   addView(modalLayer_);
   startInputListening();
 }
@@ -388,6 +393,7 @@ void MusicSelectScene::onPause() {
 
 void MusicSelectScene::onResume() {
   launching_ = false;
+  hideDecideOverlay();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (reactivateSkinOnResume_) {
     reactivateSkinOnResume_ = false;
@@ -952,6 +958,13 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (failed_) return Scene::handleEvents(event);
+  // While a chart is launching, the decide overlay blocks all input so the
+  // user cannot scroll or change selection mid-launch.
+  if (launching_ && decideOverlay_ != nullptr &&
+      decideOverlay_->getVisible()) {
+    (void)decideOverlay_->handleEvents(event);
+    return {};
+  }
   if (recordsModal_ != nullptr && recordsModal_->isVisible()) {
     (void)recordsModal_->handleEvents(event);
     return {};
@@ -1529,6 +1542,19 @@ void MusicSelectScene::stopPreloadWorker() {
   }
 }
 
+void MusicSelectScene::showDecideOverlay(const ChartMetaRecord &record) {
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setChart(record);
+    decideOverlay_->setVisible(true);
+  }
+}
+
+void MusicSelectScene::hideDecideOverlay() {
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setVisible(false);
+  }
+}
+
 bool MusicSelectScene::reusePreloadedChart(
     const ChartMetaRecord &record, bms_parser::Chart *&chart,
     play_options::PlayOptionReplayInfo &playInfo, int &lnMode) {
@@ -1592,6 +1618,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       record.meta.BmsPath.empty()) {
     return;
   }
+  showDecideOverlay(record);
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   const auto tableContext = musicSelectTableContextForLaunch(snapshot);
@@ -1660,6 +1687,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
         auto resetLaunching = [this]() {
           defer([this]() {
             launching_ = false;
+            hideDecideOverlay();
             return true;
           }, 0, true);
         };
@@ -3613,6 +3641,11 @@ void MusicSelectScene::cleanupScene() {
     preloadedPath_.clear();
   }
   if (searchInput_ != nullptr) searchInput_->endEditing();
+  if (decideOverlay_ != nullptr) {
+    modalOverlayPortal_->dismiss(decideOverlay_);
+    delete decideOverlay_;
+    decideOverlay_ = nullptr;
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
   skinTouchGesture_.cancel();

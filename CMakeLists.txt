@@ -4271,6 +4271,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(APPLE)
         target_link_libraries(chart_list_item_view_tests PRIVATE iconv)
     endif()
+    add_executable(decide_loading_overlay_tests
+        tests/decide_loading_overlay_tests.cpp
+        src/scene/DecideLoadingOverlay.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
+        src/view/ImageView.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(decide_loading_overlay_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(decide_loading_overlay_tests PRIVATE cxx_std_23)
+    target_link_libraries(decide_loading_overlay_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(decide_loading_overlay_tests PRIVATE iconv)
+    endif()
     add_executable(dropdown_view_tests
         tests/dropdown_view_tests.cpp
         src/bms_parser.cpp
@@ -6809,6 +6840,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         jukebox_restore_tests
         image_view_fade_tests
         chart_list_item_view_tests
+        decide_loading_overlay_tests
         ir_upload_candidate_list_view_tests
         find_bms_download_tests
         gameplay_bga_target_tests
@@ -6824,6 +6856,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_modal_tests
         image_view_fade_tests
         chart_list_item_view_tests
+        decide_loading_overlay_tests
         context_menu_view_tests
         view_layout_tests
         button_enabled_tests
@@ -7023,6 +7056,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         image_decode_coordinator_tests
         image_file_decoder_tests
         image_view_fade_tests
+        decide_loading_overlay_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests

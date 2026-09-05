@@ -39,6 +39,7 @@
 
 class BlockingOverlayView;
 class OverlayPortal;
+class DecideLoadingOverlay;
 class ResultRecordListView;
 class TextInputBox;
 class TextView;
@@ -78,6 +79,11 @@ private:
   void launchCourse(const MusicSelectBar &, bool autoplay);
   void launchSelectedDirectoryAutoplay();
   void startPreloadForSelection();
+  void ensurePreloadWorker();
+  void preloadWorkerLoop(std::stop_token stop);
+  void stopPreloadWorker();
+  void showDecideOverlay(const ChartMetaRecord &record);
+  void hideDecideOverlay();
   [[nodiscard]] bool reusePreloadedChart(
       const ChartMetaRecord &, bms_parser::Chart *&,
       play_options::PlayOptionReplayInfo &, int &lnMode);
@@ -191,9 +197,6 @@ private:
   std::optional<ChartMetaRecord> preloadRequest_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
   std::filesystem::path preloadedPath_;
-  void ensurePreloadWorker();
-  void preloadWorkerLoop(std::stop_token stop);
-  void stopPreloadWorker();
   MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;
@@ -235,6 +238,7 @@ private:
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;
+  DecideLoadingOverlay *decideOverlay_ = nullptr;
   std::uint64_t displayedTasksRevision_ = 0;
   std::uint64_t displayedTaskProgressRevision_ = 0;
   View *errorView_ = nullptr;

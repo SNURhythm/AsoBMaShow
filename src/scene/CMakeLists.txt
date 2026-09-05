@@ -3,6 +3,7 @@ target_sources(main PRIVATE
     ChartRecordsScene.cpp
     ChartViewerScene.cpp
     CourseGameplaySessionBuilder.cpp
+    DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
     FindBmsProgressPresentation.cpp
     IrUploadsController.cpp

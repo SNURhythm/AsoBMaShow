@@ -50,6 +50,8 @@
 class Button;
 class DropdownView;
 class OverlayPortal;
+class BlockingOverlayView;
+class DecideLoadingOverlay;
 class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
@@ -194,6 +196,7 @@ private:
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
+  DecideLoadingOverlay *decideOverlay_ = nullptr;
   std::unique_ptr<ContextMenuView> revealContextMenu;
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
   ImageView *jacketView = nullptr;

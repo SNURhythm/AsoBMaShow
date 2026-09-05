@@ -35,6 +35,7 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
+#include "DecideLoadingOverlay.h"
 #include "../view/PlayOptionsPanelView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
@@ -904,6 +905,13 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  // While a chart is launching, the decide overlay blocks all input so the
+  // user cannot start another chart or mutate the library mid-launch.
+  if (willStart.load(std::memory_order_acquire) && decideOverlay_ != nullptr &&
+      decideOverlay_->getVisible()) {
+    (void)decideOverlay_->handleEvents(event);
+    return {};
+  }
   if (recordsModal_ != nullptr && recordsModal_->isVisible()) {
     (void)recordsModal_->handleEvents(event);
     return {};
@@ -1506,12 +1514,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
 
-  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
-                                    rendering::window_height);
+overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                     rendering::window_height);
   overlayPortal->setPositionType(YGPositionTypeAbsolute);
   overlayPortal->setPosition(Edge::Left, 0);
   overlayPortal->setPosition(Edge::Top, 0);
   overlayPortal->setZIndex(2000);
+  decideOverlay_ = new DecideLoadingOverlay(
+      0, 0, rendering::window_width, rendering::window_height, {});
+  decideOverlay_->setVisible(false);
+  overlayPortal->present(decideOverlay_);
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -4109,6 +4121,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
   if (startButtonText != nullptr) {
     startButtonText->setText("Loading...");
+  }
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setChart(record);
+    decideOverlay_->setVisible(true);
   }
   ImageView::dropAllCache();
 
@@ -7822,6 +7838,9 @@ bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
 
 void MainMenuScene::resetStartLoadingUi() {
   willStart.store(false);
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setVisible(false);
+  }
   refreshStartButtonForActiveFolder();
 }
 
@@ -9048,6 +9067,11 @@ void MainMenuScene::cleanupScene() {
   folderRecyclerView = nullptr;
   temporaryChartFolder.reset();
   rootLayout = nullptr;
+  if (decideOverlay_ != nullptr) {
+    overlayPortal->dismiss(decideOverlay_);
+    delete decideOverlay_;
+    decideOverlay_ = nullptr;
+  }
   overlayPortal = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
