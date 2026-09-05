@@ -3108,17 +3108,18 @@ SkinResourcePlanResult SkinResourcePreparationService::decodeAndPlan(
             }
           }
         }
-      } else {
-        // Fast batch reader is unavailable for this format; fall back to the
-        // per-file reader on the reconstructed virtual path.
-        for (const auto &[reference, inner] : items) {
-          std::vector<unsigned char> encoded;
-          if (readOne(archive_file::makeVirtualPath(
-                          std::filesystem::path(archivePath), inner),
-                      encoded) &&
-              encoded.size() <= maximumEncodedBytes) {
-            encodedByReference[reference] = std::move(encoded);
-          }
+      }
+      // A missing target (batch miss, case-only path difference, or fallback
+      // path) falls back to the per-file reader on the reconstructed virtual
+      // path so an optional chart image is never silently dropped.
+      for (const auto &[reference, inner] : items) {
+        if (encodedByReference.contains(reference)) continue;
+        std::vector<unsigned char> encoded;
+        if (readOne(archive_file::makeVirtualPath(
+                        std::filesystem::path(archivePath), inner),
+                    encoded) &&
+            encoded.size() <= maximumEncodedBytes) {
+          encodedByReference[reference] = std::move(encoded);
         }
       }
     }
