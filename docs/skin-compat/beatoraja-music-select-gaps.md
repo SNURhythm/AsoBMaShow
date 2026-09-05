@@ -27,9 +27,10 @@ row currently encodes:
    resolve across a user-configurable sound-set folder in every Beatoraja
    extension — see gap #3).
 3. **No default select BGM / decide sound** (**ADDRESSED**: a looping `SELECT`
-   default and `DECIDE` on launch are wired; they resolve through the same
-   configurable sound-set folder, so no bundled `select.wav` asset is needed if
-   the user points at a Beatoraja skin's `Sound/` — see gap #4).
+   default and `DECIDE` on launch are wired; bundled `assets/select.wav` and
+   `assets/decide.wav` ship in the repo, synthesized by
+   `scripts/generate_select_sounds.py`, and a user-configured sound-set folder
+   is searched first for `select.*`/`decide.*` — see gap #4).
 4. **No chart background (BGA) compositing** behind the skinned selector
    (open).
 5. A handful of **source input/event branches** are unmapped — mostly closed:
@@ -193,14 +194,14 @@ select BGM is instant. The default select BGM and the `DECIDE` sound resolve
 through the same search as the SEs — `musicSelectSystemSoundPath` checks the
 user-configured sound-set folder (when set) first, then the bundled `assets/`
 root, in Beatoraja extension order `.wav, .flac, .ogg, .mp3` — so a set shipping
-`select.ogg`/`decide.flac` (e.g. ModernChic's `Sound/`) is honored without
-bundling assets. The folder is configured in the Music Select settings section
-as a **typed path**: the app has no folder-picker widget, so the user must
-paste/copy the folder's absolute path. **No bundled `assets/select.wav` /
-`assets/decide.wav` asset ships in this repo yet** — in a stock checkout with an
-empty sound-set folder the default load fails and the worker idles (an SDL
-warning logs the missed load); packaging the asset is a follow-up, not part of
-this branch. Pause and
+`select.ogg`/`decide.flac` (e.g. ModernChic's `Sound/`) is honored. The folder
+is configured in the Music Select settings section as a **typed path**: the app
+has no folder-picker widget, so the user must paste/copy the folder's absolute
+path. A stock checkout now also has bundled defaults: the repo ships
+`assets/select.wav` and `assets/decide.wav` (plus all eight select SEs) generated
+deterministically by `scripts/generate_select_sounds.py` (pure-Python DSP, no
+third-party deps, select is a seamless 2.0 s loop), so the default load never
+fails on a fresh install. Pause and
 error/teardown silence preview audio explicitly
 (`MusicSelectPreviewAudioService::silence`, used by
 `MusicSelectScene::onPause`/`enterError`) instead of resuming the select BGM;
