@@ -1,5 +1,6 @@
 #include "MusicSelectScene.h"
 
+#include "../audio/SelectAudioDiagnostics.h"
 #include "../StartupTiming.h"
 #include "../PlatformOpen.h"
 #include "../targets.h"
@@ -505,6 +506,7 @@ void MusicSelectScene::init() {
       skin::musicSelectSystemSoundPath(
           selectSoundRoots, skin::MusicSelectSystemSound::Select)
           .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
+  audio::diag::SelectAudioLog("[bgm] scene default=" + selectBgm.string());
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
       musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm));
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
