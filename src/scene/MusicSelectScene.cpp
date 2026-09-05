@@ -647,6 +647,8 @@ void MusicSelectScene::onResume() {
   syncToolbar();
   reloadLibrary();
   if (!failed_) {
+    // Resume the looping select BGM after pause silenced it.
+    if (previewAudio_) previewAudio_->resumeDefaultBgm();
     selectedBarMoved();
     startInputListening();
   }

@@ -88,6 +88,11 @@ public:
   // stops audio entirely instead of resuming the select BGM.
   void silence();
 
+  // Resume the looping default select BGM after silence() (e.g. when the scene
+  // is brought back to the foreground). The worker treats nullopt as "play the
+  // default", so resetting to that state restarts the BGM.
+  void resumeDefaultBgm();
+
 private:
   class Impl;
   std::unique_ptr<Impl> impl_;

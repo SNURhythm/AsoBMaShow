@@ -216,6 +216,28 @@ void testSilenceStopsWithoutStartingDefaultBgm() {
          "silence leaves the preview stopped and does not route to the default");
 }
 
+void testResumeAfterSilenceRestartsDefaultBgm() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  RecordingPreviewPort port;
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1),
+         "the default select BGM starts with the select screen");
+  service.silence();
+  expect(port.waitForStopCount(1),
+         "silence stops the default BGM");
+  const auto afterSilence = port.takeCalls();
+  expect(afterSilence.size() == 1 && afterSilence[0].path == defaultBgm,
+         "silence does not start the default BGM");
+
+  service.resumeDefaultBgm();
+  expect(port.waitForPlayCount(2),
+         "resuming after silence replays the default select BGM");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 2 && calls[0].path == defaultBgm &&
+             calls[1].path == defaultBgm && calls[1].loop,
+         "resumeDefaultBgm routes back to the looping default select BGM");
+}
+
 void testIdleWithoutDefaultStaysSilent() {
   RecordingPreviewPort port;
   MusicSelectPreviewAudioService service(port.port());
@@ -235,6 +257,7 @@ int main(int argc, char **argv) {
   testNoPreviewFallsBackToDefaultSelectBgm();
   testEmptySelectionSwitchRoutesBackToDefault();
   testSilenceStopsWithoutStartingDefaultBgm();
+  testResumeAfterSilenceRestartsDefaultBgm();
   testIdleWithoutDefaultStaysSilent();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_preview_tests", failures,

@@ -64,8 +64,22 @@ void silence() {
     condition_.notify_one();
   }
 
+void resumeDefaultBgm() {
+    std::lock_guard lock(mutex_);
+    // Returning to the nullopt state asks the worker to play the looping
+    // default select BGM again.
+    if (!requestedPath_.has_value()) return;
+    if (loadCancellation_) {
+      loadCancellation_->store(true, std::memory_order_release);
+    }
+    requestedPath_.reset();
+    ++requestSerial_;
+    condition_.notify_one();
+  }
+
 private:
   void run(std::stop_token stop) {
+    audio::diag::SelectAudioLog("[bgm] worker started");
     std::uint64_t observedSerial = 0;
     std::optional<std::filesystem::path> playingPath;
     while (!stop.stop_requested()) {
@@ -83,6 +97,8 @@ private:
         cancellation = std::make_shared<std::atomic_bool>(false);
         loadCancellation_ = cancellation;
       }
+      audio::diag::SelectAudioLog("[bgm] worker woke serial=" +
+                                  std::to_string(serial));
 
       const std::filesystem::path target = requested.value_or(defaultPath_);
       if (target.empty()) {
@@ -142,3 +158,7 @@ void MusicSelectPreviewAudioService::switchTo(
 }
 
 void MusicSelectPreviewAudioService::silence() { impl_->silence(); }
+
+void MusicSelectPreviewAudioService::resumeDefaultBgm() {
+  impl_->resumeDefaultBgm();
+}
