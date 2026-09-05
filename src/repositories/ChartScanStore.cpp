@@ -597,9 +597,46 @@ struct ChartRepository::Session::ScanBatch::Impl {
     return chartInsertStatementReady;
   }
 
+  bool ensureChartHasDocumentUpdateStatement() {
+    if (chartHasDocumentUpdateStatementReady) {
+      return true;
+    }
+    if (chartHasDocumentUpdateStatementAttempted) {
+      return false;
+    }
+    chartHasDocumentUpdateStatementAttempted = true;
+    chartHasDocumentUpdateStatementReady = prepareSqliteStatementLogged(
+        database(),
+        "UPDATE chart_meta SET has_document = @has_document "
+        "WHERE path = @path AND has_document != @has_document",
+        chartHasDocumentUpdateStatement,
+        "preparing chart document flag update", logSdlSqlErrorText);
+    return chartHasDocumentUpdateStatementReady;
+  }
+
+  bool ensureSourcePreferenceUpdateStatement() {
+    if (sourcePreferenceUpdateStatementReady) {
+      return true;
+    }
+    if (sourcePreferenceUpdateStatementAttempted) {
+      return false;
+    }
+    sourcePreferenceUpdateStatementAttempted = true;
+    sourcePreferenceUpdateStatementReady = prepareSqliteStatementLogged(
+        database(),
+        "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
+        "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
+        "OR source_archive_size IS NULL OR source_archive_size != ?)",
+        sourcePreferenceUpdateStatement,
+        "preparing chart source preference update", logSdlSqlErrorText);
+    return sourcePreferenceUpdateStatementReady;
+  }
+
   std::shared_ptr<ChartSessionStorage> storage;
   std::unique_ptr<SqliteTransactionHandle> transaction;
   SqliteStatementHandle chartInsertStatement;
+  SqliteStatementHandle chartHasDocumentUpdateStatement;
+  SqliteStatementHandle sourcePreferenceUpdateStatement;
   const std::int64_t addDateSeconds;
   int changedCount = 0;
   bool folderChanged = false;
@@ -607,6 +644,10 @@ struct ChartRepository::Session::ScanBatch::Impl {
   bool committed = false;
   bool chartInsertStatementAttempted = false;
   bool chartInsertStatementReady = false;
+  bool chartHasDocumentUpdateStatementAttempted = false;
+  bool chartHasDocumentUpdateStatementReady = false;
+  bool sourcePreferenceUpdateStatementAttempted = false;
+  bool sourcePreferenceUpdateStatementReady = false;
 };
 
 ChartRepository::Session::ScanBatch::ScanBatch(std::unique_ptr<Impl> impl)
@@ -644,18 +685,17 @@ bool ChartRepository::Session::ScanBatch::UpdateChartHasDocument(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
-  SqliteStatementHandle statement;
-  if (!prepareSqliteStatementLogged(
-          impl_->database(),
-          "UPDATE chart_meta SET has_document = @has_document "
-          "WHERE path = @path AND has_document != @has_document",
-          statement, "preparing chart document flag update", logSqlErrorText)) {
+  if (!impl_->ensureChartHasDocumentUpdateStatement()) {
     return false;
   }
-  sqlite3_bind_int(statement.get(), 1, hasDocument ? 1 : 0);
-  bindSqliteText(statement.get(), 2,
+  sqlite3_reset(impl_->chartHasDocumentUpdateStatement.get());
+  sqlite3_clear_bindings(impl_->chartHasDocumentUpdateStatement.get());
+  sqlite3_bind_int(impl_->chartHasDocumentUpdateStatement.get(), 1,
+                   hasDocument ? 1 : 0);
+  bindSqliteText(impl_->chartHasDocumentUpdateStatement.get(), 2,
                  chart_storage_identity::StoredPathText(path));
-  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+  if (sqlite3_step(impl_->chartHasDocumentUpdateStatement.get()) !=
+      SQLITE_DONE) {
     logSqlError("updating chart document flag", impl_->database());
     return false;
   }
@@ -917,24 +957,24 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
-  const char *query =
-      "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
-      "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
-      "OR source_archive_size IS NULL OR source_archive_size != ?)";
-  SqliteStatementHandle statement;
-  if (!prepareSqliteStatementLogged(impl_->database(), query, statement,
-                                    "preparing chart source preference update",
-                                    logSqlErrorText)) {
+  if (!impl_->ensureSourcePreferenceUpdateStatement()) {
     return false;
   }
   const sqlite3_int64 archiveSize = clampSqlInteger(update.archiveSize);
-  sqlite3_bind_int(statement.get(), 1, update.priority);
-  sqlite3_bind_int64(statement.get(), 2, archiveSize);
-  bindSqliteText(statement.get(), 3,
+  sqlite3_reset(impl_->sourcePreferenceUpdateStatement.get());
+  sqlite3_clear_bindings(impl_->sourcePreferenceUpdateStatement.get());
+  sqlite3_bind_int(impl_->sourcePreferenceUpdateStatement.get(), 1,
+                   update.priority);
+  sqlite3_bind_int64(impl_->sourcePreferenceUpdateStatement.get(), 2,
+                     archiveSize);
+  bindSqliteText(impl_->sourcePreferenceUpdateStatement.get(), 3,
                  chart_storage_identity::StoredPathText(update.path));
-  sqlite3_bind_int(statement.get(), 4, update.priority);
-  sqlite3_bind_int64(statement.get(), 5, archiveSize);
-  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+  sqlite3_bind_int(impl_->sourcePreferenceUpdateStatement.get(), 4,
+                   update.priority);
+  sqlite3_bind_int64(impl_->sourcePreferenceUpdateStatement.get(), 5,
+                     archiveSize);
+  if (sqlite3_step(impl_->sourcePreferenceUpdateStatement.get()) !=
+      SQLITE_DONE) {
     logSqlError("updating chart source preference", impl_->database());
     return false;
   }

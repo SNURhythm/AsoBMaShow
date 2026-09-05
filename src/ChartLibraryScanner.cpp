@@ -1931,18 +1931,26 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         record.size, record.mtimeNs};
   }
 
+  std::unordered_map<path_t, bool> completedArchiveCache;
   auto archiveIdentityCompleted =
       [&](const std::filesystem::path &archivePath) -> bool {
+    const path_t archiveKey = archiveScanKey(archivePath);
+    if (const auto cached = completedArchiveCache.find(archiveKey);
+        cached != completedArchiveCache.end()) {
+      return cached->second;
+    }
     std::int64_t archiveSize = 0;
     std::int64_t mtimeNs = 0;
-    if (!archiveFileState(archivePath, archiveSize, mtimeNs)) {
-      return false;
+    bool completed = false;
+    if (archiveFileState(archivePath, archiveSize, mtimeNs)) {
+      const auto identityIt = completedArchiveIdentity.find(
+          checkpointPathTextForDb(archivePath));
+      completed = identityIt != completedArchiveIdentity.end() &&
+                  identityIt->second.first == archiveSize &&
+                  identityIt->second.second == mtimeNs;
     }
-    const auto identityIt = completedArchiveIdentity.find(
-        checkpointPathTextForDb(archivePath));
-    return identityIt != completedArchiveIdentity.end() &&
-           identityIt->second.first == archiveSize &&
-           identityIt->second.second == mtimeNs;
+    completedArchiveCache.emplace(archiveKey, completed);
+    return completed;
   };
 
   auto archiveBatchFinished =
@@ -2188,6 +2196,16 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (shouldStop()) {
       break;
     }
+    std::filesystem::path updateArchivePath;
+    std::filesystem::path updateInnerPath;
+    if (archive_file::splitVirtualPath(update.path, updateArchivePath,
+                                       updateInnerPath) &&
+        archiveIdentityCompleted(updateArchivePath)) {
+      // The chart belongs to an archive that was fully parsed and committed
+      // in an earlier run, and its archive file is unchanged (same size and
+      // mtime), so the stored source preference is already current.
+      continue;
+    }
     recordStorageResult(scanBatch->UpdateSourcePreference({
         .path = update.path,
         .priority = update.priority,
@@ -2261,6 +2279,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   for (const auto &[path, hasDocument] : documentFlagUpdates) {
     if (shouldStop()) {
       break;
+    }
+    std::filesystem::path flagArchivePath;
+    std::filesystem::path flagInnerPath;
+    if (archive_file::splitVirtualPath(path, flagArchivePath, flagInnerPath) &&
+        archiveIdentityCompleted(flagArchivePath)) {
+      // The chart belongs to an unchanged, previously completed archive, so
+      // its stored document flag is already current.
+      continue;
     }
     recordStorageResult(scanBatch->UpdateChartHasDocument(path, hasDocument));
   }
