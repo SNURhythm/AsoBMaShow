@@ -77,7 +77,16 @@ public:
   MusicSelectPreviewAudioService &
   operator=(const MusicSelectPreviewAudioService &) = delete;
 
+  // Replace whatever the preview worker is playing. `std::nullopt` means the
+  // looping default select BGM (Beatoraja's PreviewMusicProcessor fallback), so
+  // moving to a chart without `#PREVIEW` routes back to the SELECT sound.
   void switchTo(std::optional<std::filesystem::path> path);
+
+  // Stop whatever the preview worker is playing and stay silent. Unlike
+  // switchTo(nullopt), silence() does NOT start the default select BGM; the
+  // scene uses it for pause and error/teardown, where Beatoraja's MusicSelector
+  // stops audio entirely instead of resuming the select BGM.
+  void silence();
 
 private:
   class Impl;

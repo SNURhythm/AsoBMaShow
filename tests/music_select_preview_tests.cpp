@@ -196,6 +196,26 @@ void testEmptySelectionSwitchRoutesBackToDefault() {
          "the empty-preview switch reroutes to the default select BGM");
 }
 
+void testSilenceStopsWithoutStartingDefaultBgm() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  const std::filesystem::path preview = "/songs/a/preview.ogg";
+  RecordingPreviewPort port;
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1),
+         "the default select BGM starts with the select screen");
+  service.switchTo(preview);
+  expect(port.waitForPlayCount(2),
+         "selecting a chart with a preview starts the preview");
+  service.silence();
+  expect(port.waitForStopCount(1),
+         "silence asks the boundary to stop playback");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 2 && calls[0].path == defaultBgm,
+         "silence leaves the default select BGM unplayed");
+  expect(calls.size() == 2 && calls[1].path == preview,
+         "silence leaves the preview stopped and does not route to the default");
+}
+
 void testIdleWithoutDefaultStaysSilent() {
   RecordingPreviewPort port;
   MusicSelectPreviewAudioService service(port.port());
@@ -214,6 +234,7 @@ int main(int argc, char **argv) {
   testArchiveGatedSelectionDefersToDefaultAudio();
   testNoPreviewFallsBackToDefaultSelectBgm();
   testEmptySelectionSwitchRoutesBackToDefault();
+  testSilenceStopsWithoutStartingDefaultBgm();
   testIdleWithoutDefaultStaysSilent();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_preview_tests", failures,

@@ -68,9 +68,11 @@ void SkinSystemSoundService::playDecide() {
 }
 
 void SkinSystemSoundService::play(MusicSelectSystemSound sound) {
-  if (!playback_) return;
+  // Resolve and warn on a missing asset even when no playback boundary is
+  // injected, so callers always see why nothing plays.
   const auto path = pathFor(sound);
-  if (path) playback_(*path);
+  if (!path) return;
+  if (playback_) playback_(*path);
 }
 
 std::optional<std::filesystem::path>

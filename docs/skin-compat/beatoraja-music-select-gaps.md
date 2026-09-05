@@ -22,11 +22,16 @@ row currently encodes:
 
 1. **Music-select skin sources that are videos decode as movies** (VERIFIED
    COVERED, see gap #1).
-2. **No sound effects** play for select actions.
-3. **No default select BGM / decide sound**, and the preview path diverges from
-   the pinned `PreviewMusicProcessor`.
-4. **No chart background (BGA) compositing** behind the skinned selector.
-5. A handful of **source input/event branches** are unmapped.
+2. **No sound effects** play for select actions (**FIXED**: wired through
+   `SkinSystemSoundService` in `feature/music-select-gaps`; see gap #3).
+3. **No default select BGM / decide sound** (**ADDRESSED**: a looping `SELECT`
+   default and `DECIDE` on launch are wired; no bundled `select.wav` asset
+   ships yet, a documented limitation — see gap #4).
+4. **No chart background (BGA) compositing** behind the skinned selector
+   (open).
+5. A handful of **source input/event branches** are unmapped — mostly closed:
+   `Num6` → Settings lands here, while the open skin-config key remains (see
+   gap #8).
 
 None of these are covered by a ledger row, so the ledger gate cannot see them.
 The remaining work belongs in the existing runtime plan (`2026-09-01-beatoraja-music-select-runtime.md`,
@@ -109,7 +114,7 @@ consume. Decide whether select shows chart BGA at all (Beatoraja keeps most
 skin layout over a songlist/background asset; the chart's own BGA is mainly a
 gameplay media) and, if so, run it through the existing BGA views.
 
-### 3. Select sound effects are structured but never played
+### 3. Select sound effects
 
 **FIXED/WIRED.** `MusicSelectScene` now owns a `SkinSystemSoundService`
 (`src/audio/SkinSystemSoundService.{h,cpp}`) created in `init()`. The
@@ -119,30 +124,31 @@ plays `FOLDER_OPEN`, and a successful `closeDirectory` plays `FOLDER_CLOSE`.
 Playback goes through the same `AudioWrapper` skin-sound APIs as the preview
 service (`loadSkinSound` + `playSkinSound`); the service resolves each intent
 to its pinned Beatoraja filename under the injected asset root and skips (with
-a warning) when a file is missing, so the scene never fails. Routing is proven
-by `tests/music_select_system_sound_tests.cpp` and ledger rows
-`select.sound.effect.option-change`, `select.sound.effect.scratch`,
-`select.sound.folder-open`, `select.sound.folder-close`. `OPTION_OPEN` /
+a warning) when a file is missing, so the scene never fails. Routing and asset
+resolution are proven at the service level by
+`tests/music_select_system_sound_tests.cpp`; the scene wiring is wired but not
+scene-level tested because `MusicSelectScene` is not constructible in the unit
+suite. `OPTION_OPEN` /
 `OPTION_CLOSE` service entry points exist but the panel open-close wiring is
 left to the pending input-branch closure.
 
-The controller and input processor *emit* the source SE intents; the scene
-drops them all.
+The controller and input processor *emit* the source SE intents, and the scene
+dispatches them to the service:
 
 - `MusicSelectEventController.cpp:55-64` `changedWithSound()` /
   `refreshWithSound()` append `Effect::OptionChangeSound`, used by nearly every
   event (`10/11/12`, `40/42/43/54/55`, `72/73/74/75`, `77/78/79`, `308`,
-  `321-324`, `330-332`, `341-344`, `350-353`, `360-361`, `400`).
+  `321-324`, `330-332`, `341-344`, `350-353`, `360-361`, `400`);
+  `MusicSelectScene::executeEvent` routes the kind to
+  `systemSound_->playOptionChange()` (`MusicSelectScene.cpp:2575`).
 - `MusicSelectEventEffectKind::OptionChangeSound` is the *only* sound effect
   kind (`MusicSelectEventController.h:9-26`).
-- `MusicSelectScene::executeEvent`'s switch (`:2401-2547`) has **no
-  `OptionChangeSound` case** and falls through to `default: break`.
 - `MusicSelectInputProcessor.cpp:233,238,350,356` emit
-  `MusicSelectInputActionKind::ScratchSound`, but
-  `MusicSelectScene::applyInputAction` (`:2248-2360`) has no case and no audio
-  invocation.
-- Folder open/close play nothing: the scene's `openDirectory`/`closeDirectory`
-  are silent.
+  `MusicSelectInputActionKind::ScratchSound`; `MusicSelectScene::applyInputAction`
+  routes it to `playScratch()` (`MusicSelectScene.cpp:2426`).
+- A successful `openDirectory` plays `FOLDER_OPEN`
+  (`MusicSelectScene.cpp:1248`) and a successful `closeDirectory` plays
+  `FOLDER_CLOSE` (`MusicSelectScene.cpp:1617`).
 
 Pinned source plays:
 - `OPTION_CHANGE` on every option/configuration change and on replay-slot
@@ -162,10 +168,9 @@ The full source SE set lives in `SystemSoundManager.SoundType`
 `RESULT_*`, `COURSE_*`, `GUIDESE_*`, `SELECT`, `DECIDE`. A select scene only
 needs the select subset.
 
-Fix: give `MusicSelectScene` a small system-SE adapter (same
-`AudioWrapper` skin-sound APIs the preview service already uses), handle
-`OptionChangeSound`, `ScratchSound`, and add `FolderOpen`/`FolderClose`
-effects; play `GUIDESE_*` when the selected chart's guide is on.
+The adapter above lands the select subset; `GUIDESE_*` remains open: play the
+`GUIDESE_*` system sounds when the selected chart's guide is on and
+`guideSoundEffects` is enabled.
 
 ### 4. No default select BGM, and no decide sound
 
@@ -179,8 +184,15 @@ it. `MusicSelectScene::launchSelected` plays `DECIDE` through
 AudioWrapper-backed port (`MusicSelectPreviewBgmPlayer` in
 `MusicSelectScene.cpp`), which caches the default handle so returning to the
 select BGM is instant. The default asset resolves to the same `assets/select.wav`
-as `SkinSystemSoundService::Select`; when the file is missing the worker idles
-and nothing fails.
+as `SkinSystemSoundService::Select`. **No bundled `assets/select.wav` /
+`assets/decide.wav` asset ships in this repo yet** — in a stock checkout the
+default load fails and the worker idles (an SDL warning logs the missed load);
+packaging the asset is a follow-up, not part of this branch. Pause and
+error/teardown silence preview audio explicitly
+(`MusicSelectPreviewAudioService::silence`, used by
+`MusicSelectScene::onPause`/`enterError`) instead of resuming the select BGM;
+only folder navigation away from a song returns to the looping default (pinned
+Beatoraja keeps the SELECT sound running across folder moves).
 
 ### 5. Preview with no `#PREVIEW` is silent (Beatoraja fades to select BGM)
 
@@ -215,7 +227,12 @@ pressed `Num6` to a new `MusicSelectInputActionKind::OpenSettings`
 `MusicSelectScene::applyInputAction` dispatches that action to the scene's
 `openSettings()` — the same Settings entry the toolbar uses
 (`MusicSelectScene.cpp:3641-3646`). This matches pinned `MusicSelector.input()`
-mapping `NUM6` to the CONFIG screen (`MusicSelector.java:296-300`).
+mapping `NUM6` to the CONFIG screen (`MusicSelector.java:296-300`). The
+input-processor routing is unit-tested by
+`tests/music_select_input_processor_tests.cpp`
+(`testNum6ControlKeyOpensSettings`); the scene-level dispatch
+(`applyInputAction` → `openSettings`) is wired but not scene-level tested
+because `MusicSelectScene` is not constructible in the unit suite.
 
 ### 8. Open skin-configuration key is unhandled
 
@@ -265,7 +282,7 @@ For calibration, these are implemented and ledger/evidence-backed:
   origin, and no-return-to-Intro policy.
 - Events `10-19, 40-42, 54-55, 72-75, 77-79, 89-90, 210-213, 308, 312,
   315-318, 321-324, 330-332, 340-344, 350-353, 360-361, 400` per the pinned
-  `EventType` count, minus the sound sink described above.
+  `EventType` count, routed to their select SEs (see gap #3).
 
 ## Remediation roadmap
 
@@ -278,10 +295,11 @@ reused.
    to `SkinMovieResource`; proven by `tests/skin_movie_catalog_types_tests`
    (type-5 movie fixture + `SkinMovieCatalog` assertion: a movie source is
    decoded, prepared, and drawn).
-2. **Select SE wiring** — add a system-SE adapter reusing the preview service's
-   `AudioWrapper` skin-sound path; handle `OptionChangeSound`, `ScratchSound`,
-   add `FolderOpenSound`/`FolderCloseSound`/`OptionOpenSound`/`OptionCloseSound`
-   effects; play `GUIDESE_*` from the persisted `guideSoundEffects` setting.
+2. **Select SE wiring** — done: the `SkinSystemSoundService` adapter plays
+   `OptionChangeSound`, `ScratchSound`, and `FolderOpenSound`/`FolderCloseSound`
+   through the preview service's `AudioWrapper` skin-sound path. Remaining from
+   this slice: `OptionOpenSound`/`OptionCloseSound` panel wiring and `GUIDESE_*`
+   from the persisted `guideSoundEffects` setting (see gap #3).
 3. **Default select BGM + preview parity** — done: `SELECT` default in the
    preview service (injectable `AudioPort` + default path), fallback to the
    default on empty preview, `DECIDE` on launch. Remaining from this slice:

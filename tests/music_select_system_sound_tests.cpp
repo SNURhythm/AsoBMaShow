@@ -139,6 +139,19 @@ void testMissingAssetRootWarnsAndSkipsPlayback() {
          "every missing sound logs a warning instead of failing");
 }
 
+void testMissingAssetWarnsEvenWithoutPlaybackBoundary() {
+  std::vector<std::string> warnings;
+  SkinSystemSoundService service(
+      "/does/not/exist", {},
+      [&warnings](std::string_view message) { warnings.emplace_back(message); });
+  service.playOptionChange();
+  service.playScratch();
+  service.playFolderOpen();
+  service.playFolderClose();
+  expect(warnings.size() == 4,
+         "missing assets warn even when no playback boundary is injected");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -146,6 +159,7 @@ int main(int argc, char **argv) {
   testRemainingSelectSubsetRoutesToPinnedPaths();
   testFilenameMapMatchesPinnedSystemSoundManager();
   testMissingAssetRootWarnsAndSkipsPlayback();
+  testMissingAssetWarnsEvenWithoutPlaybackBoundary();
   return music_select_skin_ledger_evidence::finish(
       argc, argv, "music_select_system_sound_tests", failures,
       {"select.sound.effect.option-change", "select.sound.effect.scratch",

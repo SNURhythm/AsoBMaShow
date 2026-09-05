@@ -47,6 +47,20 @@ public:
     condition_.notify_one();
   }
 
+void silence() {
+    std::lock_guard lock(mutex_);
+    // An empty path is distinct from the nullopt "play default" state, so the
+    // worker maps an empty target to a stop with no subsequent default playback.
+    const std::filesystem::path emptyPath;
+    if (requestedPath_ == emptyPath) return;
+    if (loadCancellation_) {
+      loadCancellation_->store(true, std::memory_order_release);
+    }
+    requestedPath_ = emptyPath;
+    ++requestSerial_;
+    condition_.notify_one();
+  }
+
 private:
   void run(std::stop_token stop) {
     std::uint64_t observedSerial = 0;
@@ -117,3 +131,5 @@ void MusicSelectPreviewAudioService::switchTo(
     std::optional<std::filesystem::path> path) {
   impl_->switchTo(std::move(path));
 }
+
+void MusicSelectPreviewAudioService::silence() { impl_->silence(); }

@@ -155,7 +155,17 @@ public:
       const auto loaded = audio_->loadSkinSound(
           key, *cancellation, std::numeric_limits<std::size_t>::max(),
           std::numeric_limits<std::size_t>::max(), stop);
-      if (!loaded.handle) return false;
+      if (!loaded.handle) {
+        // A superseded request is cancelled mid-load and expected to fail; only
+        // warn on a genuine load failure (e.g. the bundled default BGM missing)
+        // so navigation back-and-forth never spams the log.
+        if (!cancellation->load(std::memory_order_acquire) &&
+            !stop.stop_requested()) {
+          SDL_Log("Music-select skin sound failed to load: %s",
+                  fspath_to_utf8(path).c_str());
+        }
+        return false;
+      }
       handle = *loaded.handle;
       if (isDefault) defaultHandle_ = handle;
     }
@@ -554,7 +564,9 @@ void MusicSelectScene::onPause() {
 #endif
   stopInputListening();
   previewController_.reset();
-  if (previewAudio_) previewAudio_->switchTo(std::nullopt);
+  // Pausing stops preview audio entirely; Beatoraja does not resume the select
+  // BGM while the scene is covered.
+  if (previewAudio_) previewAudio_->silence();
   if (irExternalUrlGeneration_ != 0 && irExternalUrlService_) {
     irExternalUrlService_->close(irExternalUrlGeneration_);
   }
@@ -661,6 +673,9 @@ void MusicSelectScene::selectedBarMoved() {
       previewSelection(snapshot, context.settings.archiveChartPreviewEnabled),
       songBarChangeMicros_);
   if (previewMove.stopAudio && previewAudio_) {
+    // Leaving a song folder returns to the looping select BGM: pinned
+    // Beatoraja drops the preview but the selector keeps the SELECT sound
+    // running, so route through the default rather than going silent.
     previewAudio_->switchTo(std::nullopt);
   }
 
@@ -2809,7 +2824,9 @@ void MusicSelectScene::enterError(
   failed_ = true;
   stopInputListening();
   previewController_.reset();
-  if (previewAudio_) previewAudio_->switchTo(std::nullopt);
+  // Error/teardown silences preview audio entirely rather than resuming the
+  // select BGM.
+  if (previewAudio_) previewAudio_->silence();
   if (searchInput_ != nullptr) searchInput_->endEditing();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
