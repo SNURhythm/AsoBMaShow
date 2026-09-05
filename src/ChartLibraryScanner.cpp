@@ -1790,8 +1790,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     // No work was produced, but a pending flush request (e.g. a UI-requested
     // durable state) must still be acknowledged so the caller's completion
     // signal arrives; nothing needs to be committed because there were no
-    // changes.
-    acknowledgeFlushRequest(pendingFlushRequest());
+    // changes. Only a healthy traversal may acknowledge, so an unavailable
+    // root that returns completed=false does not report a flush completion.
+    if (traversalHealthy) {
+      acknowledgeFlushRequest(pendingFlushRequest());
+    }
     bool finalized = traversalHealthy;
     if (reconcileMode == ReconcileMode::Full) {
       finalized = finalized && session.ClearScanCheckpoint();
@@ -3214,7 +3217,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
     }
   }
-  if (committed) {
+  if (committed && !interrupted.load(std::memory_order_relaxed)) {
     acknowledgeFlushRequest(pendingFlushRequest());
   }
   if (!committed) {
