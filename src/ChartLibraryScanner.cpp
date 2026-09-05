@@ -1727,6 +1727,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   reportProgress(rootCount, rootCount,
                  ChartScanProgressStage::PreparingUpdates);
+  archive_file::appendDebugLogLine(
+      "Preparing updates: diffs=" + std::to_string(diffs.size()) +
+      " documentFlagUpdates=" + std::to_string(documentFlagUpdates.size()) +
+      " checkpointFound=" + std::to_string(checkpoint.found) +
+      " checkpointPhase=" +
+      (checkpoint.found ? checkpoint.phase : std::string("(none)")));
 
   if (shouldStop()) {
     entityScheduler.cancel();
@@ -2791,6 +2797,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (batchPtr == nullptr) {
       continue;
     }
+    archive_file::appendDebugLogLine(
+        "Processing archive batch: index=" +
+        std::to_string(archiveIndex) + "/" +
+        std::to_string(archiveBatchOrder.size()) + " path=" +
+        fspath_to_utf8(archiveBatchOrder[archiveIndex]) + " inner=" +
+        std::to_string(batchPtr->innerPaths.size()));
     const ArchiveParseBatch &batch = *batchPtr;
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (innerStart >= batch.innerPaths.size()) {
