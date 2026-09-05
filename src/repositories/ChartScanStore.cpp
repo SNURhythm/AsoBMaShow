@@ -979,6 +979,54 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
   return true;
 }
 
+bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
+    const std::filesystem::path &archivePath, int priority,
+    std::uint64_t archiveSize) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  // Charts inside an archive are stored under archivePath/innerPath,
+  // normalized by StoredPathText the same way as the archive path itself, so
+  // one indexed LIKE range scan updates the whole archive's preference.
+  std::string prefix = chart_storage_identity::StoredPathText(archivePath);
+  prefix += std::filesystem::path::preferred_separator;
+  std::string escapedPrefix;
+  escapedPrefix.reserve(prefix.size());
+  for (const char character : prefix) {
+    if (character == '%' || character == '_' || character == '\\') {
+      escapedPrefix += '\\';
+    }
+    escapedPrefix += character;
+  }
+  const std::string pattern = escapedPrefix + "%";
+
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(),
+          "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
+          "WHERE path LIKE ? ESCAPE '\\' AND (source_priority IS NULL OR "
+          "source_priority != ? OR source_archive_size IS NULL OR "
+          "source_archive_size != ?)",
+          statement, "preparing archive source preference update",
+          logSqlErrorText)) {
+    return false;
+  }
+  const sqlite3_int64 clampedArchiveSize = clampSqlInteger(archiveSize);
+  sqlite3_bind_int(statement.get(), 1, priority);
+  sqlite3_bind_int64(statement.get(), 2, clampedArchiveSize);
+  bindSqliteText(statement.get(), 3, pattern);
+  sqlite3_bind_int(statement.get(), 4, priority);
+  sqlite3_bind_int64(statement.get(), 5, clampedArchiveSize);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("updating archive chart source preference", impl_->database());
+    return false;
+  }
+  if (sqlite3_changes(impl_->database()) > 0) {
+    impl_->noteChanged();
+  }
+  return true;
+}
+
 bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
     std::span<const ChartFolderScanNode> nodes,
     std::span<const std::filesystem::path> roots) {

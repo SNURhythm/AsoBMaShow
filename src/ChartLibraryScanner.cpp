@@ -573,11 +573,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::vector<std::pair<std::filesystem::path, bool>> documentFlagUpdates;
   std::vector<std::filesystem::path> sourcePreferenceRefreshPaths;
   struct CachedSourcePreferenceUpdate {
-    std::filesystem::path path;
+    std::filesystem::path archivePath;
     int priority = 0;
     std::uint64_t archiveSize = 0;
   };
-  std::vector<CachedSourcePreferenceUpdate> cachedSourcePreferenceUpdates;
+  // One source-preference update per archive (all charts inside an archive
+  // share the same priority/archive size), keyed by archive path.
+  std::unordered_map<path_t, CachedSourcePreferenceUpdate>
+      cachedSourcePreferenceUpdates;
   struct SolidArchiveDiff {
     std::filesystem::path path;
     bool solid = false;
@@ -693,12 +696,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             archiveState.cache.mtimeNs == archiveState.mtimeNs &&
             archiveState.cache.chartCount >= 0) {
           knownChartPaths.insert(fspath_to_path_t(identity.path));
-          cachedSourcePreferenceUpdates.push_back({
-              .path = identity.path,
+          cachedSourcePreferenceUpdates[archiveKey] = {
+              .archivePath = archivePath,
               .priority = archiveState.cache.solid ? 2 : 1,
               .archiveSize = static_cast<std::uint64_t>(
                   std::max<std::int64_t>(0, archiveState.archiveSize)),
-          });
+          };
         }
         continue;
       }
@@ -2235,25 +2238,18 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   scanPhaseEnd("loop-source-preference-refresh", loopSourcePrefRefreshStart);
 
   const auto loopCachedSourcePrefStart = scanPhaseStart();
-  for (const auto &update : cachedSourcePreferenceUpdates) {
+  for (auto &[_, update] : cachedSourcePreferenceUpdates) {
     if (shouldStop()) {
       break;
     }
-    std::filesystem::path updateArchivePath;
-    std::filesystem::path updateInnerPath;
-    if (archive_file::splitVirtualPath(update.path, updateArchivePath,
-                                       updateInnerPath) &&
-        archiveIdentityCompleted(updateArchivePath)) {
-      // The chart belongs to an archive that was fully parsed and committed
-      // in an earlier run, and its archive file is unchanged (same size and
-      // mtime), so the stored source preference is already current.
+    if (archiveIdentityCompleted(update.archivePath)) {
+      // The archive was fully parsed and committed in an earlier run and its
+      // file is unchanged (same size and mtime), so its stored source
+      // preference is already current.
       continue;
     }
-    recordStorageResult(scanBatch->UpdateSourcePreference({
-        .path = update.path,
-        .priority = update.priority,
-        .archiveSize = update.archiveSize,
-    }));
+    recordStorageResult(scanBatch->UpdateSourcePreferenceInArchive(
+        update.archivePath, update.priority, update.archiveSize));
   }
   scanPhaseEnd("loop-cached-source-preference", loopCachedSourcePrefStart);
 

@@ -229,6 +229,13 @@ public:
       bool UpsertArchiveCache(const ArchiveScanCacheUpdate &update);
       bool UpdateSourcePreference(
           const ChartSourcePreferenceUpdate &update);
+      // Sets source_priority/source_archive_size for every chart under the
+      // given archive in one UPDATE (the path column is a PRIMARY KEY, so the
+      // LIKE range scan uses the index). All charts in an archive share the
+      // same preference, so this replaces per-chart UPDATEs on a large library.
+      bool UpdateSourcePreferenceInArchive(
+          const std::filesystem::path &archivePath, int priority,
+          std::uint64_t archiveSize);
       bool SynchronizeFolders(std::span<const ChartFolderScanNode> nodes,
                               std::span<const std::filesystem::path> roots);
       std::optional<int>
