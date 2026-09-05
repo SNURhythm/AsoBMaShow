@@ -23,10 +23,13 @@ row currently encodes:
 1. **Music-select skin sources that are videos decode as movies** (VERIFIED
    COVERED, see gap #1).
 2. **No sound effects** play for select actions (**FIXED**: wired through
-   `SkinSystemSoundService` in `feature/music-select-gaps`; see gap #3).
+   `SkinSystemSoundService` in `feature/music-select-gaps`; all select SEs now
+   resolve across a user-configurable sound-set folder in every Beatoraja
+   extension — see gap #3).
 3. **No default select BGM / decide sound** (**ADDRESSED**: a looping `SELECT`
-   default and `DECIDE` on launch are wired; no bundled `select.wav` asset
-   ships yet, a documented limitation — see gap #4).
+   default and `DECIDE` on launch are wired; they resolve through the same
+   configurable sound-set folder, so no bundled `select.wav` asset is needed if
+   the user points at a Beatoraja skin's `Sound/` — see gap #4).
 4. **No chart background (BGA) compositing** behind the skinned selector
    (open).
 5. A handful of **source input/event branches** are unmapped — mostly closed:
@@ -59,9 +62,9 @@ Connecting that plumbing to the type-5 pipeline was left behind:
 |---|------|-----------|------------------|----------------------|
 | 1 | Movie sources in type-5 skins | VERIFIED COVERED: shared `SkinMovieCatalog::resolveMovies` promotes a movie-extension image resource to `SkinMovieResource`; `SkinResourceCatalog` skips movie paths at image-decode time | `JSONSkinLoader` treats `image` paths whose extension is a movie extension as movies | Covered by shared promotion, proven by `tests/skin_movie_catalog_types_tests` |
 | 2 | Chart background (BGA) on select | Only setting mutation for play | Select scene composites its media behind the skin | `MusicSelectScene::renderScene` + compositor |
-| 3 | Option/scratch/folder SE | WIRED: `OptionChangeSound`/`ScratchSound`/folder open-close play through `SkinSystemSoundService` | `OPTION_*`, `SCRATCH`, `FOLDER_OPEN/CLOSE` play system sounds | `MusicSelectScene` audio wiring |
-| 4 | Select BGM + decide sound | ADDRESSED: looping SELECT default in the preview service, `DECIDE` on launch | `SELECT` looped, `DECIDE` on start | Preview service default path |
-| 5 | Preview without `#PREVIEW` | ADDRESSED: falls back to `SELECT` | Fades back to `SELECT` | See #4 |
+| 3 | Option/scratch/folder SE | WIRED: `OptionChangeSound`/`ScratchSound`/folder open-close play through `SkinSystemSoundService`; every select SE resolves across the user-configured sound-set folder (all four Beatoraja extensions) then the bundled root | `OPTION_*`, `SCRATCH`, `FOLDER_OPEN/CLOSE` play system sounds | `MusicSelectScene` audio wiring |
+| 4 | Select BGM + decide sound | ADDRESSED: looping SELECT default in the preview service, `DECIDE` on launch; both resolve across the user-configured sound-set folder (all four Beatoraja extensions) | `SELECT` looped, `DECIDE` on start | Preview service default path |
+| 5 | Preview without `#PREVIEW` | ADDRESSED: falls back to `SELECT` (resolved through the configured sound-set folder) | Fades back to `SELECT` | See #4 |
 | 6 | `SongPreview` config | Gap (no user setting): previews always loop, gated only by `archiveChartPreviewEnabled` | `NONE`/`ONCE`/`LOOP` | Settings + preview service |
 | 7 | `Num6` | ADDRESSED: `Num6` in the control-key set, `SDLK_6` bound, routes to Settings | Opens CONFIG | `controlKey()` + control-key set + `OpenSettings` action |
 | 8 | Open skin-config key | Unmapped | Opens `SKINCONFIG` | Input binding |
@@ -122,10 +125,13 @@ gameplay media) and, if so, run it through the existing BGA views.
 `ScratchSound` input action plays `SCRATCH`, a successful `openDirectory`
 plays `FOLDER_OPEN`, and a successful `closeDirectory` plays `FOLDER_CLOSE`.
 Playback goes through the same `AudioWrapper` skin-sound APIs as the preview
-service (`loadSkinSound` + `playSkinSound`); the service resolves each intent
-to its pinned Beatoraja filename under the injected asset root and skips (with
-a warning) when a file is missing, so the scene never fails. Routing and asset
-resolution are proven at the service level by
+service (`loadSkinSound` + `playSkinSound`); the service resolves each intent to
+its pinned Beatoraja filename across the search roots, tried in order — the
+user-configured sound-set folder (when set) then the bundled `assets/` root —
+and within a root tries Beatoraja's full extension order `.wav, .flac, .ogg,
+.mp3` (`AudioDriver.getPaths`). The first existing file wins; a file missing
+everywhere is skipped with a warning, so the scene never fails. Routing and
+asset resolution are proven at the service level by
 `tests/music_select_system_sound_tests.cpp`; the scene wiring is wired but not
 scene-level tested because `MusicSelectScene` is not constructible in the unit
 suite. `OPTION_OPEN` /
@@ -180,14 +186,21 @@ system sound as its fallback: the worker starts it when the select screen opens
 (`PreviewThread` plays the default on thread start,
 `PreviewMusicProcessor.java:79-81`) and an empty preview switch routes back to
 it. `MusicSelectScene::launchSelected` plays `DECIDE` through
-`SkinSystemSoundService` (`decide.wav`). The scene wires the
+`SkinSystemSoundService`. The scene wires the
 AudioWrapper-backed port (`MusicSelectPreviewBgmPlayer` in
 `MusicSelectScene.cpp`), which caches the default handle so returning to the
-select BGM is instant. The default asset resolves to the same `assets/select.wav`
-as `SkinSystemSoundService::Select`. **No bundled `assets/select.wav` /
-`assets/decide.wav` asset ships in this repo yet** — in a stock checkout the
-default load fails and the worker idles (an SDL warning logs the missed load);
-packaging the asset is a follow-up, not part of this branch. Pause and
+select BGM is instant. The default select BGM and the `DECIDE` sound resolve
+through the same search as the SEs — `musicSelectSystemSoundPath` checks the
+user-configured sound-set folder (when set) first, then the bundled `assets/`
+root, in Beatoraja extension order `.wav, .flac, .ogg, .mp3` — so a set shipping
+`select.ogg`/`decide.flac` (e.g. ModernChic's `Sound/`) is honored without
+bundling assets. The folder is configured in the Music Select settings section
+as a **typed path**: the app has no folder-picker widget, so the user must
+paste/copy the folder's absolute path. **No bundled `assets/select.wav` /
+`assets/decide.wav` asset ships in this repo yet** — in a stock checkout with an
+empty sound-set folder the default load fails and the worker idles (an SDL
+warning logs the missed load); packaging the asset is a follow-up, not part of
+this branch. Pause and
 error/teardown silence preview audio explicitly
 (`MusicSelectPreviewAudioService::silence`, used by
 `MusicSelectScene::onPause`/`enterError`) instead of resuming the select BGM;
@@ -203,7 +216,9 @@ routes a `nullopt` switch to its looping default select BGM
 approximated by a simple switch to the default (the worker is one
 request-serial + cancellation thread; `AudioWrapper` has no per-skin-sound
 volume/fade helper), matching the ruling. With gap #4 fixed, empty preview
-naturally routes to `SELECT`.
+naturally routes to `SELECT`, which itself resolves across the configured
+sound-set folder (and all four Beatoraja extensions) before the bundled root —
+so a set that ships its select BGM as `select.ogg` is what the fallback plays.
 
 ### 6. `SongPreview` mode is not modeled
 

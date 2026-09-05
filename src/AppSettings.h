@@ -259,6 +259,11 @@ public:
   int skinMusicSelectScrollDurationHigh = 50;
   int skinMusicSelectAnalogTicksPerScroll = 3;
   int skinMusicSelectMaxSearchBarCount = 10;
+  // Folder searched before the bundled `assets/` root for every music-select
+  // system sound (the select SEs plus the default select/decide audio), in
+  // Beatoraja extension order. Empty = bundled default unchanged. It is a
+  // plain path string and is not length-clamped like the skin property enums.
+  std::string skinSelectSoundSetPath;
   // Remaining selector-owned Config/PlayerConfig values. These retain the
   // pinned source's integer domains because the native settings model cannot
   // losslessly represent BGA AUTO or every DP option.

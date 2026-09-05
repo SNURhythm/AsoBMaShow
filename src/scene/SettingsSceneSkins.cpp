@@ -920,6 +920,30 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
        {.label = "Hidden",
         .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
         .action = [setToolbarHidden] { setToolbarHidden(true); }}}));
+  // Typed path because the app has no folder-picker widget; empty keeps the
+  // bundled assets fallback. Resolution happens live in MusicSelectScene.
+  auto *soundSetRow = new View();
+  soundSetRow->setFlexDirection(FlexDirection::Row);
+  soundSetRow->setFlexWrap(YGWrapWrap);
+  soundSetRow->setAlignItems(YGAlignCenter);
+  soundSetRow->setGap(metrics.compact ? 8.0f : 10.0f);
+  auto *soundSetLabel = makeText("Sound set folder", metrics.smallTextSize,
+                                 ui_theme::textSecondary(), TextView::LEFT,
+                                 TextView::MIDDLE);
+  soundSetLabel->setMinWidth(0.0f);
+  soundSetLabel->setFlexShrink(1.0f);
+  soundSetRow->addView(soundSetLabel);
+  auto *soundSetInput =
+      makeTextInput(metrics, std::max(260, metrics.cardsWidth / 2));
+  soundSetInput->setEditingText(context.settings.skinSelectSoundSetPath);
+  soundSetInput->onEditingFinished(
+      [this, soundSetInput](const std::string &) {
+        context.settings.skinSelectSoundSetPath = soundSetInput->getText();
+        lastLayoutWidth = -1;
+        persistSettings();
+      });
+  soundSetRow->addView(soundSetInput);
+  overview->addView(soundSetRow);
   auto *safetyRow = new View();
   safetyRow->setFlexDirection(FlexDirection::Row);
   safetyRow->setFlexWrap(YGWrapWrap);

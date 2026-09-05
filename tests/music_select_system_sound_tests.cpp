@@ -53,9 +53,10 @@ void testWiredSoundsRouteToPinnedPaths() {
        {"o-change.wav", "scratch.wav", "f-open.wav", "f-close.wav"}) {
     sandbox.write(filename);
   }
+  const std::vector<std::filesystem::path> roots{sandbox.root()};
   std::vector<std::filesystem::path> played;
   SkinSystemSoundService service(
-      sandbox.root(),
+      roots,
       [&played](const std::filesystem::path &path) { played.push_back(path); });
   service.playOptionChange();
   service.playScratch();
@@ -78,8 +79,9 @@ void testRemainingSelectSubsetRoutesToPinnedPaths() {
     sandbox.write(filename);
   }
   std::vector<std::filesystem::path> played;
+  const std::vector<std::filesystem::path> roots{sandbox.root()};
   SkinSystemSoundService service(
-      sandbox.root(),
+      roots,
       [&played](const std::filesystem::path &path) { played.push_back(path); });
   service.playOptionOpen();
   service.playOptionClose();
@@ -125,8 +127,9 @@ void testFilenameMapMatchesPinnedSystemSoundManager() {
 void testMissingAssetRootWarnsAndSkipsPlayback() {
   std::vector<std::filesystem::path> played;
   std::vector<std::string> warnings;
+  const std::vector<std::filesystem::path> roots{"/does/not/exist"};
   SkinSystemSoundService service(
-      "/does/not/exist",
+      roots,
       [&played](const std::filesystem::path &path) { played.push_back(path); },
       [&warnings](std::string_view message) { warnings.emplace_back(message); });
   service.playOptionChange();
@@ -141,8 +144,9 @@ void testMissingAssetRootWarnsAndSkipsPlayback() {
 
 void testMissingAssetWarnsEvenWithoutPlaybackBoundary() {
   std::vector<std::string> warnings;
+  const std::vector<std::filesystem::path> roots{"/does/not/exist"};
   SkinSystemSoundService service(
-      "/does/not/exist", {},
+      roots, {},
       [&warnings](std::string_view message) { warnings.emplace_back(message); });
   service.playOptionChange();
   service.playScratch();
@@ -150,6 +154,99 @@ void testMissingAssetWarnsEvenWithoutPlaybackBoundary() {
   service.playFolderClose();
   expect(warnings.size() == 4,
          "missing assets warn even when no playback boundary is injected");
+}
+
+void testResolutionHelperFindsOggInConfiguredSet() {
+  SoundSandbox setDir;
+  setDir.write("f-open.ogg");
+  const std::vector<std::filesystem::path> roots{setDir.root()};
+  const auto resolved = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::FolderOpen);
+  expect(resolved && *resolved == setDir.root() / "f-open.ogg",
+         "a configured sound-set dir with only f-open.ogg resolves FolderOpen "
+         "to that .ogg");
+}
+
+void testResolutionHelperPicksWavOverOgg() {
+  SoundSandbox setDir;
+  setDir.write("scratch.wav");
+  setDir.write("scratch.ogg");
+  const std::vector<std::filesystem::path> roots{setDir.root()};
+  const auto resolved =
+      skin::musicSelectSystemSoundPath(roots, MusicSelectSystemSound::Scratch);
+  expect(resolved && *resolved == setDir.root() / "scratch.wav",
+         "Beatoraja extension order resolves scratch.wav over scratch.ogg");
+}
+
+void testResolutionHelperPrefersConfiguredSetOverBundled() {
+  SoundSandbox setDir;
+  SoundSandbox bundled;
+  setDir.write("o-change.flac");
+  bundled.write("o-change.wav");
+  const std::vector<std::filesystem::path> roots{setDir.root(), bundled.root()};
+  const auto resolved = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::OptionChange);
+  expect(resolved && *resolved == setDir.root() / "o-change.flac",
+         "the configured sound-set dir wins over a bundled root even when the "
+         "bundled root has a higher-priority extension");
+}
+
+void testResolutionHelperFallsBackToBundledRoot() {
+  SoundSandbox setDir;
+  SoundSandbox bundled;
+  bundled.write("o-change.flac");
+  const std::vector<std::filesystem::path> roots{setDir.root(), bundled.root()};
+  const auto resolved = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::OptionChange);
+  expect(resolved && *resolved == bundled.root() / "o-change.flac",
+         "a sound-set dir with nothing falls back to the bundled root");
+}
+
+void testEachBeatorajaExtensionResolvesAlone() {
+  for (const std::string_view extension : skin::kBeatorajaSoundExtensions) {
+    const std::string filename = std::string("decide") + std::string(extension);
+    SoundSandbox setDir;
+    setDir.write(filename);
+    const std::vector<std::filesystem::path> roots{setDir.root()};
+    const auto resolved =
+        skin::musicSelectSystemSoundPath(roots, MusicSelectSystemSound::Decide);
+    expect(resolved && *resolved == setDir.root() / filename,
+           filename + " alone resolves Decide to that path");
+  }
+}
+
+void testMissingEverywhereReturnsNulloptWithWarningAndNoPlayback() {
+  SoundSandbox setDir;
+  SoundSandbox bundled;
+  std::vector<std::filesystem::path> played;
+  std::vector<std::string> warnings;
+  const std::vector<std::filesystem::path> roots{setDir.root(), bundled.root()};
+  SkinSystemSoundService service(
+      roots,
+      [&played](const std::filesystem::path &path) { played.push_back(path); },
+      [&warnings](std::string_view message) { warnings.emplace_back(message); });
+  service.playOptionChange();
+  expect(played.empty(),
+         "a sound-set sound missing everywhere never reaches playback");
+  expect(warnings.size() == 1,
+         "a sound-set sound missing everywhere warns once per call without "
+         "throwing");
+}
+
+void testServiceIntegrationRoutsConfiguredOggThroughPlayback() {
+  SoundSandbox setDir;
+  SoundSandbox bundled;
+  setDir.write("f-open.ogg");
+  std::vector<std::filesystem::path> played;
+  const std::vector<std::filesystem::path> roots{setDir.root(), bundled.root()};
+  SkinSystemSoundService service(
+      roots,
+      [&played](const std::filesystem::path &path) { played.push_back(path); });
+  service.playFolderOpen();
+  const std::vector<std::filesystem::path> expected{
+      setDir.root() / "f-open.ogg"};
+  expect(played == expected,
+         "the service routes a configured-set .ogg to the playback boundary");
 }
 
 } // namespace
@@ -160,6 +257,13 @@ int main(int argc, char **argv) {
   testFilenameMapMatchesPinnedSystemSoundManager();
   testMissingAssetRootWarnsAndSkipsPlayback();
   testMissingAssetWarnsEvenWithoutPlaybackBoundary();
+  testResolutionHelperFindsOggInConfiguredSet();
+  testResolutionHelperPicksWavOverOgg();
+  testResolutionHelperPrefersConfiguredSetOverBundled();
+  testResolutionHelperFallsBackToBundledRoot();
+  testEachBeatorajaExtensionResolvesAlone();
+  testMissingEverywhereReturnsNulloptWithWarningAndNoPlayback();
+  testServiceIntegrationRoutsConfiguredOggThroughPlayback();
   return music_select_skin_ledger_evidence::finish(
       argc, argv, "music_select_system_sound_tests", failures,
       {"select.sound.effect.option-change", "select.sound.effect.scratch",

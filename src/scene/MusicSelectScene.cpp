@@ -123,6 +123,21 @@ musicSelectSkinSoundPlayback(AudioWrapper &audio) {
   return [player](const std::filesystem::path &path) { (*player)(path); };
 }
 
+// User-configured music-select sound-set directory, trimmed. Empty when unset
+// or blank so the search-roots span never carries an empty entry; callers then
+// keep the bundled `assets/` root as the fallback.
+std::filesystem::path musicSelectSoundSetRoot(const std::string &configured) {
+  const auto isSpace = [](unsigned char ch) { return std::isspace(ch) != 0; };
+  const auto first =
+      std::find_if_not(configured.begin(), configured.end(), isSpace);
+  if (first == configured.end()) {
+    return {};
+  }
+  const auto last =
+      std::find_if_not(configured.rbegin(), configured.rend(), isSpace).base();
+  return std::filesystem::path(std::string(first, last));
+}
+
 // Previews the chart and the looping select BGM through the same AudioWrapper
 // skin-sound path as the system-SE player. The default handle stays loaded so
 // returning to the select BGM is instant; preview sounds are disposed as soon
@@ -440,16 +455,25 @@ MusicSelectScene::MusicSelectScene(
 
 void MusicSelectScene::init() {
   started_ = std::chrono::steady_clock::now();
+  // Search the user-configured sound-set folder (when set) before the bundled
+  // `assets/` root, resolving each sound across Beatoraja's extension order.
+  std::vector<std::filesystem::path> selectSoundRoots;
+  const auto configuredSet =
+      musicSelectSoundSetRoot(context.settings.skinSelectSoundSetPath);
+  if (!configuredSet.empty()) {
+    selectSoundRoots.push_back(configuredSet);
+  }
+  selectSoundRoots.emplace_back(kSkinSoundAssetRoot);
   // The looping SELECT system sound doubles as the preview fallback
   // (MusicSelector.java:173-174 setDefault(getSound(SELECT))).
   const auto selectBgm =
-      std::filesystem::path{kSkinSoundAssetRoot} /
-      std::string(
-          skin::musicSelectSystemSoundFilename(skin::MusicSelectSystemSound::Select));
+      skin::musicSelectSystemSoundPath(
+          selectSoundRoots, skin::MusicSelectSystemSound::Select)
+          .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
       musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm));
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
-      kSkinSoundAssetRoot,
+      selectSoundRoots,
       musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
   sortIndex_ = sourceSortIndex(context.settings.skinSortId);
   inputProcessor_ = MusicSelectInputProcessor(

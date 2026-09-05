@@ -1,9 +1,24 @@
 #include "SkinSystemSoundService.h"
 
 #include <cstdio>
+#include <span>
 #include <string>
+#include <system_error>
+#include <utility>
 
 namespace skin {
+
+namespace {
+
+// The Beatoraja default filename carries a ".wav" hint; the resolver searches
+// every supported extension against the base name, so strip it.
+std::string_view musicSelectSystemSoundFileBase(MusicSelectSystemSound sound) {
+  const std::string_view filename = musicSelectSystemSoundFilename(sound);
+  const std::size_t dot = filename.rfind('.');
+  return dot == std::string_view::npos ? filename : filename.substr(0, dot);
+}
+
+} // namespace
 
 std::string_view
 musicSelectSystemSoundFilename(MusicSelectSystemSound sound) noexcept {
@@ -28,10 +43,28 @@ musicSelectSystemSoundFilename(MusicSelectSystemSound sound) noexcept {
   return {};
 }
 
-SkinSystemSoundService::SkinSystemSoundService(std::filesystem::path assetRoot,
-                                               Playback playback,
-                                               Warning warning)
-    : assetRoot_(std::move(assetRoot)),
+std::optional<std::filesystem::path>
+musicSelectSystemSoundPath(
+    std::span<const std::filesystem::path> searchRoots,
+    MusicSelectSystemSound sound) noexcept {
+  const std::string_view base = musicSelectSystemSoundFileBase(sound);
+  for (const std::filesystem::path &root : searchRoots) {
+    for (const std::string_view extension : kBeatorajaSoundExtensions) {
+      const auto candidate = root / std::filesystem::path(std::string(base) +
+                                                          std::string(extension));
+      std::error_code error;
+      if (std::filesystem::is_regular_file(candidate, error)) {
+        return candidate;
+      }
+    }
+  }
+  return std::nullopt;
+}
+
+SkinSystemSoundService::SkinSystemSoundService(
+    std::span<const std::filesystem::path> searchRoots, Playback playback,
+    Warning warning)
+    : searchRoots_(searchRoots.begin(), searchRoots.end()),
       playback_(std::move(playback)),
       warning_(std::move(warning)) {}
 
@@ -77,10 +110,10 @@ void SkinSystemSoundService::play(MusicSelectSystemSound sound) {
 
 std::optional<std::filesystem::path>
 SkinSystemSoundService::pathFor(MusicSelectSystemSound sound) const {
-  const auto path = assetRoot_ / musicSelectSystemSoundFilename(sound);
-  std::error_code error;
-  if (!std::filesystem::is_regular_file(path, error)) {
-    warn("Music select system sound missing, skipping: " + path.string());
+  const auto path = musicSelectSystemSoundPath(searchRoots_, sound);
+  if (!path) {
+    warn("Music select system sound missing, skipping: " +
+         std::string(musicSelectSystemSoundFilename(sound)));
     return std::nullopt;
   }
   return path;
