@@ -67,7 +67,7 @@ private:
   void touchLocked(std::string_view revisionKey,
                    std::string_view entryKey) const;
 
-  static constexpr std::size_t kDefaultByteBudget = 96U * 1024U * 1024U;
+  static constexpr std::size_t kDefaultByteBudget = 128U * 1024U * 1024U;
   std::size_t byteBudget_;
   mutable std::shared_mutex mutex_;
   std::map<Key, SkinDecodeCacheEntry, std::less<>> entries_;
