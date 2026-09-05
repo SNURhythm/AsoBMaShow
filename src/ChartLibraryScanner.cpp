@@ -1792,6 +1792,55 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
+  // Deterministic ordering. The scan signature and the archive checkpoint
+  // resume both depend on these orders; directory iteration (especially over
+  // iOS File Provider Storage) is not stable across runs, so without sorting
+  // a mid-refresh quit would compute a different signature on restart and
+  // discard the checkpoint, forcing a full re-parse.
+  std::ranges::sort(individualDiffs, {}, [](const ScanDiff &diff) {
+    return checkpointPathTextForDb(diff.path);
+  });
+  std::map<std::string, path_t> sortedArchiveOrder;
+  for (const auto &archiveKey : archiveBatchOrder) {
+    const auto batchIt = archiveBatches.find(archiveKey);
+    if (batchIt == archiveBatches.end()) {
+      sortedArchiveOrder.emplace(
+          checkpointPathTextForDb(archiveKey), archiveKey);
+      continue;
+    }
+    sortedArchiveOrder.emplace(
+        checkpointPathTextForDb(batchIt->second.archivePath), archiveKey);
+    // Sort inner entries deterministically and keep parallel arrays aligned.
+    ArchiveParseBatch &batch = batchIt->second;
+    std::vector<std::size_t> innerOrder(batch.innerPaths.size());
+    for (std::size_t i = 0; i < innerOrder.size(); ++i) innerOrder[i] = i;
+    std::ranges::sort(innerOrder, [&](std::size_t left, std::size_t right) {
+      return checkpointInnerPathText(batch.innerPaths[left]) <
+             checkpointInnerPathText(batch.innerPaths[right]);
+    });
+    ArchiveParseBatch sorted;
+    sorted.archivePath = batch.archivePath;
+    sorted.innerPaths.reserve(batch.innerPaths.size());
+    sorted.parseAttempted.reserve(batch.parseAttempted.size());
+    sorted.hasDocument.reserve(batch.hasDocument.size());
+    sorted.preparedMetas.reserve(batch.preparedMetas.size());
+    for (const std::size_t index : innerOrder) {
+      sorted.innerPaths.push_back(std::move(batch.innerPaths[index]));
+      sorted.parseAttempted.push_back(batch.parseAttempted[index]);
+      sorted.hasDocument.push_back(batch.hasDocument[index]);
+      sorted.preparedMetas.push_back(
+          std::move(batch.preparedMetas[index]));
+    }
+    batch = std::move(sorted);
+  }
+  std::vector<path_t> originalArchiveOrder = std::move(archiveBatchOrder);
+  archiveBatchOrder.clear();
+  archiveBatchOrder.reserve(originalArchiveOrder.size());
+  for (auto &[ignored, archiveKey] : sortedArchiveOrder) {
+    (void)ignored;
+    archiveBatchOrder.push_back(std::move(archiveKey));
+  }
+
   int parseTotal = static_cast<int>(individualDiffs.size());
   for (const auto &archiveKey : archiveBatchOrder) {
     const auto batchIt = archiveBatches.find(archiveKey);
