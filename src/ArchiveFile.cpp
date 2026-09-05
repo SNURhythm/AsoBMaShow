@@ -91,6 +91,9 @@
 #endif
 
 namespace archive_file {
+
+std::filesystem::path archiveIndexCacheDirectory();
+
 namespace {
 
 bool stopRequested(const std::stop_token *stopToken);
@@ -507,6 +510,11 @@ struct CachedIndex {
 
 std::mutex gIndexMutex;
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
+
+// Directory for persisting archive entry indexes across app restarts. Empty
+// means disk persistence is disabled. Guarded by gIndexCacheMutex.
+std::mutex gIndexCacheDirectoryMutex;
+std::filesystem::path gArchiveIndexCacheDirectory;
 
 // Single-flight coordination: while one thread is building an archive index
 // for a key, concurrent requesters wait and reuse the finished index instead
@@ -3369,6 +3377,129 @@ void buildIndexLookups(CachedIndex &index) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// On-disk archive index persistence
+//
+// The in-memory gIndexCache is rebuilt on every cold start, which for large
+// archives (hundreds of thousands of entries) costs seconds of miniz/7-Zip
+// listing before any chart can be read. When a cache directory is configured,
+// each built CachedIndex is serialized to a per-archive file keyed by a hash
+// of the normalized archive path, and reloaded on the next launch when the
+// archive's size and mtime still match (so the entry offsets stay valid).
+// ---------------------------------------------------------------------------
+
+std::string hex64(std::uint64_t value);
+std::uint64_t fnv1a64(const std::string &value);
+
+std::filesystem::path archiveIndexCacheFilePath(const std::string &key) {
+  return archiveIndexCacheDirectory() /
+         ("archive-index-" + hex64(fnv1a64(key)) + ".idx");
+}
+
+bool writeCachedIndexToDisk(const std::string &key,
+                            const CachedIndex &index) {
+  const std::filesystem::path directory = archiveIndexCacheDirectory();
+  if (directory.empty()) {
+    return false;
+  }
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  if (error) {
+    return false;
+  }
+  const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
+  std::ofstream file(filePath, std::ios::binary | std::ios::trunc);
+  if (!file) {
+    return false;
+  }
+  auto writeU64 = [&](std::uint64_t value) {
+    file.write(reinterpret_cast<const char *>(&value), sizeof(value));
+  };
+  auto writeU8 = [&](std::uint8_t value) {
+    file.write(reinterpret_cast<const char *>(&value), sizeof(value));
+  };
+  writeU64(static_cast<std::uint64_t>(index.size));
+  writeU64(static_cast<std::uint64_t>(
+      index.mtime.time_since_epoch().count()));
+  writeU8(static_cast<std::uint8_t>(index.backend));
+  writeU8(index.sevenZipFormat);
+  writeU64(index.entries.size());
+  for (const auto &entry : index.entries) {
+    const std::string pathText = entry.path.generic_string();
+    writeU64(pathText.size());
+    file.write(pathText.data(),
+               static_cast<std::streamsize>(pathText.size()));
+    writeU8(entry.directory ? 1 : 0);
+    writeU64(entry.size);
+    writeU64(entry.order);
+    writeU64(static_cast<std::uint64_t>(entry.offset));
+    writeU8(entry.solid ? 1 : 0);
+  }
+  file.flush();
+  return file.good();
+}
+
+std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
+    const std::string &key, std::uintmax_t size,
+    std::filesystem::file_time_type mtime) {
+  const std::filesystem::path directory = archiveIndexCacheDirectory();
+  if (directory.empty()) {
+    return nullptr;
+  }
+  const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
+  std::ifstream file(filePath, std::ios::binary);
+  if (!file) {
+    return nullptr;
+  }
+  auto readU64 = [&]() -> std::uint64_t {
+    std::uint64_t value = 0;
+    file.read(reinterpret_cast<char *>(&value), sizeof(value));
+    return value;
+  };
+  auto readU8 = [&]() -> std::uint8_t {
+    std::uint8_t value = 0;
+    file.read(reinterpret_cast<char *>(&value), sizeof(value));
+    return value;
+  };
+  auto index = std::make_shared<CachedIndex>();
+  const std::uint64_t storedSize = readU64();
+  const std::uint64_t storedMtime = readU64();
+  if (!file.good() ||
+      storedSize != static_cast<std::uint64_t>(size) ||
+      storedMtime != static_cast<std::uint64_t>(mtime.time_since_epoch().count())) {
+    return nullptr;
+  }
+  index->size = size;
+  index->mtime = mtime;
+  index->backend = static_cast<ArchiveIndexBackend>(readU8());
+  index->sevenZipFormat = readU8();
+  const std::uint64_t entryCount = readU64();
+  if (!file.good()) {
+    return nullptr;
+  }
+  index->entries.reserve(static_cast<std::size_t>(entryCount));
+  for (std::uint64_t i = 0; i < entryCount; ++i) {
+    const std::uint64_t pathLen = readU64();
+    if (!file.good() || pathLen > (1024ull * 1024ull * 1024ull)) {
+      return nullptr;
+    }
+    std::string pathText(static_cast<std::size_t>(pathLen), '\0');
+    file.read(pathText.data(), static_cast<std::streamsize>(pathLen));
+    Entry entry;
+    entry.path = utf8_to_path_t(pathText);
+    entry.directory = readU8() != 0;
+    entry.size = readU64();
+    entry.order = static_cast<std::size_t>(readU64());
+    entry.offset = static_cast<std::int64_t>(readU64());
+    entry.solid = readU8() != 0;
+    if (!file.good()) {
+      return nullptr;
+    }
+    index->entries.push_back(std::move(entry));
+  }
+  return index;
+}
+
 std::shared_ptr<const CachedIndex>
 cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath) {
   std::uintmax_t size = 0;
@@ -3410,6 +3541,21 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
       return it->second;
     }
     hadCachedIndex = it != gIndexCache.end() && it->second != nullptr;
+  }
+
+  // Try to restore a previously persisted index from disk (cold start) before
+  // rebuilding. Validated by size+mtime so offsets remain valid.
+  if (!hadCachedIndex) {
+    auto diskIndex = readCachedIndexFromDisk(key, size, mtime);
+    if (diskIndex != nullptr) {
+      buildIndexLookups(*diskIndex);
+      appendDebugLogLineImpl("Loaded archive index from disk cache: " +
+                             pathForLog(archivePath) + " entries=" +
+                             std::to_string(diskIndex->entries.size()));
+      std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+      gIndexCache[key] = diskIndex;
+      return diskIndex;
+    }
   }
 
   // Single-flight: if another thread is already building this archive's index,
@@ -3563,6 +3709,10 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                          ": " + pathForLog(archivePath) + " entries=" +
                          std::to_string(loaded->entries.size()));
 
+  if (!writeCachedIndexToDisk(key, *loaded)) {
+    appendDebugLogLineImpl("Failed to persist archive index to disk: " +
+                           pathForLog(archivePath));
+  }
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     gIndexCache[key] = loaded;
@@ -7084,6 +7234,21 @@ bool isArchiveSupportAvailable() {
 void setCachePathNormalizer(CachePathNormalizer normalizer) {
   std::lock_guard<std::mutex> lock(gCachePathNormalizerMutex);
   gCachePathNormalizer = std::move(normalizer);
+}
+
+void setArchiveIndexCacheDirectory(std::filesystem::path directory) {
+  std::lock_guard<std::mutex> lock(gIndexCacheDirectoryMutex);
+  gArchiveIndexCacheDirectory = std::move(directory);
+}
+
+std::filesystem::path archiveIndexCacheDirectory() {
+  std::lock_guard<std::mutex> lock(gIndexCacheDirectoryMutex);
+  return gArchiveIndexCacheDirectory;
+}
+
+void clearArchiveIndexCacheForTesting() {
+  std::lock_guard<std::mutex> lock(gIndexMutex);
+  gIndexCache.clear();
 }
 
 bool hasSupportedArchiveExtension(const std::filesystem::path &path) {

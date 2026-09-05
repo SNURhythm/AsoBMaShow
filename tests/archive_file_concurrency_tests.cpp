@@ -529,6 +529,52 @@ void testFullUnzipHonorsPauseDuringExtraction() {
   assert(error == "Unzip cancelled");
 }
 
+void testArchiveIndexPersistsAcrossColdCacheRestart() {
+  constexpr int kEntryCount = 20;
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "persist.zip";
+  std::vector<std::string> entryPaths;
+  entryPaths.reserve(kEntryCount);
+  for (int index = 0; index < kEntryCount; ++index) {
+    entryPaths.push_back("folder/entry-" + std::to_string(index) + ".bms");
+  }
+  writeStoredZip(archivePath, entryPaths);
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  std::vector<archive_file::Entry> firstEntries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, firstEntries, &error));
+  assert(firstEntries.size() == kEntryCount);
+
+  // Simulate a cold restart: drop the in-memory index and re-list. The
+  // persisted index file should be reloaded from disk (same size/mtime),
+  // reproducing the same entry count without rebuilding from the archive.
+  archive_file::clearArchiveIndexCacheForTesting();
+  std::vector<archive_file::Entry> reloadedEntries;
+  assert(archive_file::listEntries(archivePath, reloadedEntries, &error));
+  assert(reloadedEntries.size() == kEntryCount);
+
+  // A changed archive (different mtime) must not trust the stale disk index;
+  // it rebuilds and still yields the correct count.
+  std::error_code touchError;
+  std::filesystem::last_write_time(
+      archivePath, std::filesystem::file_time_type(
+                       std::filesystem::last_write_time(archivePath) +
+                       std::chrono::seconds(2)),
+      touchError);
+  assert(!touchError);
+  archive_file::clearArchiveIndexCacheForTesting();
+  std::vector<archive_file::Entry> rebuiltEntries;
+  assert(archive_file::listEntries(archivePath, rebuiltEntries, &error));
+  assert(rebuiltEntries.size() == kEntryCount);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
 void testDebugLogRetainsNewestThousandLines() {
   for (int index = 0; index <= 1000; ++index) {
     archive_file::appendDebugLogLine("retention-marker-" +
@@ -558,6 +604,7 @@ int main() {
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
   testFullUnzipHonorsPauseDuringExtraction();
+  testArchiveIndexPersistsAcrossColdCacheRestart();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

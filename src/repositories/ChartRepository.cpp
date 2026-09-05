@@ -4,6 +4,7 @@
 #include "ChartRepositoryInternal.h"
 #include "ChartSqlExpressions.h"
 #include "ChartStorageIdentity.h"
+#include "../ArchiveFile.h"
 #include "../LongNoteModeUtils.h"
 #include "ScoreRepository.h"
 #include "ScoreCacheQueries.h"
@@ -1817,6 +1818,8 @@ ChartRepository::ChartRepository()
 ChartRepository::ChartRepository(std::filesystem::path databasePath)
     : impl_(std::make_unique<Impl>(std::move(databasePath))) {
   chart_storage_identity::ConfigureArchiveCachePathNormalization();
+  archive_file::setArchiveIndexCacheDirectory(
+      Utils::GetDocumentsPath("db") / "archive-index");
 }
 
 ChartRepository::~ChartRepository() = default;

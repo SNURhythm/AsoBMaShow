@@ -138,6 +138,13 @@ struct TemporaryCacheUsageResult {
 bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);
 void setCachePathNormalizer(CachePathNormalizer normalizer);
+// Sets the directory used to persist per-archive entry indexes to disk across
+// app restarts. If empty, disk persistence is disabled (indexes stay in
+// memory only). Must be called before any archive indexing.
+void setArchiveIndexCacheDirectory(std::filesystem::path directory);
+// Test-only: drops all in-memory archive indexes so the next lookup reloads
+// from disk (or rebuilds). Not used in production paths.
+void clearArchiveIndexCacheForTesting();
 void appendDebugLogLine(const std::string &message);
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void setStreamingEntryObserverForTesting(
