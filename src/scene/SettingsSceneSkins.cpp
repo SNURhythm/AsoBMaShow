@@ -964,6 +964,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   soundSetInput->onEditingFinished(
       [this, soundSetInput](const std::string &) {
         context.settings.skinSelectSoundSetPath = soundSetInput->getText();
+        context.settings.skinSelectSoundSetBookmark.clear();
         lastLayoutWidth = -1;
         persistSettings();
       });

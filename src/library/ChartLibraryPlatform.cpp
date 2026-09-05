@@ -370,8 +370,7 @@ void SoundSetFolderPicker::request() {
 
 bool SoundSetFolderPicker::active() const noexcept {
   if (impl_ == nullptr) return false;
-  if (impl_->pickerActive.load(std::memory_order_acquire)) return true;
-  return impl_->resultReady.load(std::memory_order_acquire);
+  return impl_->pickerActive.load(std::memory_order_acquire);
 }
 
 std::optional<SoundSetFolderPick> SoundSetFolderPicker::consume() noexcept {

@@ -47,11 +47,12 @@ public:
   // pick is active or a result awaits consume.
   void request();
 
-  // True while the native picker is displayed or a result awaits consume().
+  // True while the native picker is displayed (a pick is genuinely in flight).
+  // False once the pick thread publishes a result that awaits consume(), so the
+  // main-thread consumer can fall through to consume() on the next poll.
   [[nodiscard]] bool active() const noexcept;
 
-  // Consumes a finished pick; returns std::nullopt while active or when no
-  // result is pending.
+  // Consumes a finished pick; returns std::nullopt when no result is pending.
   [[nodiscard]] std::optional<SoundSetFolderPick> consume() noexcept;
 
 private:

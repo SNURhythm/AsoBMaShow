@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -128,6 +129,23 @@ void testBundleAwareDecodeBoundedEncodedFallback() {
          "bundle-aware path");
 }
 
+void testBundleAwareDecodeHonorsStopToken() {
+  SoundSandbox sandbox;
+  const auto wavPath = sandbox.copyBundledWav();
+  std::vector<short> pcm;
+  SF_INFO info;
+  std::atomic<bool> cancelled{false};
+  std::stop_source source;
+  source.request_stop();
+  const bool decoded = decodeSkinSoundBundleAware(
+      fspath_to_path_t(wavPath), pcm, info, cancelled, {},
+      source.get_token());
+  expect(!decoded,
+         "a stop-requested bundle-aware decode returns no audio");
+  expect(pcm.empty(),
+         "the stopped bundle-aware decode leaves no PCM behind");
+}
+
 } // namespace
 
 int main() {
@@ -136,6 +154,7 @@ int main() {
   testBundleAwareDecodeRejectsOversizedEncodedFile();
   testBundleAwareDecodeMissingFileFallsBackToRecordedFailure();
   testBundleAwareDecodeBoundedEncodedFallback();
+  testBundleAwareDecodeHonorsStopToken();
   if (failures != 0) {
     std::cerr << "skin_sound_bundle_decode_tests: " << failures
               << " assertion(s) failed\n";

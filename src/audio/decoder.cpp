@@ -233,6 +233,9 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
                                 std::vector<short> &buffer, SF_INFO &fileInfo,
                                 std::atomic<bool> &isCancelled,
                                 AudioDecodeLimits limits, std::stop_token stop) {
+  if (stop.stop_requested()) {
+    return false;
+  }
   const std::filesystem::path fsPath(displayPath);
   // Bundle-aware read first: SDL_RWFromFile resolves relative asset paths
   // against the app bundle on iOS/macOS, so the bundled `assets/*.wav`
@@ -245,7 +248,7 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
       if (decodeAudioBytesToPCMBounded(displayPath, *bytes, buffer, fileInfo,
                                        isCancelled,
                                        limits.maximumPcmSamples) &&
-          !isCancelled) {
+          !stop.stop_requested() && !isCancelled) {
         return true;
       }
       buffer.clear();

@@ -38,7 +38,8 @@ bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
 // sounds load there), decodes from memory with limits.maximumPcmSamples, and
 // falls back to decodeAudioToPCMBounded for archive (virtual) paths and user
 // files with absolute paths that the bundle lookup cannot see. Returns false
-// when neither path yields decodable PCM within the limits.
+// when neither path yields decodable PCM within the limits or when |stop| is
+// requested, so a stop-requested loadSkinSound cannot return audio.
 bool decodeSkinSoundBundleAware(const path_t &displayPath,
                                 std::vector<short> &buffer, SF_INFO &fileInfo,
                                 std::atomic<bool> &isCancelled,
