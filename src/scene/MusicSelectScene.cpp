@@ -1424,6 +1424,9 @@ void MusicSelectScene::closeDirectory() {
 }
 
 void MusicSelectScene::startPreloadForSelection() {
+  if (launching_) {
+    return;
+  }
   const auto snapshot = bars_.snapshot();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
@@ -1435,39 +1438,90 @@ void MusicSelectScene::startPreloadForSelection() {
   const auto record = *selected.chart;
   {
     std::lock_guard<std::mutex> lock(preloadMutex_);
+    // Already preloaded, or a request for this chart is in flight.
+    if (preloadRequest_ &&
+        fspath_to_path_t(preloadRequest_->meta.BmsPath) ==
+            fspath_to_path_t(record.meta.BmsPath)) {
+      return;
+    }
     if (fspath_to_path_t(preloadedPath_) ==
         fspath_to_path_t(record.meta.BmsPath)) {
-      return;  // already preloaded (or in flight) for this chart
+      return;
     }
     preloadedPath_ = record.meta.BmsPath;
+    preloadRequest_ = record;
   }
+  ensurePreloadWorker();
+  preloadCv_.notify_one();
+}
+
+void MusicSelectScene::ensurePreloadWorker() {
   if (preloadThread_.joinable()) {
-    preloadCancelled_.store(true, std::memory_order_release);
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(preloadMutex_);
+    preloadStop_.store(false, std::memory_order_release);
+  }
+  preloadThread_ = std::jthread(
+      [this](std::stop_token stop) { preloadWorkerLoop(std::move(stop)); });
+}
+
+void MusicSelectScene::preloadWorkerLoop(std::stop_token stop) {
+  const auto superseded = [&]() {
+    std::unique_lock<std::mutex> lock(preloadMutex_);
+    return stop.stop_requested() ||
+           preloadStop_.load(std::memory_order_acquire) ||
+           preloadRequest_.has_value();
+  };
+  while (true) {
+    ChartMetaRecord request;
+    {
+      std::unique_lock<std::mutex> lock(preloadMutex_);
+      preloadCv_.wait(lock, [&] {
+        return stop.stop_requested() ||
+               preloadStop_.load(std::memory_order_acquire) ||
+               preloadRequest_.has_value();
+      });
+      if (stop.stop_requested() ||
+          preloadStop_.load(std::memory_order_acquire)) {
+        return;
+      }
+      request = std::move(*preloadRequest_);
+      preloadRequest_.reset();
+    }
+    std::atomic_bool cancelled = false;
+    auto chart = play_options::parseChart(request.meta, cancelled,
+                                          "music-select preload");
+    if (!chart || cancelled.load(std::memory_order_relaxed) ||
+        superseded()) {
+      continue;
+    }
+    context.jukebox.stop();
+    (void)context.jukebox.loadChart(*chart, true, cancelled);
+    if (cancelled.load(std::memory_order_relaxed) || superseded()) {
+      continue;
+    }
+    std::lock_guard<std::mutex> lock(preloadMutex_);
+    if (fspath_to_path_t(preloadedPath_) !=
+        fspath_to_path_t(request.meta.BmsPath)) {
+      continue;  // selection moved on
+    }
+    preloadedChart_ = std::move(chart);
+  }
+}
+
+void MusicSelectScene::stopPreloadWorker() {
+  {
+    std::lock_guard<std::mutex> lock(preloadMutex_);
+    preloadStop_.store(true, std::memory_order_release);
+    preloadRequest_.reset();
+  }
+  preloadCv_.notify_all();
+  if (preloadThread_.joinable()) {
     preloadThread_.request_stop();
     preloadThread_.join();
   }
-  preloadCancelled_.store(false, std::memory_order_release);
-  preloadThread_ = std::jthread(
-      [this, record]() mutable {
-        std::atomic_bool cancelled = false;
-        auto chart = play_options::parseChart(record.meta, cancelled,
-                                              "music-select preload");
-        if (!chart || cancelled ||
-            preloadCancelled_.load(std::memory_order_acquire)) {
-          return;
-        }
-        context.jukebox.stop();
-        (void)context.jukebox.loadChart(*chart, true, cancelled);
-        if (cancelled || preloadCancelled_.load(std::memory_order_acquire)) {
-          return;
-        }
-        std::lock_guard<std::mutex> lock(preloadMutex_);
-        if (fspath_to_path_t(preloadedPath_) !=
-            fspath_to_path_t(record.meta.BmsPath)) {
-          return;  // selection moved on
-        }
-        preloadedChart_ = std::move(chart);
-      });
 }
 
 bool MusicSelectScene::reusePreloadedChart(
@@ -1544,13 +1598,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   int preloadedLnMode = 0;
   if (reusePreloadedChart(record, preparedChartRaw, preloadedPlayInfo,
                           preloadedLnMode)) {
-    // Stop the preload thread before gameplay starts so it cannot keep
+    // Stop the preload worker before gameplay starts so it cannot keep
     // touching the jukebox while GamePlayScene uses it.
-    if (preloadThread_.joinable()) {
-      preloadCancelled_.store(true, std::memory_order_release);
-      preloadThread_.request_stop();
-      preloadThread_.join();
-    }
+    stopPreloadWorker();
     StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
     if (!launching_) {
       launching_ = true;
@@ -1588,11 +1638,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   }
 
   launching_ = true;
-  if (preloadThread_.joinable()) {
-    preloadCancelled_.store(true, std::memory_order_release);
-    preloadThread_.request_stop();
-    preloadThread_.join();
-  }
+  stopPreloadWorker();
   if (launchThread_.joinable()) {
     launchThread_.join();
   }
@@ -3549,11 +3595,7 @@ void MusicSelectScene::cleanupScene() {
     launchThread_.request_stop();
     launchThread_.join();
   }
-  preloadCancelled_.store(true, std::memory_order_release);
-  if (preloadThread_.joinable()) {
-    preloadThread_.request_stop();
-    preloadThread_.join();
-  }
+  stopPreloadWorker();
   {
     std::lock_guard<std::mutex> lock(preloadMutex_);
     preloadedChart_.reset();

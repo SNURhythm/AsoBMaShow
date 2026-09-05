@@ -27,6 +27,7 @@
 #include <chrono>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <future>
 #include <map>
@@ -179,13 +180,20 @@ private:
   std::jthread launchThread_;
   std::atomic_bool launchCancelled_{false};
   // Background preload of the selected chart's parse + jukebox load so Start
-  // is near-instant even for a heavy archive chart. Mirrors MainMenu's
-  // preview-reuse: the preload runs while browsing, and launch reuses it.
+  // is near-instant even for a heavy archive chart. A single worker thread
+  // lives for the scene and processes the latest selection request, so
+  // scrolling never joins a previous in-flight load on the UI thread (which
+  // would block every bar move while a heavy load finished).
   std::jthread preloadThread_;
-  std::atomic_bool preloadCancelled_{false};
+  std::atomic_bool preloadStop_{false};
   mutable std::mutex preloadMutex_;
+  std::condition_variable preloadCv_;
+  std::optional<ChartMetaRecord> preloadRequest_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
   std::filesystem::path preloadedPath_;
+  void ensurePreloadWorker();
+  void preloadWorkerLoop(std::stop_token stop);
+  void stopPreloadWorker();
   MusicSelectSearchHistory searchHistory_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;
