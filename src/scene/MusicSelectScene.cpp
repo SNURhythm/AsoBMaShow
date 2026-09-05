@@ -376,6 +376,7 @@ std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
   case SDLK_3: return MusicSelectControlKey::Num3;
   case SDLK_4: return MusicSelectControlKey::Num4;
   case SDLK_5: return MusicSelectControlKey::Num5;
+  case SDLK_6: return MusicSelectControlKey::Num6;
   case SDLK_7: return MusicSelectControlKey::Num7;
   case SDLK_8: return MusicSelectControlKey::Num8;
   case SDLK_9: return MusicSelectControlKey::Num9;
@@ -2498,6 +2499,9 @@ void MusicSelectScene::applyInputAction(
     break;
   case MusicSelectInputActionKind::ExitApplication:
     context.quitFlag.store(true);
+    break;
+  case MusicSelectInputActionKind::OpenSettings:
+    openSettings();
     break;
   default:
     break;

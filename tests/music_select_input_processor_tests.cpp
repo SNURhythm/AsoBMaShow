@@ -388,6 +388,19 @@ void testDurationAccelerationAfterFiftyRepeats() {
           "releasing duration input resets its repeat counter");
 }
 
+void testNum6ControlKeyOpensSettings() {
+  MusicSelectInputProcessor processor({});
+  auto input = emptyInput();
+  input.controlPressed = {MusicSelectControlKey::Num6};
+  const auto actions = processor.process(input, 1);
+  require(has(actions, MusicSelectInputActionKind::OpenSettings),
+          "NUM6 control key opens the settings scene");
+  require(!has(actions, MusicSelectInputActionKind::Play) &&
+              !has(actions, MusicSelectInputActionKind::SearchPrompt) &&
+              !hasEvent(actions, 11) && !hasEvent(actions, 210),
+          "NUM6 emits only the settings-open action");
+}
+
 void testControlsCommandsPostActionsAndExitOrder() {
   MusicSelectInputProcessor processor({});
   auto input = emptyInput();
@@ -511,6 +524,7 @@ int main(int argc, char **argv) {
   testPanelPriorityAndEveryPanelAssignment();
   testWheelAnalogAndRepeatState();
   testDurationAccelerationAfterFiftyRepeats();
+  testNum6ControlKeyOpensSettings();
   testControlsCommandsPostActionsAndExitOrder();
   return music_select_skin_ledger_evidence::finish(
       argc, argv, "music_select_input_processor_tests", failures, ledgerIds(),

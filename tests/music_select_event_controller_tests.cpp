@@ -83,9 +83,14 @@ void testLaunchAndExternalEventsEmitSourceActions() {
   AppSettings settings;
   MusicSelectEventContext context{.settings = settings,
                                   .selectedSongHasPath = true};
-  require(has(run(context, 13), Effect::OpenSettings) &&
-              has(run(context, 14), Effect::OpenSettings),
-          "key and skin configuration events open settings");
+  const auto keyconfig = run(context, 13);
+  const auto skinconfig = run(context, 14);
+  require(keyconfig.effects.size() == 1 && !keyconfig.settingsChanged &&
+              skinconfig.effects.size() == 1 && !skinconfig.settingsChanged &&
+              keyconfig.effects[0].kind == Effect::OpenSettings &&
+              skinconfig.effects[0].kind == Effect::OpenSettings,
+          "keyconfig and skinconfig stay separate controller cases, each "
+          "emitting exactly the settings-open effect");
   require(has(run(context, 15), Effect::Play) &&
               has(run(context, 16), Effect::Autoplay) &&
               has(run(context, 315), Effect::Practice),

@@ -58,9 +58,9 @@ Connecting that plumbing to the type-5 pipeline was left behind:
 | 4 | Select BGM + decide sound | ADDRESSED: looping SELECT default in the preview service, `DECIDE` on launch | `SELECT` looped, `DECIDE` on start | Preview service default path |
 | 5 | Preview without `#PREVIEW` | ADDRESSED: falls back to `SELECT` | Fades back to `SELECT` | See #4 |
 | 6 | `SongPreview` config | Gap (no user setting): previews always loop, gated only by `archiveChartPreviewEnabled` | `NONE`/`ONCE`/`LOOP` | Settings + preview service |
-| 7 | `Num6` | Unmapped | Opens CONFIG | `controlKey()` + control-key set |
+| 7 | `Num6` | ADDRESSED: `Num6` in the control-key set, `SDLK_6` bound, routes to Settings | Opens CONFIG | `controlKey()` + control-key set + `OpenSettings` action |
 | 8 | Open skin-config key | Unmapped | Opens `SKINCONFIG` | Input binding |
-| 9 | `keyconfig` vs `skinconfig` events | Both open Settings | Distinct destinations (13/14) | Event controller + scene |
+| 9 | `keyconfig` vs `skinconfig` events | ADDRESSED: both open Settings, kept as separate controller cases | Distinct destinations (13/14) | Event controller + scene |
 
 ## Detail
 
@@ -206,13 +206,16 @@ honoring remain the un-surfaced part of this gap.
 
 ### 7. `Num6` is unmapped
 
-`MusicSelectControlKey` has no `Num6` (`src/music_select/MusicSelectInputProcessor.h:55-71`)
-and `MusicSelectScene::controlKey()` omits `SDLK_6`
-(`MusicSelectScene.cpp:241-249`, it jumps `SDLK_6` -> `SDLK_7`). Pinned
-`MusicSelector.input()` maps `NUM6` to the CONFIG screen
-(`MusicSelector.java:296-300`). AsoBMaShow's equivalent is the Settings
-scene. Add `Num6`, bind `SDLK_6`, and route it to the same Settings entry the
-toolbar uses.
+**ADDRESSED.** `MusicSelectControlKey` now has `Num6`
+(`src/music_select/MusicSelectInputProcessor.h:55-71`) and
+`MusicSelectScene::controlKey()` binds `SDLK_6`
+(`MusicSelectScene.cpp:371-392`). `MusicSelectInputProcessor::process` routes a
+pressed `Num6` to a new `MusicSelectInputActionKind::OpenSettings`
+(`MusicSelectInputProcessor.cpp:144-150`), and
+`MusicSelectScene::applyInputAction` dispatches that action to the scene's
+`openSettings()` — the same Settings entry the toolbar uses
+(`MusicSelectScene.cpp:3641-3646`). This matches pinned `MusicSelector.input()`
+mapping `NUM6` to the CONFIG screen (`MusicSelector.java:296-300`).
 
 ### 8. Open skin-configuration key is unhandled
 
@@ -227,12 +230,16 @@ trigger.
 
 ### 9. `keyconfig` vs `skinconfig` events collapse to Settings
 
-Pinned `EventType` distinguishes `keyconfig` (13) and `skinconfig` (14)
-(`EventFactory.java`). AsoBMaShow routes both to the same Settings destination
-(`MusicSelectEventController.cpp:185-186`), losing the distinct key-config
-destination. The toolbar-spec even calls out Settings as the one application
-destination; decide whether key-config gets its own surface or is an explicit
-non-goal.
+**ADDRESSED with a recorded non-goal.** Pinned `EventType` distinguishes
+`keyconfig` (13) and `skinconfig` (14) (`EventFactory.java`). AsoBMaShow has no
+key-config surface (checked: nothing under `src/scene/` or `src/view/` provides
+a key-config screen), so per the Task 4 ruling both events keep routing to the
+Settings destination, but they remain **structurally separate `case`s** in
+`MusicSelectEventController::execute` (`MusicSelectEventController.cpp:185-190`):
+`case 14` keeps the one-line `effect(OpenSettings)`, and `case 13` carries a
+comment reserving the slot for a future key-config surface. The controller test
+asserts each event still emits exactly the settings-open effect
+(`music_select_event_controller_tests.cpp:82-92`).
 
 ## Already covered (not gaps)
 
@@ -279,9 +286,11 @@ reused.
    preview service (injectable `AudioPort` + default path), fallback to the
    default on empty preview, `DECIDE` on launch. Remaining from this slice:
    `SongPreview` `NONE/ONCE/LOOP` + `systemvolume` honoring (see gap #6).
-4. **Input/event branches** — add `Num6` (`SDLK_6`) → Settings; add open
-   skin-configuration handling or record it as an explicit non-goal; decide the
-   `keyconfig`/`skinconfig` split.
+4. **Input/event branches** — done: `Num6` (`SDLK_6`) → Settings; the
+   `keyconfig`/`skinconfig` split recorded as separate Settings-routed cases.
+   Remaining from this slice: gap #8, the open skin-configuration key
+   (`OPEN_SKIN_CONFIGURATION` → `SKINCONFIG`), is deliberately out of scope
+   (it needs a skin-config destination and re-activation semantics).
 5. **Select BGA decision** — either composite chart media via the existing BGA
    views or mark chart-BGA-during-select a documented non-goal (matches the
    design's "BGA" ambiguity).
