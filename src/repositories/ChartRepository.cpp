@@ -752,6 +752,16 @@ bool createChartScanCheckpointTable(sqlite3 *db) {
   if (!execSql(db, query, "creating chart scan checkpoint table")) {
     return false;
   }
+  const char *completedQuery =
+      "CREATE TABLE IF NOT EXISTS chart_scan_completed_archive ("
+      "archive_path TEXT NOT NULL,"
+      "archive_size INTEGER NOT NULL DEFAULT 0,"
+      "mtime_ns INTEGER NOT NULL DEFAULT 0,"
+      "PRIMARY KEY (archive_path, archive_size, mtime_ns)"
+      ")";
+  if (!execSql(db, completedQuery, "creating completed archive table")) {
+    return false;
+  }
   return true;
 }
 
@@ -759,8 +769,12 @@ bool clearChartScanCheckpoint(sqlite3 *db) {
   if (!createChartScanCheckpointTable(db)) {
     return false;
   }
-  return execSql(db, "DELETE FROM chart_scan_checkpoint",
-                 "clearing chart scan checkpoint");
+  if (!execSql(db, "DELETE FROM chart_scan_checkpoint",
+               "clearing chart scan checkpoint")) {
+    return false;
+  }
+  return execSql(db, "DELETE FROM chart_scan_completed_archive",
+                 "clearing completed archive records");
 }
 
 bool createArchiveScanCacheTable(sqlite3 *db) {

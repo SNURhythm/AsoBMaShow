@@ -620,11 +620,28 @@ void testStopAndPauseBeforeWork() {
   assert(session->CountAllChartMeta() == 0);
 }
 
-void testCheckpointResume() {
+void testArchiveCheckpointResumeSurvivesArchiveOrderChanges() {
+  constexpr int kChartsPerCompleteArchive = 20;
+  constexpr int kChartsInPartialArchive = 105;
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
-  writeChart(root, "first", "First Scanner Chart");
-  writeChart(root, "second", "Second Scanner Chart");
+  auto chartTextFor = [&](const std::string &prefix, int index) {
+    return chartText(prefix + " " + std::to_string(index));
+  };
+
+  auto writeArchiveWith = [&](const std::string &name,
+                              const std::string &prefix, int chartCount) {
+    std::vector<std::pair<std::string, std::string>> files;
+    for (int chartIndex = 0; chartIndex < chartCount; ++chartIndex) {
+      files.emplace_back("chart-" + std::to_string(chartIndex) + ".bms",
+                         chartTextFor(prefix, chartIndex));
+    }
+    writeZip(root / name, std::move(files));
+  };
+
+  writeArchiveWith("gamma-0.zip", "Archive0", kChartsPerCompleteArchive);
+  writeArchiveWith("gamma-1.zip", "Archive1", kChartsPerCompleteArchive);
+  writeArchiveWith("gamma-2.zip", "Archive2", kChartsInPartialArchive);
 
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
@@ -632,21 +649,42 @@ void testCheckpointResume() {
   assert(session.has_value());
   ChartLibraryScanner scanner;
 
+  // Stop during the third archive so the first two are recorded as completed
+  // by identity (their charts are durable) and the third records a
+  // mid-archive resumed count.
   std::stop_source stop;
   const auto stopToken = stop.get_token();
-  const int firstChanged = scanner.Scan(
-      *session, {root}, &stopToken, nullptr, nullptr,
-      []() -> std::uint64_t { return 1; },
+  int parsingCurrent = 0;
+  (void)scanner.Scan(
+      *session, {root}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parsingCurrent = progress.current;
+        }
+      },
+      nullptr,
+      [&]() -> std::uint64_t {
+        return parsingCurrent >= (2 * kChartsPerCompleteArchive + 40) ? 1 : 0;
+      },
       [&](std::uint64_t request) {
         assert(request == 1);
         stop.request_stop();
       });
-  assert(firstChanged == 1);
-  assert(session->CountAllChartMeta() == 1);
-  assert(session->LoadScanSnapshot().checkpoint.has_value());
+  assert(session->CountAllChartMeta() >= 2 * kChartsPerCompleteArchive);
+  const ChartScanSnapshot interrupted = session->LoadScanSnapshot();
+  assert(interrupted.checkpoint.has_value());
+  assert(interrupted.completedArchives.size() == 2);
 
-  assert(scanner.Scan(*session, {root}) == 1);
-  assert(session->CountAllChartMeta() == 2);
+  // Add a new archive that sorts before everything and replace an already
+  // completed archive so its mtime no longer matches the recorded identity;
+  // the identity-based resume must skip the unchanged known archive and pick
+  // up the new and changed ones.
+  writeArchiveWith("delta--leading.zip", "Leading", 4);
+  writeArchiveWith("gamma-0.zip", "Replaced", 3);
+
+  (void)scanner.Scan(*session, {root});
+  assert(session->CountAllChartMeta() ==
+         4 + 3 + kChartsPerCompleteArchive + kChartsInPartialArchive);
   assert(!session->LoadScanSnapshot().checkpoint.has_value());
 }
 
@@ -1285,14 +1323,16 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
         }
       });
   assert(corrupted);
-  assert(!result.completed);
-  assert(!result.committed);
+  // An archive that cannot be read is skipped instead of aborting the whole
+  // refresh: the scan completes, the durable charts from the interrupted run
+  // are preserved, and the checkpoint is cleared on success.
+  assert(result.completed);
+  assert(result.committed);
   assert(session->CountAllChartMeta() == 100);
   const ChartScanSnapshot failed = session->LoadScanSnapshot();
   assert(failed.archiveCache.empty());
-  assert(failed.checkpoint.has_value());
-  assert(failed.checkpoint->subIndex == 100);
-  assert(metadataRebuildRequired(databasePath));
+  assert(!failed.checkpoint.has_value());
+  assert(!metadataRebuildRequired(databasePath));
 }
 
 void testUnreadableArchivePreservesMetadataRebuildState() {
@@ -1760,7 +1800,7 @@ int main() {
   testAddedArchivePathIsIndexed();
   testFullScanSkipsOnlyFindBmsPrivateStorageDirectory();
   testStopAndPauseBeforeWork();
-  testCheckpointResume();
+  testArchiveCheckpointResumeSurvivesArchiveOrderChanges();
   testStorageFailureLeavesNoChart();
   testRebuildFlagClearFailureDoesNotReportCompletedScan();
   testMissingFullScanRootPreservesMetadataRebuildState();

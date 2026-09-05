@@ -1920,138 +1920,132 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return count;
   };
 
-  auto validateIndividualCheckpoint = [&]() {
-    const std::size_t nextIndex =
-        static_cast<std::size_t>(checkpoint.nextIndex);
-    if (nextIndex > individualDiffs.size() || checkpoint.subIndex != 0) {
+  std::size_t resumeStart = archiveBatchOrder.size();
+  std::unordered_map<std::string, std::pair<std::int64_t, std::int64_t>>
+      completedArchiveIdentity;
+  completedArchiveIdentity.reserve(scanSnapshot.completedArchives.size());
+  for (const auto &record : scanSnapshot.completedArchives) {
+    // Key by the same normalized DB path text used for checkpoint identity so
+    // the stored path round-trips consistently with the live archive path.
+    completedArchiveIdentity[checkpointPathTextForDb(record.path)] = {
+        record.size, record.mtimeNs};
+  }
+
+  auto archiveIdentityCompleted =
+      [&](const std::filesystem::path &archivePath) -> bool {
+    std::int64_t archiveSize = 0;
+    std::int64_t mtimeNs = 0;
+    if (!archiveFileState(archivePath, archiveSize, mtimeNs)) {
       return false;
     }
-    if (nextIndex > 0 &&
-        checkpointPathTextForDb(individualDiffs[nextIndex - 1].path) !=
-            checkpointPathTextForDb(checkpoint.lastPath)) {
-      return false;
+    const auto identityIt = completedArchiveIdentity.find(
+        checkpointPathTextForDb(archivePath));
+    return identityIt != completedArchiveIdentity.end() &&
+           identityIt->second.first == archiveSize &&
+           identityIt->second.second == mtimeNs;
+  };
+
+  auto archiveBatchFinished =
+      [&](const ArchiveParseBatch &batch) -> std::optional<
+          std::pair<std::int64_t, std::int64_t>> {
+    if (!archiveIdentityCompleted(batch.archivePath)) {
+      return std::nullopt;
     }
-    resumePlan.valid = true;
-    resumePlan.archivePhase = false;
-    resumePlan.individualStart = nextIndex;
-    parseCurrent = static_cast<int>(
-        std::min<std::size_t>(nextIndex, static_cast<std::size_t>(parseTotal)));
-    return true;
+    std::int64_t archiveSize = 0;
+    std::int64_t mtimeNs = 0;
+    if (!archiveFileState(batch.archivePath, archiveSize, mtimeNs)) {
+      return std::nullopt;
+    }
+    return std::pair<std::int64_t, std::int64_t>{archiveSize, mtimeNs};
   };
 
   auto validateArchiveCheckpoint = [&]() {
-    const std::size_t nextIndex =
-        static_cast<std::size_t>(checkpoint.nextIndex);
     const std::size_t subIndex = static_cast<std::size_t>(checkpoint.subIndex);
     archive_file::appendDebugLogLine(
-        "Validating archive checkpoint: nextIndex=" +
-        std::to_string(nextIndex) + " subIndex=" + std::to_string(subIndex) +
-        " archiveBatchOrder=" + std::to_string(archiveBatchOrder.size()) +
+        "Resolving archive checkpoint: subIndex=" +
+        std::to_string(subIndex) +
+        " archives=" + std::to_string(archiveBatchOrder.size()) +
+        " completed=" + std::to_string(completedArchiveIdentity.size()) +
         " ckptArchivePath=" +
         (checkpoint.archivePath.empty()
              ? "(empty)"
              : fspath_to_utf8(checkpoint.archivePath)) +
         " ckptSize=" + std::to_string(checkpoint.archiveSize) +
         " ckptMtime=" + std::to_string(checkpoint.archiveMtimeNs));
-    if (nextIndex > archiveBatchOrder.size()) {
-      return false;
-    }
-    if (nextIndex == 0 && subIndex == 0) {
-      resumePlan.valid = true;
-      resumePlan.archivePhase = true;
-      resumePlan.individualStart = individualDiffs.size();
-      resumePlan.archiveStart = 0;
-      resumePlan.archiveSubStart = 0;
-      parseCurrent = static_cast<int>(std::min<std::size_t>(
-          individualDiffs.size(), static_cast<std::size_t>(parseTotal)));
-      return true;
-    }
 
-    if (subIndex == 0) {
-      if (nextIndex == 0) {
-        return false;
-      }
-      const auto previousBatchIt =
-          archiveBatches.find(archiveBatchOrder[nextIndex - 1]);
-      if (previousBatchIt == archiveBatches.end()) {
-        return false;
-      }
-      const ArchiveParseBatch &previousBatch = previousBatchIt->second;
-      if (checkpointPathTextForDb(previousBatch.archivePath) !=
-          checkpointPathTextForDb(checkpoint.archivePath)) {
-        return false;
-      }
-      std::int64_t archiveSize = 0;
-      std::int64_t mtimeNs = 0;
-      if (!archiveFileState(previousBatch.archivePath, archiveSize, mtimeNs) ||
-          archiveSize != checkpoint.archiveSize ||
-          mtimeNs != checkpoint.archiveMtimeNs) {
-        return false;
-      }
-      if (!previousBatch.innerPaths.empty() &&
-          checkpointInnerPathText(previousBatch.innerPaths.back()) !=
-              checkpoint.lastInnerPath) {
-        return false;
-      }
-    } else {
-      if (nextIndex >= archiveBatchOrder.size()) {
-        return false;
-      }
-      const auto batchIt = archiveBatches.find(archiveBatchOrder[nextIndex]);
+    // Archives whose current (path, size, mtime) identity is in the completed
+    // set were fully parsed and committed in an earlier (interrupted) run.
+    // Their charts are already durable, so skip them regardless of where they
+    // sort during this run. The first archive whose identity is not completed
+    // is where parsing resumes.
+    resumeStart = archiveBatchOrder.size();
+    for (std::size_t i = 0; i < archiveBatchOrder.size(); ++i) {
+      const auto batchIt = archiveBatches.find(archiveBatchOrder[i]);
       if (batchIt == archiveBatches.end()) {
-        return false;
+        continue;
       }
-      const ArchiveParseBatch &batch = batchIt->second;
-      if (subIndex > batch.innerPaths.size()) {
-        return false;
-      }
-      if (checkpointPathTextForDb(batch.archivePath) !=
-          checkpointPathTextForDb(checkpoint.archivePath)) {
-        return false;
-      }
-      std::int64_t archiveSize = 0;
-      std::int64_t mtimeNs = 0;
-      if (!archiveFileState(batch.archivePath, archiveSize, mtimeNs) ||
-          archiveSize != checkpoint.archiveSize ||
-          mtimeNs != checkpoint.archiveMtimeNs) {
-        return false;
-      }
-      if (checkpointInnerPathText(batch.innerPaths[subIndex - 1]) !=
-          checkpoint.lastInnerPath) {
-        return false;
+      if (archiveBatchFinished(batchIt->second).has_value()) {
+        resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[i]);
+      } else {
+        resumeStart = i;
+        break;
       }
     }
-
     resumePlan.valid = true;
     resumePlan.archivePhase = true;
     resumePlan.individualStart = individualDiffs.size();
-    resumePlan.archiveStart = nextIndex;
-    resumePlan.archiveSubStart = subIndex;
-    for (std::size_t i = 0; i < nextIndex && i < archiveBatchOrder.size();
-         ++i) {
-      resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[i]);
+    resumePlan.archiveStart = resumeStart;
+    resumePlan.archiveSubStart = 0;
+
+    // Mid-archive continuation: the checkpoint recorded the archive being
+    // streamed at interruption (its identity plus the count of charts already
+    // durably inserted). If that archive is exactly where this run resumes
+    // and the recorded inner path is still at that position in its (stable)
+    // entry order, continue from subIndex instead of restarting the archive.
+    if (resumeStart < archiveBatchOrder.size()) {
+      const auto resumeBatchIt =
+          archiveBatches.find(archiveBatchOrder[resumeStart]);
+      if (resumeBatchIt != archiveBatches.end()) {
+        const ArchiveParseBatch &batch = resumeBatchIt->second;
+        const bool archivePathsMatch =
+            !checkpoint.archivePath.empty() &&
+            checkpointPathTextForDb(batch.archivePath) ==
+                checkpointPathTextForDb(checkpoint.archivePath);
+        std::int64_t archiveSize = 0;
+        std::int64_t mtimeNs = 0;
+        if (archivePathsMatch && subIndex > 0 &&
+            subIndex <= batch.innerPaths.size() &&
+            archiveFileState(batch.archivePath, archiveSize, mtimeNs) &&
+            archiveSize == checkpoint.archiveSize &&
+            mtimeNs == checkpoint.archiveMtimeNs &&
+            checkpointInnerPathText(batch.innerPaths[subIndex - 1]) ==
+                checkpoint.lastInnerPath) {
+          resumePlan.archiveSubStart = subIndex;
+          resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[resumeStart]);
+        }
+      }
     }
-    if (subIndex > 0 && nextIndex < archiveBatchOrder.size()) {
-      resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[nextIndex]);
-    }
-    const std::size_t resumedCount = individualDiffs.size() +
-                                     archiveBatchInnerCountBefore(nextIndex) +
-                                     subIndex;
+
+    const std::size_t resumedCount =
+        individualDiffs.size() +
+        archiveBatchInnerCountBefore(resumeStart) +
+        resumePlan.archiveSubStart;
     parseCurrent = static_cast<int>(std::min<std::size_t>(
         resumedCount, static_cast<std::size_t>(parseTotal)));
     return true;
   };
 
-  if (checkpoint.found && checkpoint.scanSignature == scanSignature &&
-      ((checkpoint.phase == kScanCheckpointPhaseIndividual &&
-        validateIndividualCheckpoint()) ||
-       (checkpoint.phase == kScanCheckpointPhaseArchive &&
-        validateArchiveCheckpoint()))) {
+  if (checkpoint.found && checkpoint.phase == kScanCheckpointPhaseArchive &&
+      validateArchiveCheckpoint()) {
     archive_file::appendDebugLogLine(
-        "Continuing chart scan from checkpoint: phase=" + checkpoint.phase +
-        " nextIndex=" + std::to_string(checkpoint.nextIndex) +
-        " subIndex=" + std::to_string(checkpoint.subIndex));
+        "Continuing chart scan from archive checkpoint: subIndex=" +
+        std::to_string(checkpoint.subIndex) +
+        " archiveStart=" + std::to_string(resumePlan.archiveStart) +
+        " archiveSubStart=" + std::to_string(resumePlan.archiveSubStart) +
+        " protected=" + std::to_string(resumePlan.protectedArchiveKeys.size()));
   } else if (checkpoint.found) {
+    resumeStart = 0;
+    resumePlan = ResumePlan{};
     session.ClearScanCheckpoint();
     archive_file::appendDebugLogLine(
         "Discarded stale chart scan checkpoint before parsing.");
@@ -2167,8 +2161,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           return false;
         }
         const path_t archiveKey = archiveScanKey(archivePath);
-        return resumePlan.protectedArchiveKeys.find(archiveKey) !=
-               resumePlan.protectedArchiveKeys.end();
+        if (resumePlan.protectedArchiveKeys.find(archiveKey) !=
+            resumePlan.protectedArchiveKeys.end()) {
+          return true;
+        }
+        // Protect every archive whose (path, size, mtime) identity is already
+        // completed: its charts are durable and the parse loop will skip it,
+        // so its rows must not be removed by the reindex deletion pass even
+        // if it sorts after the resume point this run.
+        return archiveIdentityCompleted(archivePath);
       };
 
   for (const auto &path : sourcePreferenceRefreshPaths) {
@@ -2706,7 +2707,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (batch != nullptr && innerStart < batch->innerPaths.size() &&
         !archiveBatchIsPrepared(archiveIndex) &&
-        !prefetchedArchiveIndexes.contains(archiveIndex)) {
+        !prefetchedArchiveIndexes.contains(archiveIndex) &&
+        !archiveBatchFinished(*batch).has_value()) {
       unpreparedArchiveIndexes.push_back(archiveIndex);
     }
   }
@@ -2837,13 +2839,22 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (batchPtr == nullptr) {
       continue;
     }
+    const ArchiveParseBatch &batch = *batchPtr;
+    if (archiveBatchFinished(batch).has_value()) {
+      // This archive was fully parsed and committed in an earlier run; its
+      // charts are already durable, so skip it even if it sorts after the
+      // resume point this run.
+      archive_file::appendDebugLogLine(
+          "Skipping already-completed archive batch: " +
+          fspath_to_utf8(batch.archivePath));
+      continue;
+    }
     archive_file::appendDebugLogLine(
         "Processing archive batch: index=" +
         std::to_string(archiveIndex) + "/" +
         std::to_string(archiveBatchOrder.size()) + " path=" +
         fspath_to_utf8(archiveBatchOrder[archiveIndex]) + " inner=" +
-        std::to_string(batchPtr->innerPaths.size()));
-    const ArchiveParseBatch &batch = *batchPtr;
+        std::to_string(batch.innerPaths.size()));
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (innerStart >= batch.innerPaths.size()) {
       int storedChartCount = 0;
@@ -2856,6 +2867,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         storedChartCount = *count;
       }
       writePendingArchiveCache(batch, storedChartCount);
+      std::int64_t completedArchiveSize = 0;
+      std::int64_t completedArchiveMtimeNs = 0;
+      if (archiveFileState(batch.archivePath, completedArchiveSize,
+                           completedArchiveMtimeNs)) {
+        recordStorageResult(scanBatch->RecordCompletedArchive(
+            batch.archivePath, completedArchiveSize,
+            completedArchiveMtimeNs));
+      }
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()
@@ -3054,6 +3073,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (parsedFullBatch && archiveStorageHealthy &&
         !stopRequested(stopToken)) {
       writePendingArchiveCache(batch, storedChartCount);
+      std::int64_t completedArchiveSize = 0;
+      std::int64_t completedArchiveMtimeNs = 0;
+      if (archiveFileState(batch.archivePath, completedArchiveSize,
+                           completedArchiveMtimeNs)) {
+        recordStorageResult(scanBatch->RecordCompletedArchive(
+            batch.archivePath, completedArchiveSize,
+            completedArchiveMtimeNs));
+      }
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()

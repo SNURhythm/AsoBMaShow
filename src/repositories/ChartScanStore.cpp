@@ -377,8 +377,59 @@ bool upsertScanCheckpoint(sqlite3 *database,
 }
 
 bool clearScanCheckpoint(sqlite3 *database) {
-  return executeSqliteLogged(database, "DELETE FROM chart_scan_checkpoint",
-                             "clearing chart scan checkpoint", logSqlErrorText);
+  if (!executeSqliteLogged(database, "DELETE FROM chart_scan_checkpoint",
+                           "clearing chart scan checkpoint", logSqlErrorText)) {
+    return false;
+  }
+  return executeSqliteLogged(
+      database, "DELETE FROM chart_scan_completed_archive",
+      "clearing completed archive records", logSqlErrorText);
+}
+
+bool recordCompletedArchive(sqlite3 *database,
+                            const CompletedArchiveRecord &record) {
+  const char *query =
+      "INSERT INTO chart_scan_completed_archive "
+      "(archive_path, archive_size, mtime_ns) VALUES (?, ?, ?) "
+      "ON CONFLICT(archive_path, archive_size, mtime_ns) DO NOTHING";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "recording completed archive",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  bindSqliteText(
+      statement.get(), 1,
+      chart_storage_identity::StoredPathText(record.path));
+  sqlite3_bind_int64(statement.get(), 2, record.size);
+  sqlite3_bind_int64(statement.get(), 3, record.mtimeNs);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("recording completed archive", database);
+    return false;
+  }
+  return true;
+}
+
+bool selectCompletedArchives(
+    sqlite3 *database, std::vector<CompletedArchiveRecord> &records) {
+  const char *query =
+      "SELECT archive_path, archive_size, mtime_ns "
+      "FROM chart_scan_completed_archive";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "selecting completed archives",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    records.push_back({
+        .path = storedPathFromDatabase(
+            sqliteColumnString(statement.get(), 0)),
+        .size = sqlite3_column_int64(statement.get(), 1),
+        .mtimeNs = sqlite3_column_int64(statement.get(), 2),
+    });
+  }
+  return true;
 }
 
 bool clearMetadataRebuildRequired(sqlite3 *database) {
@@ -452,6 +503,7 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
     }
   }
 
+  selectCompletedArchives(database, snapshot.completedArchives);
   ChartScanCheckpoint checkpoint;
   if (selectScanCheckpoint(database, checkpoint) && checkpoint.found) {
     snapshot.checkpoint = std::move(checkpoint);
@@ -1080,6 +1132,20 @@ std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(
     return std::nullopt;
   }
   return count;
+}
+
+bool ChartRepository::Session::ScanBatch::RecordCompletedArchive(
+    const std::filesystem::path &archivePath, std::int64_t size,
+    std::int64_t mtimeNs) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  return recordCompletedArchive(impl_->database(),
+                                CompletedArchiveRecord{
+                                    .path = archivePath,
+                                    .size = size,
+                                    .mtimeNs = mtimeNs,
+                                });
 }
 
 bool ChartRepository::Session::ScanBatch::CheckpointAndContinue(

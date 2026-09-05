@@ -233,6 +233,12 @@ public:
                               std::span<const std::filesystem::path> roots);
       std::optional<int>
       CountChartsInArchive(const std::filesystem::path &path);
+      // Records that the given archive's charts were fully parsed and
+      // committed. Written in the same scan transaction as the archive-phase
+      // checkpoint so that a mid-scan crash can resume by identity (path +
+      // size + mtime) even if other archives were added or removed.
+      bool RecordCompletedArchive(const std::filesystem::path &archivePath,
+                                  std::int64_t size, std::int64_t mtimeNs);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
       // Commits the current scan transaction and starts a fresh one, so
       // progress (e.g. regular-file parses) becomes durable without recording a

@@ -60,10 +60,17 @@ struct ChartScanCheckpoint {
   std::string lastInnerPath;
 };
 
+struct CompletedArchiveRecord {
+  std::filesystem::path path;
+  std::int64_t size = 0;
+  std::int64_t mtimeNs = 0;
+};
+
 struct ChartScanSnapshot {
   std::vector<bms_parser::ChartMeta> charts;
   std::vector<SolidArchiveRecord> solidArchives;
   std::vector<ArchiveScanCacheRecord> archiveCache;
+  std::vector<CompletedArchiveRecord> completedArchives;
   std::optional<ChartScanCheckpoint> checkpoint;
 };
 
