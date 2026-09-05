@@ -1031,11 +1031,22 @@ void testMissingFullScanRootPreservesMetadataRebuildState() {
   assert(session.has_value());
   setMetadataRebuildRequired(databasePath, true);
 
+  // A scan over an unavailable root must not report a flush completion: the
+  // traversal is unhealthy, so nothing was durably refreshed.
+  std::uint64_t flushCompleted = 0;
   ChartLibraryScanner scanner;
-  const ChartScanResult result = scanner.ScanWithResult(*session, {root});
+  const ChartScanResult result = scanner.ScanWithResult(
+      *session, {root}, nullptr, nullptr, nullptr,
+      []() -> std::uint64_t { return 5; },
+      [&](std::uint64_t request) {
+        if (request > flushCompleted) {
+          flushCompleted = request;
+        }
+      });
   assert(result.changedCount == 0);
   assert(!result.completed);
   assert(!result.committed);
+  assert(flushCompleted == 0);
   assert(metadataRebuildRequired(databasePath));
 }
 
@@ -1462,6 +1473,36 @@ void testArchiveCheckpointResumeUsesOrderedFallbackPipeline() {
   assert(snapshot.archiveCache.size() == 1);
   assert(snapshot.archiveCache.front().chartCount == 3);
   assert(!snapshot.checkpoint.has_value());
+}
+
+void testInterruptedScanDoesNotAcknowledgeFlush() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  writeChart(root, "sample", "Stopped Flush Scanner");
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+
+  // A scan stopped before any work produces no durable progress, so a pending
+  // flush request must not be acknowledged (no completion signal without a
+  // commit).
+  std::stop_source stopped;
+  stopped.request_stop();
+  const auto stoppedToken = stopped.get_token();
+  std::uint64_t flushCompleted = 0;
+  (void)scanner.Scan(
+      *session, {root}, &stoppedToken, nullptr, nullptr,
+      []() -> std::uint64_t { return 1; },
+      [&](std::uint64_t request) {
+        if (request > flushCompleted) {
+          flushCompleted = request;
+        }
+      });
+  assert(flushCompleted == 0);
+  assert(session->CountAllChartMeta() == 0);
 }
 
 void testMidArchiveCheckpointResumePreservesValidCacheCount() {
@@ -2269,6 +2310,7 @@ int main() {
   testMidArchiveCheckpointResumePreservesValidCacheCount();
   testArchiveStreamFailurePreservesCheckpointPrefix();
   testUnmodifiedRescanAcknowledgesPendingFlushRequest();
+  testInterruptedScanDoesNotAcknowledgeFlush();
   testUnreadableArchivePreservesMetadataRebuildState();
   testStopAtPreparingUpdatesCancelsArchivePrefetch();
   testLargeSingleArchivePreservesAllChartResults();

@@ -1790,17 +1790,18 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     // No work was produced, but a pending flush request (e.g. a UI-requested
     // durable state) must still be acknowledged so the caller's completion
     // signal arrives; nothing needs to be committed because there were no
-    // changes. Only a healthy traversal may acknowledge, so an unavailable
-    // root that returns completed=false does not report a flush completion.
-    if (traversalHealthy) {
-      acknowledgeFlushRequest(pendingFlushRequest());
-    }
+    // changes. Only a fully finalized scan (healthy traversal and, for a Full
+    // scan, a successful checkpoint clear) may acknowledge, so a scan that
+    // reports completed=false does not claim a flush completion.
     bool finalized = traversalHealthy;
     if (reconcileMode == ReconcileMode::Full) {
       finalized = finalized && session.ClearScanCheckpoint();
       if (finalized) {
         finalized = session.ClearChartMetadataRebuildRequired();
       }
+    }
+    if (finalized) {
+      acknowledgeFlushRequest(pendingFlushRequest());
     }
     return ChartScanResult{.completed = finalized};
   }
