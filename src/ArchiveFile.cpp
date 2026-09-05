@@ -508,6 +508,16 @@ struct CachedIndex {
 std::mutex gIndexMutex;
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
 
+// Single-flight coordination: while one thread is building an archive index
+// for a key, concurrent requesters wait and reuse the finished index instead
+// of rebuilding it (a large library can otherwise index the same archive from
+// the scan and the prefetch/read workers at once).
+std::mutex gIndexBuildMutex;
+std::unordered_map<std::string, std::condition_variable> gIndexBuildInFlight;
+std::unordered_map<std::string, bool> gIndexBuildActive;
+std::unordered_map<std::string, bool> gIndexBuildDone;
+std::unordered_map<std::string, bool> gIndexBuildFailed;
+
 constexpr std::size_t kDebugLogMaxLines = 1000;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
@@ -3402,6 +3412,38 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     hadCachedIndex = it != gIndexCache.end() && it->second != nullptr;
   }
 
+  // Single-flight: if another thread is already building this archive's index,
+  // wait for it and reuse the result instead of rebuilding. The first caller
+  // to reach here becomes the builder.
+  bool isBuilder = false;
+  {
+    std::unique_lock<std::mutex> buildLock(gIndexBuildMutex);
+    if (gIndexBuildActive[key]) {
+      auto &inflightCv = gIndexBuildInFlight[key];
+      inflightCv.wait(buildLock, [&] { return !gIndexBuildActive[key]; });
+      const bool builtOk = gIndexBuildDone[key];
+      const bool builtFailed = gIndexBuildFailed[key];
+      buildLock.unlock();
+      std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+      const auto cacheIt = gIndexCache.find(key);
+      if (builtOk && cacheIt != gIndexCache.end() &&
+          cacheIt->second != nullptr && cacheIt->second->size == size &&
+          cacheIt->second->mtime == mtime) {
+        return cacheIt->second;
+      }
+      if (builtFailed && errorMessage != nullptr) {
+        *errorMessage = "Failed to index archive: " + pathForLog(archivePath);
+      }
+      buildLock.lock();
+      // Fall through to retry building if the in-flight result did not match
+      // (e.g. stale failure) rather than returning a mismatched index.
+    }
+    gIndexBuildActive[key] = true;
+    gIndexBuildDone[key] = false;
+    gIndexBuildFailed[key] = false;
+    isBuilder = true;
+  }
+
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ || ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP || \
     ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   appendDebugLogLineImpl((hadCachedIndex ? "Archive changed; rebuilding index: "
@@ -3412,8 +3454,15 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   loaded->size = size;
   loaded->mtime = mtime;
   bool loadedEntries = false;
-  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-    return nullptr;
+   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+     {
+       std::lock_guard<std::mutex> buildLock(gIndexBuildMutex);
+       gIndexBuildActive[key] = false;
+       gIndexBuildDone[key] = true;
+       gIndexBuildFailed[key] = true;
+       gIndexBuildInFlight[key].notify_all();
+     }
+     return nullptr;
   }
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
   std::string zipError;
@@ -3494,7 +3543,14 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   if (!loadedEntries) {
     appendDebugLogLineImpl("Archive indexing failed: " +
                            pathForLog(archivePath));
-    return nullptr;
+     {
+       std::lock_guard<std::mutex> buildLock(gIndexBuildMutex);
+       gIndexBuildActive[key] = false;
+       gIndexBuildDone[key] = true;
+       gIndexBuildFailed[key] = true;
+       gIndexBuildInFlight[key].notify_all();
+     }
+     return nullptr;
   }
   const std::size_t skippedSystemEntries = filterSystemEntries(loaded->entries);
   if (skippedSystemEntries > 0) {
@@ -3511,10 +3567,24 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     std::lock_guard<std::mutex> lock(gIndexMutex);
     gIndexCache[key] = loaded;
   }
+  {
+    std::lock_guard<std::mutex> buildLock(gIndexBuildMutex);
+    gIndexBuildActive[key] = false;
+    gIndexBuildDone[key] = true;
+    gIndexBuildFailed[key] = false;
+    gIndexBuildInFlight[key].notify_all();
+  }
   return loaded;
 #else
   if (errorMessage != nullptr) {
     *errorMessage = "Archive support is not compiled in.";
+  }
+  {
+    std::lock_guard<std::mutex> buildLock(gIndexBuildMutex);
+    gIndexBuildActive[key] = false;
+    gIndexBuildDone[key] = true;
+    gIndexBuildFailed[key] = true;
+    gIndexBuildInFlight[key].notify_all();
   }
   return nullptr;
 #endif
