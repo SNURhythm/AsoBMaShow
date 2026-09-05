@@ -1913,6 +1913,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   for (const auto &record : scanSnapshot.completedArchives) {
     // Key by the same normalized DB path text used for checkpoint identity so
     // the stored path round-trips consistently with the live archive path.
+    // NOTE: matching an archive as "already completed" trusts that the
+    // (path, size, mtime) triple means byte-identical content, the same
+    // assumption archive_scan_cache and source-preference identity already
+    // rely on. A re-zipped archive with identical size and identical ns mtime
+    // would be skipped (rare; content-hash identity would require re-reading
+    // the archive, which defeats the resume fast-path).
     completedArchiveIdentity[checkpointPathTextForDb(record.path)] = {
         record.size, record.mtimeNs};
   }
@@ -1940,17 +1946,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   };
 
   auto archiveBatchFinished =
-      [&](const ArchiveParseBatch &batch) -> std::optional<
-          std::pair<std::int64_t, std::int64_t>> {
-    if (!archiveIdentityCompleted(batch.archivePath)) {
-      return std::nullopt;
-    }
-    std::int64_t archiveSize = 0;
-    std::int64_t mtimeNs = 0;
-    if (!archiveFileState(batch.archivePath, archiveSize, mtimeNs)) {
-      return std::nullopt;
-    }
-    return std::pair<std::int64_t, std::int64_t>{archiveSize, mtimeNs};
+      [&](const ArchiveParseBatch &batch) -> bool {
+    return archiveIdentityCompleted(batch.archivePath);
   };
 
   auto validateArchiveCheckpoint = [&]() {
@@ -1978,7 +1975,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (batchIt == archiveBatches.end()) {
         continue;
       }
-      if (archiveBatchFinished(batchIt->second).has_value()) {
+      if (archiveBatchFinished(batchIt->second)) {
         resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[i]);
       } else {
         resumeStart = i;
@@ -2035,7 +2032,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     for (std::size_t i = resumeStart; i < archiveBatchOrder.size(); ++i) {
       const auto batchIt = archiveBatches.find(archiveBatchOrder[i]);
       if (batchIt != archiveBatches.end() &&
-          archiveBatchFinished(batchIt->second).has_value()) {
+          archiveBatchFinished(batchIt->second)) {
         skippedCompletedInnerCount += batchIt->second.innerPaths.size();
       }
     }
@@ -2716,7 +2713,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (batch != nullptr && innerStart < batch->innerPaths.size() &&
         !prefetchedArchiveIndexes.contains(archiveIndex) &&
-        !archiveBatchFinished(*batch).has_value()) {
+        !archiveBatchFinished(*batch)) {
       unpreparedArchiveIndexes.push_back(archiveIndex);
     }
   }
@@ -2847,7 +2844,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       continue;
     }
     const ArchiveParseBatch &batch = *batchPtr;
-    if (archiveBatchFinished(batch).has_value()) {
+    if (archiveBatchFinished(batch)) {
       // This archive was fully parsed and committed in an earlier run; its
       // charts are already durable, so skip it even if it sorts after the
       // resume point this run.
