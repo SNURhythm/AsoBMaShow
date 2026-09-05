@@ -151,7 +151,9 @@ std::size_t pruneArchiveIndexCache(
     const std::vector<std::filesystem::path> &liveArchivePaths);
 // Test-only: drops all in-memory archive indexes so the next lookup reloads
 // from disk (or rebuilds). Not used in production paths.
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void clearArchiveIndexCacheForTesting();
+#endif
 void appendDebugLogLine(const std::string &message);
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void setStreamingEntryObserverForTesting(

@@ -784,6 +784,64 @@ void testArchiveIndexPrunesOrphanedCacheFiles() {
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
+void testArchiveIndexPrunesOrphanedTmpCacheFiles() {
+  TempDirectory temporary;
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  const auto keepArchive = temporary.path() / "keep.zip";
+  const auto removedArchive = temporary.path() / "removed.zip";
+  writeStoredZip(keepArchive, {"keep/a.bms"});
+  writeStoredZip(removedArchive, {"removed/a.bms"});
+
+  std::string error;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(keepArchive, entries, &error));
+  assert(archive_file::listEntries(removedArchive, entries, &error));
+
+  // Simulate the orphans a crash between the temporary write and the rename in
+  // the index writer leaves behind: a .idx.tmp sibling for every persisted
+  // index, plus one whose hash no live archive produces.
+  std::size_t idxFiles = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    std::error_code typeError;
+    if (entry.is_regular_file(typeError) && !typeError &&
+        entry.path().extension() == ".idx") {
+      ++idxFiles;
+      std::error_code copyError;
+      std::filesystem::copy_file(entry.path(),
+                                 entry.path().string() + ".tmp", copyError);
+      assert(!copyError);
+    }
+  }
+  assert(idxFiles == 2);
+  std::ofstream(cacheDir / "archive-index-0000000000000000.idx.tmp",
+                std::ios::binary)
+      << "stale";
+
+  // Prune with only the still-present archive listed: the removed archive's
+  // .idx and both of its .idx.tmp orphans are dropped. The live archive's .idx
+  // is retained and its .idx.tmp sibling is left alone (the real .idx is
+  // authoritative).
+  const std::size_t pruned =
+      archive_file::pruneArchiveIndexCache({keepArchive});
+  assert(pruned == 3);
+  assert(std::filesystem::exists(
+      cacheDir / "archive-index-0000000000000000.idx.tmp") == false);
+
+  std::size_t remaining = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    if (entry.is_regular_file()) {
+      ++remaining;
+    }
+  }
+  assert(remaining == 2);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
 void testCorruptIndexEntryCountIsRejected() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "corrupt-count.zip";
@@ -919,9 +977,10 @@ void testSingleFlightWaitersDoNotEachReindexAfterFailedBuild() {
 
   {
     std::unique_lock<std::mutex> lock(gate.mutex);
-    gate.cv.wait(lock, [&] {
+    const bool primaryReachedGate = gate.cv.wait_for(lock, 10s, [&] {
       return gate.builderInsideBuild && gate.arrived == kWorkerCount;
     });
+    assert(primaryReachedGate);
   }
   for (auto &worker : workers) {
     worker.join();
@@ -978,6 +1037,7 @@ int main() {
   testFullUnzipHonorsPauseDuringExtraction();
   testArchiveIndexPersistsAcrossColdCacheRestart();
   testArchiveIndexPrunesOrphanedCacheFiles();
+  testArchiveIndexPrunesOrphanedTmpCacheFiles();
   testCorruptIndexEntryCountIsRejected();
   testSingleFlightWaitersDoNotEachReindexAfterFailedBuild();
   testDebugLogRetainsNewestThousandLines();

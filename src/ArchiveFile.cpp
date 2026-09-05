@@ -3449,29 +3449,36 @@ std::size_t pruneArchiveIndexCacheImpl(
   const auto parseHashFromFileName = [](const std::string &fileName)
       -> std::optional<std::uint64_t> {
     constexpr std::string_view prefix = "archive-index-";
-    constexpr std::string_view suffix = ".idx";
-    if (fileName.size() != prefix.size() + 16 + suffix.size() ||
-        fileName.compare(0, prefix.size(), prefix) != 0 ||
-        fileName.compare(fileName.size() - suffix.size(), suffix.size(),
-                         suffix) != 0) {
-      return std::nullopt;
-    }
+    // A crash between the temporary write and the rename in
+    // writeCachedIndexToDisk leaves an orphaned "<name>.idx.tmp" sibling; prune
+    // those the same way, so they cannot accumulate across refreshes.
+    constexpr std::string_view suffixes[] = {".idx", ".idx.tmp"};
     std::uint64_t value = 0;
-    const std::size_t hexStart = prefix.size();
-    for (std::size_t i = 0; i < 16; ++i) {
-      const char character = fileName[hexStart + i];
-      const unsigned digit =
-          (character >= '0' && character <= '9')
-              ? static_cast<unsigned>(character - '0')
-              : (character >= 'a' && character <= 'f')
-                    ? static_cast<unsigned>(character - 'a' + 10)
-                    : 16;
-      if (digit >= 16) {
-        return std::nullopt;
+    for (const auto &suffix : suffixes) {
+      if (fileName.size() != prefix.size() + 16 + suffix.size() ||
+          fileName.compare(0, prefix.size(), prefix) != 0 ||
+          fileName.compare(fileName.size() - suffix.size(), suffix.size(),
+                           suffix) != 0) {
+        continue;
       }
-      value = (value << 4) | digit;
+      value = 0;
+      const std::size_t hexStart = prefix.size();
+      for (std::size_t i = 0; i < 16; ++i) {
+        const char character = fileName[hexStart + i];
+        const unsigned digit =
+            (character >= '0' && character <= '9')
+                ? static_cast<unsigned>(character - '0')
+                : (character >= 'a' && character <= 'f')
+                      ? static_cast<unsigned>(character - 'a' + 10)
+                      : 16;
+        if (digit >= 16) {
+          return std::nullopt;
+        }
+        value = (value << 4) | digit;
+      }
+      return value;
     }
-    return value;
+    return std::nullopt;
   };
 
   std::size_t removed = 0;
@@ -3486,11 +3493,14 @@ std::size_t pruneArchiveIndexCacheImpl(
       continue;
     }
     const std::filesystem::path filePath = iterator->path();
-    if (filePath.extension() != ".idx") {
+    const std::string fileName = filePath.filename().string();
+    const bool orphanTmpIndex =
+        fileName.size() > 4 &&
+        fileName.compare(fileName.size() - 8, 8, ".idx.tmp") == 0;
+    if (filePath.extension() != ".idx" && !orphanTmpIndex) {
       continue;
     }
-    const auto fileNameHash =
-        parseHashFromFileName(filePath.filename().string());
+    const auto fileNameHash = parseHashFromFileName(fileName);
     if (fileNameHash.has_value() &&
         !liveArchiveHashes.contains(*fileNameHash)) {
       // The file name encodes a hash no live archive produces, so the key
@@ -7548,6 +7558,7 @@ std::size_t pruneArchiveIndexCache(
   return pruneArchiveIndexCacheImpl(liveArchivePaths);
 }
 
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void clearArchiveIndexCacheForTesting() {
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
@@ -7562,6 +7573,7 @@ void clearArchiveIndexCacheForTesting() {
   }
   setArchiveIndexCacheDirectory({});
 }
+#endif
 
 bool hasSupportedArchiveExtension(const std::filesystem::path &path) {
   return !archiveExtensionFromPath(path).empty();

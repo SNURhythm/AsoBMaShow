@@ -1555,12 +1555,25 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   setMetadataRebuildRequired(databasePath, true);
 
   bool corrupted = false;
+  bool failureTriggered = false;
+  std::uint64_t flushCompleted = 0;
+  const std::uint64_t requestedFlush = 1;
   const ChartScanResult result = scanner.ScanWithResult(
       *session, {archivePath}, nullptr,
       [&](const ChartScanProgress &progress) {
         if (!corrupted &&
             progress.stage == ChartScanProgressStage::ReadingArchive) {
           corrupted = corruptStoredZipPayload(archivePath, "Failure Resume 102");
+          failureTriggered = true;
+        }
+      },
+      nullptr,
+      [&]() -> std::uint64_t {
+        return failureTriggered ? requestedFlush : 0;
+      },
+      [&](std::uint64_t request) {
+        if (request > flushCompleted) {
+          flushCompleted = request;
         }
       });
   assert(corrupted);
@@ -1569,6 +1582,11 @@ void testArchiveStreamFailurePreservesCheckpointPrefix() {
   // are preserved, and the checkpoint is cleared on success.
   assert(result.completed);
   assert(result.committed);
+  // The failed-archive reset is written in the open transaction, so its flush
+  // acknowledgement must be deferred to a durable boundary (the final commit)
+  // rather than fired immediately. The ack still eventually fires so callers
+  // waiting on the flush do not stall.
+  assert(flushCompleted >= requestedFlush);
   assert(session->CountAllChartMeta() == 100);
   const ChartScanSnapshot failed = session->LoadScanSnapshot();
   assert(failed.archiveCache.empty());

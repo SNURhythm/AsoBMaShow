@@ -52,7 +52,6 @@ constexpr std::uint64_t kArchiveParseMaxInFlightBytes =
     16ull * 1024ull * 1024ull;
 constexpr std::size_t kArchiveDirectConcurrentMinCharts = 16;
 constexpr std::size_t kArchiveClassificationPauseInterval = 256;
-constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
 
 bool isFindBmsPrivateStorageDirectory(const std::filesystem::path &path) {
@@ -766,9 +765,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   struct ArchiveParseBatch {
     std::filesystem::path archivePath;
     std::vector<std::filesystem::path> innerPaths;
-    std::vector<bool> parseAttempted;
     std::vector<bool> hasDocument;
-    std::vector<std::optional<ParsedChartMetadata>> preparedMetas;
   };
 
   struct ArchiveParsedChart {
@@ -1822,9 +1819,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                     .first;
     }
     batchIt->second.innerPaths.push_back(innerPath);
-    batchIt->second.parseAttempted.push_back(diff.parseAttempted);
     batchIt->second.hasDocument.push_back(diff.hasDocument);
-    batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
 
   // Sort the archive order by path so the archive resume indexes stay
@@ -2514,53 +2509,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                                              : std::size_t{0};
   };
 
-  auto archiveBatchIsPrepared = [&](std::size_t archiveIndex) {
-    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
-    if (batch == nullptr ||
-        batch->parseAttempted.size() != batch->innerPaths.size() ||
-        batch->preparedMetas.size() != batch->innerPaths.size()) {
-      return false;
-    }
-    const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
-    if (innerStart > batch->innerPaths.size()) {
-      return false;
-    }
-    return std::all_of(
-        batch->parseAttempted.begin() +
-            static_cast<std::vector<bool>::difference_type>(innerStart),
-        batch->parseAttempted.end(), [](bool attempted) { return attempted; });
-  };
-
-  auto preparedArchiveParseResult = [&](std::size_t archiveIndex) {
-    ArchiveParseJobResult result;
-    result.archiveIndex = archiveIndex;
-    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
-    if (batch == nullptr || !archiveBatchIsPrepared(archiveIndex)) {
-      result.errorMessage = "Archive parse result was not prepared.";
-      return result;
-    }
-    result.innerStart = archiveInnerStartForIndex(archiveIndex);
-    result.pendingInnerPaths.assign(
-        batch->innerPaths.begin() +
-            static_cast<std::vector<std::filesystem::path>::difference_type>(
-                result.innerStart),
-        batch->innerPaths.end());
-    std::vector<ArchiveParsedChart> parsedCharts;
-    parsedCharts.reserve(result.pendingInnerPaths.size());
-    for (std::size_t index = result.innerStart;
-         index < batch->innerPaths.size(); ++index) {
-      parsedCharts.push_back({
-          .innerPath = batch->innerPaths[index],
-          .chartPath = archive_file::makeVirtualPath(batch->archivePath,
-                                                     batch->innerPaths[index]),
-          .meta = batch->preparedMetas[index],
-      });
-    }
-    result.parsedCharts = std::move(parsedCharts);
-    result.complete = true;
-    return result;
-  };
-
   std::vector<std::shared_ptr<ArchiveParseJobState>> archiveParseResults;
   archiveParseResults.reserve(archiveBatchOrder.size());
   std::unordered_set<std::size_t> prefetchedArchiveIndexes;
@@ -2755,7 +2703,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (batch != nullptr && innerStart < batch->innerPaths.size() &&
-        !archiveBatchIsPrepared(archiveIndex) &&
         !prefetchedArchiveIndexes.contains(archiveIndex) &&
         !archiveBatchFinished(*batch).has_value()) {
       unpreparedArchiveIndexes.push_back(archiveIndex);
@@ -2789,8 +2736,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
-    if (batch == nullptr || innerStart >= batch->innerPaths.size() ||
-        archiveBatchIsPrepared(archiveIndex)) {
+    if (batch == nullptr || innerStart >= batch->innerPaths.size()) {
       continue;
     }
     std::vector<std::filesystem::path> pendingInnerPaths(
@@ -2954,7 +2900,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
     const std::string archiveText = fspath_to_utf8(batch.archivePath);
     const std::size_t requestedCharts = batch.innerPaths.size() - innerStart;
-    const bool archiveInsertStmtReady = true;
     std::optional<bool> archiveSolidHint;
     if (const auto cacheIt = pendingArchiveCacheDiffs.find(archiveKey);
         cacheIt != pendingArchiveCacheDiffs.end()) {
@@ -3060,17 +3005,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     };
 
     std::optional<ArchiveParseJobResult> terminalResult;
-    if (archiveBatchIsPrepared(archiveIndex)) {
-      terminalResult = preparedArchiveParseResult(archiveIndex);
-    } else {
-      while (!terminalResult.has_value() && !shouldStop()) {
-        ArchiveParseJobEvent event =
-            waitTakeArchiveParseEvent(archiveIndex, parsedInBatch);
-        if (event.terminalResult.has_value()) {
-          terminalResult = std::move(event.terminalResult);
-        } else {
-          applyParsedCharts(std::move(event.parsedCharts));
-        }
+    while (!terminalResult.has_value() && !shouldStop()) {
+      ArchiveParseJobEvent event =
+          waitTakeArchiveParseEvent(archiveIndex, parsedInBatch);
+      if (event.terminalResult.has_value()) {
+        terminalResult = std::move(event.terminalResult);
+      } else {
+        applyParsedCharts(std::move(event.parsedCharts));
       }
     }
     if (terminalResult.has_value() &&
@@ -3115,14 +3056,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         const ChartScanCheckpoint resetCheckpoint = makeCheckpoint(
             kArchiveCheckpointSignature, kScanCheckpointPhaseArchive, 0, 0,
             std::filesystem::path(), batch.archivePath, "");
-        if (recordStorageResult(
+        // SaveCheckpointInPlace writes inside the open transaction, so the
+        // delete+reset above only becomes durable at the next commit. Do not
+        // acknowledge a pending flush here: a hard kill between this write and
+        // that commit would roll the reset back despite the flush-complete
+        // signal. The flush request is satisfied at the next durable boundary
+        // (a later archive checkpoint or the final commit below).
+        if (!recordStorageResult(
                 scanBatch->SaveCheckpointInPlace(resetCheckpoint))) {
-          if (const auto failedArchiveCheckpointRequest =
-                  checkpointSaveRequest(true);
-              failedArchiveCheckpointRequest.has_value()) {
-            acknowledgeFlushRequest(*failedArchiveCheckpointRequest);
-          }
-        } else {
           archiveStorageHealthy = false;
         }
       }
@@ -3137,8 +3078,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           " requested=" + std::to_string(requestedCharts) +
           " files=" + std::to_string(deliveredCharts) +
           " inserted=" + std::to_string(insertedCharts) +
-          " insertMs=" + std::to_string(insertMs) + " reusedStatement=" +
-          std::string(archiveInsertStmtReady ? "true" : "false") +
+          " insertMs=" + std::to_string(insertMs) + " reusedStatement=true" +
           " sourcePreferenceHint=" +
           std::string(archiveSourcePreference.has_value() ? "true" : "false") +
           " solidHint=" +
