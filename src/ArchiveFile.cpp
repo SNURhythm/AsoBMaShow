@@ -1,6 +1,7 @@
 #include "ArchiveFile.h"
 
 #include "BmsMetadataText.h"
+#include "audio/ChartAssetExtensions.h"
 #include "targets.h"
 #include "RAII.h"
 #if TARGET_OS_ANDROID
@@ -4005,6 +4006,36 @@ const Entry *findIndexedEntry(const CachedIndex &index,
     return &index.entries[lowerIt->second];
   }
 
+  return nullptr;
+}
+
+// BMS charts reference audio by the name written in the chart (e.g.
+// `#PREVIEW music.wav`), but the archive can store that file under a different
+// audio extension (e.g. `music.ogg`). When the exact entry lookup misses,
+// substitute every supported audio extension for the referenced one and retry.
+// Returns nullptr when none of the candidates exist.
+const Entry *
+findIndexedEntryWithAudioExtensionFallback(const CachedIndex &index,
+                                           const std::filesystem::path &innerPath) {
+  const std::filesystem::path referencedExtension = innerPath.extension();
+  if (referencedExtension.empty()) {
+    return nullptr;
+  }
+  const std::filesystem::path base = innerPath;
+  const std::filesystem::path parentWithBase =
+      base.parent_path() / base.stem();
+  for (const std::string_view candidate : asobmshow::chart_assets::kAudioExtensions) {
+    if (candidate == referencedExtension.generic_string()) {
+      continue;
+    }
+    std::filesystem::path alternate = parentWithBase;
+    alternate += ".";
+    alternate += std::string(candidate);
+    if (const Entry *entry = findIndexedEntry(index, alternate);
+        entry != nullptr && !entry->directory) {
+      return entry;
+    }
+  }
   return nullptr;
 }
 
@@ -8567,6 +8598,14 @@ bool readFileBounded(const std::filesystem::path &path,
   if (stop.stop_requested()) return false;
   if (index == nullptr) return false;
   const Entry *entry = findIndexedEntry(*index, innerPath);
+  if (entry == nullptr || entry->directory) {
+    // BMS references audio by the name written in the chart (e.g.
+    // `#PREVIEW music.wav`), but the archive may store the same file under a
+    // different audio extension (e.g. `music.ogg`). Retry the lookup with each
+    // supported audio extension substituted before concluding the entry is
+    // genuinely absent.
+    entry = findIndexedEntryWithAudioExtensionFallback(*index, innerPath);
+  }
   if (entry == nullptr || entry->directory) {
     // Diagnose: dump the target bytes and every indexed entry under the same
     // folder (name + bytes) so a name/encoding mismatch is visible on-device

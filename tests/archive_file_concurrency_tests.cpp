@@ -450,6 +450,24 @@ void testZipBoundedReadStreamsFullInBoundsEntry() {
                           bytes.size()) == payload);
 }
 
+void testBoundedReadFallsBackToAlternativeAudioExtension() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "preview-extension.zip";
+  const std::string payload = "ogg-lives-here";
+  // The archive stores the audio as .ogg, but the chart references it as .wav
+  // (BMS #PREVIEW quirk: the extension in the chart need not match the file).
+  writeStoredZipContents(archivePath, "folder/music.ogg", payload);
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "folder/music.wav"), bytes,
+      payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+  assert(bytes == std::vector<unsigned char>(payload.begin(), payload.end()));
+}
+
 void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "lied-central-dir.zip";
@@ -1029,6 +1047,7 @@ int main() {
   // these bounded-read tests index real archives, which would otherwise pollute
   // that assertion's retained debug-log window.
   testZipBoundedReadStreamsFullInBoundsEntry();
+  testBoundedReadFallsBackToAlternativeAudioExtension();
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
   testBoundedReadRejectsOversizedSevenZipEntry();
   testSevenZipReadUsesCurrentOperationPauseCallback();
