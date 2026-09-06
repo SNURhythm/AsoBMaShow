@@ -447,39 +447,6 @@ void testRootProjectionDefersDirectoryContents() {
           "root projection does not materialize table, command, or song children");
 }
 
-void testRootProjectionAggregatesRootFolderLamps() {
-  MusicSelectRepositoryMetadata metadata;
-  metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
-  std::vector<ChartMetaRecord> records{
-      chart("/songs/a.bms", "aaa", "Alpha", "Another", "/songs"),
-      chart("/songs/b.bms", "bbb", "Beta", "", "/songs")};
-  const std::vector<std::string> searches{};
-  const auto scoreFor =
-      [](const bms_parser::ChartMeta &meta, int mode) {
-        if (meta.SHA256 == "aaa") {
-          return std::optional<ScoreBestSnapshot>(ScoreBestSnapshot{
-              .score = 1000,
-              .maxScore = 1200,
-              .clearType = kClearTypeExHardClearRank});
-        }
-        return std::optional<ScoreBestSnapshot>{};
-      };
-
-  const auto projection = MusicSelectRepositoryProjection{}.projectRoot(
-      metadata, searches, 99, records, scoreFor, "ALL");
-  const auto *folder = projection.find({"folder:/songs"});
-  require(folder && folder->kind == skin::MusicSelectBarKind::Folder,
-          "root projection exposes the physical folder bar");
-  require(folder && folder->presentation.folderLampCounts[0] == 1 &&
-              folder->presentation.folderLampCounts[7] == 1 &&
-              folder->presentation.folderLampCounts[8] == 0,
-          "root folder aggregate counts direct-song clear lamps");
-  int total = 0;
-  for (const int count : folder->presentation.folderLampCounts) total += count;
-  require(folder && total == 2,
-          "root folder total is the sum of its direct-song lamps");
-}
-
 } // namespace
 
 int main(int argc, char **argv) {
@@ -493,7 +460,6 @@ int main(int argc, char **argv) {
   testProjectsSearchHistoryAfterCommands();
   testProjectsRecentScoreImprovementCommandChildren();
   testRootProjectionDefersDirectoryContents();
-  testRootProjectionAggregatesRootFolderLamps();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_repository_projection_tests", failures,
       "music-select repository projection assertion(s) failed",

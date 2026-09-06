@@ -67,12 +67,7 @@ public:
   [[nodiscard]] MusicSelectProjection
   projectRoot(const MusicSelectRepositoryMetadata &,
               std::span<const std::string> searches,
-              std::uint64_t repositoryRevision,
-              std::span<const ChartMetaRecord> records = {},
-              std::function<std::optional<ScoreBestSnapshot>(
-                  const bms_parser::ChartMeta &, int)>
-                  scoreFor = nullptr,
-              std::string_view modeFilter = "ALL") const;
+              std::uint64_t repositoryRevision) const;
 
   [[nodiscard]] MusicSelectProjection
   project(MusicSelectRepositoryProjectionInput) const;

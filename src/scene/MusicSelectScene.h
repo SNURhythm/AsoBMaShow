@@ -165,7 +165,6 @@ private:
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;
   MusicSelectRepositoryMetadata repositoryMetadata_;
-  std::vector<ChartMetaRecord> allChartRecords_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
   std::atomic_bool recordsExportInProgress_{false};

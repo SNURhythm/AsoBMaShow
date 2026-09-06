@@ -1,5 +1,6 @@
 #include "MusicSelectPropertyProjection.h"
 
+#include "../audio/SelectAudioDiagnostics.h"
 #include "../AssistOptionUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../replay/ReplayOption.h"
@@ -505,7 +506,12 @@ void projectSelectedBar(Properties &out,
 
   if (directory) {
     const auto &counts = selected->presentation.folderLampCounts;
-    out.integers[300] = std::accumulate(counts.begin(), counts.end(), 0);
+    const int total = std::accumulate(counts.begin(), counts.end(), 0);
+    audio::diag::SelectAudioLog(
+        std::string("[folder] dir kind=") +
+        std::to_string(static_cast<int>(selected->kind)) + " total=" +
+        std::to_string(total) + " id=" + selected->id.value);
+    out.integers[300] = total;
     for (int clearType = 0; clearType < 11; ++clearType) {
       out.integers[320 + clearType] =
           counts[static_cast<std::size_t>(clearType)];
