@@ -131,6 +131,29 @@ void testCancelWithoutJoinStopsWorker() {
   worker.stop();
 }
 
+void testRequestAfterCancelProcessesNewItem() {
+  ChartPreloadWorker worker(std::chrono::milliseconds(20));
+  RecordingProcessor recorder;
+  worker.configure(recorder.make(worker));
+  recorder.release.store(false);
+
+  // Select item A; it starts.
+  worker.request(makeRecord("A"));
+  recorder.waitStarted(1);
+  // Change selection: cancel() (cooperative, no join) then request B.
+  worker.cancel();
+  recorder.release.store(true);
+  recorder.waitCompleted(1);
+  worker.request(makeRecord("B"));
+  recorder.waitStarted(2);
+  recorder.release.store(true);
+  recorder.waitCompleted(2);
+
+  expect(recorder.contains("B"),
+         "a request after cancel() processes the new item");
+  worker.stop();
+}
+
 void testStopJoinsAndIdleFires() {
   ChartPreloadWorker worker(std::chrono::milliseconds(20));
   RecordingProcessor recorder;
@@ -157,6 +180,7 @@ int main() {
   testLatestWinsSupersedesQueued();
   testDedupSamePath();
   testCancelWithoutJoinStopsWorker();
+  testRequestAfterCancelProcessesNewItem();
   testStopJoinsAndIdleFires();
   if (failures != 0) {
     std::cerr << failures << " failures\n";

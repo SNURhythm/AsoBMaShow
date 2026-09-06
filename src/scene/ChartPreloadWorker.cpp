@@ -18,6 +18,11 @@ void ChartPreloadWorker::request(const ChartMetaRecord &record) {
         *inFlightPath_ == fspath_to_path_t(record.meta.BmsPath)) {
       return;  // this exact chart is already being processed
     }
+    // A request may arrive after cancel() left stop_ set (the worker thread
+    // cooperatively stopping without a join). Re-enable the worker so the new
+    // request is processed, and let ensureWorker() respawn the thread if it
+    // has fully returned.
+    stop_.store(false, std::memory_order_release);
     pending_ = record;
     pendingSince_ = std::chrono::steady_clock::now();
   }
@@ -65,8 +70,14 @@ void ChartPreloadWorker::setOnIdle(std::function<void()> onIdle) {
 }
 
 void ChartPreloadWorker::ensureWorker() {
-  if (thread_.joinable()) {
+  if (thread_.joinable() && !threadFinished_.load(std::memory_order_acquire)) {
     return;
+  }
+  if (thread_.joinable()) {
+    // The previous worker loop returned (e.g. after cancel()) but was never
+    // joined; reclaim it before starting a fresh thread.
+    thread_.join();
+    threadFinished_.store(false, std::memory_order_release);
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -84,6 +95,7 @@ void ChartPreloadWorker::workerLoop(std::stop_token stop) {
       while (true) {
         if (stop.stop_requested() ||
             stop_.load(std::memory_order_acquire)) {
+          threadFinished_.store(true, std::memory_order_release);
           return;
         }
         if (!pending_.has_value()) {
@@ -126,4 +138,5 @@ void ChartPreloadWorker::joinIfRunning() {
     thread_.request_stop();
     thread_.join();
   }
+  threadFinished_.store(false, std::memory_order_release);
 }

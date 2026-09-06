@@ -75,6 +75,10 @@ private:
   std::chrono::milliseconds debounceDelay_;
   std::jthread thread_;
   std::atomic_bool stop_{false};
+  // True once the worker loop has returned but the thread has not been joined.
+  // cancel() stops the worker without joining, so a later request() must be
+  // able to respawn the finished thread rather than treating it as live.
+  std::atomic_bool threadFinished_{false};
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::optional<ChartMetaRecord> pending_;
