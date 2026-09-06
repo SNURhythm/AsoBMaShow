@@ -107,9 +107,9 @@ def swept_tone(n_samples, f0, f1, amp, harmonics=1, vib_depth=0.0, vib_rate=0.0)
 
 
 # ---------------------------------------------------------------- select BGM
-# A ~10 s rhythm-game-style menu track: bright, driving, with a clear beat
-# (kick + bass), staccato synth chords, and a catchy lead hook. Uplifting
-# I-V-vi-IV progression in C. No tremolo or detune beating.
+# A bright rhythm-game menu track with high-pitched instruments: a sparkling
+# plucky lead in the C6-E7 register, airy high chord stabs, a light
+# high-octave bass, and a driving beat. No tremolo or detune beating.
 
 EQ = {
     "A1": 55.00, "C1": 32.70, "C2": 65.41, "D2": 73.42, "E2": 82.41,
@@ -119,31 +119,41 @@ EQ = {
     "C4": 261.63, "D4": 293.66, "E4": 329.63, "F4": 349.23, "G4": 392.00,
     "A4": 440.00, "B4": 493.88, "C5": 523.25, "D5": 587.33, "E5": 659.26,
     "F5": 698.46, "G5": 783.99, "A5": 880.00, "B5": 987.77, "C6": 1046.50,
-    "D6": 1174.66, "E6": 1318.51,
+    "D6": 1174.66, "E6": 1318.51, "F6": 1396.91, "G6": 1567.98,
+    "A6": 1760.00, "B6": 1975.53, "C7": 2093.00, "D7": 2349.32,
+    "E7": 2637.02, "F7": 2793.83, "G7": 3135.96,
 }
 
 SELECT_SECONDS = 20
-# ~120 BPM -> 0.5 s/beat -> 2.5 s per bar (8 bars in 20 s).
 BEAT = 0.5
 
 
-def make_kick(when_sec, amp=0.30):
-    """A soft kick: a low sine with a quick pitch drop, ~0.18 s."""
+def bright_tone(freq, t, n_harmonics=3):
+    """A bright/glassy tone: fundamental plus a few harmonics, so high-pitch
+    instruments cut through instead of sounding like dull sines."""
+    s = 0.0
+    for h in range(1, n_harmonics + 1):
+        s += math.sin(2 * math.pi * freq * h * t) / h
+    return s
+
+
+def make_kick(when_sec, amp=0.24):
+    """A soft kick: a low sine with a quick pitch drop."""
     n = SR * SELECT_SECONDS
     out = [0.0] * n
     on = int(when_sec * SR)
-    dur = int(0.18 * SR)
+    dur = int(0.16 * SR)
     for i in range(on, min(n, on + dur)):
         t = (i - on) / SR
-        freq = 120.0 * math.exp(-t / 0.03) + 45.0
-        env = min(1.0, t / 0.002) * exp_env(t, 0.05)
+        freq = 130.0 * math.exp(-t / 0.03) + 48.0
+        env = min(1.0, t / 0.002) * exp_env(t, 0.045)
         out[i] += amp * math.sin(2 * math.pi * freq * t) * env
     return out
 
 
 def make_rhythm_bar(start_sec, duration_sec, bass, bass_high, voices, lead):
-    """A bright rhythm-game bar: kick on each beat, driving eighth-note bass,
-    staccato chord stabs, and a catchy lead hook."""
+    """A bright rhythm-game bar: kick + light high-octave bass, high staccato
+    chord stabs, and a sparkling high lead."""
     n = SR * SELECT_SECONDS
     out = [0.0] * n
     onset = int(start_sec * SR)
@@ -155,7 +165,8 @@ def make_rhythm_bar(start_sec, duration_sec, bass, bass_high, voices, lead):
         kick = make_kick(start_sec + b * BEAT)
         for i in range(onset, end):
             out[i] += kick[i]
-    # Driving eighth-note bass: root on downbeats, fifth/octave on offbeats.
+    # Light high-octave bass (clean, not muddy): root on downbeats, fifth on
+    # offbeats, in a higher register with a soft envelope.
     step = BEAT / 2
     for beat in range(int(duration_sec / step)):
         when = start_sec + beat * step
@@ -163,77 +174,76 @@ def make_rhythm_bar(start_sec, duration_sec, bass, bass_high, voices, lead):
         on = int(when * SR)
         for i in range(on, min(end, on + int(step * SR))):
             t = (i - on) / SR
-            attack = min(1.0, t / 0.005)
+            attack = min(1.0, t / 0.004)
             release = min(1.0, (step - t) / 0.05)
             env = max(0.0, attack * release)
-            out[i] += 0.20 * math.sin(2 * math.pi * EQ[freq] * t) * env
-    # Staccato chord stabs on each beat (bright, short).
+            out[i] += 0.15 * bright_tone(EQ[freq], t, n_harmonics=2) * env
+    # High staccato chord stabs on each beat (airy, bright).
     for b in range(beats):
         when = start_sec + b * BEAT
         on = int(when * SR)
-        stab_len = int(0.30 * SR)
+        stab_len = int(0.26 * SR)
         for i in range(on, min(end, on + stab_len)):
             t = (i - on) / SR
-            attack = min(1.0, t / 0.004)
+            attack = min(1.0, t / 0.003)
             release = min(1.0, (stab_len / SR - t) / 0.05)
             env = max(0.0, attack * release)
             s = 0.0
             for f, amp in voices:
-                s += amp * math.sin(2 * math.pi * EQ[f] * t)
+                s += amp * bright_tone(EQ[f], t, n_harmonics=3)
             out[i] += s * env
-    # Catchy lead hook (bright, plucky).
+    # Sparkling high lead (C6-E7 register), fast plucky decay.
     for m_start, note, amp in lead:
         m_onset = onset + int(m_start * SR)
         for i in range(m_onset, end):
             t = (i - m_onset) / SR
-            attack = min(1.0, t / 0.006)
-            release = min(1.0, (0.20 - t) / 0.06)
+            attack = min(1.0, t / 0.004)
+            release = min(1.0, (0.18 - t) / 0.055)
             env = max(0.0, attack * release)
-            out[i] += amp * math.sin(2 * math.pi * EQ[note] * t) * env
+            out[i] += amp * bright_tone(EQ[note], t, n_harmonics=4) * env
     return out
 
 
 def make_select():
     n = SR * SELECT_SECONDS
     out = [0.0] * n
-    # A fuller rhythm-game track: 8 bars (20 s) with a verse/chorus feel so the
-    # loop is not repetitive. Bright, uplifting I - V - vi - IV in C with a
-    # driving beat and a catchy lead hook.
+    # Bright, high-pitched verse/chorus in C. Verse chord stabs are high; the
+    # chorus soars higher. The lead lives in the C6-G6 register.
     sections = [
-        # Verse (C - G - Am - F), lead hook A.
-        make_rhythm_bar(0.0, 2.5, "C2", "C3",
-                        [("C4", 0.06), ("E4", 0.06), ("G4", 0.05), ("B4", 0.04)],
-                        [(0.0, "E5", 0.11), (0.5, "G5", 0.11), (1.0, "C6", 0.10),
-                         (1.5, "G5", 0.10), (2.0, "E5", 0.09)]),
-        make_rhythm_bar(2.5, 2.5, "G2", "G3",
-                        [("G4", 0.06), ("B4", 0.06), ("D5", 0.05), ("F5", 0.04)],
-                        [(2.5, "D5", 0.10), (3.0, "B5", 0.10), (3.5, "G5", 0.09),
-                         (4.0, "D6", 0.09), (4.5, "B5", 0.08)]),
-        make_rhythm_bar(5.0, 2.5, "A1", "A2",
-                        [("A3", 0.06), ("C4", 0.06), ("E4", 0.05), ("G4", 0.04)],
-                        [(5.0, "C5", 0.10), (5.5, "E5", 0.10), (6.0, "A5", 0.09),
-                         (6.5, "E5", 0.09), (7.0, "C6", 0.08)]),
-        make_rhythm_bar(7.5, 2.5, "F2", "F3",
-                        [("F4", 0.06), ("A4", 0.06), ("C5", 0.05), ("E5", 0.04)],
-                        [(7.5, "A5", 0.10), (8.0, "C6", 0.10), (8.5, "F5", 0.09),
-                         (9.0, "A5", 0.09), (9.5, "C6", 0.08)]),
-        # Chorus (C - Am - F - G), lead hook B (higher, more active).
-        make_rhythm_bar(10.0, 2.5, "C2", "C3",
-                        [("C4", 0.07), ("E4", 0.07), ("G4", 0.06), ("B4", 0.05)],
-                        [(10.0, "G5", 0.11), (10.5, "C6", 0.11), (11.0, "E6", 0.10),
-                         (11.5, "C6", 0.10), (12.0, "G5", 0.09)]),
-        make_rhythm_bar(12.5, 2.5, "A1", "A2",
-                        [("A3", 0.07), ("C4", 0.07), ("E4", 0.06), ("G4", 0.05)],
-                        [(12.5, "E5", 0.10), (13.0, "A5", 0.10), (13.5, "C6", 0.09),
-                         (14.0, "A5", 0.09), (14.5, "E6", 0.08)]),
-        make_rhythm_bar(15.0, 2.5, "F2", "F3",
-                        [("F4", 0.07), ("A4", 0.07), ("C5", 0.06), ("E5", 0.05)],
-                        [(15.0, "A5", 0.10), (15.5, "F5", 0.10), (16.0, "C6", 0.09),
-                         (16.5, "A5", 0.09), (17.0, "F5", 0.08)]),
-        make_rhythm_bar(17.5, 2.5, "G2", "G3",
-                        [("G4", 0.07), ("B4", 0.07), ("D5", 0.06), ("F5", 0.05)],
-                        [(17.5, "B5", 0.10), (18.0, "D6", 0.10), (18.5, "G5", 0.09),
-                         (19.0, "B5", 0.09), (19.5, "D6", 0.08)]),
+        # Verse (C - G - Am - F): high stabs + sparkling lead.
+        make_rhythm_bar(0.0, 2.5, "C3", "C4",
+                        [("C5", 0.045), ("E5", 0.045), ("G5", 0.04), ("B5", 0.035)],
+                        [(0.0, "G6", 0.085), (0.5, "E6", 0.085), (1.0, "C7", 0.08),
+                         (1.5, "G6", 0.08), (2.0, "E6", 0.07)]),
+        make_rhythm_bar(2.5, 2.5, "G3", "G4",
+                        [("G5", 0.045), ("B5", 0.045), ("D6", 0.04), ("F6", 0.035)],
+                        [(2.5, "D6", 0.08), (3.0, "B6", 0.08), (3.5, "G6", 0.07),
+                         (4.0, "D7", 0.07), (4.5, "B6", 0.065)]),
+        make_rhythm_bar(5.0, 2.5, "A2", "A3",
+                        [("A4", 0.04), ("C5", 0.04), ("E5", 0.035), ("G5", 0.03)],
+                        [(5.0, "C6", 0.075), (5.5, "E6", 0.075), (6.0, "A6", 0.07),
+                         (6.5, "E6", 0.07), (7.0, "C7", 0.06)]),
+        make_rhythm_bar(7.5, 2.5, "F3", "F4",
+                        [("F5", 0.045), ("A5", 0.045), ("C6", 0.04), ("E6", 0.035)],
+                        [(7.5, "A6", 0.08), (8.0, "C7", 0.08), (8.5, "F6", 0.07),
+                         (9.0, "A6", 0.07), (9.5, "C7", 0.065)]),
+        # Chorus (C - Am - F - G): higher stabs, soaring lead.
+        make_rhythm_bar(10.0, 2.5, "C3", "C4",
+                        [("C5", 0.05), ("E5", 0.05), ("G5", 0.045), ("B5", 0.04)],
+                        [(10.0, "E7", 0.085), (10.5, "C7", 0.085), (11.0, "G6", 0.08),
+                         (11.5, "C7", 0.08), (12.0, "E7", 0.07)]),
+        make_rhythm_bar(12.5, 2.5, "A2", "A3",
+                        [("A4", 0.045), ("C5", 0.045), ("E5", 0.04), ("G5", 0.035)],
+                        [(12.5, "E6", 0.075), (13.0, "A6", 0.075), (13.5, "C7", 0.07),
+                         (14.0, "A6", 0.07), (14.5, "E7", 0.06)]),
+        make_rhythm_bar(15.0, 2.5, "F3", "F4",
+                        [("F5", 0.05), ("A5", 0.05), ("C6", 0.045), ("E6", 0.04)],
+                        [(15.0, "C7", 0.08), (15.5, "F6", 0.08), (16.0, "A6", 0.07),
+                         (16.5, "C7", 0.07), (17.0, "F6", 0.06)]),
+        make_rhythm_bar(17.5, 2.5, "G3", "G4",
+                        [("G5", 0.05), ("B5", 0.05), ("D6", 0.045), ("F6", 0.04)],
+                        [(17.5, "D7", 0.08), (18.0, "B6", 0.08), (18.5, "G6", 0.07),
+                         (19.0, "B6", 0.07), (19.5, "D7", 0.06)]),
     ]
     for i in range(n):
         for section in sections:
