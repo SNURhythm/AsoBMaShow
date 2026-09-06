@@ -267,6 +267,19 @@ std::string normalizeEntryName(std::string value) {
   return normalized;
 }
 
+// Debug: hex-encode the UTF-8 bytes of a path string so an index-name mismatch
+// (e.g. one side Shift-JIS, the other UTF-8) is visible in the log.
+std::string indexDebugBytes(const std::string &value) {
+  static const char *kHex = "0123456789abcdef";
+  std::string out;
+  out.reserve(value.size() * 2);
+  for (unsigned char c : value) {
+    out.push_back(kHex[c >> 4]);
+    out.push_back(kHex[c & 0xf]);
+  }
+  return out;
+}
+
 bool safeEntryPath(const std::string &name, std::filesystem::path &outPath) {
   if (name.empty() || name.find('\0') != std::string::npos) {
     return false;
@@ -8555,8 +8568,30 @@ bool readFileBounded(const std::filesystem::path &path,
   if (index == nullptr) return false;
   const Entry *entry = findIndexedEntry(*index, innerPath);
   if (entry == nullptr || entry->directory) {
+    // Diagnose: dump the target bytes and every indexed entry under the same
+    // folder (name + bytes) so a name/encoding mismatch is visible on-device
+    // without console access.
+    const std::string targetName = normalizeEntryName(innerPath.generic_string());
+    const std::string targetFolder =
+        innerPath.parent_path().lexically_normal().generic_string();
+    std::ostringstream detail;
+    detail << "Archive entry not found: " << innerPath.generic_string()
+           << " [target bytes=" << indexDebugBytes(targetName)
+           << " folder=" << targetFolder << " entries="
+           << index->entries.size() << "]";
+    for (const Entry &candidate : index->entries) {
+      const std::string candidateName =
+          normalizeEntryName(candidate.path.generic_string());
+      if (targetFolder.empty() ||
+          candidateName.rfind(targetFolder + "/", 0) == 0) {
+        detail << " | " << candidateName << " bytes="
+               << indexDebugBytes(candidateName)
+               << (candidate.directory ? " [dir]"
+                                       : " size=" + std::to_string(candidate.size));
+      }
+    }
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive entry not found: " + innerPath.generic_string();
+      *errorMessage = detail.str();
     }
     return false;
   }
