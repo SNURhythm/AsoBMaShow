@@ -1217,23 +1217,37 @@ std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return std::nullopt;
   }
+  // Archive chart rows are stored under the virtual path
+  // archivePath/innerPath, normalized by StoredPathText the same way as the
+  // archive path itself. Count them with a single bounded range scan on the
+  // path PRIMARY KEY (path >= prefix AND path < upper) instead of a LIKE scan
+  // that SQLite cannot index-seek.
+  std::string prefix = chart_storage_identity::StoredPathText(path);
+  prefix += std::filesystem::path::preferred_separator;
+  const std::string upper = sqliteLexicographicSuccessor(prefix);
+
+  std::string sql = "SELECT COUNT(*) FROM chart_meta WHERE path >= ? ";
+  if (!upper.empty()) {
+    sql += "AND path < ? ";
+  }
+
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(
-          impl_->database(), "SELECT path FROM chart_meta", statement,
-          "counting archive chart rows", logSqlErrorText)) {
+          impl_->database(), sql, statement, "counting archive chart rows",
+          logSqlErrorText)) {
     return std::nullopt;
   }
-  int count = 0;
-  const auto target = path.lexically_normal();
-  int stepResult = SQLITE_OK;
-  while ((stepResult = sqlite3_step(statement.get())) == SQLITE_ROW) {
-    const auto chartPath =
-        storedPathFromDatabase(sqliteColumnString(statement.get(), 0));
-    if (pathIsInsideDirectory(chartPath, target)) {
-      ++count;
-    }
+  int bindIndex = 1;
+  bindSqliteText(statement.get(), bindIndex++, prefix);
+  if (!upper.empty()) {
+    bindSqliteText(statement.get(), bindIndex++, upper);
   }
-  if (stepResult != SQLITE_DONE) {
+  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+    logSqlError("counting archive chart rows", impl_->database());
+    return std::nullopt;
+  }
+  const int count = sqlite3_column_int(statement.get(), 0);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("counting archive chart rows", impl_->database());
     return std::nullopt;
   }

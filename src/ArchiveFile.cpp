@@ -525,10 +525,11 @@ std::filesystem::path gArchiveIndexCacheDirectory;
 // of rebuilding it (a large library can otherwise index the same archive from
 // the scan and the prefetch/read workers at once).
 std::mutex gIndexBuildMutex;
-std::unordered_map<std::string, std::condition_variable> gIndexBuildInFlight;
+std::condition_variable gIndexBuildCv;
 std::unordered_map<std::string, bool> gIndexBuildActive;
 std::unordered_map<std::string, bool> gIndexBuildDone;
 std::unordered_map<std::string, bool> gIndexBuildFailed;
+std::unordered_map<std::string, std::uint32_t> gIndexBuildWaiters;
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
@@ -553,7 +554,13 @@ public:
     gIndexBuildActive[key_] = false;
     gIndexBuildDone[key_] = true;
     gIndexBuildFailed[key_] = !success;
-    gIndexBuildInFlight[key_].notify_all();
+    gIndexBuildCv.notify_all();
+    if (gIndexBuildWaiters[key_] == 0) {
+      gIndexBuildActive.erase(key_);
+      gIndexBuildDone.erase(key_);
+      gIndexBuildFailed.erase(key_);
+      gIndexBuildWaiters.erase(key_);
+    }
     finished_ = true;
   }
 
@@ -3789,13 +3796,19 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
       gIndexBuildFailed[key] = false;
       break;
     }
-    auto &inflightCv = gIndexBuildInFlight[key];
+    ++gIndexBuildWaiters[key];
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     gSingleFlightWaiterCountForTesting.fetch_add(1, std::memory_order_relaxed);
 #endif
-    inflightCv.wait(buildLock, [&] { return !gIndexBuildActive[key]; });
+    gIndexBuildCv.wait(buildLock, [&] { return !gIndexBuildActive[key]; });
     const bool builtOk = gIndexBuildDone[key];
     const bool builtFailed = gIndexBuildFailed[key];
+    if (--gIndexBuildWaiters[key] == 0 && !gIndexBuildActive[key]) {
+      gIndexBuildActive.erase(key);
+      gIndexBuildDone.erase(key);
+      gIndexBuildFailed.erase(key);
+      gIndexBuildWaiters.erase(key);
+    }
     buildLock.unlock();
     std::lock_guard<std::mutex> cacheLock(gIndexMutex);
     const auto cacheIt = gIndexCache.find(key);
@@ -7582,7 +7595,7 @@ void clearArchiveIndexCacheForTesting() {
   }
   {
     std::lock_guard<std::mutex> lock(gIndexBuildMutex);
-    gIndexBuildInFlight.clear();
+    gIndexBuildWaiters.clear();
     gIndexBuildActive.clear();
     gIndexBuildDone.clear();
     gIndexBuildFailed.clear();
