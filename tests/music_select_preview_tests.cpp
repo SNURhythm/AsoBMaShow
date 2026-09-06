@@ -247,6 +247,31 @@ void testIdleWithoutDefaultStaysSilent() {
   expect(port.takeCalls().empty(),
          "no default BGM path and no preview request plays nothing");
 }
+
+void testSilenceSuppressesReCueFromLaterDefaultSwitch() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  RecordingPreviewPort port;
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1),
+         "the default select BGM starts with the select screen");
+  service.silence();
+  expect(port.waitForStopCount(1),
+         "silence stops the default BGM");
+  service.switchTo(std::nullopt);
+  // A racing switchTo(nullopt) after a launch/pause began must not re-cue the
+  // default BGM (it previously did, bleeding the select BGM into gameplay).
+  service.resumeDefaultBgm();
+  expect(port.waitForPlayCount(2),
+         "resumeDefaultBgm after silence replays the select BGM");
+  service.silence();
+  expect(port.waitForStopCount(2),
+         "re-silencing stops the resumed BGM");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 2 && calls[0].path == defaultBgm &&
+             calls[1].path == defaultBgm && calls[1].loop,
+         "only the initial default and the explicit resume play; the racing "
+         "switchTo stayed suppressed");
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -259,6 +284,7 @@ int main(int argc, char **argv) {
   testSilenceStopsWithoutStartingDefaultBgm();
   testResumeAfterSilenceRestartsDefaultBgm();
   testIdleWithoutDefaultStaysSilent();
+  testSilenceSuppressesReCueFromLaterDefaultSwitch();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_preview_tests", failures,
       "music-select preview assertion(s) failed",

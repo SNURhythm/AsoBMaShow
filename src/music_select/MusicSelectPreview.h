@@ -85,7 +85,10 @@ public:
   // Stop whatever the preview worker is playing and stay silent. Unlike
   // switchTo(nullopt), silence() does NOT start the default select BGM; the
   // scene uses it for pause and error/teardown, where Beatoraja's MusicSelector
-  // stops audio entirely instead of resuming the select BGM.
+  // stops audio entirely instead of resuming the select BGM. Silence is sticky:
+  // every later switchTo()/resumeDefaultBgm() is ignored (so a racing
+  // navigation request cannot re-cue the BGM after a launch or pause begins)
+  // until resumeDefaultBgm() lifts it.
   void silence();
 
   // Resume the looping default select BGM after silence() (e.g. when the scene

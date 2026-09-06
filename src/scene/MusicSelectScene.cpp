@@ -1981,6 +1981,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           defer([this]() {
             launching_ = false;
             hideDecideOverlay();
+            // The launch aborted before gameplay began; lift the silence that
+            // launchSelected set so the selector's preview/BGM can play again.
+            if (previewAudio_) previewAudio_->resumeDefaultBgm();
             return true;
           }, 0, true);
         };

@@ -40,18 +40,30 @@ public:
   void switchTo(std::optional<std::filesystem::path> path) {
     {
       std::lock_guard lock(mutex_);
+      // While the scene is silenced (paused, launching, or in error) no
+      // navigation/preview request may re-cue the default BGM. The scene lifts
+      // suppression explicitly on resume.
+      if (suppressed_) return;
       if (requestedPath_ == path) return;
       if (loadCancellation_) {
         loadCancellation_->store(true, std::memory_order_release);
       }
       requestedPath_ = std::move(path);
       ++requestSerial_;
+      audio::diag::SelectAudioLog(
+          std::string("[bgm] svc switchTo serial=") +
+          std::to_string(requestSerial_) + " path=" +
+          (requestedPath_.has_value() ? requestedPath_->string() : "<default>"));
     }
     condition_.notify_one();
   }
 
 void silence() {
     std::lock_guard lock(mutex_);
+    // Silence is sticky: it suppresses every later play request (including a
+    // racing switchTo(nullopt)/resumeDefaultBgm) until the scene resumes, so
+    // the select BGM can never be re-cued after a launch/pause begins.
+    suppressed_ = true;
     // An empty path is distinct from the nullopt "play default" state, so the
     // worker maps an empty target to a stop with no subsequent default playback.
     const std::filesystem::path emptyPath;
@@ -61,6 +73,8 @@ void silence() {
     }
     requestedPath_ = emptyPath;
     ++requestSerial_;
+    audio::diag::SelectAudioLog(std::string("[bgm] svc silence serial=") +
+                                std::to_string(requestSerial_));
     condition_.notify_one();
   }
 
@@ -68,12 +82,16 @@ void resumeDefaultBgm() {
     std::lock_guard lock(mutex_);
     // Returning to the nullopt state asks the worker to play the looping
     // default select BGM again.
+    suppressed_ = false;
     if (!requestedPath_.has_value()) return;
     if (loadCancellation_) {
       loadCancellation_->store(true, std::memory_order_release);
     }
     requestedPath_.reset();
     ++requestSerial_;
+    audio::diag::SelectAudioLog(
+        std::string("[bgm] svc resumeDefault serial=") +
+        std::to_string(requestSerial_));
     condition_.notify_one();
   }
 
@@ -85,6 +103,7 @@ private:
     while (!stop.stop_requested()) {
       std::optional<std::filesystem::path> requested;
       std::uint64_t serial = 0;
+      bool suppressed = false;
       std::shared_ptr<std::atomic_bool> cancellation;
       {
         std::unique_lock lock(mutex_);
@@ -94,6 +113,7 @@ private:
         if (stop.stop_requested()) break;
         serial = requestSerial_;
         requested = requestedPath_;
+        suppressed = suppressed_;
         cancellation = std::make_shared<std::atomic_bool>(false);
         loadCancellation_ = cancellation;
       }
@@ -101,7 +121,7 @@ private:
                                   std::to_string(serial));
 
       const std::filesystem::path target = requested.value_or(defaultPath_);
-      if (target.empty()) {
+      if (suppressed || target.empty()) {
         port_.stop();
         playingPath.reset();
         observedSerial = serial;
@@ -142,6 +162,7 @@ private:
   std::condition_variable condition_;
   std::optional<std::filesystem::path> requestedPath_;
   std::uint64_t requestSerial_ = 0;
+  bool suppressed_ = false;
   std::shared_ptr<std::atomic_bool> loadCancellation_;
   std::jthread worker_;
 };
