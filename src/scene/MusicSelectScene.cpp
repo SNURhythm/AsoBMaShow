@@ -754,6 +754,14 @@ void MusicSelectScene::selectedBarMoved() {
     // Leaving a song folder returns to the looping select BGM: pinned
     // Beatoraja drops the preview but the selector keeps the SELECT sound
     // running, so route through the default rather than going silent.
+    const auto current = previewSelection(
+        snapshot, context.settings.archiveChartPreviewEnabled);
+    audio::diag::SelectAudioLog(
+        std::string("[bgm] scene selectedBarMoved stopAudio") +
+        (current.has_value()
+             ? (" folder=" + current->folder.string()) +
+                   (" preview=" + current->previewPath.string())
+             : " selection=nullopt"));
     previewAudio_->switchTo(std::nullopt);
   }
 
@@ -2887,6 +2895,9 @@ void MusicSelectScene::update(float) {
       songBarChangeMicros_);
   if (auto preview = previewController_.update(elapsedMicros(), launching_);
       preview && previewAudio_) {
+    audio::diag::SelectAudioLog(
+        std::string("[bgm] scene update switchTo path=") +
+        (preview->path.has_value() ? preview->path->string() : "<default>"));
     previewAudio_->switchTo(std::move(preview->path));
   }
   updateRanking();
