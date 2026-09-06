@@ -238,10 +238,9 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
   }
   const std::filesystem::path fsPath(displayPath);
   // Bundle-aware read first: SDL_RWFromFile resolves relative asset paths
-  // against the app bundle on iOS/macOS, so the bundled `assets/*.wav`
-  // defaults that libsndfile's plain sf_open cannot find load here. Archive
-  // (virtual) paths are excluded because their synthetic path form must stay
-  // with the archive reader.
+  // against the app bundle on iOS/macOS, and reads Files-app storage files that
+  // plain fopen cannot (the same SDL read images use). Archive (virtual) paths
+  // are excluded because their synthetic form must stay with the archive reader.
   if (!archive_file::isVirtualPath(fsPath)) {
     if (auto bytes =
             readBundleAwareAudioBytes(displayPath, limits.maximumEncodedBytes)) {
@@ -254,6 +253,25 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
       buffer.clear();
       fileInfo = {};
     }
+    // The SDL read missed (e.g. a path the bundle/filesystem layer cannot open
+    // with SDL_RWFromFile). Fall back to readFileBounded, which on iOS reads
+    // through the same SDL-backed path and on other platforms through ifstream;
+    // decode the bytes from memory so we never rely on sf_open's plain fopen
+    // (which cannot open iOS Files-app storage).
+    std::string readError;
+    std::vector<unsigned char> bytes;
+    if (archive_file::readFileBounded(fsPath, bytes,
+                                      limits.maximumEncodedBytes,
+                                      &readError, stop) &&
+        !bytes.empty() &&
+        decodeAudioBytesToPCMBounded(displayPath, bytes, buffer, fileInfo,
+                                     isCancelled,
+                                     limits.maximumPcmSamples) &&
+        !stop.stop_requested() && !isCancelled) {
+      return true;
+    }
+    buffer.clear();
+    fileInfo = {};
   }
   // Fallback: archives, user files with absolute paths, and relative paths the
   // bundle lookup genuinely cannot see keep using the existing bounded decode.

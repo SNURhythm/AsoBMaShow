@@ -1015,7 +1015,10 @@ bool readRegularFileBounded(const std::filesystem::path &path,
     }
   }
 
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  // iOS Files-app storage (and the bundle resource tree) is not openable with
+  // plain fopen/ifstream; SDL_RWFromFile is the read that reaches those. Use it
+  // as a fallback on iOS/Android when the ordinary stream cannot open the file.
   const std::string assetPath = path.generic_string();
   UniqueResource<SDL_RWops, SDL_RWclose> input(
       SDL_RWFromFile(assetPath.c_str(), "rb"));

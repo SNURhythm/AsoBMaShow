@@ -1178,6 +1178,7 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
       for (int count = std::abs(motion.rowDelta); count > 0; --count) {
         bars_.move(increase, direction, deadline);
       }
+      if (systemSound_) systemSound_->playScratch();
       selectedBarMoved();
     }
     return true;

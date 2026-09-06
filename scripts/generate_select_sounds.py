@@ -107,50 +107,67 @@ def swept_tone(n_samples, f0, f1, amp, harmonics=1, vib_depth=0.0, vib_rate=0.0)
 
 
 # ---------------------------------------------------------------- select BGM
-# A ~10 s menu piece with a smooth jazz-lite chord progression. Each chord is
-# voiced across the bass, mid, and top and given a soft attack/release so chord
-# changes and the loop point stay click-free. No tremolo, no detune beating.
+# A ~10 s menu piece that is bright and energetic: an uplifting I-vi-IV-V
+# progression in a higher register, a driving eighth-note bass pulse, and a
+# brisk upper-voice melody. No tremolo or detune beating.
 
 EQ = {
-    "A1": 55.00, "C1": 32.70, "C2": 65.41, "D2": 73.42, "F2": 87.31,
-    "G2": 98.00, "A2": 110.00, "B2": 123.47,
-    "C3": 130.81, "D3": 146.83,
-    "E3": 164.81, "F3": 174.61, "G3": 196.00, "A3": 220.00, "B3": 246.94,
+    "A1": 55.00, "C1": 32.70, "C2": 65.41, "D2": 73.42, "E2": 82.41,
+    "F2": 87.31, "G2": 98.00, "A2": 110.00, "B2": 123.47,
+    "C3": 130.81, "D3": 146.83, "E3": 164.81, "F3": 174.61, "G3": 196.00,
+    "A3": 220.00, "B3": 246.94,
     "C4": 261.63, "D4": 293.66, "E4": 329.63, "F4": 349.23, "G4": 392.00,
     "A4": 440.00, "B4": 493.88, "C5": 523.25, "D5": 587.33, "E5": 659.26,
+    "F5": 698.46, "G5": 783.99, "A5": 880.00, "B5": 987.77, "C6": 1046.50,
+    "D6": 1174.66, "E6": 1318.51,
 }
 
 SELECT_SECONDS = 10
+# ~120 BPM -> 0.5 s/beat -> 2.5 s per bar (4 bars in 10 s).
+BEAT = 0.5
 
 
-def make_chord(start_sec, duration_sec, bass, voices, melody):
-    """A chord: soft bass + mid voices, plus a plucked melody on top."""
+def make_chord(start_sec, duration_sec, bass, bass_high, voices, melody):
+    """A bright, energetic bar: chord bed + driving eighth-note bass pulse +
+    a brisk plucked upper melody."""
     n = SR * SELECT_SECONDS
     out = [0.0] * n
     onset = int(start_sec * SR)
     end = min(n, onset + int(duration_sec * SR))
 
-    def chord_env(t, t_end):
-        attack = min(1.0, t / 0.05)
-        release = min(1.0, (t_end - t) / 0.15)
+    def bar_env(t, t_end):
+        attack = min(1.0, t / 0.03)
+        release = min(1.0, (t_end - t) / 0.10)
         return max(0.0, attack * release)
 
     t_end = duration_sec
+    # Chord bed (brighter, higher register).
     for i in range(onset, end):
         t = (i - onset) / SR
-        env = chord_env(t, t_end)
+        env = bar_env(t, t_end)
         s = 0.0
-        s += 0.16 * math.sin(2 * math.pi * EQ[bass] * t)
         for f, amp in voices:
             s += amp * math.sin(2 * math.pi * EQ[f] * t)
         out[i] += s * env
-    # Plucked melody notes on top.
+    # Driving eighth-note bass: root on downbeats, fifth/octave on offbeats.
+    step = BEAT / 2
+    for beat in range(int(duration_sec / step)):
+        when = start_sec + beat * step
+        freq = bass if beat % 2 == 0 else bass_high
+        on = int(when * SR)
+        for i in range(on, min(end, on + int(step * SR))):
+            t = (i - on) / SR
+            attack = min(1.0, t / 0.006)
+            release = min(1.0, (step - t) / 0.06)
+            env = max(0.0, attack * release)
+            out[i] += 0.20 * math.sin(2 * math.pi * EQ[freq] * t) * env
+    # Brisk plucked melody on top (brighter register).
     for m_start, note, amp in melody:
         m_onset = onset + int(m_start * SR)
         for i in range(m_onset, end):
             t = (i - m_onset) / SR
-            attack = min(1.0, t / 0.015)
-            release = min(1.0, (0.45 - t) / 0.12)
+            attack = min(1.0, t / 0.008)
+            release = min(1.0, (0.22 - t) / 0.07)
             env = max(0.0, attack * release)
             out[i] += amp * math.sin(2 * math.pi * EQ[note] * t) * env
     return out
@@ -159,21 +176,24 @@ def make_chord(start_sec, duration_sec, bass, voices, melody):
 def make_select():
     n = SR * SELECT_SECONDS
     out = [0.0] * n
-    # Cool, mellow progression (Cmaj9 -> Am9 -> Fmaj7 -> Dm9) with light
-    # extensions and a gentle melody, resolving so the loop returns to Cmaj9.
+    # Uplifting I - vi - IV - V in C, in a bright register, driving bass.
     sections = [
-        make_chord(0.0, 2.5, "C2",
-                   [("C3", 0.10), ("G3", 0.08), ("B3", 0.06), ("E4", 0.05), ("D4", 0.04)],
-                   [(0.2, "E4", 0.16), (0.9, "G4", 0.12), (1.6, "B4", 0.10), (2.1, "D5", 0.09)]),
-        make_chord(2.5, 2.5, "A1",
-                   [("A2", 0.10), ("E3", 0.08), ("C4", 0.06), ("G4", 0.05), ("B3", 0.05)],
-                   [(2.7, "C4", 0.12), (3.4, "E4", 0.12), (4.1, "G4", 0.10), (4.6, "B4", 0.08)]),
-        make_chord(5.0, 2.5, "F2",
-                   [("F3", 0.10), ("A3", 0.08), ("C4", 0.07), ("E4", 0.06)],
-                   [(5.2, "A4", 0.12), (5.9, "C5", 0.10), (6.6, "E5", 0.08), (7.1, "A4", 0.08)]),
-        make_chord(7.5, 2.5, "D2",
-                   [("D3", 0.10), ("A3", 0.08), ("C4", 0.06), ("F4", 0.05), ("E4", 0.05)],
-                   [(7.7, "F4", 0.10), (8.4, "A4", 0.10), (9.1, "C5", 0.08), (9.5, "D5", 0.08)]),
+        make_chord(0.0, 2.5, "C2", "C3",
+                   [("C4", 0.07), ("E4", 0.07), ("G4", 0.06), ("B4", 0.05)],
+                   [(0.0, "C5", 0.11), (0.5, "E5", 0.11), (1.0, "G5", 0.10),
+                    (1.5, "C6", 0.09), (2.0, "B5", 0.08)]),
+        make_chord(2.5, 2.5, "A1", "A2",
+                   [("A3", 0.07), ("C4", 0.07), ("E4", 0.06), ("G4", 0.05)],
+                   [(2.5, "E5", 0.10), (3.0, "C5", 0.10), (3.5, "A4", 0.09),
+                    (4.0, "E5", 0.09), (4.5, "G5", 0.08)]),
+        make_chord(5.0, 2.5, "F2", "F3",
+                   [("F4", 0.07), ("A4", 0.07), ("C5", 0.06), ("E5", 0.05)],
+                   [(5.0, "A5", 0.10), (5.5, "C6", 0.10), (6.0, "F5", 0.09),
+                    (6.5, "A5", 0.09), (7.0, "C6", 0.08)]),
+        make_chord(7.5, 2.5, "G2", "G3",
+                   [("G4", 0.07), ("B4", 0.07), ("D5", 0.06), ("F5", 0.05)],
+                   [(7.5, "B5", 0.10), (8.0, "D6", 0.10), (8.5, "G5", 0.09),
+                    (9.0, "B5", 0.09), (9.5, "G5", 0.08)]),
     ]
     for i in range(n):
         for section in sections:
