@@ -691,12 +691,25 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   repositoryMetadata_ = MusicSelectRepositoryProjection::loadMetadata(
       *chartSession_,
       long_note_mode::valueFromId(context.settings.selectedLnMode));
+  // Full chart record list for root-folder aggregate statistics (beatoraja
+  // computes a FolderBar's clear-lamp/rank counts from its direct songs).
+  allChartRecords_.clear();
+  {
+    ChartMetaQuery query;
+    query.selectedLongNoteMode =
+        long_note_mode::valueFromId(context.settings.selectedLnMode);
+    chartSession_->QueryChartMeta(query, allChartRecords_);
+  }
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
                        context.settings.skinDifficultyFilterName,
                    .sortId = context.settings.skinSortId});
   bars_.refresh(MusicSelectRepositoryProjection{}.projectRoot(
-      repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
+      repositoryMetadata_, searchHistory_.entries(), libraryRevision_,
+      allChartRecords_, [this](const bms_parser::ChartMeta &meta, int mode) {
+        return scoreCache_.bestFor(meta, mode);
+      },
+      context.settings.skinModeFilterName));
   if (preserveDirectory) {
     for (const auto &directoryId : previous.directory) {
       const auto current = bars_.snapshot();

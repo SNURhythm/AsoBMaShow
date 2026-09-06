@@ -266,7 +266,12 @@ const MusicSelectBar *MusicSelectProjection::find(
 MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
     const MusicSelectRepositoryMetadata &metadata,
     std::span<const std::string> searches,
-    std::uint64_t repositoryRevision) const {
+    std::uint64_t repositoryRevision,
+    std::span<const ChartMetaRecord> records,
+    std::function<std::optional<ScoreBestSnapshot>(const bms_parser::ChartMeta &,
+                                                   int)>
+        scoreFor,
+    std::string_view modeFilter) const {
   MusicSelectProjection result{.repositoryRevision = repositoryRevision};
   std::vector<std::filesystem::path> physicalRoots;
   for (const auto &entry : metadata.entries) {
@@ -282,6 +287,53 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
     });
     physicalRoots.push_back(path.lexically_normal());
   }
+  // Beatoraja computes a FolderBar's clear-lamp/rank aggregates from its
+  // direct songs whenever the bar is displayed (BarManager updateFolderStatus).
+  // The root folder bars are otherwise lazy (childrenLoaded=false), so compute
+  // their aggregates here so the select skin's folder statistics show correct
+  // values without opening the folder.
+  const auto aggregateRootFolder =
+      [&](MusicSelectBar &folder,
+          const std::filesystem::path &rootPath) {
+        std::array<int, 11> lampCounts{};
+        std::array<int, 28> rankCounts{};
+        for (const auto &record : records) {
+          if (record.unavailable || record.meta.BmsPath.empty()) {
+            continue;
+          }
+          const std::filesystem::path folder =
+              !record.meta.Folder.empty()
+                  ? record.meta.Folder.lexically_normal()
+                  : record.meta.BmsPath.parent_path().lexically_normal();
+          if (folder != rootPath) {
+            continue;
+          }
+          if (!modeMatches(modeFilter, songMode(record.meta))) {
+            continue;
+          }
+          const auto best =
+              scoreFor ? scoreFor(record.meta, 0) : std::nullopt;
+          const int lamp =
+              best ? beatorajaClearType(best->clearType) : 0;
+          ++lampCounts[static_cast<std::size_t>(lamp)];
+          int rank = 0;
+          if (best && best->maxScore > 0) {
+            rank = std::min(27, best->score * 27 / best->maxScore);
+          }
+          ++rankCounts[static_cast<std::size_t>(rank)];
+        }
+        folder.presentation.folderLampCounts = std::move(lampCounts);
+        folder.presentation.folderRankCounts = std::move(rankCounts);
+        const auto firstLamp =
+            std::ranges::find_if(folder.presentation.folderLampCounts,
+                                 [](int count) { return count > 0; });
+        folder.presentation.lamp =
+            firstLamp == folder.presentation.folderLampCounts.end()
+                ? 0
+                : static_cast<int>(
+                      std::distance(folder.presentation.folderLampCounts.begin(),
+                                    firstLamp));
+      };
   for (const auto &path : physicalRoots) {
     const std::string title = path.filename().empty()
                                   ? fspath_to_utf8(path)
@@ -298,6 +350,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
         .sortable = true,
         .childrenLoaded = false,
     };
+    aggregateRootFolder(folder, path);
     result.root.push_back(folder.id);
     result.bars.push_back(std::move(folder));
   }
