@@ -201,6 +201,18 @@ public:
       if (isDefault) defaultHandle_.reset();
       return false;
     }
+    // The play command was just enqueued on the mixer. If the scene was paused
+    // or a launch started while we were loading (cancellation set), the enqueued
+    // command could otherwise survive the backend stop and resume when gameplay
+    // restarts the audio. Stop it immediately so the select BGM never bleeds
+    // into gameplay.
+    if (cancellation->load(std::memory_order_acquire) ||
+        stop.stop_requested()) {
+      (void)audio_->stopSkinSound(handle);
+      (void)audio_->disposeSkinSound(handle);
+      if (isDefault) defaultHandle_.reset();
+      return false;
+    }
     playingHandle_ = handle;
     playingKey_ = key;
     return true;
@@ -619,6 +631,7 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  audio::diag::SelectAudioLog("[bgm] scene onPause");
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
   skinTouchGesture_.cancel();
@@ -636,6 +649,7 @@ void MusicSelectScene::onPause() {
 }
 
 void MusicSelectScene::onResume() {
+  audio::diag::SelectAudioLog("[bgm] scene onResume");
   launching_ = false;
   hideDecideOverlay();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -1861,6 +1875,7 @@ bool MusicSelectScene::reusePreloadedChart(
 }
 
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
+  audio::diag::SelectAudioLog("[bgm] launchSelected");
   if (launching_) return;
   const auto snapshot = bars_.snapshot();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
@@ -1880,6 +1895,11 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   }
   if (systemSound_) systemSound_->playDecide();
   showDecideOverlay(record);
+  // Stop the select BGM the moment Start is pressed so it does not play over
+  // the decide overlay or bleed into gameplay. The preview worker stays
+  // silenced until the scene is resumed back to the selector.
+  previewController_.reset();
+  if (previewAudio_) previewAudio_->silence();
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   const auto tableContext = musicSelectTableContextForLaunch(snapshot);
