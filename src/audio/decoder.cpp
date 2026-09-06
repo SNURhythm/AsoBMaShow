@@ -320,8 +320,15 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
                                        &errorMessage, stop)) {
       SDL_Log("Failed to read archived audio file %s: %s",
               path_t_to_utf8(filePath).c_str(), errorMessage.c_str());
+      audio::diag::SelectAudioLog(
+          std::string("[dec] archive entry read FAILED: ") +
+          path_t_to_utf8(filePath) +
+          (errorMessage.empty() ? "" : (": " + errorMessage)));
       return false;
     }
+    audio::diag::SelectAudioLog(
+        std::string("[dec] archive entry read ok bytes=") +
+        std::to_string(bytes.size()) + " for " + path_t_to_utf8(filePath));
     MemoryAudioFile memoryFile{
         .data = bytes.data(),
         .size = static_cast<sf_count_t>(bytes.size()),
