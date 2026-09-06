@@ -128,6 +128,25 @@ StopSessionForTransition(Lifecycle &lifecycle, std::string_view context,
   });
 }
 
+// Like StopSessionForTransition but keeps the audio device running, so voices
+// that live outside the jukebox session (the select scene's Bus::System BGM /
+// preview / SE on the shared AudioWrapper) keep playing while a chart is
+// staged. Safe only when the caller has established that no jukebox-owned
+// audio is active (see loadChartPreservingDevice).
+template <typename Lifecycle, typename WakeScheduler>
+[[nodiscard]] audio::playback::BackendOperationResult
+StopSessionForTransitionKeepDevice(Lifecycle &lifecycle,
+                                   std::string_view context,
+                                   SessionState &state,
+                                   WakeScheduler &&wakeScheduler) {
+  return RunAfterConfirmedStopKeepDevice(lifecycle, context, [&] {
+    state.isPlaying.store(false, std::memory_order_release);
+    state.schedulerActive.store(false, std::memory_order_release);
+    state.stopwatch.pause();
+    std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+  });
+}
+
 template <typename Lifecycle, typename WakeScheduler>
 [[nodiscard]] audio::playback::BackendOperationResult
 StopPlayback(Lifecycle &lifecycle, std::string_view context,

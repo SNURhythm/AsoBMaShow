@@ -1193,6 +1193,50 @@ void testSystemOnlyMixPlaysSystemWhileSkippingBgmKeysoundAndScheduled() {
           "full-scope mix resumes the frozen bgm voice from its paused position");
 }
 
+void testSystemVoiceActivityCountersTrackNonSystemOwnership() {
+  SoundData systemSound;
+  systemSound.channels = 1;
+  systemSound.outputData = {1000, 1000, 1000, 1000};
+  systemSound.outputFrameCount = 4;
+  SoundData bgm;
+  bgm.channels = 1;
+  bgm.outputData = {1000, 1000, 1000, 1000};
+  bgm.outputFrameCount = 4;
+
+  AudioCallbackState state;
+  require(state.activeNonSystemVoices.load(std::memory_order_relaxed) == 0 &&
+              state.scheduledNonSystemSounds.load(std::memory_order_relaxed) ==
+                  0,
+          "a fresh callback state owns no non-System audio");
+
+  require(audio::playback::AppendActiveSound(state, &systemSound,
+                                             audio::Bus::System, 0),
+          "a system voice enters the mixer");
+  require(state.activeNonSystemVoices.load(std::memory_order_relaxed) == 0,
+          "a System voice does not count as non-System ownership");
+
+  require(audio::playback::AppendActiveSound(state, &bgm, audio::Bus::Bgm, 0),
+          "a BGM voice enters the mixer");
+  require(state.activeNonSystemVoices.load(std::memory_order_relaxed) == 1,
+          "a BGM voice counts as non-System ownership");
+
+  audio::playback::RemoveSound(state, &bgm);
+  require(state.activeNonSystemVoices.load(std::memory_order_relaxed) == 0,
+          "removing the BGM voice clears non-System ownership");
+
+  require(audio::playback::InsertScheduledSound(
+              state, {.soundData = &bgm, .bus = audio::Bus::Bgm}),
+          "a BGM scheduled sound is staged");
+  require(state.scheduledNonSystemSounds.load(std::memory_order_relaxed) == 1,
+          "a staged BGM schedule counts as non-System scheduled ownership");
+
+  audio::playback::ClearCallbackSounds(state);
+  require(state.activeNonSystemVoices.load(std::memory_order_relaxed) == 0 &&
+              state.scheduledNonSystemSounds.load(std::memory_order_relaxed) ==
+                  0,
+          "clearing callback sounds resets the non-System counters");
+}
+
 } // namespace
 
 int main() {
@@ -1349,6 +1393,7 @@ int main() {
     testJukeboxSourceClassificationAndSeekOverlap();
     testSchedulerWaitConvertsChartDeltaToWallTime();
     testSystemOnlyMixPlaysSystemWhileSkippingBgmKeysoundAndScheduled();
+    testSystemVoiceActivityCountersTrackNonSystemOwnership();
 
     return 0;
   } catch (const std::exception &error) {

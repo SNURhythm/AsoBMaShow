@@ -611,8 +611,12 @@ void MusicSelectScene::init() {
           return;
         }
         StartupTiming::instance().mark("preload parse done, jukebox load begins");
-        context.jukebox.stop();
-        (void)context.jukebox.loadChart(*chart, true, cancelled);
+        // Stage the chart without stopping the shared audio device when the
+        // jukebox owns no active playback, so the select BGM/preview playing on
+        // the same AudioWrapper keep playing through the preload. No explicit
+        // jukebox.stop() here: loadChartPreservingDevice tears down any prior
+        // jukebox session itself (and only stops the device when it must).
+        (void)context.jukebox.loadChartPreservingDevice(*chart, true, cancelled);
         if (cancelled.load(std::memory_order_relaxed) ||
             preloadWorker_->superseded(
                 fspath_to_utf8(request.meta.BmsPath))) {

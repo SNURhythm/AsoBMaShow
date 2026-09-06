@@ -1638,9 +1638,32 @@ AudioWrapper::pruneSounds(const std::vector<path_t> &paths) {
   }
 
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-  const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
-  if (!stopped.success) {
-    return stopped;
+  // A chart swap (e.g. the music-select preload) prunes the previous chart's
+  // sounds while only Bus::System voices (select BGM / preview / SE) may be
+  // active. When the callback owns no non-System voices, no staged non-System
+  // schedules, and no realtime reservations in flight, the obsolete chart
+  // SoundData are not referenced by the running callback, so they can be
+  // erased without stopping the device (which would otherwise tear the select
+  // audio down). Otherwise fall back to the full stop so erasures are
+  // quiescent.
+  const auto observed =
+      backend != nullptr
+          ? backend->observeState()
+          : audio::playback::BackendStateObservation{
+                .state = audio::playback::BackendRunState::Stopped};
+  backendState.store(observed.state, std::memory_order_release);
+  const bool callbackOwnsOnlySystem =
+      observed.state == audio::playback::BackendRunState::Running &&
+      callbackState.activeNonSystemVoices.load(std::memory_order_acquire) ==
+          0 &&
+      callbackState.scheduledNonSystemSounds.load(std::memory_order_acquire) ==
+          0 &&
+      realtimeSoundReservations.load(std::memory_order_acquire) == 0;
+  if (!callbackOwnsOnlySystem) {
+    const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
+    if (!stopped.success) {
+      return stopped;
+    }
   }
 
   for (auto indexIt = removedIndices.rbegin(); indexIt != removedIndices.rend();
