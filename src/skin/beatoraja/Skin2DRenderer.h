@@ -9,10 +9,12 @@
 #include "SkinGeneratedTextureRaster.h"
 #include "SyntheticReplayGhostOverlay.h"
 #include "../SkinSafetyPolicy.h"
+#include "../../music_select/MusicSelectTypes.h"
 #include "../../scene/play/SkinGameplayGraphState.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -32,6 +34,7 @@ namespace skin {
 
 class PlaySkinSession;
 class ResultSkinSession;
+class MusicSelectSkinSession;
 class Skin2DRenderer;
 
 // Move-only proof that PlaySkinSession has already opened the matching Lua
@@ -58,6 +61,7 @@ private:
 
   friend class PlaySkinSession;
   friend class ResultSkinSession;
+  friend class MusicSelectSkinSession;
   friend class Skin2DRenderer;
 };
 
@@ -197,6 +201,8 @@ public:
     return {};
   }
   virtual std::int64_t timerProperty(const SkinBuiltinPropertySelector &) = 0;
+  virtual bool setTimerProperty(int, std::int64_t) { return false; }
+  virtual bool setFloatProperty(int, double) { return false; }
   virtual std::span<const SkinProjectedNoteView>
   projectedNotes() const noexcept = 0;
   virtual std::span<const SkinProjectedLongNoteView>
@@ -247,6 +253,14 @@ struct SkinFrameInputs {
   bool markProcessedNotes = false;
   SkinSafetyPolicy safetyPolicy{};
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
+  // Present only for Beatoraja SkinType 5. The SkinSongList object consumes
+  // this immutable selector snapshot while ordinary objects continue through
+  // the shared property bridge.
+  const MusicSelectSongListFrame *musicSelectSongList = nullptr;
+  // Scalable type-5 fonts are prepared from each text value observed during
+  // the preceding frame. The session consumes this only to refresh the
+  // affected atlas; it does not alter property evaluation or draw order.
+  std::function<void(SkinObjectId, std::string_view)> observedTextValue;
 };
 
 [[nodiscard]] constexpr std::size_t skinFrameMaximumCommands(
@@ -299,6 +313,7 @@ struct SkinTextInteractionGeometry {
   SkinObjectId sourceObject = 0;
   std::uint32_t authoredOrdinal = 0;
   AuthoredRect authoredRegion;
+  std::array<float, 4> rgba{1.0F, 1.0F, 1.0F, 1.0F};
   SkinStringWriterId writer{};
   std::string currentValue;
 };
@@ -319,6 +334,19 @@ struct SkinLaneGroupInteractionRegion {
   AuthoredRect authoredRegion;
 };
 
+struct SkinMusicSelectBarInteractionGeometry {
+  std::uint32_t authoredOrdinal = 0;
+  std::size_t row = 0;
+  std::size_t barIndex = 0;
+  AuthoredRect authoredRegion;
+};
+
+struct SkinMusicSelectBarHit {
+  std::uint32_t authoredOrdinal = 0;
+  std::size_t row = 0;
+  std::size_t barIndex = 0;
+};
+
 // Immutable-by-publication frame snapshot.  Consumers receive this only after
 // the matching command buffer has evaluated successfully; no callback or
 // writer is retained or invoked by the geometry queue.
@@ -337,6 +365,9 @@ struct SkinInteractionLayout {
   std::vector<SkinInteractionControl> controlsTopmostFirst;
   std::vector<SkinLaneInteractionRegion> laneRegions;
   std::vector<SkinLaneGroupInteractionRegion> laneGroupRegions;
+  // Retains SkinBar.clickable order. Unlike generic controls, the source
+  // selector walks this authored list directly rather than reversing it.
+  std::vector<SkinMusicSelectBarInteractionGeometry> musicSelectBars;
 
   [[nodiscard]] std::optional<AuthoredPoint>
   authoredPointForUi(double x, double y) const noexcept;
@@ -349,9 +380,14 @@ struct SkinInteractionLayout {
   [[nodiscard]] std::optional<SkinWriterInvocation>
   writerInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
                       long long eventMicros) const noexcept;
+  [[nodiscard]] std::optional<SkinWriterInvocation>
+  sliderWriterInvocationAt(UiLogicalPoint point,
+                           long long eventMicros) const noexcept;
   [[nodiscard]] std::optional<SkinEventInvocation>
   eventInvocationFor(const PresentationUiHit &hit, UiLogicalPoint point,
                      long long eventMicros) const noexcept;
+  [[nodiscard]] std::optional<SkinMusicSelectBarHit>
+  musicSelectBarAt(UiLogicalPoint point) const noexcept;
 };
 
 struct SkinFrameEvaluationResult {

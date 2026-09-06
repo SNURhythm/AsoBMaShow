@@ -47,13 +47,18 @@ struct Fixture {
       "{\"name\":\"Test Table\",\"symbol\":\"*\","
       "\"data_url\":\"data.json\",\"level_order\":[\"1\"],"
       "\"course\":[{\"name\":\"Course *1\","
-      "\"constraint\":[\"gauge_lr2\"],\"charts\":[{\"sha256\":\"" +
+      "\"constraint\":[\"gauge_lr2\"],"
+      "\"trophy\":[{\"name\":\"bronzemedal\",\"missrate\":7.5,"
+      "\"scorerate\":55.0},{\"name\":\"invalid\",\"missrate\":0,"
+      "\"scorerate\":50.0}],\"charts\":[{\"sha256\":\"" +
       sha256 + "\"}]}]}";
   std::string dataJson = "[{\"level\":\"1\",\"md5\":\"" + md5 +
                          "\",\"sha256\":\"" + sha256 +
                          "\",\"title\":\"Chart\",\"subtitle\":\"Sub\","
                          "\"artist\":\"Artist\",\"subartist\":\"Subartist\","
-                         "\"url\":\"chart.zip\",\"url_diff\":\"patch.zip\"}]";
+                         "\"url\":\"chart.zip\",\"url_diff\":\"patch.zip\","
+                         "\"org_md5\":[\"11111111111111111111111111111111\","
+                         "\"22222222222222222222222222222222\"]}]";
 };
 
 std::string snapshotTable(const std::filesystem::path &databasePath,
@@ -139,10 +144,18 @@ void testParseAndReplacementRollback() {
   assert(parsed->charts.front().subtitle == "Sub");
   assert(parsed->charts.front().subartist == "Subartist");
   assert(parsed->charts.front().urlDiff == "patch.zip");
+  assert(parsed->charts.front().originalMd5s ==
+         std::optional<std::vector<std::string>>({
+             "11111111111111111111111111111111",
+             "22222222222222222222222222222222"}));
   assert(parsed->courses.size() == 1);
   assert(parsed->courses.front().groupName == "Course");
   assert(parsed->courses.front().level == "*1");
   assert(parsed->courses.front().constraintJson == "[\"gauge_lr2\"]");
+  assert(parsed->courses.front().trophies.size() == 1);
+  assert(parsed->courses.front().trophies.front().name == "bronzemedal");
+  assert(parsed->courses.front().trophies.front().missRate == 7.5);
+  assert(parsed->courses.front().trophies.front().scoreRate == 55.0);
   assert(parsed->courses.front().charts.size() == 1);
   assert(parsed->courses.front().charts.front().md5 == fixture.md5);
 
@@ -244,6 +257,33 @@ void testHttpsTableRejectsInsecureDataUrl() {
           "HtTp://example.test/table/data.json");
 }
 
+void testCheckpointInterruptsAnUpdateBetweenDownloadStages() {
+  const Fixture fixture;
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  std::vector<std::string> requestedUrls;
+  DifficultyTableImporter importer(
+      [&](const std::string &url, std::string *) -> std::optional<std::string> {
+        requestedUrls.push_back(url);
+        return url == fixture.sourceUrl
+                   ? std::optional<std::string>{fixture.headerJson}
+                   : std::optional<std::string>{fixture.dataJson};
+      });
+  int checkpoints = 0;
+  std::string error;
+  assert(!importer.ImportFromUrl(
+      *session, fixture.sourceUrl, &error, nullptr,
+      [&] { return ++checkpoints < 4; }));
+  assert(checkpoints == 4);
+  assert(requestedUrls == std::vector<std::string>{fixture.sourceUrl});
+  assert(error == "Difficulty table update was interrupted");
+  assert(session->SelectDifficultyTables().empty());
+}
+
 void testListImportKeepsBoundedConcurrencyAndSkipsExistingSources() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -328,6 +368,7 @@ int main() {
   testParseAndReplacementRollback();
   testInjectedFetcherAndProgress();
   testHttpsTableRejectsInsecureDataUrl();
+  testCheckpointInterruptsAnUpdateBetweenDownloadStages();
   testListImportKeepsBoundedConcurrencyAndSkipsExistingSources();
   return 0;
 }

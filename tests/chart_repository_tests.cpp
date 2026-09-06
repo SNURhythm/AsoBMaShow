@@ -129,7 +129,7 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
     } else if (sqlText.starts_with("COMMIT")) {
       scanBatchSqlObservation->commits.fetch_add(1,
                                                   std::memory_order_relaxed);
-    } else if (sqlText.starts_with("REPLACE INTO chart_meta")) {
+    } else if (sqlText.starts_with("INSERT INTO chart_meta")) {
       std::lock_guard observationLock(scanBatchSqlObservation->mutex);
       scanBatchSqlObservation->chartMetaInsertExecutions.emplace_back(sqlText);
     }
@@ -241,6 +241,9 @@ void testScanBatchCommitAndRollback() {
   assert(session.has_value());
 
   auto meta = chartMeta(temporary.path());
+  meta.TotalLandmineNotes = 3;
+  meta.RandomValues = {2};
+  meta.MostPrevalentBpm = 175.5;
   const ChartScanCheckpoint checkpoint{
       .found = true,
       .scanSignature = "repository-test",
@@ -250,10 +253,22 @@ void testScanBatchCommitAndRollback() {
   };
   auto batch = session->BeginScanBatch();
   assert(batch.has_value());
-  assert(batch->UpsertChart(meta, std::nullopt));
+  assert(batch->UpsertChart(meta, std::nullopt, false,
+                            {.hasBpmStop = true,
+                             .hasScrollChange = true,
+                             .hasBga = true}));
   assert(batch->CheckpointAndContinue(checkpoint));
   assert(batch->Commit());
   assert(session->CountAllChartMeta() == 1);
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta({}, records);
+  assert(records.size() == 1);
+  assert(records.front().hasBpmStop);
+  assert(records.front().hasScrollChange);
+  assert(records.front().hasBga);
+  assert(records.front().meta.TotalLandmineNotes == 3);
+  assert(records.front().hasRandomSequence);
+  assert(records.front().meta.MostPrevalentBpm == 175.5);
 
   auto rollback = session->BeginScanBatch();
   assert(rollback.has_value());
@@ -279,6 +294,38 @@ void testScanBatchRetainsSessionStorage() {
   auto verification = repository.OpenSession();
   assert(verification.has_value());
   assert(verification->CountAllChartMeta() == 1);
+}
+
+void testScanBatchUpsertPreservesExistingAddDate() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto meta = chartMeta(temporary.path());
+  auto first = session->BeginScanBatch();
+  assert(first.has_value());
+  assert(first->UpsertChart(meta, std::nullopt));
+  assert(first->Commit());
+
+  {
+    Database database = openDatabase(databasePath);
+    assert(database);
+    assert(execute(database.get(), "UPDATE chart_meta SET add_date=123456"));
+  }
+  meta.Title = "Reindexed";
+  auto second = session->BeginScanBatch();
+  assert(second.has_value());
+  assert(second->UpsertChart(meta, std::nullopt));
+  assert(second->Commit());
+
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta({}, records);
+  assert(records.size() == 1);
+  assert(records.front().meta.Title == "Reindexed");
+  assert(records.front().addDateSeconds == 123456);
 }
 
 void testScanBatchReusesPreparedInsertAndTransaction() {
@@ -379,7 +426,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 5);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 10);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -506,6 +553,28 @@ void testFavoriteToggleMaintainsSongReviewChartBit() {
   assert(loaded.records.front().songReviewFavorite == 13);
 }
 
+void testSongReviewFavoritePersistsExactSourceBitfield() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+
+  auto meta = chartMeta(temporary.path());
+  assert(session->InsertChartMeta(meta));
+  assert(session->SetSongReviewFavorite(meta.SHA256, 13));
+  const std::array paths{meta.BmsPath};
+  auto loaded = session->SelectChartMetaByPaths(paths);
+  assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(loaded.records.size() == 1);
+  assert(loaded.records.front().songReviewFavorite == 13);
+
+  assert(session->SetSongReviewFavorite(meta.SHA256, 2));
+  loaded = session->SelectChartMetaByPaths(paths);
+  assert(loaded.records.front().songReviewFavorite == 2);
+  assert(session->SetSongReviewFavorite({}, 15));
+}
+
 void testSelectChartMetaByHashUsesDurableIndexedIdentity() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -558,7 +627,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=6"));
+                   "PRAGMA user_version=11"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -742,6 +811,107 @@ void testChartQueryBehaviorMatrix() {
   assert(hardCount != allCounts.end() && hardCount->second == 1);
 }
 
+void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "chart.db";
+  ChartRepository charts(chartPath);
+  assert(charts.EnsureReady());
+  auto session = charts.OpenSession();
+  assert(session.has_value());
+
+  constexpr std::string_view installedMd5 =
+      "11111111111111111111111111111111";
+  constexpr std::string_view installedSha =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  auto installed = chartMeta(temporary.path() / "installed");
+  installed.MD5 = installedMd5;
+  installed.SHA256 = installedSha;
+  installed.Title = "Installed";
+  assert(session->InsertChartMeta(installed));
+
+  difficulty_table::Document table;
+  table.name = "URL table";
+  table.symbol = "☆";
+  table.sourceUrl = "https://table.example/header.json";
+  table.dataUrl = "https://table.example/data.json";
+  table.levelOrder = {"1"};
+  table.charts = {
+      {.level = "1",
+       .md5 = std::string(installedMd5),
+       .sha256 = std::string(installedSha),
+       .title = "Installed table row",
+       .url = "https://table.example/installed.zip",
+       .urlDiff = "https://table.example/installed-patch.zip"},
+      {.level = "1",
+       .md5 = "22222222222222222222222222222222",
+       .sha256 =
+           "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+       .title = "Unavailable table row",
+       .url = "https://table.example/unavailable.zip",
+       .urlDiff = "https://table.example/unavailable-patch.zip",
+       .originalMd5s = std::vector<std::string>{
+           std::string(installedMd5)}},
+  };
+  table.courses = {{
+      .name = "URL course",
+      .groupName = "Courses",
+      .level = "1",
+      .trophies = {{.name = "silvermedal",
+                    .missRate = 5.0,
+                    .scoreRate = 70.0}},
+      .charts = {{.level = "1",
+                  .md5 = std::string(installedMd5),
+                  .sha256 = std::string(installedSha),
+                  .title = "Installed course row",
+                  .url = "https://course.example/installed.zip",
+                  .urlDiff =
+                      "https://course.example/installed-patch.zip"}},
+  }};
+  assert(session->ReplaceDifficultyTable(table));
+
+  const auto tables = session->SelectDifficultyTables();
+  assert(tables.size() == 1);
+  ChartMetaQuery levelQuery;
+  levelQuery.tableId = tables.front().id;
+  levelQuery.tableLevel = "1";
+  std::vector<ChartMetaRecord> levelRows;
+  session->QueryChartMeta(levelQuery, levelRows);
+  assert(levelRows.size() == 2);
+  assert(levelRows[0].downloadUrl ==
+         "https://table.example/installed.zip");
+  assert(levelRows[0].appendDownloadUrl ==
+         "https://table.example/installed-patch.zip");
+  assert(levelRows[1].downloadUrl ==
+         "https://table.example/unavailable.zip");
+  assert(levelRows[1].appendDownloadUrl ==
+         "https://table.example/unavailable-patch.zip");
+  assert(levelRows[1].originalMd5s ==
+         std::optional<std::vector<std::string>>({std::string(installedMd5)}));
+
+  const auto courses =
+      session->SelectDifficultyCourses(tables.front().id, "Courses");
+  assert(courses.size() == 1);
+  assert(courses.front().trophies.size() == 1);
+  assert(courses.front().trophies.front().name == "silvermedal");
+  assert(courses.front().trophies.front().missRate == 5.0);
+  assert(courses.front().trophies.front().scoreRate == 70.0);
+  ChartMetaQuery courseQuery;
+  courseQuery.courseId = courses.front().id;
+  std::vector<ChartMetaRecord> courseRows;
+  session->QueryChartMeta(courseQuery, courseRows);
+  assert(courseRows.size() == 1);
+  assert(courseRows.front().downloadUrl ==
+         "https://course.example/installed.zip");
+  assert(courseRows.front().appendDownloadUrl ==
+         "https://course.example/installed-patch.zip");
+
+  std::vector<ChartMetaRecord> libraryRows;
+  session->QueryChartMeta({}, libraryRows);
+  assert(libraryRows.size() == 1);
+  assert(libraryRows.front().downloadUrl.empty());
+  assert(libraryRows.front().appendDownloadUrl.empty());
+}
+
 void testExactFolderQuery() {
   TempDirectory temporary;
   std::atomic<int> connections{0};
@@ -785,6 +955,10 @@ void testExactFolderQuery() {
 
   auto session = charts.OpenSession();
   assert(session.has_value());
+  const auto folders = session->SelectChartMetaFolders();
+  assert(folders == std::vector<std::filesystem::path>({
+                        "library/A", "library/A/nested", "library/B",
+                        "packs/pack.zip/A", "packs/pack.zip/B"}));
   auto aliased = chartMeta("library/C/../C");
   aliased.BmsPath = "library/C/aliased.bms";
   aliased.MD5 = "md5-aliased";
@@ -906,7 +1080,7 @@ void testChartMigrationCompatibilityMatrix() {
   });
 
   TempDirectory temporary;
-  for (const int inputVersion : {0, 1, 2, 3, 4}) {
+  for (const int inputVersion : {0, 1, 2, 3, 4, 5, 6, 7}) {
     const auto path =
         temporary.path() / ("migration-v" + std::to_string(inputVersion) +
                             ".db");
@@ -917,6 +1091,16 @@ void testChartMigrationCompatibilityMatrix() {
     {
       Database database = openDatabase(path);
       assert(database);
+      assert(execute(database.get(),
+                     "ALTER TABLE chart_meta DROP COLUMN add_date;"
+                     "ALTER TABLE chart_meta DROP COLUMN total_landmine_notes;"
+                     "ALTER TABLE chart_meta DROP COLUMN has_random_sequence;"
+                     "ALTER TABLE chart_meta DROP COLUMN most_prevalent_bpm"));
+      if (inputVersion <= 5) {
+        assert(execute(database.get(),
+                       "ALTER TABLE chart_meta DROP COLUMN has_bpm_stop;"
+                       "ALTER TABLE chart_meta DROP COLUMN has_scroll_change"));
+      }
       const std::string favoriteMd5 =
           inputVersion <= 1 ? upperMd5 : std::string(lowerMd5);
       const std::string favoriteSha =
@@ -940,15 +1124,19 @@ void testChartMigrationCompatibilityMatrix() {
               "'migration.bms','" +
               favoriteMd5 + "','" + favoriteSha + "');"
               "PRAGMA user_version=" + std::to_string(inputVersion)));
+      if (inputVersion >= 5) {
+        assert(execute(database.get(),
+                       "INSERT INTO review(sha256, favorite) VALUES('" +
+                           std::string(lowerSha) + "', 2)"));
+      }
     }
 
     ChartRepository migrated(path);
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 5);
-    assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") ==
-           (inputVersion == 4 ? 1 : 0));
+    assert(queryInt(database.get(), "PRAGMA user_version") == 10);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
     assert(queryString(database.get(),
@@ -976,15 +1164,14 @@ void testChartMigrationCompatibilityMatrix() {
                        "SELECT required FROM chart_meta_rebuild_state "
                        "WHERE id=1")
             : 0;
-    assert(inputVersion >= 4 ? rebuildRequired == 0
-                             : rebuildRowExists && rebuildRequired == 1);
-    if (inputVersion >= 4) {
-      assert(queryInt(database.get(), "SELECT total FROM chart_meta") == 234);
-      assert(queryInt(database.get(),
-                      "SELECT has_total FROM chart_meta") == 1);
-      assert(queryInt(database.get(),
-                      "SELECT has_document FROM chart_meta") == 0);
-    }
+    assert(rebuildRowExists && rebuildRequired == 1);
+    assert(queryInt(database.get(),
+                    "SELECT COUNT(*) FROM pragma_table_info('chart_meta') "
+                    "WHERE name IN ('has_bpm_stop', "
+                    "'has_scroll_change')") == 2);
+    assert(queryInt(database.get(),
+                    "SELECT COUNT(*) FROM pragma_table_info('folder') "
+                    "WHERE name IN ('path', 'date', 'adddate')") == 3);
   }
 }
 
@@ -1023,13 +1210,13 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 5);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 10);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
                     "WHERE id=1") == 1);
   }
-  assert(repository.GetLibraryRevision() == revisionBefore + 2);
+  assert(repository.GetLibraryRevision() == revisionBefore + 6);
 }
 
 void testLegacyIosContainerPathRebasesToCurrentDocuments() {
@@ -1255,13 +1442,16 @@ void testEntryUpsertPreservesOriginalDatabasePathKey() {
 int main() {
   testScanBatchCommitAndRollback();
   testScanBatchRetainsSessionStorage();
+  testScanBatchUpsertPreservesExistingAddDate();
   testScanBatchReusesPreparedInsertAndTransaction();
   testSessionRoundTripAndReadinessCost();
   testSelectChartMetaByPathsHydratesInInputOrder();
   testFavoriteToggleMaintainsSongReviewChartBit();
+  testSongReviewFavoritePersistsExactSourceBitfield();
   testSelectChartMetaByHashUsesDurableIndexedIdentity();
   testRejectedFamiliesRemainUnchanged();
   testChartQueryBehaviorMatrix();
+  testDifficultyEntryDownloadUrlsFollowTheirSourceRows();
   testExactFolderQuery();
   testChartMigrationCompatibilityMatrix();
   testChartMigrationReleaseFailureDoesNotReportSuccess();

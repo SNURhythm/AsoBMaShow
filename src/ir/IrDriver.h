@@ -130,6 +130,14 @@ struct IrProviderRuntimeConfig {
   std::string apiKey;
 };
 
+struct IrChartExternalUrlRequest {
+  int keyMode = 0;
+  bool isDoublePlay = false;
+  std::string chartSha256;
+};
+
+struct IrCourseExternalUrlRequest {};
+
 using IrUserScoreProgress =
     std::function<void(std::string_view game, int completed, int total)>;
 
@@ -164,6 +172,14 @@ public:
   virtual IrAuthenticatedAccountOutcome
   fetchAuthenticatedAccount(const IrProviderRuntimeConfig &, IrHttpClient &,
                             std::stop_token) const;
+  [[nodiscard]] virtual std::optional<std::string>
+  chartExternalUrl(const IrChartExternalUrlRequest &,
+                   const IrProviderRuntimeConfig &, IrHttpClient &,
+                   std::stop_token) const;
+  [[nodiscard]] virtual std::optional<std::string>
+  courseExternalUrl(const IrCourseExternalUrlRequest &,
+                    const IrProviderRuntimeConfig &, IrHttpClient &,
+                    std::stop_token) const;
   virtual IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(const IrProviderRuntimeConfig &, IrHttpClient &,
                          std::stop_token, IrUserScoreProgress) const;
@@ -216,6 +232,16 @@ public:
                             const IrProviderRuntimeConfig &config,
                             IrHttpClient &http,
                             std::stop_token stopToken) const;
+  [[nodiscard]] std::optional<std::string>
+  chartExternalUrl(std::string_view providerId,
+                   const IrChartExternalUrlRequest &request,
+                   const IrProviderRuntimeConfig &config, IrHttpClient &http,
+                   std::stop_token stopToken) const;
+  [[nodiscard]] std::optional<std::string>
+  courseExternalUrl(std::string_view providerId,
+                    const IrCourseExternalUrlRequest &request,
+                    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+                    std::stop_token stopToken) const;
   [[nodiscard]] IrUserScoreSnapshotOutcome
   fetchUserScoreSnapshot(std::string_view providerId,
                          const IrProviderRuntimeConfig &config,

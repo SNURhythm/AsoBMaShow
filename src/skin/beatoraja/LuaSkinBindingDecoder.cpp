@@ -215,6 +215,14 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
       return {.failure = diagnostic("skin_lua_callback_invalid",
                                     "Lua callback ID is zero")};
     }
+    if (request.type.kind == SkinBindingKind::Event) {
+      const auto parameterCount = runtime_->callbackParameterCount(*callback);
+      if (parameterCount && *parameterCount > 2) {
+        // SkinLuaAccessor.loadEvent returns null unless LuaFunction.narg() is
+        // zero, one, or two. Treat that as an absent event binding.
+        return {};
+      }
+    }
     bindingSource = *callback;
   } else {
     const auto &text = std::get<std::string>(internKey.source);
@@ -287,6 +295,13 @@ LuaSkinBindingDecoder::decode(const LuaValueHandle &value,
     if (compiled.callback->slot == 0 || compiled.callback->generation == 0) {
       return {.failure = diagnostic("skin_lua_callback_invalid",
                                     "compiled Lua callback ID is zero")};
+    }
+    if (request.type.kind == SkinBindingKind::Event) {
+      const auto parameterCount =
+          runtime_->callbackParameterCount(*compiled.callback);
+      if (parameterCount && *parameterCount > 2) {
+        return {};
+      }
     }
     bindingSource = *compiled.callback;
   }

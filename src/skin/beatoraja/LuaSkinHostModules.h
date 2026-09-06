@@ -9,10 +9,13 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string>
 
 struct lua_State;
 
 namespace skin {
+
+[[nodiscard]] std::string luaToJString(lua_State *, int);
 
 class LuaSkinFileSystem;
 class LuaSkinHttpTransport;
@@ -56,6 +59,7 @@ struct LuaSkinHostModulesOptions {
   std::size_t maximumModuleSearchTemplates =
       std::numeric_limits<std::size_t>::max();
   bool allowProcessGlobalOperations = false;
+  bool allowOsLibrary = true;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
 };

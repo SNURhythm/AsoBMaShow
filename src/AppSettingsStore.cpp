@@ -594,6 +594,21 @@ json settingsToJson(const AppSettings &settings) {
       {"skinSortId", settings.skinSortId},
       {"skinDifficultyFilterName", settings.skinDifficultyFilterName},
       {"skinChartReplicationMode", settings.skinChartReplicationMode},
+      {"skinMusicSelectInput", settings.skinMusicSelectInput},
+      {"skinMusicSelectScrollDurationLow",
+       settings.skinMusicSelectScrollDurationLow},
+      {"skinMusicSelectScrollDurationHigh",
+       settings.skinMusicSelectScrollDurationHigh},
+      {"skinMusicSelectAnalogTicksPerScroll",
+       settings.skinMusicSelectAnalogTicksPerScroll},
+      {"skinMusicSelectMaxSearchBarCount",
+       settings.skinMusicSelectMaxSearchBarCount},
+      {"skinSelectSoundSetPath", settings.skinSelectSoundSetPath},
+      {"skinSelectSoundSetBookmark", settings.skinSelectSoundSetBookmark},
+      {"skinPlayer2RandomOption", settings.skinPlayer2RandomOption},
+      {"skinDoublePlayOption", settings.skinDoublePlayOption},
+      {"skinBgaMode", settings.skinBgaMode},
+      {"skinBgaExpandMode", settings.skinBgaExpandMode},
       {"skinTargetId", settings.skinTargetId},
       {"skinTargetList", settings.skinTargetList},
       {"selectedPlaybackRatePercent", settings.selectedPlaybackRatePercent},
@@ -792,6 +807,34 @@ AppSettings settingsFromJson(const json &document,
                         settings.skinDifficultyFilterName, diagnostics);
   readBoundedSkinString(document, "skinChartReplicationMode",
                         settings.skinChartReplicationMode, diagnostics);
+  readValue(document, "skinMusicSelectInput", settings.skinMusicSelectInput,
+            diagnostics);
+  readValue(document, "skinMusicSelectScrollDurationLow",
+            settings.skinMusicSelectScrollDurationLow, diagnostics);
+  readValue(document, "skinMusicSelectScrollDurationHigh",
+            settings.skinMusicSelectScrollDurationHigh, diagnostics);
+  readValue(document, "skinMusicSelectAnalogTicksPerScroll",
+            settings.skinMusicSelectAnalogTicksPerScroll, diagnostics);
+  readValue(document, "skinMusicSelectMaxSearchBarCount",
+            settings.skinMusicSelectMaxSearchBarCount, diagnostics);
+  readValue(document, "skinSelectSoundSetPath",
+            settings.skinSelectSoundSetPath, diagnostics);
+  readValue(document, "skinSelectSoundSetBookmark",
+            settings.skinSelectSoundSetBookmark, diagnostics);
+  readValue(document, "skinPlayer2RandomOption",
+            settings.skinPlayer2RandomOption, diagnostics);
+  readValue(document, "skinDoublePlayOption", settings.skinDoublePlayOption,
+            diagnostics);
+  if (document.contains("skinBgaMode")) {
+    readValue(document, "skinBgaMode", settings.skinBgaMode, diagnostics);
+  } else {
+    // The selector value was introduced after bgaEnabled. Preserve the
+    // existing profile setting's ON/OFF state rather than displaying ON for
+    // profiles that already disabled BGA.
+    settings.skinBgaMode = settings.bgaEnabled ? 0 : 2;
+  }
+  readValue(document, "skinBgaExpandMode", settings.skinBgaExpandMode,
+            diagnostics);
   readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,
                         diagnostics);
   readBoundedSkinTargetList(document, settings.skinTargetList, diagnostics);

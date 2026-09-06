@@ -615,15 +615,17 @@ void IrUploadsScene::stopPreparation() {
 void IrUploadsScene::goBack() {
   stopPreparation();
   if (context.sceneManager != nullptr) {
-    context.sceneManager->changeScene("MainMenu", false);
+    (void)returnToScene(*context.sceneManager, returnTarget_);
   }
 }
 
 void IrUploadsScene::openIrSettings() {
   stopPreparation();
   if (context.sceneManager != nullptr) {
+    returnTarget_.notifySettingsWillOpen();
     context.sceneManager->changeScene(
-        std::make_unique<SettingsScene>(context, SettingsDestination::Ir),
+        std::make_unique<SettingsScene>(context, SettingsDestination::Ir,
+                                        returnTarget_),
         false);
   }
 }

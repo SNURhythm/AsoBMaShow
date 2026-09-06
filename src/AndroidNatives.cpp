@@ -51,6 +51,8 @@ std::string pathToUtf8(const std::filesystem::path &path) {
 struct AndroidDownloadProgressBridge {
   std::atomic_bool *cancelled = nullptr;
   AndroidDownloadProgressCallback *progressCallback = nullptr;
+  AndroidDownloadCheckpoint *checkpoint = nullptr;
+  AndroidDownloadPauseProbe *pauseRequested = nullptr;
 };
 
 std::mutex gAndroidDownloadProgressMutex;
@@ -698,6 +700,33 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileCancelle
   return JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextCheckpoint(
+    JNIEnv *, jclass, jlong checkpointToken) {
+  AndroidDownloadCheckpoint *checkpoint = nullptr;
+  if (AndroidDownloadProgressBridge *bridge =
+          androidDownloadProgressBridge(checkpointToken);
+      bridge != nullptr) {
+    checkpoint = bridge->checkpoint;
+  }
+  return checkpoint == nullptr || !*checkpoint || (*checkpoint)() ? JNI_TRUE
+                                                                  : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextPauseRequested(
+    JNIEnv *, jclass, jlong checkpointToken) {
+  AndroidDownloadPauseProbe *pauseRequested = nullptr;
+  if (AndroidDownloadProgressBridge *bridge =
+          androidDownloadProgressBridge(checkpointToken);
+      bridge != nullptr) {
+    pauseRequested = bridge->pauseRequested;
+  }
+  return pauseRequested != nullptr && *pauseRequested && (*pauseRequested)()
+             ? JNI_TRUE
+             : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeMusicControlEvent(
     JNIEnv *env, jclass, jstring eventName) {
@@ -1313,13 +1342,28 @@ bool OpenURLInAndroidBrowser(const std::string &url,
 }
 
 bool DownloadURLTextAndroid(const std::string &url, std::string &body,
-                            std::string &errorMessage) {
+                            std::string &errorMessage,
+                            AndroidDownloadCheckpoint checkpoint,
+                            AndroidDownloadPauseProbe pauseRequested) {
   body.clear();
+  AndroidDownloadProgressBridge bridge;
+  jlong checkpointToken = 0;
+  if (checkpoint || pauseRequested) {
+    bridge.checkpoint = &checkpoint;
+    bridge.pauseRequested = &pauseRequested;
+    checkpointToken = registerAndroidDownloadProgressBridge(bridge);
+  }
+  struct CheckpointBridgeCleanup {
+    jlong token;
+    ~CheckpointBridgeCleanup() {
+      if (token != 0) unregisterAndroidDownloadProgressBridge(token);
+    }
+  } cleanup{checkpointToken};
+
   std::string callError;
-  const std::string result =
-      callActivityStringMethod("downloadUrlText", "(Ljava/lang/String;)"
-                                                  "Ljava/lang/String;",
-                               url.c_str(), callError);
+  const std::string result = callActivityStringMethodLong(
+      "downloadUrlText", "(Ljava/lang/String;J)Ljava/lang/String;",
+      url.c_str(), checkpointToken, callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

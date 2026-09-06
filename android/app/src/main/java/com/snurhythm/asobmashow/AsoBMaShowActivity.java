@@ -51,6 +51,7 @@ import java.util.Locale;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
@@ -266,6 +267,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                                long downloadedBytes,
                                                                long totalBytes);
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
+    private static native boolean nativeDownloadUrlTextCheckpoint(long checkpointToken);
+    private static native boolean nativeDownloadUrlTextPauseRequested(long checkpointToken);
     private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
     private static native void nativeGyroscopeActivityPaused();
@@ -998,31 +1001,83 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
-    public String downloadUrlText(String urlText) {
+    public String downloadUrlText(String urlText, long checkpointToken) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return ERROR_PREFIX + "Network download cannot block the UI thread.";
         }
 
-        HttpURLConnection connection = null;
-        try {
-            connection = openHttpConnection(urlText, "GET", 8);
-
-            int statusCode = connection.getResponseCode();
-            if (statusCode >= 400) {
-                return ERROR_PREFIX + "HTTP " + statusCode + " while downloading " + urlText;
+        while (true) {
+            AtomicReference<HttpURLConnection> activeConnection = new AtomicReference<>();
+            AtomicBoolean monitorFinished = new AtomicBoolean(false);
+            AtomicBoolean pauseObserved = new AtomicBoolean(false);
+            Thread pauseMonitor = null;
+            if (checkpointToken != 0) {
+                pauseMonitor = new Thread(() -> {
+                    while (!monitorFinished.get()) {
+                        if (pauseObserved.get() ||
+                                nativeDownloadUrlTextPauseRequested(checkpointToken)) {
+                            pauseObserved.set(true);
+                            HttpURLConnection connection = activeConnection.get();
+                            if (connection != null) {
+                                connection.disconnect();
+                                return;
+                            }
+                        }
+                        try {
+                            Thread.sleep(50);
+                        } catch (InterruptedException ignored) {
+                            return;
+                        }
+                    }
+                }, "DifficultyTablePauseMonitor");
+                pauseMonitor.setDaemon(true);
+                pauseMonitor.start();
             }
 
-            try (InputStream input = connection.getInputStream()) {
-                return readTextResponse(input);
-            }
-        } catch (Exception e) {
-            String message = e.getMessage();
-            return ERROR_PREFIX + (message == null || message.isEmpty()
-                    ? e.getClass().getSimpleName()
-                    : message);
-        } finally {
-            if (connection != null) {
-                connection.disconnect();
+            try {
+                HttpURLConnection connection = openHttpConnection(
+                        urlText, "GET", 8, activeConnection, pauseObserved);
+
+                int statusCode = connection.getResponseCode();
+                if (statusCode >= 400) {
+                    return ERROR_PREFIX + "HTTP " + statusCode +
+                            " while downloading " + urlText;
+                }
+
+                try (InputStream input = connection.getInputStream()) {
+                    return readTextResponse(input, checkpointToken);
+                }
+            } catch (Exception e) {
+                if (pauseObserved.get()) {
+                    if (nativeDownloadUrlTextCheckpoint(checkpointToken)) {
+                        continue;
+                    }
+                    return ERROR_PREFIX + "Download interrupted.";
+                }
+                String message = e.getMessage();
+                return ERROR_PREFIX + (message == null || message.isEmpty()
+                        ? e.getClass().getSimpleName()
+                        : message);
+            } finally {
+                monitorFinished.set(true);
+                HttpURLConnection connection = activeConnection.getAndSet(null);
+                if (connection != null) {
+                    connection.disconnect();
+                }
+                if (pauseMonitor != null) {
+                    pauseMonitor.interrupt();
+                    boolean interrupted = false;
+                    while (pauseMonitor.isAlive()) {
+                        try {
+                            pauseMonitor.join();
+                        } catch (InterruptedException ignored) {
+                            interrupted = true;
+                        }
+                    }
+                    if (interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
             }
         }
     }
@@ -1042,7 +1097,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
 
             try (InputStream input = connection.getInputStream()) {
-                return readTextResponse(input);
+                return readTextResponse(input, 0);
             }
         } catch (Exception e) {
             String message = e.getMessage();
@@ -1346,6 +1401,13 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private HttpURLConnection openHttpConnection(String urlText, String method,
                                                  int maxRedirects) throws IOException {
+        return openHttpConnection(urlText, method, maxRedirects, null, null);
+    }
+
+    private HttpURLConnection openHttpConnection(
+            String urlText, String method, int maxRedirects,
+            AtomicReference<HttpURLConnection> activeConnection,
+            AtomicBoolean pauseObserved) throws IOException {
         String currentUrl = urlText;
         String currentMethod = method;
         URL initialUrl = new URL(urlText);
@@ -1356,8 +1418,18 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
         boolean requireHttps = "https".equalsIgnoreCase(initialProtocol);
         for (int i = 0; i <= maxRedirects; i++) {
+            if (pauseObserved != null && pauseObserved.get()) {
+                throw new IOException("Download paused.");
+            }
             URL url = new URL(currentUrl);
             HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+            if (activeConnection != null) {
+                activeConnection.set(connection);
+            }
+            if (pauseObserved != null && pauseObserved.get()) {
+                connection.disconnect();
+                throw new IOException("Download paused.");
+            }
             connection.setInstanceFollowRedirects(false);
             connection.setRequestMethod(currentMethod);
             connection.setRequestProperty("User-Agent", "AsoBMaShow");
@@ -1377,6 +1449,9 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
 
             String location = connection.getHeaderField("Location");
+            if (activeConnection != null) {
+                activeConnection.compareAndSet(connection, null);
+            }
             connection.disconnect();
             if (location == null || location.isEmpty()) {
                 throw new IOException("Redirect did not include a Location header.");
@@ -1406,11 +1481,15 @@ public class AsoBMaShowActivity extends SDLActivity {
                 statusCode == 308;
     }
 
-    private String readTextResponse(InputStream input) throws IOException {
+    private String readTextResponse(InputStream input, long checkpointToken) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         byte[] buffer = new byte[16 * 1024];
         int total = 0;
         while (true) {
+            if (checkpointToken != 0 &&
+                    !nativeDownloadUrlTextCheckpoint(checkpointToken)) {
+                throw new IOException("Download interrupted.");
+            }
             int read = input.read(buffer);
             if (read < 0) {
                 break;

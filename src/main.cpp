@@ -22,6 +22,7 @@
 #include "main.h"
 #include "path.h"
 #include "scene/MainMenuScene.h"
+#include "scene/IntroScene.h"
 #include "scene/SceneEventRouting.h"
 #include "scene/play/GameplayGeometry.h"
 #include "scene/SettingsScene.h"
@@ -776,16 +777,23 @@ static void reportResultRecoveryWarning(
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
+  if (context.chartLibraryTasks) {
+    context.chartLibraryTasks->start();
+    context.chartLibraryTasks->enqueue(
+        {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+         .title = "Refresh Library"});
+  }
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
   bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
   bgfx::setViewMode(rendering::readback_view, bgfx::ViewMode::Sequential);
   SceneManager sceneManager(context);
+  sceneManager.registerScene("Intro", std::make_unique<IntroScene>(context));
   sceneManager.registerScene("MainMenu",
                              std::make_unique<MainMenuScene>(context));
   sceneManager.registerScene("Settings",
                              std::make_unique<SettingsScene>(context));
-  sceneManager.changeScene("MainMenu");
+  sceneManager.changeScene("Intro");
 
   // SDL_RenderClear(ren);
   // SDL_RenderCopy(ren, tex, nullptr, nullptr);
@@ -955,6 +963,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
   while (!context.quitFlag) {
     context.pollGameplaySkinCommits();
+    if (context.chartLibraryFolderActions) {
+      context.chartLibraryFolderActions->poll();
+    }
 
     auto currentFrameTime = std::chrono::steady_clock::now();
     context.applicationUptimeMillis.store(

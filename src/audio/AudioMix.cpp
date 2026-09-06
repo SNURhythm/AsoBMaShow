@@ -12,7 +12,10 @@ AudioCallbackState::AudioCallbackState()
       commandQueue(
           std::make_unique<AudioCommand[]>(kCombinedAudioCommandQueueSize)),
       realtimeCommandQueue(
-          std::make_unique<AudioCommand[]>(kRealtimeAudioCommandQueueSize)) {}
+          std::make_unique<AudioCommand[]>(kRealtimeAudioCommandQueueSize)) {
+  activeNonSystemVoices.store(0, std::memory_order_relaxed);
+  scheduledNonSystemSounds.store(0, std::memory_order_relaxed);
+}
 
 namespace audio {
 namespace {
@@ -104,6 +107,9 @@ void removeActiveSoundAt(AudioCallbackState &state, size_t index) {
   SoundData *soundData = state.playingSounds[index].soundData;
   if (soundData) {
     soundData->playing = false;
+  }
+  if (state.playingSounds[index].bus != Bus::System) {
+    state.activeNonSystemVoices.fetch_sub(1, std::memory_order_release);
   }
   --state.playingSoundCount;
   if (index < state.playingSoundCount) {
@@ -506,6 +512,9 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
       .gain = gain,
       .loop = loop,
   };
+  if (bus != Bus::System) {
+    state.activeNonSystemVoices.fetch_add(1, std::memory_order_release);
+  }
   return true;
 }
 
@@ -542,6 +551,9 @@ bool InsertScheduledSound(AudioCallbackState &state,
           scheduledSound,
           state.scheduledSounds[state.scheduledSoundCount - 1])) {
     state.scheduledSounds[state.scheduledSoundCount++] = scheduledSound;
+    if (scheduledSound.bus != Bus::System) {
+      state.scheduledNonSystemSounds.fetch_add(1, std::memory_order_release);
+    }
     return true;
   }
 
@@ -556,6 +568,9 @@ bool InsertScheduledSound(AudioCallbackState &state,
   }
   state.scheduledSounds[insertIndex] = scheduledSound;
   ++state.scheduledSoundCount;
+  if (scheduledSound.bus != Bus::System) {
+    state.scheduledNonSystemSounds.fetch_add(1, std::memory_order_release);
+  }
   return true;
 }
 
@@ -567,6 +582,8 @@ void ClearCallbackSounds(AudioCallbackState &state) {
   }
   state.playingSoundCount = 0;
   state.scheduledSoundCount = 0;
+  state.activeNonSystemVoices.store(0, std::memory_order_release);
+  state.scheduledNonSystemSounds.store(0, std::memory_order_release);
 }
 
 void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
@@ -579,12 +596,21 @@ void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
     }
   }
   std::size_t retained = 0;
+  std::uint32_t removedScheduledNonSystem = 0;
   for (std::size_t index = 0; index < state.scheduledSoundCount; ++index) {
-    if (state.scheduledSounds[index].soundData != soundData) {
-      state.scheduledSounds[retained++] = state.scheduledSounds[index];
+    if (state.scheduledSounds[index].soundData == soundData) {
+      if (state.scheduledSounds[index].bus != Bus::System) {
+        ++removedScheduledNonSystem;
+      }
+      continue;
     }
+    state.scheduledSounds[retained++] = state.scheduledSounds[index];
   }
   state.scheduledSoundCount = retained;
+  if (removedScheduledNonSystem > 0) {
+    state.scheduledNonSystemSounds.fetch_sub(removedScheduledNonSystem,
+                                              std::memory_order_release);
+  }
 }
 
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command,
@@ -811,6 +837,11 @@ void ActivateScheduledSounds(AudioCallbackState &state,
     if (!isDue) {
       break;
     }
+    if (scheduledSound.bus != Bus::System) {
+      // The due scheduled entry is consumed below regardless of whether the
+      // active append succeeds (a dropped note still leaves the schedule).
+      state.scheduledNonSystemSounds.fetch_sub(1, std::memory_order_release);
+    }
     AppendActiveSound(state, scheduledSound.soundData, scheduledSound.bus,
                       outputOffsetFrames, scheduledSound.startFrame,
                       scheduledSound.gain, scheduledSound.loop);
@@ -831,7 +862,7 @@ void ActivateScheduledSounds(AudioCallbackState &state,
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
-                     int playbackRatePercent) {
+                     int playbackRatePercent, MixScope scope) {
   constexpr float kMixHeadroom = 0.9f;
   if (outputChannels <= 0 ||
       mixBuffer.size() < static_cast<size_t>(frameCount) * outputChannels) {
@@ -848,6 +879,14 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
     if (soundData == nullptr || soundData->channels <= 0 ||
         sourceFrame >= soundData->outputFrameCount) {
       removeActiveSoundAt(state, soundIndex);
+      continue;
+    }
+
+    // When only system sounds are allowed (the gameplay clock is stopped and
+    // BGM/keysounds must not resume), leave the non-system voices active but do
+    // not advance or mix them.
+    if (scope == MixScope::SystemOnly && playingSound.bus != Bus::System) {
+      ++soundIndex;
       continue;
     }
 

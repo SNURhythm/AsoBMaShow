@@ -81,6 +81,17 @@ RunAfterConfirmedStop(Lifecycle &lifecycle, std::string_view context,
 
 template <typename Lifecycle, typename ConfirmedAction>
 [[nodiscard]] audio::playback::BackendOperationResult
+RunAfterConfirmedStopKeepDevice(Lifecycle &, std::string_view,
+                                ConfirmedAction &&confirmedAction) {
+  // Stops the playback session without stopping the audio device, so a later
+  // play() on the same device short-circuits instead of re-opening + re-priming
+  // the backend (a multi-hundred-ms cost on the gameplay start hot path).
+  std::invoke(std::forward<ConfirmedAction>(confirmedAction));
+  return {.success = true};
+}
+
+template <typename Lifecycle, typename ConfirmedAction>
+[[nodiscard]] audio::playback::BackendOperationResult
 RunAfterConfirmedStart(Lifecycle &lifecycle, std::string_view context,
                        ConfirmedAction &&confirmedAction) {
   auto result = ContextualizeFailure(lifecycle.startDevice(), context, "start");
@@ -117,11 +128,44 @@ StopSessionForTransition(Lifecycle &lifecycle, std::string_view context,
   });
 }
 
+// Like StopSessionForTransition but keeps the audio device running, so voices
+// that live outside the jukebox session (the select scene's Bus::System BGM /
+// preview / SE on the shared AudioWrapper) keep playing while a chart is
+// staged. Safe only when the caller has established that no jukebox-owned
+// audio is active (see loadChartPreservingDevice).
+template <typename Lifecycle, typename WakeScheduler>
+[[nodiscard]] audio::playback::BackendOperationResult
+StopSessionForTransitionKeepDevice(Lifecycle &lifecycle,
+                                   std::string_view context,
+                                   SessionState &state,
+                                   WakeScheduler &&wakeScheduler) {
+  return RunAfterConfirmedStopKeepDevice(lifecycle, context, [&] {
+    state.isPlaying.store(false, std::memory_order_release);
+    state.schedulerActive.store(false, std::memory_order_release);
+    state.stopwatch.pause();
+    std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+  });
+}
+
 template <typename Lifecycle, typename WakeScheduler>
 [[nodiscard]] audio::playback::BackendOperationResult
 StopPlayback(Lifecycle &lifecycle, std::string_view context,
              SessionState &state, WakeScheduler &&wakeScheduler) {
   return RunAfterConfirmedStop(lifecycle, context, [&] {
+    state.currentBga.store(-1, std::memory_order_relaxed);
+    state.currentBmpLayer.store(-1, std::memory_order_relaxed);
+    state.isPlaying.store(false, std::memory_order_release);
+    state.schedulerActive.store(false, std::memory_order_release);
+    state.stopwatch.pause();
+    std::invoke(std::forward<WakeScheduler>(wakeScheduler));
+  });
+}
+
+template <typename Lifecycle, typename WakeScheduler>
+[[nodiscard]] audio::playback::BackendOperationResult
+StopPlaybackKeepDevice(Lifecycle &lifecycle, std::string_view context,
+                       SessionState &state, WakeScheduler &&wakeScheduler) {
+  return RunAfterConfirmedStopKeepDevice(lifecycle, context, [&] {
     state.currentBga.store(-1, std::memory_order_relaxed);
     state.currentBmpLayer.store(-1, std::memory_order_relaxed);
     state.isPlaying.store(false, std::memory_order_release);

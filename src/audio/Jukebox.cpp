@@ -2173,9 +2173,12 @@ Jukebox::BgaRect Jukebox::calculateBgaRect(int sourceWidth,
 
   const float scaleX = targetWidth / static_cast<float>(sourceWidth);
   const float scaleY = targetHeight / static_cast<float>(sourceHeight);
-  const float scale = mode == AppSettings::BgaDisplayMode::Fill
-                          ? std::max(scaleX, scaleY)
-                          : std::min(scaleX, scaleY);
+  float scale = mode == AppSettings::BgaDisplayMode::Fill
+                    ? std::max(scaleX, scaleY)
+                    : std::min(scaleX, scaleY);
+  if (mode == AppSettings::BgaDisplayMode::NoExpand) {
+    scale = std::min(scale, 1.0F);
+  }
   const float width = static_cast<float>(sourceWidth) * scale;
   const float height = static_cast<float>(sourceHeight) * scale;
   return {(targetWidth - width) * 0.5f, (targetHeight - height) * 0.5f, width,
@@ -3639,6 +3642,29 @@ void Jukebox::unloadVisuals() {
 audio::playback::BackendOperationResult
 Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
                    std::atomic_bool &isCancelled) {
+  return loadChartImpl(chart, scheduleNotes, isCancelled,
+                       /*preserveDevice=*/false);
+}
+
+// Stages a chart without stopping the shared audio device when safe: the
+// jukebox owns no active playback, no non-neutral playback rate is pending (a
+// rate reset requires the device stopped), and only Bus::System voices (select
+// BGM / preview / SE) may be playing. Used by the music-select preload so the
+// audible preview is not torn down mid-play. Falls back to the normal full-stop
+// load otherwise.
+audio::playback::BackendOperationResult
+Jukebox::loadChartPreservingDevice(bms_parser::Chart &chart, bool scheduleNotes,
+                                   std::atomic_bool &isCancelled) {
+  const bool unsafeToPreserve =
+      isPlaying.load(std::memory_order_acquire) ||
+      schedulerActive.load(std::memory_order_acquire) ||
+      !audio.playbackRate().neutral();
+  return loadChartImpl(chart, scheduleNotes, isCancelled, !unsafeToPreserve);
+}
+
+audio::playback::BackendOperationResult
+Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
+                       std::atomic_bool &isCancelled, bool preserveDevice) {
   jukebox_lifecycle::SessionState lifecycleState{
       .isPlaying = isPlaying,
       .schedulerActive = schedulerActive,
@@ -3651,16 +3677,23 @@ Jukebox::loadChart(bms_parser::Chart &chart, bool scheduleNotes,
       .currentBga = currentBga,
       .currentBmpLayer = currentBmpLayer,
   };
-  const auto stopped = jukebox_lifecycle::StopSessionForTransition(
-      audio, "Jukebox::loadChart", lifecycleState, [this] { wakeScheduler(); });
+  const auto stopped = preserveDevice
+                           ? jukebox_lifecycle::StopSessionForTransitionKeepDevice(
+                                 audio, "Jukebox::loadChart", lifecycleState,
+                                 [this] { wakeScheduler(); })
+                           : jukebox_lifecycle::StopSessionForTransition(
+                                 audio, "Jukebox::loadChart", lifecycleState,
+                                 [this] { wakeScheduler(); });
   if (!stopped.success) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
     return stopped;
   }
-  std::string playbackRateError;
-  if (!setPlaybackRate({}, playbackRateError)) {
-    return {.success = false,
-            .diagnostic = "Jukebox::loadChart: " + playbackRateError};
+  if (!preserveDevice) {
+    std::string playbackRateError;
+    if (!setPlaybackRate({}, playbackRateError)) {
+      return {.success = false,
+              .diagnostic = "Jukebox::loadChart: " + playbackRateError};
+    }
   }
   if (playThread.joinable()) {
     SDL_Log("Joining playThread");
@@ -4274,7 +4307,13 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
         std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
         schedulerWakeCv.wait_for(
             waitLock,
-            std::chrono::microseconds(kSchedulerMaxIdleSleepMicros));
+            std::chrono::microseconds(kSchedulerMaxIdleSleepMicros),
+            [this] {
+              // End the idle sleep when the scheduler is told to stop (so a
+              // play/load join exits promptly) or playback resumes.
+              return !schedulerActive.load(std::memory_order_acquire) ||
+                     isPlaying.load(std::memory_order_acquire);
+            });
         prevTimestamp = Clock::now();
         continue;
       }
@@ -4536,6 +4575,36 @@ void Jukebox::leavePlaybackStopped() {
                  "Jukebox could not confirm stopped playback: %s",
                  stopped.diagnostic.c_str());
   }
+}
+
+audio::playback::BackendOperationResult Jukebox::stopKeepDevice() {
+  std::lock_guard<std::mutex> playGuard(playThreadLock);
+  jukebox_lifecycle::SessionState lifecycleState{
+      .isPlaying = isPlaying,
+      .schedulerActive = schedulerActive,
+      .stopwatch = *stopwatch,
+      .transitionMutex = playThreadLock,
+      .positionMutex = seekLock,
+      .audioCursor = audioCursor,
+      .bmpCursor = bmpCursor,
+      .bmpLayerCursor = bmpLayerCursor,
+      .currentBga = currentBga,
+      .currentBmpLayer = currentBmpLayer,
+  };
+  const auto stopped = jukebox_lifecycle::StopPlaybackKeepDevice(
+      audio, "Jukebox::stopKeepDevice", lifecycleState,
+      [this] { wakeScheduler(); });
+  if (!stopped.success) {
+    SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", stopped.diagnostic.c_str());
+    return stopped;
+  }
+  if (playThread.joinable())
+    playThread.join();
+  std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
+  for (auto &videoPlayer : videoPlayerTable) {
+    videoPlayer.second->stop();
+  }
+  return {.success = true};
 }
 
 audio::playback::BackendOperationResult Jukebox::stop() {

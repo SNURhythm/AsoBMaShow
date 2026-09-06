@@ -8,6 +8,7 @@
 #include "SettingsAudioVideoModel.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
+#include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
 #include <atomic>
@@ -61,6 +62,10 @@ class Chart;
 class Note;
 } // namespace bms_parser
 
+namespace chart_library_platform {
+class SoundSetFolderPicker;
+} // namespace chart_library_platform
+
 #include "../input/IRhythmControl.h"
 #include "../input/InputTypes.h"
 #include "SettingsSceneInputRebuild.h"
@@ -74,7 +79,9 @@ class SettingsScene : public Scene, public IRhythmControl {
 public:
   explicit SettingsScene(
       ApplicationContext &context,
-      SettingsDestination destination = SettingsDestination::Profile);
+      SettingsDestination destination = SettingsDestination::Profile,
+      SceneReturnTarget returnTarget =
+          SceneReturnTarget::Registered("MainMenu"));
   ~SettingsScene() override;
 
   void init() override;
@@ -89,6 +96,7 @@ public:
                                 bool isBackSpin = false) override;
 
 private:
+  SceneReturnTarget returnTarget_;
   enum class SettingsTab {
     Profile,
     Timing,
@@ -317,6 +325,9 @@ private:
   bool gameplaySkinControlsBuiltDisabled = false;
   TextView *gameplaySkinStatusText = nullptr;
   TextView *gameplaySkinUiMessageText = nullptr;
+  TextInputBox *skinSelectSoundSetInput = nullptr;
+  std::unique_ptr<chart_library_platform::SoundSetFolderPicker>
+      soundSetFolderPicker;
   TextView *gameplaySkinConfigurationDigestText = nullptr;
   View *gameplaySkinSafetyOverlayRoot = nullptr;
   View *gameplaySkinBusyOverlayRoot = nullptr;
@@ -495,6 +506,7 @@ private:
       const skin::GameplaySkinSettingsSnapshot &snapshot);
   void ensureGameplaySkinBusyOverlay(
       const skin::GameplaySkinSettingsSnapshot &snapshot);
+  void applyPendingSoundSetFolderPick();
   [[nodiscard]] skin::ConfigOffset
   gameplaySkinOffsetForEntry(const skin::SkinEntryId &entry,
                              const std::string &name) const;

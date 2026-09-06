@@ -43,8 +43,8 @@ namespace {
 using asobmshow::bms_metadata::normalizedHash;
 
 constexpr int kArchiveParseCheckpointInterval = 100;
-constexpr int kIndividualParseCheckpointInterval = 1000;
 constexpr std::size_t kIndividualParseBatchSize = 512;
+constexpr std::size_t kIndividualCommitInterval = 1000;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
 constexpr std::size_t kArchiveParseResultChunkSize =
     kArchiveParseMaxInFlightFiles;
@@ -52,7 +52,6 @@ constexpr std::uint64_t kArchiveParseMaxInFlightBytes =
     16ull * 1024ull * 1024ull;
 constexpr std::size_t kArchiveDirectConcurrentMinCharts = 16;
 constexpr std::size_t kArchiveClassificationPauseInterval = 256;
-constexpr const char *kScanCheckpointPhaseIndividual = "individual";
 constexpr const char *kScanCheckpointPhaseArchive = "archive";
 
 bool isFindBmsPrivateStorageDirectory(const std::filesystem::path &path) {
@@ -113,9 +112,39 @@ bool parsedChartMetaHasStableIdentity(const bms_parser::ChartMeta &meta) {
          canonical_digest::isCanonicalLowerHex(sha256, 64);
 }
 
+bool reconcileIdentityHasStableIdentity(
+    const ChartScanReconcileIdentity &identity) {
+  return !identity.path.empty() &&
+         canonical_digest::isCanonicalLowerHex(identity.md5, 32) &&
+         canonical_digest::isCanonicalLowerHex(identity.sha256, 64);
+}
+
 bool parsedChartMetaLooksInsertable(const bms_parser::ChartMeta &meta) {
   return parsedChartMetaHasStableIdentity(meta) &&
          (meta.TotalNotes > 0 || meta.TotalLandmineNotes > 0);
+}
+
+struct ParsedChartMetadata {
+  bms_parser::ChartMeta meta;
+  ChartSequenceFeatures sequenceFeatures;
+};
+
+ChartSequenceFeatures sequenceFeatures(const bms_parser::Chart &chart) {
+  ChartSequenceFeatures result;
+  // SongData#setBMSModel uses BMSModel#getBgaList, which the pinned decoder
+  // fills from declared #BMP resources rather than from BGA timeline use.
+  result.hasBga = !chart.BmpTable.empty();
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) continue;
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr) continue;
+      // SongData.setBMSModel at the pinned commit checks these exact values.
+      result.hasBpmStop = result.hasBpmStop || timeline->StopLength > 0;
+      result.hasScrollChange =
+          result.hasScrollChange || timeline->Scroll != 1.0;
+    }
+  }
+  return result;
 }
 
 bool hasTextDocumentExtension(const std::filesystem::path &path) {
@@ -128,6 +157,25 @@ bool hasTextDocumentExtension(const std::filesystem::path &path) {
         std::tolower(static_cast<unsigned char>(character)));
   }
   return filename.ends_with(".txt");
+}
+
+// Mirrors beatoraja's SQLiteSongDatabaseAccessor.isPreviewFile(): a file whose
+// lowercased name starts with "preview" and ends in a supported audio
+// extension is the folder's fallback preview when a chart has no #PREVIEW.
+bool isPreviewAudioFile(const std::filesystem::path &path) {
+  std::string filename = fspath_to_utf8(path.filename());
+  if (filename.size() < 8) {
+    return false;
+  }
+  for (char &character : filename) {
+    character = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(character)));
+  }
+  if (!filename.starts_with("preview")) {
+    return false;
+  }
+  return filename.ends_with(".wav") || filename.ends_with(".ogg") ||
+         filename.ends_with(".mp3") || filename.ends_with(".flac");
 }
 
 bool folderContainsTextDocument(const std::filesystem::path &folder) {
@@ -159,6 +207,9 @@ struct ArchiveScanResult {
   std::uint64_t uncompressedSize = 0;
   std::vector<std::filesystem::path> chartPaths;
   std::unordered_set<path_t> documentedChartPaths;
+  // Inner-folder path -> preview filename (first preview* audio file seen in
+  // that folder), mirroring beatoraja's per-folder preview fallback.
+  std::unordered_map<path_t, path_t> folderPreviews;
 };
 
 ArchiveScanResult
@@ -210,6 +261,12 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     if (hasTextDocumentExtension(entry.path)) {
       documentedFolders.insert(
           fspath_to_path_t(entry.path.parent_path().lexically_normal()));
+    }
+    if (isPreviewAudioFile(entry.path)) {
+      const path_t innerFolder =
+          fspath_to_path_t(entry.path.parent_path().lexically_normal());
+      result.folderPreviews.emplace(innerFolder,
+                                    fspath_to_path_t(entry.path.filename()));
     }
     if (result.solid ||
         !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
@@ -267,6 +324,14 @@ std::int64_t fileTimeToSqlNs(std::filesystem::file_time_type time) {
   return static_cast<std::int64_t>(nanos);
 }
 
+std::int64_t fileTimeToUnixSeconds(std::filesystem::file_time_type time) {
+  const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::file_clock::to_sys(time)
+                               .time_since_epoch())
+                           .count();
+  return static_cast<std::int64_t>(seconds);
+}
+
 bool archiveFileState(const std::filesystem::path &path,
                       std::int64_t &archiveSize, std::int64_t &mtimeNs) {
   std::error_code error;
@@ -299,26 +364,6 @@ std::string checkpointInnerPathText(const std::filesystem::path &path) {
   return path.lexically_normal().generic_string();
 }
 
-void fnv1aAppend(std::uint64_t &hash, const std::string &text) {
-  constexpr std::uint64_t kPrime = 1099511628211ull;
-  for (const unsigned char ch : text) {
-    hash ^= ch;
-    hash *= kPrime;
-  }
-  hash ^= 0xffu;
-  hash *= kPrime;
-}
-
-std::string stableHashHex(std::uint64_t value) {
-  constexpr char kHex[] = "0123456789abcdef";
-  std::string text(16, '0');
-  for (int i = 15; i >= 0; --i) {
-    text[i] = kHex[value & 0xfu];
-    value >>= 4u;
-  }
-  return text;
-}
-
 std::optional<archive_file::SourcePreference>
 archiveBatchSourcePreference(const std::filesystem::path &archivePath,
                              std::optional<bool> solidHint) {
@@ -335,6 +380,25 @@ archiveBatchSourcePreference(const std::filesystem::path &archivePath,
       .archiveSize = static_cast<std::uint64_t>(std::min<std::uintmax_t>(
           size, std::numeric_limits<std::uint64_t>::max())),
   };
+}
+
+bool pathAtOrInsideRoot(const std::filesystem::path &path,
+                        const std::filesystem::path &root) {
+  if (path.empty() || root.empty()) {
+    return false;
+  }
+  const auto normalizedPath = path.lexically_normal();
+  const auto normalizedRoot = root.lexically_normal();
+  if (normalizedPath == normalizedRoot) {
+    return true;
+  }
+  const auto relative = normalizedPath.lexically_relative(normalizedRoot);
+  if (relative.empty() || relative.is_absolute()) {
+    return false;
+  }
+  const auto first = relative.begin();
+  return first != relative.end() && *first != std::filesystem::path("..") &&
+         *first != std::filesystem::path(".");
 }
 
 } // namespace
@@ -378,8 +442,9 @@ ChartScanResult ChartLibraryScanner::ScanWithResult(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
-  return ScanImpl(session, roots, true, stopToken, std::move(progressCallback),
-                  std::move(pauseCallback), std::move(flushRequestCallback),
+  return ScanImpl(session, roots, ReconcileMode::Full, stopToken,
+                  std::move(progressCallback), std::move(pauseCallback),
+                  std::move(flushRequestCallback),
                   std::move(flushCompleteCallback));
 }
 
@@ -391,14 +456,30 @@ ChartScanResult ChartLibraryScanner::ScanAddedWithResult(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback) {
-  return ScanImpl(session, roots, false, stopToken, std::move(progressCallback),
-                  std::move(pauseCallback), std::move(flushRequestCallback),
+  return ScanImpl(session, roots, ReconcileMode::None, stopToken,
+                  std::move(progressCallback), std::move(pauseCallback),
+                  std::move(flushRequestCallback),
+                  std::move(flushCompleteCallback));
+}
+
+ChartScanResult ChartLibraryScanner::ScanScopedWithResult(
+    ChartRepository::Session &session,
+    const std::vector<std::filesystem::path> &roots,
+    const std::stop_token *stopToken,
+    ChartScanProgressCallback progressCallback,
+    ChartScanPauseCallback pauseCallback,
+    ChartScanFlushRequestCallback flushRequestCallback,
+    ChartScanFlushCompleteCallback flushCompleteCallback) {
+  return ScanImpl(session, roots, ReconcileMode::Scoped, stopToken,
+                  std::move(progressCallback), std::move(pauseCallback),
+                  std::move(flushRequestCallback),
                   std::move(flushCompleteCallback));
 }
 
 ChartScanResult ChartLibraryScanner::ScanImpl(
     ChartRepository::Session &session,
-    const std::vector<std::filesystem::path> &roots, bool reconcileExisting,
+    const std::vector<std::filesystem::path> &roots,
+    ReconcileMode reconcileMode,
     const std::stop_token *stopToken,
     ChartScanProgressCallback progressCallback,
     ChartScanPauseCallback pauseCallback,
@@ -407,6 +488,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   if (stopRequested(stopToken)) {
     return {};
   }
+  const bool reconcileExisting = reconcileMode != ReconcileMode::None;
   std::atomic_bool interrupted{false};
   auto pauseIfNeeded = [&]() {
     return pauseCallback == nullptr || pauseCallback();
@@ -433,36 +515,79 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   };
 
+  using ScanClock = std::chrono::steady_clock;
+  auto scanPhaseStart = []() { return ScanClock::now(); };
+  auto scanPhaseEnd = [&](const char *phase, ScanClock::time_point start) {
+    const auto phaseMillis =
+        std::chrono::duration_cast<std::chrono::milliseconds>(ScanClock::now() -
+                                                              start)
+            .count();
+    SDL_Log("Chart scan phase: %s took %lld ms", phase,
+            static_cast<long long>(phaseMillis));
+    archive_file::appendDebugLogLine(std::string("Chart scan phase: ") +
+                                     phase + " took " +
+                                     std::to_string(phaseMillis) + " ms");
+  };
+  auto scanPhase = [&](const char *phase) {
+    archive_file::appendDebugLogLine(std::string("Chart scan phase begin: ") +
+                                     phase);
+  };
+
   reportProgress(0, static_cast<int>(std::max<std::size_t>(roots.size(), 1)),
                  ChartScanProgressStage::Preparing);
   if (shouldStop()) {
     return {};
   }
 
+  const auto scanSnapshotLoadStart = scanPhaseStart();
   ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
-      reconcileExisting ? ChartScanSnapshotLoad::Full
+      reconcileExisting ? ChartScanSnapshotLoad::Reconcile
                         : ChartScanSnapshotLoad::CheckpointOnly);
+  // The reconcile pass only needs each stored chart's identity (path + md5 +
+  // sha256), so load those lightweight records instead of full metadata rows.
+  std::vector<ChartScanReconcileIdentity> storedChartIdentities;
+  if (reconcileExisting) {
+    storedChartIdentities = session.LoadScanReconcileIdentities();
+  }
+  scanPhaseEnd("load-scan-snapshot", scanSnapshotLoadStart);
+  if (reconcileMode == ReconcileMode::Scoped) {
+    const auto pathOutsideScope = [&](const std::filesystem::path &path) {
+      return std::ranges::none_of(roots, [&](const auto &root) {
+        return pathAtOrInsideRoot(path, root);
+      });
+    };
+    std::erase_if(storedChartIdentities, [&](const auto &identity) {
+      return pathOutsideScope(identity.path);
+    });
+    std::erase_if(scanSnapshot.solidArchives, [&](const auto &archive) {
+      return pathOutsideScope(archive.path);
+    });
+    std::erase_if(scanSnapshot.archiveCache, [&](const auto &archive) {
+      return pathOutsideScope(archive.path);
+    });
+  }
   const ChartScanCheckpoint checkpoint =
       scanSnapshot.checkpoint.value_or(ChartScanCheckpoint{});
-  std::vector<bms_parser::ChartMeta> chartMetas =
-      std::move(scanSnapshot.charts);
 
   struct ScanDiff {
     std::filesystem::path path;
     bool deleted = false;
     bool parseAttempted = false;
     bool hasDocument = false;
-    std::optional<bms_parser::ChartMeta> preparedMeta;
+    std::optional<ParsedChartMetadata> preparedMeta;
   };
   std::vector<ScanDiff> diffs;
   std::vector<std::pair<std::filesystem::path, bool>> documentFlagUpdates;
   std::vector<std::filesystem::path> sourcePreferenceRefreshPaths;
   struct CachedSourcePreferenceUpdate {
-    std::filesystem::path path;
+    std::filesystem::path archivePath;
     int priority = 0;
     std::uint64_t archiveSize = 0;
   };
-  std::vector<CachedSourcePreferenceUpdate> cachedSourcePreferenceUpdates;
+  // One source-preference update per archive (all charts inside an archive
+  // share the same priority/archive size), keyed by archive path.
+  std::unordered_map<path_t, CachedSourcePreferenceUpdate>
+      cachedSourcePreferenceUpdates;
   struct SolidArchiveDiff {
     std::filesystem::path path;
     bool solid = false;
@@ -481,14 +606,22 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::unordered_map<path_t, ArchiveCacheDiff> pendingArchiveCacheDiffs;
   std::vector<std::filesystem::path> staleSolidArchives;
   std::vector<std::filesystem::path> reindexedArchives;
+  std::vector<std::filesystem::path> liveArchivePaths;
   std::unordered_set<path_t> knownChartPaths;
   std::unordered_map<path_t, int> knownArchiveChartCounts;
   std::unordered_map<path_t, int> storedArchiveChartCounts;
   std::unordered_set<path_t> scannedArchivePaths;
-  diffs.reserve(chartMetas.size());
-  documentFlagUpdates.reserve(chartMetas.size());
-  sourcePreferenceRefreshPaths.reserve(chartMetas.size());
-  cachedSourcePreferenceUpdates.reserve(chartMetas.size());
+  // Folder path (ordinary filesystem folder or archive inner folder) -> preview
+  // filename, mirroring beatoraja's per-folder preview fallback: the first
+  // preview* audio file in a folder is used for any chart there lacking
+  // #PREVIEW. Populated during folder traversal and archive scans; applied when
+  // a chart is inserted (new/refreshed charts; legacy rows without #PREVIEW
+  // stay empty until the user refreshes them).
+  std::unordered_map<path_t, path_t> folderPreviews;
+  diffs.reserve(storedChartIdentities.size());
+  documentFlagUpdates.reserve(storedChartIdentities.size());
+  sourcePreferenceRefreshPaths.reserve(storedChartIdentities.size());
+  cachedSourcePreferenceUpdates.reserve(storedChartIdentities.size());
 
   auto archiveScanKey = [](const std::filesystem::path &archivePath) {
     return fspath_to_path_t(archivePath.lexically_normal());
@@ -530,23 +663,36 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return state;
   };
 
-  for (const auto &chartMeta : chartMetas) {
+  std::map<std::filesystem::path, ChartFolderScanNode> folderScanNodes;
+  std::vector<std::filesystem::path> folderScanRoots;
+  const auto observeFolder = [&](const std::filesystem::path &path) {
+    std::error_code error;
+    const auto modified = std::filesystem::last_write_time(path, error);
+    const std::int64_t dateSeconds =
+        error ? -1 : fileTimeToUnixSeconds(modified);
+    const auto normalized = path.lexically_normal();
+    folderScanNodes.insert_or_assign(
+        normalized, ChartFolderScanNode{.path = fspath_to_path_t(normalized),
+                                        .dateSeconds = dateSeconds});
+  };
+
+  for (const auto &identity : storedChartIdentities) {
     if (shouldStop()) {
       return {};
     }
-    if (!parsedChartMetaHasStableIdentity(chartMeta)) {
-      diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
+    if (!reconcileIdentityHasStableIdentity(identity)) {
+      diffs.push_back({.path = identity.path, .deleted = true});
       continue;
     }
 
     std::filesystem::path archivePath;
     std::filesystem::path innerPath;
-    const bool liveArchivePath = archive_file::splitVirtualPath(
-        chartMeta.BmsPath, archivePath, innerPath);
+    const bool liveArchivePath =
+        archive_file::splitVirtualPath(identity.path, archivePath, innerPath);
     std::filesystem::path storedArchivePathValue;
     std::filesystem::path storedInnerPath;
     const bool storedArchivePath = splitStoredArchiveVirtualPath(
-        chartMeta.BmsPath, storedArchivePathValue, storedInnerPath);
+        identity.path, storedArchivePathValue, storedInnerPath);
     if (storedArchivePath) {
       ++storedArchiveChartCounts[archiveScanKey(storedArchivePathValue)];
     }
@@ -563,23 +709,23 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
             archiveState.cache.archiveSize == archiveState.archiveSize &&
             archiveState.cache.mtimeNs == archiveState.mtimeNs &&
             archiveState.cache.chartCount >= 0) {
-          knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
-          cachedSourcePreferenceUpdates.push_back({
-              .path = chartMeta.BmsPath,
+          knownChartPaths.insert(fspath_to_path_t(identity.path));
+          cachedSourcePreferenceUpdates[archiveKey] = {
+              .archivePath = archivePath,
               .priority = archiveState.cache.solid ? 2 : 1,
               .archiveSize = static_cast<std::uint64_t>(
                   std::max<std::int64_t>(0, archiveState.archiveSize)),
-          });
+          };
         }
         continue;
       }
     }
 
-    if (archive_file::exists(chartMeta.BmsPath)) {
-      knownChartPaths.insert(fspath_to_path_t(chartMeta.BmsPath));
-      sourcePreferenceRefreshPaths.push_back(chartMeta.BmsPath);
+    if (archive_file::exists(identity.path)) {
+      knownChartPaths.insert(fspath_to_path_t(identity.path));
+      sourcePreferenceRefreshPaths.push_back(identity.path);
     } else {
-      diffs.push_back({.path = chartMeta.BmsPath, .deleted = true});
+      diffs.push_back({.path = identity.path, .deleted = true});
     }
   }
 
@@ -596,7 +742,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto parseChartMeta = [&](const std::filesystem::path &path,
                             const std::vector<unsigned char> *bytes)
-      -> std::optional<bms_parser::ChartMeta> {
+      -> std::optional<ParsedChartMetadata> {
     const std::string chartText = fspath_to_utf8(path);
     bms_parser::Parser parser;
     bms_parser::Chart *rawChart = nullptr;
@@ -604,7 +750,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::atomic_bool cancelled(false);
     try {
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &rawChart, false, true, cancelled);
+        parser.Parse(*bytes, &rawChart, false, false, cancelled);
         chart.reset(rawChart);
         rawChart = nullptr;
         if (chart != nullptr) {
@@ -617,7 +763,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &rawChart, false, true,
+        archive_file::parseChart(parser, path, &rawChart, false, false,
                                  cancelled);
         chart.reset(rawChart);
         rawChart = nullptr;
@@ -647,21 +793,20 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           " md5=" + chart->Meta.MD5 + " sha256=" + chart->Meta.SHA256);
       return std::nullopt;
     }
-    return chart->Meta;
+    return ParsedChartMetadata{.meta = std::move(chart->Meta),
+                               .sequenceFeatures = sequenceFeatures(*chart)};
   };
 
   struct ArchiveParseBatch {
     std::filesystem::path archivePath;
     std::vector<std::filesystem::path> innerPaths;
-    std::vector<bool> parseAttempted;
     std::vector<bool> hasDocument;
-    std::vector<std::optional<bms_parser::ChartMeta>> preparedMetas;
   };
 
   struct ArchiveParsedChart {
     std::filesystem::path innerPath;
     std::filesystem::path chartPath;
-    std::optional<bms_parser::ChartMeta> meta;
+    std::optional<ParsedChartMetadata> meta;
   };
 
   struct ArchiveParseJobResult {
@@ -711,7 +856,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::filesystem::path path;
     bool parseAttempted = false;
     bool hasDocument = false;
-    std::optional<bms_parser::ChartMeta> meta;
+    std::optional<ParsedChartMetadata> meta;
   };
   struct PreparedArchive {
     std::filesystem::path path;
@@ -1296,6 +1441,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       discoveryHealthy.store(false, std::memory_order_relaxed);
       return;
     }
+    liveArchivePaths.push_back(archivePath);
 
     const std::string archiveText = fspath_to_utf8(archivePath);
     const auto cacheIt = archiveCacheByPath.find(archiveKey);
@@ -1384,6 +1530,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   int scannedRootCount = 0;
   bool traversalHealthy = true;
+  const auto folderTraversalStart = scanPhaseStart();
   const int rootCount =
       static_cast<int>(std::max<std::size_t>(roots.size(), 1));
   for (const auto &root : roots) {
@@ -1457,6 +1604,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       continue;
     }
 
+    std::error_code rootDirectoryError;
+    if (std::filesystem::is_directory(root, rootDirectoryError) &&
+        !rootDirectoryError) {
+      const auto normalizedRoot = root.lexically_normal();
+      observeFolder(normalizedRoot);
+      folderScanRoots.push_back(normalizedRoot);
+    }
+
     std::filesystem::recursive_directory_iterator iterator(
         root, std::filesystem::directory_options::skip_permission_denied,
         error);
@@ -1468,6 +1623,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
       std::error_code directoryTypeError;
       if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
+        observeFolder(iterator->path());
         if (isFindBmsPrivateStorageDirectory(iterator->path())) {
           iterator.disable_recursion_pending();
         }
@@ -1478,7 +1634,17 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         continue;
       }
       const std::filesystem::path path = iterator->path();
+      if (isPreviewAudioFile(path)) {
+        const path_t folder =
+            fspath_to_path_t(path.parent_path().lexically_normal());
+        folderPreviews.emplace(folder, fspath_to_path_t(path.filename()));
+      }
       if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
+        if (const auto folder = folderScanNodes.find(
+                path.parent_path().lexically_normal());
+            folder != folderScanNodes.end()) {
+          folder->second.containsBms = true;
+        }
         scheduleOrdinaryChart(path, hasDocumentForChartPath(path));
         continue;
       }
@@ -1517,6 +1683,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   }
   traversalHealthy =
       traversalHealthy && discoveryHealthy.load(std::memory_order_relaxed);
+  scanPhaseEnd("folder-traversal-and-entity-prep", folderTraversalStart);
+  const auto reconcileDiffBuildStart = scanPhaseStart();
+  scanPhase("reconcile-diff-build");
 
   for (auto &preparedSlot : preparedEntities) {
     if (!preparedSlot.has_value()) {
@@ -1593,6 +1762,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .path = prepared.path,
         .solid = false,
     });
+    // Merge the archive's per-inner-folder preview fallbacks into the global
+    // map, keyed by the virtual folder path (archive path + inner folder) so
+    // parseChartMeta's meta.Folder lookup matches.
+    for (const auto &[innerFolder, preview] : archiveScan.folderPreviews) {
+      folderPreviews.emplace(
+          fspath_to_path_t(archive_file::makeVirtualPath(
+              prepared.path, std::filesystem::path(innerFolder))),
+          preview);
+    }
     if (archiveScan.chartPaths.empty()) {
       archiveCacheDiffs.push_back(cacheDiff);
     } else {
@@ -1615,30 +1793,79 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   reportProgress(rootCount, rootCount,
                  ChartScanProgressStage::PreparingUpdates);
+  scanPhaseEnd("reconcile-diff-build", reconcileDiffBuildStart);
+  archive_file::appendDebugLogLine(
+      "Preparing updates: diffs=" + std::to_string(diffs.size()) +
+      " documentFlagUpdates=" + std::to_string(documentFlagUpdates.size()) +
+      " checkpointFound=" + std::to_string(checkpoint.found) +
+      " checkpointPhase=" +
+      (checkpoint.found ? checkpoint.phase : std::string("(none)")));
 
   if (shouldStop()) {
     entityScheduler.cancel();
     return {};
   }
+
+  std::uint64_t completedFlushRequest = 0;
+  auto pendingFlushRequest = [&]() -> std::uint64_t {
+    if (flushRequestCallback == nullptr) {
+      return 0;
+    }
+    return flushRequestCallback();
+  };
+  auto acknowledgeFlushRequest = [&](std::uint64_t request) {
+    if (request == 0 || request <= completedFlushRequest) {
+      return;
+    }
+    completedFlushRequest = request;
+    if (flushCompleteCallback != nullptr) {
+      flushCompleteCallback(request);
+    }
+  };
+
   const bool noScanWork =
       diffs.empty() && documentFlagUpdates.empty() &&
       sourcePreferenceRefreshPaths.empty() &&
       cachedSourcePreferenceUpdates.empty() && solidArchiveDiffs.empty() &&
       archiveCacheDiffs.empty() && pendingArchiveCacheDiffs.empty() &&
-      staleSolidArchives.empty() && reindexedArchives.empty();
+      staleSolidArchives.empty() && reindexedArchives.empty() &&
+      folderScanNodes.empty();
   if (noScanWork) {
     entityScheduler.finish();
     for (const auto &exception : entityScheduler.takeExceptions()) {
       (void)exception;
       traversalHealthy = false;
     }
-    bool finalized = traversalHealthy && session.ClearScanCheckpoint();
-    if (finalized && reconcileExisting) {
-      finalized = session.ClearChartMetadataRebuildRequired();
+    // No work was produced, but a pending flush request (e.g. a UI-requested
+    // durable state) must still be acknowledged so the caller's completion
+    // signal arrives; nothing needs to be committed because there were no
+    // changes. Only a fully finalized scan (healthy traversal and, for a Full
+    // scan, a successful checkpoint clear) may acknowledge, so a scan that
+    // reports completed=false does not claim a flush completion.
+    bool finalized = traversalHealthy;
+    if (reconcileMode == ReconcileMode::Full) {
+      finalized = finalized && session.ClearScanCheckpoint();
+      if (finalized) {
+        finalized = session.ClearChartMetadataRebuildRequired();
+      }
+    }
+    if (finalized) {
+      acknowledgeFlushRequest(pendingFlushRequest());
     }
     return ChartScanResult{.completed = finalized};
   }
 
+  // Archive ordering. The archive order must be deterministic so an
+  // interrupted scan can resume by archive identity across restarts: a
+  // checkpoint survives a restart only if both runs project the same archive
+  // sequence. Directory iteration (especially over iOS File Provider Storage)
+  // is not stable across runs, so sort the archives by path. Per-archive inner
+  // paths are collected from the archive's own entry listing, which is
+  // deterministic for an unchanged archive, so no per-diff or per-inner-path
+  // sorting is needed. The stored scan_signature is informational only (the
+  // resume decision is made on archive identity plus subIndex); a fixed
+  // literal is written and nothing validates it.
+  const auto orderingStart = std::chrono::steady_clock::now();
   std::vector<ScanDiff> individualDiffs;
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, ArchiveParseBatch> archiveBatches;
@@ -1668,10 +1895,32 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                     .first;
     }
     batchIt->second.innerPaths.push_back(innerPath);
-    batchIt->second.parseAttempted.push_back(diff.parseAttempted);
     batchIt->second.hasDocument.push_back(diff.hasDocument);
-    batchIt->second.preparedMetas.push_back(std::move(diff.preparedMeta));
   }
+
+  // Sort the archive order by path so the archive resume indexes stay
+  // deterministic across runs (the scan signature is informational only).
+  std::ranges::sort(archiveBatchOrder, [&](const path_t &left, const path_t &right) {
+    const auto leftIt = archiveBatches.find(left);
+    const auto rightIt = archiveBatches.find(right);
+    const std::string leftKey =
+        leftIt != archiveBatches.end()
+            ? checkpointPathTextForDb(leftIt->second.archivePath)
+            : checkpointPathTextForDb(left);
+    const std::string rightKey =
+        rightIt != archiveBatches.end()
+            ? checkpointPathTextForDb(rightIt->second.archivePath)
+            : checkpointPathTextForDb(right);
+    return leftKey < rightKey;
+  });
+  const auto orderingMillis =
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - orderingStart)
+          .count();
+  archive_file::appendDebugLogLine(
+      "Deterministic ordering took " + std::to_string(orderingMillis) +
+      "ms for " + std::to_string(individualDiffs.size()) + " individual diffs and " +
+      std::to_string(archiveBatchOrder.size()) + " archive batches.");
 
   int parseTotal = static_cast<int>(individualDiffs.size());
   for (const auto &archiveKey : archiveBatchOrder) {
@@ -1683,78 +1932,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   parseTotal = std::max(parseTotal, 1);
   int parseCurrent = 0;
 
-  auto computeScanSignature = [&](std::size_t individualStart,
-                                  std::size_t archiveStart) {
-    constexpr std::uint64_t kOffset = 14695981039346656037ull;
-    std::uint64_t hash = kOffset;
-    fnv1aAppend(hash, "chart-scan-v1");
-
-    std::vector<std::string> rootKeys;
-    rootKeys.reserve(roots.size());
-    for (const auto &root : roots) {
-      std::string rootKey = checkpointPathTextForDb(root);
-      std::int64_t size = 0;
-      std::int64_t mtimeNs = 0;
-      if (archiveFileState(root, size, mtimeNs)) {
-        rootKey += "|file|";
-        rootKey += std::to_string(size);
-        rootKey += "|";
-        rootKey += std::to_string(mtimeNs);
-      } else {
-        std::error_code error;
-        const bool directory = std::filesystem::is_directory(root, error);
-        if (error) {
-          rootKey += "|unknown";
-        } else {
-          rootKey += directory ? "|dir" : "|missing";
-        }
-      }
-      rootKeys.push_back(std::move(rootKey));
-    }
-    std::sort(rootKeys.begin(), rootKeys.end());
-    fnv1aAppend(hash, "roots");
-    fnv1aAppend(hash, std::to_string(rootKeys.size()));
-    for (const auto &rootKey : rootKeys) {
-      fnv1aAppend(hash, rootKey);
-    }
-
-    fnv1aAppend(hash, "individual");
-    individualStart = std::min(individualStart, individualDiffs.size());
-    fnv1aAppend(hash, std::to_string(individualDiffs.size() - individualStart));
-    for (std::size_t i = individualStart; i < individualDiffs.size(); ++i) {
-      const auto &diff = individualDiffs[i];
-      fnv1aAppend(hash, diff.deleted ? "d" : "u");
-      fnv1aAppend(hash, checkpointPathTextForDb(diff.path));
-    }
-
-    fnv1aAppend(hash, "archives");
-    archiveStart = std::min(archiveStart, archiveBatchOrder.size());
-    fnv1aAppend(hash, std::to_string(archiveBatchOrder.size() - archiveStart));
-    for (std::size_t i = archiveStart; i < archiveBatchOrder.size(); ++i) {
-      const auto &archiveKey = archiveBatchOrder[i];
-      const auto batchIt = archiveBatches.find(archiveKey);
-      if (batchIt == archiveBatches.end()) {
-        continue;
-      }
-      const ArchiveParseBatch &batch = batchIt->second;
-      fnv1aAppend(hash, checkpointPathTextForDb(batch.archivePath));
-      std::int64_t archiveSize = 0;
-      std::int64_t mtimeNs = 0;
-      if (archiveFileState(batch.archivePath, archiveSize, mtimeNs)) {
-        fnv1aAppend(hash, std::to_string(archiveSize));
-        fnv1aAppend(hash, std::to_string(mtimeNs));
-      } else {
-        fnv1aAppend(hash, "missing");
-      }
-      fnv1aAppend(hash, std::to_string(batch.innerPaths.size()));
-      for (const auto &innerPath : batch.innerPaths) {
-        fnv1aAppend(hash, checkpointInnerPathText(innerPath));
-      }
-    }
-    return stableHashHex(hash);
-  };
-
-  const std::string scanSignature = computeScanSignature(0, 0);
+  const std::string kArchiveCheckpointSignature = "chart-scan-archives-v1";
   struct ResumePlan {
     bool valid = false;
     bool archivePhase = false;
@@ -1777,134 +1955,170 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return count;
   };
 
-  auto validateIndividualCheckpoint = [&]() {
-    const std::size_t nextIndex =
-        static_cast<std::size_t>(checkpoint.nextIndex);
-    if (nextIndex > individualDiffs.size() || checkpoint.subIndex != 0) {
-      return false;
+  std::size_t resumeStart = archiveBatchOrder.size();
+  std::unordered_map<std::string, std::pair<std::int64_t, std::int64_t>>
+      completedArchiveIdentity;
+  completedArchiveIdentity.reserve(scanSnapshot.completedArchives.size());
+  for (const auto &record : scanSnapshot.completedArchives) {
+    // Key by the same normalized DB path text used for checkpoint identity so
+    // the stored path round-trips consistently with the live archive path.
+    // NOTE: matching an archive as "already completed" trusts that the
+    // (path, size, mtime) triple means byte-identical content, the same
+    // assumption archive_scan_cache and source-preference identity already
+    // rely on. A re-zipped archive with identical size and identical ns mtime
+    // would be skipped (rare; content-hash identity would require re-reading
+    // the archive, which defeats the resume fast-path).
+    completedArchiveIdentity[checkpointPathTextForDb(record.path)] = {
+        record.size, record.mtimeNs};
+  }
+
+  std::unordered_map<path_t, bool> completedArchiveCache;
+  auto archiveIdentityCompleted =
+      [&](const std::filesystem::path &archivePath) -> bool {
+    const path_t archiveKey = archiveScanKey(archivePath);
+    if (const auto cached = completedArchiveCache.find(archiveKey);
+        cached != completedArchiveCache.end()) {
+      return cached->second;
     }
-    if (nextIndex > 0 &&
-        checkpointPathTextForDb(individualDiffs[nextIndex - 1].path) !=
-            checkpointPathTextForDb(checkpoint.lastPath)) {
-      return false;
+    std::int64_t archiveSize = 0;
+    std::int64_t mtimeNs = 0;
+    bool completed = false;
+    if (archiveFileState(archivePath, archiveSize, mtimeNs)) {
+      const auto identityIt = completedArchiveIdentity.find(
+          checkpointPathTextForDb(archivePath));
+      completed = identityIt != completedArchiveIdentity.end() &&
+                  identityIt->second.first == archiveSize &&
+                  identityIt->second.second == mtimeNs;
     }
-    resumePlan.valid = true;
-    resumePlan.archivePhase = false;
-    resumePlan.individualStart = nextIndex;
-    parseCurrent = static_cast<int>(
-        std::min<std::size_t>(nextIndex, static_cast<std::size_t>(parseTotal)));
-    return true;
+    completedArchiveCache.emplace(archiveKey, completed);
+    return completed;
+  };
+
+  auto archiveBatchFinished =
+      [&](const ArchiveParseBatch &batch) -> bool {
+    return archiveIdentityCompleted(batch.archivePath);
   };
 
   auto validateArchiveCheckpoint = [&]() {
-    const std::size_t nextIndex =
-        static_cast<std::size_t>(checkpoint.nextIndex);
     const std::size_t subIndex = static_cast<std::size_t>(checkpoint.subIndex);
-    if (nextIndex > archiveBatchOrder.size()) {
-      return false;
-    }
-    if (nextIndex == 0 && subIndex == 0) {
-      resumePlan.valid = true;
-      resumePlan.archivePhase = true;
-      resumePlan.individualStart = individualDiffs.size();
-      resumePlan.archiveStart = 0;
-      resumePlan.archiveSubStart = 0;
-      parseCurrent = static_cast<int>(std::min<std::size_t>(
-          individualDiffs.size(), static_cast<std::size_t>(parseTotal)));
-      return true;
-    }
+    archive_file::appendDebugLogLine(
+        "Resolving archive checkpoint: subIndex=" +
+        std::to_string(subIndex) +
+        " archives=" + std::to_string(archiveBatchOrder.size()) +
+        " completed=" + std::to_string(completedArchiveIdentity.size()) +
+        " ckptArchivePath=" +
+        (checkpoint.archivePath.empty()
+             ? "(empty)"
+             : fspath_to_utf8(checkpoint.archivePath)) +
+        " ckptSize=" + std::to_string(checkpoint.archiveSize) +
+        " ckptMtime=" + std::to_string(checkpoint.archiveMtimeNs));
 
-    if (subIndex == 0) {
-      if (nextIndex == 0) {
-        return false;
-      }
-      const auto previousBatchIt =
-          archiveBatches.find(archiveBatchOrder[nextIndex - 1]);
-      if (previousBatchIt == archiveBatches.end()) {
-        return false;
-      }
-      const ArchiveParseBatch &previousBatch = previousBatchIt->second;
-      if (checkpointPathTextForDb(previousBatch.archivePath) !=
-          checkpointPathTextForDb(checkpoint.archivePath)) {
-        return false;
-      }
-      std::int64_t archiveSize = 0;
-      std::int64_t mtimeNs = 0;
-      if (!archiveFileState(previousBatch.archivePath, archiveSize, mtimeNs) ||
-          archiveSize != checkpoint.archiveSize ||
-          mtimeNs != checkpoint.archiveMtimeNs) {
-        return false;
-      }
-      if (!previousBatch.innerPaths.empty() &&
-          checkpointInnerPathText(previousBatch.innerPaths.back()) !=
-              checkpoint.lastInnerPath) {
-        return false;
-      }
-    } else {
-      if (nextIndex >= archiveBatchOrder.size()) {
-        return false;
-      }
-      const auto batchIt = archiveBatches.find(archiveBatchOrder[nextIndex]);
+    // Archives whose current (path, size, mtime) identity is in the completed
+    // set were fully parsed and committed in an earlier (interrupted) run.
+    // Their charts are already durable, so skip them regardless of where they
+    // sort during this run. The first archive whose identity is not completed
+    // is where parsing resumes.
+    resumeStart = archiveBatchOrder.size();
+    for (std::size_t i = 0; i < archiveBatchOrder.size(); ++i) {
+      const auto batchIt = archiveBatches.find(archiveBatchOrder[i]);
       if (batchIt == archiveBatches.end()) {
-        return false;
+        continue;
       }
-      const ArchiveParseBatch &batch = batchIt->second;
-      if (subIndex > batch.innerPaths.size()) {
-        return false;
-      }
-      if (checkpointPathTextForDb(batch.archivePath) !=
-          checkpointPathTextForDb(checkpoint.archivePath)) {
-        return false;
-      }
-      std::int64_t archiveSize = 0;
-      std::int64_t mtimeNs = 0;
-      if (!archiveFileState(batch.archivePath, archiveSize, mtimeNs) ||
-          archiveSize != checkpoint.archiveSize ||
-          mtimeNs != checkpoint.archiveMtimeNs) {
-        return false;
-      }
-      if (checkpointInnerPathText(batch.innerPaths[subIndex - 1]) !=
-          checkpoint.lastInnerPath) {
-        return false;
+      if (archiveBatchFinished(batchIt->second)) {
+        resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[i]);
+      } else {
+        resumeStart = i;
+        break;
       }
     }
-
     resumePlan.valid = true;
     resumePlan.archivePhase = true;
-    resumePlan.individualStart = individualDiffs.size();
-    resumePlan.archiveStart = nextIndex;
-    resumePlan.archiveSubStart = subIndex;
-    for (std::size_t i = 0; i < nextIndex && i < archiveBatchOrder.size();
-         ++i) {
-      resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[i]);
+    // The individual (regular-file) diffs are recomputed fresh every run and
+    // are idempotent (parseAttempted skips already-committed charts), so always
+    // process them from index 0 on a resume instead of skipping them because a
+    // stale archive-phase checkpoint is present.
+    resumePlan.individualStart = 0;
+    resumePlan.archiveStart = resumeStart;
+    resumePlan.archiveSubStart = 0;
+
+    // Mid-archive continuation: the checkpoint recorded the archive being
+    // streamed at interruption (its identity plus the count of charts already
+    // durably inserted). If that archive is exactly where this run resumes
+    // and the recorded inner path is still at that position in its (stable)
+    // entry order, continue from subIndex instead of restarting the archive.
+    if (resumeStart < archiveBatchOrder.size()) {
+      const auto resumeBatchIt =
+          archiveBatches.find(archiveBatchOrder[resumeStart]);
+      if (resumeBatchIt != archiveBatches.end()) {
+        const ArchiveParseBatch &batch = resumeBatchIt->second;
+        const bool archivePathsMatch =
+            !checkpoint.archivePath.empty() &&
+            checkpointPathTextForDb(batch.archivePath) ==
+                checkpointPathTextForDb(checkpoint.archivePath);
+        std::int64_t archiveSize = 0;
+        std::int64_t mtimeNs = 0;
+        if (archivePathsMatch && subIndex > 0 &&
+            subIndex <= batch.innerPaths.size() &&
+            archiveFileState(batch.archivePath, archiveSize, mtimeNs) &&
+            archiveSize == checkpoint.archiveSize &&
+            mtimeNs == checkpoint.archiveMtimeNs &&
+            checkpointInnerPathText(batch.innerPaths[subIndex - 1]) ==
+                checkpoint.lastInnerPath) {
+          resumePlan.archiveSubStart = subIndex;
+          resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[resumeStart]);
+        }
+      }
     }
-    if (subIndex > 0 && nextIndex < archiveBatchOrder.size()) {
-      resumePlan.protectedArchiveKeys.insert(archiveBatchOrder[nextIndex]);
+
+    // Individual diffs are always reprocessed from index 0 on a resume (see
+    // individualStart = 0 above); parseCurrent must not pre-count them, or the
+    // individual loop would double-count and overshoot parseTotal.
+    // Completed archives that sort after the resume point are skipped (not
+    // parsed) by the archive loop, so their inner-path counts are already-done
+    // baseline too; without them progress would plateau below parseTotal on a
+    // successful commit.
+    std::size_t skippedCompletedInnerCount = 0;
+    for (std::size_t i = resumeStart; i < archiveBatchOrder.size(); ++i) {
+      const auto batchIt = archiveBatches.find(archiveBatchOrder[i]);
+      if (batchIt != archiveBatches.end() &&
+          archiveBatchFinished(batchIt->second)) {
+        skippedCompletedInnerCount += batchIt->second.innerPaths.size();
+      }
     }
-    const std::size_t resumedCount = individualDiffs.size() +
-                                     archiveBatchInnerCountBefore(nextIndex) +
-                                     subIndex;
+    const std::size_t resumedCount =
+        archiveBatchInnerCountBefore(resumeStart) +
+        skippedCompletedInnerCount + resumePlan.archiveSubStart;
     parseCurrent = static_cast<int>(std::min<std::size_t>(
         resumedCount, static_cast<std::size_t>(parseTotal)));
     return true;
   };
 
-  if (checkpoint.found && checkpoint.scanSignature == scanSignature &&
-      ((checkpoint.phase == kScanCheckpointPhaseIndividual &&
-        validateIndividualCheckpoint()) ||
-       (checkpoint.phase == kScanCheckpointPhaseArchive &&
-        validateArchiveCheckpoint()))) {
+  if (checkpoint.found && checkpoint.phase == kScanCheckpointPhaseArchive &&
+      validateArchiveCheckpoint()) {
     archive_file::appendDebugLogLine(
-        "Continuing chart scan from checkpoint: phase=" + checkpoint.phase +
-        " nextIndex=" + std::to_string(checkpoint.nextIndex) +
-        " subIndex=" + std::to_string(checkpoint.subIndex));
+        "Continuing chart scan from archive checkpoint: subIndex=" +
+        std::to_string(checkpoint.subIndex) +
+        " archiveStart=" + std::to_string(resumePlan.archiveStart) +
+        " archiveSubStart=" + std::to_string(resumePlan.archiveSubStart) +
+        " protected=" + std::to_string(resumePlan.protectedArchiveKeys.size()));
   } else if (checkpoint.found) {
-    session.ClearScanCheckpoint();
+    resumeStart = 0;
+    resumePlan = ResumePlan{};
+    // Only a full-library scan may wipe the resume state. A scoped/added scan
+    // operates on a subset of roots and would otherwise destroy the whole
+    // library's completed-archive markers on a stale checkpoint row.
+    if (reconcileMode == ReconcileMode::Full) {
+      session.ClearScanCheckpoint();
+    }
     archive_file::appendDebugLogLine(
         "Discarded stale chart scan checkpoint before parsing.");
   }
 
   auto scanBatch = session.BeginScanBatch();
+  archive_file::appendDebugLogLine(
+      scanBatch.has_value()
+          ? "Chart scan batch begun."
+          : "Chart scan batch begin failed.");
   if (!scanBatch.has_value()) {
     entityScheduler.cancel();
     return {};
@@ -1914,8 +2128,30 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     storageHealthy = success && storageHealthy;
     return success;
   };
+  std::vector<ChartFolderScanNode> scannedFolders;
+  scannedFolders.reserve(folderScanNodes.size());
+  for (const auto &[_, node] : folderScanNodes) {
+    scannedFolders.push_back(node);
+  }
+  if (!folderScanRoots.empty()) {
+    archive_file::appendDebugLogLine(
+        "Synchronizing folders: roots=" +
+        std::to_string(folderScanRoots.size()) + " nodes=" +
+        std::to_string(folderScanNodes.size()));
+    const auto syncStart = std::chrono::steady_clock::now();
+    recordStorageResult(
+        scanBatch->SynchronizeFolders(scannedFolders, folderScanRoots));
+    const auto syncMillis =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - syncStart)
+            .count();
+    archive_file::appendDebugLogLine(
+        "Folder synchronization complete in " + std::to_string(syncMillis) +
+        "ms.");
+  }
+  const auto reconcileLoopStart = scanPhaseStart();
+  scanPhase("reconcile-update-loops");
   std::vector<std::filesystem::path> upsertedChartPaths;
-  std::uint64_t completedFlushRequest = 0;
 
   auto makeCheckpoint = [&](const std::string &signature,
                             const std::string &phase, std::size_t nextIndex,
@@ -1941,7 +2177,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     return nextCheckpoint;
   };
 
-  auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) {
+  auto saveCheckpoint = [&](const ChartScanCheckpoint &nextCheckpoint) -> bool {
     if (!recordStorageResult(
             scanBatch->CheckpointAndContinue(nextCheckpoint))) {
       archive_file::appendDebugLogLine(
@@ -1949,24 +2185,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           nextCheckpoint.phase +
           " nextIndex=" + std::to_string(nextCheckpoint.nextIndex) +
           " subIndex=" + std::to_string(nextCheckpoint.subIndex));
+      return false;
     }
-  };
-
-  auto pendingFlushRequest = [&]() -> std::uint64_t {
-    if (flushRequestCallback == nullptr) {
-      return 0;
-    }
-    return flushRequestCallback();
-  };
-
-  auto acknowledgeFlushRequest = [&](std::uint64_t request) {
-    if (request == 0 || request <= completedFlushRequest) {
-      return;
-    }
-    completedFlushRequest = request;
-    if (flushCompleteCallback != nullptr) {
-      flushCompleteCallback(request);
-    }
+    return true;
   };
 
   auto checkpointSaveRequest = [&](bool force) -> std::optional<std::uint64_t> {
@@ -1979,20 +2200,30 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto saveCheckpointForFlush = [&](const ChartScanCheckpoint &nextCheckpoint,
                                     std::uint64_t request) {
-    saveCheckpoint(nextCheckpoint);
-    acknowledgeFlushRequest(request);
+    if (saveCheckpoint(nextCheckpoint)) {
+      acknowledgeFlushRequest(request);
+    }
   };
 
   auto archiveDeleteProtectedByCheckpoint =
       [&](const std::filesystem::path &archivePath) {
-        if (!resumePlan.valid || !resumePlan.archivePhase) {
+        if (resumePlan.valid && !resumePlan.archivePhase) {
           return false;
         }
         const path_t archiveKey = archiveScanKey(archivePath);
-        return resumePlan.protectedArchiveKeys.find(archiveKey) !=
-               resumePlan.protectedArchiveKeys.end();
+        if (resumePlan.valid &&
+            resumePlan.protectedArchiveKeys.find(archiveKey) !=
+                resumePlan.protectedArchiveKeys.end()) {
+          return true;
+        }
+        // Protect every archive whose (path, size, mtime) identity is already
+        // completed: its charts are durable and the parse loop will skip it,
+        // so its rows must not be removed by the reindex deletion pass even
+        // if it sorts after the resume point this run.
+        return archiveIdentityCompleted(archivePath);
       };
 
+  const auto loopSourcePrefRefreshStart = scanPhaseStart();
   for (const auto &path : sourcePreferenceRefreshPaths) {
     if (shouldStop()) {
       break;
@@ -2004,18 +2235,25 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .archiveSize = preference.archiveSize,
     }));
   }
+  scanPhaseEnd("loop-source-preference-refresh", loopSourcePrefRefreshStart);
 
-  for (const auto &update : cachedSourcePreferenceUpdates) {
+  const auto loopCachedSourcePrefStart = scanPhaseStart();
+  for (auto &[_, update] : cachedSourcePreferenceUpdates) {
     if (shouldStop()) {
       break;
     }
-    recordStorageResult(scanBatch->UpdateSourcePreference({
-        .path = update.path,
-        .priority = update.priority,
-        .archiveSize = update.archiveSize,
-    }));
+    if (archiveIdentityCompleted(update.archivePath)) {
+      // The archive was fully parsed and committed in an earlier run and its
+      // file is unchanged (same size and mtime), so its stored source
+      // preference is already current.
+      continue;
+    }
+    recordStorageResult(scanBatch->UpdateSourcePreferenceInArchive(
+        update.archivePath, update.priority, update.archiveSize));
   }
+  scanPhaseEnd("loop-cached-source-preference", loopCachedSourcePrefStart);
 
+  const auto loopStaleSolidArchivesStart = scanPhaseStart();
   for (const auto &path : staleSolidArchives) {
     if (shouldStop()) {
       break;
@@ -2023,7 +2261,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     recordStorageResult(scanBatch->DeleteSolidArchive(path));
     recordStorageResult(scanBatch->DeleteArchiveCache(path));
   }
+  scanPhaseEnd("loop-stale-solid-archives", loopStaleSolidArchivesStart);
 
+  const auto loopReindexedArchivesStart = scanPhaseStart();
   for (const auto &path : reindexedArchives) {
     if (shouldStop()) {
       break;
@@ -2036,7 +2276,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     recordStorageResult(scanBatch->DeleteChartsInArchive(path));
   }
+  scanPhaseEnd("loop-reindexed-archives", loopReindexedArchivesStart);
 
+  const auto loopArchiveCacheDiffsStart = scanPhaseStart();
   for (const auto &diff : archiveCacheDiffs) {
     if (shouldStop()) {
       break;
@@ -2049,7 +2291,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .chartCount = diff.chartCount,
     }));
   }
+  scanPhaseEnd("loop-archive-cache-diffs", loopArchiveCacheDiffsStart);
 
+  const auto loopSolidArchiveDiffsStart = scanPhaseStart();
   for (const auto &diff : solidArchiveDiffs) {
     if (shouldStop()) {
       break;
@@ -2065,35 +2309,62 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       recordStorageResult(scanBatch->DeleteSolidArchive(diff.path));
     }
   }
+  scanPhaseEnd("loop-solid-archive-diffs", loopSolidArchiveDiffsStart);
 
-  auto insertIndividualChartMeta = [&](bms_parser::ChartMeta &meta,
+  auto insertIndividualChartMeta = [&](ParsedChartMetadata &parsed,
                                        bool hasDocument) -> bool {
+    // Beatoraja preview fallback: a chart without #PREVIEW uses the first
+    // preview* audio file in its folder (SQLiteSongDatabaseAccessor
+    // isPreviewFile). Only newly-parsed/refreshed charts get this; legacy rows
+    // without a #PREVIEW stay empty until the user refreshes them.
+    if (parsed.meta.Preview.empty()) {
+      const path_t folderKey =
+          fspath_to_path_t(parsed.meta.Folder.lexically_normal());
+      if (const auto found = folderPreviews.find(folderKey);
+          found != folderPreviews.end()) {
+        parsed.meta.Preview = found->second;
+      }
+    }
     if (!recordStorageResult(
-            scanBatch->UpsertChart(meta, std::nullopt, hasDocument))) {
+            scanBatch->UpsertChart(parsed.meta, std::nullopt, hasDocument,
+                                   parsed.sequenceFeatures))) {
       return false;
     }
     if (!reconcileExisting) {
-      upsertedChartPaths.push_back(meta.BmsPath);
+      upsertedChartPaths.push_back(parsed.meta.BmsPath);
     }
     return true;
   };
 
+  const auto loopDocumentFlagStart = scanPhaseStart();
   for (const auto &[path, hasDocument] : documentFlagUpdates) {
     if (shouldStop()) {
       break;
     }
+    std::filesystem::path flagArchivePath;
+    std::filesystem::path flagInnerPath;
+    if (archive_file::splitVirtualPath(path, flagArchivePath, flagInnerPath) &&
+        archiveIdentityCompleted(flagArchivePath)) {
+      // The chart belongs to an unchanged, previously completed archive, so
+      // its stored document flag is already current.
+      continue;
+    }
     recordStorageResult(scanBatch->UpdateChartHasDocument(path, hasDocument));
   }
+  scanPhaseEnd("loop-document-flag-updates", loopDocumentFlagStart);
+  scanPhaseEnd("reconcile-update-loops", reconcileLoopStart);
+  const auto individualParseStart = scanPhaseStart();
+  scanPhase("individual-chart-parse");
 
   auto individualParseWorkerCount = [](std::size_t fileCount) {
     return static_cast<std::size_t>(parallel_worker_count(fileCount));
   };
 
   auto parseIndividualChartBatch = [&](std::size_t begin, std::size_t end)
-      -> std::vector<std::optional<bms_parser::ChartMeta>> {
+      -> std::vector<std::optional<ParsedChartMetadata>> {
     using Clock = std::chrono::steady_clock;
     const std::size_t count = end > begin ? end - begin : 0;
-    std::vector<std::optional<bms_parser::ChartMeta>> parsedMetas(count);
+    std::vector<std::optional<ParsedChartMetadata>> parsedMetas(count);
     if (count == 0) {
       return parsedMetas;
     }
@@ -2175,6 +2446,28 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   const std::size_t individualStartIndex =
       resumePlan.valid ? resumePlan.individualStart : 0;
+  std::size_t lastCommitDiffIndex = individualStartIndex;
+  // Commit periodically so individually-parsed charts are durable even if the
+  // app is killed mid-scan. On restart the diffs are recomputed and any
+  // already-committed charts become no-ops; no resume position is needed.
+  // Gate on the number of diffs consumed since the last commit (not a modulo
+  // of the stride-quantized diff index, whose first multiple of the interval
+  // could land orders of magnitude late). Applies to both the delete and the
+  // parse paths so a delete-heavy individual phase cannot run one unbounded
+  // transaction. Returns false when the commit failed and the caller should
+  // stop.
+  auto maybeCommitForProgress = [&](std::size_t diffIndex) {
+    if (shouldStop() ||
+        diffIndex - lastCommitDiffIndex < kIndividualCommitInterval) {
+      return true;
+    }
+    lastCommitDiffIndex = diffIndex;
+    if (!recordStorageResult(scanBatch->CommitForProgress())) {
+      return false;
+    }
+    acknowledgeFlushRequest(pendingFlushRequest());
+    return true;
+  };
   for (std::size_t diffIndex = individualStartIndex;
        diffIndex < individualDiffs.size();) {
     const auto &diff = individualDiffs[diffIndex];
@@ -2186,16 +2479,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                      ChartScanProgressStage::RemovingDeleted);
       recordStorageResult(scanBatch->DeleteChart(diff.path));
       ++parseCurrent;
-      const std::size_t nextIndex = diffIndex + 1;
-      const auto checkpointRequest = checkpointSaveRequest(
-          nextIndex % kIndividualParseCheckpointInterval == 0);
-      if (checkpointRequest.has_value()) {
-        saveCheckpointForFlush(
-            makeCheckpoint(computeScanSignature(nextIndex, 0),
-                           kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
-            *checkpointRequest);
+      diffIndex = diffIndex + 1;
+      if (!maybeCommitForProgress(diffIndex)) {
+        break;
       }
-      diffIndex = nextIndex;
       continue;
     }
 
@@ -2222,19 +2509,16 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                                   individualDiffs[currentIndex].hasDocument);
       }
       ++parseCurrent;
-      const std::size_t nextIndex = currentIndex + 1;
-      const auto checkpointRequest = checkpointSaveRequest(
-          nextIndex % kIndividualParseCheckpointInterval == 0);
-      if (checkpointRequest.has_value()) {
-        saveCheckpointForFlush(
-            makeCheckpoint(computeScanSignature(nextIndex, 0),
-                           kScanCheckpointPhaseIndividual, 0, 0, {}, {}, ""),
-            *checkpointRequest);
-      }
     }
     diffIndex = batchEnd;
+    if (!maybeCommitForProgress(diffIndex)) {
+      break;
+    }
   }
 
+  scanPhaseEnd("individual-chart-parse", individualParseStart);
+  const auto archiveScheduleStart = scanPhaseStart();
+  scanPhase("archive-schedule-and-stream");
   if (!shouldStop() && !archiveBatchOrder.empty() &&
       (!resumePlan.valid || !resumePlan.archivePhase)) {
     const std::filesystem::path lastPath = individualDiffs.empty()
@@ -2243,7 +2527,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const auto checkpointRequest = checkpointSaveRequest(true);
     if (checkpointRequest.has_value()) {
       saveCheckpointForFlush(
-          makeCheckpoint(computeScanSignature(individualDiffs.size(), 0),
+          makeCheckpoint(kArchiveCheckpointSignature,
                          kScanCheckpointPhaseArchive, 0, 0, lastPath, {}, ""),
           *checkpointRequest);
     }
@@ -2293,53 +2577,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   auto archiveInnerStartForIndex = [&](std::size_t archiveIndex) {
     return archiveIndex == archiveStartIndex ? archiveSubStartIndex
                                              : std::size_t{0};
-  };
-
-  auto archiveBatchIsPrepared = [&](std::size_t archiveIndex) {
-    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
-    if (batch == nullptr ||
-        batch->parseAttempted.size() != batch->innerPaths.size() ||
-        batch->preparedMetas.size() != batch->innerPaths.size()) {
-      return false;
-    }
-    const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
-    if (innerStart > batch->innerPaths.size()) {
-      return false;
-    }
-    return std::all_of(
-        batch->parseAttempted.begin() +
-            static_cast<std::vector<bool>::difference_type>(innerStart),
-        batch->parseAttempted.end(), [](bool attempted) { return attempted; });
-  };
-
-  auto preparedArchiveParseResult = [&](std::size_t archiveIndex) {
-    ArchiveParseJobResult result;
-    result.archiveIndex = archiveIndex;
-    const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
-    if (batch == nullptr || !archiveBatchIsPrepared(archiveIndex)) {
-      result.errorMessage = "Archive parse result was not prepared.";
-      return result;
-    }
-    result.innerStart = archiveInnerStartForIndex(archiveIndex);
-    result.pendingInnerPaths.assign(
-        batch->innerPaths.begin() +
-            static_cast<std::vector<std::filesystem::path>::difference_type>(
-                result.innerStart),
-        batch->innerPaths.end());
-    std::vector<ArchiveParsedChart> parsedCharts;
-    parsedCharts.reserve(result.pendingInnerPaths.size());
-    for (std::size_t index = result.innerStart;
-         index < batch->innerPaths.size(); ++index) {
-      parsedCharts.push_back({
-          .innerPath = batch->innerPaths[index],
-          .chartPath = archive_file::makeVirtualPath(batch->archivePath,
-                                                     batch->innerPaths[index]),
-          .meta = batch->preparedMetas[index],
-      });
-    }
-    result.parsedCharts = std::move(parsedCharts);
-    result.complete = true;
-    return result;
   };
 
   std::vector<std::shared_ptr<ArchiveParseJobState>> archiveParseResults;
@@ -2536,8 +2773,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (batch != nullptr && innerStart < batch->innerPaths.size() &&
-        !archiveBatchIsPrepared(archiveIndex) &&
-        !prefetchedArchiveIndexes.contains(archiveIndex)) {
+        !prefetchedArchiveIndexes.contains(archiveIndex) &&
+        !archiveBatchFinished(*batch)) {
       unpreparedArchiveIndexes.push_back(archiveIndex);
     }
   }
@@ -2569,8 +2806,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
     const ArchiveParseBatch *batch = archiveBatchForIndex(archiveIndex);
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
-    if (batch == nullptr || innerStart >= batch->innerPaths.size() ||
-        archiveBatchIsPrepared(archiveIndex)) {
+    if (batch == nullptr || innerStart >= batch->innerPaths.size()) {
       continue;
     }
     std::vector<std::filesystem::path> pendingInnerPaths(
@@ -2669,6 +2905,28 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       continue;
     }
     const ArchiveParseBatch &batch = *batchPtr;
+    if (archiveBatchFinished(batch)) {
+      // This archive was fully parsed and committed in an earlier run; its
+      // charts are already durable, so skip it even if it sorts after the
+      // resume point this run.
+      archive_file::appendDebugLogLine(
+          "Skipping already-completed archive batch: " +
+          fspath_to_utf8(batch.archivePath));
+      if (!(resumePlan.valid && resumePlan.archivePhase)) {
+        // Without a validated archive checkpoint there is no pre-count of
+        // these already-done inner paths (validateArchiveCheckpoint's count
+        // covers exactly the checkpoint case), so count them here or progress
+        // would plateau below parseTotal on a successful commit.
+        parseCurrent += static_cast<int>(batch.innerPaths.size());
+      }
+      continue;
+    }
+    archive_file::appendDebugLogLine(
+        "Processing archive batch: index=" +
+        std::to_string(archiveIndex) + "/" +
+        std::to_string(archiveBatchOrder.size()) + " path=" +
+        fspath_to_utf8(archiveBatchOrder[archiveIndex]) + " inner=" +
+        std::to_string(batch.innerPaths.size()));
     const std::size_t innerStart = archiveInnerStartForIndex(archiveIndex);
     if (innerStart >= batch.innerPaths.size()) {
       int storedChartCount = 0;
@@ -2681,6 +2939,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         storedChartCount = *count;
       }
       writePendingArchiveCache(batch, storedChartCount);
+      std::int64_t completedArchiveSize = 0;
+      std::int64_t completedArchiveMtimeNs = 0;
+      if (archiveFileState(batch.archivePath, completedArchiveSize,
+                           completedArchiveMtimeNs)) {
+        recordStorageResult(scanBatch->RecordCompletedArchive(
+            batch.archivePath, completedArchiveSize,
+            completedArchiveMtimeNs));
+      }
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()
@@ -2694,7 +2960,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (checkpointRequest.has_value()) {
         saveCheckpointForFlush(
             makeCheckpoint(
-                computeScanSignature(individualDiffs.size(), archiveIndex + 1),
+                kArchiveCheckpointSignature,
                 kScanCheckpointPhaseArchive, 0, 0, lastPath, batch.archivePath,
                 lastInnerPath),
             *checkpointRequest);
@@ -2704,7 +2970,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
     const std::string archiveText = fspath_to_utf8(batch.archivePath);
     const std::size_t requestedCharts = batch.innerPaths.size() - innerStart;
-    const bool archiveInsertStmtReady = true;
     std::optional<bool> archiveSolidHint;
     if (const auto cacheIt = pendingArchiveCacheDiffs.find(archiveKey);
         cacheIt != pendingArchiveCacheDiffs.end()) {
@@ -2772,12 +3037,21 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           const bool hasDocument =
               parsedInBatch < batch.hasDocument.size() &&
               batch.hasDocument[parsedInBatch];
+          if (parsed.meta->meta.Preview.empty()) {
+            const path_t folderKey = fspath_to_path_t(
+                parsed.meta->meta.Folder.lexically_normal());
+            if (const auto found = folderPreviews.find(folderKey);
+                found != folderPreviews.end()) {
+              parsed.meta->meta.Preview = found->second;
+            }
+          }
           if (recordStorageResult(scanBatch->UpsertChart(
-                  *parsed.meta, storedArchiveSourcePreference, hasDocument))) {
+                  parsed.meta->meta, storedArchiveSourcePreference,
+                  hasDocument, parsed.meta->sequenceFeatures))) {
             ++insertedCharts;
             ++storedChartCount;
             if (!reconcileExisting) {
-              upsertedChartPaths.push_back(parsed.meta->BmsPath);
+              upsertedChartPaths.push_back(parsed.meta->meta.BmsPath);
             }
           } else {
             archiveStorageHealthy = false;
@@ -2797,7 +3071,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           if (checkpointRequest.has_value()) {
             saveCheckpointForFlush(
                 makeCheckpoint(
-                    computeScanSignature(individualDiffs.size(), archiveIndex),
+                    kArchiveCheckpointSignature,
                     kScanCheckpointPhaseArchive, 0, parsedInBatch,
                     parsed.chartPath, batch.archivePath,
                     checkpointInnerPathText(parsed.innerPath)),
@@ -2809,17 +3083,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     };
 
     std::optional<ArchiveParseJobResult> terminalResult;
-    if (archiveBatchIsPrepared(archiveIndex)) {
-      terminalResult = preparedArchiveParseResult(archiveIndex);
-    } else {
-      while (!terminalResult.has_value() && !shouldStop()) {
-        ArchiveParseJobEvent event =
-            waitTakeArchiveParseEvent(archiveIndex, parsedInBatch);
-        if (event.terminalResult.has_value()) {
-          terminalResult = std::move(event.terminalResult);
-        } else {
-          applyParsedCharts(std::move(event.parsedCharts));
-        }
+    while (!terminalResult.has_value() && !shouldStop()) {
+      ArchiveParseJobEvent event =
+          waitTakeArchiveParseEvent(archiveIndex, parsedInBatch);
+      if (event.terminalResult.has_value()) {
+        terminalResult = std::move(event.terminalResult);
+      } else {
+        applyParsedCharts(std::move(event.parsedCharts));
       }
     }
     if (terminalResult.has_value() &&
@@ -2831,7 +3101,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         terminalResult.has_value() && terminalResult->complete &&
         parsedInBatch == batch.innerPaths.size() && !shouldStop();
     if (terminalResult.has_value() && !terminalResult->complete) {
-      traversalHealthy = false;
+      // A single archive that cannot be read (encrypted, passphrase-locked,
+      // corrupt, or an unsupported entry) must not poison the whole library
+      // refresh. Skip it: its charts are simply not added this scan and will
+      // be discovered on a later successful pass. Only storage/DB-level
+      // failures set archiveStorageHealthy=false.
       if (!terminalResult->errorMessage.empty()) {
         SDL_Log("Failed to read charts from archive %s: %s",
                 archiveText.c_str(), terminalResult->errorMessage.c_str());
@@ -2850,6 +3124,26 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
               "Failed to remove partially streamed DB chart batch: " +
               archiveText);
         }
+        // The delete above may have removed rows a mid-archive checkpoint
+        // already committed for this archive. Reset the resume position to the
+        // start of the archive so a later resume (if the app dies before the
+        // next checkpoint) re-parses the whole archive instead of assuming
+        // rows [0, subIndex) still exist. Write the reset into the same open
+        // transaction as the delete so a kill between the two cannot leave a
+        // stale higher-subIndex checkpoint durably overstating row count.
+        const ChartScanCheckpoint resetCheckpoint = makeCheckpoint(
+            kArchiveCheckpointSignature, kScanCheckpointPhaseArchive, 0, 0,
+            std::filesystem::path(), batch.archivePath, "");
+        // SaveCheckpointInPlace writes inside the open transaction, so the
+        // delete+reset above only becomes durable at the next commit. Do not
+        // acknowledge a pending flush here: a hard kill between this write and
+        // that commit would roll the reset back despite the flush-complete
+        // signal. The flush request is satisfied at the next durable boundary
+        // (a later archive checkpoint or the final commit below).
+        if (!recordStorageResult(
+                scanBatch->SaveCheckpointInPlace(resetCheckpoint))) {
+          archiveStorageHealthy = false;
+        }
       }
     }
 
@@ -2862,8 +3156,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           " requested=" + std::to_string(requestedCharts) +
           " files=" + std::to_string(deliveredCharts) +
           " inserted=" + std::to_string(insertedCharts) +
-          " insertMs=" + std::to_string(insertMs) + " reusedStatement=" +
-          std::string(archiveInsertStmtReady ? "true" : "false") +
+          " insertMs=" + std::to_string(insertMs) + " reusedStatement=true" +
           " sourcePreferenceHint=" +
           std::string(archiveSourcePreference.has_value() ? "true" : "false") +
           " solidHint=" +
@@ -2874,6 +3167,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     if (parsedFullBatch && archiveStorageHealthy &&
         !stopRequested(stopToken)) {
       writePendingArchiveCache(batch, storedChartCount);
+      std::int64_t completedArchiveSize = 0;
+      std::int64_t completedArchiveMtimeNs = 0;
+      if (archiveFileState(batch.archivePath, completedArchiveSize,
+                           completedArchiveMtimeNs)) {
+        recordStorageResult(scanBatch->RecordCompletedArchive(
+            batch.archivePath, completedArchiveSize,
+            completedArchiveMtimeNs));
+      }
       const std::filesystem::path lastPath =
           batch.innerPaths.empty()
               ? std::filesystem::path()
@@ -2887,7 +3188,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       if (checkpointRequest.has_value()) {
         saveCheckpointForFlush(
             makeCheckpoint(
-                computeScanSignature(individualDiffs.size(), archiveIndex + 1),
+                kArchiveCheckpointSignature,
                 kScanCheckpointPhaseArchive, 0, 0, lastPath, batch.archivePath,
                 lastInnerPath),
             *checkpointRequest);
@@ -2900,6 +3201,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           " files=" + std::to_string(deliveredCharts));
     }
   }
+  scanPhaseEnd("archive-schedule-and-stream", archiveScheduleStart);
   if (shouldStop()) {
     archiveParseScheduler->cancel();
   } else {
@@ -2931,14 +3233,59 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   if (stopRequested(stopToken)) {
     interrupted.store(true, std::memory_order_relaxed);
   }
-  acknowledgeFlushRequest(pendingFlushRequest());
   bool committed = storageHealthy && traversalHealthy && commitSucceeded;
   if (!stopRequested(stopToken) && committed) {
-    bool finalized = session.ClearScanCheckpoint();
-    if (finalized && reconcileExisting) {
-      finalized = session.ClearChartMetadataRebuildRequired();
+    bool finalized = true;
+    if (reconcileMode == ReconcileMode::Full) {
+      finalized = session.ClearScanCheckpoint();
+      if (finalized) {
+        finalized = session.ClearChartMetadataRebuildRequired();
+      }
     }
     committed = finalized;
+    // Drop persisted archive index files for archives that are no longer
+    // present, so the disk cache does not grow with removed archives. Only a
+    // Full scan that actually traversed every configured library entry has a
+    // complete live path set; a Full refresh over a sub-folder or import
+    // destination would otherwise delete index files for archives outside its
+    // scope. Skipping the prune is always safe (the cache is simply left for a
+    // later full-library pass).
+    const std::vector<ChartEntry> effectiveEntries =
+        session.SelectEffectiveEntries();
+    // Coverage uses the normalized DB path text (the same identity archive keys
+    // and checkpoints use) rather than a filesystem-relative comparison, so it
+    // still matches when the scan roots are platform-resolved differently from
+    // the stored entry path (e.g. iOS security-scoped containers). An entry is
+    // covered when it equals a root or starts with a root plus a separator;
+    // any uncovered entry conservatively skips the prune.
+    const bool fullLibraryCoverage = std::ranges::all_of(
+        effectiveEntries, [&](const ChartEntry &entry) {
+          const std::string entryText = checkpointPathTextForDb(entry.path);
+          const char separator =
+              static_cast<char>(std::filesystem::path::preferred_separator);
+          return std::ranges::any_of(roots, [&](const auto &root) {
+            const std::string rootText = checkpointPathTextForDb(root);
+            if (entryText == rootText) {
+              return true;
+            }
+            return entryText.size() > rootText.size() &&
+                   entryText.compare(0, rootText.size(), rootText) == 0 &&
+                   entryText[rootText.size()] == separator;
+          });
+        });
+    if (committed && reconcileMode == ReconcileMode::Full &&
+        fullLibraryCoverage) {
+      const std::size_t pruned = archive_file::pruneArchiveIndexCache(
+          liveArchivePaths);
+      if (pruned > 0) {
+        archive_file::appendDebugLogLine(
+            "Pruned " + std::to_string(pruned) +
+            " orphaned archive index cache files after library refresh.");
+      }
+    }
+  }
+  if (committed && !interrupted.load(std::memory_order_relaxed)) {
+    acknowledgeFlushRequest(pendingFlushRequest());
   }
   if (!committed) {
     upsertedChartPaths.clear();

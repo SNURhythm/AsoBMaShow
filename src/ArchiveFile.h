@@ -15,6 +15,7 @@
 #include <stop_token>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace archive_file {
@@ -138,10 +139,27 @@ struct TemporaryCacheUsageResult {
 bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);
 void setCachePathNormalizer(CachePathNormalizer normalizer);
+// Sets the directory used to persist per-archive entry indexes to disk across
+// app restarts. If empty, disk persistence is disabled (indexes stay in
+// memory only). Must be called before any archive indexing.
+void setArchiveIndexCacheDirectory(std::filesystem::path directory);
+// Removes persisted archive index files whose archive no longer exists on
+// disk. liveArchivePaths should list the archives currently present (their
+// keys are derived with the same path normalization used when writing).
+// Returns the number of files removed.
+std::size_t pruneArchiveIndexCache(
+    const std::vector<std::filesystem::path> &liveArchivePaths);
+// Test-only: drops all in-memory archive indexes so the next lookup reloads
+// from disk (or rebuilds). Not used in production paths.
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+void clearArchiveIndexCacheForTesting();
+#endif
 void appendDebugLogLine(const std::string &message);
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer);
+void resetSingleFlightWaiterCountForTesting();
+std::uint32_t singleFlightWaiterCountForTesting();
 #endif
 std::uint64_t debugLogRevision();
 std::vector<std::string> debugLogLines();
@@ -215,7 +233,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::filesystem::path &destinationRoot,
                   std::string *errorMessage = nullptr,
                   const std::stop_token *stopToken = nullptr,
-                  UnzipProgressCallback progressCallback = nullptr);
+                  UnzipProgressCallback progressCallback = nullptr,
+                  PauseCallback pauseCallback = nullptr);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
                 std::string *errorMessage = nullptr,

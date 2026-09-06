@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
+#include "../library/ChartLibraryPlatform.h"
 #include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../view/ScrollView.h"
@@ -63,8 +64,9 @@ formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
 } // namespace
 
 SettingsScene::SettingsScene(ApplicationContext &context,
-                             SettingsDestination destination)
-    : Scene(context),
+                             SettingsDestination destination,
+                             SceneReturnTarget returnTarget)
+    : Scene(context), returnTarget_(std::move(returnTarget)),
       activeTab(destination == SettingsDestination::Ir ? SettingsTab::Ir
                                                        : SettingsTab::Profile),
       lastLaidOutTab(activeTab) {}
@@ -260,6 +262,7 @@ void SettingsScene::init() {
 void SettingsScene::update(float dt) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();
+  applyPendingSoundSetFolderPick();
 #endif
   if (audioVideoSession != nullptr) {
     const bool hadPreview = audioVideoSession->hasDisplayPreview();

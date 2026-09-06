@@ -11,6 +11,7 @@
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "../Utils.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 #include <SDL2/SDL.h>
 #include "../path.h"
 
@@ -172,6 +173,34 @@ int columnInt(sqlite3_stmt *stmt, int idx) {
 std::string columnString(sqlite3_stmt *stmt, int idx) {
   return sqliteColumnString(stmt, idx);
 }
+
+std::string serializeCourseTrophies(
+    const std::vector<difficulty_table::Trophy> &trophies) {
+  nlohmann::json value = nlohmann::json::array();
+  for (const auto &trophy : trophies) {
+    value.push_back({{"name", trophy.name},
+                     {"missrate", trophy.missRate},
+                     {"scorerate", trophy.scoreRate}});
+  }
+  return value.dump();
+}
+
+std::vector<difficulty_table::Trophy>
+deserializeCourseTrophies(const std::string &text) {
+  std::vector<difficulty_table::Trophy> result;
+  const auto value = nlohmann::json::parse(text, nullptr, false);
+  if (!value.is_array()) return result;
+  result.reserve(value.size());
+  for (const auto &item : value) {
+    if (!item.is_object()) continue;
+    result.push_back({
+        .name = item.value("name", std::string()),
+        .missRate = item.value("missrate", 0.0),
+        .scoreRate = item.value("scorerate", 0.0),
+    });
+  }
+  return result;
+}
 bool clearDifficultyTableContent(sqlite3 *db, int tableId) {
   auto deleteCourseEntries =
       "DELETE FROM difficulty_course_entries WHERE course_id IN "
@@ -301,6 +330,7 @@ bool ensureDifficultySchema(sqlite3 *db) {
       "subartist TEXT,"
       "url TEXT,"
       "url_diff TEXT,"
+      "org_md5 TEXT,"
       "sort_order INTEGER NOT NULL DEFAULT 0"
       ")",
       "CREATE TABLE IF NOT EXISTS difficulty_courses ("
@@ -310,6 +340,7 @@ bool ensureDifficultySchema(sqlite3 *db) {
       "group_name TEXT NOT NULL DEFAULT '',"
       "level TEXT NOT NULL DEFAULT '',"
       "constraint_json TEXT NOT NULL DEFAULT '[]',"
+      "trophy_json TEXT NOT NULL DEFAULT '[]',"
       "course_key TEXT NOT NULL DEFAULT '',"
       "sort_order INTEGER NOT NULL DEFAULT 0"
       ")",
@@ -325,6 +356,7 @@ bool ensureDifficultySchema(sqlite3 *db) {
       "subartist TEXT,"
       "url TEXT,"
       "url_diff TEXT,"
+      "org_md5 TEXT,"
       "sort_order INTEGER NOT NULL DEFAULT 0"
       ")",
       "CREATE INDEX IF NOT EXISTS idx_difficulty_entries_table_level "
@@ -373,6 +405,7 @@ bool ensureDifficultySchema(sqlite3 *db) {
       "ALTER TABLE difficulty_course_entries ADD COLUMN subartist TEXT",
       "ALTER TABLE difficulty_course_entries ADD COLUMN url TEXT",
       "ALTER TABLE difficulty_course_entries ADD COLUMN url_diff TEXT",
+      "ALTER TABLE difficulty_course_entries ADD COLUMN org_md5 TEXT",
   };
   for (const auto *query : courseEntryMigrations) {
     if (!execSqlAllowDuplicateColumn(
@@ -381,10 +414,22 @@ bool ensureDifficultySchema(sqlite3 *db) {
     }
   }
   if (!execSqlAllowDuplicateColumn(
+          db, "ALTER TABLE difficulty_table_entries ADD COLUMN org_md5 TEXT",
+          "migrating difficulty table entry schema")) {
+    return false;
+  }
+  if (!execSqlAllowDuplicateColumn(
           db,
           "ALTER TABLE difficulty_courses "
           "ADD COLUMN course_key TEXT NOT NULL DEFAULT ''",
           "migrating difficulty course key schema")) {
+    return false;
+  }
+  if (!execSqlAllowDuplicateColumn(
+          db,
+          "ALTER TABLE difficulty_courses "
+          "ADD COLUMN trophy_json TEXT NOT NULL DEFAULT '[]'",
+          "migrating difficulty course trophy schema")) {
     return false;
   }
   if (!execSql(db,
@@ -633,9 +678,9 @@ bool insertDifficultyTableEntry(sqlite3 *database, int tableId,
   const char *query =
       "INSERT INTO difficulty_table_entries "
       "(table_id, level, md5, sha256, title, subtitle, artist, subartist, "
-      "url, url_diff, sort_order) "
+      "url, url_diff, org_md5, sort_order) "
       "VALUES (@table_id, @level, @md5, @sha256, @title, @subtitle, "
-      "@artist, @subartist, @url, @url_diff, @sort_order)";
+      "@artist, @subartist, @url, @url_diff, @org_md5, @sort_order)";
   SqliteStatementHandle statement;
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return false;
@@ -650,7 +695,13 @@ bool insertDifficultyTableEntry(sqlite3 *database, int tableId,
   bindSqliteText(statement.get(), 8, chart.subartist);
   bindSqliteText(statement.get(), 9, chart.url);
   bindSqliteText(statement.get(), 10, chart.urlDiff);
-  sqlite3_bind_int(statement.get(), 11, sortOrder);
+  if (chart.originalMd5s) {
+    bindSqliteText(statement.get(), 11,
+                   nlohmann::json(*chart.originalMd5s).dump());
+  } else {
+    sqlite3_bind_null(statement.get(), 11);
+  }
+  sqlite3_bind_int(statement.get(), 12, sortOrder);
   return sqlite3_step(statement.get()) == SQLITE_DONE;
 }
 
@@ -663,12 +714,13 @@ int insertDifficultyCourse(sqlite3 *database, int tableId,
       retainId
           ? "INSERT INTO difficulty_courses "
             "(id, table_id, name, group_name, level, constraint_json, "
-            "course_key, sort_order) VALUES (@id, @table_id, @name, "
-            "@group_name, @level, @constraint_json, @course_key, @sort_order)"
+            "trophy_json, course_key, sort_order) VALUES (@id, @table_id, "
+            "@name, @group_name, @level, @constraint_json, @trophy_json, "
+            "@course_key, @sort_order)"
           : "INSERT INTO difficulty_courses "
-            "(table_id, name, group_name, level, constraint_json, course_key, "
-            "sort_order) VALUES (@table_id, @name, @group_name, @level, "
-            "@constraint_json, @course_key, @sort_order)";
+            "(table_id, name, group_name, level, constraint_json, trophy_json, "
+            "course_key, sort_order) VALUES (@table_id, @name, @group_name, "
+            "@level, @constraint_json, @trophy_json, @course_key, @sort_order)";
   SqliteStatementHandle statement;
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return 0;
@@ -682,6 +734,8 @@ int insertDifficultyCourse(sqlite3 *database, int tableId,
   bindSqliteText(statement.get(), parameter++, course.groupName);
   bindSqliteText(statement.get(), parameter++, course.level);
   bindSqliteText(statement.get(), parameter++, course.constraintJson);
+  bindSqliteText(statement.get(), parameter++,
+                 serializeCourseTrophies(course.trophies));
   bindSqliteText(statement.get(), parameter++, courseKey);
   sqlite3_bind_int(statement.get(), parameter, sortOrder);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
@@ -697,9 +751,9 @@ bool insertDifficultyCourseEntry(sqlite3 *database, int courseId,
   const char *query =
       "INSERT INTO difficulty_course_entries "
       "(course_id, level, md5, sha256, title, subtitle, artist, subartist, "
-      "url, url_diff, sort_order) "
+      "url, url_diff, org_md5, sort_order) "
       "VALUES (@course_id, @level, @md5, @sha256, @title, @subtitle, "
-      "@artist, @subartist, @url, @url_diff, @sort_order)";
+      "@artist, @subartist, @url, @url_diff, @org_md5, @sort_order)";
   SqliteStatementHandle statement;
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return false;
@@ -714,7 +768,13 @@ bool insertDifficultyCourseEntry(sqlite3 *database, int courseId,
   bindSqliteText(statement.get(), 8, chart.subartist);
   bindSqliteText(statement.get(), 9, chart.url);
   bindSqliteText(statement.get(), 10, chart.urlDiff);
-  sqlite3_bind_int(statement.get(), 11, sortOrder);
+  if (chart.originalMd5s) {
+    bindSqliteText(statement.get(), 11,
+                   nlohmann::json(*chart.originalMd5s).dump());
+  } else {
+    sqlite3_bind_null(statement.get(), 11);
+  }
+  sqlite3_bind_int(statement.get(), 12, sortOrder);
   return sqlite3_step(statement.get()) == SQLITE_DONE;
 }
 
@@ -980,7 +1040,7 @@ selectDifficultyCourses(sqlite3 *db, int tableId,
   }
   std::string query =
       "SELECT dc.id, dc.course_key, dc.table_id, dt.name, dc.group_name, "
-      "dc.level, dc.name, dc.constraint_json "
+      "dc.level, dc.name, dc.constraint_json, dc.trophy_json "
       "FROM difficulty_courses dc "
       "JOIN difficulty_tables dt ON dt.id = dc.table_id "
       "WHERE dc.table_id = @table_id AND dc.group_name = @group_name "
@@ -1006,6 +1066,7 @@ selectDifficultyCourses(sqlite3 *db, int tableId,
     course.level = columnString(stmt.get(), 5);
     course.name = columnString(stmt.get(), 6);
     course.constraintJson = columnString(stmt.get(), 7);
+    course.trophies = deserializeCourseTrophies(columnString(stmt.get(), 8));
     courses.push_back(std::move(course));
   }
   return courses;

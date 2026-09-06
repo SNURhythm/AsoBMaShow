@@ -11,6 +11,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -35,6 +36,9 @@ struct ImageDecodeRequest {
   int targetWidth = 0;
   int targetHeight = 0;
   bool priority = false;
+  int maximumDimension = std::numeric_limits<int>::max();
+  std::size_t maximumEncodedBytes = std::numeric_limits<std::size_t>::max();
+  std::size_t maximumDecodedBytes = std::numeric_limits<std::size_t>::max();
   // A coordinator work item owns secure package bytes until its loader has
   // consumed them; callers never need to keep a revision/view alive for a
   // queued decode.

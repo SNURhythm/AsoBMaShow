@@ -125,12 +125,31 @@ struct AudioCallbackState {
   std::atomic<std::uint32_t> ownerControlCommandCount{0};
   std::atomic<std::uint32_t> ownerRetirementCommandCount{0};
   std::atomic<std::uint64_t> nextCommandSubmissionSequence{1};
+  // Tracked so a device-preserving chart swap can know whether the callback
+  // owns any non-System (jukebox BGM/keysound) voices or staged schedules. When
+  // both are zero the only active audio is Bus::System (select SEs / BGM /
+  // previews), which live in a separate registry, so chart SoundData can be
+  // erased without stopping the device. Maintained on the audio callback thread
+  // (via AppendActiveSound / removeActiveSoundAt / InsertScheduledSound /
+  // RemoveSound / ActivateScheduledSounds / ClearCallbackSounds).
+  std::atomic<std::uint32_t> activeNonSystemVoices{0};
+  std::atomic<std::uint32_t> scheduledNonSystemSounds{0};
   std::unique_ptr<AudioCommand[]> realtimeCommandQueue;
   std::atomic<std::uint32_t> realtimeCommandReadCursor{0};
   std::atomic<std::uint32_t> realtimeCommandWriteCursor{0};
 };
 
 namespace audio::playback {
+
+enum class MixScope : std::uint8_t {
+  // Mix every active bus (Bgm, Keysound, System). Used while the gameplay
+  // clock is running.
+  AllBuses,
+  // Mix only Bus::System voices, skipping Bgm/Keysound. Used while the
+  // gameplay clock is stopped so select SEs / BGM / previews remain audible
+  // without resuming gameplay audio.
+  SystemOnly,
+};
 
 struct OutputRateCandidate {
   SoundData *soundData = nullptr;
@@ -218,6 +237,7 @@ void ActivateScheduledSounds(AudioCallbackState &state,
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
-                     int playbackRatePercent);
+                     int playbackRatePercent,
+                     MixScope scope = MixScope::AllBuses);
 
 } // namespace audio::playback

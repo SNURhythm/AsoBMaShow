@@ -1,6 +1,8 @@
 #pragma once
 #include "../BmsSearchService.h"
 #include "../ChartLibraryScanner.h"
+#include "../library/ChartLibraryPlatform.h"
+#include "../library/ChartLibraryTaskService.h"
 #include "../view/RecyclerView.h"
 #include "ChartFilterSortPanelView.h"
 #include "Scene.h"
@@ -15,7 +17,6 @@
 #include "../ir/IrRankingModal.h"
 #include "../ThreadCompat.h"
 #include "../path.h"
-#include "../utils/Debouncer.h"
 #include "../view/ImageView.h"
 #include "../view/ContextMenuView.h"
 #include "../view/ResultRecordListView.h"
@@ -32,7 +33,9 @@
 #include "../audio/Jukebox.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
+#include "ReplayRecordsModal.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -46,6 +49,9 @@
 class Button;
 class DropdownView;
 class OverlayPortal;
+class BlockingOverlayView;
+class DecideLoadingOverlay;
+class ChartPreloadWorker;
 class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
@@ -63,6 +69,7 @@ public:
   void init() override;
   void onPause() override;
   void onResume() override;
+  EventHandleResult handleEvents(SDL_Event &event) override;
 
   void update(float dt) override;
   void renderScene() override;
@@ -76,23 +83,12 @@ private:
   std::atomic_bool selectedChartMediaReady = false;
   std::atomic_bool selectedChartReusableForStart = false;
 
-  std::thread loadThread;
-  struct RetiredPreviewLoadThread {
-    std::thread thread;
-    std::shared_ptr<std::atomic_bool> finished;
-  };
-  std::shared_ptr<std::atomic_bool> previewLoadCancelToken =
-      std::make_shared<std::atomic_bool>(false);
-  std::shared_ptr<std::atomic_bool> previewLoadFinishedToken =
-      std::make_shared<std::atomic_bool>(true);
-  Debouncer previewLoadDebouncer;
-  std::vector<RetiredPreviewLoadThread> retiredPreviewLoadThreads;
-  std::mutex retiredPreviewLoadThreadsMutex;
+  // Preview chart loading runs on the shared ChartPreloadWorker (single
+  // scene-lifetime thread, debounced and latest-wins) so a selection change
+  // never spawns or joins a per-selection thread on the UI thread.
+  ChartPreloadWorker *previewWorker_ = nullptr;
   std::mutex previewJukeboxLoadMutex;
   bool pendingStopAndClearSelectedChartAfterPreview = false;
-  std::jthread checkEntriesThread;
-  std::jthread addFolderPickerThread;
-  std::jthread archiveImportPickerThread;
   std::jthread findBmsThread;
   std::jthread replayLoadThread;
   std::shared_ptr<std::atomic_bool> replayLoadCancelToken =
@@ -102,85 +98,19 @@ private:
   std::atomic_bool replayLoadInProgress = false;
   std::jthread replayExportThread;
   std::jthread unzipThread;
-  std::atomic_bool folderItemsReloadRequested = false;
-  std::atomic_bool chartListReloadRequested = false;
   bool prioritizeVisibleArtworkBindings = false;
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
-  std::uint64_t replayIrUploadFeedbackRevision = 0;
   std::unordered_map<std::string, std::uint64_t> replayIrObservedRevisions;
   std::atomic_bool unzipInProgress = false;
-  std::atomic_bool addFolderPickerInProgress = false;
-  std::atomic_bool archiveImportPickerInProgress = false;
-  std::atomic_bool libraryTaskWorkerPaused = false;
   std::atomic_bool tasksModalOpenRequested = false;
-  enum class LibraryTaskStatus {
-    Queued,
-    Running,
-    Complete,
-    Failed,
-    Paused,
-  };
-  enum class LibraryTaskKind {
-    RefreshLibrary,
-    IndexDownloadedPath,
-    AndroidImport,
-  };
-  struct LibraryTaskRequest {
-    std::uint64_t id = 0;
-    LibraryTaskKind kind = LibraryTaskKind::RefreshLibrary;
-    std::string title;
-    std::filesystem::path folderToAdd;
-    std::string iosBookmark;
-    std::filesystem::path downloadedPath;
-    std::vector<std::filesystem::path> downloadedRemovedPaths;
-    main_menu_library::FindBmsChartIdentity downloadedTargetIdentity;
-    std::uint64_t downloadedSelectionGeneration = 0;
-    std::filesystem::path androidImportPath;
-    bool androidImportFolder = false;
-    bool rebuildLibraryMetadata = false;
-  };
-  struct LibraryTaskInfo {
-    std::uint64_t id = 0;
-    std::string title;
-    LibraryTaskStatus status = LibraryTaskStatus::Queued;
-    double fraction = 0.0;
-    int current = 0;
-    int total = 0;
-    std::string detail;
-  };
-  std::deque<LibraryTaskRequest> libraryTaskQueue;
-  std::vector<LibraryTaskInfo> libraryTasks;
-  std::mutex libraryTaskMutex;
-  std::mutex libraryTaskWorkerMutex;
-  std::mutex libraryTaskPauseMutex;
-  std::condition_variable_any libraryTaskCv;
-  std::condition_variable_any libraryTaskPauseCv;
-  std::atomic<std::uint64_t> nextLibraryTaskId{1};
-  std::uint64_t libraryTasksRevision = 0;
-  std::atomic<int> libraryActiveTaskCount{0};
+  using LibraryTaskStatus = chart_library_tasks::TaskStatus;
+  using LibraryTaskInfo = chart_library_tasks::TaskInfo;
+  using LibraryTaskProgressSnapshot = chart_library_tasks::ProgressSnapshot;
   std::uint64_t displayedLibraryTasksRevision = 0;
-  std::atomic<std::uint64_t> libraryProgressRevision{0};
-  std::atomic<std::uint64_t> libraryProgressTaskId{0};
-  std::atomic<int> libraryProgressCurrent{0};
-  std::atomic<int> libraryProgressTotal{0};
-  std::atomic<int> libraryProgressBasisPoints{0};
-  std::atomic<int> libraryProgressStage{
-      static_cast<int>(ChartScanProgressStage::Preparing)};
-  std::atomic<std::uint64_t> libraryScanFlushRequested{0};
-  std::atomic<std::uint64_t> libraryScanFlushCompleted{0};
   std::uint64_t displayedLibraryProgressRevision = 0;
   std::string displayedLibraryTasksButtonText;
-  struct LibraryTaskProgressSnapshot {
-    bool valid = false;
-    std::uint64_t revision = 0;
-    std::uint64_t taskId = 0;
-    int current = 0;
-    int total = 0;
-    int basisPoints = 0;
-    ChartScanProgressStage stage = ChartScanProgressStage::Preparing;
-  };
   struct SelectedChartRandomInfo {
     std::optional<unsigned int> seed;
     std::optional<std::string> prng;
@@ -258,7 +188,9 @@ private:
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
+  DecideLoadingOverlay *decideOverlay_ = nullptr;
   std::unique_ptr<ContextMenuView> revealContextMenu;
+  std::unique_ptr<ReplayRecordsModal> recordsModal_;
   ImageView *jacketView = nullptr;
   TextInputBox *searchBox = nullptr;
   ChartFilterPanelView *chartFilterPanel = nullptr;
@@ -291,22 +223,10 @@ private:
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *replayStatusText = nullptr;
-  View *replayModalRoot = nullptr;
-  View *replayModalContentFrame = nullptr;
-  View *replayListContent = nullptr;
-  View *replayFilterSortContent = nullptr;
-  View *replayWatchOptionsContent = nullptr;
-  View *replayExportOptionsContent = nullptr;
-  View *replayExportProgressContent = nullptr;
-  View *replayDeleteConfirmationContent = nullptr;
-  View *replayExportProgressTrack = nullptr;
-  View *replayExportProgressFill = nullptr;
-  TextView *replayModalTitleText = nullptr;
-  TextView *replayExportProgressMessageText = nullptr;
-  TextView *replayExportProgressPercentText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;
   PlayOptionsPanelView *playOptionsPanel = nullptr;
+  std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal;
   View *parseLogModalRoot = nullptr;
   View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
@@ -392,55 +312,6 @@ private:
   Button *readyPlayOptionsButton = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
-  ResultRecordListView *replayListView = nullptr;
-  Button *replayWatchButton = nullptr;
-  Button *replayGBattleButton = nullptr;
-  Button *replayModalResultButton = nullptr;
-  Button *replayModalExportButton = nullptr;
-  Button *replayShareButton = nullptr;
-  Button *replayDeleteButton = nullptr;
-  Button *replayDeleteCancelButton = nullptr;
-  Button *replayDeleteConfirmButton = nullptr;
-  Button *replayModalFilterButton = nullptr;
-  Button *replayModalCloseButton = nullptr;
-  Button *replayFps60Button = nullptr;
-  Button *replayFps120Button = nullptr;
-  Button *replayResolution1080Button = nullptr;
-  Button *replayResolutionFullButton = nullptr;
-  Button *replayResultIncludeButton = nullptr;
-  Button *replayResultSkipButton = nullptr;
-  Button *replayTouchShowButton = nullptr;
-  Button *replayTouchHideButton = nullptr;
-  Button *replayGhostShowButton = nullptr;
-  Button *replayGhostHideButton = nullptr;
-  Button *replayExportTouchShowButton = nullptr;
-  Button *replayExportTouchHideButton = nullptr;
-  Button *replayExportGhostShowButton = nullptr;
-  Button *replayExportGhostHideButton = nullptr;
-  TextView *replayWatchButtonText = nullptr;
-  TextView *replayGBattleButtonText = nullptr;
-  TextView *replayModalResultButtonText = nullptr;
-  TextView *replayModalExportButtonText = nullptr;
-  TextView *replayShareButtonText = nullptr;
-  TextView *replayDeleteButtonText = nullptr;
-  TextView *replayDeleteCancelButtonText = nullptr;
-  TextView *replayDeleteConfirmButtonText = nullptr;
-  TextView *replayModalFilterButtonText = nullptr;
-  TextView *replayModalCloseButtonText = nullptr;
-  TextView *replayFps60ButtonText = nullptr;
-  TextView *replayFps120ButtonText = nullptr;
-  TextView *replayResolution1080ButtonText = nullptr;
-  TextView *replayResolutionFullButtonText = nullptr;
-  TextView *replayResultIncludeButtonText = nullptr;
-  TextView *replayResultSkipButtonText = nullptr;
-  TextView *replayTouchShowButtonText = nullptr;
-  TextView *replayTouchHideButtonText = nullptr;
-  TextView *replayGhostShowButtonText = nullptr;
-  TextView *replayGhostHideButtonText = nullptr;
-  TextView *replayExportTouchShowButtonText = nullptr;
-  TextView *replayExportTouchHideButtonText = nullptr;
-  TextView *replayExportGhostShowButtonText = nullptr;
-  TextView *replayExportGhostHideButtonText = nullptr;
   struct PendingReplayExportResult {
     bool success = false;
     std::filesystem::path outputPath;
@@ -473,11 +344,6 @@ private:
   std::optional<PendingUnzipResult> pendingUnzipResult;
   std::mutex unzipProgressMutex;
   std::optional<PendingUnzipProgress> pendingUnzipProgress;
-  std::mutex androidArchiveImportMutex;
-  std::optional<std::string> pendingAndroidArchiveImportError;
-  std::deque<std::pair<std::uint64_t, bool>> pendingAndroidArchiveImportTasks;
-  std::atomic_bool androidArchiveImportCopyPending = false;
-  std::uint64_t nextAndroidArchiveImportPollMs = 0;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct PendingFindBmsSelectionHandoff {
     std::filesystem::path chartPath;
@@ -543,51 +409,11 @@ private:
   bool chartDifficultyMinDropdownOpen = false;
   bool chartDifficultyMaxDropdownOpen = false;
   std::optional<int> chartDifficultyRangeTableId;
-  std::vector<ResultRecordSummary> resultRecordSummaries;
-  std::vector<ResultRecordSummary> visibleResultRecordSummaries;
-  std::optional<std::string> selectedResultRecordStableKey;
-  std::optional<ResultRecordSummary> selectedResultRecordSummary;
   std::string publishedResultRecordDiagnostic;
-  ReplayRecordFilters replayRecordFilters;
-  ChartMetaRecord replayModalChart;
-  std::optional<ResultRecordSummary> replayExportSelection;
   platform_document_handoff::PlatformDocumentHandoffOperation
       replayFileDocumentHandoff;
   platform_document_handoff::PlatformDocumentHandoffOperation
       parseLogDocumentHandoff;
-  replay::ReplayFileDeleteConfirmation replayDeleteConfirmation;
-  ChartMetaRecord replayExportChart;
-  int selectedReplayIndex = -1;
-  int selectedExportFps = 120;
-  bool selectedExportFullResolution = true;
-  bool selectedExportIncludeResultScreen = true;
-  bool selectedReplayRenderTouchPoints = true;
-  bool selectedReplayRenderGhosts = true;
-  double replayExportProgressFraction = 0.0;
-  struct ReplayClearFilterButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::optional<int> rank;
-  };
-  struct ReplayOptionFilterButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::optional<std::string> option;
-  };
-  struct ReplayScoreRankFilterButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::optional<std::string> rank;
-  };
-  struct ReplaySortButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    ReplayRecordSortCriterion criterion = ReplayRecordSortCriterion::Newest;
-  };
-  std::vector<ReplayClearFilterButton> replayClearFilterButtons;
-  std::vector<ReplayOptionFilterButton> replayPlayOptionFilterButtons;
-  std::vector<ReplayScoreRankFilterButton> replayScoreRankFilterButtons;
-  std::vector<ReplaySortButton> replaySortButtons;
   main_menu_profile::Selections profileSelections;
   bool profileSelectionsInitialized = false;
   struct EffectivePlayOptionSelection {
@@ -642,14 +468,6 @@ private:
   void refreshLibraryIfNeeded();
   void startLibraryRefresh();
   void startLibraryRebuild();
-  void startLibraryTaskWorker();
-  void stopLibraryTaskWorker();
-  void pauseLibraryTaskWorker();
-  void resumeLibraryTaskWorker();
-  void syncLibraryTaskPauseStateWithForegroundScene();
-  bool waitForLibraryTaskResume(std::uint64_t id,
-                                const std::stop_token &stopToken);
-  void enqueueLibraryTask(LibraryTaskRequest task);
   void enqueueLibraryRefreshTask(
       const std::string &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
@@ -660,41 +478,10 @@ private:
       const main_menu_library::FindBmsChartIdentity &targetIdentity = {},
       std::uint64_t selectionGeneration = 0,
       std::vector<std::filesystem::path> removedPaths = {});
-#if TARGET_OS_ANDROID
-  void createPendingAndroidImportTask(bool folderImport);
-  void enqueueAndroidImportTask(std::uint64_t id,
-                                const std::filesystem::path &importPath,
-                                bool folderImport);
-#endif
-  void libraryTaskLoop(const std::stop_token &stopToken);
-  void runLibraryRefreshTask(const LibraryTaskRequest &task,
-                             const std::stop_token &stopToken);
-  void runDownloadedPathIndexTask(const LibraryTaskRequest &task,
-                                  const std::stop_token &stopToken);
-#if TARGET_OS_ANDROID
-  void runAndroidImportTask(const LibraryTaskRequest &task,
-                            const std::stop_token &stopToken);
-#endif
-  void seedDefaultDifficultyTablesIfNeeded(
-      ChartRepository::Session &chartSession, std::uint64_t taskId,
-      const std::stop_token &stopToken);
-  static bool isPauseableLibraryTaskStatus(LibraryTaskStatus status);
-  static bool isActiveLibraryTaskStatus(LibraryTaskStatus status);
-  void setLibraryTaskState(std::uint64_t id, LibraryTaskStatus status,
-                           double fraction, int current, int total,
-                           const std::string &detail);
-  void bumpLibraryTasksRevisionLocked();
-  void updateLibraryTaskProgress(std::uint64_t id,
-                                 const ChartScanProgress &progress);
   LibraryTaskProgressSnapshot readLibraryTaskProgress() const;
   int activeLibraryTaskCount();
   void requestLibraryScanFlush();
-  std::uint64_t pendingLibraryScanFlushRequest() const;
-  void completeLibraryScanFlush(std::uint64_t request);
   void refreshTasksButton();
-  bool insertChartFolderEntryImmediately(
-      const std::filesystem::path &folderPath,
-      const std::string &iosBookmark);
   int clearRankForChart(const ChartMetaRecord &record) const;
   int clearRankForFolder(const std::string &key) const;
   int clearMarkCountForFolder(const std::string &key, int clearMarkRank) const;
@@ -733,14 +520,6 @@ private:
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();
-  void schedulePreviewLoad(bms_parser::ChartMeta meta);
-  void startPreviewLoadThread(bms_parser::ChartMeta meta,
-                              DebounceToken previewToken);
-  void cancelActivePreviewLoading();
-  void retirePreviewLoadThread(bool stopPreviewAudioWhenDone);
-  void reapRetiredPreviewLoadThreads();
-  void joinRetiredPreviewLoadThreads();
-  void cancelPreviewLoading(bool stopPreviewAudio);
   void stopAndClearSelectedChart();
   SelectedChartRandomInfo
   selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
@@ -833,40 +612,17 @@ private:
   void buildPlayOptionsModal();
   void showPlayOptionsModal();
   void hidePlayOptionsModal();
-  void buildReplayModal();
-  void showReplayListModal(const ChartMetaRecord &record);
-  void reloadReplayRecordModels(bool preserveViewState);
-  void showReplayFilterSortOptions();
-  void showReplayExportOptions();
-  void showReplayExportProgress(const std::string &title = "Exporting Replay",
-                                const std::string &message =
-                                    "Preparing export");
-  void hideReplayModal();
-  void refreshReplayModalActions();
-  void startSelectedReplayFileShare();
-  void showReplayDeleteConfirmation();
-  void cancelReplayDeleteConfirmation();
-  void confirmSelectedReplayFileDelete();
+  void openReplayRecordsForSelection();
+  void shareReplayFile(const replay::ReplayFileActionRequest &request);
+  void removeReplayFile(const replay::ReplayFileActionRequest &request);
   void applyReplayFileDocumentHandoff();
-  void refreshReplayFilterSortButtons();
-  void refreshReplayExportOptionButtons();
-  void updateReplayExportProgressUi(double fraction,
-                                    const std::string &message);
-  void clearReplayModalSelection();
-  bool selectReplayModalIndex(int index);
-  void applyReplayRecordFilters(
-      std::optional<std::string> preferredStableKey = std::nullopt);
-  void setReplayClearFilter(std::optional<int> rank);
-  void setReplayPlayOptionFilter(std::optional<std::string> option);
-  void setReplayScoreRankFilter(std::optional<std::string> rank);
-  void setReplaySortCriterion(ReplayRecordSortCriterion criterion);
-  bool replayScoreRankFilterAvailable() const;
+  ReplayRecordsModalCallbacks makeRecordsModalCallbacks();
+  std::vector<ResultRecordSummary>
+  loadRecordsForModal(const ChartMetaRecord &record);
   bool beginReplayExport(const std::string &progressTitle,
                          const std::string &progressMessage,
                          const std::string &statusMessage);
   void queueReplayExportResult(const ReplayVideoExportResult &result);
-  bool selectedReplayIsAutoPlay() const;
-  bool selectedReplayIsCourseReplay() const;
   bms_parser::ChartMeta
   replayLoadMetaForRecord(const ChartMetaRecord &record) const;
   ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;
@@ -911,24 +667,6 @@ private:
   void stopReplayLoadWorker();
   void applyReplayExportProgress();
   void applyReplayExportResult();
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  void addIOSFolderEntryFromFiles();
-#endif
-#if TARGET_OS_ANDROID
-  void addAndroidFolderEntryFromPicker();
-  void importAndroidArchiveFromPicker();
-  void importAndroidFolderFromPicker();
-  void importAndroidPathFromPicker(bool folderImport);
-  void pollPendingAndroidArchiveImport();
-  void applyPendingAndroidArchiveImport();
-#endif
-  static ChartScanResult
-  LoadCharts(ChartRepository::Session &chartSession,
-             std::vector<ChartEntry> &entries, MainMenuScene &scene,
-             const std::stop_token &stop_token,
-             ChartScanProgressCallback progressCallback = nullptr,
-             ChartScanPauseCallback pauseCallback = nullptr,
-             bool addedPathsOnly = false, bool requestReload = true);
   enum DiffType { Deleted, Added };
   struct Diff {
     std::filesystem::path path;

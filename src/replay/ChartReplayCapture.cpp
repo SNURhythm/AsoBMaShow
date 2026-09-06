@@ -32,7 +32,9 @@ captureChartReplayPersistenceAttempt(const ChartReplayCapture &capture,
       return std::nullopt;
     }
 
-    ChartReplayPersistenceAttempt attempt{.result = capture.result};
+    ChartReplayPersistenceAttempt attempt{
+        .result = capture.result,
+        .averageJudgeMicros = capture.averageJudgeMicros};
     std::string snapshotDiagnostic;
     attempt.irSnapshot =
         ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);

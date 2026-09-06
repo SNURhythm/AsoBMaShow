@@ -1,8 +1,8 @@
 #include "MainMenuScene.h"
+#include "../StartupTiming.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
 #include "../BmsChartFile.h"
-#include "../DifficultyTableImporter.h"
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
@@ -18,6 +18,7 @@
 #include "../ResultContracts.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../PlatformDocumentHandoff.h"
+#include "../PlatformOpen.h"
 #include "../RAII.h"
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
@@ -34,6 +35,8 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
+#include "ChartPreloadWorker.h"
+#include "DecideLoadingOverlay.h"
 #include "../view/PlayOptionsPanelView.h"
 #include "../view/TextView.h"
 #include "../view/TextInputBox.h"
@@ -42,12 +45,14 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "ChartViewerScene.h"
+#include "CourseGameplaySessionBuilder.h"
 #include "FindBmsDialogPolicy.h"
 #include "FindBmsProgressPresentation.h"
 #include "IrUploadsScene.h"
 #include "MusicPlayerScene.h"
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
+#include "SettingsScene.h"
 #include "play/GamePlayScene.h"
 #include "play/GameplayGaugeRules.h"
 #include "play/Pacemaker.h"
@@ -68,8 +73,6 @@
 #include <vector>
 #ifdef _WIN32
 #include <windows.h>
-#include <shlobj.h>
-#include <shellapi.h>
 
 #elif __APPLE__
 
@@ -81,7 +84,6 @@
 #include <sys/stat.h>
 #else
 // define something for OSX
-#include "../MacNatives.h"
 #include <dirent.h>
 #include <sys/stat.h>
 #endif
@@ -103,12 +105,6 @@
 #include <iostream>
 #include <limits>
 #include <sstream>
-#if TARGET_OS_LINUX
-#include <spawn.h>
-#include <sys/wait.h>
-extern char **environ;
-#endif
-
 namespace {
 
 constexpr int kRootPadding = 28;
@@ -153,13 +149,6 @@ recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
   return ir::IrRecordActivity::None;
 }
 
-constexpr const char *kDefaultDifficultyTableUrls[] = {
-    "https://rattoto10.jounin.jp/table.html",
-    "https://rattoto10.jounin.jp/table_insane.html",
-    "https://stellabms.xyz/sl/table.html",
-    "https://stellabms.xyz/st/table.html",
-};
-
 std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
                              GameplayRuleset ruleset) {
   const double total = resolveEffectiveGaugeTotal(ruleset, meta);
@@ -169,16 +158,6 @@ std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
   while (!value.empty() && value.back() == '0') value.pop_back();
   if (!value.empty() && value.back() == '.') value.pop_back();
   return value;
-}
-
-void ensureLibraryFolderExists(const std::filesystem::path &path) {
-  std::error_code error;
-  if (Utils::EnsureDirectoryExists(path, error)) {
-    return;
-  }
-
-  throw std::runtime_error("Could not create library folder '" +
-                           fspath_to_utf8(path) + "': " + error.message());
 }
 
 bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
@@ -191,36 +170,6 @@ bool ensureDirectoryExistsLogged(const std::filesystem::path &path,
   SDL_Log("Failed to create %s %s: %s", description,
           fspath_to_utf8(path).c_str(), error.message().c_str());
   return false;
-}
-
-const char *homeDirectoryEnvValue() {
-  if (const char *home = std::getenv("HOME");
-      home != nullptr && home[0] != '\0') {
-    return home;
-  }
-#ifdef _WIN32
-  if (const char *profile = std::getenv("USERPROFILE");
-      profile != nullptr && profile[0] != '\0') {
-    return profile;
-  }
-#endif
-  return nullptr;
-}
-
-bool expandCurrentUserHomeShortcut(std::string &path) {
-  if (path.empty() || path.front() != '~') {
-    return true;
-  }
-  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
-    return true;
-  }
-
-  const char *home = homeDirectoryEnvValue();
-  if (home == nullptr) {
-    return false;
-  }
-  path.replace(0, 1, home);
-  return true;
 }
 
 struct SafeAreaInsets {
@@ -660,255 +609,11 @@ SafeAreaInsets getSafeAreaInsetsUi() {
   return insets;
 }
 
-bool revealPathInFileManager(const std::filesystem::path &path,
-                             const OverlayAnchor &sourceAnchor,
-                             std::string &errorMessage) {
-  (void)sourceAnchor;
-  errorMessage.clear();
-  if (path.empty()) {
-    errorMessage = "Chart file path is empty";
-    return false;
-  }
-
-  std::error_code errorCode;
-  std::filesystem::path targetPath = path;
-  if (!targetPath.is_absolute()) {
-    const auto absolutePath = std::filesystem::absolute(targetPath, errorCode);
-    if (!errorCode) {
-      targetPath = absolutePath;
-    }
-    errorCode.clear();
-  }
-  std::filesystem::path archivePath;
-  std::filesystem::path innerPath;
-  if (archive_file::splitVirtualPath(targetPath, archivePath, innerPath)) {
-    targetPath = archivePath;
-  }
-
-  const std::string targetPathText = fspath_to_utf8(targetPath);
-  const bool targetExists = std::filesystem::exists(targetPath, errorCode);
-  if (errorCode) {
-    errorMessage =
-        "Could not check chart file: " + targetPathText + " (" +
-        errorCode.message() + ")";
-    return false;
-  }
-  if (!targetExists) {
-    errorMessage = "Chart file does not exist: " +
-                   targetPathText;
-    return false;
-  }
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  const NormalizedOverlayAnchor normalizedSourceAnchor =
-      normalizeOverlayAnchor(sourceAnchor, rendering::window_width,
-                             rendering::window_height);
-  return RevealIOSFileInFiles(
-      targetPathText,
-      {.x = normalizedSourceAnchor.x,
-       .y = normalizedSourceAnchor.y,
-       .width = normalizedSourceAnchor.width,
-       .height = normalizedSourceAnchor.height},
-      errorMessage);
-#elif TARGET_OS_ANDROID
-  errorMessage = "Reveal is not supported on Android yet";
-  return false;
-#elif TARGET_OS_OSX
-  return RevealPathInFinder(targetPathText, errorMessage);
-#elif defined(_WIN32)
-  const std::wstring nativePath = targetPath.wstring();
-  const HRESULT coInit = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED |
-                                                     COINIT_DISABLE_OLE1DDE);
-  const bool didCoInitialize = SUCCEEDED(coInit);
-  PIDLIST_ABSOLUTE pidl = ILCreateFromPathW(nativePath.c_str());
-  if (pidl == nullptr) {
-    if (didCoInitialize) {
-      CoUninitialize();
-    }
-    errorMessage = "Could not resolve chart file for Explorer";
-    return false;
-  }
-
-  const HRESULT result = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
-  ILFree(pidl);
-  if (didCoInitialize) {
-    CoUninitialize();
-  }
-  if (FAILED(result)) {
-    std::ostringstream stream;
-    stream << "Could not open Explorer: HRESULT 0x" << std::hex
-           << static_cast<unsigned long>(result);
-    errorMessage = stream.str();
-    return false;
-  }
-  return true;
-#elif TARGET_OS_LINUX
-  const bool isDirectory = std::filesystem::is_directory(targetPath, errorCode);
-  if (errorCode) {
-    errorMessage =
-        "Could not check chart file type: " + targetPathText + " (" +
-        errorCode.message() + ")";
-    return false;
-  }
-  std::filesystem::path directoryPath =
-      isDirectory ? targetPath : targetPath.parent_path();
-  if (directoryPath.empty()) {
-    directoryPath = ".";
-  }
-
-  std::string openerPath;
-  for (const char *candidate :
-       {"/usr/bin/xdg-open", "/bin/xdg-open", "/usr/local/bin/xdg-open"}) {
-    if (std::filesystem::exists(candidate, errorCode)) {
-      openerPath = candidate;
-      break;
-    }
-    errorCode.clear();
-  }
-  if (openerPath.empty()) {
-    errorMessage = "Could not find xdg-open";
-    return false;
-  }
-
-  const std::string directoryText = fspath_to_utf8(directoryPath);
-  pid_t pid = 0;
-  char *argv[] = {const_cast<char *>(openerPath.c_str()),
-                  const_cast<char *>(directoryText.c_str()), nullptr};
-  const int result =
-      posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
-  if (result != 0) {
-    errorMessage =
-        std::string("Could not open file manager: ") + std::strerror(result);
-    return false;
-  }
-  std::thread([pid]() {
-    int status = 0;
-    waitpid(pid, &status, 0);
-  }).detach();
-  return true;
-#else
-  errorMessage = "Reveal is not supported on this platform";
-  return false;
-#endif
-}
-
-bool openExternalUrl(const std::string &url, std::string &errorMessage) {
-  errorMessage.clear();
-  if (url.empty()) {
-    errorMessage = "URL is empty";
-    return false;
-  }
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return OpenURLInIOSBrowser(url, errorMessage);
-#elif TARGET_OS_ANDROID
-  return OpenURLInAndroidBrowser(url, errorMessage);
-#elif TARGET_OS_OSX
-  return OpenURLInDefaultBrowser(url, errorMessage);
-#elif defined(_WIN32)
-  const HINSTANCE result = ShellExecuteA(nullptr, "open", url.c_str(), nullptr,
-                                         nullptr, SW_SHOWNORMAL);
-  if (reinterpret_cast<intptr_t>(result) <= 32) {
-    errorMessage = "Could not open browser";
-    return false;
-  }
-  return true;
-#elif TARGET_OS_LINUX
-  std::error_code errorCode;
-  std::string openerPath;
-  for (const char *candidate :
-       {"/usr/bin/xdg-open", "/bin/xdg-open", "/usr/local/bin/xdg-open"}) {
-    if (std::filesystem::exists(candidate, errorCode)) {
-      openerPath = candidate;
-      break;
-    }
-    errorCode.clear();
-  }
-  if (openerPath.empty()) {
-    errorMessage = "Could not find xdg-open";
-    return false;
-  }
-
-  pid_t pid = 0;
-  char *argv[] = {const_cast<char *>(openerPath.c_str()),
-                  const_cast<char *>(url.c_str()), nullptr};
-  const int result =
-      posix_spawn(&pid, openerPath.c_str(), nullptr, nullptr, argv, environ);
-  if (result != 0) {
-    errorMessage =
-        std::string("Could not open browser: ") + std::strerror(result);
-    return false;
-  }
-  std::thread([pid]() {
-    int status = 0;
-    waitpid(pid, &status, 0);
-  }).detach();
-  return true;
-#else
-  errorMessage = "Opening URLs is not supported on this platform";
-  return false;
-#endif
-}
-
 using main_menu_library::folderKeyForCourse;
 using main_menu_library::folderKeyForCourseGroup;
 using main_menu_library::folderKeyForCourseTable;
 using main_menu_library::folderKeyForLevel;
 using main_menu_library::folderKeyForTable;
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-std::mutex gIOSFolderAccessMutex;
-std::vector<void *> gIOSFolderAccessHandles;
-std::unordered_map<path_t, path_t> gIOSResolvedFolderPaths;
-
-void ClearIOSFolderAccessLocked() {
-  for (void *handle : gIOSFolderAccessHandles) {
-    StopIOSSecurityScopedResource(handle);
-  }
-  gIOSFolderAccessHandles.clear();
-  gIOSResolvedFolderPaths.clear();
-}
-
-void ClearIOSFolderAccess() {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
-  ClearIOSFolderAccessLocked();
-}
-
-void RefreshIOSFolderAccess(const std::vector<ChartEntry> &entries) {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
-  ClearIOSFolderAccessLocked();
-
-  for (const auto &entry : entries) {
-    if (entry.iosBookmark.empty()) {
-      continue;
-    }
-    std::string resolvedPath;
-    std::string errorMessage;
-    void *handle = StartIOSSecurityScopedResource(path_t_to_utf8(entry.path),
-                                                  entry.iosBookmark,
-                                                  resolvedPath, errorMessage);
-    if (!errorMessage.empty()) {
-      SDL_Log("Failed to open folder access for %s: %s",
-              path_t_to_utf8(entry.path).c_str(), errorMessage.c_str());
-    }
-    if (!resolvedPath.empty()) {
-      gIOSResolvedFolderPaths[entry.path] = utf8_to_path_t(resolvedPath);
-    }
-    if (handle != nullptr) {
-      gIOSFolderAccessHandles.push_back(handle);
-    }
-  }
-}
-
-std::filesystem::path ResolveIOSFolderEntryPath(const ChartEntry &entry) {
-  std::lock_guard<std::mutex> lock(gIOSFolderAccessMutex);
-  const auto it = gIOSResolvedFolderPaths.find(entry.path);
-  if (it != gIOSResolvedFolderPaths.end()) {
-    return std::filesystem::path(it->second);
-  }
-  return std::filesystem::path(entry.path);
-}
-#endif
 
 int clearRankForGaugeType(GaugeType gaugeType) {
   switch (gaugeType) {
@@ -1200,25 +905,32 @@ void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
   }
 }
 
+EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  // While a chart is launching, the decide overlay blocks all input so the
+  // user cannot start another chart or mutate the library mid-launch.
+  if (willStart.load(std::memory_order_acquire) && decideOverlay_ != nullptr &&
+      decideOverlay_->getVisible()) {
+    (void)decideOverlay_->handleEvents(event);
+    return {};
+  }
+  if (recordsModal_ != nullptr && recordsModal_->isVisible()) {
+    (void)recordsModal_->handleEvents(event);
+    return {};
+  }
+  return Scene::handleEvents(event);
+}
+
 void MainMenuScene::init() {
   // Initialize the scene
   chartSession =
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
-    if (libraryActiveTaskCount.load(std::memory_order_acquire) > 0 ||
-        androidArchiveImportCopyPending.load(std::memory_order_acquire)) {
-      return "A chart library scan or import is active.";
-    }
     if (replayExportInProgress.load(std::memory_order_acquire)) {
       return "A replay export is active.";
     }
     if (unzipInProgress.load(std::memory_order_acquire) ||
         findBmsJobRunning.load(std::memory_order_acquire)) {
       return "A chart archive operation is active.";
-    }
-    if (addFolderPickerInProgress.load(std::memory_order_acquire) ||
-        archiveImportPickerInProgress.load(std::memory_order_acquire)) {
-      return "A chart import picker is active.";
     }
     if (willStart.load(std::memory_order_acquire)) {
       return "A chart or replay transition is active.";
@@ -1239,32 +951,8 @@ void MainMenuScene::init() {
     observedIrAccountEvidenceRevision = 0;
     replayIrObservedRevisions.clear();
   };
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  context.requestAddChartFolderFromFiles = [this]() {
-    addIOSFolderEntryFromFiles();
-  };
-#elif TARGET_OS_ANDROID
-  if (AndroidBuildHasManageExternalStorage()) {
-    context.requestAddChartFolderFromFiles = [this]() {
-      addAndroidFolderEntryFromPicker();
-    };
-  } else {
-    context.requestAddChartFolderFromFiles = [this]() {
-      importAndroidFolderFromPicker();
-    };
-  }
-#endif
-  context.requestRebuildChartLibrary = [this]() {
-    startLibraryRebuild();
-  };
-  context.notifyBackgroundTaskPauseStateChanged = [this]() {
-    syncLibraryTaskPauseStateWithForegroundScene();
-  };
   initView(context);
   SDL_Log("Main Menu Scene Initialized");
-  syncLibraryTaskPauseStateWithForegroundScene();
-  startLibraryTaskWorker();
-  enqueueLibraryRefreshTask("Refresh Library");
 }
 
 void MainMenuScene::onPause() {
@@ -1286,8 +974,6 @@ void MainMenuScene::onResume() {
   // Gameplay selections belong to the committed profile even when its score
   // attachment is temporarily unavailable.
   reloadProfileSelectionsFromSettings();
-  syncLibraryTaskPauseStateWithForegroundScene();
-  startLibraryTaskWorker();
   if (scoreQueryReady) {
     if (refreshScoreClearRankViews().has_value()) {
       scoreClearRanks = {};
@@ -1353,8 +1039,7 @@ void MainMenuScene::applyThemeChange() {
   refreshPlayOptionButtons();
   refreshAssistOptionButtons();
   refreshChartFilterButtons();
-  refreshReplayModalActions();
-  refreshReplayExportOptionButtons();
+  if (recordsModal_ != nullptr) recordsModal_->refresh();
   refreshFindBmsModal();
   refreshMusicModal();
   if (rootLayout != nullptr) {
@@ -1362,177 +1047,14 @@ void MainMenuScene::applyThemeChange() {
   }
 }
 
-void MainMenuScene::startLibraryTaskWorker() {
-  std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
-  const bool workerPaused = libraryTaskWorkerPaused.load();
-  if (workerPaused) {
-    return;
-  }
-  if (checkEntriesThread.joinable()) {
-    return;
-  }
-  if (!workerPaused) {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    bool changed = false;
-    for (auto &task : libraryTasks) {
-      if (task.status != LibraryTaskStatus::Paused) {
-        continue;
-      }
-      const auto queuedIt = std::find_if(
-          libraryTaskQueue.begin(), libraryTaskQueue.end(),
-          [&task](const auto &queuedTask) { return queuedTask.id == task.id; });
-      if (queuedIt != libraryTaskQueue.end()) {
-        task.status = LibraryTaskStatus::Queued;
-        task.detail = "Waiting";
-        changed = true;
-      }
-    }
-    if (changed) {
-      bumpLibraryTasksRevisionLocked();
-    }
-  }
-  checkEntriesThread = std::jthread(
-      [this](const std::stop_token &stopToken) { libraryTaskLoop(stopToken); });
-}
-
-void MainMenuScene::stopLibraryTaskWorker() {
-  std::lock_guard<std::mutex> workerLock(libraryTaskWorkerMutex);
-  if (!checkEntriesThread.joinable()) {
-    return;
-  }
-  SDL_Log("Joining library task worker");
-  checkEntriesThread.request_stop();
-  libraryTaskWorkerPaused = false;
-  libraryTaskPauseCv.notify_all();
-  libraryTaskCv.notify_all();
-  checkEntriesThread.join();
-}
-
-void MainMenuScene::pauseLibraryTaskWorker() {
-  libraryTaskWorkerPaused = true;
-  bool changed = false;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    for (auto &task : libraryTasks) {
-      if (isPauseableLibraryTaskStatus(task.status)) {
-        task.status = LibraryTaskStatus::Paused;
-        task.detail = "Paused";
-        changed = true;
-      }
-    }
-    if (changed) {
-      bumpLibraryTasksRevisionLocked();
-    }
-  }
-  libraryTaskCv.notify_all();
-}
-
-void MainMenuScene::resumeLibraryTaskWorker() {
-  libraryTaskWorkerPaused = false;
-  bool changed = false;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    for (auto &task : libraryTasks) {
-      if (task.status != LibraryTaskStatus::Paused) {
-        continue;
-      }
-      const auto queuedIt = std::find_if(
-          libraryTaskQueue.begin(), libraryTaskQueue.end(),
-          [&task](const auto &queuedTask) { return queuedTask.id == task.id; });
-      task.status = queuedIt != libraryTaskQueue.end()
-                        ? LibraryTaskStatus::Queued
-                        : LibraryTaskStatus::Running;
-      task.detail = queuedIt != libraryTaskQueue.end() ? "Waiting" : "Resuming";
-      changed = true;
-    }
-    if (changed) {
-      bumpLibraryTasksRevisionLocked();
-    }
-  }
-  libraryTaskPauseCv.notify_all();
-  libraryTaskCv.notify_all();
-}
-
-void MainMenuScene::syncLibraryTaskPauseStateWithForegroundScene() {
-  if (context.backgroundTasksPausedForForegroundScene.load()) {
-    pauseLibraryTaskWorker();
-    return;
-  }
-
-  resumeLibraryTaskWorker();
-  startLibraryTaskWorker();
-}
-
-bool MainMenuScene::waitForLibraryTaskResume(std::uint64_t id,
-                                             const std::stop_token &stopToken) {
-  if (!libraryTaskWorkerPaused.load()) {
-    return !stopToken.stop_requested();
-  }
-
-  const LibraryTaskProgressSnapshot snapshot = readLibraryTaskProgress();
-  const double fraction =
-      snapshot.valid && snapshot.taskId == id
-          ? static_cast<double>(snapshot.basisPoints) / 10000.0
-          : 0.0;
-  const int current =
-      snapshot.valid && snapshot.taskId == id ? snapshot.current : 0;
-  const int total =
-      snapshot.valid && snapshot.taskId == id ? snapshot.total : 0;
-  setLibraryTaskState(id, LibraryTaskStatus::Paused, fraction, current, total,
-                      "Paused");
-
-  std::unique_lock<std::mutex> lock(libraryTaskPauseMutex);
-  libraryTaskPauseCv.wait(lock, [this, &stopToken]() {
-    return stopToken.stop_requested() || !libraryTaskWorkerPaused.load();
-  });
-  if (stopToken.stop_requested()) {
-    return false;
-  }
-  setLibraryTaskState(id, LibraryTaskStatus::Running, fraction, current, total,
-                      "Resuming");
-  return true;
-}
-
-void MainMenuScene::enqueueLibraryTask(LibraryTaskRequest task) {
-  task.id = nextLibraryTaskId.fetch_add(1);
-  const std::uint64_t id = task.id;
-  const std::string title = task.title;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.push_back(std::move(task));
-    libraryTasks.push_back(LibraryTaskInfo{
-        .id = id,
-        .title = title,
-        .status = LibraryTaskStatus::Queued,
-        .fraction = 0.0,
-        .current = 0,
-        .total = 0,
-        .detail = "Waiting",
-    });
-    constexpr std::size_t kMaxTaskHistory = 24;
-    while (libraryTasks.size() > kMaxTaskHistory) {
-      const auto removable = std::find_if(
-          libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-            return task.status == LibraryTaskStatus::Complete ||
-                   task.status == LibraryTaskStatus::Failed ||
-                   task.status == LibraryTaskStatus::Paused;
-          });
-      if (removable == libraryTasks.end()) {
-        break;
-      }
-      libraryTasks.erase(removable);
-    }
-    bumpLibraryTasksRevisionLocked();
-  }
-  startLibraryTaskWorker();
-  libraryTaskCv.notify_one();
-}
-
 void MainMenuScene::enqueueLibraryRefreshTask(
     const std::string &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark, bool rebuildLibraryMetadata) {
-  enqueueLibraryTask(LibraryTaskRequest{
-      .kind = LibraryTaskKind::RefreshLibrary,
+  if (!context.chartLibraryTasks) {
+    return;
+  }
+  context.chartLibraryTasks->enqueue({
+      .kind = chart_library_tasks::TaskKind::RefreshLibrary,
       .title = title,
       .folderToAdd = folderToAdd,
       .iosBookmark = iosBookmark,
@@ -1545,11 +1067,11 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
     const main_menu_library::FindBmsChartIdentity &targetIdentity,
     std::uint64_t selectionGeneration,
     std::vector<std::filesystem::path> removedPaths) {
-  if (path.empty()) {
+  if (path.empty() || !context.chartLibraryTasks) {
     return;
   }
-  enqueueLibraryTask(LibraryTaskRequest{
-      .kind = LibraryTaskKind::IndexDownloadedPath,
+  context.chartLibraryTasks->enqueue({
+      .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
       .title = "Index Downloaded BMS",
       .downloadedPath = path,
       .downloadedRemovedPaths = std::move(removedPaths),
@@ -1558,211 +1080,23 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
   });
 }
 
-#if TARGET_OS_ANDROID
-void MainMenuScene::createPendingAndroidImportTask(bool folderImport) {
-  startLibraryTaskWorker();
-  const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTasks.push_back(LibraryTaskInfo{
-        .id = id,
-        .title = folderImport ? "Import Folder" : "Import Archive",
-        .status = LibraryTaskStatus::Running,
-        .fraction = 0.0,
-        .current = 0,
-        .total = 0,
-        .detail = folderImport ? "Copying selected folder"
-                               : "Copying selected archive",
-    });
-    constexpr std::size_t kMaxTaskHistory = 24;
-    while (libraryTasks.size() > kMaxTaskHistory) {
-      const auto removable = std::find_if(
-          libraryTasks.begin(), libraryTasks.end(), [](const auto &task) {
-            return task.status == LibraryTaskStatus::Complete ||
-                   task.status == LibraryTaskStatus::Failed ||
-                   task.status == LibraryTaskStatus::Paused;
-          });
-      if (removable == libraryTasks.end()) {
-        break;
-      }
-      libraryTasks.erase(removable);
-    }
-    bumpLibraryTasksRevisionLocked();
-  }
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    pendingAndroidArchiveImportTasks.emplace_back(id, folderImport);
-  }
-  androidArchiveImportCopyPending.store(true);
-  tasksModalOpenRequested.store(true);
-}
-
-void MainMenuScene::enqueueAndroidImportTask(
-    std::uint64_t id, const std::filesystem::path &importPath,
-    bool folderImport) {
-  if (importPath.empty()) {
-    setLibraryTaskState(id, LibraryTaskStatus::Failed, 0.0, 0, 0,
-                        "Import failed: selected path is empty.");
-    return;
-  }
-
-  startLibraryTaskWorker();
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.push_back(LibraryTaskRequest{
-        .id = id,
-        .kind = LibraryTaskKind::AndroidImport,
-        .title = folderImport ? "Import Folder" : "Import Archive",
-        .androidImportPath = importPath,
-        .androidImportFolder = folderImport,
-    });
-    auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
-                               [id](const auto &task) {
-                                 return task.id == id;
-                               });
-    if (taskIt == libraryTasks.end()) {
-      libraryTasks.push_back(LibraryTaskInfo{
-          .id = id,
-          .title = folderImport ? "Import Folder" : "Import Archive",
-          .status = LibraryTaskStatus::Queued,
-          .fraction = 0.0,
-          .current = 0,
-          .total = 0,
-          .detail = "Waiting",
-      });
-    } else {
-      taskIt->title = folderImport ? "Import Folder" : "Import Archive";
-      taskIt->status = LibraryTaskStatus::Queued;
-      taskIt->fraction = 0.0;
-      taskIt->current = 0;
-      taskIt->total = 0;
-      taskIt->detail = "Waiting";
-    }
-    bumpLibraryTasksRevisionLocked();
-  }
-  tasksModalOpenRequested.store(true);
-  libraryTaskCv.notify_one();
-}
-#endif
-
-bool MainMenuScene::isPauseableLibraryTaskStatus(LibraryTaskStatus status) {
-  return status == LibraryTaskStatus::Queued ||
-         status == LibraryTaskStatus::Running;
-}
-
-bool MainMenuScene::isActiveLibraryTaskStatus(LibraryTaskStatus status) {
-  return isPauseableLibraryTaskStatus(status) ||
-         status == LibraryTaskStatus::Paused;
-}
-
-void MainMenuScene::setLibraryTaskState(std::uint64_t id,
-                                        LibraryTaskStatus status,
-                                        double fraction, int current, int total,
-                                        const std::string &detail) {
-  std::lock_guard<std::mutex> lock(libraryTaskMutex);
-  auto taskIt = std::find_if(libraryTasks.begin(), libraryTasks.end(),
-                             [id](const auto &task) { return task.id == id; });
-  if (taskIt == libraryTasks.end()) {
-    return;
-  }
-  taskIt->status = status;
-  taskIt->fraction = std::clamp(fraction, 0.0, 1.0);
-  taskIt->current = std::max(0, current);
-  taskIt->total = std::max(0, total);
-  taskIt->detail = detail;
-  bumpLibraryTasksRevisionLocked();
-}
-
-void MainMenuScene::bumpLibraryTasksRevisionLocked() {
-  ++libraryTasksRevision;
-  const int activeCount = static_cast<int>(std::count_if(
-      libraryTasks.begin(), libraryTasks.end(),
-      [](const auto &task) { return isActiveLibraryTaskStatus(task.status); }));
-  libraryActiveTaskCount.store(activeCount, std::memory_order_release);
-}
-
-void MainMenuScene::updateLibraryTaskProgress(
-    std::uint64_t id, const ChartScanProgress &progress) {
-  const int total = std::max(0, progress.total);
-  const int current = total > 0 ? std::clamp(progress.current, 0, total)
-                                : std::max(0, progress.current);
-  const int basisPoints =
-      total > 0
-          ? static_cast<int>((static_cast<std::int64_t>(current) * 10000) /
-                             std::max(1, total))
-          : 0;
-  std::uint64_t revision =
-      libraryProgressRevision.load(std::memory_order_relaxed);
-  if ((revision & 1U) != 0) {
-    ++revision;
-  }
-  libraryProgressRevision.store(revision + 1, std::memory_order_release);
-  libraryProgressTaskId.store(id, std::memory_order_relaxed);
-  libraryProgressCurrent.store(current, std::memory_order_relaxed);
-  libraryProgressTotal.store(total, std::memory_order_relaxed);
-  libraryProgressBasisPoints.store(std::clamp(basisPoints, 0, 10000),
-                                   std::memory_order_relaxed);
-  libraryProgressStage.store(static_cast<int>(progress.stage),
-                             std::memory_order_relaxed);
-  libraryProgressRevision.store(revision + 2, std::memory_order_release);
-}
-
 MainMenuScene::LibraryTaskProgressSnapshot
 MainMenuScene::readLibraryTaskProgress() const {
-  for (int attempt = 0; attempt < 3; ++attempt) {
-    const std::uint64_t before =
-        libraryProgressRevision.load(std::memory_order_acquire);
-    if ((before & 1U) != 0) {
-      continue;
-    }
-    LibraryTaskProgressSnapshot snapshot;
-    snapshot.valid = before != 0;
-    snapshot.revision = before;
-    snapshot.taskId = libraryProgressTaskId.load(std::memory_order_relaxed);
-    snapshot.current = libraryProgressCurrent.load(std::memory_order_relaxed);
-    snapshot.total = libraryProgressTotal.load(std::memory_order_relaxed);
-    snapshot.basisPoints =
-        libraryProgressBasisPoints.load(std::memory_order_relaxed);
-    snapshot.stage = static_cast<ChartScanProgressStage>(
-        libraryProgressStage.load(std::memory_order_relaxed));
-    const std::uint64_t after =
-        libraryProgressRevision.load(std::memory_order_acquire);
-    if (before == after && (after & 1U) == 0) {
-      return snapshot;
-    }
-  }
-  return {};
+  return context.chartLibraryTasks
+             ? context.chartLibraryTasks->snapshot().progress
+             : LibraryTaskProgressSnapshot{};
 }
 
 int MainMenuScene::activeLibraryTaskCount() {
-  return libraryActiveTaskCount.load(std::memory_order_acquire);
+  return context.chartLibraryTasks
+             ? context.chartLibraryTasks->snapshot().activeCount
+             : 0;
 }
 
 void MainMenuScene::requestLibraryScanFlush() {
   if (activeLibraryTaskCount() > 0) {
-    libraryScanFlushRequested.fetch_add(1, std::memory_order_release);
-  }
-  requestLibraryReload(true);
-}
-
-std::uint64_t MainMenuScene::pendingLibraryScanFlushRequest() const {
-  const std::uint64_t requested =
-      libraryScanFlushRequested.load(std::memory_order_acquire);
-  const std::uint64_t completed =
-      libraryScanFlushCompleted.load(std::memory_order_acquire);
-  return requested > completed ? requested : 0;
-}
-
-void MainMenuScene::completeLibraryScanFlush(std::uint64_t request) {
-  if (request == 0) {
-    return;
-  }
-  std::uint64_t completed =
-      libraryScanFlushCompleted.load(std::memory_order_relaxed);
-  while (completed < request &&
-         !libraryScanFlushCompleted.compare_exchange_weak(
-             completed, request, std::memory_order_release,
-             std::memory_order_relaxed)) {
+    context.chartLibraryScanFlushRequested.fetch_add(
+        1, std::memory_order_release);
   }
   requestLibraryReload(true);
 }
@@ -1781,729 +1115,8 @@ void MainMenuScene::refreshTasksButton() {
   tasksButtonText->setText(label);
 }
 
-void MainMenuScene::libraryTaskLoop(const std::stop_token &stopToken) {
-  std::optional<LibraryTaskRequest> pausedTask;
-  while (!stopToken.stop_requested()) {
-    LibraryTaskRequest task;
-    {
-      std::unique_lock<std::mutex> lock(libraryTaskMutex);
-      libraryTaskCv.wait(lock, [this, &stopToken]() {
-        if (stopToken.stop_requested()) {
-          return true;
-        }
-        return !libraryTaskWorkerPaused.load() && !libraryTaskQueue.empty();
-      });
-      if (stopToken.stop_requested()) {
-        break;
-      }
-      auto taskIt = libraryTaskQueue.begin();
-      if (libraryTaskWorkerPaused.load()) {
-        continue;
-      }
-      if (taskIt == libraryTaskQueue.end()) {
-        continue;
-      }
-      task = *taskIt;
-      libraryTaskQueue.erase(taskIt);
-    }
-
-    if (!waitForLibraryTaskResume(task.id, stopToken)) {
-      pausedTask = task;
-      break;
-    }
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
-                        "Starting");
-    try {
-      switch (task.kind) {
-      case LibraryTaskKind::RefreshLibrary:
-        runLibraryRefreshTask(task, stopToken);
-        break;
-      case LibraryTaskKind::IndexDownloadedPath:
-        runDownloadedPathIndexTask(task, stopToken);
-        break;
-      case LibraryTaskKind::AndroidImport:
-#if TARGET_OS_ANDROID
-        runAndroidImportTask(task, stopToken);
-#else
-        throw std::runtime_error("Android import task is unavailable.");
-#endif
-        break;
-      }
-      if (stopToken.stop_requested()) {
-        setLibraryTaskState(task.id, LibraryTaskStatus::Paused, 0.0, 0, 0,
-                            "Paused");
-        pausedTask = task;
-      } else {
-        setLibraryTaskState(task.id, LibraryTaskStatus::Complete, 1.0, 1, 1,
-                            "Complete");
-      }
-    } catch (const std::exception &e) {
-      setLibraryTaskState(task.id, LibraryTaskStatus::Failed, 0.0, 0, 0,
-                          e.what());
-      archive_file::appendDebugLogLine("Library task failed: " + task.title +
-                                       ": " + e.what());
-    }
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    if (pausedTask.has_value()) {
-      const auto queuedIt =
-          std::find_if(libraryTaskQueue.begin(), libraryTaskQueue.end(),
-                       [&pausedTask](const auto &task) {
-                         return task.id == pausedTask->id;
-                       });
-      if (queuedIt == libraryTaskQueue.end()) {
-        libraryTaskQueue.push_front(*pausedTask);
-      }
-    }
-    for (auto &task : libraryTasks) {
-      if (isPauseableLibraryTaskStatus(task.status)) {
-        task.status = LibraryTaskStatus::Paused;
-        task.detail = "Paused";
-      }
-    }
-    bumpLibraryTasksRevisionLocked();
-  }
-}
-
-void MainMenuScene::seedDefaultDifficultyTablesIfNeeded(
-    ChartRepository::Session &chartSession, std::uint64_t taskId,
-    const std::stop_token &stopToken) {
-  if (context.settings.defaultDifficultyTablesSeeded ||
-      stopToken.stop_requested()) {
-    return;
-  }
-
-  constexpr int totalTables =
-      static_cast<int>(sizeof(kDefaultDifficultyTableUrls) /
-                       sizeof(kDefaultDifficultyTableUrls[0]));
-  int successfulTables = 0;
-  bool allSucceeded = true;
-  DifficultyTableImporter importer;
-
-  for (int i = 0; i < totalTables; ++i) {
-    if (stopToken.stop_requested()) {
-      return;
-    }
-
-    const char *url = kDefaultDifficultyTableUrls[i];
-    setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02, i,
-                        totalTables, "Adding default difficulty tables");
-
-    std::string errorMessage;
-    const bool ok = importer.ImportFromUrl(
-        chartSession, url, &errorMessage,
-        [this, taskId, i, totalTables,
-         url](const DifficultyTableImportProgress &progress) {
-          std::string detail = progress.tableName.empty()
-                                   ? std::string(url)
-                                   : progress.tableName;
-          setLibraryTaskState(taskId, LibraryTaskStatus::Running, 0.02,
-                              i + (progress.current > 0 ? 1 : 0), totalTables,
-                              "Adding default table: " + detail);
-        });
-    if (ok) {
-      ++successfulTables;
-    } else {
-      allSucceeded = false;
-      SDL_Log("Failed to import default difficulty table %s: %s", url,
-              errorMessage.empty() ? "unknown error" : errorMessage.c_str());
-    }
-  }
-
-  if (stopToken.stop_requested()) {
-    return;
-  }
-
-  if (allSucceeded) {
-    context.settings.defaultDifficultyTablesSeeded = true;
-    if (!context.saveSettings()) {
-      SDL_Log("Failed to save default difficulty table seed setting");
-    }
-  }
-  if (successfulTables > 0) {
-    requestLibraryReload(true);
-  }
-}
-
-void MainMenuScene::runLibraryRefreshTask(const LibraryTaskRequest &task,
-                                          const std::stop_token &stopToken) {
-  auto taskSession = context.chartRepository.OpenSession();
-  if (!taskSession.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
-  }
-  taskSession->EnsureSchema();
-
-  auto pauseTask = [&]() {
-    return waitForLibraryTaskResume(task.id, stopToken);
-  };
-  if (!pauseTask()) {
-    return;
-  }
-
-  std::vector<ChartEntry> entries;
-  if (!task.folderToAdd.empty()) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.01, 0, 0,
-                        "Adding folder");
-    if (!taskSession->InsertEntry(task.folderToAdd, task.iosBookmark)) {
-      throw std::runtime_error("Failed to add folder");
-    }
-    requestLibraryReload(true);
-    entries.push_back({
-        .path = fspath_to_path_t(task.folderToAdd),
-        .iosBookmark = task.iosBookmark,
-    });
-  }
-
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.02, 0, 0,
-                      "Importing difficulty tables");
-  if (!pauseTask()) {
-    return;
-  }
-  seedDefaultDifficultyTablesIfNeeded(*taskSession, task.id, stopToken);
-  if (stopToken.stop_requested() || !pauseTask()) {
-    return;
-  }
-  DifficultyTableImporter importer;
-  const int importedTables = importer.ImportFromDirectory(
-      *taskSession, Utils::GetDocumentsPath("tables"));
-  if (importedTables > 0 && !stopToken.stop_requested()) {
-    requestLibraryReload(true);
-  }
-  if (entries.empty()) {
-    entries = taskSession->SelectEffectiveEntries();
-  }
-  if (stopToken.stop_requested()) {
-    return;
-  }
-
-  if (entries.empty()) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.04, 0, 0,
-                        "Waiting for library folder");
-    if (!pauseTask()) {
-      return;
-    }
-    constexpr auto bootstrapMode =
-        main_menu_library::emptyLibraryBootstrapMode(TARGET_PLATFORM);
-    if constexpr (bootstrapMode ==
-                  main_menu_library::EmptyLibraryBootstrapMode::DefaultFolder) {
-      const auto path = ChartRepository::DefaultBmsFolderPath();
-      ensureLibraryFolderExists(path);
-      if (!taskSession->InsertEntry(path)) {
-        throw std::runtime_error("Failed to add default library folder");
-      }
-      entries = taskSession->SelectEffectiveEntries();
-      if (entries.empty()) {
-        throw std::runtime_error(
-            "Default library folder was not available after insertion");
-      }
-    } else {
-      char *folder_c = tinyfd_selectFolderDialog("Select Folder", nullptr);
-      std::string folder;
-      if (folder_c == nullptr) {
-        std::cerr << "tinyfd_selectFolderDialog error: " << strerror(errno)
-                  << std::endl;
-        std::cout << "Failed to open folder select dialog.\n";
-
-        while (folder.empty()) {
-          if (stopToken.stop_requested()) {
-            return;
-          }
-
-          std::cout << "Enter bms folder path: ";
-          std::cin >> folder;
-          if (std::cin.eof() || std::cin.fail()) {
-            break;
-          }
-          if (folder.empty()) {
-            continue;
-          }
-
-          if (!expandCurrentUserHomeShortcut(folder)) {
-            std::cout
-                << "Could not expand ~ because no home directory is set.\n";
-            folder.clear();
-            continue;
-          }
-          std::ifstream test(folder);
-          if (!test) {
-            folder.clear();
-          }
-        }
-
-        if (folder.empty()) {
-          return;
-        }
-      } else {
-        folder = folder_c;
-      }
-      const std::filesystem::path path(folder);
-      if (!taskSession->InsertEntry(path)) {
-        throw std::runtime_error("Failed to add selected library folder");
-      }
-      entries = taskSession->SelectEffectiveEntries();
-    }
-  }
-
-  if (stopToken.stop_requested()) {
-    return;
-  }
-
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.06, 0, 0,
-                      "Refreshing folder access");
-  if (!pauseTask()) {
-    return;
-  }
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  RefreshIOSFolderAccess(entries);
-#endif
-  if (task.rebuildLibraryMetadata) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.08, 0, 0,
-                        "Clearing library caches");
-    if (!pauseTask()) {
-      return;
-    }
-    archive_file::appendDebugLogLine(
-        "Manual library rebuild requested; clearing chart metadata caches.");
-    if (!taskSession->ClearChartMeta()) {
-      throw std::runtime_error("Failed to clear chart metadata cache");
-    }
-    requestLibraryReload(true);
-  }
-  LoadCharts(
-      *taskSession, entries, *this, stopToken,
-      [this, taskId = task.id](const ChartScanProgress &progress) {
-        updateLibraryTaskProgress(taskId, progress);
-      },
-      [this, taskId = task.id, &stopToken]() {
-        return waitForLibraryTaskResume(taskId, stopToken);
-      });
-}
-
-void MainMenuScene::runDownloadedPathIndexTask(
-    const LibraryTaskRequest &task, const std::stop_token &stopToken) {
-  auto taskSession = context.chartRepository.OpenSession();
-  if (!taskSession.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
-  }
-  if (!taskSession->EnsureSchema()) {
-    throw std::runtime_error("Failed to prepare chart database");
-  }
-  if (!waitForLibraryTaskResume(task.id, stopToken)) {
-    return;
-  }
-
-  for (const auto &removedPath : task.downloadedRemovedPaths) {
-    if (taskSession->DeleteChartMetaInDirectory(removedPath) < 0) {
-      requestLibraryReload(true);
-      throw std::runtime_error(
-          "Failed to reconcile replaced Find BMS files");
-    }
-  }
-
-  auto entries =
-      main_menu_library::downloadedPathScanEntries(task.downloadedPath);
-  if (entries.empty()) {
-    throw std::runtime_error("Downloaded chart path is empty");
-  }
-  const ChartScanResult scanResult = LoadCharts(
-      *taskSession, entries, *this, stopToken,
-      [this, taskId = task.id](const ChartScanProgress &progress) {
-        updateLibraryTaskProgress(taskId, progress);
-      },
-      [this, taskId = task.id, &stopToken]() {
-        return waitForLibraryTaskResume(taskId, stopToken);
-      },
-      true, false);
-  if (stopToken.stop_requested()) {
-    return;
-  }
-  if (!scanResult.completed) {
-    requestLibraryReload(true);
-    throw std::runtime_error("Failed to index downloaded BMS charts");
-  }
-
-  std::optional<std::filesystem::path> chartPath;
-  if (scanResult.committed && task.downloadedTargetIdentity.valid()) {
-    const auto matches = taskSession->SelectChartMetaByHash(
-        task.downloadedTargetIdentity.sha256,
-        task.downloadedTargetIdentity.md5);
-    chartPath = main_menu_library::downloadedChartPath(
-        matches, task.downloadedPath, scanResult.upsertedChartPaths);
-  }
-  if (!main_menu_library::findBmsIndexTaskSucceeded(
-          task.downloadedTargetIdentity, scanResult.committed, chartPath)) {
-    requestLibraryReload(true);
-    throw std::runtime_error(
-        "Downloaded BMS target was not parsed and indexed");
-  }
-  if (chartPath.has_value()) {
-    std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
-    pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
-        .chartPath = *chartPath,
-        .targetIdentity = task.downloadedTargetIdentity,
-        .selectionGeneration = task.downloadedSelectionGeneration,
-    };
-  }
-  requestLibraryReload(true);
-}
-
-bool MainMenuScene::insertChartFolderEntryImmediately(
-    const std::filesystem::path &folderPath, const std::string &iosBookmark) {
-  if (folderPath.empty()) {
-    return false;
-  }
-
-  auto entrySession = context.chartRepository.OpenSession();
-  if (!entrySession.has_value()) {
-    SDL_Log("Failed to open chart database while adding folder %s",
-            fspath_to_utf8(folderPath).c_str());
-    return false;
-  }
-
-  if (!entrySession->InsertEntry(folderPath, iosBookmark)) {
-    SDL_Log("Failed to add chart folder entry %s",
-            fspath_to_utf8(folderPath).c_str());
-    return false;
-  }
-
-  requestLibraryReload(true);
-  return true;
-}
-
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-void MainMenuScene::addIOSFolderEntryFromFiles() {
-  if (willStart.load() || replayExportInProgress.load() ||
-      addFolderPickerInProgress.load()) {
-    return;
-  }
-  if (addFolderPickerThread.joinable()) {
-    addFolderPickerThread.join();
-  }
-  if (addFolderPickerInProgress.exchange(true)) {
-    return;
-  }
-
-  addFolderPickerThread =
-      std::jthread([this](const std::stop_token &stopToken) {
-        struct PickerFlagReset {
-          std::atomic_bool &flag;
-          ~PickerFlagReset() { flag.store(false); }
-        } reset{addFolderPickerInProgress};
-
-        std::string folder;
-        std::string bookmark;
-        std::string errorMessage;
-        if (!PickIOSFolder(folder, bookmark, errorMessage)) {
-          if (!errorMessage.empty()) {
-            SDL_Log("Failed to pick iOS library folder: %s",
-                    errorMessage.c_str());
-          }
-          return;
-        }
-        if (stopToken.stop_requested()) {
-          return;
-        }
-
-        std::filesystem::path folderPath(folder);
-        std::string folderName =
-            !folderPath.filename().empty()
-                ? fspath_to_utf8(folderPath.filename())
-                : fspath_to_utf8(folderPath);
-        if (folderName.empty()) {
-          folderName = "Folder";
-        }
-        insertChartFolderEntryImmediately(folderPath, bookmark);
-        enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
-                                  bookmark);
-      });
-}
-#endif
-
-#if TARGET_OS_ANDROID
-void MainMenuScene::addAndroidFolderEntryFromPicker() {
-  if (willStart.load() || replayExportInProgress.load() ||
-      addFolderPickerInProgress.load()) {
-    return;
-  }
-  if (addFolderPickerThread.joinable()) {
-    addFolderPickerThread.join();
-  }
-  if (addFolderPickerInProgress.exchange(true)) {
-    return;
-  }
-
-  addFolderPickerThread =
-      std::jthread([this](const std::stop_token &stopToken) {
-        struct PickerFlagReset {
-          std::atomic_bool &flag;
-          ~PickerFlagReset() { flag.store(false); }
-        } reset{addFolderPickerInProgress};
-
-        std::filesystem::path folder;
-        std::string treeUri;
-        std::string errorMessage;
-        if (!PickAndroidChartFolder(folder, treeUri, errorMessage)) {
-          if (!errorMessage.empty()) {
-            SDL_Log("Failed to pick Android library folder: %s",
-                    errorMessage.c_str());
-          }
-          return;
-        }
-        if (stopToken.stop_requested()) {
-          return;
-        }
-
-        std::filesystem::path folderPath(folder);
-        std::string folderName =
-            !folderPath.filename().empty()
-                ? fspath_to_utf8(folderPath.filename())
-                : fspath_to_utf8(folderPath);
-        if (folderName.empty()) {
-          folderName = "Folder";
-        }
-        insertChartFolderEntryImmediately(folderPath, treeUri);
-        enqueueLibraryRefreshTask("Add Folder: " + folderName, folderPath,
-                                  treeUri);
-      });
-}
-
-void MainMenuScene::importAndroidArchiveFromPicker() {
-  importAndroidPathFromPicker(false);
-}
-
-void MainMenuScene::importAndroidFolderFromPicker() {
-  importAndroidPathFromPicker(true);
-}
-
-void MainMenuScene::importAndroidPathFromPicker(bool folderImport) {
-  if (willStart.load() || replayExportInProgress.load() ||
-      archiveImportPickerInProgress.load()) {
-    return;
-  }
-  if (archiveImportPickerThread.joinable()) {
-    archiveImportPickerThread.join();
-  }
-  if (archiveImportPickerInProgress.exchange(true)) {
-    return;
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setText(folderImport ? "Choose a folder..."
-                                           : "Choose an archive...");
-  }
-
-  archiveImportPickerThread =
-      std::jthread([this, folderImport](const std::stop_token &stopToken) {
-        struct PickerFlagReset {
-          std::atomic_bool &flag;
-          ~PickerFlagReset() { flag.store(false); }
-        } reset{archiveImportPickerInProgress};
-
-        std::filesystem::path importPath;
-        std::string errorMessage;
-        const bool picked =
-            folderImport ? PickAndroidFolderForImport(importPath, errorMessage)
-                         : PickAndroidArchiveForImport(importPath,
-                                                       errorMessage);
-        if (!picked) {
-          std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-          pendingAndroidArchiveImportError =
-              errorMessage.empty()
-                  ? (folderImport ? "Folder import cancelled."
-                                  : "Archive import cancelled.")
-                  : errorMessage;
-          return;
-        }
-        if (stopToken.stop_requested()) {
-          return;
-        }
-
-        if (importPath.empty()) {
-          createPendingAndroidImportTask(folderImport);
-        } else {
-          const std::uint64_t id = nextLibraryTaskId.fetch_add(1);
-          enqueueAndroidImportTask(id, importPath, folderImport);
-        }
-      });
-}
-
-void MainMenuScene::pollPendingAndroidArchiveImport() {
-  const std::uint64_t now = SDL_GetTicks64();
-  if (now < nextAndroidArchiveImportPollMs) {
-    return;
-  }
-  nextAndroidArchiveImportPollMs = now + 1000;
-
-  std::string errorMessage;
-  const auto archivePath = ConsumePendingAndroidArchiveImport(errorMessage);
-  if (!archivePath.has_value() && errorMessage.empty()) {
-    return;
-  }
-
-  std::uint64_t taskId = 0;
-  bool folderImport = false;
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    if (!pendingAndroidArchiveImportTasks.empty()) {
-      taskId = pendingAndroidArchiveImportTasks.front().first;
-      folderImport = pendingAndroidArchiveImportTasks.front().second;
-      pendingAndroidArchiveImportTasks.pop_front();
-    }
-    androidArchiveImportCopyPending.store(
-        !pendingAndroidArchiveImportTasks.empty());
-  }
-  if (archivePath.has_value()) {
-    if (taskId == 0) {
-      taskId = nextLibraryTaskId.fetch_add(1);
-    }
-    enqueueAndroidImportTask(taskId, *archivePath, folderImport);
-  } else {
-    if (taskId != 0) {
-      setLibraryTaskState(taskId, LibraryTaskStatus::Failed, 0.0, 0, 0,
-                          errorMessage.empty() ? "Import failed"
-                                               : errorMessage);
-    }
-    {
-      std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-      pendingAndroidArchiveImportError = errorMessage;
-    }
-  }
-}
-
-void MainMenuScene::applyPendingAndroidArchiveImport() {
-  std::optional<std::string> errorMessage;
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    if (pendingAndroidArchiveImportError.has_value()) {
-      errorMessage = std::move(pendingAndroidArchiveImportError);
-      pendingAndroidArchiveImportError.reset();
-    }
-  }
-
-  if (errorMessage.has_value()) {
-    SDL_Log("Android archive import failed: %s", errorMessage->c_str());
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText("Archive import failed");
-    }
-  }
-}
-
-void MainMenuScene::runAndroidImportTask(const LibraryTaskRequest &task,
-                                         const std::stop_token &stopToken) {
-  const std::filesystem::path importPath = task.androidImportPath;
-  if (importPath.empty()) {
-    throw std::runtime_error("Import failed: selected path is empty.");
-  }
-
-  std::error_code importPathError;
-  const bool importingFolder =
-      task.androidImportFolder ||
-      std::filesystem::is_directory(importPath, importPathError);
-  const std::string importType = importingFolder ? "folder" : "archive";
-  const std::filesystem::path outputRoot = ChartRepository::DefaultBmsFolderPath();
-
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 0.0, 0, 0,
-                      "Preparing import");
-  archive_file::appendDebugLogLine(
-      "Android import task requested: " + fspath_to_utf8(importPath) +
-      " outputRoot=" + fspath_to_utf8(outputRoot));
-
-  auto postImportProgress = [this, &task,
-                             importingFolder](double fraction,
-                                              const std::string &message) {
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
-                        std::clamp(fraction, 0.0, 1.0), 0, 0,
-                        message.empty()
-                            ? (importingFolder ? "Importing folder"
-                                               : "Importing archive")
-                            : message);
-  };
-
-  std::string errorMessage;
-  std::error_code fsError;
-  if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
-    throw std::runtime_error("Import failed: could not create BMS import "
-                             "folder: " +
-                             fsError.message());
-  }
-
-  std::filesystem::path outputFolder;
-  if (importingFolder) {
-    outputFolder = importPath;
-    postImportProgress(0.90, "Refreshing library");
-  } else {
-    auto postUnzipProgress =
-        [&](const archive_file::UnzipProgress &progress) {
-          postImportProgress(progress.fraction * 0.90, progress.message);
-        };
-    const auto unzippedArchive = archive_file::unzipArchiveFully(
-        importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress);
-    if (unzippedArchive.has_value()) {
-      outputFolder = unzippedArchive->outputFolder;
-    }
-  }
-
-  if (outputFolder.empty()) {
-    throw std::runtime_error(
-        stopToken.stop_requested()
-            ? "Import cancelled"
-            : (errorMessage.empty() ? "Import failed"
-                                    : "Import failed: " + errorMessage));
-  }
-  if (stopToken.stop_requested()) {
-    throw std::runtime_error("Import cancelled");
-  }
-
-  auto importSession = context.chartRepository.OpenSession();
-  if (!importSession.has_value()) {
-    throw std::runtime_error("Imported " + importType +
-                             ". Failed to refresh library.");
-  }
-
-  importSession->EnsureSchema();
-  importSession->InsertEntry(outputRoot);
-
-  std::vector<std::filesystem::path> roots{outputFolder};
-  postImportProgress(0.92, "Refreshing library");
-  auto scanProgress = [this, &task](const ChartScanProgress &progress) {
-    const int total = std::max(0, progress.total);
-    const int current = total > 0 ? std::clamp(progress.current, 0, total)
-                                  : std::max(0, progress.current);
-    const double scanFraction =
-        total > 0 ? static_cast<double>(current) / std::max(1, total) : 0.0;
-    setLibraryTaskState(task.id, LibraryTaskStatus::Running,
-                        0.92 + scanFraction * 0.08, current, total,
-                        chartScanProgressStageText(progress.stage));
-  };
-  auto pauseTask = [this, &task, &stopToken]() {
-    return waitForLibraryTaskResume(task.id, stopToken);
-  };
-  ChartLibraryScanner scanner;
-  const int changedCount = scanner.Scan(
-      *importSession, roots, &stopToken, scanProgress, pauseTask);
-  if (stopToken.stop_requested()) {
-    throw std::runtime_error("Import cancelled");
-  }
-
-  if (!importingFolder) {
-    std::filesystem::remove(importPath, fsError);
-  }
-  requestLibraryReload(true);
-  const std::string message =
-      changedCount > 0 ? "Imported " + importType + ". Library refreshed."
-                       : "Imported " + importType +
-                             ". Library already current.";
-  SDL_Log("Android import task result: %s", message.c_str());
-  archive_file::appendDebugLogLine(message);
-  setLibraryTaskState(task.id, LibraryTaskStatus::Running, 1.0, 1, 1,
-                      message);
-}
-#endif
-
 void MainMenuScene::initView(ApplicationContext &context) {
   // Initialize the view
-  replayDeleteConfirmation.cancel();
   revealContextMenu.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;
@@ -2540,22 +1153,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
-  replayModalRoot = nullptr;
-  replayModalContentFrame = nullptr;
-  replayListContent = nullptr;
-  replayFilterSortContent = nullptr;
-  replayWatchOptionsContent = nullptr;
-  replayExportOptionsContent = nullptr;
-  replayExportProgressContent = nullptr;
-  replayDeleteConfirmationContent = nullptr;
-  replayExportProgressTrack = nullptr;
-  replayExportProgressFill = nullptr;
-  replayModalTitleText = nullptr;
-  replayExportProgressMessageText = nullptr;
-  replayExportProgressPercentText = nullptr;
+  recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
   playOptionsPanel = nullptr;
+  playOptionsModal.reset();
   musicModalRoot = nullptr;
   unzipModalRoot = nullptr;
   unzipProgressTrack = nullptr;
@@ -2640,55 +1242,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
-  replayListView = nullptr;
-  replayWatchButton = nullptr;
-  replayGBattleButton = nullptr;
-  replayModalResultButton = nullptr;
-  replayModalExportButton = nullptr;
-  replayShareButton = nullptr;
-  replayDeleteButton = nullptr;
-  replayDeleteCancelButton = nullptr;
-  replayDeleteConfirmButton = nullptr;
-  replayModalFilterButton = nullptr;
-  replayModalCloseButton = nullptr;
-  replayFps60Button = nullptr;
-  replayFps120Button = nullptr;
-  replayResolution1080Button = nullptr;
-  replayResolutionFullButton = nullptr;
-  replayResultIncludeButton = nullptr;
-  replayResultSkipButton = nullptr;
-  replayTouchShowButton = nullptr;
-  replayTouchHideButton = nullptr;
-  replayGhostShowButton = nullptr;
-  replayGhostHideButton = nullptr;
-  replayExportTouchShowButton = nullptr;
-  replayExportTouchHideButton = nullptr;
-  replayExportGhostShowButton = nullptr;
-  replayExportGhostHideButton = nullptr;
-  replayWatchButtonText = nullptr;
-  replayGBattleButtonText = nullptr;
-  replayModalResultButtonText = nullptr;
-  replayModalExportButtonText = nullptr;
-  replayShareButtonText = nullptr;
-  replayDeleteButtonText = nullptr;
-  replayDeleteCancelButtonText = nullptr;
-  replayDeleteConfirmButtonText = nullptr;
-  replayModalFilterButtonText = nullptr;
-  replayModalCloseButtonText = nullptr;
-  replayFps60ButtonText = nullptr;
-  replayFps120ButtonText = nullptr;
-  replayResolution1080ButtonText = nullptr;
-  replayResolutionFullButtonText = nullptr;
-  replayResultIncludeButtonText = nullptr;
-  replayResultSkipButtonText = nullptr;
-  replayTouchShowButtonText = nullptr;
-  replayTouchHideButtonText = nullptr;
-  replayGhostShowButtonText = nullptr;
-  replayGhostHideButtonText = nullptr;
-  replayExportTouchShowButtonText = nullptr;
-  replayExportTouchHideButtonText = nullptr;
-  replayExportGhostShowButtonText = nullptr;
-  replayExportGhostHideButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -2701,14 +1254,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   suppressPreviewForChartPath.reset();
   unzipDeleteCandidatePath.reset();
   unzipEstimatedUncompressedSize = 0;
-#if TARGET_OS_ANDROID
-  {
-    std::lock_guard<std::mutex> lock(androidArchiveImportMutex);
-    pendingAndroidArchiveImportError.reset();
-    pendingAndroidArchiveImportTasks.clear();
-  }
-  androidArchiveImportCopyPending = false;
-#endif
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   chartSelectionGeneration = 0;
@@ -2716,7 +1261,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
-  replayIrUploadFeedbackRevision = 0;
   replayIrObservedRevisions.clear();
   unzipInProgress = false;
   tasksModalOpenRequested = false;
@@ -2739,24 +1283,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartScoreRankDropdownOpen = false;
   chartDifficultyMinDropdownOpen = false;
   chartDifficultyMaxDropdownOpen = false;
-  visibleResultRecordSummaries.clear();
-  resultRecordSummaries.clear();
-  selectedResultRecordStableKey.reset();
   publishedResultRecordDiagnostic.clear();
-  replayRecordFilters = {};
-  selectedReplayIndex = -1;
-  selectedResultRecordSummary.reset();
-  replayExportSelection.reset();
-  selectedExportFps = 120;
-  selectedExportFullResolution = true;
-  selectedExportIncludeResultScreen = true;
-  selectedReplayRenderTouchPoints = true;
-  selectedReplayRenderGhosts = true;
-  replayExportProgressFraction = 0.0;
-  replayClearFilterButtons.clear();
-  replayPlayOptionFilterButtons.clear();
-  replayScoreRankFilterButtons.clear();
-  replaySortButtons.clear();
 
   appliedUiThemeMode = ui_theme::activeMode();
 
@@ -2782,11 +1309,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
     return;
   }
   chartSession->EnsureSchema();
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  RefreshIOSFolderAccess(chartSession->SelectEffectiveEntries());
-#elif TARGET_OS_ANDROID
-  (void)chartSession->SelectEffectiveEntries();
-#endif
+  chart_library_platform::refreshFolderAccess(
+      chartSession->SelectEffectiveEntries());
 
   static constexpr int kChartListItemHeight = 108;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
@@ -2856,7 +1380,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
-      retirePreviewLoadThread(true);
+      if (previewWorker_ != nullptr) {
+        previewWorker_->cancel();
+      }
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = true;
+      }
       clearSelectedChart();
       jacketView->freeImage();
       refreshStartButtonForActiveFolder();
@@ -2869,7 +1399,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
         item.unavailable && !item.solidArchive &&
         (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
-    retirePreviewLoadThread(true);
+    if (previewWorker_ != nullptr) {
+      previewWorker_->cancel();
+    }
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      pendingStopAndClearSelectedChartAfterPreview = true;
+    }
     clearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {
       jacketView->freeImage();
@@ -2930,7 +1466,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
-    schedulePreviewLoad(meta);
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      pendingStopAndClearSelectedChartAfterPreview = false;
+    }
+    if (previewWorker_ != nullptr) {
+      ChartMetaRecord previewRecord;
+      previewRecord.meta = std::move(meta);
+      previewWorker_->request(std::move(previewRecord));
+    }
   };
   recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
     auto unselectedView = recyclerView->getViewByIndex(idx);
@@ -2991,12 +1535,91 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
   rootLayout->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
 
-  overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
-                                    rendering::window_height);
+overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
+                                     rendering::window_height);
   overlayPortal->setPositionType(YGPositionTypeAbsolute);
   overlayPortal->setPosition(Edge::Left, 0);
   overlayPortal->setPosition(Edge::Top, 0);
   overlayPortal->setZIndex(2000);
+  decideOverlay_ = new DecideLoadingOverlay(
+      0, 0, rendering::window_width, rendering::window_height, {});
+  decideOverlay_->setVisible(false);
+  overlayPortal->present(decideOverlay_);
+  previewWorker_ = new ChartPreloadWorker(kPreviewDebounceDelay);
+  previewWorker_->setOnIdle([this]() {
+    bool shouldStopPreviewAudio = false;
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      if (pendingStopAndClearSelectedChartAfterPreview) {
+        pendingStopAndClearSelectedChartAfterPreview = false;
+        shouldStopPreviewAudio = true;
+      }
+    }
+    if (shouldStopPreviewAudio) {
+      stopAndClearSelectedChart();
+    }
+  });
+  previewWorker_->configure(
+      [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
+        const auto &meta = request.meta;
+        const auto isCancelled = [&cancelled, this, &meta]() {
+          return cancelled.load(std::memory_order_relaxed) ||
+                 previewWorker_->superseded(
+                     fspath_to_utf8(meta.BmsPath));
+        };
+        SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          if (isCancelled()) {
+            return;
+          }
+          this->context.jukebox.stop();
+        }
+        SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
+        std::unique_ptr<bms_parser::Chart> chart;
+        try {
+          chart = play_options::parseChart(meta.BmsPath, cancelled, "preview");
+        } catch (const std::exception &e) {
+          SDL_Log("Preview parse failed %s: %s",
+                  fspath_to_utf8(meta.BmsPath).c_str(), e.what());
+          archive_file::appendDebugLogLine(
+              "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) +
+              ": " + e.what());
+          return;
+        }
+        if (isCancelled()) {
+          return;
+        }
+        SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
+        if (chart == nullptr) {
+          SDL_Log("Chart is null");
+          archive_file::appendDebugLogLine("Preview chart is null: " +
+                                           fspath_to_utf8(meta.BmsPath));
+          return;
+        }
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          if (isCancelled()) {
+            return;
+          }
+          if (this->context.jukebox.hasLoadedResources()) {
+            this->context.jukebox.reloadChartResources(*chart, true, cancelled);
+          } else {
+            this->context.jukebox.loadChart(*chart, true, cancelled);
+          }
+          if (isCancelled()) {
+            return;
+          }
+          setSelectedChart(std::move(chart), true);
+          if (isCancelled()) {
+            clearSelectedChart();
+            return;
+          }
+          if (!willStart.load()) {
+            this->context.jukebox.play();
+          }
+        }
+      });
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -3034,18 +1657,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
                             ui_theme::accentBorderStrong);
     addFolderButton->setCornerRadius(ui_theme::controlRadius());
     addFolderButton->setStyledBorderWidth(1);
-#if TARGET_OS_ANDROID
     addFolderButton->setOnClickListener([this]() {
-      if (AndroidBuildHasManageExternalStorage()) {
-        addAndroidFolderEntryFromPicker();
-      } else {
-        importAndroidFolderFromPicker();
+      if (this->context.requestAddChartFolderFromFiles) {
+        this->context.requestAddChartFolderFromFiles();
       }
     });
-#elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    addFolderButton->setOnClickListener(
-        [this]() { addIOSFolderEntryFromFiles(); });
-#endif
     nav->addView(addFolderButton);
   }
 #if TARGET_OS_ANDROID
@@ -3062,7 +1678,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   importArchiveButton->setCornerRadius(ui_theme::controlRadius());
   importArchiveButton->setStyledBorderWidth(1);
   importArchiveButton->setOnClickListener(
-      [this]() { importAndroidArchiveFromPicker(); });
+      [this]() {
+        if (this->context.chartLibraryFolderActions) {
+          this->context.chartLibraryFolderActions->requestImportArchive();
+        }
+      });
   nav->addView(importArchiveButton);
 #endif
 
@@ -3112,9 +1732,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
   musicButton->setHeight(50);
   musicButton->setOnClickListener([this, &context]() {
     if (context.sceneManager != nullptr) {
-      cancelPreviewLoading(true);
+      if (previewWorker_ != nullptr) {
+        previewWorker_->stop();
+      }
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = false;
+      }
+      stopAndClearSelectedChart();
       context.sceneManager->changeScene(
-          std::make_unique<MusicPlayerScene>(context), true);
+          std::make_unique<MusicPlayerScene>(
+              context, SceneReturnTarget::Retained(this)),
+          true);
     }
   });
   styleThemedActionButton(musicButton, musicButtonText, true, ui_theme::control,
@@ -3128,9 +1757,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
   irUploadsButton->setHeight(50);
   irUploadsButton->setOnClickListener([this, &context]() {
     if (context.sceneManager != nullptr) {
-      cancelPreviewLoading(true);
+      if (previewWorker_ != nullptr) {
+        previewWorker_->stop();
+      }
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = false;
+      }
+      stopAndClearSelectedChart();
       context.sceneManager->changeScene(
-          std::make_unique<IrUploadsScene>(context), true);
+          std::make_unique<IrUploadsScene>(
+              context, SceneReturnTarget::Retained(this)),
+          true);
     }
   });
   styleThemedActionButton(irUploadsButton, irUploadsButtonText, true,
@@ -3414,7 +2052,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       return;
     }
 
-    showReplayListModal(*selectedMeta);
+    openReplayRecordsForSelection();
   });
   replayButtonSlot->addView(replayButton);
 
@@ -3557,15 +2195,26 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (willStart.load() || replayExportInProgress.load()) {
       return;
     }
-    cancelPreviewLoading(true);
-    context.sceneManager->changeScene("Settings", true);
+    if (previewWorker_ != nullptr) {
+      previewWorker_->stop();
+    }
+    {
+      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      pendingStopAndClearSelectedChartAfterPreview = false;
+    }
+    stopAndClearSelectedChart();
+    context.sceneManager->changeScene(
+        std::make_unique<SettingsScene>(
+            context, SettingsDestination::Profile,
+            SceneReturnTarget::Retained(this)),
+        true);
   });
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
   right->addView(settingsButton);
   rootLayout->addView(right);
   buildPlayOptionsModal();
-  buildReplayModal();
+  recordsModal_ = ReplayRecordsModal::Create(rootLayout, makeRecordsModalCallbacks());
   buildParseLogModal();
   buildTasksModal();
   buildFindBmsModal();
@@ -4551,8 +3200,8 @@ void MainMenuScene::refreshIrRecordListIfNeeded() {
   if (!recordsNeedRefresh) {
     return;
   }
-  if (replayModalRoot != nullptr && replayModalRoot->getVisible()) {
-    reloadReplayRecordModels(true);
+  if (recordsModal_ != nullptr && recordsModal_->isVisible()) {
+    recordsModal_->reloadRecords(true);
   }
 }
 
@@ -4608,15 +3257,28 @@ int MainMenuScene::clearMarkCountForFolder(const std::string &key,
 
 void MainMenuScene::requestLibraryReload(bool includeFolders) {
   if (includeFolders) {
-    folderItemsReloadRequested = true;
+    context.chartLibraryFoldersReloadRequested = true;
   }
-  chartListReloadRequested = true;
+  context.chartLibraryListReloadRequested = true;
 }
 
 void MainMenuScene::applyPendingUiUpdates() {
+  if (context.chartLibraryTasks) {
+    for (auto &completion :
+         context.chartLibraryTasks->takeDownloadedIndexCompletions()) {
+      std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
+      pendingFindBmsSelectionHandoff = PendingFindBmsSelectionHandoff{
+          .chartPath = std::move(completion.chartPath),
+          .targetIdentity = std::move(completion.targetIdentity),
+          .selectionGeneration = completion.selectionGeneration,
+      };
+    }
+  }
   const bool shouldOpenTasksModal = tasksModalOpenRequested.exchange(false);
-  const bool shouldReloadFolders = folderItemsReloadRequested.exchange(false);
-  const bool shouldReloadCharts = chartListReloadRequested.exchange(false);
+  const bool shouldReloadFolders =
+      context.chartLibraryFoldersReloadRequested.exchange(false);
+  const bool shouldReloadCharts =
+      context.chartLibraryListReloadRequested.exchange(false);
   std::optional<PendingFindBmsSelectionHandoff> findBmsHandoff;
   if (shouldReloadFolders || shouldReloadCharts) {
     std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
@@ -5355,8 +4017,10 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
 
 void MainMenuScene::startSelectedCourse() {
   if (willStart.load() || unzipInProgress.load() ||
-      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || recyclerView == nullptr ||
+      pendingSelectChartPath.has_value() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
+      recyclerView == nullptr ||
       activeFolder.type != LibraryFolderItem::Type::Course ||
       activeFolder.courseId <= 0) {
     return;
@@ -5409,42 +4073,23 @@ void MainMenuScene::startSelectedCourse() {
     return;
   }
 
-  auto session = std::make_shared<CoursePlaySession>();
-  session->courseId = activeFolder.courseId;
-  session->courseKey = activeFolder.courseKey;
-  session->courseName =
-      activeFolder.courseGroupName.empty()
-          ? activeFolder.label
-          : activeFolder.courseGroupName + " " + activeFolder.label;
-  session->courseGroupName = activeFolder.courseGroupName;
-  session->constraintJson = activeFolder.courseConstraintJson;
-  session->entries.reserve(records.size());
-  for (const auto &record : records) {
-    session->entries.push_back(CoursePlayEntry{.meta = record.meta});
-  }
-  const CourseConstraintSettings constraintSettings =
-      courseConstraintSettingsFromJson(activeFolder.courseConstraintJson);
-  int courseLongNoteMode =
-      long_note_mode::valueFromId(profileSelections.longNoteMode);
-  if (constraintSettings.rules.longNoteMode !=
-      CourseLongNoteMode::Unspecified) {
-    courseLongNoteMode = courseLongNoteModeToChartMetaValue(
-        constraintSettings.rules.longNoteMode);
-  }
-  session->currentIndex = 0;
-  session->ruleset = profileSelections.ruleset;
-  session->rulesetDescriptor = RulesetDescriptor::For(session->ruleset);
-  session->gaugeType = profileSelections.gaugeType;
-  session->gaugeProfile = constraintSettings.gaugeProfile;
-  session->gaugeAutoShift = profileSelections.gaugeAutoShift;
-  session->gaugeAutoShiftLowerBound =
-      profileSelections.gaugeAutoShiftLowerBound;
-  session->longNoteMode = courseLongNoteMode;
-  session->constraints = constraintSettings.rules;
-  session->requestedPlayOption = coursePlayOptionForConstraints(
-      profileSelections.playOption, constraintSettings);
-  session->assistOption = assist_options::kOff;
-  session->autoKeySound = !context.settings.inputKeysoundEnabled;
+  auto session = buildCourseGameplaySession(
+      {.courseId = activeFolder.courseId,
+       .courseKey = activeFolder.courseKey,
+       .courseName = activeFolder.courseGroupName.empty()
+                         ? activeFolder.label
+                         : activeFolder.courseGroupName + " " +
+                               activeFolder.label,
+       .courseGroupName = activeFolder.courseGroupName,
+       .constraintJson = activeFolder.courseConstraintJson,
+       .records = records,
+       .selections = profileSelections,
+       .player2PlayOption = std::string(
+           replay::beatorajaReplayOptionName(
+               context.settings.skinPlayer2RandomOption)
+               .value_or("NORMAL")),
+       .doublePlayFlip = context.settings.skinDoublePlayOption == 1,
+       .inputKeysoundEnabled = context.settings.inputKeysoundEnabled});
   startCourseDirect(std::move(session));
 }
 
@@ -5459,7 +4104,9 @@ void MainMenuScene::startCourseDirect(
     startButtonText->setText("Loading...");
   }
   ImageView::dropAllCache();
-  cancelActivePreviewLoading();
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
   const int selectedLongNoteMode =
@@ -5477,10 +4124,13 @@ void MainMenuScene::startCourseDirect(
           resetStartLoadingUi();
           return true;
         };
-        if (loadThread.joinable()) {
-          loadThread.join();
+        if (previewWorker_ != nullptr) {
+          previewWorker_->stop();
         }
-        joinRetiredPreviewLoadThreads();
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          pendingStopAndClearSelectedChartAfterPreview = false;
+        }
         clearSelectedChart();
 
         const bms_parser::ChartMeta *firstMeta = session->currentMeta();
@@ -5509,8 +4159,9 @@ void MainMenuScene::startCourseDirect(
         applyCourseConstraintsToChart(*preparedChart, session->constraints);
 
         play_options::PlayOptionReplayInfo playInfo =
-            play_options::applySelectedPlayOptions(*preparedChart,
-                                                   session->requestedPlayOption);
+            play_options::applySelectedPlayOptions(
+                *preparedChart, session->requestedPlayOption,
+                session->requestedPlayOption2);
         applyEffectiveLongNoteModeToChart(*preparedChart,
                                           selectedLongNoteMode);
         session->playOption = playInfo.option;
@@ -5537,6 +4188,7 @@ void MainMenuScene::startCourseDirect(
         options.playOptionSeed = playInfo.seed;
         options.playOption2 = playInfo.option2;
         options.playOption2Seed = playInfo.seed2;
+        options.doublePlayFlip = session->doublePlayFlip;
         options.longNoteMode = selectedLongNoteMode;
         options.assistOption = session->assistOption;
         options.playback = course_rules::kRequiredPlaybackRate;
@@ -5558,8 +4210,10 @@ void MainMenuScene::startCourseDirect(
 
 void MainMenuScene::startSelectedChart() {
   if (willStart.load() || unzipInProgress.load() ||
-      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || recyclerView == nullptr) {
+      pendingSelectChartPath.has_value() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
+      recyclerView == nullptr) {
     return;
   }
 
@@ -5578,6 +4232,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   if (willStart.exchange(true)) {
     return;
   }
+  StartupTiming::instance().beginSession();
+  StartupTiming::instance().mark("main menu start press");
 
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
@@ -5587,6 +4243,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
   if (startButtonText != nullptr) {
     startButtonText->setText("Loading...");
+  }
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setChart(record);
+    decideOverlay_->setVisible(true);
   }
   ImageView::dropAllCache();
 
@@ -5645,12 +4305,17 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           return true;
         };
         if (!canReusePreviewForStart) {
-          cancelActivePreviewLoading();
+          if (previewWorker_ != nullptr) {
+            previewWorker_->cancel();
+          }
         }
-        if (loadThread.joinable()) {
-          loadThread.join();
+        if (previewWorker_ != nullptr) {
+          previewWorker_->stop();
         }
-        joinRetiredPreviewLoadThreads();
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          pendingStopAndClearSelectedChartAfterPreview = false;
+        }
 
         bms_parser::Chart *readyChart = nullptr;
         if (canReusePreviewForStart) {
@@ -5683,7 +4348,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           return finishStart();
         }
 
-        cancelActivePreviewLoading();
+        if (previewWorker_ != nullptr) {
+          previewWorker_->cancel();
+        }
         selectedChartMediaReady.store(false);
         selectedChartReusableForStart.store(false);
         std::atomic_bool parseCancelled = false;
@@ -5772,7 +4439,8 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 void MainMenuScene::openChartViewerForSelection() {
   if (willStart.load() || replayExportInProgress.load() ||
       unzipInProgress.load() || pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
       recyclerView == nullptr) {
     return;
   }
@@ -5799,7 +4467,13 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
   const SelectedChartRandomInfo chartRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
-  cancelPreviewLoading(false);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   archive_file::appendDebugLogLine(
       "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
   context.jukebox.stop();
@@ -5927,8 +4601,15 @@ void MainMenuScene::revealSelectedChartInFileManager() {
       .width = revealButton->getWidth(),
       .height = revealButton->getHeight(),
   };
-  if (!revealPathInFileManager(record->meta.BmsPath, sourceAnchor,
-                               errorMessage)) {
+  const auto normalized = normalizeOverlayAnchor(
+      sourceAnchor, rendering::window_width, rendering::window_height);
+  if (!platform_open::revealPathInFileManager(
+          record->meta.BmsPath,
+          {.x = normalized.x,
+           .y = normalized.y,
+           .width = normalized.width,
+           .height = normalized.height},
+          errorMessage)) {
     SDL_Log("Failed to reveal chart file %s: %s",
             fspath_to_utf8(record->meta.BmsPath).c_str(),
             errorMessage.c_str());
@@ -6043,7 +4724,8 @@ void MainMenuScene::refreshUnzipButtonForSelection(
 void MainMenuScene::startUnzipSelectedArchiveFolder() {
   if (willStart.load() || replayExportInProgress.load() ||
       unzipInProgress.load() || pendingSelectChartPath.has_value() ||
-      chartListReloadRequested.load() || folderItemsReloadRequested.load() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() ||
       recyclerView == nullptr) {
     return;
   }
@@ -6061,8 +4743,9 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
   const bool fullArchiveUnzip =
       record.solidArchive && !archive_file::isVirtualPath(record.meta.BmsPath);
   if (willStart.load() || replayExportInProgress.load() ||
-      pendingSelectChartPath.has_value() || chartListReloadRequested.load() ||
-      folderItemsReloadRequested.load() || record.unavailable ||
+      pendingSelectChartPath.has_value() ||
+      context.chartLibraryListReloadRequested.load() ||
+      context.chartLibraryFoldersReloadRequested.load() || record.unavailable ||
       record.meta.BmsPath.empty() || !fullArchiveUnzip) {
     return;
   }
@@ -6081,7 +4764,14 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     std::lock_guard<std::mutex> lock(unzipProgressMutex);
     pendingUnzipProgress.reset();
   }
-  cancelPreviewLoading(true);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
+  stopAndClearSelectedChart();
   unzipEstimatedUncompressedSize =
       fullArchiveUnzip ? record.archiveUncompressedSize : 0;
 
@@ -6562,11 +5252,7 @@ std::filesystem::path MainMenuScene::preferredBmsDownloadRoot() {
     return fallback;
   }
 
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  return ResolveIOSFolderEntryPath(*selected);
-#else
-  return std::filesystem::path(selected->path);
-#endif
+  return chart_library_platform::resolveFolderEntryPath(*selected);
 }
 
 void MainMenuScene::buildParseLogModal() {
@@ -7074,7 +5760,13 @@ void MainMenuScene::playSelectedChartAsMusic() {
     return;
   }
 
-  cancelPreviewLoading(false);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   context.jukebox.stop();
 
   MusicTrackRecord musicRecord{.representativeChart = record.meta,
@@ -7150,7 +5842,13 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
 }
 
 void MainMenuScene::playSavedMusicPlaylist() {
-  cancelPreviewLoading(false);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -7174,7 +5872,13 @@ void MainMenuScene::clearSavedMusicPlaylist() {
 }
 
 void MainMenuScene::playRandomMusicLibrary() {
-  cancelPreviewLoading(false);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -7228,7 +5932,13 @@ void MainMenuScene::seekMusicRelative(long long deltaMicros) {
 }
 
 void MainMenuScene::playNextMusicTrack() {
-  cancelPreviewLoading(false);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -7238,7 +5948,13 @@ void MainMenuScene::playNextMusicTrack() {
 }
 
 void MainMenuScene::playPreviousMusicTrack() {
-  cancelPreviewLoading(false);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -7382,39 +6098,34 @@ void MainMenuScene::refreshTasksModal() {
     return;
   }
 
-  std::uint64_t tasksRevision = 0;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    tasksRevision = libraryTasksRevision;
-  }
-  const LibraryTaskProgressSnapshot progressSnapshot =
-      readLibraryTaskProgress();
-  if (tasksRevision == displayedLibraryTasksRevision &&
-      progressSnapshot.revision == displayedLibraryProgressRevision) {
+  const auto snapshot = context.chartLibraryTasks
+                            ? context.chartLibraryTasks->snapshot()
+                            : chart_library_tasks::Snapshot{};
+  if (snapshot.revision == displayedLibraryTasksRevision &&
+      snapshot.progress.revision == displayedLibraryProgressRevision) {
     return;
   }
-  displayedLibraryTasksRevision = tasksRevision;
-  displayedLibraryProgressRevision = progressSnapshot.revision;
+  displayedLibraryTasksRevision = snapshot.revision;
+  displayedLibraryProgressRevision = snapshot.progress.revision;
   tasksText->setText(tasksModalTextSnapshot());
 }
 
 std::string MainMenuScene::tasksModalTextSnapshot() {
-  const LibraryTaskProgressSnapshot progressSnapshot =
-      readLibraryTaskProgress();
+  const auto snapshot = context.chartLibraryTasks
+                            ? context.chartLibraryTasks->snapshot()
+                            : chart_library_tasks::Snapshot{};
+  const LibraryTaskProgressSnapshot &progressSnapshot = snapshot.progress;
   std::vector<LibraryTaskInfo> activeTasks;
   std::vector<LibraryTaskInfo> recentTasks;
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    activeTasks.reserve(libraryTasks.size());
-    recentTasks.reserve(libraryTasks.size());
-    for (const auto &task : libraryTasks) {
-      if (task.status == LibraryTaskStatus::Queued ||
-          task.status == LibraryTaskStatus::Running ||
-          task.status == LibraryTaskStatus::Paused) {
-        activeTasks.push_back(task);
-      } else {
-        recentTasks.push_back(task);
-      }
+  activeTasks.reserve(snapshot.tasks.size());
+  recentTasks.reserve(snapshot.tasks.size());
+  for (const auto &task : snapshot.tasks) {
+    if (task.status == LibraryTaskStatus::Queued ||
+        task.status == LibraryTaskStatus::Running ||
+        task.status == LibraryTaskStatus::Paused) {
+      activeTasks.push_back(task);
+    } else {
+      recentTasks.push_back(task);
     }
   }
 
@@ -8128,7 +6839,7 @@ void MainMenuScene::applyFindBmsUpdates() {
 
 void MainMenuScene::openFindBmsResultUrl(const std::string &url) {
   std::string errorMessage;
-  if (!openExternalUrl(url, errorMessage)) {
+  if (!platform_open::openExternalUrl(url, errorMessage)) {
     SDL_Log("Failed to open URL %s: %s", url.c_str(), errorMessage.c_str());
   }
 }
@@ -8137,65 +6848,8 @@ void MainMenuScene::buildPlayOptionsModal() {
   if (rootLayout == nullptr) {
     return;
   }
-
-  const float availablePanelWidth =
-      std::max(300.0f, static_cast<float>(rendering::window_width) - 48.0f);
-  const float kModalPanelWidth = std::min(760.0f, availablePanelWidth);
-  constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalScrollRightPadding = 18.0f;
-  const float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
-  const float kOptionContentWidth =
-      std::max(0.0f, kModalContentWidth - kModalScrollRightPadding);
-  const float availablePanelHeight =
-      std::max(240.0f, static_cast<float>(rendering::window_height) - 72.0f);
-  const float kModalPanelHeight = std::min(820.0f, availablePanelHeight);
-
-  playOptionsModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
-                                                 rendering::window_height);
-  playOptionsModalRoot->setPositionType(YGPositionTypeAbsolute);
-  playOptionsModalRoot->setPosition(Edge::Left, 0);
-  playOptionsModalRoot->setPosition(Edge::Top, 0);
-  playOptionsModalRoot->setZIndex(1000);
-  playOptionsModalRoot->setVisible(false);
-  playOptionsModalRoot->setFlexDirection(FlexDirection::Column);
-  playOptionsModalRoot->setAlignItems(YGAlignCenter);
-  playOptionsModalRoot->setJustifyContent(YGJustifyCenter);
-  playOptionsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
-
-  auto *panel = new View();
-  panel->setWidth(kModalPanelWidth)
-      ->setHeight(kModalPanelHeight)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::All, 22)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(modalPanelBorder)
-      ->setBorderWidth(1);
-
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText("Play Options");
-  title->setThemedColor(ui_theme::textPrimary);
-  title->setHeight(42);
-  panel->addView(title);
-
-  auto *scrollView = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
-                                    1);
-  scrollView->setWidth(kModalContentWidth);
-  scrollView->setFlex(1.0f);
-  scrollView->setContentPadding(Edge::Right, kModalScrollRightPadding);
-
-  auto *optionsContent = new View();
-  optionsContent->setFlexDirection(FlexDirection::Column);
-  optionsContent->setAlignItems(YGAlignStretch);
-  optionsContent->setGap(12);
-  optionsContent->setWidth(kOptionContentWidth);
-
-  const size_t playOptionColumns = kOptionContentWidth >= 620.0f ? 4U : 2U;
-  playOptionsPanel = new PlayOptionsPanelView(
+  playOptionsModal = MainMenuPlayOptionsModal::Create(
+      rootLayout,
       {.onRulesetSelected = [this](GameplayRuleset ruleset) {
          setGameplayRulesetSelection(ruleset);
        },
@@ -8227,41 +6881,16 @@ void MainMenuScene::buildPlayOptionsModal() {
        .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
        .onPacemakerSelected = [this](const std::string &target) {
          setPacemakerTargetSelection(target);
-       }},
-      {.width = kOptionContentWidth,
-       .playOptionColumns = static_cast<int>(playOptionColumns),
-       .showGauge = true,
-       .showLaneOrder = false,
-       .showPacemaker = true},
-      overlayPortal);
-  optionsContent->addView(playOptionsPanel);
-
-  scrollView->setContentView(optionsContent);
-  panel->addView(scrollView);
-
-  auto *footer = new View();
-  footer->setFlexDirection(FlexDirection::Row);
-  footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setHeight(58);
-  playOptionsCloseButton =
-      makeModalButton("Close", 20, &playOptionsCloseButtonText);
-  playOptionsCloseButton->setOnClickListener(
-      [this]() { hidePlayOptionsModal(); });
-  footer->addView(playOptionsCloseButton);
-  panel->addView(footer);
-
-  playOptionsModalRoot->addView(panel);
-  rootLayout->addView(playOptionsModalRoot);
+       }}, overlayPortal);
+  if (!playOptionsModal) return;
+  playOptionsModalRoot = playOptionsModal->root();
+  playOptionsPanel = playOptionsModal->panel();
   refreshGaugeSelectionButtons();
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
   refreshAssistOptionButtons();
   refreshPlaybackSelectionControls();
   refreshPacemakerTargetButtons();
-  styleThemedActionButton(playOptionsCloseButton, playOptionsCloseButtonText,
-                          true, ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
 }
 
 void MainMenuScene::showPlayOptionsModal() {
@@ -8275,822 +6904,44 @@ void MainMenuScene::showPlayOptionsModal() {
   refreshAssistOptionButtons();
   refreshPlaybackSelectionControls();
   refreshPacemakerTargetButtons();
-  playOptionsModalRoot->setSize(rendering::window_width,
-                                rendering::window_height);
-  playOptionsModalRoot->setVisible(true);
-  playOptionsModalRoot->applyYogaLayout();
+  playOptionsModal->show();
 }
 
 void MainMenuScene::hidePlayOptionsModal() {
   if (playOptionsModalRoot == nullptr) {
     return;
   }
-  if (playOptionsPanel != nullptr) {
-    playOptionsPanel->closeDropdowns();
-  }
-  playOptionsModalRoot->setVisible(false);
+  playOptionsModal->hide();
 }
 
-void MainMenuScene::buildReplayModal() {
-  if (rootLayout == nullptr) {
+void MainMenuScene::openReplayRecordsForSelection() {
+  if (recordsModal_ == nullptr || recyclerView == nullptr) {
     return;
   }
-
-  constexpr float kModalPanelWidth = 760.0f;
-  constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
-  constexpr float kModalContentHeight = 418.0f;
-
-  replayModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
-                                            rendering::window_height);
-  replayModalRoot->setPositionType(YGPositionTypeAbsolute);
-  replayModalRoot->setPosition(Edge::Left, 0);
-  replayModalRoot->setPosition(Edge::Top, 0);
-  replayModalRoot->setZIndex(1000);
-  replayModalRoot->setVisible(false);
-  replayModalRoot->setFlexDirection(FlexDirection::Column);
-  replayModalRoot->setAlignItems(YGAlignCenter);
-  replayModalRoot->setJustifyContent(YGJustifyCenter);
-  replayModalRoot->setThemedBackgroundColor(ui_theme::scrim);
-
-  auto *panel = new View();
-  panel->setWidth(kModalPanelWidth)
-      ->setHeight(620)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setGap(14)
-      ->setPadding(Edge::All, 22)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(modalPanelBorder)
-      ->setBorderWidth(1);
-
-  auto *header = new View();
-  header->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
-      ->setGap(10)
-      ->setHeight(54);
-  replayModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  replayModalTitleText->setText("Records");
-  replayModalTitleText->setThemedColor(ui_theme::textPrimary);
-  replayModalTitleText->setHeight(54);
-  replayModalTitleText->setFlexGrow(1.0f);
-  replayModalTitleText->setFlexBasis(0.0f);
-  replayModalTitleText->setMinWidth(0.0f);
-  replayModalFilterButton =
-      makeModalIconButton(kIconFilter, 20, &replayModalFilterButtonText);
-  replayModalFilterButton->setWidth(54);
-  replayModalFilterButton->setHeight(54);
-  replayModalFilterButton->setFlexShrink(0.0f);
-  replayModalCloseButton =
-      makeModalIconButton(kIconXmark, 22, &replayModalCloseButtonText);
-  replayModalCloseButton->setWidth(54);
-  replayModalCloseButton->setHeight(54);
-  replayModalCloseButton->setFlexShrink(0.0f);
-  replayShareButton =
-      makeModalIconButton(kIconShare, 20, &replayShareButtonText);
-  replayShareButton->setWidth(54);
-  replayShareButton->setHeight(54);
-  replayShareButton->setFlexShrink(0.0f);
-  replayDeleteButton =
-      makeModalIconButton(kIconTrash, 20, &replayDeleteButtonText);
-  replayDeleteButton->setWidth(54);
-  replayDeleteButton->setHeight(54);
-  replayDeleteButton->setFlexShrink(0.0f);
-  header->addView(replayModalTitleText);
-  header->addView(replayShareButton);
-  header->addView(replayDeleteButton);
-  header->addView(replayModalFilterButton);
-  header->addView(replayModalCloseButton);
-  panel->addView(header);
-
-  replayModalContentFrame = new View();
-  replayModalContentFrame->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setFlexShrink(0);
-  panel->addView(replayModalContentFrame);
-
-  replayListContent = new View();
-  replayListContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setGap(10);
-  replayListView = new ResultRecordListView();
-  replayListView->onSelectionChanged = [this](int idx) {
-    selectReplayModalIndex(idx);
-    if (selectedReplayIsAutoPlay()) {
-      selectedReplayRenderTouchPoints = false;
-      selectedReplayRenderGhosts = false;
-      refreshReplayExportOptionButtons();
-    }
-    refreshReplayModalActions();
-  };
-  replayListView->onIrUploadRequested =
-      [this](const ResultRecordSummary &record) {
-        if (resultRecordActionTarget(record, ResultRecordAction::IrUpload) ==
-                ResultRecordActionTarget::ModernChart &&
-            record.modern.has_value()) {
-          startModernReplayIrUpload(*record.modern);
-        }
-      };
-  replayListView->onIrStatusFeedbackRequested =
-      [this](const ResultRecordSummary &record) {
-        publishReplayIrStatusFeedback(record.irState);
-      };
-  replayListView->setFlex(1);
-  replayListView->clearBackgroundColor();
-  replayListView->setThemedBorderColor(ui_theme::hairline);
-  replayListView->setBorderWidth(1);
-  replayListContent->addView(replayListView);
-  replayModalContentFrame->addView(replayListContent);
-
-  replayFilterSortContent = new View();
-  replayFilterSortContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight);
-  replayFilterSortContent->setVisible(false);
-
-  constexpr float kFilterScrollRightPadding = 12.0f;
-  constexpr float kFilterContentWidth =
-      kModalContentWidth - kFilterScrollRightPadding;
-  auto *filterScroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
-                                      static_cast<int>(kModalContentHeight));
-  filterScroll->setWidth(kModalContentWidth);
-  filterScroll->setHeight(kModalContentHeight);
-  filterScroll->setContentPadding(Edge::Right, kFilterScrollRightPadding);
-
-  auto *filterContent = new View();
-  filterContent->setFlexDirection(FlexDirection::Column);
-  filterContent->setAlignItems(YGAlignStretch);
-  filterContent->setGap(10);
-  filterContent->setWidth(kFilterContentWidth);
-
-  auto makeFilterButton = [](const std::string &label, int fontSize,
-                             TextView **textOut) {
-    auto *button = makeModalButton(label, fontSize, textOut);
-    button->setHeight(46);
-    button->setFlexGrow(1.0f);
-    button->setFlexBasis(0.0f);
-    button->setFlexShrink(1.0f);
-    return button;
-  };
-  auto addFilterButton = [&](View *&row, size_t &index, size_t columns,
-                             Button *button) {
-    if (index % columns == 0) {
-      row = makeModalOptionRow(46);
-      filterContent->addView(row);
-    }
-    if (row != nullptr) {
-      row->addView(button);
-    }
-    ++index;
-  };
-
-  filterContent->addView(makeModalLabel("Clear Mark"));
-  View *filterRow = nullptr;
-  size_t filterIndex = 0;
-  auto makeClearFilterButton = [this, &makeFilterButton](
-                                   const std::string &label,
-                                   std::optional<int> rank) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 15, &text);
-    button->setOnClickListener(
-        [this, rank]() { setReplayClearFilter(rank); });
-    replayClearFilterButtons.push_back({
-        .button = button,
-        .text = text,
-        .rank = rank,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 3,
-                  makeClearFilterButton("All", std::nullopt));
-  for (const auto &filter : kDifficultyClearMarkFilters) {
-    if (filter.rank == kNoClearTypeRank) {
-      continue;
-    }
-    addFilterButton(filterRow, filterIndex, 3,
-                    makeClearFilterButton(filter.label, filter.rank));
+  const int selected = recyclerView->selectedIndex;
+  if (selected < 0 || selected >= recyclerView->size()) {
+    return;
   }
-
-  filterContent->addView(makeModalLabel("Play Option"));
-  filterRow = nullptr;
-  filterIndex = 0;
-  auto makePlayOptionFilterButton = [this, &makeFilterButton](
-                                        const std::string &label,
-                                        std::optional<std::string> option) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 14, &text);
-    button->setOnClickListener(
-        [this, option]() { setReplayPlayOptionFilter(option); });
-    replayPlayOptionFilterButtons.push_back({
-        .button = button,
-        .text = text,
-        .option = option,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 4,
-                  makePlayOptionFilterButton("All", std::nullopt));
-  for (std::string_view option : play_options::kPlayOptions) {
-    const std::string optionName(option);
-    addFilterButton(filterRow, filterIndex, 4,
-                    makePlayOptionFilterButton(optionName, optionName));
+  const auto *selectedMeta = &recyclerView->get(selected);
+  const bool courseStartReplay =
+      selectedMeta->courseStart &&
+      activeFolder.type == LibraryFolderItem::Type::Course &&
+      activeFolder.courseId > 0;
+  if (selectedMeta->solidArchive || selectedMeta->unavailable ||
+      (!courseStartReplay && selectedMeta->meta.BmsPath.empty())) {
+    return;
   }
-
-  filterContent->addView(makeModalLabel("Score Rank"));
-  filterRow = nullptr;
-  filterIndex = 0;
-  auto makeScoreRankFilterButton = [this, &makeFilterButton](
-                                       const std::string &label,
-                                       std::optional<std::string> rank) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 16, &text);
-    button->setOnClickListener(
-        [this, rank]() { setReplayScoreRankFilter(rank); });
-    replayScoreRankFilterButtons.push_back({
-        .button = button,
-        .text = text,
-        .rank = rank,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 4,
-                  makeScoreRankFilterButton("All", std::nullopt));
-  constexpr std::array<const char *, 10> kScoreRankFilterLabels = {
-      "MAX", "MAX -", "AAA", "AA", "A", "B", "C", "D", "E", "F"};
-  for (const char *rank : kScoreRankFilterLabels) {
-    addFilterButton(filterRow, filterIndex, 4,
-                    makeScoreRankFilterButton(rank, std::string(rank)));
-  }
-
-  filterContent->addView(makeModalLabel("Sort"));
-  filterRow = nullptr;
-  filterIndex = 0;
-  auto makeSortButton = [this, &makeFilterButton](
-                            const std::string &label,
-                            ReplayRecordSortCriterion criterion) {
-    TextView *text = nullptr;
-    auto *button = makeFilterButton(label, 16, &text);
-    button->setOnClickListener(
-        [this, criterion]() { setReplaySortCriterion(criterion); });
-    replaySortButtons.push_back({
-        .button = button,
-        .text = text,
-        .criterion = criterion,
-    });
-    return button;
-  };
-  addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton("Newest", ReplayRecordSortCriterion::Newest));
-  addFilterButton(
-      filterRow, filterIndex, 2,
-      makeSortButton("Clear Mark", ReplayRecordSortCriterion::ClearMark));
-  addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton("Score", ReplayRecordSortCriterion::Score));
-  addFilterButton(
-      filterRow, filterIndex, 2,
-      makeSortButton("Max Combo", ReplayRecordSortCriterion::MaxCombo));
-
-  filterScroll->setContentView(filterContent);
-  replayFilterSortContent->addView(filterScroll);
-  replayModalContentFrame->addView(replayFilterSortContent);
-
-  replayWatchOptionsContent = new View();
-  replayWatchOptionsContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setGap(12);
-  replayWatchOptionsContent->setVisible(false);
-
-  replayWatchOptionsContent->addView(makeModalLabel("Watch Visualization"));
-  auto *replayTouchRow = makeModalOptionRow(52.0f);
-  auto *replayTouchLabel = makeModalLabel("Touch Points");
-  replayTouchLabel->setWidth(180);
-  replayTouchLabel->setHeight(52);
-  replayTouchLabel->setVAlign(TextView::MIDDLE);
-  replayTouchShowButton =
-      makeModalButton("Show", 18, &replayTouchShowButtonText);
-  replayTouchHideButton =
-      makeModalButton("Hide", 18, &replayTouchHideButtonText);
-  replayTouchShowButton->setFlex(1);
-  replayTouchHideButton->setFlex(1);
-  replayTouchShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayTouchHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = false;
-    refreshReplayExportOptionButtons();
-  });
-  replayTouchRow->addView(replayTouchLabel);
-  replayTouchRow->addView(replayTouchShowButton);
-  replayTouchRow->addView(replayTouchHideButton);
-  replayWatchOptionsContent->addView(replayTouchRow);
-  auto *replayGhostRow = makeModalOptionRow(52.0f);
-  auto *replayGhostLabel = makeModalLabel("Ghosts");
-  replayGhostLabel->setWidth(180);
-  replayGhostLabel->setHeight(52);
-  replayGhostLabel->setVAlign(TextView::MIDDLE);
-  replayGhostShowButton =
-      makeModalButton("Show", 18, &replayGhostShowButtonText);
-  replayGhostHideButton =
-      makeModalButton("Hide", 18, &replayGhostHideButtonText);
-  replayGhostShowButton->setFlex(1);
-  replayGhostHideButton->setFlex(1);
-  replayGhostShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayGhostHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = false;
-    refreshReplayExportOptionButtons();
-  });
-  replayGhostRow->addView(replayGhostLabel);
-  replayGhostRow->addView(replayGhostShowButton);
-  replayGhostRow->addView(replayGhostHideButton);
-  replayWatchOptionsContent->addView(replayGhostRow);
-  replayModalContentFrame->addView(replayWatchOptionsContent);
-
-  replayExportOptionsContent = new View();
-  replayExportOptionsContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setGap(6);
-  replayExportOptionsContent->setVisible(false);
-
-  replayExportOptionsContent->addView(makeModalLabel("Frame Rate"));
-  auto *fpsRow = makeModalOptionRow();
-  replayFps60Button = makeModalButton("60 fps", 20, &replayFps60ButtonText);
-  replayFps120Button = makeModalButton("120 fps", 20, &replayFps120ButtonText);
-  replayFps60Button->setFlex(1);
-  replayFps120Button->setFlex(1);
-  replayFps60Button->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFps = 60;
-    refreshReplayExportOptionButtons();
-  });
-  replayFps120Button->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFps = 120;
-    refreshReplayExportOptionButtons();
-  });
-  fpsRow->addView(replayFps60Button);
-  fpsRow->addView(replayFps120Button);
-  replayExportOptionsContent->addView(fpsRow);
-
-  replayExportOptionsContent->addView(makeModalLabel("Resolution"));
-  auto *resolutionRow = makeModalOptionRow();
-  replayResolution1080Button =
-      makeModalButton("1080p", 20, &replayResolution1080ButtonText);
-  replayResolutionFullButton =
-      makeModalButton("Full Resolution", 20, &replayResolutionFullButtonText);
-  replayResolution1080Button->setFlex(1);
-  replayResolutionFullButton->setFlex(1);
-  replayResolution1080Button->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFullResolution = false;
-    refreshReplayExportOptionButtons();
-  });
-  replayResolutionFullButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportFullResolution = true;
-    refreshReplayExportOptionButtons();
-  });
-  resolutionRow->addView(replayResolution1080Button);
-  resolutionRow->addView(replayResolutionFullButton);
-  replayExportOptionsContent->addView(resolutionRow);
-
-  replayExportOptionsContent->addView(makeModalLabel("Result Screen"));
-  auto *resultRow = makeModalOptionRow();
-  replayResultIncludeButton =
-      makeModalButton("Include", 20, &replayResultIncludeButtonText);
-  replayResultSkipButton =
-      makeModalButton("Skip", 20, &replayResultSkipButtonText);
-  replayResultIncludeButton->setFlex(1);
-  replayResultSkipButton->setFlex(1);
-  replayResultIncludeButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportIncludeResultScreen = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayResultSkipButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load()) {
-      return;
-    }
-    selectedExportIncludeResultScreen = false;
-    refreshReplayExportOptionButtons();
-  });
-  resultRow->addView(replayResultIncludeButton);
-  resultRow->addView(replayResultSkipButton);
-  replayExportOptionsContent->addView(resultRow);
-
-  auto *exportTouchRow = makeModalOptionRow();
-  auto *exportTouchLabel = makeModalLabel("Touch Points");
-  exportTouchLabel->setWidth(180);
-  exportTouchLabel->setHeight(58);
-  exportTouchLabel->setVAlign(TextView::MIDDLE);
-  replayExportTouchShowButton =
-      makeModalButton("Show", 18, &replayExportTouchShowButtonText);
-  replayExportTouchHideButton =
-      makeModalButton("Hide", 18, &replayExportTouchHideButtonText);
-  replayExportTouchShowButton->setFlex(1);
-  replayExportTouchHideButton->setFlex(1);
-  replayExportTouchShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayExportTouchHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderTouchPoints = false;
-    refreshReplayExportOptionButtons();
-  });
-  exportTouchRow->addView(exportTouchLabel);
-  exportTouchRow->addView(replayExportTouchShowButton);
-  exportTouchRow->addView(replayExportTouchHideButton);
-  replayExportOptionsContent->addView(exportTouchRow);
-
-  auto *exportGhostRow = makeModalOptionRow();
-  auto *exportGhostLabel = makeModalLabel("Ghosts");
-  exportGhostLabel->setWidth(180);
-  exportGhostLabel->setHeight(58);
-  exportGhostLabel->setVAlign(TextView::MIDDLE);
-  replayExportGhostShowButton =
-      makeModalButton("Show", 18, &replayExportGhostShowButtonText);
-  replayExportGhostHideButton =
-      makeModalButton("Hide", 18, &replayExportGhostHideButtonText);
-  replayExportGhostShowButton->setFlex(1);
-  replayExportGhostHideButton->setFlex(1);
-  replayExportGhostShowButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = true;
-    refreshReplayExportOptionButtons();
-  });
-  replayExportGhostHideButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || selectedReplayIsAutoPlay()) {
-      return;
-    }
-    selectedReplayRenderGhosts = false;
-    refreshReplayExportOptionButtons();
-  });
-  exportGhostRow->addView(exportGhostLabel);
-  exportGhostRow->addView(replayExportGhostShowButton);
-  exportGhostRow->addView(replayExportGhostHideButton);
-  replayExportOptionsContent->addView(exportGhostRow);
-  replayModalContentFrame->addView(replayExportOptionsContent);
-
-  replayExportProgressContent = new View();
-  replayExportProgressContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setGap(18);
-  replayExportProgressContent->setVisible(false);
-
-  replayExportProgressMessageText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  replayExportProgressMessageText->setText("Preparing export");
-  replayExportProgressMessageText->setColor(
-      ui_theme::sdl(ui_theme::textPrimary()));
-  replayExportProgressMessageText->setHeight(38);
-  replayExportProgressContent->addView(replayExportProgressMessageText);
-
-  replayExportProgressTrack = new View();
-  replayExportProgressTrack->setWidth(kModalContentWidth)
-      ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
-      ->setBorderWidth(1);
-  replayExportProgressFill = new View();
-  replayExportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      ui_theme::progressFill());
-  replayExportProgressTrack->addView(replayExportProgressFill);
-  replayExportProgressContent->addView(replayExportProgressTrack);
-
-  replayExportProgressPercentText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  replayExportProgressPercentText->setText("0%");
-  replayExportProgressPercentText->setColor(
-      ui_theme::sdl(ui_theme::textSecondary()));
-  replayExportProgressPercentText->setHeight(34);
-  replayExportProgressPercentText->setAlign(TextView::RIGHT);
-  replayExportProgressContent->addView(replayExportProgressPercentText);
-  replayModalContentFrame->addView(replayExportProgressContent);
-
-  replayDeleteConfirmationContent = new View();
-  replayDeleteConfirmationContent->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, 0)
-      ->setPosition(Edge::Top, 0)
-      ->setWidth(kModalContentWidth)
-      ->setHeight(kModalContentHeight)
-      ->setGap(20);
-  replayDeleteConfirmationContent->setVisible(false);
-
-  auto *deleteQuestion =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 28);
-  deleteQuestion->setText("Delete this BRD replay file?");
-  deleteQuestion->setThemedColor(ui_theme::textPrimary);
-  deleteQuestion->setAlign(TextView::CENTER);
-  deleteQuestion->setHeight(44);
-  replayDeleteConfirmationContent->addView(deleteQuestion);
-
-  auto *deleteDetail = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  deleteDetail->setText(
-      "Result history will be kept. The BRD file and replay actions cannot "
-      "be restored.");
-  deleteDetail->setThemedColor(ui_theme::textSecondary);
-  deleteDetail->setAlign(TextView::CENTER);
-  deleteDetail->setWrap(true);
-  deleteDetail->setHeight(72);
-  replayDeleteConfirmationContent->addView(deleteDetail);
-
-  auto *deleteConfirmationActions = makeModalOptionRow();
-  deleteConfirmationActions->setJustifyContent(YGJustifyCenter);
-  replayDeleteCancelButton =
-      makeModalButton("Cancel", 20, &replayDeleteCancelButtonText);
-  replayDeleteConfirmButton =
-      makeModalButton("Delete Replay", 18, &replayDeleteConfirmButtonText);
-  replayDeleteCancelButton->setWidth(190);
-  replayDeleteConfirmButton->setWidth(210);
-  replayDeleteCancelButton->setOnClickListener(
-      [this]() { cancelReplayDeleteConfirmation(); });
-  replayDeleteConfirmButton->setOnClickListener(
-      [this]() { confirmSelectedReplayFileDelete(); });
-  styleThemedActionButton(
-      replayDeleteCancelButton, replayDeleteCancelButtonText, true,
-      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-      ui_theme::hairlineStrong);
-  styleThemedActionButton(
-      replayDeleteConfirmButton, replayDeleteConfirmButtonText, true,
-      ui_theme::warningAction, ui_theme::warningActionHover,
-      ui_theme::warningActionPressed, ui_theme::amber);
-  deleteConfirmationActions->addView(replayDeleteCancelButton);
-  deleteConfirmationActions->addView(replayDeleteConfirmButton);
-  replayDeleteConfirmationContent->addView(deleteConfirmationActions);
-  replayModalContentFrame->addView(replayDeleteConfirmationContent);
-
-  auto *footer = new View();
-  footer->setFlexDirection(FlexDirection::Row);
-  footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setGap(8);
-  footer->setHeight(58);
-
-  replayWatchButton = makeModalButton("Watch", 20, &replayWatchButtonText);
-  replayGBattleButton =
-      makeModalButton("G-BATTLE", 18, &replayGBattleButtonText);
-  replayModalResultButton =
-      makeModalButton("View Result", 18, &replayModalResultButtonText);
-  replayModalExportButton =
-      makeModalButton("Export Video", 18, &replayModalExportButtonText);
-  replayModalCloseButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress || replayLoadInProgress.load() ||
-        replayFileDocumentHandoff) {
-      return;
-    }
-    hideReplayModal();
-  });
-  replayShareButton->setOnClickListener(
-      [this]() { startSelectedReplayFileShare(); });
-  replayDeleteButton->setOnClickListener(
-      [this]() { showReplayDeleteConfirmation(); });
-  replayModalFilterButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (replayFilterSortContent != nullptr &&
-        replayFilterSortContent->getVisible()) {
-      replayModalTitleText->setText("Records");
-      replayFilterSortContent->setVisible(false);
-      replayListContent->setVisible(true);
-      replayListView->restoreSelection(selectedReplayIndex);
-      refreshReplayModalActions();
-      return;
-    }
-    showReplayFilterSortOptions();
-  });
-  replayWatchButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (!selectedResultRecordSummary.has_value()) {
-      return;
-    }
-    const auto target = resultRecordActionTarget(
-        *selectedResultRecordSummary, ResultRecordAction::Watch);
-    if (target == ResultRecordActionTarget::None) {
-      return;
-    }
-    if (replayWatchOptionsContent != nullptr &&
-        replayWatchOptionsContent->getVisible()) {
-      if (target == ResultRecordActionTarget::ModernCourse &&
-          selectedResultRecordSummary->modernCourse.has_value()) {
-        startModernCourseReplayPlayback(
-            replayModalChart, *selectedResultRecordSummary->modernCourse);
-      } else if (target == ResultRecordActionTarget::ModernChart &&
-                 selectedResultRecordSummary->modern.has_value()) {
-        startModernReplayPlayback(replayModalChart,
-                                  *selectedResultRecordSummary->modern);
-      } else if (target == ResultRecordActionTarget::AutoPlay) {
-        startAutoPlayPlayback(replayModalChart);
-      }
-      return;
-    }
-    replayModalTitleText->setText("Watch Options");
-    replayListContent->setVisible(false);
-    replayFilterSortContent->setVisible(false);
-    replayWatchOptionsContent->setVisible(true);
-    replayExportOptionsContent->setVisible(false);
-    replayExportProgressContent->setVisible(false);
-    refreshReplayExportOptionButtons();
-    refreshReplayModalActions();
-    replayModalRoot->applyYogaLayoutFromRoot();
-  });
-  replayGBattleButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (!selectedResultRecordSummary.has_value() ||
-        resultRecordActionTarget(*selectedResultRecordSummary,
-                                 ResultRecordAction::GBattle) !=
-            ResultRecordActionTarget::ModernChart) {
-      return;
-    }
-    if (selectedResultRecordSummary->modern.has_value()) {
-      startModernGBattlePlayback(replayModalChart,
-                                 *selectedResultRecordSummary->modern);
-    }
-  });
-  replayModalResultButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress ||
-        !selectedResultRecordSummary.has_value()) {
-      return;
-    }
-    const auto target = resultRecordActionTarget(
-        *selectedResultRecordSummary, ResultRecordAction::ResultRecall);
-    if (target == ResultRecordActionTarget::ModernCourse &&
-        selectedResultRecordSummary->modernCourse.has_value()) {
-      startModernCourseReplayResultRecall(
-          *selectedResultRecordSummary->modernCourse,
-          selectedResultRecordSummary->capabilities.retrySame);
-      return;
-    }
-    if (target == ResultRecordActionTarget::ModernChart &&
-        selectedResultRecordSummary->modern.has_value()) {
-      startModernReplayResultRecall(replayModalChart,
-                                    *selectedResultRecordSummary->modern);
-      return;
-    }
-    const auto *remoteIdentity = std::get_if<IrRemoteRecordId>(
-        &selectedResultRecordSummary->identity);
-    if (target != ResultRecordActionTarget::Remote ||
-        remoteIdentity == nullptr || !selectedResultRecordStableKey) {
-      return;
-    }
-    startRemoteResultRecall(*remoteIdentity, *selectedResultRecordStableKey);
-  });
-  replayModalExportButton->setOnClickListener([this]() {
-    if (replayExportInProgress.load() || replayResultRecallInProgress ||
-        replayIrUploadInProgress) {
-      return;
-    }
-    if (replayWatchOptionsContent != nullptr &&
-        replayWatchOptionsContent->getVisible()) {
-      return;
-    }
-    if (replayFilterSortContent != nullptr &&
-        replayFilterSortContent->getVisible()) {
-      return;
-    }
-    if (replayExportOptionsContent != nullptr &&
-        replayExportOptionsContent->getVisible()) {
-      if (!replayExportSelection.has_value()) {
-        return;
-      }
-      const ResultRecordSummary exportSelection =
-          replayExportSelection.value();
-      const auto target = resultRecordActionTarget(
-          exportSelection, ResultRecordAction::VideoExport);
-      const bool exportAutoPlay = exportSelection.autoPlay;
-      ReplayVideoExportOptions options;
-      options.fps = selectedExportFps;
-      options.includeResultScreen = selectedExportIncludeResultScreen;
-      options.renderTouchPoints =
-          exportAutoPlay ? false : selectedReplayRenderTouchPoints;
-      options.renderReplayGhosts =
-          exportAutoPlay ? false : selectedReplayRenderGhosts;
-      options.pacemakerTarget =
-          exportAutoPlay
-              ? pacemaker::kTargetOff
-              : pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
-      if (!selectedExportFullResolution) {
-        options.height = 1080;
-      }
-      if (target == ResultRecordActionTarget::ModernCourse &&
-          exportSelection.modernCourse.has_value()) {
-        startModernCourseReplayVideoExport(
-            *exportSelection.modernCourse, options);
-      } else if (target == ResultRecordActionTarget::ModernChart &&
-                 exportSelection.modern.has_value()) {
-        startModernReplayVideoExport(replayExportChart,
-                                     *exportSelection.modern, options);
-      } else if (target == ResultRecordActionTarget::AutoPlay) {
-        startAutoPlayVideoExport(replayExportChart, options);
-      }
-      return;
-    }
-    if (!selectedResultRecordSummary.has_value() ||
-        resultRecordActionTarget(*selectedResultRecordSummary,
-                                 ResultRecordAction::VideoExport) ==
-            ResultRecordActionTarget::None) {
-      return;
-    }
-    showReplayExportOptions();
-  });
-  footer->addView(replayWatchButton);
-  footer->addView(replayGBattleButton);
-  footer->addView(replayModalResultButton);
-  footer->addView(replayModalExportButton);
-  panel->addView(footer);
-
-  replayModalRoot->addView(panel);
-  rootLayout->addView(replayModalRoot);
-  refreshReplayExportOptionButtons();
-  refreshReplayModalActions();
+  replayIrObservedRevisions.clear();
+  recordsModal_->setTouchVisualizationEnabled(
+      context.settings.touchVisualizationEnabled);
+  recordsModal_->showChart(*selectedMeta);
+  setReplayButtonVisible(true);
 }
 
-void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
-  std::optional<std::string> preferredStableKey =
-      preserveViewState ? selectedResultRecordStableKey : std::nullopt;
-  const float previousScrollOffset =
-      preserveViewState && replayListView != nullptr
-          ? replayListView->scrollOffset
-          : 0.0F;
-
+std::vector<ResultRecordSummary>
+MainMenuScene::loadRecordsForModal(const ChartMetaRecord &record) {
   const bool courseReplayList =
-      replayModalChart.courseStart &&
+      record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
       (!activeFolder.courseKey.empty() || activeFolder.courseId > 0);
   std::vector<ReplaySummary> syntheticRecords;
@@ -9105,9 +6956,9 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       modernSummaries.push_back(makeLegacyCourseResultRecord(summary));
     }
   } else {
-    syntheticRecords.push_back(autoPlayReplaySummary(replayModalChart));
+    syntheticRecords.push_back(autoPlayReplaySummary(record));
     const auto legacy = context.replayRepository.ListLegacyChartSummaries(
-        replayModalChart.meta, kMaximumLegacyResultSummaryRows);
+        record.meta, kMaximumLegacyResultSummaryRows);
     modernSummaries.reserve(legacy.size());
     for (const LegacyChartResultSummary &summary : legacy) {
       modernSummaries.push_back(makeLegacyChartResultRecord(summary));
@@ -9119,10 +6970,10 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   std::unordered_map<std::string, ir::IrUploadRecord> irRecordsByAttempt;
   bool modernIrReadSucceeded = courseReplayList;
   if (!courseReplayList && irServerOrigin.has_value() &&
-      !replayModalChart.meta.SHA256.empty()) {
+      !record.meta.SHA256.empty()) {
     auto records = context.replayRepository.ListIrUploadRecordsForChart(
-        ir::kTachiProviderId, *irServerOrigin,
-        replayModalChart.meta.SHA256, kMaximumModernChartHistoryRows);
+        ir::kTachiProviderId, *irServerOrigin, record.meta.SHA256,
+        kMaximumModernChartHistoryRows);
     std::string irReadDiagnostic;
     if (records.status != ir::IrUploadRecordReadStatus::Loaded) {
       irReadDiagnostic =
@@ -9132,8 +6983,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
                     records.diagnostic;
     } else {
       irRecordsByAttempt.reserve(records.records.size());
-      for (auto &record : records.records) {
-        irRecordsByAttempt.emplace(record.attemptId, std::move(record));
+      for (auto &irRecord : records.records) {
+        irRecordsByAttempt.emplace(irRecord.attemptId, std::move(irRecord));
       }
       irReadDiagnostic = std::move(records.diagnostic);
     }
@@ -9185,9 +7036,9 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         archive_file::appendDebugLogLine(diagnostic);
       }
     }
-  } else if (!courseReplayList && !replayModalChart.meta.SHA256.empty()) {
+  } else if (!courseReplayList && !record.meta.SHA256.empty()) {
     const auto history = context.replayRepository.ListModernChartResults(
-        replayModalChart.meta.SHA256, kMaximumModernChartHistoryRows);
+        record.meta.SHA256, kMaximumModernChartHistoryRows);
     if (history.status == ModernChartHistoryReadStatus::Loaded) {
       modernSummaries.reserve(modernSummaries.size() + history.records.size());
       replay::ReplayFileActionService replayActions(context.replayRepository);
@@ -9195,8 +7046,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         const auto inspected = replayActions.probe(modern.replayFile);
         ir::IrRecordState irState = ir::IrRecordState::Hidden;
         std::optional<IrRemoteRecordId> linkedRemote;
-        const auto storedIr =
-            irRecordsByAttempt.find(modern.result.attemptId);
+        const auto storedIr = irRecordsByAttempt.find(modern.result.attemptId);
         if (storedIr != irRecordsByAttempt.end()) {
           const auto serviceStatus =
               context.irSubmissionService != nullptr
@@ -9209,8 +7059,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
             linkedRemote = IrRemoteRecordId{
                 .providerId = std::string(ir::kTachiProviderId),
                 .serverOrigin = *irServerOrigin,
-                .remoteScoreId =
-                    *storedIr->second.receiptRemoteScoreId,
+                .remoteScoreId = *storedIr->second.receiptRemoteScoreId,
             };
           }
         }
@@ -9245,8 +7094,8 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
     } else if (irServerOrigin.has_value()) {
       mergeOrigin = *irServerOrigin;
       auto loaded = context.replayRepository.ListIrRemoteScoresForChart(
-          ir::kTachiProviderId, mergeOrigin, replayModalChart.meta.MD5,
-          replayModalChart.meta.SHA256);
+          ir::kTachiProviderId, mergeOrigin, record.meta.MD5,
+          record.meta.SHA256);
       if (loaded.status == ir::IrRemoteScoreReadOutcome::Status::Loaded) {
         remoteScores = std::move(loaded.scores);
         remoteReadSucceeded = true;
@@ -9276,7 +7125,7 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
   }
 
   try {
-    resultRecordSummaries = mergeResultRecords(
+    auto merged = mergeResultRecords(
         syntheticRecords, modernSummaries,
         remoteReadSucceeded
             ? std::span<const ir::IrRemoteScore>(remoteScores)
@@ -9286,11 +7135,12 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
         modernIrReadSucceeded) {
       publishedResultRecordDiagnostic.clear();
     }
+    return merged;
   } catch (...) {
-    resultRecordSummaries = mergeResultRecords(
+    auto merged = mergeResultRecords(
         syntheticRecords, modernSummaries,
-        std::span<const ir::IrRemoteScore>{},
-        ir::kTachiProviderId, std::string_view{});
+        std::span<const ir::IrRemoteScore>{}, ir::kTachiProviderId,
+        std::string_view{});
     const std::string diagnostic =
         "IR Records unavailable: remote score projection is invalid";
     if (diagnostic != publishedResultRecordDiagnostic) {
@@ -9298,278 +7148,75 @@ void MainMenuScene::reloadReplayRecordModels(bool preserveViewState) {
       SDL_Log("%s", diagnostic.c_str());
       archive_file::appendDebugLogLine(diagnostic);
     }
-  }
-
-  applyReplayRecordFilters(std::move(preferredStableKey));
-  if (preserveViewState && replayListView != nullptr) {
-    replayListView->scrollOffset = previousScrollOffset;
-    replayListView->rebindVisibleItems();
+    return merged;
   }
 }
 
-void MainMenuScene::showReplayListModal(const ChartMetaRecord &record) {
-  if (replayModalRoot == nullptr || replayListView == nullptr) {
-    return;
-  }
-
-  replayModalChart = record;
-  replayExportSelection.reset();
-  replayIrUploadInProgress = false;
-  replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
-  replayDeleteConfirmation.cancel();
-
-  clearReplayModalSelection();
-  selectedReplayRenderTouchPoints = context.settings.touchVisualizationEnabled;
-  selectedReplayRenderGhosts = true;
-  replayRecordFilters = {};
-  reloadReplayRecordModels(false);
-  setReplayButtonVisible(true);
-  replayModalTitleText->setText("Records");
-  replayListContent->setVisible(true);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(false);
-  replayModalRoot->setSize(rendering::window_width, rendering::window_height);
-  replayModalRoot->setVisible(true);
-  refreshReplayFilterSortButtons();
-  refreshReplayExportOptionButtons();
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::showReplayFilterSortOptions() {
-  if (replayModalRoot == nullptr || replayFilterSortContent == nullptr) {
-    return;
-  }
-  replayModalTitleText->setText("Filter / Sort");
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(true);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(false);
-  replayExportSelection.reset();
-  refreshReplayFilterSortButtons();
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::showReplayExportOptions() {
-  if (replayModalRoot == nullptr ||
-      !selectedResultRecordSummary.has_value() ||
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::VideoExport) ==
-          ResultRecordActionTarget::None) {
-    return;
-  }
-
-  replayExportSelection = selectedResultRecordSummary;
-  replayExportChart = replayModalChart;
-  replayModalTitleText->setText("Export Options");
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(true);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(false);
-  selectedExportFps = 120;
-  selectedExportFullResolution = true;
-  selectedExportIncludeResultScreen = true;
-  if (replayExportSelection->autoPlay) {
-    selectedReplayRenderTouchPoints = false;
-    selectedReplayRenderGhosts = false;
-  }
-  refreshReplayExportOptionButtons();
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::showReplayExportProgress(const std::string &title,
-                                             const std::string &message) {
-  if (replayModalRoot == nullptr) {
-    return;
-  }
-
-  replayModalTitleText->setText(title);
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(true);
-  replayDeleteConfirmationContent->setVisible(false);
-  updateReplayExportProgressUi(0.0, message);
-  replayModalRoot->setSize(rendering::window_width, rendering::window_height);
-  replayModalRoot->setVisible(true);
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::hideReplayModal() {
-  if (replayModalRoot == nullptr) {
-    return;
-  }
-  if (replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress || replayLoadInProgress.load()) {
-    return;
-  }
-  replayModalRoot->setVisible(false);
-  replayDeleteConfirmation.cancel();
-  if (replayDeleteConfirmationContent != nullptr) {
-    replayDeleteConfirmationContent->setVisible(false);
-  }
-  replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
-  clearReplayModalSelection();
-  replayExportSelection.reset();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Watch");
-  }
-  if (replayGBattleButtonText != nullptr) {
-    replayGBattleButtonText->setText("G-BATTLE");
-  }
-  if (replayModalResultButtonText != nullptr) {
-    replayModalResultButtonText->setText("View Result");
-  }
-  if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText("Export Video");
-  }
-}
-
-void MainMenuScene::startSelectedReplayFileShare() {
-  if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
-      replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress || replayDeleteConfirmation.active()) {
-    return;
-  }
-  const auto selection = replay::replayFileActionSelection(
-      *selectedResultRecordSummary, true);
-  if (!selection.request || !selection.shareVisible) {
+void MainMenuScene::shareReplayFile(
+    const replay::ReplayFileActionRequest &request) {
+  if (replayFileDocumentHandoff || replayExportInProgress.load() ||
+      replayResultRecallInProgress || replayIrUploadInProgress) {
     return;
   }
 
   replay::ReplayFileActionService actions(context.replayRepository);
-  auto prepared = actions.prepareShare(*selection.request);
+  auto prepared = actions.prepareShare(request);
   if (prepared.state != replay::ReplayFileActionState::Verified ||
       !prepared.share) {
     const std::string diagnostic = prepared.diagnostic.empty()
                                        ? "Replay file is unavailable to share."
                                        : prepared.diagnostic;
     SDL_Log("Replay share unavailable: %s", diagnostic.c_str());
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText(diagnostic);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setStatus(diagnostic);
+      recordsModal_->reloadRecords(true);
     }
-    reloadReplayRecordModels(true);
-    refreshReplayModalActions();
     return;
   }
 
-  PlatformDocumentExportRequest request{
+  PlatformDocumentExportRequest exportRequest{
       .localPath = prepared.share->sourcePath,
       .mimeType = "application/gzip",
       .suggestedName = prepared.share->suggestedFilename,
       .maxBytes = replay::kReplayLimits.maxCompressedBytes,
       .sourceLifetime = std::move(prepared.share->sourceLifetime)};
   replayFileDocumentHandoff =
-      platform_document_handoff::ExportDocumentAsync(std::move(request));
-  if (!replayFileDocumentHandoff) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText("Unable to open replay sharing.");
+      platform_document_handoff::ExportDocumentAsync(std::move(exportRequest));
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setDocumentHandoffActive(true);
+    if (!replayFileDocumentHandoff) {
+      recordsModal_->setStatus("Unable to open replay sharing.");
+    } else {
+      recordsModal_->setStatus("Choose where to share the BRD replay.");
     }
-  } else if (replayStatusText != nullptr) {
-    replayStatusText->setText("Choose where to share the BRD replay.");
-  }
-  refreshReplayModalActions();
-}
-
-void MainMenuScene::showReplayDeleteConfirmation() {
-  if (!selectedResultRecordSummary || replayFileDocumentHandoff ||
-      replayExportInProgress.load() || replayResultRecallInProgress ||
-      replayIrUploadInProgress) {
-    return;
-  }
-  const auto selection = replay::replayFileActionSelection(
-      *selectedResultRecordSummary, true);
-  if (replayDeleteConfirmationContent == nullptr ||
-      !replayDeleteConfirmation.begin(selection)) {
-    return;
-  }
-
-  replayModalTitleText->setText("Confirm Replay Deletion");
-  replayListContent->setVisible(false);
-  replayFilterSortContent->setVisible(false);
-  replayWatchOptionsContent->setVisible(false);
-  replayExportOptionsContent->setVisible(false);
-  replayExportProgressContent->setVisible(false);
-  replayDeleteConfirmationContent->setVisible(true);
-  refreshReplayModalActions();
-  replayModalRoot->applyYogaLayoutFromRoot();
-}
-
-void MainMenuScene::cancelReplayDeleteConfirmation() {
-  replayDeleteConfirmation.cancel();
-  if (replayDeleteConfirmationContent != nullptr) {
-    replayDeleteConfirmationContent->setVisible(false);
-  }
-  if (replayListContent != nullptr) {
-    replayListContent->setVisible(true);
-  }
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText("Records");
-  }
-  if (replayListView != nullptr) {
-    replayListView->restoreSelection(selectedReplayIndex);
-  }
-  refreshReplayModalActions();
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
   }
 }
 
-void MainMenuScene::confirmSelectedReplayFileDelete() {
+void MainMenuScene::removeReplayFile(
+    const replay::ReplayFileActionRequest &request) {
   if (replayFileDocumentHandoff || replayExportInProgress.load() ||
       replayResultRecallInProgress || replayIrUploadInProgress) {
     return;
   }
-  auto request = replayDeleteConfirmation.confirm();
-  if (!request) {
-    return;
-  }
-
-  if (replayDeleteConfirmationContent != nullptr) {
-    replayDeleteConfirmationContent->setVisible(false);
-  }
-  if (replayListContent != nullptr) {
-    replayListContent->setVisible(true);
-  }
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText("Records");
-  }
 
   replay::ReplayFileActionService actions(context.replayRepository);
-  const auto removed = actions.remove(*request);
+  const auto removed = actions.remove(request);
   if (removed.state == replay::ReplayFileActionState::UserDeleted) {
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText(
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setStatus(
           removed.cleanupPending
               ? "Replay hidden; file cleanup will retry at startup."
               : "Replay file deleted. Result history was kept.");
+      recordsModal_->reloadRecords(true);
     }
-    reloadReplayRecordModels(true);
   } else {
     const std::string diagnostic = removed.diagnostic.empty()
                                        ? "Replay file could not be deleted."
                                        : removed.diagnostic;
     SDL_Log("Replay delete failed: %s", diagnostic.c_str());
-    if (replayStatusText != nullptr) {
-      replayStatusText->setText(diagnostic);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setStatus(diagnostic);
     }
-  }
-  refreshReplayModalActions();
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
   }
 }
 
@@ -9579,423 +7226,87 @@ void MainMenuScene::applyReplayFileDocumentHandoff() {
   }
   auto result = replayFileDocumentHandoff.takeResult();
   replayFileDocumentHandoff.close();
-  if (replayStatusText != nullptr && result) {
-    if (result->ok()) {
-      replayStatusText->setText("Replay BRD shared.");
-    } else if (result->cancelled()) {
-      replayStatusText->setText("Replay sharing cancelled.");
-    } else {
-      replayStatusText->setText(result->message.empty()
-                                    ? "Replay sharing failed."
-                                    : result->message);
-    }
-  }
-  refreshReplayModalActions();
-}
-
-void MainMenuScene::refreshReplayModalActions() {
-  const bool filterSortMode = replayFilterSortContent != nullptr &&
-                              replayFilterSortContent->getVisible();
-  const bool watchOptionsMode = replayWatchOptionsContent != nullptr &&
-                                replayWatchOptionsContent->getVisible();
-  const bool optionsMode = replayExportOptionsContent != nullptr &&
-                           replayExportOptionsContent->getVisible();
-  const bool progressMode = replayExportProgressContent != nullptr &&
-                            replayExportProgressContent->getVisible();
-  const bool deleteConfirmationMode =
-      replayDeleteConfirmationContent != nullptr &&
-      replayDeleteConfirmationContent->getVisible();
-  const bool exportInProgress = replayExportInProgress.load();
-  const bool resultRecallInProgress = replayResultRecallInProgress;
-  const bool irUploadInProgress = replayIrUploadInProgress;
-  const bool loadInProgress = replayLoadInProgress.load();
-  const bool modalOperationInProgress =
-      exportInProgress || resultRecallInProgress || irUploadInProgress ||
-      loadInProgress || static_cast<bool>(replayFileDocumentHandoff);
-  const auto fileActions = selectedResultRecordSummary.has_value()
-                               ? replay::replayFileActionSelection(
-                                     *selectedResultRecordSummary,
-                                     !modalOperationInProgress)
-                               : replay::ReplayFileActionSelection{};
-  const bool watchVisible =
-      selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !deleteConfirmationMode &&
-      !optionsMode && !progressMode &&
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::Watch) !=
-          ResultRecordActionTarget::None;
-  const bool gbattleVisible =
-      selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !watchOptionsMode && !optionsMode && !progressMode &&
-      !deleteConfirmationMode &&
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::GBattle) ==
-          ResultRecordActionTarget::ModernChart;
-  const ResultRecordRecallActionState resultAction =
-      resultRecordRecallActionState(
-          selectedResultRecordSummary,
-          !filterSortMode && !watchOptionsMode && !optionsMode &&
-              !progressMode && !deleteConfirmationMode,
-          modalOperationInProgress);
-  const bool resultVisible = resultAction.visible;
-  const bool exportVisible =
-      selectedResultRecordSummary.has_value() && !filterSortMode &&
-      !watchOptionsMode && !progressMode && !deleteConfirmationMode &&
-      resultRecordActionTarget(*selectedResultRecordSummary,
-                               ResultRecordAction::VideoExport) !=
-          ResultRecordActionTarget::None;
-
-  if (replayModalCloseButtonText != nullptr) {
-    replayModalCloseButtonText->setText(ui_icons::textForCodepoint(kIconXmark));
-  }
-  if (replayModalFilterButtonText != nullptr) {
-    replayModalFilterButtonText->setText(
-        ui_icons::textForCodepoint(kIconFilter));
-  }
-  if (replayShareButtonText != nullptr) {
-    replayShareButtonText->setText(ui_icons::textForCodepoint(kIconShare));
-  }
-  if (replayDeleteButtonText != nullptr) {
-    replayDeleteButtonText->setText(ui_icons::textForCodepoint(kIconTrash));
-  }
-  if (replayWatchButtonText != nullptr && !loadInProgress) {
-    replayWatchButtonText->setText("Watch");
-  }
-  if (replayGBattleButtonText != nullptr && !loadInProgress) {
-    replayGBattleButtonText->setText("G-BATTLE");
-  }
-  if (replayModalResultButtonText != nullptr) {
-    replayModalResultButtonText->setText(
-        resultRecallInProgress ? "Loading..." : "View Result");
-  }
-  if (replayModalExportButtonText != nullptr) {
-    replayModalExportButtonText->setText(exportInProgress ? "Exporting"
-                                                          : "Export Video");
-  }
-
-  if (replayModalFilterButton != nullptr) {
-    const bool filterVisible =
-        !watchOptionsMode && !optionsMode && !progressMode &&
-        !deleteConfirmationMode;
-    replayModalFilterButton->setVisible(filterVisible);
-    replayModalFilterButton->setWidth(filterVisible ? 54.0f : 0.0f);
-  }
-  if (replayShareButton != nullptr) {
-    const bool visible = fileActions.shareVisible && !deleteConfirmationMode;
-    replayShareButton->setVisible(visible);
-    replayShareButton->setWidth(visible ? 54.0F : 0.0F);
-  }
-  if (replayDeleteButton != nullptr) {
-    const bool visible = fileActions.deleteVisible && !deleteConfirmationMode;
-    replayDeleteButton->setVisible(visible);
-    replayDeleteButton->setWidth(visible ? 54.0F : 0.0F);
-  }
-  if (replayWatchButton != nullptr) {
-    replayWatchButton->setVisible(watchVisible);
-    replayWatchButton->setWidth(
-        watchVisible ? (watchOptionsMode ? 160.0F : 124.0F) : 0.0F);
-  }
-  if (replayGBattleButton != nullptr) {
-    replayGBattleButton->setVisible(gbattleVisible);
-    replayGBattleButton->setWidth(gbattleVisible ? 144.0F : 0.0F);
-  }
-  if (replayModalResultButton != nullptr) {
-    replayModalResultButton->setVisible(resultVisible);
-    replayModalResultButton->setWidth(resultVisible ? 142.0F : 0.0F);
-  }
-  if (replayModalExportButton != nullptr) {
-    replayModalExportButton->setVisible(exportVisible);
-    replayModalExportButton->setWidth(
-        exportVisible ? (optionsMode ? 160.0F : 142.0F) : 0.0F);
-  }
-
-  styleThemedActionButton(replayModalCloseButton, replayModalCloseButtonText,
-                          !modalOperationInProgress, ui_theme::control,
-                          ui_theme::controlHover, ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
-  styleThemedActionButton(
-      replayShareButton, replayShareButtonText,
-      fileActions.shareVisible && fileActions.enabled &&
-          !deleteConfirmationMode,
-      ui_theme::infoAction, ui_theme::infoActionHover,
-      ui_theme::infoActionPressed, ui_theme::accentBorder);
-  styleThemedActionButton(
-      replayDeleteButton, replayDeleteButtonText,
-      fileActions.deleteVisible && fileActions.enabled &&
-          !deleteConfirmationMode,
-      ui_theme::warningAction, ui_theme::warningActionHover,
-      ui_theme::warningActionPressed, ui_theme::amber);
-  if (replay_record_filters::hasActiveCriteria(replayRecordFilters) ||
-      filterSortMode) {
-    styleThemedActionButton(
-        replayModalFilterButton, replayModalFilterButtonText,
-        !watchOptionsMode && !optionsMode && !progressMode &&
-            !modalOperationInProgress,
-        ui_theme::primaryAction, ui_theme::primaryActionHover,
-        ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
-  } else {
-    styleThemedActionButton(
-        replayModalFilterButton, replayModalFilterButtonText,
-        !watchOptionsMode && !optionsMode && !progressMode &&
-            !modalOperationInProgress,
-        ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-        ui_theme::hairlineStrong);
-  }
-  styleThemedActionButton(replayWatchButton, replayWatchButtonText,
-                          watchVisible && !modalOperationInProgress,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
-  styleThemedActionButton(replayGBattleButton, replayGBattleButtonText,
-                          gbattleVisible && !modalOperationInProgress,
-                          ui_theme::warningAction,
-                          ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed, ui_theme::amber);
-  styleThemedActionButton(replayModalResultButton, replayModalResultButtonText,
-                          resultAction.enabled,
-                          ui_theme::successAction,
-                          ui_theme::successActionHover,
-                          ui_theme::successActionPressed, ui_theme::lime);
-  styleThemedActionButton(replayModalExportButton, replayModalExportButtonText,
-                          exportVisible && !modalOperationInProgress,
-                          ui_theme::violetAction, ui_theme::violetActionHover,
-                          ui_theme::violetActionPressed,
-                          ui_theme::violetActionHover);
-
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
-  }
-}
-
-void MainMenuScene::refreshReplayFilterSortButtons() {
-  for (const ReplayClearFilterButton &item : replayClearFilterButtons) {
-    styleOptionButton(item.button, item.text,
-                      item.rank == replayRecordFilters.clearMarkRank);
-  }
-  for (const ReplayOptionFilterButton &item : replayPlayOptionFilterButtons) {
-    const std::optional<std::string> normalized =
-        item.option.has_value()
-            ? std::optional<std::string>(
-                  play_options::normalizePlayOption(*item.option))
-            : std::nullopt;
-    styleOptionButton(item.button, item.text,
-                      normalized == replayRecordFilters.playOption);
-  }
-  for (const ReplayScoreRankFilterButton &item :
-       replayScoreRankFilterButtons) {
-    if (item.rank.has_value() && !replayScoreRankFilterAvailable()) {
-      styleThemedActionButton(item.button, item.text, false,
-                              ui_theme::control, ui_theme::controlHover,
-                              ui_theme::controlPressed,
-                              ui_theme::hairlineStrong);
-    } else {
-      styleOptionButton(item.button, item.text,
-                        item.rank == replayRecordFilters.scoreRank);
-    }
-  }
-  for (const ReplaySortButton &item : replaySortButtons) {
-    styleOptionButton(item.button, item.text,
-                      item.criterion == replayRecordFilters.sort);
-  }
-}
-
-void MainMenuScene::refreshReplayExportOptionButtons() {
-  const bool autoPlaySelection = selectedReplayIsAutoPlay();
-  if (autoPlaySelection) {
-    selectedReplayRenderTouchPoints = false;
-    selectedReplayRenderGhosts = false;
-  }
-
-  styleOptionButton(replayFps60Button, replayFps60ButtonText,
-                    selectedExportFps == 60);
-  styleOptionButton(replayFps120Button, replayFps120ButtonText,
-                    selectedExportFps == 120);
-  styleOptionButton(replayResolution1080Button, replayResolution1080ButtonText,
-                    !selectedExportFullResolution);
-  styleOptionButton(replayResolutionFullButton, replayResolutionFullButtonText,
-                    selectedExportFullResolution);
-  styleOptionButton(replayResultIncludeButton, replayResultIncludeButtonText,
-                    selectedExportIncludeResultScreen);
-  styleOptionButton(replayResultSkipButton, replayResultSkipButtonText,
-                    !selectedExportIncludeResultScreen);
-  if (autoPlaySelection) {
-    styleThemedActionButton(replayTouchShowButton, replayTouchShowButtonText,
-                            false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayTouchHideButton, replayTouchHideButtonText, true);
-    styleThemedActionButton(replayExportTouchShowButton,
-                            replayExportTouchShowButtonText, false,
-                            ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayExportTouchHideButton,
-                      replayExportTouchHideButtonText, true);
-    styleThemedActionButton(replayGhostShowButton, replayGhostShowButtonText,
-                            false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayGhostHideButton, replayGhostHideButtonText, true);
-    styleThemedActionButton(replayExportGhostShowButton,
-                            replayExportGhostShowButtonText, false,
-                            ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
-    styleOptionButton(replayExportGhostHideButton,
-                      replayExportGhostHideButtonText, true);
-    return;
-  }
-
-  styleOptionButton(replayTouchShowButton, replayTouchShowButtonText,
-                    selectedReplayRenderTouchPoints);
-  styleOptionButton(replayTouchHideButton, replayTouchHideButtonText,
-                    !selectedReplayRenderTouchPoints);
-  styleOptionButton(replayExportTouchShowButton,
-                    replayExportTouchShowButtonText,
-                    selectedReplayRenderTouchPoints);
-  styleOptionButton(replayExportTouchHideButton,
-                    replayExportTouchHideButtonText,
-                    !selectedReplayRenderTouchPoints);
-  styleOptionButton(replayGhostShowButton, replayGhostShowButtonText,
-                    selectedReplayRenderGhosts);
-  styleOptionButton(replayGhostHideButton, replayGhostHideButtonText,
-                    !selectedReplayRenderGhosts);
-  styleOptionButton(replayExportGhostShowButton,
-                    replayExportGhostShowButtonText,
-                    selectedReplayRenderGhosts);
-  styleOptionButton(replayExportGhostHideButton,
-                    replayExportGhostHideButtonText,
-                    !selectedReplayRenderGhosts);
-}
-
-void MainMenuScene::updateReplayExportProgressUi(double fraction,
-                                                 const std::string &message) {
-  replayExportProgressFraction = std::clamp(fraction, 0.0, 1.0);
-  const int displayedPercent =
-      static_cast<int>(std::lround(replayExportProgressFraction * 100.0));
-  if (replayExportProgressMessageText != nullptr) {
-    replayExportProgressMessageText->setText(message);
-  }
-  if (replayExportProgressPercentText != nullptr) {
-    replayExportProgressPercentText->setText(std::to_string(displayedPercent) +
-                                             "%");
-  }
-  if (replayExportProgressFill != nullptr) {
-    replayExportProgressFill->setWidthPercent(
-        static_cast<float>(displayedPercent));
-  }
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
-  }
-}
-
-void MainMenuScene::clearReplayModalSelection() {
-  selectedReplayIndex = -1;
-  selectedResultRecordSummary.reset();
-  selectedResultRecordStableKey.reset();
-}
-
-bool MainMenuScene::selectReplayModalIndex(int index) {
-  clearReplayModalSelection();
-  if (index < 0 ||
-      index >= static_cast<int>(visibleResultRecordSummaries.size())) {
-    return false;
-  }
-
-  selectedReplayIndex = index;
-  selectedResultRecordSummary =
-      visibleResultRecordSummaries[static_cast<std::size_t>(index)];
-  selectedResultRecordStableKey = selectedResultRecordSummary->stableKey();
-  return true;
-}
-
-void MainMenuScene::applyReplayRecordFilters(
-    std::optional<std::string> preferredStableKey) {
-  if (!preferredStableKey.has_value()) {
-    preferredStableKey = selectedResultRecordStableKey;
-  }
-
-  visibleResultRecordSummaries = replay_record_filters::apply(
-      resultRecordSummaries, replayRecordFilters);
-  if (replayListView != nullptr) {
-    replayListView->setResultRecords(visibleResultRecordSummaries);
-  }
-
-  clearReplayModalSelection();
-  int restoreIndex = -1;
-  if (preferredStableKey.has_value()) {
-    for (size_t i = 0; i < visibleResultRecordSummaries.size(); ++i) {
-      if (visibleResultRecordSummaries[i].stableKey() ==
-          *preferredStableKey) {
-        restoreIndex = static_cast<int>(i);
-        break;
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setDocumentHandoffActive(false);
+    if (result) {
+      if (result->ok()) {
+        recordsModal_->setStatus("Replay BRD shared.");
+      } else if (result->cancelled()) {
+        recordsModal_->setStatus("Replay sharing cancelled.");
+      } else {
+        recordsModal_->setStatus(result->message.empty()
+                                     ? "Replay sharing failed."
+                                     : result->message);
       }
     }
   }
-  if (restoreIndex >= 0) {
-    selectReplayModalIndex(restoreIndex);
-    if (replayListView != nullptr) {
-      replayListView->restoreSelection(restoreIndex);
-    }
-  }
-  refreshReplayModalActions();
 }
 
-void MainMenuScene::setReplayClearFilter(std::optional<int> rank) {
-  replayRecordFilters.clearMarkRank = rank;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-void MainMenuScene::setReplayPlayOptionFilter(
-    std::optional<std::string> option) {
-  replayRecordFilters.playOption =
-      option.has_value() ? std::optional<std::string>(
-                               play_options::normalizePlayOption(*option))
-                         : std::nullopt;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-void MainMenuScene::setReplayScoreRankFilter(
-    std::optional<std::string> rank) {
-  if (rank.has_value() && !replayScoreRankFilterAvailable()) {
-    return;
-  }
-  replayRecordFilters.scoreRank = rank;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-void MainMenuScene::setReplaySortCriterion(
-    ReplayRecordSortCriterion criterion) {
-  replayRecordFilters.sort = criterion;
-  applyReplayRecordFilters();
-  refreshReplayFilterSortButtons();
-}
-
-bool MainMenuScene::replayScoreRankFilterAvailable() const {
-  return replay_record_filters::supportsScoreRankFilter(
-      resultRecordSummaries);
-}
-
-bool MainMenuScene::selectedReplayIsAutoPlay() const {
-  if (replayExportOptionsContent != nullptr &&
-      replayExportOptionsContent->getVisible() &&
-      replayExportSelection.has_value()) {
-    return replayExportSelection->autoPlay;
-  }
-  return selectedResultRecordSummary.has_value() &&
-         selectedResultRecordSummary->autoPlay;
-}
-
-bool MainMenuScene::selectedReplayIsCourseReplay() const {
-  if (replayExportOptionsContent != nullptr &&
-      replayExportOptionsContent->getVisible() &&
-      replayExportSelection.has_value()) {
-    return replayExportSelection->course;
-  }
-  return selectedResultRecordSummary.has_value() &&
-         selectedResultRecordSummary->course;
+ReplayRecordsModalCallbacks MainMenuScene::makeRecordsModalCallbacks() {
+  ReplayRecordsModalCallbacks callbacks;
+  callbacks.loadRecords = [this](const ChartMetaRecord &record) {
+    return loadRecordsForModal(record);
+  };
+  callbacks.watchModernChart =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        startModernReplayPlayback(record, modern);
+      };
+  callbacks.watchModernCourse =
+      [this](const ChartMetaRecord &record,
+             const ModernCourseResultRecord &modern) {
+        startModernCourseReplayPlayback(record, modern);
+      };
+  callbacks.watchAutoPlay = [this](const ChartMetaRecord &record) {
+    startAutoPlayPlayback(record);
+  };
+  callbacks.gbattle =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        startModernGBattlePlayback(record, modern);
+      };
+  callbacks.recallModernChart =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        startModernReplayResultRecall(record, modern);
+      };
+  callbacks.recallModernCourse = [this](const ModernCourseResultRecord &modern,
+                                        bool retrySame) {
+    startModernCourseReplayResultRecall(modern, retrySame);
+  };
+  callbacks.recallRemote = [this](const IrRemoteRecordId &identity,
+                                  const std::string &selectedStableKey) {
+    startRemoteResultRecall(identity, selectedStableKey);
+  };
+  callbacks.exportModernChart =
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern,
+             ReplayVideoExportOptions options) {
+        options.pacemakerTarget =
+            pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+        startModernReplayVideoExport(record, modern, options);
+      };
+  callbacks.exportModernCourse =
+      [this](const ModernCourseResultRecord &modern,
+             ReplayVideoExportOptions options) {
+        options.pacemakerTarget =
+            pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+        startModernCourseReplayVideoExport(modern, options);
+      };
+  callbacks.exportAutoPlay =
+      [this](const ChartMetaRecord &record, ReplayVideoExportOptions options) {
+        options.pacemakerTarget = pacemaker::kTargetOff;
+        startAutoPlayVideoExport(record, options);
+      };
+  callbacks.share = [this](const replay::ReplayFileActionRequest &request) {
+    shareReplayFile(request);
+  };
+  callbacks.remove = [this](const replay::ReplayFileActionRequest &request) {
+    removeReplayFile(request);
+  };
+  callbacks.irUpload = [this](const ModernChartResultRecord &modern) {
+    startModernReplayIrUpload(modern);
+  };
+  callbacks.irStatusFeedback = [this](ir::IrRecordState state) {
+    publishReplayIrStatusFeedback(state);
+  };
+  return callbacks;
 }
 
 bms_parser::ChartMeta
@@ -10062,10 +7373,10 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
   }
 
   willStart.store(true);
-  cancelActivePreviewLoading();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Loading...");
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
   }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const audio::PlaybackRate autoPlayPlayback{
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
@@ -10077,10 +7388,13 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
           resetReplayWatchLoadingUi();
           return true;
         };
-        if (loadThread.joinable()) {
-          loadThread.join();
+        if (previewWorker_ != nullptr) {
+          previewWorker_->stop();
         }
-        joinRetiredPreviewLoadThreads();
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          pendingStopAndClearSelectedChartAfterPreview = false;
+        }
 
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> autoPlayChart;
@@ -10101,7 +7415,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
           return failReplayLoad();
         }
 
-        hideReplayModal();
+        if (recordsModal_ != nullptr) recordsModal_->hide();
         changeToGameplayScene(
             chart, {
                          .startPosition = 0,
@@ -10137,21 +7451,35 @@ void MainMenuScene::startModernReplayPlayback(
   }
 
   willStart.store(true);
-  cancelActivePreviewLoading();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Loading...");
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
   }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const std::string pacemakerTarget =
       pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
-  const bool renderTouchPoints = selectedReplayRenderTouchPoints;
-  const bool renderGhosts = selectedReplayRenderGhosts;
-  retirePreviewLoadThread(true);
+  const bool renderTouchPoints =
+      recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
+  const bool renderGhosts =
+      recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = true;
+  }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), pacemakerTarget,
        renderTouchPoints,
        renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
-          joinRetiredPreviewLoadThreads();
+          if (previewWorker_ != nullptr) {
+            previewWorker_->stop();
+          }
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            pendingStopAndClearSelectedChartAfterPreview = false;
+          }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
           auto loaded = consumer.load(modern, record.meta.BmsPath, *cancelled);
@@ -10211,7 +7539,7 @@ void MainMenuScene::startModernReplayPlayback(
                 applyReplayProvenanceToStartOptions(replayOptions,
                                                     *loaded.replayData);
                 context.jukebox.stop();
-                hideReplayModal();
+                if (recordsModal_ != nullptr) recordsModal_->hide();
                 changeToGameplayScene(chart, std::move(replayOptions));
                 willStart.store(false);
               });
@@ -10231,10 +7559,10 @@ void MainMenuScene::startModernGBattlePlayback(
   }
 
   willStart.store(true);
-  cancelActivePreviewLoading();
-  if (replayGBattleButtonText != nullptr) {
-    replayGBattleButtonText->setText("Loading...");
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
   }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   const GaugeType gaugeType = profileSelections.gaugeType;
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
   const GaugeType gaugeAutoShiftLowerBound =
@@ -10246,13 +7574,25 @@ void MainMenuScene::startModernGBattlePlayback(
       .mode = context.settings.selectedPlaybackMode,
   };
 
-  retirePreviewLoadThread(true);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = true;
+  }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), gaugeType, gaugeAutoShift,
        gaugeAutoShiftLowerBound, autoKeySound, ruleset,
        playback](std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
-          joinRetiredPreviewLoadThreads();
+          if (previewWorker_ != nullptr) {
+            previewWorker_->stop();
+          }
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            pendingStopAndClearSelectedChartAfterPreview = false;
+          }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
           auto loaded = consumer.load(modern, record.meta.BmsPath, *cancelled);
@@ -10303,7 +7643,7 @@ void MainMenuScene::startModernGBattlePlayback(
                 }
                 auto recordData = loaded.replayData;
                 context.jukebox.stop();
-                hideReplayModal();
+                if (recordsModal_ != nullptr) recordsModal_->hide();
                 changeToGameplayScene(
                     chart, {
                                .startPosition = 0,
@@ -10351,19 +7691,33 @@ void MainMenuScene::startModernCourseReplayPlayback(
   auto chartPaths = std::move(currentSelection->completedChartPaths);
 
   willStart.store(true);
-  cancelActivePreviewLoading();
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Loading...");
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
   }
-  const bool renderTouchPoints = selectedReplayRenderTouchPoints;
-  const bool renderGhosts = selectedReplayRenderGhosts;
-  retirePreviewLoadThread(true);
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
+  const bool renderTouchPoints =
+      recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
+  const bool renderGhosts =
+      recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = true;
+  }
   startReplayLoadWorker(
       [this, modern = std::move(modern), chartPaths = std::move(chartPaths),
        renderTouchPoints,
        renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
-          joinRetiredPreviewLoadThreads();
+          if (previewWorker_ != nullptr) {
+            previewWorker_->stop();
+          }
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            pendingStopAndClearSelectedChartAfterPreview = false;
+          }
 
           auto consumer =
               replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
@@ -10397,7 +7751,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
                 if (!warning.empty()) {
                   publishReplayLoadDiagnostic("course Watch warning", warning);
                 }
-                hideReplayModal();
+                if (recordsModal_ != nullptr) recordsModal_->hide();
                 startCourseReplayDirect(std::move(session));
                 willStart.store(false);
               });
@@ -10477,197 +7831,6 @@ void MainMenuScene::clearSelectedChart() {
   }
 }
 
-void MainMenuScene::schedulePreviewLoad(bms_parser::ChartMeta meta) {
-  {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
-  previewLoadDebouncer.schedule(
-      kPreviewDebounceDelay,
-      [this, meta = std::move(meta)](const DebounceToken &previewToken) {
-        if (willStart.load() || previewToken.cancelled()) {
-          return;
-        }
-        startPreviewLoadThread(meta, previewToken);
-      });
-}
-
-void MainMenuScene::startPreviewLoadThread(
-    bms_parser::ChartMeta meta, DebounceToken previewToken) {
-  if (loadThread.joinable()) {
-    return;
-  }
-
-  auto cancelToken = std::make_shared<std::atomic_bool>(false);
-  auto finishedToken = std::make_shared<std::atomic_bool>(false);
-  previewLoadCancelToken = cancelToken;
-  previewLoadFinishedToken = finishedToken;
-  loadThread = std::thread([this, meta = std::move(meta), cancelToken,
-                            finishedToken, previewToken]() {
-    auto markFinished = makeScopeExit([finishedToken]() {
-      finishedToken->store(true, std::memory_order_release);
-    });
-    auto isCancelled = [cancelToken, previewToken]() {
-      return cancelToken->load(std::memory_order_relaxed) ||
-             previewToken.cancelled();
-    };
-    SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
-
-    {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
-      if (isCancelled()) {
-        return;
-      }
-      context.jukebox.stop();
-    }
-    SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
-    std::unique_ptr<bms_parser::Chart> chart;
-    try {
-      chart = play_options::parseChart(meta.BmsPath, *cancelToken, "preview");
-    } catch (const std::exception &e) {
-      SDL_Log("Preview parse failed %s: %s",
-              fspath_to_utf8(meta.BmsPath).c_str(), e.what());
-      archive_file::appendDebugLogLine(
-          "Preview parse exception: " + fspath_to_utf8(meta.BmsPath) + ": " +
-          e.what());
-      return;
-    }
-    if (isCancelled()) {
-      return;
-    }
-    SDL_Log("Parsed %s", fspath_to_utf8(meta.BmsPath).c_str());
-    if (chart == nullptr) {
-      SDL_Log("Chart is null");
-      archive_file::appendDebugLogLine("Preview chart is null: " +
-                                       fspath_to_utf8(meta.BmsPath));
-      return;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
-      if (isCancelled()) {
-        return;
-      }
-      if (context.jukebox.hasLoadedResources()) {
-        context.jukebox.reloadChartResources(*chart, true, *cancelToken);
-      } else {
-        context.jukebox.loadChart(*chart, true, *cancelToken);
-      }
-      if (isCancelled()) {
-        return;
-      }
-      setSelectedChart(std::move(chart), true);
-      if (isCancelled()) {
-        clearSelectedChart();
-        return;
-      }
-      if (!willStart.load()) {
-        context.jukebox.play();
-      }
-    }
-  });
-}
-
-void MainMenuScene::cancelActivePreviewLoading() {
-  previewLoadDebouncer.cancel();
-  if (previewLoadCancelToken != nullptr) {
-    previewLoadCancelToken->store(true, std::memory_order_release);
-  }
-}
-
-void MainMenuScene::retirePreviewLoadThread(bool stopPreviewAudioWhenDone) {
-  cancelActivePreviewLoading();
-  {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
-    if (stopPreviewAudioWhenDone) {
-      pendingStopAndClearSelectedChartAfterPreview = true;
-    }
-    if (loadThread.joinable()) {
-      SDL_Log("Retiring preview thread");
-      retiredPreviewLoadThreads.push_back(RetiredPreviewLoadThread{
-          .thread = std::move(loadThread),
-          .finished = previewLoadFinishedToken != nullptr
-                          ? previewLoadFinishedToken
-                          : std::make_shared<std::atomic_bool>(true),
-      });
-    }
-  }
-  previewLoadCancelToken = std::make_shared<std::atomic_bool>(true);
-  previewLoadFinishedToken = std::make_shared<std::atomic_bool>(true);
-  reapRetiredPreviewLoadThreads();
-}
-
-void MainMenuScene::reapRetiredPreviewLoadThreads() {
-  std::vector<RetiredPreviewLoadThread> finishedThreads;
-  bool shouldStopPreviewAudio = false;
-  {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
-    auto it = retiredPreviewLoadThreads.begin();
-    while (it != retiredPreviewLoadThreads.end()) {
-      const bool finished =
-          it->finished == nullptr ||
-          it->finished->load(std::memory_order_acquire);
-      if (!finished) {
-        ++it;
-        continue;
-      }
-      finishedThreads.push_back(std::move(*it));
-      it = retiredPreviewLoadThreads.erase(it);
-    }
-
-    if (pendingStopAndClearSelectedChartAfterPreview &&
-        retiredPreviewLoadThreads.empty()) {
-      pendingStopAndClearSelectedChartAfterPreview = false;
-      shouldStopPreviewAudio = true;
-    }
-  }
-
-  for (auto &retiredThread : finishedThreads) {
-    if (retiredThread.thread.joinable()) {
-      SDL_Log("Joining finished preview thread");
-      retiredThread.thread.join();
-    }
-  }
-  if (shouldStopPreviewAudio) {
-    stopAndClearSelectedChart();
-  }
-}
-
-void MainMenuScene::joinRetiredPreviewLoadThreads() {
-  std::vector<RetiredPreviewLoadThread> retiredThreads;
-  bool shouldStopPreviewAudio = false;
-  {
-    std::lock_guard<std::mutex> lock(retiredPreviewLoadThreadsMutex);
-    retiredThreads.swap(retiredPreviewLoadThreads);
-    if (pendingStopAndClearSelectedChartAfterPreview) {
-      pendingStopAndClearSelectedChartAfterPreview = false;
-      shouldStopPreviewAudio = true;
-    }
-  }
-
-  for (auto &retiredThread : retiredThreads) {
-    if (retiredThread.thread.joinable()) {
-      SDL_Log("Joining retired preview thread");
-      retiredThread.thread.join();
-    }
-  }
-  if (shouldStopPreviewAudio) {
-    stopAndClearSelectedChart();
-  }
-}
-
-void MainMenuScene::cancelPreviewLoading(bool stopPreviewAudio) {
-  cancelActivePreviewLoading();
-  if (loadThread.joinable()) {
-    SDL_Log("Joining preview thread");
-    loadThread.join();
-  }
-  joinRetiredPreviewLoadThreads();
-  if (stopPreviewAudio) {
-    stopAndClearSelectedChart();
-  }
-}
-
 void MainMenuScene::stopAndClearSelectedChart() {
   context.jukebox.stop();
   clearSelectedChart();
@@ -10703,17 +7866,15 @@ bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
 
 void MainMenuScene::resetStartLoadingUi() {
   willStart.store(false);
+  if (decideOverlay_ != nullptr) {
+    decideOverlay_->setVisible(false);
+  }
   refreshStartButtonForActiveFolder();
 }
 
 void MainMenuScene::resetReplayWatchLoadingUi() {
   willStart.store(false);
-  if (replayWatchButtonText != nullptr) {
-    replayWatchButtonText->setText("Watch");
-  }
-  if (replayGBattleButtonText != nullptr) {
-    replayGBattleButtonText->setText("G-BATTLE");
-  }
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
 }
 
 void MainMenuScene::publishReplayLoadDiagnostic(
@@ -10733,10 +7894,13 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
   const std::string safeDiagnostic = replayDiagnosticOr(diagnostic, fallback);
   publishReplayLoadDiagnostic(action, safeDiagnostic);
   resetReplayWatchLoadingUi();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setStatus(safeDiagnostic);
+    recordsModal_->reloadRecords(true);
+  }
   if (replayStatusText != nullptr) {
     replayStatusText->setText(safeDiagnostic);
   }
-  reloadReplayRecordModels(true);
   return true;
 }
 
@@ -10759,7 +7923,6 @@ void MainMenuScene::startReplayLoadWorker(
         }
         work(std::move(cancelled));
       });
-  refreshReplayModalActions();
 }
 
 void MainMenuScene::queueReplayLoadCompletion(
@@ -10785,6 +7948,7 @@ void MainMenuScene::applyReplayLoadCompletion() {
     replayLoadThread.join();
   }
   replayLoadInProgress.store(false, std::memory_order_release);
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
   completion();
 }
 
@@ -10797,12 +7961,14 @@ void MainMenuScene::stopReplayLoadWorker() {
     replayLoadThread.join();
   }
   replayLoadInProgress.store(false, std::memory_order_release);
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
   std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
   pendingReplayLoadCompletion = {};
 }
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
                                           StartOptions options) {
+  StartupTiming::instance().mark("main menu parse + jukebox ready, changing scene");
   if (options.replayData == nullptr) {
     options.clubMode = context.settings.gameplayClubModeEnabled;
   }
@@ -10822,14 +7988,19 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
   }
 
   willStart.store(true);
-  cancelActivePreviewLoading();
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
   {
     std::lock_guard<std::mutex> lock(replayExportProgressMutex);
     pendingReplayExportProgress.reset();
   }
-  showReplayExportProgress(progressTitle, progressMessage);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->showExportProgress(progressTitle, progressMessage);
+    recordsModal_->setStatus(statusMessage);
+  }
   if (replayStatusText != nullptr) {
     replayStatusText->setText(statusMessage);
   }
@@ -10855,7 +8026,9 @@ void MainMenuScene::startAutoPlayVideoExport(
 
 #if TARGET_OS_ANDROID
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    updateReplayExportProgressUi(progress.fraction, progress.message);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->updateExportProgress(progress.fraction, progress.message);
+    }
   };
 #else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
@@ -10895,10 +8068,13 @@ void MainMenuScene::startAutoPlayVideoExport(
                     autoPlayClubMode, autoPlayRuleset, autoPlayLongNoteMode,
                     autoPlayRandomInfo](const std::stop_token *stopToken) {
     try {
-      if (loadThread.joinable()) {
-        loadThread.join();
+      if (previewWorker_ != nullptr) {
+        previewWorker_->stop();
       }
-      joinRetiredPreviewLoadThreads();
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = false;
+      }
       context.jukebox.stop();
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
@@ -10973,7 +8149,9 @@ void MainMenuScene::startModernReplayVideoExport(
 
 #if TARGET_OS_ANDROID
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    updateReplayExportProgressUi(progress.fraction, progress.message);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->updateExportProgress(progress.fraction, progress.message);
+    }
   };
 #else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
@@ -10991,10 +8169,13 @@ void MainMenuScene::startModernReplayVideoExport(
   auto runExport = [this, record, modern = std::move(modern), options,
                     complete](const std::stop_token *stopToken) mutable {
     try {
-      if (loadThread.joinable()) {
-        loadThread.join();
+      if (previewWorker_ != nullptr) {
+        previewWorker_->stop();
       }
-      joinRetiredPreviewLoadThreads();
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = false;
+      }
       context.jukebox.stop();
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
@@ -11066,7 +8247,9 @@ void MainMenuScene::startModernCourseReplayVideoExport(
 
 #if TARGET_OS_ANDROID
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    updateReplayExportProgressUi(progress.fraction, progress.message);
+    if (recordsModal_ != nullptr) {
+      recordsModal_->updateExportProgress(progress.fraction, progress.message);
+    }
   };
 #else
   options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
@@ -11085,10 +8268,13 @@ void MainMenuScene::startModernCourseReplayVideoExport(
                     chartPaths = std::move(chartPaths)](
                        const std::stop_token *stopToken) mutable {
     try {
-      if (loadThread.joinable()) {
-        loadThread.join();
+      if (previewWorker_ != nullptr) {
+        previewWorker_->stop();
       }
-      joinRetiredPreviewLoadThreads();
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = false;
+      }
       context.jukebox.stop();
       if (stopToken != nullptr && stopToken->stop_requested()) {
         complete({.success = false, .message = "Replay export cancelled"});
@@ -11179,36 +8365,20 @@ void MainMenuScene::publishReplayIrStatusFeedback(
     return;
   }
 
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText(message);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->showIrFeedback(message);
   }
-  const std::uint64_t feedbackRevision = ++replayIrUploadFeedbackRevision;
-  defer(
-      [this, feedbackRevision]() {
-        if (feedbackRevision != replayIrUploadFeedbackRevision ||
-            replayIrUploadInProgress) {
-          return true;
-        }
-        if (replayModalRoot != nullptr && replayModalRoot->getVisible() &&
-            replayListContent != nullptr && replayListContent->getVisible() &&
-            replayModalTitleText != nullptr) {
-          replayModalTitleText->setText("Records");
-          replayModalRoot->applyYogaLayoutFromRoot();
-        }
-        return true;
-      },
-      1400, true);
 }
 
 void MainMenuScene::observeReplayIrServiceRevisions() {
-  if (replayModalRoot == nullptr || !replayModalRoot->getVisible() ||
-      replayListContent == nullptr || !replayListContent->getVisible() ||
+  if (recordsModal_ == nullptr || !recordsModal_->isVisible() ||
+      recordsModal_->records().empty() ||
       context.irSubmissionService == nullptr) {
     return;
   }
 
   bool reload = false;
-  for (const ResultRecordSummary &summary : resultRecordSummaries) {
+  for (const ResultRecordSummary &summary : recordsModal_->records()) {
     if (!summary.modern.has_value()) {
       continue;
     }
@@ -11224,7 +8394,7 @@ void MainMenuScene::observeReplayIrServiceRevisions() {
     reload = true;
   }
   if (reload) {
-    reloadReplayRecordModels(true);
+    recordsModal_->reloadRecords(true);
   }
 }
 
@@ -11259,20 +8429,24 @@ void MainMenuScene::startModernReplayIrUpload(
   }
 
   replayIrUploadInProgress = true;
-  ++replayIrUploadFeedbackRevision;
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText("Preparing IR...");
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setIrUploadInProgress(true);
+    recordsModal_->showIrFeedback("Preparing IR...");
   }
-  refreshReplayModalActions();
-  cancelActivePreviewLoading();
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
 
   defer(
       [this, modern = std::move(modern)]() {
         try {
-          if (loadThread.joinable()) {
-            loadThread.join();
+          if (previewWorker_ != nullptr) {
+            previewWorker_->stop();
           }
-          joinRetiredPreviewLoadThreads();
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            pendingStopAndClearSelectedChartAfterPreview = false;
+          }
           const auto snapshot =
               context.replayRepository.LoadModernIrSubmissionSnapshot(
                   modern.result.attemptId);
@@ -11318,35 +8492,17 @@ void MainMenuScene::startModernReplayIrUpload(
 void MainMenuScene::finishReplayIrUpload(std::string attemptId,
                                          std::string message) {
   replayIrUploadInProgress = false;
-  if (!attemptId.empty()) {
-    reloadReplayRecordModels(true);
-  }
-
   std::string safeMessage = ir::sanitizeDiagnostic(message);
   if (safeMessage.empty()) {
     safeMessage = "IR upload could not be queued.";
   }
-  if (replayModalTitleText != nullptr) {
-    replayModalTitleText->setText(safeMessage);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setIrUploadInProgress(false);
+    if (!attemptId.empty()) {
+      recordsModal_->reloadRecords(true);
+    }
+    recordsModal_->showIrFeedback(safeMessage);
   }
-  refreshReplayModalActions();
-
-  const std::uint64_t feedbackRevision = ++replayIrUploadFeedbackRevision;
-  defer(
-      [this, feedbackRevision]() {
-        if (feedbackRevision != replayIrUploadFeedbackRevision ||
-            replayIrUploadInProgress) {
-          return true;
-        }
-        if (replayModalRoot != nullptr && replayModalRoot->getVisible() &&
-            replayListContent != nullptr && replayListContent->getVisible() &&
-            replayModalTitleText != nullptr) {
-          replayModalTitleText->setText("Records");
-          replayModalRoot->applyYogaLayoutFromRoot();
-        }
-        return true;
-      },
-      1400, true);
 }
 
 void MainMenuScene::startModernReplayResultRecall(
@@ -11357,13 +8513,25 @@ void MainMenuScene::startModernReplayResultRecall(
   }
 
   replayResultRecallInProgress = true;
-  refreshReplayModalActions();
-  retirePreviewLoadThread(true);
+  if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = true;
+  }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern)](
           std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
-          joinRetiredPreviewLoadThreads();
+          if (previewWorker_ != nullptr) {
+            previewWorker_->stop();
+          }
+          {
+            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            pendingStopAndClearSelectedChartAfterPreview = false;
+          }
           const auto exact = context.replayRepository
                                  .LoadModernChartResultByAttempt(
                                      modern.result.attemptId);
@@ -11469,15 +8637,26 @@ void MainMenuScene::startModernCourseReplayResultRecall(
   auto currentSelection = currentCourseSelectionFor(modern.result);
 
   replayResultRecallInProgress = true;
-  refreshReplayModalActions();
-  cancelActivePreviewLoading();
-  retirePreviewLoadThread(true);
+  if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = true;
+  }
   startReplayLoadWorker([this, modern = std::move(modern), retrySameAllowed,
                          currentSelection = std::move(currentSelection)](
                             std::shared_ptr<std::atomic_bool>
                                 cancelled) mutable {
     try {
-      joinRetiredPreviewLoadThreads();
+      if (previewWorker_ != nullptr) {
+        previewWorker_->stop();
+      }
+      {
+        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        pendingStopAndClearSelectedChartAfterPreview = false;
+      }
       const auto exact =
           context.replayRepository.LoadModernCourseResultByAttempt(
               modern.result.attemptId);
@@ -11651,24 +8830,31 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
     return;
   }
   replayResultRecallInProgress = true;
-  refreshReplayModalActions();
-  cancelActivePreviewLoading();
+  if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
+  if (previewWorker_ != nullptr) {
+    previewWorker_->cancel();
+  }
   defer(
       [this, identity = std::move(identity),
        selectedStableKey = std::move(selectedStableKey)]() {
-        if (loadThread.joinable()) {
-          loadThread.join();
+        if (previewWorker_ != nullptr) {
+          previewWorker_->stop();
         }
-        joinRetiredPreviewLoadThreads();
+        {
+          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          pendingStopAndClearSelectedChartAfterPreview = false;
+        }
 
         RemoteResultRecallRequest request{
             .identity = std::move(identity),
             .selectedStableKey = std::move(selectedStableKey),
         };
         RemoteResultRecallCallbacks callbacks{
-            .selectionStillMatches = [this](const auto &candidate) {
+            .selectionStillMatches = [this](const RemoteResultRecallRequest &request) {
               return remoteResultRecallSelectionMatches(
-                  selectedResultRecordSummary, candidate);
+                  recordsModal_ != nullptr ? recordsModal_->selection()
+                                           : std::optional<ResultRecordSummary>{},
+                  request);
             },
             .loadExact = [this](const IrRemoteRecordId &candidate) {
               return context.replayRepository.LoadIrRemoteScore(
@@ -11700,23 +8886,19 @@ void MainMenuScene::finishReplayResultRecallFailure(std::string diagnostic) {
   SDL_Log("Saved result recall failed: %s",
           safeDiagnostic.empty() ? "result unavailable"
                                  : safeDiagnostic.c_str());
-  if (replayModalResultButtonText != nullptr) {
-    replayModalResultButtonText->setText("Result Unavailable");
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setResultRecallInProgress(false);
+    if (!safeDiagnostic.empty()) {
+      recordsModal_->setStatus(safeDiagnostic);
+    }
   }
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->applyYogaLayoutFromRoot();
-  }
-  defer(
-      [this]() {
-        replayResultRecallInProgress = false;
-        refreshReplayModalActions();
-        return true;
-      },
-      1400, true);
+  replayResultRecallInProgress = false;
 }
 
 void MainMenuScene::finishRemoteResultRecallFailure(std::string diagnostic) {
-  reloadReplayRecordModels(true);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->reloadRecords(true);
+  }
   finishReplayResultRecallFailure(std::move(diagnostic));
 }
 
@@ -11731,7 +8913,9 @@ void MainMenuScene::applyReplayExportProgress() {
     pendingReplayExportProgress.reset();
   }
 
-  updateReplayExportProgressUi(progress->fraction, progress->message);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->updateExportProgress(progress->fraction, progress->message);
+  }
 }
 
 void MainMenuScene::applyReplayExportResult() {
@@ -11777,17 +8961,15 @@ void MainMenuScene::applyReplayExportResult() {
           result->message, "Replay export failed."));
     }
   }
-  if (replayExportProgressContent != nullptr &&
-      replayExportProgressContent->getVisible()) {
-    replayModalTitleText->setText("Records");
-    replayExportProgressContent->setVisible(false);
-    replayExportOptionsContent->setVisible(false);
-    replayListContent->setVisible(true);
-    replayExportSelection.reset();
-    if (replayListView != nullptr) {
-      replayListView->restoreSelection(selectedReplayIndex);
-    }
-    refreshReplayModalActions();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setExportInProgress(false);
+    recordsModal_->returnToList(
+        result->success
+            ? (result->message == "Saved to Photos" ? "Saved" : "Exported")
+            : (result->message == "No Chart"
+                   ? "No Chart"
+                   : replayDiagnosticOr(result->message,
+                                        "Replay export failed.")));
   }
 
   if (result->success) {
@@ -11812,8 +8994,6 @@ void MainMenuScene::applyReplayExportResult() {
 void MainMenuScene::update(float dt) {
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
-  previewLoadDebouncer.update();
-  reapRetiredPreviewLoadThreads();
   refreshScoreClearRanksIfNeeded();
   refreshIrRecordListIfNeeded();
   refreshTasksButton();
@@ -11827,10 +9007,9 @@ void MainMenuScene::update(float dt) {
   applyReplayFileDocumentHandoff();
   applyParseLogDocumentHandoff();
   observeReplayIrServiceRevisions();
-#if TARGET_OS_ANDROID
-  pollPendingAndroidArchiveImport();
-  applyPendingAndroidArchiveImport();
-#endif
+  if (recordsModal_ != nullptr) {
+    recordsModal_->update();
+  }
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
@@ -11867,8 +9046,8 @@ void MainMenuScene::renderScene() {
       safe.left != lastSafeLeft || safe.bottom != lastSafeBottom ||
       safe.right != lastSafeRight;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
-  if (replayModalRoot != nullptr) {
-    replayModalRoot->setSize(rendering::window_width, rendering::window_height);
+  if (recordsModal_ != nullptr) {
+    recordsModal_->resize(rendering::window_width, rendering::window_height);
   }
   if (playOptionsModalRoot != nullptr) {
     playOptionsModalRoot->setSize(rendering::window_width,
@@ -11920,38 +9099,25 @@ void MainMenuScene::cleanupScene() {
   // Cleanup resources when exiting the scene
   revealContextMenu.reset();
   rankingsModal.reset();
+  playOptionsModal.reset();
   replayFileDocumentHandoff.close();
   parseLogDocumentHandoff.close();
-  replayDeleteConfirmation.cancel();
-  cancelActivePreviewLoading();
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  {
+    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    pendingStopAndClearSelectedChartAfterPreview = false;
+  }
   stopReplayLoadWorker();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
-  context.requestAddChartFolderFromFiles = nullptr;
-  context.requestRebuildChartLibrary = nullptr;
-  context.notifyBackgroundTaskPauseStateChanged = nullptr;
-  libraryTaskWorkerPaused = true;
   if (replayExportThread.joinable()) {
     SDL_Log("Joining replayExportThread");
     replayExportThread.request_stop();
     replayExportThread.join();
   }
-  if (addFolderPickerThread.joinable()) {
-    SDL_Log("Joining addFolderPickerThread");
-    addFolderPickerThread.request_stop();
-    addFolderPickerThread.join();
-  }
-  addFolderPickerInProgress = false;
-#if TARGET_OS_ANDROID
-  if (archiveImportPickerThread.joinable()) {
-    SDL_Log("Joining archiveImportPickerThread");
-    archiveImportPickerThread.request_stop();
-    archiveImportPickerThread.join();
-  }
-  archiveImportPickerInProgress = false;
-#endif
-  stopLibraryTaskWorker();
   if (findBmsThread.joinable()) {
     SDL_Log("Joining findBmsThread");
     findBmsCancelled = true;
@@ -11963,14 +9129,6 @@ void MainMenuScene::cleanupScene() {
     unzipThread.request_stop();
     unzipThread.join();
   }
-  if (loadThread.joinable()) {
-    SDL_Log("Joining loadThread");
-    loadThread.join();
-  }
-  joinRetiredPreviewLoadThreads();
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  ClearIOSFolderAccess();
-#endif
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
   chartListCache.clear();
@@ -11980,6 +9138,15 @@ void MainMenuScene::cleanupScene() {
   folderRecyclerView = nullptr;
   temporaryChartFolder.reset();
   rootLayout = nullptr;
+  if (decideOverlay_ != nullptr) {
+    overlayPortal->dismiss(decideOverlay_);
+    delete decideOverlay_;
+    decideOverlay_ = nullptr;
+  }
+  if (previewWorker_ != nullptr) {
+    delete previewWorker_;
+    previewWorker_ = nullptr;
+  }
   overlayPortal = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
@@ -12006,19 +9173,7 @@ void MainMenuScene::cleanupScene() {
   tasksButtonText = nullptr;
   replayButtonText = nullptr;
   replayStatusText = nullptr;
-  replayModalRoot = nullptr;
-  replayModalContentFrame = nullptr;
-  replayListContent = nullptr;
-  replayFilterSortContent = nullptr;
-  replayWatchOptionsContent = nullptr;
-  replayExportOptionsContent = nullptr;
-  replayExportProgressContent = nullptr;
-  replayDeleteConfirmationContent = nullptr;
-  replayExportProgressTrack = nullptr;
-  replayExportProgressFill = nullptr;
-  replayModalTitleText = nullptr;
-  replayExportProgressMessageText = nullptr;
-  replayExportProgressPercentText = nullptr;
+  recordsModal_.reset();
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
   musicModalRoot = nullptr;
@@ -12101,55 +9256,6 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
-  replayListView = nullptr;
-  replayWatchButton = nullptr;
-  replayGBattleButton = nullptr;
-  replayModalResultButton = nullptr;
-  replayModalExportButton = nullptr;
-  replayShareButton = nullptr;
-  replayDeleteButton = nullptr;
-  replayDeleteCancelButton = nullptr;
-  replayDeleteConfirmButton = nullptr;
-  replayModalFilterButton = nullptr;
-  replayModalCloseButton = nullptr;
-  replayFps60Button = nullptr;
-  replayFps120Button = nullptr;
-  replayResolution1080Button = nullptr;
-  replayResolutionFullButton = nullptr;
-  replayResultIncludeButton = nullptr;
-  replayResultSkipButton = nullptr;
-  replayTouchShowButton = nullptr;
-  replayTouchHideButton = nullptr;
-  replayGhostShowButton = nullptr;
-  replayGhostHideButton = nullptr;
-  replayExportTouchShowButton = nullptr;
-  replayExportTouchHideButton = nullptr;
-  replayExportGhostShowButton = nullptr;
-  replayExportGhostHideButton = nullptr;
-  replayWatchButtonText = nullptr;
-  replayGBattleButtonText = nullptr;
-  replayModalResultButtonText = nullptr;
-  replayModalExportButtonText = nullptr;
-  replayShareButtonText = nullptr;
-  replayDeleteButtonText = nullptr;
-  replayDeleteCancelButtonText = nullptr;
-  replayDeleteConfirmButtonText = nullptr;
-  replayModalFilterButtonText = nullptr;
-  replayModalCloseButtonText = nullptr;
-  replayFps60ButtonText = nullptr;
-  replayFps120ButtonText = nullptr;
-  replayResolution1080ButtonText = nullptr;
-  replayResolutionFullButtonText = nullptr;
-  replayResultIncludeButtonText = nullptr;
-  replayResultSkipButtonText = nullptr;
-  replayTouchShowButtonText = nullptr;
-  replayTouchHideButtonText = nullptr;
-  replayGhostShowButtonText = nullptr;
-  replayGhostHideButtonText = nullptr;
-  replayExportTouchShowButtonText = nullptr;
-  replayExportTouchHideButtonText = nullptr;
-  replayExportGhostShowButtonText = nullptr;
-  replayExportGhostHideButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
   pendingUnzipResult.reset();
@@ -12170,7 +9276,6 @@ void MainMenuScene::cleanupScene() {
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
-  ++replayIrUploadFeedbackRevision;
   unzipInProgress = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
@@ -12180,97 +9285,19 @@ void MainMenuScene::cleanupScene() {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
-  {
-    std::lock_guard<std::mutex> lock(libraryTaskMutex);
-    libraryTaskQueue.clear();
-    libraryTasks.clear();
-    bumpLibraryTasksRevisionLocked();
-  }
-  libraryProgressRevision.store(0, std::memory_order_release);
-  libraryProgressTaskId.store(0, std::memory_order_relaxed);
-  libraryProgressCurrent.store(0, std::memory_order_relaxed);
-  libraryProgressTotal.store(0, std::memory_order_relaxed);
-  libraryProgressBasisPoints.store(0, std::memory_order_relaxed);
-  libraryProgressStage.store(
-      static_cast<int>(ChartScanProgressStage::Preparing),
-      std::memory_order_relaxed);
   displayedLibraryTasksRevision = 0;
   displayedLibraryProgressRevision = 0;
   displayedLibraryTasksButtonText.clear();
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
-  visibleResultRecordSummaries.clear();
-  resultRecordSummaries.clear();
-  selectedResultRecordStableKey.reset();
   publishedResultRecordDiagnostic.clear();
-  replayRecordFilters = {};
-  selectedReplayIndex = -1;
-  selectedResultRecordSummary.reset();
-  replayExportSelection.reset();
-  selectedExportFps = 120;
-  selectedExportFullResolution = true;
-  selectedExportIncludeResultScreen = true;
-  selectedReplayRenderTouchPoints = true;
-  selectedReplayRenderGhosts = true;
-  replayExportProgressFraction = 0.0;
   playOptionsPanel = nullptr;
-  replayClearFilterButtons.clear();
-  replayPlayOptionFilterButtons.clear();
-  replayScoreRankFilterButtons.clear();
-  replaySortButtons.clear();
   lastLayoutWidth = -1;
   lastLayoutHeight = -1;
   lastSafeTop = -1;
   lastSafeLeft = -1;
   lastSafeBottom = -1;
   lastSafeRight = -1;
-}
-
-ChartScanResult MainMenuScene::LoadCharts(
-    ChartRepository::Session &chartSession, std::vector<ChartEntry> &entries,
-    MainMenuScene &scene, const std::stop_token &stop_token,
-    ChartScanProgressCallback progressCallback,
-    ChartScanPauseCallback pauseCallback, bool addedPathsOnly,
-    bool requestReload) {
-  std::vector<std::filesystem::path> roots;
-  roots.reserve(entries.size());
-  for (auto &entry : entries) {
-    if (stop_token.stop_requested()) {
-      break;
-    }
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-    roots.push_back(ResolveIOSFolderEntryPath(entry));
-#elif TARGET_OS_ANDROID
-    std::filesystem::path root(entry.path);
-    RegisterAndroidChartFolder(root, entry.iosBookmark);
-    roots.push_back(std::move(root));
-#else
-    roots.emplace_back(entry.path);
-#endif
-  }
-
-  if (stop_token.stop_requested()) {
-    return {};
-  }
-
-  SDL_Log("Refreshing chart library");
-  ChartLibraryScanner scanner;
-  const ChartScanResult result =
-      addedPathsOnly
-          ? scanner.ScanAddedWithResult(chartSession, roots, &stop_token,
-                                        progressCallback, pauseCallback)
-          : scanner.ScanWithResult(
-                chartSession, roots, &stop_token, progressCallback,
-                pauseCallback,
-                [&scene]() { return scene.pendingLibraryScanFlushRequest(); },
-                [&scene](std::uint64_t request) {
-                  scene.completeLibraryScanFlush(request);
-                });
-  SDL_Log("Chart library refresh changed %d entries", result.changedCount);
-  if (requestReload && !stop_token.stop_requested()) {
-    scene.requestLibraryReload(true);
-  }
-  return result;
 }
 
 #ifdef _WIN32

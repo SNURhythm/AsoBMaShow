@@ -1,5 +1,7 @@
 #include "skin/beatoraja/LuaSkinRuntime.h"
 
+#include "music_select_runtime_ledger_assertions.h"
+
 #include "skin/SkinProfileSettings.h"
 #include "skin/SkinStoragePaths.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"
@@ -175,7 +177,8 @@ std::unique_ptr<RuntimeHarness>
 makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
             bool forceWriteCapableFileSystem = false,
             bool entryAtPackageRoot = false,
-            SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard) {
+            SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard,
+            bool preservePinnedLuaSandbox = false) {
   static std::atomic_uint64_t profileSerial{0};
   RuntimePackageFixture &package = runtimePackage();
   if (!package.prepared) {
@@ -196,7 +199,10 @@ makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
                                  .profileId = profile,
                                  .allowDataWrites = writes,
                                  .safetyPolicy =
-                                     SkinSafetyPolicy(safetyLevel)});
+                                     SkinSafetyPolicy(
+                                         safetyLevel,
+                                         std::numeric_limits<std::uint64_t>::max(),
+                                         preservePinnedLuaSandbox)});
   expect(fileSystem.fileSystem != nullptr,
          "runtime filesystem is created for the fixture");
   if (!fileSystem.fileSystem) {
@@ -215,7 +221,9 @@ makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
   auto created = LuaSkinRuntime::create(
       {.purpose = purpose,
        .fileSystem = std::move(fileSystem.fileSystem),
-       .safetyPolicy = SkinSafetyPolicy(safetyLevel)});
+       .safetyPolicy = SkinSafetyPolicy(
+           safetyLevel, std::numeric_limits<std::uint64_t>::max(),
+           preservePinnedLuaSandbox)});
   expect(created.runtime != nullptr && !created.failure,
          "bounded Lua runtime is created");
   if (!created.runtime) {
@@ -366,7 +374,7 @@ void testCatalogEntrySourceIsBoundedBeforeHostAllocation() {
          "Lua budget");
 }
 
-void testUnrestrictedRuntimeLiftsSourceBudgetAndProcessGlobalGuard() {
+void testUnrestrictedRuntimeLiftsSourceBudgetWithoutChangingSafeOs() {
   RuntimePackageFixture fixture;
   if (!fixture.prepared) {
     return;
@@ -416,19 +424,24 @@ void testUnrestrictedRuntimeLiftsSourceBudgetAndProcessGlobalGuard() {
                                package.package.directoryName /
                                "skin/unrestricted_globals.luaskin";
   writeText(globalsPath,
-            "return { query = function() return type(os.setlocale) end }\n");
+            "return { query = function() return os == nil and 'nil' or "
+            "type(os.setlocale) end }\n");
   auto standard = makeHarness(LuaRuntimePurpose::Gameplay,
                               "unrestricted_globals.luaskin");
   auto unrestricted = makeHarness(
       LuaRuntimePurpose::Gameplay, "unrestricted_globals.luaskin", false,
       false, SkinSafetyLevel::Unrestricted);
-  if (!standard || !unrestricted) {
+  auto musicSelect = makeHarness(
+      LuaRuntimePurpose::MusicSelect, "unrestricted_globals.luaskin", false,
+      false, SkinSafetyLevel::Unrestricted);
+  if (!standard || !unrestricted || !musicSelect) {
     return;
   }
   for (const auto &[name, harness, expected] :
        std::array<std::tuple<std::string_view, RuntimeHarness *, std::string_view>,
-                  2>{{{"Standard", standard.get(), "nil"},
-                       {"Unrestricted", unrestricted.get(), "function"}}}) {
+                  3>{{{"Standard", standard.get(), "function"},
+                       {"Unrestricted", unrestricted.get(), "function"},
+                       {"Music select", musicSelect.get(), "function"}}}) {
     auto header = harness->runtime->loadHeader();
     expect(header.value.has_value(), "process-global fixture header loads");
     if (!header.value) {
@@ -444,7 +457,8 @@ void testUnrestrictedRuntimeLiftsSourceBudgetAndProcessGlobalGuard() {
     }
     const auto result = harness->runtime->invoke(*callback, {});
     expect(result.value && std::get<std::string>(*result.value) == expected,
-           std::string(name) + " exposes the expected os.setlocale capability");
+           std::string(name) +
+               " preserves Beatoraja SafeOsLib's standard os surface");
   }
 }
 
@@ -548,6 +562,35 @@ void testMainStateAccessorsOpenOnlyAtRenderTransition() {
   const auto *ready = result.value ? std::get_if<bool>(&*result.value) : nullptr;
   expect(ready != nullptr && *ready && !result.failure,
          "the header-captured main-state table is populated in place");
+}
+
+void testMusicSelectPurposeHasTheConfiguredLiveHost() {
+  auto harness =
+      makeHarness(LuaRuntimePurpose::MusicSelect, "render_main_state.luaskin");
+  if (!harness) {
+    return;
+  }
+  auto header = harness->runtime->loadHeader();
+  expect(header.value.has_value(),
+         "music-select live host executes its header pass");
+  if (!header.value) {
+    return;
+  }
+  const LuaCallbackId callback =
+      requireCallback(*header.value, "render_main_state_ready");
+  expect(harness->runtime->loadConfigured({}).value.has_value() &&
+             harness->runtime->enterRenderPhase().ok &&
+             harness->runtime->beginFrame(1).ok,
+         "music-select purpose enters the configured render host");
+  const auto result = harness->runtime->invoke(callback, {});
+  const auto *ready = result.value ? std::get_if<bool>(&*result.value) : nullptr;
+  expect(ready && *ready && !result.failure,
+         "music-select exposes main_state, timers, events, and callbacks");
+
+  auto legacy =
+      makeHarness(LuaRuntimePurpose::MusicSelect, "legacy_facade.luaskin");
+  expect(legacy && legacy->runtime->loadHeader().value.has_value(),
+         "music-select purpose exposes the pinned legacy facade");
 }
 
 void testRuntimeProvidesBeatorajaSafeOsLibrary() {
@@ -1220,14 +1263,15 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testRuntimeContractsUseSourceAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testCatalogEntrySourceIsBoundedBeforeHostAllocation();
-  testUnrestrictedRuntimeLiftsSourceBudgetAndProcessGlobalGuard();
+  testUnrestrictedRuntimeLiftsSourceBudgetWithoutChangingSafeOs();
   testCatalogLuaLoadersBoundSourceBeforeHostAllocation();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();
+  testMusicSelectPurposeHasTheConfiguredLiveHost();
   testRuntimeProvidesBeatorajaSafeOsLibrary();
   testRuntimeSearchesVirtualPackagePath();
   testRuntimeCreatesConfiguredDynamicHistoryData();
@@ -1237,10 +1281,7 @@ int main() {
   testFreshPurposesDoNotShareLuaState();
   testLanguageSurfaceBit32AndTextOnlyLoading();
   testLoadfileUsesBeatorajaRestrictedIoRoot();
-  if (failures != 0) {
-    std::cerr << failures << " lua skin runtime test(s) failed\n";
-    return 1;
-  }
-  std::cout << "lua skin runtime tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "lua_skin_runtime_tests", failures,
+      "lua skin runtime test(s) failed", "lua skin runtime tests passed");
 }

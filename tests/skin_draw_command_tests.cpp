@@ -1,4 +1,5 @@
 #include "skin/beatoraja/Skin2DRenderer.h"
+#include "music_select_runtime_ledger_assertions.h"
 #include "skin/beatoraja/SkinBpmGraphRenderer.h"
 #include "skin/beatoraja/SkinGaugeGraphRenderer.h"
 #include "skin/beatoraja/SkinHitErrorVisualizerRenderer.h"
@@ -503,7 +504,9 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
          std::uint64_t sessionSerial = 1,
          bool markProcessedNotes = false,
          const PlaySkinViewport *requestedViewport = nullptr,
-         const SkinPreparedMovieView *movies = nullptr) {
+         const SkinPreparedMovieView *movies = nullptr,
+         const MusicSelectSongListFrame *musicSelectSongList = nullptr,
+         skin::SkinSafetyPolicy safetyPolicy = skin::SkinSafetyPolicy()) {
   static const BeatorajaSkinConfiguration emptyConfiguration;
   const auto &configuration = configured ? *configured : emptyConfiguration;
   const auto defaultViewport = viewport();
@@ -521,7 +524,227 @@ evaluate(Skin2DRenderer &renderer, RuntimeHarness &runtime,
                                  .runtime = &runtime.runtime(),
                                  .state = state,
                                  .markProcessedNotes = markProcessedNotes,
-                                 .gaugeRandomSource = gaugeRandomSource});
+                                 .safetyPolicy = safetyPolicy,
+                                 .gaugeRandomSource = gaugeRandomSource,
+                                 .musicSelectSongList = musicSelectSongList});
+}
+
+void testMusicSelectSongListLowersSelectedBarStateAndPublishesHit() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  SkinImageObject barImage;
+  barImage.definitionKind = SkinImageDefinitionKind::ImageSet;
+  for (int value = 0; value < 7; ++value) {
+    const SkinResourceId resource = static_cast<SkinResourceId>(100 + value);
+    resources.addImage(resource, {.x = 0, .y = 0, .w = 10, .h = 10});
+    barImage.orderedStates.push_back(
+        {.resource = resource,
+         .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}});
+  }
+  resources.addImage(200, {.x = 0, .y = 0, .w = 10, .h = 10});
+  SkinSongListPresentation barPresentation{
+      .object = 2,
+      .destination = destination(2, 1, 100.0).presentation};
+  SkinSongListPresentation labelPresentation{
+      .object = 3,
+      .destination = destination(3, 2, 5.0).presentation};
+  SkinSongListObject songList{
+      .position = 1,
+      .center = 1,
+      .clickable = {1},
+      .listOn = {{}, barPresentation},
+      .label = {{}, labelPresentation},
+  };
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 5;
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "song-list",
+       .payload = std::move(songList),
+       .authoredOrdinal = 7,
+       .critical = true},
+      {.id = 2,
+       .authoredName = "bar-image",
+       .payload = std::move(barImage),
+       .authoredOrdinal = 1},
+      imageObject(3, 200, false),
+  };
+  model.model.destinations = {destination(1, 7, 0.0)};
+  model.model.destinations.front().presentation.frames.clear();
+  MusicSelectSongListFrame frame;
+  frame.bars = {{.kind = MusicSelectBarKind::Song,
+                 .title = "query",
+                 .exists = true,
+                 .featureFlags = MusicSelectFeatureRandom}};
+  const auto evaluated = evaluate(renderer, runtime, model, resources, state,
+                                  1, 0, nullptr, std::nullopt, nullptr, 1,
+                                  false, nullptr, nullptr, &frame);
+  expect(evaluated.submitReady.has_value() &&
+             evaluated.submitReady->commands.size() == 2,
+         "SkinBar keeps its constructor destination when the authored "
+         "song-list wrapper has no destination frames");
+  if (evaluated.submitReady && evaluated.submitReady->commands.size() == 2) {
+    const auto *bar = std::get_if<SkinTexturedQuadCommand>(
+        &evaluated.submitReady->commands[0].payload);
+    const auto *label = std::get_if<SkinTexturedQuadCommand>(
+        &evaluated.submitReady->commands[1].payload);
+    expect(bar != nullptr && bar->resource == 100,
+           "SongBar maps to image-set state zero");
+    expect(bar != nullptr && label != nullptr &&
+               bar->vertices[0].x == 100.0F &&
+               label->vertices[0].x == 105.0F &&
+               label->vertices[0].y == bar->vertices[0].y - 50.0F,
+           "position one offsets relative children by the bar height without "
+           "moving the bar image");
+  }
+  expect(evaluated.interactionLayout.has_value(),
+         "SkinBar publishes its immutable pointer layout");
+  if (evaluated.interactionLayout) {
+    const auto playViewport = viewport();
+    const UiLogicalPoint point{
+        .x = static_cast<float>(playViewport.authoredToUi.m00 * 110.0 +
+                                playViewport.authoredToUi.m01 * 30.0 +
+                                playViewport.authoredToUi.tx),
+        .y = static_cast<float>(playViewport.authoredToUi.m10 * 110.0 +
+                                playViewport.authoredToUi.m11 * 30.0 +
+                                playViewport.authoredToUi.ty)};
+    const auto hit = evaluated.interactionLayout->musicSelectBarAt(point);
+    expect(hit && hit->row == 1 && hit->barIndex == 0 &&
+               hit->authoredOrdinal == 7,
+           "position one leaves pointer geometry at the authored bar region");
+  }
+
+  // JsonSelectSkinObjectLoader drops a failed nested child without dropping
+  // the SkinBar that owns it.  The valid bar image must stay visible.
+  model.model.objects[2].payload = SkinBlankObject{};
+  const auto omittedChild = evaluate(renderer, runtime, model, resources,
+                                     state, 2, 0, nullptr, std::nullopt,
+                                     nullptr, 1, false, nullptr, nullptr,
+                                     &frame);
+  expect(omittedChild.submitReady &&
+             omittedChild.submitReady->commands.size() == 1 &&
+             omittedChild.diagnostics.empty(),
+         "a failed optional SkinBar child does not suppress its chart row");
+}
+
+void testMusicSelectDistributionGraphLowersDescendingSourceSegments() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+
+  SkinImageObject barImage;
+  barImage.definitionKind = SkinImageDefinitionKind::ImageSet;
+  for (int value = 0; value < 7; ++value) {
+    const SkinResourceId resource = static_cast<SkinResourceId>(100 + value);
+    resources.addImage(resource, {.x = 0, .y = 0, .w = 10, .h = 10});
+    barImage.orderedStates.push_back(
+        {.resource = resource,
+         .frames = {{.x = 0, .y = 0, .w = 10, .h = 10}}});
+  }
+
+  std::vector<SkinSourceRect> graphFrames;
+  for (int stateIndex = 0; stateIndex < 11; ++stateIndex) {
+    graphFrames.push_back(
+        {.x = stateIndex, .y = 0, .w = 1, .h = 1});
+  }
+  resources.addImageAtlas(300, graphFrames, 11, 1);
+  SkinSelectDistributionGraphObject graph;
+  graph.sprite = {.resource = 300, .frames = std::move(graphFrames)};
+
+  SkinSongListObject songList{
+      .center = 0,
+      .listOn = {{.object = 2,
+                  .destination = destination(2, 1, 100.0).presentation}},
+      .graph = SkinSongListPresentation{
+          .object = 4,
+          .destination = destination(4, 2, 5.0).presentation},
+  };
+  ValidatedBeatorajaSkinModel model;
+  model.model.header.type = 5;
+  model.model.objects = {
+      {.id = 1,
+       .authoredName = "song-list",
+       .payload = std::move(songList),
+       .authoredOrdinal = 7,
+       .critical = true},
+      {.id = 2,
+       .authoredName = "bar-image",
+       .payload = std::move(barImage),
+       .authoredOrdinal = 1},
+      {.id = 4,
+       .authoredName = "folder-graph",
+       .payload = std::move(graph),
+       .authoredOrdinal = 2},
+  };
+  model.model.destinations = {destination(1, 7, 0.0)};
+
+  MusicSelectSongListFrame frame;
+  MusicSelectBarFrame folder{.kind = MusicSelectBarKind::Folder,
+                             .title = "folder"};
+  folder.folderLampCounts[10] = 1;
+  folder.folderLampCounts[5] = 3;
+  frame.bars = {std::move(folder)};
+  const auto evaluated = evaluate(renderer, runtime, model, resources, state,
+                                  1, 0, nullptr, std::nullopt, nullptr, 1,
+                                  false, nullptr, nullptr, &frame);
+  expect(evaluated.submitReady.has_value() &&
+             evaluated.submitReady->commands.size() == 3,
+         "folder graph lowers its bar followed by two non-empty segments");
+  if (!evaluated.submitReady || evaluated.submitReady->commands.size() != 3) {
+    return;
+  }
+  const auto *high = std::get_if<SkinTexturedQuadCommand>(
+      &evaluated.submitReady->commands[1].payload);
+  const auto *low = std::get_if<SkinTexturedQuadCommand>(
+      &evaluated.submitReady->commands[2].payload);
+  expect(high != nullptr && low != nullptr && high->resource == 300 &&
+             low->resource == 300 && high->vertices[0].x == 105.0F &&
+             high->vertices[2].x == 115.0F &&
+             low->vertices[0].x == 115.0F &&
+             low->vertices[2].x == 145.0F,
+         "distribution segments draw from index 10 down with proportional "
+         "destination widths");
+  expect(high != nullptr && low != nullptr && high->vertices[0].u >
+                                                  low->vertices[0].u,
+         "descending graph segments retain their distinct source states");
+
+  std::vector<SkinSourceRect> judgeFrames;
+  for (int stateIndex = 0; stateIndex < 28; ++stateIndex) {
+    judgeFrames.push_back(
+        {.x = stateIndex, .y = 0, .w = 1, .h = 1});
+  }
+  resources.addImageAtlas(301, judgeFrames, 28, 1);
+  auto &judge = std::get<SkinSelectDistributionGraphObject>(
+      model.model.objects[2].payload);
+  judge.type = SkinSelectDistributionGraphType::Judge;
+  judge.sprite = {.resource = 301, .frames = std::move(judgeFrames)};
+  frame.bars[0].folderLampCounts = {};
+  frame.bars[0].folderRankCounts[27] = 1;
+  frame.bars[0].folderRankCounts[0] = 3;
+  const auto judged = evaluate(renderer, runtime, model, resources, state, 2,
+                               0, nullptr, std::nullopt, nullptr, 1, false,
+                               nullptr, nullptr, &frame);
+  expect(judged.submitReady.has_value() &&
+             judged.submitReady->commands.size() == 3,
+         "judge distribution uses all twenty-eight source rank states");
+  if (!judged.submitReady || judged.submitReady->commands.size() != 3) {
+    return;
+  }
+  const auto *highestRank = std::get_if<SkinTexturedQuadCommand>(
+      &judged.submitReady->commands[1].payload);
+  const auto *lowestRank = std::get_if<SkinTexturedQuadCommand>(
+      &judged.submitReady->commands[2].payload);
+  expect(highestRank != nullptr && lowestRank != nullptr &&
+             highestRank->resource == 301 && lowestRank->resource == 301 &&
+             highestRank->vertices[0].x == 105.0F &&
+             highestRank->vertices[2].x == 115.0F &&
+             lowestRank->vertices[0].x == 115.0F &&
+             lowestRank->vertices[2].x == 145.0F &&
+             highestRank->vertices[0].u > lowestRank->vertices[0].u,
+         "judge segments also draw descending with proportional widths");
 }
 
 void testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers() {
@@ -2141,7 +2364,7 @@ void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
   if (run.glyphs.size() != 4) {
     return;
   }
-  expect(run.glyphs[0].vertices[0].y == 614.0F,
+expect(run.glyphs[0].vertices[0].y == 614.0F,
          "cap glyph subtracts cap height from the destination-top baseline");
   expect(run.glyphs[1].vertices[0].y == 622.0F,
          "descender uses its taller prepared bitmap below the baseline");
@@ -2149,6 +2372,36 @@ void testTextVerticalPlacementMatchesPinnedBitmapFontBaseline() {
          "diacritic bearing can extend above the cap-height line");
   expect(run.glyphs[3].vertices[0].y == 634.0F,
          "second hard line applies one prepared line-height step");
+}
+
+void testSelectorCompatibilitySkipsTransientlyMissingGlyphs() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  resources.addTextAtlas(2, avAtlas());
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  auto text = textObject(2, false);
+  std::get<SkinTextObject>(text.payload).literal = "AZ";
+  model.model.objects = {std::move(text)};
+  model.model.destinations = {destination(2, 20, 60.0)};
+  // BeatorajaCompatibility does not enforce LuaDecoderLimit, so a transiently
+  // absent glyph (while the selector atlas patch builds) must render the
+  // available glyphs instead of suppressing the whole run.
+  const auto result = evaluate(
+      renderer, runtime, model, resources, state, 1, 0, nullptr, std::nullopt,
+      nullptr, 1, false, nullptr, nullptr, nullptr,
+      skin::SkinSafetyPolicy(skin::SkinSafetyLevel::BeatorajaCompatibility));
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "selector text with a transiently missing glyph still lowers");
+  if (!result.submitReady || result.submitReady->commands.size() != 1) {
+    return;
+  }
+  const auto *run = std::get_if<SkinGlyphRunCommand>(
+      &result.submitReady->commands.front().payload);
+  expect(run != nullptr && run->glyphs.size() == 1 &&
+             run->glyphs[0].codepoint == U'A',
+         "the available glyph renders and the transiently missing one is skipped");
 }
 
 void testMissingTextGlyphHonorsCriticalityWithoutPartialCommands() {
@@ -2668,6 +2921,47 @@ void testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop() {
                quad.vertices[1].u == 0.14F,
            "built-in graph resolves the system image before the pinned rate crop");
   }
+}
+
+void testNegativeDestinationRendersPreparedSystemImage() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  const SkinSourceRect region{.x = 0, .y = 0, .w = 64, .h = 32};
+  resources.addBuiltinImage(100, 31, region, 64, 32);
+  FakeState state;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects.push_back(
+      {.id = 1,
+       .authoredName = "-100",
+       .payload = SkinBuiltinImageObject{.referenceId = 100},
+       .authoredOrdinal = 1,
+       .critical = true});
+  auto presented = destination(1, 119, 100.0);
+  presented.presentation.frames.front().x = 25.0;
+  presented.presentation.frames.front().y = 40.0;
+  presented.presentation.frames.front().width = 128.0;
+  presented.presentation.frames.front().height = 64.0;
+  model.model.destinations = {std::move(presented)};
+
+  const auto result = evaluate(renderer, runtime, model, resources, state);
+  expect(result.submitReady && result.submitReady->commands.size() == 1,
+         "a negative destination ID draws its available SkinSourceReference");
+  if (result.submitReady && result.submitReady->commands.size() == 1) {
+    const auto &quad = std::get<SkinTexturedQuadCommand>(
+        result.submitReady->commands.front().payload);
+    expect(quad.resource == 31 && quad.vertices[0].x == 25.0F &&
+               quad.vertices[1].x == 153.0F,
+           "a negative destination uses its authored geometry and prepared "
+           "system image");
+  }
+
+  FakeResources unavailable;
+  const auto missing =
+      evaluate(renderer, runtime, model, unavailable, state, 2);
+  expect(missing.submitReady && missing.submitReady->commands.empty() &&
+             missing.diagnostics.empty(),
+         "an unavailable negative SkinSourceReference is a valid empty draw");
 }
 
 void testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable() {
@@ -6323,7 +6617,9 @@ void testDesktopAndIpadFitCommandFixtures() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  testMusicSelectSongListLowersSelectedBarStateAndPublishesHit();
+  testMusicSelectDistributionGraphLowersDescendingSourceSegments();
   testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers();
   testMovieCommandsPreserveTimingDestinationStateAndMixedOrdering();
   testStaticBuiltinFrameDoesNotRequireLuaRuntime();
@@ -6356,6 +6652,7 @@ int main() {
   testPracticeWithoutAuthoredObjectUsesBgaLegacyFallback();
   testTextVerticalPlacementMatchesPinnedBitmapFontBaseline();
   testMissingTextGlyphHonorsCriticalityWithoutPartialCommands();
+  testSelectorCompatibilitySkipsTransientlyMissingGlyphs();
   testFalseDestinationSkipsTextValueCallback();
   testTextGlyphLimitFailsBeforePublishingACommand();
   testTextAlignmentWrappingAndShrinkUsePreparedAdvances();
@@ -6366,6 +6663,7 @@ int main() {
   testNonCardinalSliderDirectionDrawsWithoutMotion();
   testGraphCropsLeftOrBottomWithJavaTruncation();
   testBuiltinReferenceGraphUsesPreparedSystemImageAndPinnedCrop();
+  testNegativeDestinationRendersPreparedSystemImage();
   testBuiltinReferenceGraphKeepsCollapsedOnePixelCropDrawable();
   testUnavailableBuiltinReferenceSkipsRateLookup();
   testExplicitSliderAndGraphRatesRemainUnclamped();
@@ -6418,5 +6716,8 @@ int main() {
   testTimingDistributionKeepsOneMillisecondPerSourcePixel();
   testGeneratedPixmapHitErrorTimingAndZeroAlphaContracts();
   testDesktopAndIpadFitCommandFixtures();
-  return failures == 0 ? 0 : 1;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "skin_draw_command_tests", failures,
+      "skin draw command assertion(s) failed",
+      "skin draw command tests passed");
 }

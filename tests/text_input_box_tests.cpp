@@ -30,6 +30,7 @@ int ui_view_height = design_height;
 namespace {
 
 int clearCompositionCalls = 0;
+SDL_Rect nativeInputRect{};
 
 void expect(bool condition, const char *message) {
   if (!condition) {
@@ -114,6 +115,48 @@ void testEmptyInputHasNoClearHitTarget() {
   input.onUnselected();
 }
 
+void testFocusedInputConsumesItsInitiatingTouch() {
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.setPositionNoLayout(450, 735, YGPositionTypeAbsolute);
+  input.applyYogaLayout();
+  input.setEditingText("needle");
+  input.beginEditing();
+
+  SDL_Event down{};
+  down.type = SDL_FINGERDOWN;
+  down.tfinger.type = SDL_FINGERDOWN;
+  down.tfinger.fingerId = 7;
+  down.tfinger.x = 570.0F / static_cast<float>(rendering::design_width);
+  down.tfinger.y = 757.0F / static_cast<float>(rendering::design_height);
+  expect(!input.handleEvents(down),
+         "a focused native text input consumes its initiating touch");
+
+  SDL_Event up = down;
+  up.type = SDL_FINGERUP;
+  up.tfinger.type = SDL_FINGERUP;
+  expect(!input.handleEvents(up),
+         "the initiating text touch keeps its matching release");
+  input.endEditing();
+}
+
+void testBeginEditingUsesTheLatestDeclaredInputFrame() {
+  nativeInputRect = {};
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.setPositionNoLayout(450, 735, YGPositionTypeAbsolute);
+  input.beginEditing();
+
+  expect(nativeInputRect.x >= input.getX() &&
+             nativeInputRect.x < input.getX() + input.getWidth() &&
+             nativeInputRect.y >= input.getY() &&
+             nativeInputRect.y < input.getY() + input.getHeight() &&
+             nativeInputRect.w > 0 && nativeInputRect.h > 0,
+         "begin editing frames the platform editor at the declared touch "
+         "target");
+  input.endEditing();
+}
+
 void testDeferredTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -166,6 +209,11 @@ extern "C" void SDLCALL TextInputBoxTest_ClearComposition() {
   ++clearCompositionCalls;
 }
 
+extern "C" void SDLCALL TextInputBoxTest_SetTextInputRect(
+    const SDL_Rect *rect) {
+  nativeInputRect = rect != nullptr ? *rect : SDL_Rect{};
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -176,6 +224,8 @@ int main() {
   testDefaultHorizontalPadding();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
+  testFocusedInputConsumesItsInitiatingTouch();
+  testBeginEditingUsesTheLatestDeclaredInputFrame();
   testDeferredTextKeepsRasterizedLineHeight();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 

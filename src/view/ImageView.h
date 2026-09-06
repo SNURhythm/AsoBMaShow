@@ -46,6 +46,7 @@ private:
   bool asyncImageBound = false;
   bool asyncImagePending = false;
   image_decode::ImageDecodeCoordinator::Ticket asyncTicket = 0;
+  std::optional<path_t> sharedChartImagePath_;
   std::optional<ImageFade> fade_;
   std::optional<Color> scrimColor_;
   ThemeColorProvider themedScrimColorProvider_;
@@ -61,6 +62,10 @@ public:
   ~ImageView() override;
   bool setImage(const path_t &path);
   bool setImageAsync(const path_t &path, bool prioritize = false);
+  // Like setImageAsync but decodes at the source's full resolution and also
+  // seeds the shared chart-image cache, so the gameplay skin's builtin
+  // stage/back/banner loads reuse the same decoded pixels.
+  bool setImageAsyncShared(const path_t &path, bool prioritize = false);
   void freeImage();
   ImageView *setFade(ImageFadeDirection direction, float strength);
   ImageView *clearFade();
@@ -80,6 +85,14 @@ public:
   static void dropCache(const path_t &path);
   static void dropAllCache();
   static void evictDecodedImageCache();
+  // Shared decoded-image cache used by both view thumbnails and the gameplay
+  // skin's builtin chart images. Keyed by archive/content identity so the
+  // skin reuses a stage/back/banner image already loaded for display.
+  [[nodiscard]] static image_decode::DecodedImageCache &
+  sharedDecodedImageCache();
+  [[nodiscard]] static std::string chartImageCacheKey(const path_t &path);
+  [[nodiscard]] static std::optional<image_decode::DecodedImageData>
+  findChartImage(const path_t &path);
 #if defined(ASOBMASHOW_IMAGE_VIEW_TESTING)
   [[nodiscard]] static std::size_t
   pendingAsyncDecodeCountForTesting(const path_t &path);

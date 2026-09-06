@@ -1,6 +1,7 @@
 #include "ArchiveFile.h"
 
 #include "BmsMetadataText.h"
+#include "audio/ChartAssetExtensions.h"
 #include "targets.h"
 #include "RAII.h"
 #if TARGET_OS_ANDROID
@@ -91,11 +92,17 @@
 #endif
 
 namespace archive_file {
+
+std::filesystem::path archiveIndexCacheDirectory();
+
 namespace {
 
 bool stopRequested(const std::stop_token *stopToken);
 bool pauseIfNeeded(const PauseCallback &pauseCallback,
                    std::string *errorMessage = nullptr);
+bool unzipCheckpoint(const std::stop_token *stopToken,
+                     const PauseCallback &pauseCallback,
+                     std::string *errorMessage = nullptr);
 void reportUnzipProgress(const UnzipProgressCallback &callback,
                           double fraction, std::uint64_t current,
                           std::uint64_t total, std::string message);
@@ -259,6 +266,19 @@ std::string normalizeEntryName(std::string value) {
     normalized.clear();
   }
   return normalized;
+}
+
+// Debug: hex-encode the UTF-8 bytes of a path string so an index-name mismatch
+// (e.g. one side Shift-JIS, the other UTF-8) is visible in the log.
+std::string indexDebugBytes(const std::string &value) {
+  static const char *kHex = "0123456789abcdef";
+  std::string out;
+  out.reserve(value.size() * 2);
+  for (unsigned char c : value) {
+    out.push_back(kHex[c >> 4]);
+    out.push_back(kHex[c & 0xf]);
+  }
+  return out;
 }
 
 bool safeEntryPath(const std::string &name, std::filesystem::path &outPath) {
@@ -503,7 +523,65 @@ struct CachedIndex {
 };
 
 std::mutex gIndexMutex;
+// NOTE: gIndexCache is intentionally unbounded (one full entry list per
+// archive indexed this process, bounded by library size). An LRU eviction of
+// least-recently-used archive indexes is a possible follow-up if memory
+// becomes a concern on very large libraries.
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
+
+// Directory for persisting archive entry indexes across app restarts. Empty
+// means disk persistence is disabled. Guarded by gIndexCacheMutex.
+std::mutex gIndexCacheDirectoryMutex;
+std::filesystem::path gArchiveIndexCacheDirectory;
+
+// Single-flight coordination: while one thread is building an archive index
+// for a key, concurrent requesters wait and reuse the finished index instead
+// of rebuilding it (a large library can otherwise index the same archive from
+// the scan and the prefetch/read workers at once).
+std::mutex gIndexBuildMutex;
+std::condition_variable gIndexBuildCv;
+std::unordered_map<std::string, bool> gIndexBuildActive;
+std::unordered_map<std::string, bool> gIndexBuildDone;
+std::unordered_map<std::string, bool> gIndexBuildFailed;
+std::unordered_map<std::string, std::uint32_t> gIndexBuildWaiters;
+
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
+#endif
+
+// RAII scope for the single-flight index builder: on ANY exit from the builder
+// body (including an exception thrown by a backend) it clears the in-flight
+// flag, records the outcome, and wakes every waiter, so a failing or aborted
+// build can never leave waiters blocked on the in-flight condition variable.
+class IndexBuildScope {
+public:
+  explicit IndexBuildScope(std::string key) : key_(std::move(key)) {}
+
+  ~IndexBuildScope() {
+    if (!finished_) {
+      complete(false);
+    }
+  }
+
+  void complete(bool success) {
+    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
+    gIndexBuildActive[key_] = false;
+    gIndexBuildDone[key_] = true;
+    gIndexBuildFailed[key_] = !success;
+    gIndexBuildCv.notify_all();
+    if (gIndexBuildWaiters[key_] == 0) {
+      gIndexBuildActive.erase(key_);
+      gIndexBuildDone.erase(key_);
+      gIndexBuildFailed.erase(key_);
+      gIndexBuildWaiters.erase(key_);
+    }
+    finished_ = true;
+  }
+
+private:
+  std::string key_;
+  bool finished_ = false;
+};
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
 std::mutex gDebugLogMutex;
@@ -958,7 +1036,10 @@ bool readRegularFileBounded(const std::filesystem::path &path,
     }
   }
 
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  // iOS Files-app storage (and the bundle resource tree) is not openable with
+  // plain fopen/ifstream; SDL_RWFromFile is the read that reaches those. Use it
+  // as a fallback on iOS/Android when the ordinary stream cannot open the file.
   const std::string assetPath = path.generic_string();
   UniqueResource<SDL_RWops, SDL_RWclose> input(
       SDL_RWFromFile(assetPath.c_str(), "rb"));
@@ -1557,8 +1638,9 @@ private:
 class SevenZipFileOutStream final : public ISequentialOutStream {
 public:
   SevenZipFileOutStream(const std::filesystem::path &path,
-                        const std::stop_token *stopToken)
-      : stopToken_(stopToken) {
+                        const std::stop_token *stopToken,
+                        PauseCallback pauseCallback)
+      : stopToken_(stopToken), pauseCallback_(std::move(pauseCallback)) {
     file_.open(path, std::ios::binary | std::ios::trunc);
   }
 
@@ -1593,7 +1675,7 @@ public:
     if (processedSize != nullptr) {
       *processedSize = 0;
     }
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       return E_ABORT;
     }
     if (size == 0) {
@@ -1616,6 +1698,7 @@ public:
 private:
   std::ofstream file_;
   const std::stop_token *stopToken_ = nullptr;
+  PauseCallback pauseCallback_;
   ULONG refCount_ = 0;
 };
 
@@ -2018,10 +2101,12 @@ public:
                               std::unordered_map<UInt32, Entry> entries,
                               std::uint64_t totalFiles,
                               const std::stop_token *stopToken,
-                              UnzipProgressCallback progressCallback)
+                              UnzipProgressCallback progressCallback,
+                              PauseCallback pauseCallback)
       : outputFolder_(std::move(outputFolder)), entries_(std::move(entries)),
         totalFiles_(std::max<std::uint64_t>(totalFiles, 1)),
-        stopToken_(stopToken), progressCallback_(std::move(progressCallback)) {}
+        stopToken_(stopToken), progressCallback_(std::move(progressCallback)),
+        pauseCallback_(std::move(pauseCallback)) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -2052,7 +2137,7 @@ public:
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
 
   STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2066,7 +2151,7 @@ public:
     }
     *outStream = nullptr;
     currentEntry_ = nullptr;
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2086,7 +2171,8 @@ public:
       return E_FAIL;
     }
 
-    auto *stream = new SevenZipFileOutStream(outputPath, stopToken_);
+    auto *stream =
+        new SevenZipFileOutStream(outputPath, stopToken_, pauseCallback_);
     if (!stream->isOpen()) {
       delete stream;
       failed_ = true;
@@ -2101,7 +2187,7 @@ public:
   }
 
   STDMETHOD(PrepareOperation)(Int32) throw() override {
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2123,7 +2209,7 @@ public:
       }
     }
     currentEntry_ = nullptr;
-    if (stopRequested(stopToken_)) {
+    if (!unzipCheckpoint(stopToken_, pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
@@ -2140,6 +2226,7 @@ private:
   std::uint64_t totalFiles_ = 1;
   const std::stop_token *stopToken_ = nullptr;
   UnzipProgressCallback progressCallback_;
+  PauseCallback pauseCallback_;
   const Entry *currentEntry_ = nullptr;
   std::uint64_t completedFiles_ = 0;
   ULONG refCount_ = 0;
@@ -3204,6 +3291,7 @@ bool extractArchiveFullyWithLibarchive(
     const std::shared_ptr<const CachedIndex> &index,
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
+    const PauseCallback &pauseCallback,
     std::string *errorMessage) {
   auto archiveStorage = openArchive(archivePath, errorMessage);
   if (archiveStorage == nullptr) {
@@ -3232,7 +3320,7 @@ bool extractArchiveFullyWithLibarchive(
   std::array<unsigned char, 64 * 1024> buffer{};
   std::uint64_t completedFiles = 0;
   for (;;) {
-    if (stopRequested(stopToken)) {
+    if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
       return fail("Unzip cancelled");
     }
     const int status = archive_read_next_header(archiveHandle, &entry);
@@ -3281,7 +3369,7 @@ bool extractArchiveFullyWithLibarchive(
       return fail("Could not write unzipped file: " + pathForLog(outputPath));
     }
     for (;;) {
-      if (stopRequested(stopToken)) {
+      if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
         return fail("Unzip cancelled");
       }
       const la_ssize_t count =
@@ -3349,6 +3437,310 @@ void buildIndexLookups(CachedIndex &index) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// On-disk archive index persistence
+//
+// The in-memory gIndexCache is rebuilt on every cold start, which for large
+// archives (hundreds of thousands of entries) costs seconds of miniz/7-Zip
+// listing before any chart can be read. When a cache directory is configured,
+// each built CachedIndex is serialized to a per-archive file keyed by a hash
+// of the normalized archive path, and reloaded on the next launch when the
+// archive's size and mtime still match (so the entry offsets stay valid).
+// ---------------------------------------------------------------------------
+
+std::string hex64(std::uint64_t value);
+std::uint64_t fnv1a64(const std::string &value);
+
+std::filesystem::path archiveIndexCacheFilePath(const std::string &key) {
+  return archiveIndexCacheDirectory() /
+         ("archive-index-" + hex64(fnv1a64(key)) + ".idx");
+}
+
+// Internal implementation of pruneArchiveIndexCache; kept in the anonymous
+// namespace because it uses anonymous helpers (archiveKey). The public
+// entry point below delegates to this.
+std::size_t pruneArchiveIndexCacheImpl(
+    const std::vector<std::filesystem::path> &liveArchivePaths) {
+  const std::filesystem::path directory = archiveIndexCacheDirectory();
+  if (directory.empty()) {
+    return 0;
+  }
+  std::unordered_set<std::string> liveArchiveKeys;
+  std::unordered_set<std::uint64_t> liveArchiveHashes;
+  liveArchiveKeys.reserve(liveArchivePaths.size());
+  liveArchiveHashes.reserve(liveArchivePaths.size());
+  for (const auto &path : liveArchivePaths) {
+    const std::string key = archiveKey(path);
+    liveArchiveKeys.insert(key);
+    liveArchiveHashes.insert(fnv1a64(key));
+  }
+  const auto parseHashFromFileName = [](const std::string &fileName)
+      -> std::optional<std::uint64_t> {
+    constexpr std::string_view prefix = "archive-index-";
+    // A crash between the temporary write and the rename in
+    // writeCachedIndexToDisk leaves an orphaned "<name>.idx.tmp" sibling; prune
+    // those the same way, so they cannot accumulate across refreshes.
+    constexpr std::string_view suffixes[] = {".idx", ".idx.tmp"};
+    std::uint64_t value = 0;
+    for (const auto &suffix : suffixes) {
+      if (fileName.size() != prefix.size() + 16 + suffix.size() ||
+          fileName.compare(0, prefix.size(), prefix) != 0 ||
+          fileName.compare(fileName.size() - suffix.size(), suffix.size(),
+                           suffix) != 0) {
+        continue;
+      }
+      value = 0;
+      const std::size_t hexStart = prefix.size();
+      for (std::size_t i = 0; i < 16; ++i) {
+        const char character = fileName[hexStart + i];
+        const unsigned digit =
+            (character >= '0' && character <= '9')
+                ? static_cast<unsigned>(character - '0')
+                : (character >= 'a' && character <= 'f')
+                      ? static_cast<unsigned>(character - 'a' + 10)
+                      : 16;
+        if (digit >= 16) {
+          return std::nullopt;
+        }
+        value = (value << 4) | digit;
+      }
+      return value;
+    }
+    return std::nullopt;
+  };
+
+  std::size_t removed = 0;
+  std::error_code error;
+  std::filesystem::directory_iterator iterator(
+      directory, std::filesystem::directory_options::skip_permission_denied,
+      error);
+  for (const auto end = std::filesystem::directory_iterator();
+       !error && iterator != end; iterator.increment(error)) {
+    std::error_code typeError;
+    if (!iterator->is_regular_file(typeError) || typeError) {
+      continue;
+    }
+    const std::filesystem::path filePath = iterator->path();
+    const std::string fileName = filePath.filename().string();
+    const bool orphanTmpIndex =
+        fileName.size() > 4 &&
+        fileName.compare(fileName.size() - 8, 8, ".idx.tmp") == 0;
+    if (filePath.extension() != ".idx" && !orphanTmpIndex) {
+      continue;
+    }
+    const auto fileNameHash = parseHashFromFileName(fileName);
+    if (fileNameHash.has_value() &&
+        !liveArchiveHashes.contains(*fileNameHash)) {
+      // The file name encodes a hash no live archive produces, so the key
+      // cannot match; remove it without reading the stored key.
+      std::error_code removeError;
+      std::filesystem::remove(filePath, removeError);
+      if (!removeError) {
+        ++removed;
+      }
+      continue;
+    }
+    // A live archive's ".idx.tmp" may be mid-write (writeCachedIndexToDisk
+    // holds no lock against prune), so its header may be partial and
+    // unreadable. Never remove a live archive's temp file here; the writer
+    // cleans it up itself, and only truly orphaned temps (no live hash) are
+    // removed above.
+    if (orphanTmpIndex && fileNameHash.has_value()) {
+      continue;
+    }
+    std::ifstream file(filePath, std::ios::binary);
+    if (!file) {
+      continue;
+    }
+    std::error_code sizeError;
+    const std::uintmax_t fileBytes =
+        std::filesystem::file_size(filePath, sizeError);
+    std::uint8_t version = 0;
+    file.read(reinterpret_cast<char *>(&version), sizeof(version));
+    std::uint64_t keyLen = 0;
+    file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
+    bool shouldRemove = true;
+    if (file.good() && version == 2 &&
+        (!sizeError && keyLen <= fileBytes) &&
+        keyLen <= (1024ull * 1024ull * 1024ull)) {
+      std::string storedKey(static_cast<std::size_t>(keyLen), '\0');
+      file.read(storedKey.data(), static_cast<std::streamsize>(keyLen));
+      if (file.good() && liveArchiveKeys.contains(storedKey)) {
+        shouldRemove = false;
+      }
+    }
+    if (shouldRemove) {
+      std::error_code removeError;
+      std::filesystem::remove(filePath, removeError);
+      if (!removeError) {
+        ++removed;
+      }
+    }
+  }
+  return removed;
+}
+
+bool writeCachedIndexToDisk(const std::string &key,
+                            const CachedIndex &index) {
+  const std::filesystem::path directory = archiveIndexCacheDirectory();
+  if (directory.empty()) {
+    return false;
+  }
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  if (error) {
+    return false;
+  }
+  const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
+  const auto serialize = [&](std::ostream &stream) {
+    auto writeU64 = [&](std::uint64_t value) {
+      stream.write(reinterpret_cast<const char *>(&value), sizeof(value));
+    };
+    auto writeU8 = [&](std::uint8_t value) {
+      stream.write(reinterpret_cast<const char *>(&value), sizeof(value));
+    };
+    writeU8(2);  // format version
+    writeU64(key.size());
+    stream.write(key.data(), static_cast<std::streamsize>(key.size()));
+    writeU64(static_cast<std::uint64_t>(index.size));
+    writeU64(static_cast<std::uint64_t>(
+        index.mtime.time_since_epoch().count()));
+    writeU8(static_cast<std::uint8_t>(index.backend));
+    writeU8(index.sevenZipFormat);
+    writeU64(index.entries.size());
+    for (const auto &entry : index.entries) {
+      const std::string pathText = entry.path.generic_string();
+      writeU64(pathText.size());
+      stream.write(pathText.data(),
+                   static_cast<std::streamsize>(pathText.size()));
+      writeU8(entry.directory ? 1 : 0);
+      writeU64(entry.size);
+      writeU64(entry.order);
+      writeU64(static_cast<std::uint64_t>(entry.offset));
+      writeU8(entry.solid ? 1 : 0);
+    }
+    stream.flush();
+    return stream.good();
+  };
+  // Write to a temporary sibling and rename atomically so a crash mid-write
+  // never leaves a partial file that future reads would have to re-validate
+  // and rebuild.
+  std::filesystem::path tmpPath = filePath;
+  tmpPath += ".tmp";
+  {
+    std::ofstream file(tmpPath, std::ios::binary | std::ios::trunc);
+    if (!file) {
+      return false;
+    }
+    if (!serialize(file)) {
+      std::error_code removeError;
+      std::filesystem::remove(tmpPath, removeError);
+      return false;
+    }
+  }
+  std::filesystem::rename(tmpPath, filePath, error);
+  if (!error) {
+    return true;
+  }
+  // Some filesystems cannot atomically replace an existing file; fall back
+  // to a direct write so the cache still persists.
+  std::ofstream direct(filePath, std::ios::binary | std::ios::trunc);
+  if (!direct) {
+    std::error_code removeError;
+    std::filesystem::remove(tmpPath, removeError);
+    return false;
+  }
+  const bool directOk = serialize(direct);
+  // The tmp sibling is no longer needed; leave no orphaned .tmp files whether
+  // or not the direct write succeeded.
+  std::error_code removeError;
+  std::filesystem::remove(tmpPath, removeError);
+  return directOk;
+}
+
+std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
+    const std::string &key, std::uintmax_t size,
+    std::filesystem::file_time_type mtime) {
+  const std::filesystem::path directory = archiveIndexCacheDirectory();
+  if (directory.empty()) {
+    return nullptr;
+  }
+  const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
+  std::error_code sizeError;
+  const std::uintmax_t fileBytes =
+      std::filesystem::file_size(filePath, sizeError);
+  if (sizeError || fileBytes == 0) {
+    return nullptr;
+  }
+  std::ifstream file(filePath, std::ios::binary);
+  if (!file) {
+    return nullptr;
+  }
+  auto readU64 = [&]() -> std::uint64_t {
+    std::uint64_t value = 0;
+    file.read(reinterpret_cast<char *>(&value), sizeof(value));
+    return value;
+  };
+  auto readU8 = [&]() -> std::uint8_t {
+    std::uint8_t value = 0;
+    file.read(reinterpret_cast<char *>(&value), sizeof(value));
+    return value;
+  };
+  auto index = std::make_shared<CachedIndex>();
+  const std::uint8_t version = readU8();
+  const std::uint64_t storedKeyLen = readU64();
+  if (!file.good() || version != 2 ||
+      storedKeyLen > fileBytes ||
+      storedKeyLen > (1024ull * 1024ull * 1024ull)) {
+    return nullptr;
+  }
+  std::string storedKey(static_cast<std::size_t>(storedKeyLen), '\0');
+  file.read(storedKey.data(), static_cast<std::streamsize>(storedKeyLen));
+  if (!file.good() || storedKey != key) {
+    return nullptr;
+  }
+  const std::uint64_t storedSize = readU64();
+  const std::uint64_t storedMtime = readU64();
+  if (!file.good() ||
+      storedSize != static_cast<std::uint64_t>(size) ||
+      storedMtime != static_cast<std::uint64_t>(mtime.time_since_epoch().count())) {
+    return nullptr;
+  }
+  index->size = size;
+  index->mtime = mtime;
+  index->backend = static_cast<ArchiveIndexBackend>(readU8());
+  index->sevenZipFormat = readU8();
+  const std::uint64_t entryCount = readU64();
+  // Each serialized entry needs at least 34 bytes beyond the variable-length
+  // path, so a count much larger than the file can hold is malformed and
+  // would otherwise allow an unbounded allocation from a corrupt file.
+  if (!file.good() || entryCount > (fileBytes / 34ull)) {
+    return nullptr;
+  }
+  index->entries.reserve(static_cast<std::size_t>(entryCount));
+  for (std::uint64_t i = 0; i < entryCount; ++i) {
+    const std::uint64_t pathLen = readU64();
+    if (!file.good() || pathLen > fileBytes ||
+        pathLen > (1024ull * 1024ull * 1024ull)) {
+      return nullptr;
+    }
+    std::string pathText(static_cast<std::size_t>(pathLen), '\0');
+    file.read(pathText.data(), static_cast<std::streamsize>(pathLen));
+    Entry entry;
+    entry.path = utf8_to_path_t(pathText);
+    entry.directory = readU8() != 0;
+    entry.size = readU64();
+    entry.order = static_cast<std::size_t>(readU64());
+    entry.offset = static_cast<std::int64_t>(readU64());
+    entry.solid = readU8() != 0;
+    if (!file.good()) {
+      return nullptr;
+    }
+    index->entries.push_back(std::move(entry));
+  }
+  return index;
+}
+
 std::shared_ptr<const CachedIndex>
 cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath) {
   std::uintmax_t size = 0;
@@ -3392,6 +3784,85 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     hadCachedIndex = it != gIndexCache.end() && it->second != nullptr;
   }
 
+  // Try to restore a previously persisted index from disk (cold start) before
+  // rebuilding. Validated by size+mtime so offsets remain valid.
+  if (!hadCachedIndex) {
+    auto diskIndex = readCachedIndexFromDisk(key, size, mtime);
+    if (diskIndex != nullptr) {
+      buildIndexLookups(*diskIndex);
+      appendDebugLogLineImpl("Loaded archive index from disk cache: " +
+                             pathForLog(archivePath) + " entries=" +
+                             std::to_string(diskIndex->entries.size()));
+      std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+      gIndexCache[key] = diskIndex;
+      return diskIndex;
+    }
+  }
+
+  // Single-flight: if another thread is already building this archive's index,
+  // wait for it and reuse the result instead of rebuilding. The first caller
+  // to reach here becomes the builder.
+  for (;;) {
+    std::unique_lock<std::mutex> buildLock(gIndexBuildMutex);
+    if (!gIndexBuildActive[key]) {
+      gIndexBuildActive[key] = true;
+      gIndexBuildDone[key] = false;
+      gIndexBuildFailed[key] = false;
+      break;
+    }
+    ++gIndexBuildWaiters[key];
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+    gSingleFlightWaiterCountForTesting.fetch_add(1, std::memory_order_relaxed);
+#endif
+    gIndexBuildCv.wait(buildLock, [&] { return !gIndexBuildActive[key]; });
+    const bool builtOk = gIndexBuildDone[key];
+    const bool builtFailed = gIndexBuildFailed[key];
+    if (--gIndexBuildWaiters[key] == 0 && !gIndexBuildActive[key]) {
+      gIndexBuildActive.erase(key);
+      gIndexBuildDone.erase(key);
+      gIndexBuildFailed.erase(key);
+      gIndexBuildWaiters.erase(key);
+    }
+    buildLock.unlock();
+    std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+    const auto cacheIt = gIndexCache.find(key);
+    if (builtOk && cacheIt != gIndexCache.end() &&
+        cacheIt->second != nullptr && cacheIt->second->size == size &&
+        cacheIt->second->mtime == mtime) {
+      return cacheIt->second;
+    }
+    if (builtFailed) {
+      // The in-flight build failed (corrupt archive, backend error, or a
+      // pause abort). Report the failure to this caller instead of retrying,
+      // so N concurrent waiters do not each run a full re-index back to
+      // back. A later request can rebuild normally.
+      if (errorMessage != nullptr) {
+        *errorMessage = "Failed to index archive: " + pathForLog(archivePath);
+      }
+      return nullptr;
+    }
+    // Re-acquire the build lock and re-check whether another waiter has
+    // claimed the builder role while this thread inspected the cache; if so,
+    // loop back and wait on that build instead of racing into a duplicate
+    // one. Reaching the fall-through otherwise means the in-flight result did
+    // not match (e.g. a completed build that was evicted) rather than
+    // returning a mismatched index.
+    buildLock.lock();
+    if (gIndexBuildActive[key]) {
+      buildLock.unlock();
+      continue;
+    }
+    gIndexBuildActive[key] = true;
+    gIndexBuildDone[key] = false;
+    gIndexBuildFailed[key] = false;
+    break;
+  }
+
+  // Guard the entire builder body below: even if make_shared, buildIndexLookups,
+  // or a backend throws, the in-flight flag is cleared and every waiter wakes
+  // with a recorded failure instead of blocking forever.
+  IndexBuildScope buildScope(key);
+
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ || ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP || \
     ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   appendDebugLogLineImpl((hadCachedIndex ? "Archive changed; rebuilding index: "
@@ -3402,8 +3873,9 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   loaded->size = size;
   loaded->mtime = mtime;
   bool loadedEntries = false;
-  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-    return nullptr;
+   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+     buildScope.complete(false);
+     return nullptr;
   }
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
   std::string zipError;
@@ -3484,6 +3956,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   if (!loadedEntries) {
     appendDebugLogLineImpl("Archive indexing failed: " +
                            pathForLog(archivePath));
+    buildScope.complete(false);
     return nullptr;
   }
   const std::size_t skippedSystemEntries = filterSystemEntries(loaded->entries);
@@ -3497,15 +3970,21 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                          ": " + pathForLog(archivePath) + " entries=" +
                          std::to_string(loaded->entries.size()));
 
+  if (!writeCachedIndexToDisk(key, *loaded)) {
+    appendDebugLogLineImpl("Failed to persist archive index to disk: " +
+                           pathForLog(archivePath));
+  }
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     gIndexCache[key] = loaded;
   }
+  buildScope.complete(true);
   return loaded;
 #else
   if (errorMessage != nullptr) {
     *errorMessage = "Archive support is not compiled in.";
   }
+  buildScope.complete(false);
   return nullptr;
 #endif
 }
@@ -3527,6 +4006,36 @@ const Entry *findIndexedEntry(const CachedIndex &index,
     return &index.entries[lowerIt->second];
   }
 
+  return nullptr;
+}
+
+// BMS charts reference audio by the name written in the chart (e.g.
+// `#PREVIEW music.wav`), but the archive can store that file under a different
+// audio extension (e.g. `music.ogg`). When the exact entry lookup misses,
+// substitute every supported audio extension for the referenced one and retry.
+// Returns nullptr when none of the candidates exist.
+const Entry *
+findIndexedEntryWithAudioExtensionFallback(const CachedIndex &index,
+                                           const std::filesystem::path &innerPath) {
+  const std::filesystem::path referencedExtension = innerPath.extension();
+  if (referencedExtension.empty()) {
+    return nullptr;
+  }
+  const std::filesystem::path base = innerPath;
+  const std::filesystem::path parentWithBase =
+      base.parent_path() / base.stem();
+  for (const std::string_view candidate : asobmshow::chart_assets::kAudioExtensions) {
+    if (candidate == referencedExtension.generic_string()) {
+      continue;
+    }
+    std::filesystem::path alternate = parentWithBase;
+    alternate += ".";
+    alternate += std::string(candidate);
+    if (const Entry *entry = findIndexedEntry(index, alternate);
+        entry != nullptr && !entry->directory) {
+      return entry;
+    }
+  }
   return nullptr;
 }
 
@@ -4478,6 +4987,107 @@ bool readZipEntriesByName(
     files.push_back(std::move(file));
   }
 
+  mz_zip_reader_end(&archive);
+  return true;
+}
+
+bool readZipEntryBounded(const std::filesystem::path &archivePath,
+                         const Entry &entry, std::vector<unsigned char> &bytes,
+                         std::size_t maximumBytes, std::string *errorMessage,
+                         const PauseCallback &pauseCallback, bool *oversize) {
+  *oversize = false;
+  bytes.clear();
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
+
+  mz_zip_archive archive{};
+  mz_zip_zero_struct(&archive);
+  const std::string archiveText = fspath_to_utf8(archivePath);
+  if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
+                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
+                                  0)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Could not open ZIP central directory.";
+    }
+    return false;
+  }
+
+  auto fail = [&](const std::string &message, bool wasOversize = false) {
+    if (wasOversize) {
+      *oversize = true;
+    }
+    if (errorMessage != nullptr) {
+      *errorMessage = message;
+    }
+    bytes.clear();
+    mz_zip_reader_end(&archive);
+    return false;
+  };
+
+  if (entry.order > std::numeric_limits<mz_uint>::max()) {
+    return fail("ZIP index is out of range.");
+  }
+  const mz_uint fileIndex = static_cast<mz_uint>(entry.order);
+  if (fileIndex >= mz_zip_reader_get_num_files(&archive)) {
+    return fail("ZIP index is out of range.");
+  }
+  mz_zip_archive_file_stat stat{};
+  if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
+    return fail("Could not read ZIP central directory entry.");
+  }
+  if (stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
+    return fail("ZIP entry is not supported by direct reader.");
+  }
+  if (stat.m_uncomp_size != entry.size) {
+    return fail("ZIP central directory size did not match archive index.");
+  }
+  const auto filename = minizFilename(&archive, fileIndex);
+  if (!filename.has_value()) {
+    return fail("Could not read ZIP central directory filename.");
+  }
+  if (compareZipEntryName(*filename,
+                          normalizeEntryName(entry.path.generic_string())) ==
+      ZipNameMatch::Mismatches) {
+    return fail("ZIP central directory order did not match archive index.");
+  }
+  if (stat.m_uncomp_size >
+      static_cast<mz_uint64>(std::numeric_limits<std::size_t>::max())) {
+    return fail("ZIP entry is too large to read into memory.");
+  }
+
+  // Bounded streaming extraction: decompression is pulled in small chunks and
+  // capped at maximumBytes, so a lying central directory cannot force a full
+  // oversized allocation before the cap is enforced.
+  bytes.reserve(static_cast<std::size_t>(stat.m_uncomp_size));
+  mz_zip_reader_extract_iter_state *iterator =
+      mz_zip_reader_extract_iter_new(&archive, fileIndex, 0);
+  if (iterator == nullptr) {
+    return fail("Could not start streaming ZIP extraction.");
+  }
+  std::array<unsigned char, 64 * 1024> chunk{};
+  for (;;) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      mz_zip_reader_extract_iter_free(iterator);
+      return fail("Operation cancelled");
+    }
+    const size_t produced =
+        mz_zip_reader_extract_iter_read(iterator, chunk.data(), chunk.size());
+    if (produced == 0) {
+      break;
+    }
+    if (produced > maximumBytes - bytes.size()) {
+      mz_zip_reader_extract_iter_free(iterator);
+      return fail("Archive entry exceeds bounded read limit: " +
+                      entry.path.generic_string(),
+                  true);
+    }
+    bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + produced);
+  }
+  mz_zip_reader_extract_iter_free(iterator);
+  if (bytes.size() != static_cast<std::size_t>(stat.m_uncomp_size)) {
+    return fail("ZIP entry extraction did not produce the declared size.");
+  }
   mz_zip_reader_end(&archive);
   return true;
 }
@@ -6744,6 +7354,7 @@ bool extractSevenZipArchiveFully(
     const std::shared_ptr<const CachedIndex> &index,
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
+    const PauseCallback &pauseCallback,
     std::string *errorMessage) {
   if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
       index->sevenZipFormat == 0) {
@@ -6758,10 +7369,9 @@ bool extractSevenZipArchiveFully(
     return false;
   }
 
-  PauseCallback inputPauseCallback;
-  if (stopToken != nullptr) {
-    inputPauseCallback = [stopToken] { return !stopRequested(stopToken); };
-  }
+  const PauseCallback inputPauseCallback = [stopToken, pauseCallback] {
+    return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
+  };
   std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
   SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
                                         std::move(inputPauseCallback));
@@ -6810,7 +7420,8 @@ bool extractSevenZipArchiveFully(
   }
 
   auto *callback = new SevenZipFullExtractCallback(
-      outputFolder, std::move(entries), fileCount, stopToken, progressCallback);
+      outputFolder, std::move(entries), fileCount, stopToken, progressCallback,
+      pauseCallback);
   IArchiveExtractCallback *callbackInterface = callback;
   callbackInterface->AddRef();
   CMyComPtr<IArchiveExtractCallback> callbackHandle;
@@ -6897,6 +7508,18 @@ bool pauseIfNeeded(const PauseCallback &pauseCallback,
   }
   if (errorMessage != nullptr && errorMessage->empty()) {
     *errorMessage = "Operation cancelled";
+  }
+  return false;
+}
+
+bool unzipCheckpoint(const std::stop_token *stopToken,
+                     const PauseCallback &pauseCallback,
+                     std::string *errorMessage) {
+  if (!stopRequested(stopToken) && pauseIfNeeded(pauseCallback)) {
+    return true;
+  }
+  if (errorMessage != nullptr) {
+    *errorMessage = "Unzip cancelled";
   }
   return false;
 }
@@ -6993,6 +7616,38 @@ void setCachePathNormalizer(CachePathNormalizer normalizer) {
   gCachePathNormalizer = std::move(normalizer);
 }
 
+void setArchiveIndexCacheDirectory(std::filesystem::path directory) {
+  std::lock_guard<std::mutex> lock(gIndexCacheDirectoryMutex);
+  gArchiveIndexCacheDirectory = std::move(directory);
+}
+
+std::filesystem::path archiveIndexCacheDirectory() {
+  std::lock_guard<std::mutex> lock(gIndexCacheDirectoryMutex);
+  return gArchiveIndexCacheDirectory;
+}
+
+std::size_t pruneArchiveIndexCache(
+    const std::vector<std::filesystem::path> &liveArchivePaths) {
+  return pruneArchiveIndexCacheImpl(liveArchivePaths);
+}
+
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+void clearArchiveIndexCacheForTesting() {
+  {
+    std::lock_guard<std::mutex> lock(gIndexMutex);
+    gIndexCache.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
+    gIndexBuildWaiters.clear();
+    gIndexBuildActive.clear();
+    gIndexBuildDone.clear();
+    gIndexBuildFailed.clear();
+  }
+  setArchiveIndexCacheDirectory({});
+}
+#endif
+
 bool hasSupportedArchiveExtension(const std::filesystem::path &path) {
   return !archiveExtensionFromPath(path).empty();
 }
@@ -7006,6 +7661,14 @@ void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer) {
   std::lock_guard lock(gStreamingEntryObserverMutex);
   gStreamingEntryObserver = std::move(observer);
+}
+
+void resetSingleFlightWaiterCountForTesting() {
+  gSingleFlightWaiterCountForTesting.store(0, std::memory_order_relaxed);
+}
+
+std::uint32_t singleFlightWaiterCountForTesting() {
+  return gSingleFlightWaiterCountForTesting.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -7936,8 +8599,38 @@ bool readFileBounded(const std::filesystem::path &path,
   if (index == nullptr) return false;
   const Entry *entry = findIndexedEntry(*index, innerPath);
   if (entry == nullptr || entry->directory) {
+    // BMS references audio by the name written in the chart (e.g.
+    // `#PREVIEW music.wav`), but the archive may store the same file under a
+    // different audio extension (e.g. `music.ogg`). Retry the lookup with each
+    // supported audio extension substituted before concluding the entry is
+    // genuinely absent.
+    entry = findIndexedEntryWithAudioExtensionFallback(*index, innerPath);
+  }
+  if (entry == nullptr || entry->directory) {
+    // Diagnose: dump the target bytes and every indexed entry under the same
+    // folder (name + bytes) so a name/encoding mismatch is visible on-device
+    // without console access.
+    const std::string targetName = normalizeEntryName(innerPath.generic_string());
+    const std::string targetFolder =
+        innerPath.parent_path().lexically_normal().generic_string();
+    std::ostringstream detail;
+    detail << "Archive entry not found: " << innerPath.generic_string()
+           << " [target bytes=" << indexDebugBytes(targetName)
+           << " folder=" << targetFolder << " entries="
+           << index->entries.size() << "]";
+    for (const Entry &candidate : index->entries) {
+      const std::string candidateName =
+          normalizeEntryName(candidate.path.generic_string());
+      if (targetFolder.empty() ||
+          candidateName.rfind(targetFolder + "/", 0) == 0) {
+        detail << " | " << candidateName << " bytes="
+               << indexDebugBytes(candidateName)
+               << (candidate.directory ? " [dir]"
+                                       : " size=" + std::to_string(candidate.size));
+      }
+    }
     if (errorMessage != nullptr) {
-      *errorMessage = "Archive entry not found: " + innerPath.generic_string();
+      *errorMessage = detail.str();
     }
     return false;
   }
@@ -7947,6 +8640,52 @@ bool readFileBounded(const std::filesystem::path &path,
                       entry->path.generic_string();
     }
     return false;
+  }
+  // Read through the offset-based random-access batch reader (miniz ZIP seek,
+  // unarr RAR4, or 7-Zip index) so a single entry is decompressed without
+  // streaming through the whole archive. The libarchive fallback below stays
+  // only for formats the fast backends cannot index.
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  // The ZIP backend is fed through a chunked streaming decompress so the bound
+  // is enforced as data is produced, not after a lying central directory has
+  // already forced a full oversized allocation.
+  if (hasZipArchiveExtension(archivePath)) {
+    std::string zipError;
+    bool zipOversize = false;
+    if (readZipEntryBounded(archivePath, *entry, bytes, maximumBytes, &zipError,
+                            [stop] { return !stop.stop_requested(); },
+                            &zipOversize)) {
+      return true;
+    }
+    if (zipOversize || archiveReadCancelled(zipError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = zipError;
+      }
+      bytes.clear();
+      return false;
+    }
+    bytes.clear();
+  }
+#endif
+  std::vector<FileData> files;
+  std::string batchError;
+  if (readArchiveEntries(archivePath, {entry->path}, files, &batchError,
+                         [stop] { return !stop.stop_requested(); }) &&
+      files.size() == 1) {
+    if (files.front().bytes.size() > maximumBytes) {
+      // The RAR/7-Zip indexed readers size their output to the declared entry
+      // size, which a lying header can under-declare and then decompress
+      // larger. Fail cleanly instead of falling through to a fallback read
+      // that could hand the truncated buffer straight back.
+      bytes.clear();
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive entry exceeds bounded read limit: " +
+                        entry->path.generic_string();
+      }
+      return false;
+    }
+    bytes = std::move(files.front().bytes);
+    return true;
   }
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   return readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
@@ -8257,6 +8996,7 @@ bool extractArchiveFullyWithBatchReader(
     const std::vector<Entry> &entries,
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
+    const PauseCallback &pauseCallback,
     std::string *errorMessage) {
   static constexpr std::size_t kMaxBatchFiles = 128;
   static constexpr std::uint64_t kMaxBatchBytes = 64ull * 1024ull * 1024ull;
@@ -8294,10 +9034,7 @@ bool extractArchiveFullyWithBatchReader(
   std::uint64_t writtenCount = 0;
   std::size_t nextFile = 0;
   while (nextFile < filesToExtract.size()) {
-    if (stopRequested(stopToken)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Unzip cancelled";
-      }
+    if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
       return false;
     }
 
@@ -8320,9 +9057,16 @@ bool extractArchiveFullyWithBatchReader(
 
     std::vector<FileData> batchFiles;
     const EntryRange range{.start = batchStartOrder, .end = batchEndOrder};
-    const auto keepGoing = [stopToken]() { return !stopRequested(stopToken); };
+    const auto keepGoing = [stopToken, pauseCallback]() {
+      return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
+    };
     if (!readArchiveEntriesInRange(archivePath, batchPaths, range, batchFiles,
                                    errorMessage, keepGoing)) {
+      if (errorMessage != nullptr &&
+          (*errorMessage == "Operation cancelled" ||
+           stopRequested(stopToken))) {
+        *errorMessage = "Unzip cancelled";
+      }
       return false;
     }
     if (batchFiles.empty() && !batchPaths.empty()) {
@@ -8333,10 +9077,7 @@ bool extractArchiveFullyWithBatchReader(
     }
 
     for (const FileData &file : batchFiles) {
-      if (stopRequested(stopToken)) {
-        if (errorMessage != nullptr) {
-          *errorMessage = "Unzip cancelled";
-        }
+      if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
         return false;
       }
 
@@ -8394,7 +9135,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::filesystem::path &destinationRoot,
                   std::string *errorMessage,
                   const std::stop_token *stopToken,
-                  UnzipProgressCallback progressCallback) {
+                  UnzipProgressCallback progressCallback,
+                  PauseCallback pauseCallback) {
   reportUnzipProgress(progressCallback, 0.02, 0, 0, "Preparing unzip");
   if (archivePath.empty() || !hasSupportedArchiveExtension(archivePath)) {
     if (errorMessage != nullptr) {
@@ -8410,16 +9152,14 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     }
     return std::nullopt;
   }
-  if (stopRequested(stopToken)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
-    }
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
 
   reportUnzipProgress(progressCallback, 0.04, 0, 0,
                       "Reading archive index");
-  const auto index = cachedIndexForArchive(archivePath, errorMessage);
+  const auto index =
+      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
   if (index == nullptr) {
     return std::nullopt;
   }
@@ -8500,10 +9240,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                                  errorMessage, error)) {
     return std::nullopt;
   }
-  if (stopRequested(stopToken)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
-    }
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
 
@@ -8517,7 +9254,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   if (index->backend == ArchiveIndexBackend::SevenZip) {
     extracted = extractSevenZipArchiveFully(archivePath, outputFolder, index,
                                             stopToken, progressCallback,
-                                            errorMessage);
+                                            pauseCallback, errorMessage);
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
@@ -8525,13 +9262,13 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       index->backend == ArchiveIndexBackend::LibArchive) {
     extracted = extractArchiveFullyWithLibarchive(
         archivePath, outputFolder, index, stopToken, progressCallback,
-        errorMessage);
+        pauseCallback, errorMessage);
   }
 #endif
   if (!extracted && !stopRequested(stopToken)) {
     extracted = extractArchiveFullyWithBatchReader(
         archivePath, outputFolder, index->entries, stopToken, progressCallback,
-        errorMessage);
+        pauseCallback, errorMessage);
   }
   if (!extracted) {
     if (errorMessage != nullptr && errorMessage->empty()) {
@@ -8541,10 +9278,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     }
     return std::nullopt;
   }
-  if (stopRequested(stopToken)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
-    }
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
 

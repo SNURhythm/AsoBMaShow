@@ -261,17 +261,23 @@ void testBeatorajaDirectSkinDirectorySemantics() {
 
   const fs::path outside = fixture.temp.root() / "outside-resource.bin";
   writeText(outside, "outside-resource");
+  const fs::path entryScopedAbsolute = fs::path(
+      (visiblePackage / "entry").generic_string() + "/" +
+      outside.generic_string());
+  writeText(entryScopedAbsolute, "entry-scoped resource");
   const auto resource = fileSystem.resolveResourceCandidates(outside.string(),
                                                               outside.string());
   expect(!resource.failure && resource.normalizedVirtualPath &&
              *resource.normalizedVirtualPath ==
-                 outside.lexically_normal().generic_string(),
-         "resource paths keep Beatoraja's normal absolute-path resolution");
+                 entryScopedAbsolute.lexically_normal().generic_string(),
+         "resource paths prepend the entry parent even for an authored "
+         "absolute-looking name");
   if (resource.normalizedVirtualPath) {
     const auto bytes =
         fileSystem.readResolvedResource(*resource.normalizedVirtualPath, 4096);
-    expect(!bytes.failure && bytesToString(bytes.bytes) == "outside-resource",
-           "resource reads follow the resolved normal filesystem path");
+    expect(!bytes.failure && bytesToString(bytes.bytes) == "entry-scoped resource",
+           "resource reads stay below the entry parent rather than reading "
+           "the authored absolute path");
   }
 
   const auto write =
@@ -521,6 +527,13 @@ void testUnrestrictedFilesystemLiftsWriteAndContainmentGuards() {
     return;
   }
 
+  const auto configuredModule = created.fileSystem->readLuaPath(
+      "skin/FixtureSkin/entry/direct.lua", 4096);
+  expect(!configuredModule.failure &&
+             bytesToString(configuredModule.bytes) == "return 'direct'\n",
+         "Unrestricted preserves skin_config.get_path current-package "
+         "resolution");
+
   const fs::path outside = fixture.temp.root() / "outside" / "state.txt";
   const auto write = created.fileSystem->writeData(
       outside.string(), bytesOf("unrestricted write\n"), false);
@@ -607,6 +620,26 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
              write.failure->code == SkinFileError::EscapesPackage &&
              readText(outside / "secret.lua") == "return 'outside'\n",
          "Lua writes cannot follow a linked child outside the skin directory");
+
+  auto pinned = LuaSkinFileSystem::create(
+      {.revision = fixture.prepared->readView(),
+       .entry = fixture.entry,
+       .storageRoots = fixture.roots,
+       .profileId = std::nullopt,
+       .allowDataWrites = true,
+       .safetyPolicy = SkinSafetyPolicy(
+           SkinSafetyLevel::Unrestricted,
+           std::numeric_limits<std::uint64_t>::max(), true)});
+  expect(pinned.fileSystem != nullptr,
+         "pinned type-5 filesystem creates without a no-follow inspector");
+  if (!pinned.fileSystem) {
+    return;
+  }
+  const auto pinnedRead =
+      pinned.fileSystem->readLuaPath("escape/secret.lua", 4096);
+  expect(!pinnedRead.failure &&
+             bytesToString(pinnedRead.bytes) == "return 'outside'\n",
+         "type-5 follows linked paths after SkinLuaPathResolver's lexical check");
 }
 
 } // namespace

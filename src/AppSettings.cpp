@@ -55,6 +55,9 @@ parseBgaDisplayMode(const std::string &value,
   if (value == "stretch" || value == "2") {
     return AppSettings::BgaDisplayMode::Stretch;
   }
+  if (value == "no-expand" || value == "3") {
+    return AppSettings::BgaDisplayMode::NoExpand;
+  }
   return fallback;
 }
 
@@ -90,6 +93,8 @@ const char *bgaDisplayModeToString(AppSettings::BgaDisplayMode mode) {
     return "fill";
   case AppSettings::BgaDisplayMode::Stretch:
     return "stretch";
+  case AppSettings::BgaDisplayMode::NoExpand:
+    return "no-expand";
   }
   return "fit";
 }
@@ -442,6 +447,7 @@ void AppSettings::sanitize() {
   case BgaDisplayMode::Fit:
   case BgaDisplayMode::Fill:
   case BgaDisplayMode::Stretch:
+  case BgaDisplayMode::NoExpand:
     break;
   default:
     bgaDisplayMode = BgaDisplayMode::Fit;
@@ -576,6 +582,19 @@ void AppSettings::sanitize() {
   boundedSkinString(skinDifficultyFilterName, "ALL");
   boundedSkinString(skinChartReplicationMode, "RIVALCHART");
   boundedSkinString(skinTargetId, "MAX");
+  skinMusicSelectInput = std::clamp(skinMusicSelectInput, 0, 2);
+  skinMusicSelectScrollDurationLow =
+      std::clamp(skinMusicSelectScrollDurationLow, 2, 1000);
+  skinMusicSelectScrollDurationHigh =
+      std::clamp(skinMusicSelectScrollDurationHigh, 1, 1000);
+  skinMusicSelectAnalogTicksPerScroll =
+      std::clamp(skinMusicSelectAnalogTicksPerScroll, 1, 1000);
+  skinMusicSelectMaxSearchBarCount =
+      std::clamp(skinMusicSelectMaxSearchBarCount, 1, 100);
+  skinPlayer2RandomOption = std::clamp(skinPlayer2RandomOption, 0, 9);
+  skinDoublePlayOption = std::clamp(skinDoublePlayOption, 0, 3);
+  skinBgaMode = std::clamp(skinBgaMode, 0, 2);
+  skinBgaExpandMode = std::clamp(skinBgaExpandMode, 0, 2);
   std::vector<std::string> boundedTargetList;
   boundedTargetList.reserve(
       std::min(skinTargetList.size(), kMaximumSkinTargetListEntries));

@@ -217,6 +217,43 @@ inline std::string coursePlayOptionForConstraints(
   return normalized;
 }
 
+struct CoursePlayOptionsForConstraints {
+  std::string player1 = "NORMAL";
+  std::string player2 = "NORMAL";
+  bool doublePlayFlip = false;
+};
+
+inline CoursePlayOptionsForConstraints coursePlayOptionsForConstraints(
+    const std::string &selectedPlayer1,
+    const std::string &selectedPlayer2, bool selectedDoublePlayFlip,
+    const CourseConstraintSettings &constraintSettings) {
+  CoursePlayOptionsForConstraints result{
+      .player1 = play_options::normalizePlayOption(selectedPlayer1),
+      .player2 = play_options::normalizePlayOption(selectedPlayer2),
+      .doublePlayFlip = selectedDoublePlayFlip};
+  if (!constraintSettings.gradeConstraint) {
+    return result;
+  }
+  if (*constraintSettings.gradeConstraint == "grade") {
+    return {};
+  }
+  if (*constraintSettings.gradeConstraint == "grade_mirror") {
+    if (result.player1 == "MIRROR") {
+      return {.player1 = "MIRROR",
+              .player2 = "MIRROR",
+              .doublePlayFlip = true};
+    }
+    return {};
+  }
+  if (*constraintSettings.gradeConstraint == "grade_random") {
+    const auto player1 = replay::beatorajaReplayOptionIndex(result.player1);
+    const auto player2 = replay::beatorajaReplayOptionIndex(result.player2);
+    if (player1 && *player1 > 5) result.player1 = "NORMAL";
+    if (player2 && *player2 > 5) result.player2 = "NORMAL";
+  }
+  return result;
+}
+
 inline bool coursePlayOptionLocksSelection(
     const CourseConstraintSettings &constraintSettings) {
   return constraintSettings.gradeConstraint.has_value() &&

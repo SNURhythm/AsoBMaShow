@@ -122,6 +122,9 @@ public:
       const bms_parser::ChartMeta &chartMeta,
       int selectedLongNoteMode = 0);
   PlayerScoreHistorySnapshot LoadPlayerScoreHistory();
+  RecentScoreImprovements
+  LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
+                              int selectedLongNoteMode);
   std::optional<ScoreBestSnapshot> LoadBestClearScore(
       const bms_parser::ChartMeta &chartMeta,
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
@@ -133,6 +136,9 @@ public:
       int selectedLongNoteMode = 0);
   std::optional<ScoreBestSnapshot>
   LoadBestCourseScore(const CoursePlaySession &session);
+  CourseSelectorOptionScores LoadCourseSelectorOptionScores(
+      std::string_view courseKey, int legacyCourseId, int longNoteMode,
+      bool doublePlay);
   CourseScoreRecoveryResult RecoverCourseRecords(
       std::span<const course_identity::Definition> definitions);
   ScoreClearRankCache LoadBestClearRanks();

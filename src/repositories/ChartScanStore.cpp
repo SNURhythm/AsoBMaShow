@@ -11,9 +11,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <functional>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
+#include <set>
 #include <utility>
 
 namespace {
@@ -40,6 +43,25 @@ sqlite3_int64 clampSqlInteger(std::uint64_t value) {
                      std::numeric_limits<sqlite3_int64>::max())
              ? std::numeric_limits<sqlite3_int64>::max()
              : static_cast<sqlite3_int64>(value);
+}
+
+// Lexicographic successor of a binary string: increment the last byte that is
+// not 0xFF and truncate any trailing 0xFF bytes. This yields the upper bound
+// of the prefix interval [input, bound): every string that has `input` as a
+// prefix compares strictly less than the bound under memcmp ordering. (It is
+// not the literal immediate successor, which would be input + '\0'.) Returns
+// an empty string when every byte is 0xFF, meaning no finite bound exists.
+std::string sqliteLexicographicSuccessor(const std::string &text) {
+  std::string upper = text;
+  for (std::size_t i = upper.size(); i > 0; --i) {
+    unsigned char &byte = reinterpret_cast<unsigned char &>(upper[i - 1]);
+    if (byte != 0xFF) {
+      ++byte;
+      upper.resize(i);
+      return upper;
+    }
+  }
+  return std::string();
 }
 
 sqlite3_int64 fileTimeToSqlNs(std::filesystem::file_time_type time) {
@@ -107,7 +129,7 @@ bool pathIsInsideDirectory(const std::filesystem::path &path,
 }
 
 const char *insertChartMetaSql() {
-  return "REPLACE INTO chart_meta ("
+  return "INSERT INTO chart_meta ("
          "path,"
          "md5,"
          "sha256,"
@@ -138,6 +160,13 @@ const char *insertChartMetaSql() {
          "total_backspin_notes,"
          "ln_mode,"
          "has_document,"
+         "has_bpm_stop,"
+         "has_scroll_change,"
+         "add_date,"
+         "total_landmine_notes,"
+         "has_random_sequence,"
+         "most_prevalent_bpm,"
+         "has_bga,"
          "source_priority,"
          "source_archive_size"
          ") VALUES("
@@ -171,16 +200,61 @@ const char *insertChartMetaSql() {
          "@total_backspin_notes,"
          "@ln_mode,"
          "@has_document,"
+         "@has_bpm_stop,"
+         "@has_scroll_change,"
+         "@add_date,"
+         "@total_landmine_notes,"
+         "@has_random_sequence,"
+         "@most_prevalent_bpm,"
+         "@has_bga,"
          "@source_priority,"
          "@source_archive_size"
-         ")";
+         ") ON CONFLICT(path) DO UPDATE SET "
+         "md5=excluded.md5,"
+         "sha256=excluded.sha256,"
+         "title=excluded.title,"
+         "subtitle=excluded.subtitle,"
+         "genre=excluded.genre,"
+         "artist=excluded.artist,"
+         "sub_artist=excluded.sub_artist,"
+         "folder=excluded.folder,"
+         "stage_file=excluded.stage_file,"
+         "banner=excluded.banner,"
+         "back_bmp=excluded.back_bmp,"
+         "preview=excluded.preview,"
+         "level=excluded.level,"
+         "difficulty=excluded.difficulty,"
+         "total=excluded.total,"
+         "has_total=excluded.has_total,"
+         "bpm=excluded.bpm,"
+         "max_bpm=excluded.max_bpm,"
+         "min_bpm=excluded.min_bpm,"
+         "length=excluded.length,"
+         "rank=excluded.rank,"
+         "player=excluded.player,"
+         "keys=excluded.keys,"
+         "total_notes=excluded.total_notes,"
+         "total_long_notes=excluded.total_long_notes,"
+         "total_scratch_notes=excluded.total_scratch_notes,"
+         "total_backspin_notes=excluded.total_backspin_notes,"
+         "ln_mode=excluded.ln_mode,"
+         "has_document=excluded.has_document,"
+         "has_bpm_stop=excluded.has_bpm_stop,"
+         "has_scroll_change=excluded.has_scroll_change,"
+         "total_landmine_notes=excluded.total_landmine_notes,"
+         "has_random_sequence=excluded.has_random_sequence,"
+         "most_prevalent_bpm=excluded.most_prevalent_bpm,"
+         "has_bga=excluded.has_bga,"
+         "source_priority=excluded.source_priority,"
+         "source_archive_size=excluded.source_archive_size";
 }
 
 bool bindAndInsertChartMeta(
     sqlite3 *database, sqlite3_stmt *statement,
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<ChartSourcePreference> &sourcePreferenceHint,
-    bool hasDocument) {
+    bool hasDocument, ChartSequenceFeatures sequenceFeatures,
+    std::int64_t addDateSeconds) {
   if (statement == nullptr) {
     logSdlSqlErrorText("inserting a chart", "statement is not prepared");
     return false;
@@ -231,8 +305,15 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 28, chartMeta.TotalBackSpinNotes);
   sqlite3_bind_int(statement, 29, chartMeta.LnMode);
   sqlite3_bind_int(statement, 30, hasDocument ? 1 : 0);
-  sqlite3_bind_int(statement, 31, sourcePreference.priority);
-  sqlite3_bind_int64(statement, 32,
+  sqlite3_bind_int(statement, 31, sequenceFeatures.hasBpmStop ? 1 : 0);
+  sqlite3_bind_int(statement, 32, sequenceFeatures.hasScrollChange ? 1 : 0);
+  sqlite3_bind_int64(statement, 33, addDateSeconds);
+  sqlite3_bind_int(statement, 34, chartMeta.TotalLandmineNotes);
+  sqlite3_bind_int(statement, 35, chartMeta.RandomValues.empty() ? 0 : 1);
+  sqlite3_bind_double(statement, 36, chartMeta.MostPrevalentBpm);
+  sqlite3_bind_int(statement, 37, sequenceFeatures.hasBga ? 1 : 0);
+  sqlite3_bind_int(statement, 38, sourcePreference.priority);
+  sqlite3_bind_int64(statement, 39,
                      clampSqlInteger(sourcePreference.archiveSize));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
@@ -315,8 +396,59 @@ bool upsertScanCheckpoint(sqlite3 *database,
 }
 
 bool clearScanCheckpoint(sqlite3 *database) {
-  return executeSqliteLogged(database, "DELETE FROM chart_scan_checkpoint",
-                             "clearing chart scan checkpoint", logSqlErrorText);
+  if (!executeSqliteLogged(database, "DELETE FROM chart_scan_checkpoint",
+                           "clearing chart scan checkpoint", logSqlErrorText)) {
+    return false;
+  }
+  return executeSqliteLogged(
+      database, "DELETE FROM chart_scan_completed_archive",
+      "clearing completed archive records", logSqlErrorText);
+}
+
+bool recordCompletedArchive(sqlite3 *database,
+                            const CompletedArchiveRecord &record) {
+  const char *query =
+      "INSERT INTO chart_scan_completed_archive "
+      "(archive_path, archive_size, mtime_ns) VALUES (?, ?, ?) "
+      "ON CONFLICT(archive_path, archive_size, mtime_ns) DO NOTHING";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "recording completed archive",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  bindSqliteText(
+      statement.get(), 1,
+      chart_storage_identity::StoredPathText(record.path));
+  sqlite3_bind_int64(statement.get(), 2, record.size);
+  sqlite3_bind_int64(statement.get(), 3, record.mtimeNs);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("recording completed archive", database);
+    return false;
+  }
+  return true;
+}
+
+bool selectCompletedArchives(
+    sqlite3 *database, std::vector<CompletedArchiveRecord> &records) {
+  const char *query =
+      "SELECT archive_path, archive_size, mtime_ns "
+      "FROM chart_scan_completed_archive";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+                                    "selecting completed archives",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    records.push_back({
+        .path = storedPathFromDatabase(
+            sqliteColumnString(statement.get(), 0)),
+        .size = sqlite3_column_int64(statement.get(), 1),
+        .mtimeNs = sqlite3_column_int64(statement.get(), 2),
+    });
+  }
+  return true;
 }
 
 bool clearMetadataRebuildRequired(sqlite3 *database) {
@@ -353,7 +485,10 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
   ChartScanSnapshot snapshot;
   if (load == ChartScanSnapshotLoad::Full) {
     chart_repository_detail::SelectAllChartMeta(database, snapshot.charts);
+  }
 
+  if (load == ChartScanSnapshotLoad::Full ||
+      load == ChartScanSnapshotLoad::Reconcile) {
     SqliteStatementHandle solidStatement;
     if (prepareSqliteStatementLogged(
             database, "SELECT path FROM solid_archives", solidStatement,
@@ -390,6 +525,7 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
     }
   }
 
+  selectCompletedArchives(database, snapshot.completedArchives);
   ChartScanCheckpoint checkpoint;
   if (selectScanCheckpoint(database, checkpoint) && checkpoint.found) {
     snapshot.checkpoint = std::move(checkpoint);
@@ -408,7 +544,11 @@ bool ChartRepository::Session::InsertChartMeta(
     return false;
   }
   if (!bindAndInsertChartMeta(database, statement.get(), chartMeta,
-                              std::nullopt, false)) {
+                              std::nullopt, false, {},
+                              std::chrono::duration_cast<std::chrono::seconds>(
+                                  std::chrono::system_clock::now()
+                                      .time_since_epoch())
+                                  .count())) {
     return false;
   }
   chart_repository_detail::BumpLibraryRevision();
@@ -417,7 +557,11 @@ bool ChartRepository::Session::InsertChartMeta(
 
 struct ChartRepository::Session::ScanBatch::Impl {
   explicit Impl(std::shared_ptr<ChartSessionStorage> storageValue)
-      : storage(std::move(storageValue)) {
+      : storage(std::move(storageValue)),
+        addDateSeconds(
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch())
+                .count()) {
     if (!beginTransaction()) {
       return;
     }
@@ -457,6 +601,10 @@ struct ChartRepository::Session::ScanBatch::Impl {
     }
   }
 
+  void noteFolderChanged(bool changed = true) {
+    folderChanged = folderChanged || changed;
+  }
+
   bool ensureChartInsertStatement() {
     if (chartInsertStatementReady) {
       return true;
@@ -471,14 +619,57 @@ struct ChartRepository::Session::ScanBatch::Impl {
     return chartInsertStatementReady;
   }
 
+  bool ensureChartHasDocumentUpdateStatement() {
+    if (chartHasDocumentUpdateStatementReady) {
+      return true;
+    }
+    if (chartHasDocumentUpdateStatementAttempted) {
+      return false;
+    }
+    chartHasDocumentUpdateStatementAttempted = true;
+    chartHasDocumentUpdateStatementReady = prepareSqliteStatementLogged(
+        database(),
+        "UPDATE chart_meta SET has_document = @has_document "
+        "WHERE path = @path AND has_document != @has_document",
+        chartHasDocumentUpdateStatement,
+        "preparing chart document flag update", logSdlSqlErrorText);
+    return chartHasDocumentUpdateStatementReady;
+  }
+
+  bool ensureSourcePreferenceUpdateStatement() {
+    if (sourcePreferenceUpdateStatementReady) {
+      return true;
+    }
+    if (sourcePreferenceUpdateStatementAttempted) {
+      return false;
+    }
+    sourcePreferenceUpdateStatementAttempted = true;
+    sourcePreferenceUpdateStatementReady = prepareSqliteStatementLogged(
+        database(),
+        "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
+        "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
+        "OR source_archive_size IS NULL OR source_archive_size != ?)",
+        sourcePreferenceUpdateStatement,
+        "preparing chart source preference update", logSdlSqlErrorText);
+    return sourcePreferenceUpdateStatementReady;
+  }
+
   std::shared_ptr<ChartSessionStorage> storage;
   std::unique_ptr<SqliteTransactionHandle> transaction;
   SqliteStatementHandle chartInsertStatement;
+  SqliteStatementHandle chartHasDocumentUpdateStatement;
+  SqliteStatementHandle sourcePreferenceUpdateStatement;
+  const std::int64_t addDateSeconds;
   int changedCount = 0;
+  bool folderChanged = false;
   bool ready = false;
   bool committed = false;
   bool chartInsertStatementAttempted = false;
   bool chartInsertStatementReady = false;
+  bool chartHasDocumentUpdateStatementAttempted = false;
+  bool chartHasDocumentUpdateStatementReady = false;
+  bool sourcePreferenceUpdateStatementAttempted = false;
+  bool sourcePreferenceUpdateStatementReady = false;
 };
 
 ChartRepository::Session::ScanBatch::ScanBatch(std::unique_ptr<Impl> impl)
@@ -491,7 +682,8 @@ ChartRepository::Session::ScanBatch::operator=(ScanBatch &&) noexcept = default;
 
 bool ChartRepository::Session::ScanBatch::UpsertChart(
     const bms_parser::ChartMeta &meta,
-    std::optional<ChartSourcePreference> sourcePreference, bool hasDocument) {
+    std::optional<ChartSourcePreference> sourcePreference, bool hasDocument,
+    ChartSequenceFeatures sequenceFeatures) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
@@ -502,7 +694,8 @@ bool ChartRepository::Session::ScanBatch::UpsertChart(
   sqlite3_clear_bindings(impl_->chartInsertStatement.get());
   if (!bindAndInsertChartMeta(impl_->database(),
                               impl_->chartInsertStatement.get(), meta,
-                              sourcePreference, hasDocument)) {
+                              sourcePreference, hasDocument,
+                              sequenceFeatures, impl_->addDateSeconds)) {
     return false;
   }
   impl_->noteChanged();
@@ -514,18 +707,17 @@ bool ChartRepository::Session::ScanBatch::UpdateChartHasDocument(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
-  SqliteStatementHandle statement;
-  if (!prepareSqliteStatementLogged(
-          impl_->database(),
-          "UPDATE chart_meta SET has_document = @has_document "
-          "WHERE path = @path AND has_document != @has_document",
-          statement, "preparing chart document flag update", logSqlErrorText)) {
+  if (!impl_->ensureChartHasDocumentUpdateStatement()) {
     return false;
   }
-  sqlite3_bind_int(statement.get(), 1, hasDocument ? 1 : 0);
-  bindSqliteText(statement.get(), 2,
+  sqlite3_reset(impl_->chartHasDocumentUpdateStatement.get());
+  sqlite3_clear_bindings(impl_->chartHasDocumentUpdateStatement.get());
+  sqlite3_bind_int(impl_->chartHasDocumentUpdateStatement.get(), 1,
+                   hasDocument ? 1 : 0);
+  bindSqliteText(impl_->chartHasDocumentUpdateStatement.get(), 2,
                  chart_storage_identity::StoredPathText(path));
-  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+  if (sqlite3_step(impl_->chartHasDocumentUpdateStatement.get()) !=
+      SQLITE_DONE) {
     logSqlError("updating chart document flag", impl_->database());
     return false;
   }
@@ -597,42 +789,37 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
-  std::vector<std::filesystem::path> chartPaths;
-  SqliteStatementHandle selectStatement;
-  if (!prepareSqliteStatementLogged(
-          impl_->database(), "SELECT path FROM chart_meta", selectStatement,
-          "selecting archive chart paths", logSqlErrorText)) {
-    return false;
-  }
-  while (sqlite3_step(selectStatement.get()) == SQLITE_ROW) {
-    chartPaths.push_back(
-        storedPathFromDatabase(sqliteColumnString(selectStatement.get(), 0)));
+  // Archive chart rows are stored under the virtual path
+  // archivePath/innerPath, normalized by StoredPathText the same way as the
+  // archive path itself. Delete them with a single bounded range scan on the
+  // path PRIMARY KEY (path >= prefix AND path < upper) instead of a LIKE scan
+  // that SQLite cannot index-seek.
+  std::string prefix = chart_storage_identity::StoredPathText(archivePath);
+  prefix += std::filesystem::path::preferred_separator;
+  const std::string upper = sqliteLexicographicSuccessor(prefix);
+
+  std::string sql = "DELETE FROM chart_meta WHERE path >= ? ";
+  if (!upper.empty()) {
+    sql += "AND path < ? ";
   }
 
   SqliteStatementHandle deleteStatement;
   if (!prepareSqliteStatementLogged(
-          impl_->database(), "DELETE FROM chart_meta WHERE path = ?",
-          deleteStatement, "preparing archive chart delete", logSqlErrorText)) {
+          impl_->database(), sql, deleteStatement,
+          "preparing archive chart delete", logSqlErrorText)) {
     return false;
   }
-  bool changed = false;
-  const auto target = archivePath.lexically_normal();
-  for (const auto &path : chartPaths) {
-    if (!pathIsInsideDirectory(path, target)) {
-      continue;
-    }
-    sqlite3_reset(deleteStatement.get());
-    sqlite3_clear_bindings(deleteStatement.get());
-    bindSqliteText(deleteStatement.get(), 1,
-                   chart_storage_identity::StoredPathText(path));
-    if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
-      logSqlError("deleting archive chart", impl_->database());
-      return false;
-    }
-    if (!changed && sqlite3_changes(impl_->database()) > 0) {
-      changed = true;
-      ++impl_->changedCount;
-    }
+  int bindIndex = 1;
+  bindSqliteText(deleteStatement.get(), bindIndex++, prefix);
+  if (!upper.empty()) {
+    bindSqliteText(deleteStatement.get(), bindIndex++, upper);
+  }
+  if (sqlite3_step(deleteStatement.get()) != SQLITE_DONE) {
+    logSqlError("deleting archive chart", impl_->database());
+    return false;
+  }
+  if (sqlite3_changes(impl_->database()) > 0) {
+    impl_->noteChanged();
   }
   return true;
 }
@@ -787,28 +974,241 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return false;
   }
-  const char *query =
-      "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
-      "WHERE path = ? AND (source_priority IS NULL OR source_priority != ? "
-      "OR source_archive_size IS NULL OR source_archive_size != ?)";
-  SqliteStatementHandle statement;
-  if (!prepareSqliteStatementLogged(impl_->database(), query, statement,
-                                    "preparing chart source preference update",
-                                    logSqlErrorText)) {
+  if (!impl_->ensureSourcePreferenceUpdateStatement()) {
     return false;
   }
   const sqlite3_int64 archiveSize = clampSqlInteger(update.archiveSize);
-  sqlite3_bind_int(statement.get(), 1, update.priority);
-  sqlite3_bind_int64(statement.get(), 2, archiveSize);
-  bindSqliteText(statement.get(), 3,
+  sqlite3_reset(impl_->sourcePreferenceUpdateStatement.get());
+  sqlite3_clear_bindings(impl_->sourcePreferenceUpdateStatement.get());
+  sqlite3_bind_int(impl_->sourcePreferenceUpdateStatement.get(), 1,
+                   update.priority);
+  sqlite3_bind_int64(impl_->sourcePreferenceUpdateStatement.get(), 2,
+                     archiveSize);
+  bindSqliteText(impl_->sourcePreferenceUpdateStatement.get(), 3,
                  chart_storage_identity::StoredPathText(update.path));
-  sqlite3_bind_int(statement.get(), 4, update.priority);
-  sqlite3_bind_int64(statement.get(), 5, archiveSize);
-  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+  sqlite3_bind_int(impl_->sourcePreferenceUpdateStatement.get(), 4,
+                   update.priority);
+  sqlite3_bind_int64(impl_->sourcePreferenceUpdateStatement.get(), 5,
+                     archiveSize);
+  if (sqlite3_step(impl_->sourcePreferenceUpdateStatement.get()) !=
+      SQLITE_DONE) {
     logSqlError("updating chart source preference", impl_->database());
     return false;
   }
   impl_->noteChanged();
+  return true;
+}
+
+bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
+    const std::filesystem::path &archivePath, int priority,
+    std::uint64_t archiveSize) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  // Charts inside an archive are stored under archivePath/innerPath,
+  // normalized by StoredPathText the same way as the archive path itself, so
+  // one bounded range scan on the path PRIMARY KEY updates the whole archive's
+  // preference without a LIKE scan that SQLite cannot index-seek.
+  std::string prefix = chart_storage_identity::StoredPathText(archivePath);
+  prefix += std::filesystem::path::preferred_separator;
+  const std::string upper = sqliteLexicographicSuccessor(prefix);
+
+  std::string sql =
+      "UPDATE chart_meta SET source_priority = ?, source_archive_size = ? "
+      "WHERE path >= ? ";
+  if (!upper.empty()) {
+    sql += "AND path < ? ";
+  }
+  sql += "AND (source_priority IS NULL OR source_priority != ? OR "
+         "source_archive_size IS NULL OR source_archive_size != ?)";
+
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(impl_->database(), sql, statement,
+                                    "preparing archive source preference update",
+                                    logSqlErrorText)) {
+    return false;
+  }
+  const sqlite3_int64 clampedArchiveSize = clampSqlInteger(archiveSize);
+  int bindIndex = 1;
+  sqlite3_bind_int(statement.get(), bindIndex++, priority);
+  sqlite3_bind_int64(statement.get(), bindIndex++, clampedArchiveSize);
+  bindSqliteText(statement.get(), bindIndex++, prefix);
+  if (!upper.empty()) {
+    bindSqliteText(statement.get(), bindIndex++, upper);
+  }
+  sqlite3_bind_int(statement.get(), bindIndex++, priority);
+  sqlite3_bind_int64(statement.get(), bindIndex++, clampedArchiveSize);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("updating archive chart source preference", impl_->database());
+    return false;
+  }
+  if (sqlite3_changes(impl_->database()) > 0) {
+    impl_->noteChanged();
+  }
+  return true;
+}
+
+bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
+    std::span<const ChartFolderScanNode> nodes,
+    std::span<const std::filesystem::path> roots) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+
+  struct StoredFolder {
+    std::string storedPath;
+    std::int64_t dateSeconds = 0;
+    std::int64_t addDateSeconds = 0;
+  };
+  std::map<std::filesystem::path, StoredFolder> stored;
+  SqliteStatementHandle select;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "SELECT path, date, adddate FROM folder", select,
+          "selecting folder scan records", logSqlErrorText)) {
+    return false;
+  }
+  int selectResult = SQLITE_OK;
+  while ((selectResult = sqlite3_step(select.get())) == SQLITE_ROW) {
+    const std::string storedPath = sqliteColumnString(select.get(), 0);
+    const auto path = storedPathFromDatabase(storedPath).lexically_normal();
+    if (!path.empty()) {
+          stored.emplace(path, StoredFolder{
+                               .storedPath = storedPath,
+                               .dateSeconds = sqlite3_column_int64(select.get(), 1),
+                               .addDateSeconds = sqlite3_column_int64(select.get(), 2),
+                           });
+    }
+  }
+  if (selectResult != SQLITE_DONE) {
+    logSqlError("selecting folder scan records", impl_->database());
+    return false;
+  }
+
+  std::map<std::filesystem::path, const ChartFolderScanNode *> nodesByPath;
+  std::map<std::filesystem::path, std::vector<std::filesystem::path>>
+      children;
+  for (const auto &node : nodes) {
+    const auto path = std::filesystem::path(node.path).lexically_normal();
+    if (path.empty()) {
+      continue;
+    }
+    nodesByPath[path] = &node;
+  }
+  for (const auto &[path, _] : nodesByPath) {
+    const auto parent = path.parent_path().lexically_normal();
+    if (nodesByPath.contains(parent)) {
+      children[parent].push_back(path);
+    }
+  }
+
+  SqliteStatementHandle upsert;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(),
+          "INSERT INTO folder(path, date, adddate) VALUES (?, ?, ?) "
+          "ON CONFLICT(path) DO UPDATE SET date = excluded.date, "
+          "adddate = excluded.adddate",
+          upsert, "preparing folder scan upsert", logSqlErrorText)) {
+    return false;
+  }
+  SqliteStatementHandle erase;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "DELETE FROM folder WHERE path = ?", erase,
+          "preparing folder scan delete", logSqlErrorText)) {
+    return false;
+  }
+
+  std::set<std::filesystem::path> deleted;
+  const auto deleteSubtree = [&](const std::filesystem::path &root) {
+    bool succeeded = true;
+    for (const auto &[path, record] : stored) {
+      if (deleted.contains(path) ||
+          (path != root && !pathIsInsideDirectory(path, root))) {
+        continue;
+      }
+      sqlite3_reset(erase.get());
+      sqlite3_clear_bindings(erase.get());
+      bindSqliteText(erase.get(), 1, record.storedPath);
+      if (sqlite3_step(erase.get()) != SQLITE_DONE) {
+        logSqlError("deleting missing folder scan record", impl_->database());
+        succeeded = false;
+        break;
+      }
+          impl_->noteFolderChanged();
+      deleted.insert(path);
+    }
+    return succeeded;
+  };
+
+  std::function<bool(const std::filesystem::path &, bool)> process;
+  process = [&](const std::filesystem::path &path, bool updateFolder) {
+    const auto node = nodesByPath.find(path);
+    if (node == nodesByPath.end()) {
+      return true;
+    }
+    std::set<std::filesystem::path> presentChildren;
+    for (const auto &child : children[path]) {
+      presentChildren.insert(child);
+    }
+
+    if (!node->second->containsBms) {
+      for (const auto &child : children[path]) {
+        bool updateChild = true;
+        const auto existing = stored.find(child);
+        if (existing != stored.end() && !deleted.contains(child)) {
+          const auto childNode = nodesByPath.find(child);
+          updateChild = childNode == nodesByPath.end() ||
+                        existing->second.dateSeconds !=
+                            childNode->second->dateSeconds;
+        }
+        if (!process(child, updateChild)) {
+          return false;
+        }
+      }
+    }
+
+    if (updateFolder) {
+      const auto existing = stored.find(path);
+      const std::int64_t addDateSeconds =
+          existing == stored.end() ||
+                  existing->second.dateSeconds != node->second->dateSeconds
+              ? impl_->addDateSeconds
+              : existing->second.addDateSeconds;
+      const bool valuesChanged =
+          existing == stored.end() ||
+          existing->second.dateSeconds != node->second->dateSeconds ||
+          existing->second.addDateSeconds != addDateSeconds;
+      sqlite3_reset(upsert.get());
+      sqlite3_clear_bindings(upsert.get());
+      bindSqliteText(upsert.get(), 1,
+                     chart_storage_identity::StoredPathText(path));
+      sqlite3_bind_int64(upsert.get(), 2, node->second->dateSeconds);
+      sqlite3_bind_int64(upsert.get(), 3, addDateSeconds);
+      if (sqlite3_step(upsert.get()) != SQLITE_DONE) {
+        logSqlError("upserting folder scan record", impl_->database());
+        return false;
+      }
+      impl_->noteFolderChanged(valuesChanged);
+    }
+
+    for (const auto &[candidate, _] : stored) {
+      if (deleted.contains(candidate) ||
+          candidate.parent_path().lexically_normal() != path ||
+          presentChildren.contains(candidate)) {
+        continue;
+      }
+      if (!deleteSubtree(candidate)) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  for (const auto &root : roots) {
+    const auto normalized = root.lexically_normal();
+    if (nodesByPath.contains(normalized) && !process(normalized, true)) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -817,27 +1217,55 @@ std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
     return std::nullopt;
   }
+  // Archive chart rows are stored under the virtual path
+  // archivePath/innerPath, normalized by StoredPathText the same way as the
+  // archive path itself. Count them with a single bounded range scan on the
+  // path PRIMARY KEY (path >= prefix AND path < upper) instead of a LIKE scan
+  // that SQLite cannot index-seek.
+  std::string prefix = chart_storage_identity::StoredPathText(path);
+  prefix += std::filesystem::path::preferred_separator;
+  const std::string upper = sqliteLexicographicSuccessor(prefix);
+
+  std::string sql = "SELECT COUNT(*) FROM chart_meta WHERE path >= ? ";
+  if (!upper.empty()) {
+    sql += "AND path < ? ";
+  }
+
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(
-          impl_->database(), "SELECT path FROM chart_meta", statement,
-          "counting archive chart rows", logSqlErrorText)) {
+          impl_->database(), sql, statement, "counting archive chart rows",
+          logSqlErrorText)) {
     return std::nullopt;
   }
-  int count = 0;
-  const auto target = path.lexically_normal();
-  int stepResult = SQLITE_OK;
-  while ((stepResult = sqlite3_step(statement.get())) == SQLITE_ROW) {
-    const auto chartPath =
-        storedPathFromDatabase(sqliteColumnString(statement.get(), 0));
-    if (pathIsInsideDirectory(chartPath, target)) {
-      ++count;
-    }
+  int bindIndex = 1;
+  bindSqliteText(statement.get(), bindIndex++, prefix);
+  if (!upper.empty()) {
+    bindSqliteText(statement.get(), bindIndex++, upper);
   }
-  if (stepResult != SQLITE_DONE) {
+  if (sqlite3_step(statement.get()) != SQLITE_ROW) {
+    logSqlError("counting archive chart rows", impl_->database());
+    return std::nullopt;
+  }
+  const int count = sqlite3_column_int(statement.get(), 0);
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("counting archive chart rows", impl_->database());
     return std::nullopt;
   }
   return count;
+}
+
+bool ChartRepository::Session::ScanBatch::RecordCompletedArchive(
+    const std::filesystem::path &archivePath, std::int64_t size,
+    std::int64_t mtimeNs) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  return recordCompletedArchive(impl_->database(),
+                                CompletedArchiveRecord{
+                                    .path = archivePath,
+                                    .size = size,
+                                    .mtimeNs = mtimeNs,
+                                });
 }
 
 bool ChartRepository::Session::ScanBatch::CheckpointAndContinue(
@@ -853,6 +1281,24 @@ bool ChartRepository::Session::ScanBatch::CheckpointAndContinue(
   return checkpointSaved && transactionStarted;
 }
 
+bool ChartRepository::Session::ScanBatch::SaveCheckpointInPlace(
+    const ChartScanCheckpoint &checkpoint) {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  return upsertScanCheckpoint(impl_->database(), checkpoint);
+}
+
+bool ChartRepository::Session::ScanBatch::CommitForProgress() {
+  if (impl_ == nullptr || !impl_->ready || impl_->committed ||
+      !impl_->commitTransaction()) {
+    return false;
+  }
+  const bool transactionStarted = impl_->beginTransaction();
+  impl_->ready = transactionStarted;
+  return transactionStarted;
+}
+
 bool ChartRepository::Session::ScanBatch::Commit() {
   if (impl_ == nullptr || !impl_->ready || impl_->committed ||
       !impl_->commitTransaction()) {
@@ -860,7 +1306,7 @@ bool ChartRepository::Session::ScanBatch::Commit() {
   }
   impl_->committed = true;
   impl_->ready = false;
-  if (impl_->changedCount > 0) {
+  if (impl_->changedCount > 0 || impl_->folderChanged) {
     chart_repository_detail::BumpLibraryRevision();
   }
   return true;
@@ -873,6 +1319,27 @@ int ChartRepository::Session::ScanBatch::ChangedCount() const {
 ChartScanSnapshot ChartRepository::Session::LoadScanSnapshot(
     ChartScanSnapshotLoad load) {
   return loadScanSnapshot(impl_->database(), load);
+}
+
+std::vector<ChartScanReconcileIdentity>
+ChartRepository::Session::LoadScanReconcileIdentities() {
+  std::vector<ChartScanReconcileIdentity> identities;
+  sqlite3 *database = impl_->database();
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          database, "SELECT path, md5, sha256 FROM chart_meta", statement,
+          "selecting chart scan reconcile identities", logSqlErrorText)) {
+    return identities;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    identities.push_back({
+        .path = storedPathFromDatabase(
+            sqliteColumnString(statement.get(), 0)),
+        .md5 = normalizedHash(sqliteColumnString(statement.get(), 1)),
+        .sha256 = normalizedHash(sqliteColumnString(statement.get(), 2)),
+    });
+  }
+  return identities;
 }
 
 std::optional<ChartRepository::Session::ScanBatch>

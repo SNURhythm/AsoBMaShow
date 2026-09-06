@@ -2703,18 +2703,33 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                             SkinBuiltinPropertySelector{std::string(name)}),
            "gameplay catalog admits each named BooleanPropertyFactory selector");
   }
+  for (const std::string_view name : {
+           "difficulty", "option1p", "open_download_site", "constant",
+           "keyassign1", "keyassign54", "keyassign+01",
+           "practice_item1", "practice_item16", "practice_item+01"}) {
+    expect(catalog.contains({.kind = SkinBindingKind::Event},
+                            SkinBuiltinPropertySelector{std::string(name)}),
+           "gameplay catalog admits every EventType and EventPattern name");
+  }
+  for (const std::string_view name : {
+           "keyassign0", "keyassign55", "practice_item0",
+           "practice_item17", "option1p_typo"}) {
+    expect(!catalog.contains({.kind = SkinBindingKind::Event},
+                             SkinBuiltinPropertySelector{std::string(name)}),
+           "gameplay catalog rejects names absent from EventFactory");
+  }
   for (const int id : {161, 162, 163, 164}) {
     expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
                              .integerDomain =
                                  SkinIntegerPropertyDomain::IntegerValue},
                             SkinBuiltinPropertySelector{id}),
            "gameplay catalog admits each implemented play-time value");
-    expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
-                             .integerDomain =
-                                 SkinIntegerPropertyDomain::ImageIndex},
-                            SkinBuiltinPropertySelector{id}),
-           "compatibility catalog accepts every integer cache selector as an "
-           "image index too");
+    expect(!catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                              .integerDomain =
+                                  SkinIntegerPropertyDomain::ImageIndex},
+                             SkinBuiltinPropertySelector{id}),
+           "an image-index factory cache slot without a source property is "
+           "absent");
   }
   expect(catalog.contains({.kind = SkinBindingKind::IntegerProperty,
                            .integerDomain =
@@ -2724,12 +2739,12 @@ void testPlayTimerPropertiesMatchPinnedJavaConversions() {
                                .integerDomain =
                                    SkinIntegerPropertyDomain::ImageIndex},
                               SkinBuiltinPropertySelector{308}) &&
-             catalog.contains({.kind = SkinBindingKind::IntegerProperty,
-                               .integerDomain =
-                                   SkinIntegerPropertyDomain::IntegerValue},
-                              SkinBuiltinPropertySelector{500}),
-         "catalog accepts every selector supplied through either integer "
-         "factory cache");
+             !catalog.contains({.kind = SkinBindingKind::IntegerProperty,
+                                .integerDomain =
+                                    SkinIntegerPropertyDomain::IntegerValue},
+                               SkinBuiltinPropertySelector{500}),
+         "catalog admits implemented selectors but keeps unimplemented "
+         "integer factory cache slots absent");
   expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
                            .floatDomain = SkinFloatPropertyDomain::Rate},
                           SkinBuiltinPropertySelector{6}),

@@ -183,10 +183,11 @@ void testUnsafeInputsFailClosed() {
     auto input = inputFor(11);
     input.value = {};
     const auto result = normalizeSkinJudgeNumber(input);
-    expect(!result.number.has_value() &&
-               result.error ==
-                   SkinJudgeNumberNormalizationError::MissingValueBinding,
-           "judge number requires an already-decoded integer binding");
+    expect(result.number.has_value() &&
+               result.error == SkinJudgeNumberNormalizationError::None &&
+               !result.number->number.value,
+           "judge number without a value ref keeps the null binding, which "
+           "the renderer hides via the IntegerPropertyFactory sentinel");
   }
   {
     auto input = inputFor(11);

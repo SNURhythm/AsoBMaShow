@@ -1,3 +1,4 @@
+#include "FileChecksum.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/beatoraja/SkinMovieCatalog.h"
 #include "skin/beatoraja/SkinBitmapFontParser.h"
@@ -66,6 +67,49 @@ void testBitmapFontDescriptorParsingMatchesPinnedSources() {
            "BMFont glyph rectangles, supplementary code points, pages, advances, and kerning are typed values");
   }
 
+  std::string mismatchedCounts = encoded;
+  const auto glyphCount = mismatchedCounts.find("chars count=6");
+  const auto kerningCount = mismatchedCounts.find("kernings count=1");
+  expect(glyphCount != std::string::npos &&
+             kerningCount != std::string::npos,
+         "BMFont count compatibility fixture contains both advisory counts");
+  if (glyphCount != std::string::npos &&
+      kerningCount != std::string::npos) {
+    mismatchedCounts.replace(glyphCount, std::string_view("chars count=6").size(),
+                             "chars count=5");
+    mismatchedCounts.replace(
+        kerningCount, std::string_view("kernings count=1").size(),
+        "kernings count=0");
+  }
+  const auto mismatched = skin::parseSkinBitmapFont(
+      skin::SkinBitmapFontResource{.id = 8,
+                                   .virtualPath = "mismatched-counts.fnt"},
+      std::as_bytes(std::span(mismatchedCounts)),
+      skin::SkinBitmapFontSourceFormat::BmFont);
+  expect(mismatched.font && mismatched.font->glyphs.size() == 6 &&
+             mismatched.font->kerning.size() == 1,
+         "BMFont advisory count metadata is recomputed like Beatoraja's "
+         "SkinTextBitmap remapping path");
+
+  constexpr std::string_view sourceValidWithoutAuxiliaryMetrics =
+      "info face=fixture size=12 padding=0,0,0,0\n"
+      "common lineHeight=12 base=9 pages=0\n"
+      "page file=page.png\n"
+      "chars count=1\n"
+      "char id=65 x=0 y=0 width=6 height=8 xoffset=1 yoffset=2 "
+      "xadvance=7 page=0 chnl=15\n";
+  const auto fallbackMetrics = skin::parseSkinBitmapFont(
+      skin::SkinBitmapFontResource{.id = 10,
+                                   .virtualPath = "fallback-metrics.fnt"},
+      std::as_bytes(std::span(sourceValidWithoutAuxiliaryMetrics)),
+      skin::SkinBitmapFontSourceFormat::BmFont);
+  expect(fallbackMetrics.font &&
+             !fallbackMetrics.font->auxiliaryMetricsComplete &&
+             fallbackMetrics.font->pagePaths ==
+                 std::vector<std::string>{"page.png"},
+         "a libGDX-valid BMFont accepts omitted scale metrics and a page id, "
+         "then uses Beatoraja's decoded-page metric fallback");
+
   const std::array<std::byte, 8> binary{
       std::byte{'B'}, std::byte{'M'}, std::byte{'F'}, std::byte{3},
       std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
@@ -99,6 +143,38 @@ void testBitmapFontDescriptorParsingMatchesPinnedSources() {
              lr2Parsed.font->glyphs.at(U'\u301c').region.x == 9 &&
              lr2Parsed.font->glyphs.at(U'\uff5e').region.x == 9,
          "LR2FONT S/M/T/R records share typed pages and glyphs while code 288 maps to both wave-dash forms");
+}
+
+void testInstalledSelectorBmFontsWhenRequested() {
+  const char *root = std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
+  if (root == nullptr || *root == '\0') {
+    return;
+  }
+  const std::filesystem::path select =
+      std::filesystem::path(root) / "LITONE12/Select";
+  for (const std::filesystem::path &relative : {
+           std::filesystem::path("font/title/lightblue/title.fnt"),
+           std::filesystem::path("font/bartitle/lightblue/title.fnt"),
+       }) {
+    const std::filesystem::path path = select / relative;
+    std::ifstream input(path, std::ios::binary);
+    const std::string descriptor{std::istreambuf_iterator<char>(input),
+                                 std::istreambuf_iterator<char>()};
+    expect(input.good() || !descriptor.empty(),
+           "installed LITONE12 BMFont descriptor is readable");
+    if (descriptor.empty()) {
+      continue;
+    }
+    const auto parsed = skin::parseSkinBitmapFont(
+        skin::SkinBitmapFontResource{.id = 1,
+                                     .virtualPath = path.generic_string()},
+        std::as_bytes(std::span(descriptor)),
+        skin::SkinBitmapFontSourceFormat::BmFont,
+        skin::SkinSafetyPolicy(skin::SkinSafetyLevel::Unrestricted,
+                               std::numeric_limits<std::uint64_t>::max(), true));
+    expect(parsed.font.has_value(),
+           "installed LITONE12 selector BMFont follows Beatoraja acceptance");
+  }
 }
 
 image_decode::DecodedImageData bitmapPage(int width, int height,
@@ -164,10 +240,13 @@ void testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs() {
              built.atlas->glyphs.contains(U'A') &&
              !built.atlas->glyphs.contains(U'B') &&
              !built.atlas->glyphs.contains(U'X') &&
-             built.atlas->kerning.empty(),
+             built.atlas->kerning.empty() &&
+             built.atlas->glyphs.at(U'A').layoutOffsetY == -10,
          "bitmap pages remain separate, an unavailable fallback page is "
          "skipped, actual first-page metrics replace the failed auxiliary "
-         "scan, and a glyph without a replacement is simply absent");
+         "scan, a glyph without a replacement is simply absent, and the "
+         "baseline offset is the glyph's yOffset plus its ink height "
+         "(Beatoraja BitmapFont layout)");
 
   auto secondPageFont = *primary.font;
   secondPageFont.pagePaths = {"wide-a.png", "wide-b.png"};
@@ -260,6 +339,9 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
   key.outlineWidth = 8.25;
   expect(!skin::canonicalizeSkinTextAtlasKey(key),
          "an oversized scalable-font outline is rejected before raster work");
+  expect(skin::canonicalizeSkinTextAtlasKey(
+             key, skin::SkinSafetyPolicy(skin::SkinSafetyLevel::Unrestricted)),
+         "Unrestricted adds no host outline-width budget");
   key.outlineWidth = 0.0;
   key.shadowSmoothness = -0.25;
   expect(!skin::canonicalizeSkinTextAtlasKey(key),
@@ -423,13 +505,23 @@ void testScalableFontOutlineWorkIsBounded() {
          .outlineRgba = {255, 0, 0, 255},
          .outlineWidth = 2.0},
         faces, std::set<char32_t>{U'A', U'\U0010ffff'}, {});
-    expect(!lateGlyphFailure.atlas &&
-               lateGlyphFailure.error ==
-                   "font atlas has an unsupported glyph",
-           "a late unsupported glyph rejects the whole scalable atlas");
+    expect(lateGlyphFailure.atlas.has_value(),
+           "an unsupported codepoint falls back to the synthetic missing "
+           "glyph box instead of rejecting the whole scalable atlas");
+    if (lateGlyphFailure.atlas) {
+      const auto missingBox =
+          lateGlyphFailure.atlas->glyphs.find(U'\U0010ffff');
+      const auto provided =
+          lateGlyphFailure.atlas->glyphs.find(U'A');
+      expect(missingBox != lateGlyphFailure.atlas->glyphs.end() &&
+                 provided != lateGlyphFailure.atlas->glyphs.end(),
+             "the fallback atlas keeps both the provided glyph and the "
+             "synthetic box for the unsupported codepoint");
+    }
   }
-  expect(skin::skinTextAtlasPaintBlendOperationsForTesting() == 0,
-         "repeated late glyph rejection performs no outline blending");
+  expect(skin::skinTextAtlasPaintBlendOperationsForTesting() > 0,
+         "the synthetic missing-glyph box participates in atlas outline "
+         "blending");
 
   std::size_t remainingAttemptWork =
       skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations;
@@ -486,6 +578,50 @@ void testScalableFontOutlineWorkIsBounded() {
              cancelled.error == "font atlas preparation cancelled" &&
              cancellationChecks == 2,
          "scalable outline painting observes deterministic mid-glyph cancellation");
+
+  const skin::SkinTextAtlasKey cachedKey{
+      .font = 1,
+      .pointSize = 24,
+      .fallbackChainDigest = "glyph-cache-fixture",
+      .outlineRgba = {255, 0, 0, 255},
+      .outlineWidth = 2.0};
+  std::map<std::string, skin::SkinPreparedGlyphBitmap> glyphStore;
+  skin::ScalableGlyphCacheAccessor glyphCache{
+      .find = [&glyphStore](char32_t codepoint) {
+        const auto found = glyphStore.find(
+            "U" + std::to_string(static_cast<unsigned>(codepoint)));
+        return found == glyphStore.end()
+                   ? std::optional<skin::SkinPreparedGlyphBitmap>{}
+                   : std::optional<skin::SkinPreparedGlyphBitmap>{found->second};
+      },
+      .store = [&glyphStore](char32_t codepoint,
+                             skin::SkinPreparedGlyphBitmap glyph) {
+        glyphStore.emplace(
+            "U" + std::to_string(static_cast<unsigned>(codepoint)),
+            std::move(glyph));
+      }};
+  const auto firstCorpus =
+      skin::buildSkinTextAtlas(15, cachedKey, faces, std::set<char32_t>{U'A'},
+                               {}, skin::SkinSafetyPolicy{},
+                               skin::SkinResourcePolicy::
+                                   maximumScalableFontPaintBlendOperations,
+                               {}, {}, &glyphCache);
+  skin::resetSkinTextAtlasGlyphCacheHitsForTesting();
+  const auto secondCorpus = skin::buildSkinTextAtlas(
+      16, cachedKey, faces,
+      std::set<char32_t>{U'A', U'B', U'\U0010ffff'}, {},
+      skin::SkinSafetyPolicy{},
+      skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations, {},
+      {}, &glyphCache);
+  expect(firstCorpus.atlas && secondCorpus.atlas &&
+             secondCorpus.atlas->glyphs.contains(U'A') &&
+             secondCorpus.atlas->glyphs.contains(U'B') &&
+             secondCorpus.atlas->glyphs.contains(U'\U0010ffff'),
+         "a second scalable atlas reuses cached glyphs and rasterizes only "
+         "the new codepoints");
+  expect(skin::skinTextAtlasGlyphCacheHitsForTesting() == 1,
+         "the shared 'A' glyph is served from the per-glyph cache on the "
+         "second atlas build");
 }
 
 void testSharedSessionAccountingRejectsDistributedAggregateOverages() {
@@ -577,6 +713,15 @@ void testSharedSessionAccountingRejectsDistributedAggregateOverages() {
                             finalAtlasPaintWork) &&
              paintWork.remainingScalableFontPaintBlendOperations() == 0,
          "multiple accepted atlases can consume the exact session paint budget");
+
+  skin::SkinResourceSessionAccounting unrestrictedPaint{
+      skin::SkinSafetyPolicy(skin::SkinSafetyLevel::Unrestricted)};
+  expect(unrestrictedPaint.addAtlas(
+             /*decodedBytes=*/0, /*glyphs=*/0, /*kerningPairs=*/0,
+             /*physicalResources=*/1,
+             skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations +
+                 1U),
+         "Unrestricted adds no host scalable-font paint-work budget");
 }
 
 struct TemporaryDirectory {
@@ -710,9 +855,14 @@ skin::ValidatedBeatorajaSkinModel singleFontModel(std::string virtualPath,
                                                    bool critical,
                                                    std::string literal) {
   skin::ValidatedBeatorajaSkinModel model;
-  model.model.resources.emplace_back(skin::SkinFontResource{
+  skin::SkinFontResource font{
       .id = 1, .authoredName = "font", .virtualPath = std::move(virtualPath),
-      .type = 0});
+      .type = 0};
+  if (font.virtualPath.ends_with(".fnt")) {
+    font.bitmap = skin::SkinBitmapFontResource{
+        .id = font.id, .virtualPath = font.virtualPath, .type = font.type};
+  }
+  model.model.resources.emplace_back(std::move(font));
   model.model.objects.push_back(
       {.id = 1,
        .authoredName = "font-object",
@@ -921,12 +1071,16 @@ void testBitmapFontEncodedAccountingCommitsWithAtlasTransaction() {
       .authoredName = "optional-too-large-atlas",
       .virtualPath = "resources/unique.fnt",
       .type = 0,
-      .fallbacks = {{.virtualPath = "resources/shared.fnt", .type = 0}}});
+      .fallbacks = {{.virtualPath = "resources/shared.fnt", .type = 0}},
+      .bitmap = skin::SkinBitmapFontResource{
+          .id = 1, .virtualPath = "resources/unique.fnt", .type = 0}});
   model.model.resources.emplace_back(skin::SkinFontResource{
       .id = 2,
       .authoredName = "accepted-shared-atlas",
       .virtualPath = "resources/shared.fnt",
-      .type = 0});
+      .type = 0,
+      .bitmap = skin::SkinBitmapFontResource{
+          .id = 2, .virtualPath = "resources/shared.fnt", .type = 0}});
   model.model.objects.push_back(
       {.id = 1,
        .authoredName = "optional-text",
@@ -1107,10 +1261,10 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   model.model.resources.emplace_back(skin::SkinFontResource{.id=7, .authoredName="fixture-font", .virtualPath="resources/fixture.ttf", .type=0});
   model.model.resources.emplace_back(skin::SkinFontResource{.id=8, .authoredName="fallback-font", .virtualPath="resources/icons.ttf", .type=0, .fallbacks={{.virtualPath="resources/fixture.ttf", .type=0}}});
   model.model.resources.emplace_back(skin::SkinFontResource{.id=9, .authoredName="kerning-font", .virtualPath="resources/signika.ttf", .type=0});
-  model.model.resources.emplace_back(skin::SkinFontResource{.id=10, .authoredName="bitmap-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=0});
-  model.model.resources.emplace_back(skin::SkinFontResource{.id=11, .authoredName="distance-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=1});
-  model.model.resources.emplace_back(skin::SkinFontResource{.id=12, .authoredName="colored-distance-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=2});
-  model.model.resources.emplace_back(skin::SkinFontResource{.id=13, .authoredName="bitmap-fallback-font", .virtualPath="resources/bitmap-font/primary.fnt", .type=0, .fallbacks={{.virtualPath="resources/bitmap-font/fixture.fnt", .type=0}}});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=10, .authoredName="bitmap-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=0, .bitmap=skin::SkinBitmapFontResource{.id=10, .virtualPath="resources/bitmap-font/fixture.fnt", .type=0}});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=11, .authoredName="distance-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=1, .bitmap=skin::SkinBitmapFontResource{.id=11, .virtualPath="resources/bitmap-font/fixture.fnt", .type=1}});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=12, .authoredName="colored-distance-font", .virtualPath="resources/bitmap-font/fixture.fnt", .type=2, .bitmap=skin::SkinBitmapFontResource{.id=12, .virtualPath="resources/bitmap-font/fixture.fnt", .type=2}});
+  model.model.resources.emplace_back(skin::SkinFontResource{.id=13, .authoredName="bitmap-fallback-font", .virtualPath="resources/bitmap-font/primary.fnt", .type=0, .fallbacks={{.virtualPath="resources/bitmap-font/fixture.fnt", .type=0}}, .bitmap=skin::SkinBitmapFontResource{.id=13, .virtualPath="resources/bitmap-font/primary.fnt", .type=0}});
   model.model.objects.push_back({.id=1, .authoredName="primary", .payload=skin::SkinImageObject{.orderedStates={{.resource=1, .frames={{.x=0,.y=0,.w=40,.h=20,.gridColumns=4,.gridRows=2}}}}}, .critical=true});
   model.model.objects.push_back({.id=2, .authoredName="alias", .payload=skin::SkinImageObject{.orderedStates={{.resource=2, .frames={{.x=2,.y=3,.w=20,.h=10,.gridColumns=2,.gridRows=1}}}}}, .critical=true});
   model.model.objects.push_back({.id=3, .authoredName="jpeg", .payload=skin::SkinImageObject{.orderedStates={{.resource=3, .frames={{.x=0,.y=0,.w=40,.h=20}}}}}, .critical=true});
@@ -1187,7 +1341,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
       .type = 0,
       .fallbacks = {{.virtualPath =
                          "resources/bitmap-font/missing-page.fnt",
-                     .type = 0}}});
+                     .type = 0}},
+      .bitmap = skin::SkinBitmapFontResource{
+          .id = 1,
+          .virtualPath = "resources/bitmap-font/primary.fnt",
+          .type = 0}});
   missingFallbackModel.model.objects.push_back(
       {.id = 1,
        .authoredName = "primary-text",
@@ -1208,8 +1366,24 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   const auto unknownGlyphModel =
       singleFontModel("resources/fixture.ttf", true, "\xF4\x8F\xBF\xBF");
   const auto unknownGlyph = service.validateResources({.revision=snapshot.prepared->readView(), .entry=entry, .fileSystem=*stagedFs.fileSystem, .model=unknownGlyphModel, .configuration=configuration, .requiredRuntimeStrings=runtimeStrings});
-  expect(!unknownGlyph.valid && hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
-         "unknown live text glyphs fail synchronously before resource publication");
+  expect(unknownGlyph.valid &&
+             !hasDiagnostic(unknownGlyph.diagnostics, "skin.resource.glyph_missing"),
+         "a live text glyph missing from the face falls back to the synthetic "
+         "missing-glyph box instead of rejecting the atlas");
+  const auto compatibleUnknownGlyph = service.validateResources(
+      {.revision = snapshot.prepared->readView(),
+       .entry = entry,
+       .fileSystem = *stagedFs.fileSystem,
+       .model = unknownGlyphModel,
+       .configuration = configuration,
+       .requiredRuntimeStrings = runtimeStrings,
+       .safetyPolicy =
+           skin::SkinSafetyPolicy(skin::SkinSafetyLevel::Unrestricted)});
+  expect(compatibleUnknownGlyph.valid &&
+             !hasDiagnostic(compatibleUnknownGlyph.diagnostics,
+                            "skin.resource.glyph_missing"),
+         "type-5 compatibility synthesizes Beatoraja's missing-glyph box "
+         "instead of rejecting the atlas");
   std::string expensiveText;
   for (char value = '!'; value <= '~'; ++value) expensiveText.push_back(value);
   skin::ValidatedBeatorajaSkinModel rejectedAtlasModel;
@@ -1347,11 +1521,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
        .model = bgaOnlyModel,
        .configuration = configuration,
        .practiceMode = true});
-  expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
-             practiceBgaPlan.plan->textAtlasesByObject.contains(17) &&
-             skin::skinResourcePlatformAssetReadsForTesting() == 2,
-         "a BGA with no Practice object prepares the legacy fallback font "
-         "only for a fixed Practice-mode session");
+expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
+              practiceBgaPlan.plan->textAtlasesByObject.contains(17) &&
+              skin::skinResourcePlatformAssetReadsForTesting() == 1,
+         "a BGA with no Practice object reuses the rasterized practice-font "
+         "atlas from the cache without re-reading the system font");
 
   positivePracticeModel.model.objects.push_back(
       {.id = 18,
@@ -1368,7 +1542,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
   expect(authoredPracticeBgaPlan.plan &&
              authoredPracticeBgaPlan.plan->atlases.empty() &&
              authoredPracticeBgaPlan.plan->textAtlasesByObject.empty() &&
-             skin::skinResourcePlatformAssetReadsForTesting() == 2,
+             skin::skinResourcePlatformAssetReadsForTesting() == 1,
          "an authored positive-item Practice object suppresses the BGA "
          "legacy fallback plan");
   positivePracticePlan.plan.reset();
@@ -1417,6 +1591,49 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              movies.catalog->findMovie(21)->handle ==
                  movies.catalog->findMovie(22)->handle,
          "deduplicated movie paths materialize and load exactly once while retaining typed aliases");
+
+  auto compatibilityWithoutMovieDevice = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = nullptr,
+       .safetyPolicy =
+           skin::SkinSafetyPolicy{skin::SkinSafetyLevel::Unrestricted}});
+  expect(compatibilityWithoutMovieDevice.catalog &&
+             compatibilityWithoutMovieDevice.catalog->movieCount() == 0 &&
+             hasDiagnostic(compatibilityWithoutMovieDevice.diagnostics,
+                           "skin.movie.device_unavailable") &&
+             std::ranges::none_of(
+                 compatibilityWithoutMovieDevice.diagnostics,
+                 [](const skin::SkinDiagnostic &diagnostic) {
+                   return diagnostic.severity ==
+                          skin::DiagnosticSeverity::Error;
+                 }),
+         "Beatoraja-compatibility loading omits a movie when no device is "
+         "available instead of rejecting the skin");
+
+  auto compatibilityFailingMovieDevice = std::make_shared<FakeMovieDevice>();
+  compatibilityFailingMovieDevice->resultWidth = 0;
+  auto compatibilityFailedMovie = skin::SkinMovieCatalog::prepare(
+      {.fileSystem = *leasedFs.fileSystem,
+       .model = movieModel,
+       .configuration = configuration,
+       .device = compatibilityFailingMovieDevice,
+       .safetyPolicy =
+           skin::SkinSafetyPolicy{skin::SkinSafetyLevel::Unrestricted}});
+  expect(compatibilityFailedMovie.catalog &&
+             compatibilityFailedMovie.catalog->movieCount() == 0 &&
+             hasDiagnostic(compatibilityFailedMovie.diagnostics,
+                           "skin.movie.load_failed") &&
+             compatibilityFailingMovieDevice->live.empty() &&
+             std::ranges::none_of(
+                 compatibilityFailedMovie.diagnostics,
+                 [](const skin::SkinDiagnostic &diagnostic) {
+                   return diagnostic.severity ==
+                          skin::DiagnosticSeverity::Error;
+                 }),
+         "Beatoraja-compatibility loading omits an unopenable movie object "
+         "without rejecting the rest of the skin");
   const auto defaultMovieLayout = skin::skinMovieDecodedLayout(
       80, 40,
       {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
@@ -1708,10 +1925,11 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
        .fileSystem=*leasedFs.fileSystem,
        .model=configuredImageModel("resources/image-default.ppm"),
        .configuration=ambiguousFiles});
-  expect(!ambiguousConfiguration.valid &&
-             hasDiagnostic(ambiguousConfiguration.diagnostics,
-                           "skin.resource.configuration_ambiguous"),
-         "overlapping configured file matches fail closed without runtime reselection");
+  expect(ambiguousConfiguration.valid &&
+             !hasDiagnostic(ambiguousConfiguration.diagnostics,
+                            "skin.resource.configuration_ambiguous"),
+         "overlapping configured file matches retain SkinLoader's first "
+         "filemap selection");
   skin::BeatorajaSkinConfiguration oversizedSelection =
       defaultFileConfiguration;
   oversizedSelection.orderedFiles.front().selectedValue.assign(1025, 'x');
@@ -1876,9 +2094,9 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
                secondAtlas.key.pointSize == 24 && firstAtlas.glyphs.contains(U'日') &&
                firstAtlas.glyphs.contains(U'4') && firstAtlas.glyphs.at(U'A').region.x > 0 &&
                firstAtlas.capHeight > 0 &&
-               firstAGlyph.layoutOffsetY == firstAGlyph.bearingY -
-                                                  firstAGlyph.region.h -
-                                                  firstAtlas.capHeight &&
+                firstAGlyph.layoutOffsetY == firstAGlyph.bearingY -
+                                                   firstAGlyph.region.h -
+                                                   firstAtlas.capHeight &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width > 0.0 &&
                static_cast<double>(firstAtlas.glyphs.at(U'A').region.x) / firstAtlas.pixels.width < 1.0 && styledColor &&
                signikaAtlas != planned.plan->atlases.end() && signikaAtlas->kerning.contains({U'A', U'V'}) &&
@@ -2414,6 +2632,36 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              aliasMapped->resolved.x == 2 && aliasMapped->resolved.w == 10,
          "immutable resource lookup preserves each authored frame identity through resolution and alias reuse");
   uploaded.catalog->enterRenderPhase();
+  const auto makeBuiltinPixels = [](int width, int height,
+                                    unsigned char value) {
+    return image_decode::DecodedImageData{
+        .width = width,
+        .height = height,
+        .rgba = std::make_shared<std::vector<unsigned char>>(
+            static_cast<std::size_t>(width) *
+                static_cast<std::size_t>(height) * 4U,
+            value)};
+  };
+  const int builtinCreatesBefore = device->creates;
+  const int builtinDestroysBefore = device->destroys;
+  expect(uploaded.catalog->replaceBuiltinImage(
+             100, makeBuiltinPixels(2, 2, 0x11U)) &&
+             uploaded.catalog->builtinImageResource(100).has_value() &&
+             uploaded.catalog->find(
+                 *uploaded.catalog->builtinImageResource(100))->width == 2 &&
+             uploaded.catalog->replaceBuiltinImage(
+                 100, makeBuiltinPixels(2, 2, 0x22U)) &&
+             uploaded.catalog->replaceBuiltinImage(
+                 100, makeBuiltinPixels(4, 2, 0x33U)) &&
+             uploaded.catalog->find(
+                 *uploaded.catalog->builtinImageResource(100))->width == 4 &&
+             uploaded.catalog->replaceBuiltinImage(100, std::nullopt) &&
+             !uploaded.catalog->builtinImageResource(100).has_value() &&
+             device->creates == builtinCreatesBefore + 2 &&
+             device->updates == 1 &&
+             device->destroys == builtinDestroysBefore + 2,
+         "selected chart resources update in place when possible, replace "
+         "only for size changes, and disappear when the source has none");
   const skin::SkinGeneratedTextureKey generatedKey{
       .sourceObject = 71,
       .authoredOrdinal = 19,
@@ -2428,6 +2676,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
       std::make_shared<const std::vector<std::uint8_t>>(32U, 0x33U);
   const int generatedCreatesBefore = device->creates;
   const int generatedDestroysBefore = device->destroys;
+  const int generatedUpdatesBefore = device->updates;
   const auto *createdGenerated = uploaded.catalog->prepareGeneratedTexture(
       generatedKey,
       {.width = 2, .height = 2, .rgba = firstPixels, .contentRevision = 1});
@@ -2450,7 +2699,7 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
              createdGenerated->key == generatedKey &&
              resizedGenerated->width == 4 && resizedGenerated->height == 2 &&
              device->creates == generatedCreatesBefore + 2 &&
-             device->updates == 2 &&
+             device->updates == generatedUpdatesBefore + 2 &&
              device->destroys == generatedDestroysBefore + 1,
          "session-generated textures create once, skip a stable revision, "
          "update every dirty revision even when a Pixmap buffer is reused, "
@@ -2506,8 +2755,332 @@ void testSecurePreparationLeaseAliasAndCatalogLifetime() {
 }
 }
 
+void testBitmapFontPagesAreCachedAcrossDecodeRuns() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source =
+      temporary.root / "visible" / "CachedFontPagesFixture";
+  const fs::path resources = source / "entry/resources";
+  fs::create_directories(resources);
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
+      resources / "fixture.fnt");
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png",
+      resources / "page.png");
+
+  const auto package =
+      *skin::normalizePackageId("CachedFontPagesFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "cached font pages fixture creates a live revision");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease && publishError.empty(),
+         "cached font pages fixture publishes a lease");
+  if (!lease) return;
+  auto leasedFs = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(leasedFs.fileSystem != nullptr,
+         "cached font pages fixture creates an entry-aware filesystem");
+  if (!leasedFs.fileSystem) return;
+
+  skin::BeatorajaSkinConfiguration configuration;
+  const auto model =
+      singleFontModel("resources/fixture.fnt", true, "AV\xF0\x9F\x99\x82");
+  std::atomic_int fontDecodes = 0;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        if (stop.stop_requested()) return std::nullopt;
+        ++fontDecodes;
+        return image_decode::decodeImageMemory(
+            encoded,
+            {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
+             .maximumEncodedBytes =
+                 skin::SkinResourcePolicy::maximumEncodedBytes,
+             .maximumDecodedBytes = skin::SkinResourcePolicy::maximumImageBytes,
+             .stop = stop});
+      });
+  const std::string revisionKey = lease->revision().lowercaseSha256;
+
+  const auto firstPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  const std::string pageKey =
+      (leasedFs.fileSystem->skinDirectory() / "resources" / "page.png")
+          .lexically_normal()
+          .generic_string();
+  expect(firstPlan.plan &&
+             service.decodeCache().findFontPage(revisionKey, pageKey)
+                 .has_value() &&
+             service.decodeCache()
+                 .findFontPageEncodedBytes(revisionKey, pageKey)
+                 .has_value(),
+         "the first decode run decodes the bitmap font pages and stores them "
+         "with their encoded byte sizes in the app-level decode cache");
+  if (!firstPlan.plan) return;
+  const int decodesAfterFirst = fontDecodes.load();
+
+  const auto secondPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(secondPlan.plan &&
+             service.decodeCache().findFontPage(revisionKey, pageKey)
+                 .has_value() &&
+             service.decodeCache()
+                 .findFontPageEncodedBytes(revisionKey, pageKey)
+                 .has_value() &&
+             fontDecodes.load() == decodesAfterFirst &&
+             secondPlan.plan->atlases.size() == firstPlan.plan->atlases.size() &&
+             secondPlan.plan->atlases.front().glyphs.size() ==
+                 firstPlan.plan->atlases.front().glyphs.size() &&
+             secondPlan.plan->atlases.front().pages.size() ==
+                 firstPlan.plan->atlases.front().pages.size() &&
+             secondPlan.plan->atlases.front().key ==
+                 firstPlan.plan->atlases.front().key,
+         "the second decode run reuses the cached font pages without "
+         "re-decoding and produces the identical font atlas");
+}
+
+void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source =
+      temporary.root / "visible" / "CachedBudgetConsistencyFixture";
+  const fs::path resources = source / "entry/resources";
+  fs::create_directories(resources);
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/bitmap-font/fixture.fnt",
+      resources / "fixture.fnt");
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/bitmap-font/page.png",
+      resources / "page.png");
+
+  const auto package =
+      *skin::normalizePackageId("CachedBudgetConsistencyFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "cached budget fixture creates a live revision");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease && publishError.empty(),
+         "cached budget fixture publishes a lease");
+  if (!lease) return;
+  auto leasedFs = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(leasedFs.fileSystem != nullptr,
+         "cached budget fixture creates an entry-aware filesystem");
+  if (!leasedFs.fileSystem) return;
+
+  skin::BeatorajaSkinConfiguration configuration;
+  const auto model =
+      singleFontModel("resources/fixture.fnt", true, "AV\xF0\x9F\x99\x82");
+  std::atomic_int fontDecodes = 0;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        if (stop.stop_requested()) return std::nullopt;
+        ++fontDecodes;
+        return image_decode::decodeImageMemory(
+            encoded,
+            {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
+             .maximumEncodedBytes =
+                 skin::SkinResourcePolicy::maximumEncodedBytes,
+             .maximumDecodedBytes = skin::SkinResourcePolicy::maximumImageBytes,
+             .stop = stop});
+      });
+  const std::string revisionKey = lease->revision().lowercaseSha256;
+
+  const std::size_t descriptorBytes = fs::file_size(resources / "fixture.fnt");
+  const std::size_t pageBytes = fs::file_size(resources / "page.png");
+  // Budget admits the descriptor but rejects the page bytes, so the face must
+  // be rejected with skin.resource.encoded_limit on every load.
+  skin::setSkinResourceAccountingLimitsForTesting(
+      descriptorBytes + pageBytes - 1U, /*maximumAtlasSessionBytes=*/3'200);
+  struct ResetAccountingLimits {
+    ~ResetAccountingLimits() {
+      skin::resetSkinResourceAccountingLimitsForTesting();
+    }
+  } resetAccountingLimits;
+
+  const auto firstPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(!firstPlan.plan,
+         "a cold run with an insufficient encoded budget rejects the face");
+  const std::string pageKey =
+      (leasedFs.fileSystem->skinDirectory() / "resources" / "page.png")
+          .lexically_normal()
+          .generic_string();
+  expect(!service.decodeCache().findFontPage(revisionKey, pageKey)
+                  .has_value() &&
+             !service.decodeCache()
+                  .findFontPageEncodedBytes(revisionKey, pageKey)
+                  .has_value(),
+         "a face rejected on the encoded budget must not populate the "
+         "app-level decode cache");
+
+  const auto secondPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(!secondPlan.plan,
+         "a warm run rejects the face exactly as the cold run did, because the "
+         "cached page would have been charged the same encoded bytes");
+  expect(!service.decodeCache().findFontPage(revisionKey, pageKey)
+                  .has_value() &&
+             !service.decodeCache()
+                  .findFontPageEncodedBytes(revisionKey, pageKey)
+                  .has_value(),
+         "the warm rejection also leaves the decode cache empty");
+}
+
+void testSkinImagesAreCachedAcrossDecodeRuns() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source =
+      temporary.root / "visible" / "CachedSkinImagesFixture";
+  const fs::path resources = source / "entry/resources";
+  fs::create_directories(resources);
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+
+  fs::copy_file(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+      resources / "fixture.png");
+
+  const auto package =
+      *skin::normalizePackageId("CachedSkinImagesFixture").package;
+  const auto entry =
+      *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "cached skin images fixture creates a live revision");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease && publishError.empty(),
+         "cached skin images fixture publishes a lease");
+  if (!lease) return;
+  auto leasedFs = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(leasedFs.fileSystem != nullptr,
+         "cached skin images fixture creates an entry-aware filesystem");
+  if (!leasedFs.fileSystem) return;
+
+  skin::BeatorajaSkinConfiguration configuration;
+  const auto model = singleImageModel("resources/fixture.png");
+  std::atomic_int imageDecodes = 0;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        if (stop.stop_requested()) return std::nullopt;
+        ++imageDecodes;
+        return image_decode::decodeImageMemory(
+            encoded,
+            {.maximumDimension = skin::SkinResourcePolicy::maximumDimension,
+             .maximumEncodedBytes =
+                 skin::SkinResourcePolicy::maximumEncodedBytes,
+             .maximumDecodedBytes = skin::SkinResourcePolicy::maximumImageBytes,
+             .stop = stop});
+      });
+  const std::string revisionKey = lease->revision().lowercaseSha256;
+
+  skin::resetSkinImageAppCacheHitsForTesting();
+  const auto firstPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  std::string digestError;
+  const std::string contentDigest =
+      *file_checksum::sha256File(resources / "fixture.png", digestError);
+  const std::string imageKey =
+      (leasedFs.fileSystem->skinDirectory() / "resources" / "fixture.png")
+          .lexically_normal()
+          .generic_string() +
+      ":" + contentDigest;
+  expect(firstPlan.plan &&
+             service.decodeCache().findSkinImage(revisionKey, imageKey)
+                 .has_value(),
+         "the first decode run decodes the skin image and stores it in the "
+         "app-level decode cache");
+  if (!firstPlan.plan) return;
+  const int decodesAfterFirst = imageDecodes.load();
+
+  const auto secondPlan = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *leasedFs.fileSystem,
+       .model = model,
+       .configuration = configuration});
+  expect(secondPlan.plan &&
+             imageDecodes.load() == decodesAfterFirst &&
+             skin::skinImageAppCacheHitsForTesting() >= 1 &&
+             secondPlan.plan->images.size() == firstPlan.plan->images.size() &&
+             secondPlan.plan->images.front().pixels.width ==
+                 firstPlan.plan->images.front().pixels.width &&
+             secondPlan.plan->images.front().pixels.height ==
+                 firstPlan.plan->images.front().pixels.height &&
+             secondPlan.plan->decodedBytes == firstPlan.plan->decodedBytes,
+         "the second decode run reuses the cached image without "
+         "re-decoding and charges the same decoded budget as the cold run");
+}
+
 int main() {
   testBitmapFontDescriptorParsingMatchesPinnedSources();
+  testInstalledSelectorBmFontsWhenRequested();
   testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs();
   testBoundedPngAndJpegDecodeBeforeAllocation();
   testSharedSdlTtfRuntimeFinalRelease();
@@ -2518,6 +3091,9 @@ int main() {
   testChartBuiltinReaderOwnsBytesAndAccountingTransaction();
   testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();
   testSecurePreparationLeaseAliasAndCatalogLifetime();
+  testBitmapFontPagesAreCachedAcrossDecodeRuns();
+  testBitmapFontCachedPagesChargeEncodedBudgetConsistently();
+  testSkinImagesAreCachedAcrossDecodeRuns();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
   return 0;

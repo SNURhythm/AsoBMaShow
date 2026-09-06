@@ -128,6 +128,18 @@ IrAuthenticatedAccountOutcome IrDriver::fetchAuthenticatedAccount(
       "driver does not support authenticated account lookup");
 }
 
+std::optional<std::string> IrDriver::chartExternalUrl(
+    const IrChartExternalUrlRequest &, const IrProviderRuntimeConfig &,
+    IrHttpClient &, std::stop_token) const {
+  return std::nullopt;
+}
+
+std::optional<std::string> IrDriver::courseExternalUrl(
+    const IrCourseExternalUrlRequest &, const IrProviderRuntimeConfig &,
+    IrHttpClient &, std::stop_token) const {
+  return std::nullopt;
+}
+
 IrUserScoreSnapshotOutcome
 IrDriver::fetchUserScoreSnapshot(const IrProviderRuntimeConfig &,
                                  IrHttpClient &, std::stop_token,
@@ -362,6 +374,36 @@ IrAuthenticatedAccountOutcome IrDriverRegistry::fetchAuthenticatedAccount(
   } catch (...) {
     return {.status = IrAuthenticatedAccountStatus::TransientFailure,
             .diagnostic = "IR authenticated account lookup failed"};
+  }
+}
+
+std::optional<std::string> IrDriverRegistry::chartExternalUrl(
+    std::string_view providerId, const IrChartExternalUrlRequest &request,
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  const auto driver = find(providerId);
+  if (!driver) {
+    return std::nullopt;
+  }
+  try {
+    return driver->chartExternalUrl(request, config, http, stopToken);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+std::optional<std::string> IrDriverRegistry::courseExternalUrl(
+    std::string_view providerId, const IrCourseExternalUrlRequest &request,
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  const auto driver = find(providerId);
+  if (!driver) {
+    return std::nullopt;
+  }
+  try {
+    return driver->courseExternalUrl(request, config, http, stopToken);
+  } catch (...) {
+    return std::nullopt;
   }
 }
 

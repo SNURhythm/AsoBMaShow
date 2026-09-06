@@ -8,6 +8,7 @@
 #include "../practice/PracticeLaunchRequest.h"
 #include "../practice/PracticePresetStore.h"
 #include "Scene.h"
+#include "SceneReturnTarget.h"
 
 #include <memory>
 #include <optional>
@@ -65,7 +66,9 @@ public:
       std::optional<unsigned int> randomSeed = std::nullopt,
       std::optional<std::string> randomPrng = std::nullopt,
       std::optional<std::vector<int>> randomValues = std::nullopt,
-      std::optional<practice::LaunchRequest> launchRequest = std::nullopt);
+      std::optional<practice::LaunchRequest> launchRequest = std::nullopt,
+      SceneReturnTarget returnTarget =
+          SceneReturnTarget::Registered("MainMenu"));
 
   void init() override;
   void onResume() override;
@@ -87,6 +90,7 @@ private:
   };
 
   ChartMetaRecord record;
+  SceneReturnTarget returnTarget_;
   std::optional<unsigned int> randomSeed;
   std::optional<std::string> randomPrng;
   std::vector<int> selectedRandomValues;

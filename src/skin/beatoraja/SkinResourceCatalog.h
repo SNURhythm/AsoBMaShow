@@ -3,6 +3,7 @@
 #include "BeatorajaSkinModel.h"
 #include "LuaSkinFileSystem.h"
 #include "PomyuCharaResource.h"
+#include "SkinDecodeCache.h"
 #include "SkinGeneratedTexture.h"
 #include "SkinLiveResourceCounters.h"
 #include "../SkinSafetyPolicy.h"
@@ -10,6 +11,7 @@
 #include "../../view/DecodedImageCache.h"
 #include "../../view/ImageDecodeCoordinator.h"
 
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <functional>
@@ -18,6 +20,8 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <set>
+#include <shared_mutex>
 #include <stop_token>
 #include <string_view>
 #include <thread>
@@ -38,11 +42,18 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumSessionEncodedBytes = 128U * 1024U * 1024U;
   static constexpr int maximumDimension = 8192;
   static constexpr std::size_t maximumImageBytes = 128U * 1024U * 1024U;
-  static constexpr std::size_t maximumSessionDecodedBytes = 256U * 1024U * 1024U;
+  // Full-featured skins (e.g. LITONE12) legitimately decode hundreds of
+  // megabytes of RGBA across images and large bitmap-font atlas pages. The
+  // shared session budget must admit real skins while still bounding runaway
+  // allocation from a hostile or broken skin.
+  static constexpr std::size_t maximumSessionDecodedBytes = 512U * 1024U * 1024U;
   static constexpr std::size_t maximumAtlases = 64;
   static constexpr std::size_t maximumTextAtlasUses = 8'192;
   static constexpr std::size_t maximumAtlasBytes = 32U * 1024U * 1024U;
-  static constexpr std::size_t maximumAtlasSessionBytes = 128U * 1024U * 1024U;
+  // Large bitmap-font atlas pages (a single LITONE12 title/artist atlas is
+  // tens of megabytes) exceed a 128 MiB aggregate quickly. Sized to admit
+  // full skins while keeping a hard ceiling on atlas texture memory.
+  static constexpr std::size_t maximumAtlasSessionBytes = 512U * 1024U * 1024U;
   static constexpr std::size_t maximumGeneratedTextures = 512;
   static constexpr std::size_t maximumGeneratedSessionBytes =
       128U * 1024U * 1024U;
@@ -61,7 +72,7 @@ struct SkinResourcePolicy {
   static constexpr std::size_t maximumScalableFontPaintBlendOperations =
       64U * 1024U * 1024U;
   static constexpr std::size_t cacheByteBudget = 128U * 1024U * 1024U;
-  static constexpr std::size_t workerCount = 2;
+  static constexpr std::size_t workerCount = 6;
 };
 
 [[nodiscard]] constexpr std::size_t skinResourceLimit(
@@ -105,8 +116,10 @@ public:
   }
   [[nodiscard]] std::size_t
   remainingScalableFontPaintBlendOperations() const noexcept {
-    return SkinResourcePolicy::maximumScalableFontPaintBlendOperations -
-           scalableFontPaintBlendOperations_;
+    const std::size_t maximum = skinResourceLimit(
+        safetyPolicy_,
+        SkinResourcePolicy::maximumScalableFontPaintBlendOperations);
+    return maximum - std::min(maximum, scalableFontPaintBlendOperations_);
   }
 
 private:
@@ -151,6 +164,8 @@ void setSkinResourceAccountingLimitsForTesting(
 void resetSkinResourceAccountingLimitsForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourceCommittedEncodedBytesForTesting() noexcept;
+void resetSkinImageAppCacheHitsForTesting() noexcept;
+[[nodiscard]] std::size_t skinImageAppCacheHitsForTesting() noexcept;
 #endif
 
 // The authored rectangle is the stable command-side identity. Resolution is
@@ -224,6 +239,37 @@ struct SkinPreparedGlyphAtlas {
   int margin = 0;
   std::size_t paintBlendOperations = 0;
 };
+// A single rasterized scalable glyph (raw anti-aliased alpha plus metrics)
+// independent of the atlas page layout. Caching these lets a chart attempt
+// reuse the skin corpus glyphs already rasterized for a previous chart and
+// rasterize only the new chart's runtime-string codepoints.
+struct SkinPreparedGlyphBitmap {
+  char32_t codepoint = 0;
+  std::size_t face = 0;
+  int bearingX = 0;
+  int bearingY = 0;
+  int advance = 0;
+  int width = 0;
+  int height = 0;
+  int padding = 0;
+  int layoutOffsetY = 0;
+  int contentWidth = 0;
+  int contentHeight = 0;
+  std::size_t opaquePixels = 0;
+  std::vector<unsigned char> alpha;
+};
+// Content digest of everything that determines a rasterized scalable atlas
+// (or a single cached glyph): the atlas key, the codepoint/pair corpus, and
+// whether the allocation guard is active (it changes style handling). The
+// caller namespaces the digest by skin revision, which covers the font file
+// bytes.
+[[nodiscard]] std::string scalableTextAtlasContentKey(
+    const SkinTextAtlasKey &key, const std::set<char32_t> &codepoints,
+    const std::set<std::pair<char32_t, char32_t>> &pairs,
+    const SkinSafetyPolicy &safetyPolicy);
+[[nodiscard]] std::string scalableGlyphKey(const SkinTextAtlasKey &key,
+                                           char32_t codepoint,
+                                           const SkinSafetyPolicy &safetyPolicy);
 struct SkinResourceUploadPlan {
   SkinRevisionLease revision;
   SkinSafetyPolicy safetyPolicy{};
@@ -245,6 +291,8 @@ struct SkinResourceValidationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  std::map<SkinObjectId, std::vector<std::string>>
+      requiredRuntimeStringsByObject;
   bool practiceMode = false;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
@@ -253,6 +301,14 @@ struct SkinResourceValidationResult { bool valid = false; bool cancelled = false
 using SkinBuiltinImageReader = std::function<bool(
     const std::filesystem::path &, std::vector<unsigned char> &,
     std::size_t, std::string *, std::stop_token)>;
+// A single decoded-or-encoded chart builtin image returned by a batch reader.
+struct SkinBuiltinImageBatch {
+  int reference = 0;
+  std::vector<unsigned char> bytes;
+};
+using SkinBuiltinImageBatchReader = std::function<bool(
+    const std::vector<std::filesystem::path> &,
+    std::vector<SkinBuiltinImageBatch> &, std::stop_token)>;
 struct SkinResourcePreparationInputs {
   SkinRevisionLease revision;
   SkinEntryId entry;
@@ -260,13 +316,55 @@ struct SkinResourcePreparationInputs {
   const ValidatedBeatorajaSkinModel &model;
   const BeatorajaSkinConfiguration &configuration;
   std::span<const std::string> requiredRuntimeStrings;
+  std::map<SkinObjectId, std::vector<std::string>>
+      requiredRuntimeStringsByObject;
   bool practiceMode = false;
   std::map<int, std::filesystem::path> builtinImagePaths;
   SkinBuiltinImageReader builtinImageReader;
+  SkinBuiltinImageBatchReader builtinImageBatchReader;
+  // Shared decoded-image cache (e.g. ImageView's chart cache) so the skin
+  // reuses a stage/back/banner image already decoded for selector/decide
+  // display instead of re-reading and re-decoding the same archive entry.
+  image_decode::DecodedImageCache *builtinImageCache = nullptr;
+  // Returns the shared-cache key for a chart asset path. The caller supplies
+  // it (the skin layer must not depend on ArchiveFile); the key must match
+  // what the display path stored under.
+  std::function<std::string(const std::filesystem::path &)>
+      builtinImageCacheKey;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
 struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool cancelled = false; std::vector<SkinDiagnostic> diagnostics; };
+
+// Selector title changes use the same font preparation as the initial plan,
+// but do not revisit images, movies, or unrelated text objects.
+struct SkinTextAtlasPreparationInputs {
+  SkinRevisionLease revision;
+  SkinEntryId entry;
+  const LuaSkinFileSystem &fileSystem;
+  const ValidatedBeatorajaSkinModel &model;
+  const BeatorajaSkinConfiguration &configuration;
+  std::map<SkinObjectId, std::vector<std::string>>
+      requiredRuntimeStringsByObject;
+  std::set<SkinObjectId> targetObjects;
+  SkinSafetyPolicy safetyPolicy{};
+  std::stop_token stop;
+};
+struct SkinPreparedTextAtlasUpdate {
+  SkinPreparedGlyphAtlas atlas;
+  // These are the SkinText objects collected into the prepared atlas. The
+  // catalog uses their resident bindings rather than assuming an atlas key is
+  // globally unique across a pre-existing compatibility catalog.
+  std::vector<SkinObjectId> objects;
+};
+struct SkinTextAtlasUpdatePlan {
+  std::vector<SkinPreparedTextAtlasUpdate> atlases;
+};
+struct SkinTextAtlasPreparationResult {
+  std::optional<SkinTextAtlasUpdatePlan> plan;
+  bool cancelled = false;
+  std::vector<SkinDiagnostic> diagnostics;
+};
 
 class SkinResourcePreparationService {
 public:
@@ -280,7 +378,26 @@ public:
   SkinResourcePreparationService &operator=(const SkinResourcePreparationService &) = delete;
   SkinResourceValidationResult validateResources(SkinResourceValidationInputs);
   SkinResourcePlanResult decodeAndPlan(SkinResourcePreparationInputs);
+  SkinTextAtlasPreparationResult
+  prepareTextAtlasUpdates(SkinTextAtlasPreparationInputs);
   void shutdown() noexcept;
+  [[nodiscard]] SkinDecodeCache &decodeCache() noexcept { return decodeCache_; }
+  // Rasterized scalable-font atlases are the most expensive resource to build
+  // and are re-requested per chart attempt with chart-specific runtime-string
+  // corpora. Cache them by a content digest of the atlas key and corpus so a
+  // repeat attempt (or a chart that shares the same glyph corpus) skips the
+  // FreeType rasterization entirely. Shared_ptr values copy out cheaply.
+  [[nodiscard]] std::shared_ptr<const SkinPreparedGlyphAtlas>
+  findCachedTextAtlas(std::string_view revisionKey,
+                      std::string_view contentKey) const;
+  void storeCachedTextAtlas(std::string revisionKey, std::string contentKey,
+                            SkinPreparedGlyphAtlas atlas);
+  void dropTextAtlasCache() noexcept;
+  [[nodiscard]] std::optional<SkinPreparedGlyphBitmap>
+  findCachedGlyph(std::string_view revisionKey,
+                  std::string_view glyphKey) const;
+  void storeCachedGlyph(std::string revisionKey, std::string glyphKey,
+                        SkinPreparedGlyphBitmap glyph);
 private:
   enum class State { Running, Stopping, Stopped };
   bool beginCall();
@@ -291,6 +408,19 @@ private:
   image_decode::DecodedImageCache cache_;
   Decoder decoder_;
   image_decode::ImageDecodeCoordinator coordinator_;
+  SkinDecodeCache decodeCache_;
+  mutable std::shared_mutex textAtlasCacheMutex_;
+  std::map<std::string,
+           std::map<std::string, std::shared_ptr<const SkinPreparedGlyphAtlas>,
+                    std::less<>>,
+           std::less<>>
+      textAtlasCache_;
+  std::size_t textAtlasCacheBytes_ = 0;
+  std::map<std::string,
+           std::map<std::string, SkinPreparedGlyphBitmap, std::less<>>,
+           std::less<>>
+      glyphCache_;
+  std::size_t glyphCacheBytes_ = 0;
   State state_ = State::Running;
   std::stop_source stop_;
   std::size_t activeCalls_ = 0;
@@ -440,6 +570,17 @@ public:
   const PreparedSkinGeneratedTexture *prepareGeneratedTexture(
       const SkinGeneratedTextureKey &,
       const SkinGeneratedTextureData &) const noexcept override;
+  // Beatoraja keeps the selector skin resident while its selected song's
+  // stage, back, and banner resources change. These three source references
+  // are therefore replaced independently of the authored resource catalog.
+  [[nodiscard]] bool replaceBuiltinImage(
+      int reference,
+      std::optional<image_decode::DecodedImageData> pixels) noexcept;
+  // Replaces a resident text atlas on the render owner. The object bindings
+  // select the same resident SkinText instances that prepared this refresh.
+  [[nodiscard]] bool
+  replaceTextAtlas(SkinPreparedGlyphAtlas &&atlas,
+                   std::span<const SkinObjectId> objects) noexcept;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };

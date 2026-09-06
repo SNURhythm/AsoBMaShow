@@ -1,0 +1,115 @@
+local function destinations(prefix, count)
+  local result = {}
+  for index = 1, count do
+    result[index] = {
+      id = prefix .. tostring(index),
+      loop = index,
+      center = index % 10,
+      blend = index == 1 and 77 or 0,
+      filter = index == 1 and -3 or 0,
+      stretch = index == 1 and 77 or -1,
+      offset = index,
+      offsets = {[9] = index + 1000},
+      op = {[7] = 900},
+      dst = {{time = index, x = index * 2, y = -index,
+              w = 320, h = 24,
+              a = index == 1 and -256 or 255,
+              r = index == 1 and -1 or 255,
+              g = index == 1 and 256 or 255,
+              b = index == 1 and 511 or 255}},
+    }
+  end
+  return result
+end
+
+local configured = skin_config ~= nil
+local images = {
+  {id = "bar-state", src = "atlas", x = 0, y = 0,
+   w = 60, h = 20, divx = 3, divy = 1, timer = 42, cycle = 300},
+  {id = "lamp-1", src = "atlas", x = 0, y = 20,
+   w = 10, h = 10, divx = 1, divy = 1},
+  {id = "len-floor", src = "atlas", x = 0, y = 40,
+   w = 50, h = 10, divx = 5, divy = 1, len = 3,
+   cycle = "not-a-number", click = 4294967295,
+   act = "this is not valid Lua !!!"},
+}
+images.keyed = {id = "keyed-image", src = "atlas", x = 0, y = 0,
+                w = 10, h = 10, act = 4294967295}
+local image_sets = {}
+for index = 1, 61 do
+  image_sets[index] = {id = "on-" .. tostring(index), images = {"bar-state"}}
+end
+image_sets.empty = {id = "empty-imageset", images = "not a table"}
+return {
+  type = 5,
+  w = 0,
+  h = -1,
+  name = configured and "Configured Select" or "Header Select",
+  author = "type-5 contract",
+  property = {{
+    name = "",
+    item = {{name = "Blue", op = 900}},
+    def = "Blue",
+  }},
+  source = {{id = "atlas", path = "atlas.png"}},
+  font = {{id = "authored-font", path = "authored.ttf"}},
+  image = images,
+  imageset = image_sets,
+  text = {
+    {id = "text-1", font = "missing-font", size = 24, ref = 10},
+    {id = "unvalidated-text", font = "authored-font", size = -123,
+     align = 77, overflow = -9, outlineWidth = -10000,
+     shadowSmoothness = -20, ref = 10},
+  },
+  value = {{id = "level-1", src = "atlas", x = 0, y = 30,
+            w = 100, h = 10, divx = 10, divy = 1,
+            digit = 2, ref = 100,
+            offset = {[4] = {x = "not-a-number", y = 1.23456789}}}},
+  graph = {{id = "distribution", src = "atlas", x = 0, y = 40,
+            w = 110, h = 10, divx = 11, divy = 1, type = -1},
+           {id = "direct-distribution", src = "atlas", x = 0, y = 40,
+            w = 280, h = 10, divx = 28, divy = 1, type = -2},
+           {id = "missing-graph", src = "no-source", type = 0}},
+  gaugegraph = {{id = "empty-gaugegraph", color = "not a table"},
+                {id = "default-gaugegraph"}},
+  note = "select loader ignores play-only note data",
+  practice = "select loader ignores play-only practice data",
+  bga = {id = "play-only-bga"},
+  songlist = {
+    id = "song-list",
+    center = 100000,
+    clickable = {[2] = -1000, named = 0, [9] = 1000},
+    listoff = destinations("off-", 61),
+    liston = destinations("on-", 61),
+    text = destinations("text-", 12),
+    level = destinations("level-", 8),
+    lamp = destinations("lamp-", 12),
+    playerlamp = destinations("player-lamp-", 12),
+    rivallamp = destinations("rival-lamp-", 12),
+    trophy = {
+      {id = "trophy-1", dst = {x = 1, y = 2, w = 3, h = 4}},
+      destinations("trophy-", 4)[2],
+      destinations("trophy-", 4)[3],
+      destinations("trophy-", 4)[4],
+    },
+    label = destinations("label-", 6),
+    graph = {
+      id = "distribution",
+      loop = -1,
+      dst = {{time = 99, x = 12, y = 34, w = 56, h = 78}},
+    },
+  },
+  destination = {
+    {id = "song-list", dst = {{x = 0, y = 0}}},
+    {id = "len-floor", mouseRect = "not a table",
+     dst = {{x = 0, y = 0}}},
+    {id = "unvalidated-text", dst = {{x = 0, y = 0}}},
+    {id = "empty-imageset", dst = {{x = 0, y = 0}}},
+    {id = "empty-gaugegraph", dst = {{x = 0, y = 0}}},
+    {id = "default-gaugegraph", dst = {{x = 0, y = 0}}},
+    {id = "direct-distribution", dst = {{x = 0, y = 0}}},
+    {id = "missing-graph", dst = {{x = 0, y = 0}}},
+    {id = "keyed-image", dst = {{x = 0, y = 0}}},
+    {id = "play-only-bga", dst = {{x = 0, y = 0}}},
+  },
+}

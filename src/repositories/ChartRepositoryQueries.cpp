@@ -13,6 +13,7 @@
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 #include "../Utils.h"
+#include "../yoga/lib/nlohmann/json.hpp"
 #include <SDL2/SDL.h>
 #include "../path.h"
 
@@ -85,6 +86,13 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.total_backspin_notes, 0),"
     "COALESCE(cm.ln_mode, 0),"
     "COALESCE(cm.has_document, 0),"
+    "COALESCE(cm.has_bpm_stop, 0),"
+    "COALESCE(cm.has_scroll_change, 0),"
+    "COALESCE(cm.add_date, 0),"
+    "COALESCE(cm.total_landmine_notes, 0),"
+    "COALESCE(cm.has_random_sequence, 0),"
+    "COALESCE(cm.most_prevalent_bpm, 0),"
+    "COALESCE(cm.has_bga, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -132,6 +140,13 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.total_backspin_notes, 0),"
     "COALESCE(cm.ln_mode, 0),"
     "COALESCE(cm.has_document, 0),"
+    "COALESCE(cm.has_bpm_stop, 0),"
+    "COALESCE(cm.has_scroll_change, 0),"
+    "COALESCE(cm.add_date, 0),"
+    "COALESCE(cm.total_landmine_notes, 0),"
+    "COALESCE(cm.has_random_sequence, 0),"
+    "COALESCE(cm.most_prevalent_bpm, 0),"
+    "COALESCE(cm.has_bga, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -1226,6 +1241,8 @@ void selectFavoriteMusicTracks(sqlite3 *database,
 int countFavoriteCharts(sqlite3 *database);
 bool setFavorite(sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
                  bool favorite);
+bool setSongReviewFavorite(sqlite3 *database, std::string_view sha256,
+                           int favorite);
 int countAllChartMeta(sqlite3 *database);
 int countSolidArchives(sqlite3 *database);
 void queryChartMeta(sqlite3 *database, const ChartMetaQuery &query,
@@ -1258,6 +1275,54 @@ void ChartRepository::Session::SelectAllChartMeta(
   selectAllChartMeta(impl_->database(), chartMetas);
 }
 
+std::vector<ChartFolderRecord>
+ChartRepository::Session::SelectFolderRecords() {
+  std::vector<ChartFolderRecord> records;
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(
+          impl_->database(), "SELECT path, date, adddate FROM folder",
+          statement, "selecting folder records", logSqlErrorText)) {
+    return records;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    std::filesystem::path path(
+        utf8_to_path_t(sqliteColumnString(statement.get(), 0)));
+    if (!path.empty()) {
+      chart_storage_identity::ToAbsolutePath(path);
+    }
+    records.push_back({
+        .path = fspath_to_path_t(path),
+        .dateSeconds = sqlite3_column_int64(statement.get(), 1),
+        .addDateSeconds = sqlite3_column_int64(statement.get(), 2),
+    });
+  }
+  return records;
+}
+
+std::vector<std::filesystem::path>
+ChartRepository::Session::SelectChartMetaFolders() {
+  std::vector<std::filesystem::path> folders;
+  std::string query = "SELECT DISTINCT cm.folder FROM chart_meta cm WHERE ";
+  query += "cm.folder != '' AND ";
+  query += preferredChartPredicate("cm");
+  query += " ORDER BY cm.folder";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(impl_->database(), query, statement,
+                                    "selecting chart metadata folders",
+                                    logSqlErrorText)) {
+    return folders;
+  }
+  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
+    std::filesystem::path path(
+        utf8_to_path_t(sqliteColumnString(statement.get(), 0)));
+    if (!path.empty()) {
+      chart_storage_identity::ToAbsolutePath(path);
+      folders.push_back(std::move(path));
+    }
+  }
+  return folders;
+}
+
 void ChartRepository::Session::SelectFavoriteMusicTracks(
     std::vector<MusicTrackRecord> &tracks) {
   selectFavoriteMusicTracks(impl_->database(), tracks);
@@ -1270,6 +1335,11 @@ int ChartRepository::Session::CountFavoriteCharts() {
 bool ChartRepository::Session::SetFavorite(
     const bms_parser::ChartMeta &chartMeta, bool favorite) {
   return setFavorite(impl_->database(), chartMeta, favorite);
+}
+
+bool ChartRepository::Session::SetSongReviewFavorite(
+    std::string_view sha256, int favorite) {
+  return setSongReviewFavorite(impl_->database(), sha256, favorite);
 }
 
 void ChartRepository::Session::QueryChartMeta(
@@ -1505,6 +1575,29 @@ bool setFavorite(sqlite3 *db,
   return true;
 }
 
+bool setSongReviewFavorite(sqlite3 *db, std::string_view sha256,
+                           int favorite) {
+  if (db == nullptr) return false;
+  if (sha256.empty()) return true;
+  const char *query =
+      "INSERT INTO review(sha256, favorite) VALUES(?1, ?2) "
+      "ON CONFLICT(sha256) DO UPDATE SET favorite=excluded.favorite";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(db, query, statement,
+                                    "preparing SongReview favorite update",
+                                    logSqlErrorText) ||
+      !bindSqliteText(statement.get(), 1, std::string(sha256)) ||
+      sqlite3_bind_int(statement.get(), 2, favorite) != SQLITE_OK) {
+    return false;
+  }
+  if (sqlite3_step(statement.get()) != SQLITE_DONE) {
+    logSqlError("updating SongReview favorite", db);
+    return false;
+  }
+  if (sqlite3_changes(db) > 0) bumpLibraryRevision();
+  return true;
+}
+
 int countAllChartMeta(sqlite3 *db) {
   auto query = "SELECT COUNT(*) FROM chart_meta";
   SqliteStatementHandle stmt;
@@ -1602,6 +1695,8 @@ void queryChartMeta(
     query += chartFavoriteColumnExpr("cm");
     query += ", ";
     query += songReviewFavoriteColumnExpr("cm");
+    query += ", COALESCE(dte.url, ''), COALESCE(dte.url_diff, ''), "
+             "dte.org_md5";
     query += " FROM difficulty_table_entries dte "
              "JOIN difficulty_tables dt ON dt.id = dte.table_id "
              "LEFT JOIN chart_meta cm ON cm.path = ";
@@ -1641,6 +1736,8 @@ void queryChartMeta(
     query += chartFavoriteColumnExpr("cm");
     query += ", ";
     query += songReviewFavoriteColumnExpr("cm");
+    query += ", COALESCE(dce.url, ''), COALESCE(dce.url_diff, ''), "
+             "dce.org_md5";
     query += " FROM difficulty_course_entries dce "
              "JOIN difficulty_courses dc ON dc.id = dce.course_id "
              "JOIN difficulty_tables dt ON dt.id = dc.table_id "
@@ -1682,6 +1779,7 @@ void queryChartMeta(
   query += chartFavoriteColumnExpr("cm");
   query += ", ";
   query += songReviewFavoriteColumnExpr("cm");
+  query += ", '', '', NULL";
   query += " FROM chart_meta cm WHERE 1 = 1";
   appendChartMetaFilters(query, chartQuery);
   appendChartMetaOrderBy(query, chartQuery, "cm");
@@ -2048,12 +2146,32 @@ bms_parser::ChartMeta readChartMeta(sqlite3_stmt *stmt) {
 ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   ChartMetaRecord record;
   record.meta = readChartMeta(stmt);
-  // ChartMeta consumes the first 29 source columns.  The shared select list
-  // reserves its 30th column for SongData.CONTENT_TEXT, which belongs to the
-  // record wrapper rather than bms_parser::ChartMeta.
-  int idx = kChartMetaColumnCount - 1;
+  // ChartMeta consumes the first 29 source columns. The remaining shared
+  // columns are SongData facts owned by the record wrapper.
+  int idx = 29;
   if (sqlite3_column_count(stmt) > idx) {
     record.hasDocument = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasBpmStop = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasScrollChange = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.addDateSeconds = sqlite3_column_int64(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.meta.TotalLandmineNotes = sqlite3_column_int(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasRandomSequence = sqlite3_column_int(stmt, idx++) != 0;
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.meta.MostPrevalentBpm = sqlite3_column_double(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.hasBga = sqlite3_column_int(stmt, idx++) != 0;
   }
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);
@@ -2067,6 +2185,26 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   if (sqlite3_column_count(stmt) > idx) {
     record.songReviewFavorite = sqlite3_column_int(stmt, idx++);
   }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.downloadUrl = columnString(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx) {
+    record.appendDownloadUrl = columnString(stmt, idx++);
+  }
+  if (sqlite3_column_count(stmt) > idx &&
+      sqlite3_column_type(stmt, idx) != SQLITE_NULL) {
+    try {
+      const auto value = nlohmann::json::parse(columnString(stmt, idx));
+      if (value.is_array()) {
+        record.originalMd5s = value.get<std::vector<std::string>>();
+      } else {
+        record.originalMd5s = std::vector<std::string>{};
+      }
+    } catch (...) {
+      record.originalMd5s = std::vector<std::string>{};
+    }
+  }
+  ++idx;
   return record;
 }
 
@@ -2134,6 +2272,7 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
       query += ", ";
       query += "'', 0, 0, ";
       query += songReviewFavoriteColumnExpr("cm");
+      query += ", '', '', NULL";
       query += " FROM chart_meta cm WHERE cm.path IN (";
       for (std::size_t index = 0; index < count; ++index) {
         query += index == 0 ? "?" : ",?";

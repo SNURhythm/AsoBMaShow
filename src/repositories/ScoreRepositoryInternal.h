@@ -43,6 +43,8 @@ struct ScoreStorageMetadata {
   std::optional<std::string_view> serverOrigin;
   std::optional<std::string_view> remoteScoreId;
   std::optional<std::int64_t> syncGeneration;
+  std::optional<int> badPoints;
+  std::optional<std::int64_t> averageJudgeMicros;
 };
 
 sqlite3 *OpenDatabase(const std::filesystem::path &path,

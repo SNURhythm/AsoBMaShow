@@ -148,9 +148,9 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   for (const int selector : integerValueSelectors) {
     add(entries, integerValue, selector);
   }
-  for (const auto &[name, unusedId] : beatorajaIntegerValueProperties()) {
-    (void)unusedId;
+  for (const auto &[name, id] : beatorajaIntegerValueProperties()) {
     add(entries, integerValue, std::string(name));
+    add(entries, integerValue, id);
   }
   add(entries, integerValue, "nowbpm");
   // Pinned IntegerPropertyFactory exposes the lane-cover family through
@@ -188,9 +188,9 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   for (int selector = 1610; selector <= 1699; ++selector) {
     add(entries, imageIndex, selector);
   }
-  for (const auto &[name, unusedId] : beatorajaImageIndexProperties()) {
-    (void)unusedId;
+  for (const auto &[name, id] : beatorajaImageIndexProperties()) {
     add(entries, imageIndex, std::string(name));
+    add(entries, imageIndex, id);
   }
   for (int index = 1; index <= 10; ++index) {
     add(entries, imageIndex, "playertype_ranking" + std::to_string(index));
@@ -220,15 +220,16 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
     add(entries, rate, selector);
   }
 
-  // FloatPropertyFactory.RateType provides built-in writers for the three
-  // Config.AudioConfig fields and BMSPlayer's practice-menu viewport.
-  // Lane-cover mutation remains unavailable through this binding surface.
+  // These are exactly the RateType entries constructed with a FloatWriter.
+  // Lane-cover mutation remains unavailable because its RateType has no
+  // writer in the pinned source.
   const SkinBindingType floatWriter{.kind = SkinBindingKind::FloatWriter};
-  for (const int selector : {17, 18, 19, 20}) {
+  for (const int selector : {1, 7, 8, 17, 18, 19, 20}) {
     add(entries, floatWriter, selector);
   }
-  for (const char *selector : {"mastervolume", "keyvolume", "bgmvolume",
-                               "practice_position"}) {
+  for (const char *selector : {
+           "musicselect_position", "skinselect_position", "ranking_position",
+           "mastervolume", "keyvolume", "bgmvolume", "practice_position"}) {
     add(entries, floatWriter, selector);
   }
 
@@ -316,6 +317,8 @@ std::vector<SkinBuiltinBindingCatalogEntry> makeCatalog() {
   // StringWriter. In BMSPlayer its MusicSelector-only body is an intentional
   // no-op, but the non-null writer still makes implicit Text fields editable.
   add(entries, SkinBindingType{.kind = SkinBindingKind::StringWriter}, 30);
+  add(entries, SkinBindingType{.kind = SkinBindingKind::StringWriter},
+      "searchword");
 
   // Timers are not a gap: TimerPropertyFactory and PlaySkinStateBridge both
   // define every nonnegative ID, including an exact inactive fallback. No
@@ -354,6 +357,46 @@ practiceItemBooleanPropertySelector(std::string_view name) noexcept {
   return (selected ? 3020 : 3000) + index - 1;
 }
 
+bool numberedEventName(std::string_view name, std::string_view prefix,
+                       int count) noexcept {
+  if (!name.starts_with(prefix)) return false;
+  std::string_view indexText = name.substr(prefix.size());
+  if (indexText.starts_with('+')) indexText.remove_prefix(1);
+  if (indexText.empty()) return false;
+  int index = 0;
+  for (const char character : indexText) {
+    if (character < '0' || character > '9') return false;
+    const int digit = character - '0';
+    if (index > (count - digit) / 10) return false;
+    index = index * 10 + digit;
+  }
+  return index >= 1 && index <= count;
+}
+
+bool isPinnedBeatorajaEventName(std::string_view name) noexcept {
+  // EventFactory.EventType names at the pinned compatibility commit. The two
+  // numbered EventPattern families below are resolved before EventType there.
+  static constexpr auto names = std::to_array<std::string_view>({
+      "difficulty", "mode", "sort", "songbar_sort", "keyconfig",
+      "skinconfig", "play", "autoplay", "practice", "open_document",
+      "gauge1p", "option1p", "option2p", "optiondp", "hsfix",
+      "hispeed1p", "duration1p", "hispeedautoadjust", "replay1",
+      "replay2", "replay3", "replay4", "open_ir", "update_folder",
+      "open_with_explorer", "open_download_site", "bga", "bgaexpand",
+      "notesdisplaytiming", "notesdisplaytimingautoadjust", "target",
+      "gaugeautoshift", "bottomshiftablegauge", "rival",
+      "favorite_chart", "favorite_song", "lnmode", "autosavereplay1",
+      "autosavereplay2", "autosavereplay3", "autosavereplay4",
+      "lanecover", "lift", "hidden", "judgealgorithm", "guidese",
+      "chartreplicationmode", "extranotedepth", "minemode", "scrollmode",
+      "longnotemode", "seventonine_pattern", "seventonine_type",
+      "constant",
+  });
+  return std::ranges::find(names, name) != names.end() ||
+         numberedEventName(name, "keyassign", 54) ||
+         numberedEventName(name, "practice_item", 16);
+}
+
 bool matchesBeatorajaBuiltinName(SkinBindingType type,
                                  std::string_view name) noexcept {
   if (type.kind == SkinBindingKind::BooleanProperty) {
@@ -363,6 +406,12 @@ bool matchesBeatorajaBuiltinName(SkinBindingType type,
     return type.integerDomain == SkinIntegerPropertyDomain::IntegerValue
                ? beatorajaIntegerValuePropertySelector(name).has_value()
                : beatorajaImageIndexPropertySelector(name).has_value();
+  }
+  if (type.kind == SkinBindingKind::Event) {
+    return isPinnedBeatorajaEventName(name);
+  }
+  if (type.kind == SkinBindingKind::StringWriter) {
+    return name == "searchword";
   }
   return type.kind == SkinBindingKind::StringProperty &&
          beatorajaStringPropertySelector(name).has_value();
@@ -653,20 +702,14 @@ bool isPinnedBeatorajaBooleanPropertyId(int selector) noexcept {
 SkinBuiltinBindingCatalogView gameplaySkinBuiltinCatalog() {
   static const auto entries = makeCatalog();
   static constexpr auto ranges = std::to_array<SkinBuiltinBindingCatalogRange>({
-      // IntegerPropertyFactory owns two independent 65,536-entry caches.
-      // An integer binding is legal throughout either factory's input domain;
-      // the runtime supplies the upstream sentinel where Aso has no matching
-      // gameplay state yet. Do not turn an otherwise loadable skin into a
-      // catalog error merely because its selector is not one of our currently
-      // rendered values.
-      {.type = {.kind = SkinBindingKind::IntegerProperty,
-                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-       .first = 0,
-       .last = 65'535},
-      {.type = {.kind = SkinBindingKind::IntegerProperty,
-                .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-       .first = 0,
-       .last = 65'535},
+      // IntegerPropertyFactory's two 65,536-entry caches make every selector
+      // in 0..65535 loadable in Beatoraja, but the catalog intentionally
+      // admits only selectors with an implemented source property.  An
+      // unlisted in-domain selector decodes to an absent binding (the decoder
+      // mirrors the upstream null-property case), so the skin still loads
+      // instead of becoming a catalog error; adding the blanket cache ranges
+      // back would admit slots Aso neither renders nor supplies a sentinel
+      // for and would reverse the play/music-select bridge admission contract.
       {.type = {.kind = SkinBindingKind::TimerProperty},
        .first = 0,
        .last = std::numeric_limits<int>::max()},

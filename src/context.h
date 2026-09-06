@@ -1,9 +1,13 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <cerrno>
+#include <cstdlib>
+#include <cstring>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -21,6 +25,7 @@
 #include <SDL2/SDL.h>
 #include "AppSettings.h"
 #include "AppSettingsStore.h"
+#include "ApplicationUiStateStore.h"
 #include "PlatformDocumentHandoff.h"
 #include "PlayerProfileManager.h"
 #include "ProfileSettingsPersistenceCoordinator.h"
@@ -30,6 +35,12 @@
 #include "repositories/ScoreRepository.h"
 #include "replay/ChartReplayPersistence.h"
 #include "replay/CourseResultPersistence.h"
+#include "library/ChartLibraryOperations.h"
+#include "library/ChartLibraryPlatform.h"
+#include "library/ChartLibraryTaskService.h"
+#include "path.h"
+#include "targets.h"
+#include "tinyfiledialogs.h"
 #include "Utils.h"
 #include "game/GameState.h"
 #include "scene/SceneManager.h"
@@ -74,6 +85,35 @@
 #endif
 
 namespace application_context_detail {
+inline const char *homeDirectoryEnvValue() {
+  if (const char *home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    return home;
+  }
+#ifdef _WIN32
+  if (const char *profile = std::getenv("USERPROFILE");
+      profile != nullptr && profile[0] != '\0') {
+    return profile;
+  }
+#endif
+  return nullptr;
+}
+
+inline bool expandCurrentUserHomeShortcut(std::string &path) {
+  if (path.empty() || path.front() != '~') {
+    return true;
+  }
+  if (path.size() > 1 && path[1] != '/' && path[1] != '\\') {
+    return true;
+  }
+  const char *home = homeDirectoryEnvValue();
+  if (home == nullptr) {
+    return false;
+  }
+  path.replace(0, 1, home);
+  return true;
+}
+
 inline std::string firstDiagnostic(const std::vector<std::string> &diagnostics,
                                    std::string fallback) {
   return diagnostics.empty() ? std::move(fallback) : diagnostics.front();
@@ -150,6 +190,9 @@ public:
   std::atomic<std::int64_t> applicationUptimeMillis{0};
   std::atomic<int> currentFramesPerSecond{0};
   std::filesystem::path applicationDataRoot;
+  ApplicationUiStateLoadResult applicationUiStateLoadResult;
+  ApplicationUiState applicationUiState;
+  std::mutex applicationUiStateMutex;
   ir::PendingIrCredentialCleanup pendingIrCredentialCleanup;
   PlayerProfileManager profileManager;
   ProfileResult profileInitializationResult;
@@ -160,6 +203,16 @@ public:
   ScoreRepository scoreRepository;
   ReplayRepository replayRepository;
   MusicPlaylistRepository musicPlaylistRepository;
+  std::unique_ptr<chart_library_tasks::ChartLibraryOperations>
+      chartLibraryOperations;
+  std::unique_ptr<chart_library_tasks::ChartLibraryTaskService>
+      chartLibraryTasks;
+  std::unique_ptr<chart_library_platform::FolderActionService>
+      chartLibraryFolderActions;
+  std::atomic_bool chartLibraryFoldersReloadRequested = false;
+  std::atomic_bool chartLibraryListReloadRequested = false;
+  std::atomic<std::uint64_t> chartLibraryScanFlushRequested{0};
+  std::atomic<std::uint64_t> chartLibraryScanFlushCompleted{0};
   std::shared_ptr<ir::tachi::BokutachiCacheStore> bokutachiCacheStore;
   ir::IrDriverRegistry irDrivers;
   std::unique_ptr<ir::IrHttpClient> irHttpClient;
@@ -301,6 +354,11 @@ public:
             *profileSettingsPersistenceCoordinator,
             *profileSettingsPersistenceCoordinator, *skinCommitCoordinator,
             lifecycleClientId);
+        gameplaySkinLifecycle->setDecodeCacheEvictor(
+            [this] {
+              skinResourcePreparationService->decodeCache().dropAll();
+              skinResourcePreparationService->dropTextAtlasCache();
+            });
         gameplaySkinLifecycle->startAfterProfileInitialization(
             *activeProfileId);
         acquireGameplaySkinForNextChart = [this](int keyMode) {
@@ -512,6 +570,9 @@ public:
 
   ApplicationContext()
       : quitFlag(false), applicationDataRoot(Utils::GetDocumentsPath()),
+        applicationUiStateLoadResult(ApplicationUiStateStore::Load(
+            applicationUiStatePath(applicationDataRoot))),
+        applicationUiState(applicationUiStateLoadResult.state),
         pendingIrCredentialCleanup(applicationDataRoot),
         profileManager(applicationDataRoot),
         profileInitializationResult(profileManager.Initialize()),
@@ -549,6 +610,132 @@ public:
     profileSettingsPersistenceCoordinator =
         std::make_unique<ProfileSettingsPersistenceCoordinator>(profileManager,
                                                                 settings);
+    chartLibraryOperations =
+        std::make_unique<chart_library_tasks::ChartLibraryOperations>(
+            chart_library_tasks::ChartLibraryOperationsDependencies{
+                .repository = chartRepository,
+                .tablesDirectory = Utils::GetDocumentsPath("tables"),
+                .defaultDifficultyTablesSeeded =
+                    [this] { return settings.defaultDifficultyTablesSeeded; },
+                .setDefaultDifficultyTablesSeeded = [this](bool seeded) {
+                  settings.defaultDifficultyTablesSeeded = seeded;
+                },
+                .saveSettings = [this] { return saveSettings(); },
+                .requestReload = [this](bool includeFolders) {
+                  if (includeFolders) {
+                    chartLibraryFoldersReloadRequested = true;
+                  }
+                  chartLibraryListReloadRequested = true;
+                },
+                .pauseRequested = [this] {
+                  return backgroundTasksPausedForForegroundScene.load(
+                      std::memory_order_acquire);
+                },
+                .selectInitialFolder = []()
+                    -> std::optional<std::filesystem::path> {
+                  constexpr auto bootstrapMode =
+                      main_menu_library::emptyLibraryBootstrapMode(
+                          TARGET_PLATFORM);
+                  if constexpr (
+                      bootstrapMode ==
+                      main_menu_library::EmptyLibraryBootstrapMode::
+                          DefaultFolder) {
+                    const auto path = ChartRepository::DefaultBmsFolderPath();
+                    std::error_code error;
+                    if (!Utils::EnsureDirectoryExists(path, error)) {
+                      throw std::runtime_error(
+                          "Could not create library folder '" +
+                          fspath_to_utf8(path) + "': " + error.message());
+                    }
+                    return path;
+                  }
+                  char *selected =
+                      tinyfd_selectFolderDialog("Select Folder", nullptr);
+                  std::string folder;
+                  if (selected == nullptr) {
+                    std::cerr << "tinyfd_selectFolderDialog error: "
+                              << std::strerror(errno) << std::endl;
+                    std::cout << "Failed to open folder select dialog.\n";
+                    while (folder.empty()) {
+                      std::cout << "Enter bms folder path: ";
+                      std::cin >> folder;
+                      if (std::cin.eof() || std::cin.fail()) {
+                        break;
+                      }
+                      if (folder.empty()) {
+                        continue;
+                      }
+                      if (!application_context_detail::
+                              expandCurrentUserHomeShortcut(folder)) {
+                        std::cout << "Could not expand ~ because no home "
+                                     "directory is set.\n";
+                        folder.clear();
+                        continue;
+                      }
+                      std::ifstream test(folder);
+                      if (!test) {
+                        folder.clear();
+                      }
+                    }
+                    if (folder.empty()) {
+                      return std::nullopt;
+                    }
+                  } else {
+                    folder = selected;
+                  }
+                  return std::filesystem::path(folder);
+                },
+                .pendingScanFlushRequest = [this] {
+                  const std::uint64_t requested =
+                      chartLibraryScanFlushRequested.load(
+                          std::memory_order_acquire);
+                  const std::uint64_t completed =
+                      chartLibraryScanFlushCompleted.load(
+                          std::memory_order_acquire);
+                  return requested > completed ? requested : 0;
+                },
+                .completeScanFlush = [this](std::uint64_t request) {
+                  if (request == 0) {
+                    return;
+                  }
+                  std::uint64_t completed =
+                      chartLibraryScanFlushCompleted.load(
+                          std::memory_order_relaxed);
+                  while (completed < request &&
+                         !chartLibraryScanFlushCompleted.compare_exchange_weak(
+                             completed, request, std::memory_order_release,
+                             std::memory_order_relaxed)) {
+                  }
+                  chartLibraryFoldersReloadRequested = true;
+                  chartLibraryListReloadRequested = true;
+                },
+            });
+    chartLibraryTasks =
+        std::make_unique<chart_library_tasks::ChartLibraryTaskService>(
+            [this](const auto &request, const auto &stopToken, auto progress,
+                   auto waitForResume) {
+              return chartLibraryOperations->run(
+                  request, stopToken, std::move(progress),
+                  std::move(waitForResume));
+            });
+    requestRebuildChartLibrary = [this] {
+      if (chartLibraryTasks) {
+        chartLibraryTasks->enqueue(
+            {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+             .title = "Rebuild Library",
+             .rebuildLibraryMetadata = true});
+      }
+    };
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+    chartLibraryFolderActions =
+        std::make_unique<chart_library_platform::FolderActionService>(
+            chartRepository, *chartLibraryTasks);
+    requestAddChartFolderFromFiles = [this] {
+      if (chartLibraryFolderActions) {
+        chartLibraryFolderActions->requestAddFolder();
+      }
+    };
+#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     initializeGameplaySkinServices();
 #endif
@@ -579,6 +766,13 @@ public:
           }
           if (profileArchiveOperationActive.load(std::memory_order_acquire)) {
             return "A profile archive operation is active.";
+          }
+          if (chartLibraryTasks &&
+              chartLibraryTasks->snapshot().activeCount > 0) {
+            return "A chart library scan or import is active.";
+          }
+          if (chartLibraryFolderActions && chartLibraryFolderActions->active()) {
+            return "A chart import picker is active.";
           }
           if (replayVideoExportActive.load(std::memory_order_acquire)) {
             return "A replay export is active.";
@@ -1285,6 +1479,17 @@ public:
     return false;
   }
 
+  bool saveApplicationUiState(std::string *diagnostic = nullptr) {
+    std::lock_guard lock(applicationUiStateMutex);
+    std::string error;
+    const bool saved = ApplicationUiStateStore::SaveAtomic(
+        applicationUiStatePath(applicationDataRoot), applicationUiState, error);
+    if (diagnostic != nullptr) {
+      *diagnostic = std::move(error);
+    }
+    return saved;
+  }
+
   bool saveSettingsCandidate(AppSettings candidate, std::string &error) {
     if (!profileReady() || !profileSettingsPersistenceCoordinator) {
       error = profileInitializationResult.message.empty()
@@ -1314,6 +1519,13 @@ public:
 
   ~ApplicationContext() {
     quitFlag = true;
+    requestRebuildChartLibrary = nullptr;
+    requestAddChartFolderFromFiles = nullptr;
+    chartLibraryFolderActions.reset();
+    if (chartLibraryTasks) {
+      chartLibraryTasks->shutdown();
+    }
+    chart_library_platform::clearFolderAccess();
     std::string musicStopError;
     musicPlayer.Stop(musicStopError);
     std::cout << "Waiting for threads to join..." << std::endl;

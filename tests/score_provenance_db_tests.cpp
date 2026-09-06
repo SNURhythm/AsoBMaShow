@@ -1116,6 +1116,57 @@ void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
   assert(best->attemptId == pending.attemptId);
 }
 
+void testRecentScoreImprovementsMatchScoreLogDayFolders(
+    const std::filesystem::path &root) {
+  const auto path = root / "recent-score-improvements" / "score.db";
+  ScoreRepository helper(path);
+  auto save = [&](std::string_view chart, char hashDigit, int suffix,
+                  std::string timestamp, int score, int clearType,
+                  int longNoteMode = long_note_mode::kLnValue) {
+    auto pending = samplePendingScore(root, std::string(chart), suffix,
+                                      std::move(timestamp));
+    pending.score.chartSha256.assign(64, hashDigit);
+    pending.score.score = score;
+    pending.score.clearType = clearType;
+    pending.score.longNoteMode = longNoteMode;
+    assert(helper.SaveProjectedScore(pending).status ==
+           result_persistence::ProjectionStatus::Inserted);
+  };
+  save("update-a", 'c', 310, "2026-07-13 23:00:00", 100,
+       kClearTypeFailedRank);
+  save("update-a", 'c', 311, "2026-07-14 01:00:00", 150,
+       kClearTypeFailedRank);
+  save("update-a", 'c', 312, "2026-07-14 02:00:00", 140,
+       kClearTypeNormalClearRank);
+  save("update-a", 'c', 313, "2026-07-15 03:00:00", 140,
+       kClearTypeNormalClearRank);
+  save("update-b", 'd', 314, "2026-07-15 04:00:00", 20,
+       kClearTypeEasyClearRank);
+  save("update-cn", 'e', 315, "2026-07-15 05:00:00", 40,
+       kClearTypeNormalClearRank, long_note_mode::kCnValue);
+  save("update-any", 'f', 316, "2026-07-15 06:00:00", 50,
+       kClearTypeHardClearRank, -1);
+
+  auto db = openDatabase(path);
+  const auto now = static_cast<std::int64_t>(queryInt(
+      db.get(), "SELECT CAST(strftime('%s', '2026-07-15 12:00:00') AS INTEGER)"));
+  db.reset();
+  const auto updates = helper.LoadRecentScoreImprovements(
+      now, long_note_mode::kLnValue);
+  const std::string updateAHash(64, 'c');
+  const std::string updateBHash(64, 'd');
+  assert(updates.score[1].contains(updateAHash));
+  assert(!updates.score[0].contains(updateAHash));
+  assert(updates.lamp[1].contains(updateAHash));
+  assert(!updates.lamp[0].contains(updateAHash));
+  assert(updates.score[0].contains(updateBHash) &&
+         updates.lamp[0].contains(updateBHash));
+  assert(!updates.score[0].contains(std::string(64, 'e')) &&
+         !updates.lamp[0].contains(std::string(64, 'e')));
+  assert(updates.score[0].contains(std::string(64, 'f')) &&
+         updates.lamp[0].contains(std::string(64, 'f')));
+}
+
 void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
     const std::filesystem::path &root) {
   const auto path = root / "chart-score-history" / "score.db";
@@ -1541,8 +1592,20 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   pending.score.poor = 8;
   pending.score.kPoor = 40;
   pending.score.comboBreak = 22;
+  pending.score.fast = 23;
+  pending.score.slow = 29;
   pending.score.longNoteMode = 2;
+  pending.averageJudgeMicros = 20'000;
   assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::Inserted);
+
+  auto metricBest = samplePendingScore(root, "best-score-ir-bp", 15,
+                                       "2026-07-18 12:35:56", 10, 5);
+  metricBest.score.bad = 2;
+  metricBest.score.poor = 1;
+  metricBest.score.longNoteMode = 2;
+  metricBest.averageJudgeMicros = 10'000;
+  assert(helper.SaveProjectedScore(metricBest).status ==
          result_persistence::ProjectionStatus::Inserted);
 
   const auto best = helper.LoadBestScore(sampleMeta(root, "best-score-ir-bp"),
@@ -1550,6 +1613,15 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   assert(best.has_value());
   assert(best->comboBreak == 22);
   assert(best->badPoints == 62);
+  assert(best->fast == 23 && best->slow == 29);
+
+  const auto selectorBest = helper.LoadBestScores().bestForHash(
+      pending.score.chartSha256, pending.score.longNoteMode);
+  assert(selectorBest.has_value());
+  assert(selectorBest->score == pending.score.score);
+  assert(selectorBest->badPoints == 3);
+  assert(selectorBest->averageJudgeMicros == 10'000);
+  assert(selectorBest->fast == 23 && selectorBest->slow == 29);
 }
 
 void testBestScoreCanFilterExactRuleset(const std::filesystem::path &root) {
@@ -1809,6 +1881,8 @@ void testVersion4MigrationPreservesOutcomesAndRows(
          ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM scores") == 1);
   assert(queryInt(migrated.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+  assert(queryInt(migrated.get(),
+                  "SELECT bad_points FROM scores WHERE id=1") == 12);
   assert(chartOutcome(migrated.get()) == chartBefore);
   assert(courseOutcome(migrated.get()) == courseBefore);
   for (const std::string table : {"scores", "course_scores"}) {
@@ -2486,6 +2560,72 @@ void testChartAndCourseRoundTripAndPathIsolation(
   retargetable.SetDatabasePath(firstPath);
   assert(retargetable.GetDatabasePath() == firstPath);
   assert(retargetable.GetRevision() > revisionBefore);
+}
+
+void testCourseSelectorOptionScoresMatchBeatorajaBuckets(
+    const std::filesystem::path &root) {
+  const auto path = root / "course-selector-option-scores" / "score.db";
+  ScoreRepository helper(path);
+  assert(helper.EnsureSchema());
+
+  CoursePlaySession session;
+  session.courseId = 24;
+  session.courseName = "Selector Course";
+  session.courseGroupName = "Group";
+  session.constraintJson = "[]";
+  session.longNoteMode = 2;
+  session.entries.push_back({.meta = sampleMeta(root, "selector-course")});
+  session.courseKey = course_identity::makeCourseKey(session);
+
+  const auto save = [&](std::string player1, std::string player2, bool flip,
+                        std::string provenanceName) {
+    ScoreProvenance provenance = sampleProvenance(provenanceName);
+    provenance.player1.option = std::move(player1);
+    provenance.player2.option = std::move(player2);
+    provenance.doublePlayFlip = flip;
+    assert(helper.SaveCourseScore(session, sampleState(20, 5), 1, 1,
+                                  provenance));
+  };
+  save("NORMAL", "NORMAL", false, "selector-normal");
+  save("MIRROR", "MIRROR", true, "selector-mirror");
+  save("RANDOM", "NORMAL", false, "selector-random-score");
+  save("NORMAL", "RANDOM", false, "selector-random-lamp");
+
+  {
+    auto db = openDatabase(path);
+    execOrAbort(
+        db.get(),
+        "UPDATE course_scores SET score=100,max_score=200,bad=6,poor=2,"
+        "kpoor=1,clear_type=" +
+            std::to_string(kClearTypeNormalClearRank) + " WHERE id=1;" +
+            "UPDATE course_scores SET score=110,max_score=220,bad=3,poor=1,"
+            "kpoor=0,clear_type=" +
+            std::to_string(kClearTypeHardClearRank) + " WHERE id=2;" +
+            "UPDATE course_scores SET score=180,max_score=200,bad=7,poor=2,"
+            "kpoor=1,clear_type=" +
+            std::to_string(kClearTypeEasyClearRank) + " WHERE id=3;" +
+            "UPDATE course_scores SET score=160,max_score=240,bad=1,poor=1,"
+            "kpoor=0,clear_type=" +
+            std::to_string(kClearTypeFullComboRank) + " WHERE id=4");
+  }
+
+  const auto scores = helper.LoadCourseSelectorOptionScores(
+      session.courseKey, session.courseId, session.longNoteMode, true);
+  assert(scores[0].has_value());
+  assert(scores[0]->score == 100);
+  assert(scores[0]->maxScore == 200);
+  assert(scores[0]->badPoints == 9);
+  assert(scores[0]->clearType == kClearTypeNormalClearRank);
+  assert(scores[1].has_value());
+  assert(scores[1]->score == 110);
+  assert(scores[1]->maxScore == 220);
+  assert(scores[1]->badPoints == 4);
+  assert(scores[1]->clearType == kClearTypeHardClearRank);
+  assert(scores[2].has_value());
+  assert(scores[2]->score == 180);
+  assert(scores[2]->maxScore == 240);
+  assert(scores[2]->badPoints == 2);
+  assert(scores[2]->clearType == kClearTypeFullComboRank);
 }
 
 void testModifiedPlaybackDoesNotUpdateBestScores(
@@ -3170,6 +3310,7 @@ int main() {
   testProjectedScoreIsIdempotent(root);
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
+  testRecentScoreImprovementsMatchScoreLogDayFolders(root);
   testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(root);
   testPlayerHistoryUsesPinnedLastPlayableNoteDuration(root);
   testVersion12BackfillsLocalPlayDurationFromChartMetadata(root);
@@ -3198,6 +3339,7 @@ int main() {
   testIgnoredRecoveryUpdateDoesNotAdvanceRevision(root);
   testFutureVersionIsRejected(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
+  testCourseSelectorOptionScoresMatchBeatorajaBuckets(root);
   testModifiedPlaybackDoesNotUpdateBestScores(root);
   testVersion8MigrationReclassifiesBeatorajaValidScores(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);

@@ -4,6 +4,7 @@
 #include "ChartRepositoryInternal.h"
 #include "ChartSqlExpressions.h"
 #include "ChartStorageIdentity.h"
+#include "../ArchiveFile.h"
 #include "../LongNoteModeUtils.h"
 #include "ScoreRepository.h"
 #include "ScoreCacheQueries.h"
@@ -29,7 +30,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 5;
+constexpr int kChartDatabaseSchemaVersion = 10;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -163,10 +164,30 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "total_backspin_notes INTEGER,"
       "ln_mode INTEGER NOT NULL DEFAULT 0,"
       "has_document INTEGER NOT NULL DEFAULT 0,"
+      "has_bpm_stop INTEGER NOT NULL DEFAULT 0,"
+      "has_scroll_change INTEGER NOT NULL DEFAULT 0,"
+      "add_date INTEGER NOT NULL DEFAULT 0,"
+      "total_landmine_notes INTEGER NOT NULL DEFAULT 0,"
+      "has_random_sequence INTEGER NOT NULL DEFAULT 0,"
+      "most_prevalent_bpm REAL NOT NULL DEFAULT 0,"
+      "has_bga INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")";
   return execSql(db, query, "creating chart meta table");
+}
+
+bool createFolderTableSchema(sqlite3 *db) {
+  // These are FolderData's path, date, and adddate fields. The selector's
+  // remaining FolderData fields are derived by the existing physical-folder
+  // projection rather than assigned unrelated defaults here.
+  const char *query =
+      "CREATE TABLE IF NOT EXISTS folder ("
+      "path TEXT PRIMARY KEY,"
+      "date INTEGER NOT NULL DEFAULT 0,"
+      "adddate INTEGER NOT NULL DEFAULT 0"
+      ")";
+  return execSql(db, query, "creating folder table");
 }
 
 std::optional<std::string> normalizedPathTextForStorage(
@@ -385,6 +406,8 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
       "DROP TABLE IF EXISTS solid_archives",
       "DROP TABLE IF EXISTS archive_scan_cache",
       "DROP TABLE IF EXISTS chart_scan_checkpoint",
+      "DROP TABLE IF EXISTS chart_scan_completed_archive",
+      "DROP TABLE IF EXISTS folder",
   };
   for (const auto *query : queries) {
     if (!execSql(db, query, "invalidating chart metadata cache")) {
@@ -394,6 +417,9 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
   }
   if (ok) {
     ok = createChartMetaTableSchema(db);
+  }
+  if (ok) {
+    ok = createFolderTableSchema(db);
   }
   if (ok) {
     ok = setChartMetadataRebuildRequired(db, true);
@@ -565,6 +591,92 @@ bool migrateChartDatabaseToVersion5(sqlite3 *db, bool &completed) {
   return true;
 }
 
+bool migrateChartDatabaseToVersion6(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_bpm_stop",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_bpm_stop INTEGER NOT NULL DEFAULT 0",
+          "checking chart BPM-stop column", "adding chart BPM-stop column",
+          logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_scroll_change",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_scroll_change INTEGER NOT NULL DEFAULT 0",
+          "checking chart scroll-change column",
+          "adding chart scroll-change column", logSqlErrorText)) {
+    return false;
+  }
+  // SongData derives both feature bits from the full timeline model. Older
+  // chart_meta rows contain no equivalent source fact, so they must be
+  // rebuilt by the normal scanner rather than assigned a guessed value.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
+bool migrateChartDatabaseToVersion7(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "add_date",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN add_date INTEGER NOT NULL DEFAULT 0",
+          "checking chart add date column", "adding chart add date column",
+          logSqlErrorText)) {
+    return false;
+  }
+  // Existing Aso rows have no SongData.adddate source fact. Re-discover them
+  // through the normal scanner, which is also how Beatoraja assigns adddate.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
+bool migrateChartDatabaseToVersion8(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "total_landmine_notes",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN total_landmine_notes INTEGER NOT NULL DEFAULT 0",
+          "checking chart landmine column", "adding chart landmine column",
+          logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_random_sequence",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_random_sequence INTEGER NOT NULL DEFAULT 0",
+          "checking chart random-sequence column",
+          "adding chart random-sequence column", logSqlErrorText) ||
+      !ensureSqliteTableColumnLogged(
+          db, "chart_meta", "most_prevalent_bpm",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN most_prevalent_bpm REAL NOT NULL DEFAULT 0",
+          "checking chart main BPM column", "adding chart main BPM column",
+          logSqlErrorText)) {
+    return false;
+  }
+  // Older rows do not contain SongData's mine/random feature facts or the
+  // separately calculated SongInformation.mainbpm value.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
+bool migrateChartDatabaseToVersion9(sqlite3 *db, bool &completed) {
+  if (!ensureSqliteTableColumnLogged(
+          db, "chart_meta", "has_bga",
+          "ALTER TABLE chart_meta "
+          "ADD COLUMN has_bga INTEGER NOT NULL DEFAULT 0",
+          "checking chart BGA-content column", "adding chart BGA-content column",
+          logSqlErrorText)) {
+    return false;
+  }
+  // Older rows have no BMSModel#getBgaList-equivalent fact. Rebuild rather
+  // than deriving it from #BMP declarations or display metadata.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
+bool migrateChartDatabaseToVersion10(sqlite3 *db, bool &completed) {
+  // FolderData.date/adddate cannot be recovered from chart records. Keep
+  // existing chart metadata and let the next source-equivalent library walk
+  // establish the folder records from the file system.
+  if (!createFolderTableSchema(db)) {
+    return false;
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -609,6 +721,14 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {3, "persist authored TOTAL metadata", migrateChartDatabaseToVersion3},
       {4, "persist folder document metadata", migrateChartDatabaseToVersion4},
       {5, "persist SongReview favorite flags", migrateChartDatabaseToVersion5},
+      {6, "persist stop and scroll sequence flags",
+       migrateChartDatabaseToVersion6},
+      {7, "persist chart library add dates", migrateChartDatabaseToVersion7},
+      {8, "persist selector chart feature metadata",
+       migrateChartDatabaseToVersion8},
+      {9, "persist chart BGA content metadata",
+       migrateChartDatabaseToVersion9},
+      {10, "persist selector folder add dates", migrateChartDatabaseToVersion10},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -634,6 +754,16 @@ bool createChartScanCheckpointTable(sqlite3 *db) {
   if (!execSql(db, query, "creating chart scan checkpoint table")) {
     return false;
   }
+  const char *completedQuery =
+      "CREATE TABLE IF NOT EXISTS chart_scan_completed_archive ("
+      "archive_path TEXT NOT NULL,"
+      "archive_size INTEGER NOT NULL DEFAULT 0,"
+      "mtime_ns INTEGER NOT NULL DEFAULT 0,"
+      "PRIMARY KEY (archive_path, archive_size, mtime_ns)"
+      ")";
+  if (!execSql(db, completedQuery, "creating completed archive table")) {
+    return false;
+  }
   return true;
 }
 
@@ -641,8 +771,12 @@ bool clearChartScanCheckpoint(sqlite3 *db) {
   if (!createChartScanCheckpointTable(db)) {
     return false;
   }
-  return execSql(db, "DELETE FROM chart_scan_checkpoint",
-                 "clearing chart scan checkpoint");
+  if (!execSql(db, "DELETE FROM chart_scan_checkpoint",
+               "clearing chart scan checkpoint")) {
+    return false;
+  }
+  return execSql(db, "DELETE FROM chart_scan_completed_archive",
+                 "clearing completed archive records");
 }
 
 bool createArchiveScanCacheTable(sqlite3 *db) {
@@ -1304,6 +1438,7 @@ static bool deleteArchiveRecords(sqlite3 *db,
 }
 
 static bool clearChartMeta(sqlite3 *db) {
+  createFolderTableSchema(db);
   createSolidArchiveTable(db);
   createArchiveScanCacheTable(db);
   createChartScanCheckpointTable(db);
@@ -1322,6 +1457,10 @@ static bool clearChartMeta(sqlite3 *db) {
   }
   const int chartChanges = sqlite3_changes(db);
   bool changed = chartChanges > 0;
+  if (!execSql(db, "DELETE FROM folder", "clearing folders")) {
+    return false;
+  }
+  changed = sqlite3_changes(db) > 0 || changed;
   if (!execSql(db, "DELETE FROM solid_archives", "clearing solid archives")) {
     return false;
   }
@@ -1333,6 +1472,11 @@ static bool clearChartMeta(sqlite3 *db) {
   changed = sqlite3_changes(db) > 0 || changed;
   if (!execSql(db, "DELETE FROM chart_scan_checkpoint",
                "clearing chart scan checkpoint")) {
+    return false;
+  }
+  changed = sqlite3_changes(db) > 0 || changed;
+  if (!execSql(db, "DELETE FROM chart_scan_completed_archive",
+               "clearing completed archive records")) {
     return false;
   }
   changed = sqlite3_changes(db) > 0 || changed;
@@ -1370,7 +1514,8 @@ static bool createEntriesTable(sqlite3 *db) {
 }
 
 bool chart_repository_detail::EnsureCoreSchema(sqlite3 *database) {
-  return createChartMetaTable(database) && createSolidArchiveTable(database) &&
+  return createChartMetaTable(database) && createFolderTableSchema(database) &&
+         createSolidArchiveTable(database) &&
          createFavoritesTable(database) && createEntriesTable(database) &&
          createChartStateTables(database);
 }
@@ -1679,6 +1824,8 @@ ChartRepository::ChartRepository()
 ChartRepository::ChartRepository(std::filesystem::path databasePath)
     : impl_(std::make_unique<Impl>(std::move(databasePath))) {
   chart_storage_identity::ConfigureArchiveCachePathNormalization();
+  archive_file::setArchiveIndexCacheDirectory(
+      Utils::GetDocumentsPath("db") / "archive-index");
 }
 
 ChartRepository::~ChartRepository() = default;

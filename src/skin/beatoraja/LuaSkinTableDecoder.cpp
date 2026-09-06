@@ -7,6 +7,7 @@
 
 #include "LuaSkinBindingDecoder.h"
 #include "LuaSkinFileSystem.h"
+#include "LuaSkinHostModules.h"
 #include "LuaSkinRuntime.h"
 #include "NumericGlyphAtlas.h"
 #include "SkinGaugeNodeExpansion.h"
@@ -30,6 +31,7 @@ extern "C" {
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cctype>
 #include <cmath>
@@ -251,13 +253,22 @@ bool rawGetField(lua_State *state, int index, std::string_view name,
   return true;
 }
 
+enum class AbsentStringDefault {
+  Clear,
+  Preserve,
+};
+
 bool copyString(lua_State *state, int index, std::string &output,
                 std::optional<std::size_t> maximumBytes, bool allowEmpty,
-                DecodeRequest &request) {
+                DecodeRequest &request,
+                AbsentStringDefault absentDefault =
+                    AbsentStringDefault::Clear) {
   if (!request.enforceGameplayLimits) {
     switch (lua_type(state, index)) {
     case LUA_TNIL:
-      output.clear();
+      if (absentDefault == AbsentStringDefault::Clear) {
+        output.clear();
+      }
       return true;
     case LUA_TBOOLEAN:
       output = lua_toboolean(state, index) != 0 ? "true" : "false";
@@ -273,7 +284,7 @@ bool copyString(lua_State *state, int index, std::string &output,
       return true;
     }
     default:
-      output = lua_typename(state, lua_type(state, index));
+      output = luaToJString(state, index);
       return true;
     }
   }
@@ -315,12 +326,15 @@ bool copyString(lua_State *state, int index, std::string &output,
 
 bool stringField(lua_State *state, int index, std::string_view name,
                  std::string &output, std::optional<std::size_t> maximumBytes,
-                 bool allowEmpty, DecodeRequest &request) {
+                 bool allowEmpty, DecodeRequest &request,
+                 AbsentStringDefault absentDefault =
+                     AbsentStringDefault::Clear) {
   if (!rawGetField(state, index, name, request)) {
     return false;
   }
   const bool ok =
-      copyString(state, -1, output, maximumBytes, allowEmpty, request);
+      copyString(state, -1, output, maximumBytes, allowEmpty, request,
+                 absentDefault);
   if (!ok && !request.result.diagnostics.empty() &&
       request.result.diagnostics.front().code.starts_with("skin_lua_header_")) {
     request.result.diagnostics.front().message +=
@@ -333,6 +347,28 @@ bool stringField(lua_State *state, int index, std::string_view name,
 bool integerAt(lua_State *state, int index, int &output,
                DecodeRequest &request) {
   if (lua_isnil(state, index)) {
+    return true;
+  }
+  if (!request.enforceGameplayLimits) {
+    // LuaSkinLoader reflects Java int fields through LuaValue::toint.  Its
+    // base implementation returns zero for non-numbers; LuaDouble performs
+    // the JVM d2l conversion followed by l2i, including saturation and the
+    // low-word wrap for values outside the signed-int range.
+    const double value = static_cast<double>(lua_tonumber(state, index));
+    std::int64_t asLong = 0;
+    if (std::isnan(value)) {
+      asLong = 0;
+    } else if (value >=
+               static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+      asLong = std::numeric_limits<std::int64_t>::max();
+    } else if (value <=
+               static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
+      asLong = std::numeric_limits<std::int64_t>::min();
+    } else {
+      asLong = static_cast<std::int64_t>(value);
+    }
+    output = static_cast<int>(std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(static_cast<std::uint64_t>(asLong))));
     return true;
   }
   if (lua_isnumber(state, index) == 0) {
@@ -530,6 +566,9 @@ bool decodeOption(lua_State *state, int index, std::size_t depth,
     const bool ok = forEachHeaderTableValue(
         state, -1, request, [&](lua_State *state, int valueIndex) {
           output.choices.emplace_back();
+          if (!lua_istable(state, valueIndex)) {
+            return true;
+          }
           return decodeChoice(state, valueIndex, depth + 2,
                               output.choices.back(), request);
         });
@@ -610,6 +649,18 @@ bool decodeObjectArrayField(lua_State *state, int rootIndex,
     const bool ok = forEachHeaderTableValue(
         state, -1, request, [&](lua_State *state, int valueIndex) {
           output.emplace_back();
+          if constexpr (requires(Output &item) {
+                          item.retainedBindingValue = std::uint32_t{};
+                        }) {
+            output.back().retainedBindingValue =
+                retainLuaBindingValue(state, valueIndex);
+          }
+          // LuaSkinLoader#fromLuaValue constructs a default component object
+          // for every non-table value encountered while converting a Lua
+          // table to a Java object array.
+          if (!lua_istable(state, valueIndex)) {
+            return true;
+          }
           const bool decoded = decodeElement(state, valueIndex, depth + 1,
                                              output.back(), request);
           if (!decoded && !request.result.diagnostics.empty() &&
@@ -653,7 +704,7 @@ bool validateSemantics(BeatorajaSkinHeader &header, DecodeRequest &request) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header does not declare a valid type");
   }
-  if (header.width < 1 || header.height < 1) {
+  if (header.type != 5 && (header.width < 1 || header.height < 1)) {
     return fail(request, "skin_lua_header_invalid",
                 "Lua skin header dimensions are outside the fixed range");
   }
@@ -800,6 +851,7 @@ struct RawSkinImage {
   int stateSelector = 0;
   int clickMode = 0;
   std::uint32_t authoredIndex = 0;
+  std::uint32_t retainedBindingValue = 0;
   std::optional<SkinTimerPropertyId> timer;
   std::optional<SkinIntegerPropertyId> stateIndex;
   std::optional<SkinEventBindingId> clickEvent;
@@ -812,11 +864,13 @@ struct RawSkinImageSet {
   std::vector<std::string> imageIds;
   int clickMode = 0;
   std::uint32_t authoredIndex = 0;
+  std::uint32_t retainedBindingValue = 0;
   SkinIntegerPropertyId stateIndex{};
   std::optional<SkinEventBindingId> clickEvent;
 };
 
 struct RawSkinNumber {
+  std::uint32_t retainedBindingValue = 0;
   RawSkinImage image;
   SkinIntegerPropertyId value{};
   int digitCount = 0;
@@ -828,6 +882,7 @@ struct RawSkinNumber {
 };
 
 struct RawSkinFloat {
+  std::uint32_t retainedBindingValue = 0;
   RawSkinImage image;
   SkinFloatPropertyId value{};
   int integerDigits = 0;
@@ -841,6 +896,7 @@ struct RawSkinFloat {
 };
 
 struct RawSkinSlider {
+  std::uint32_t retainedBindingValue = 0;
   RawSkinImage image;
   int direction = 0;
   int range = 0;
@@ -873,6 +929,7 @@ struct RawSkinText {
   int alignment = 0;
   int refSelector = 0;
   std::uint32_t authoredIndex = 0;
+  std::uint32_t retainedBindingValue = 0;
   SkinStringPropertyId value{};
   std::optional<SkinStringWriterId> writer;
   bool writerFieldPresent = false;
@@ -892,18 +949,21 @@ struct RawSkinText {
 struct RawCustomTimer {
   int id = 0;
   std::uint32_t authoredIndex = 0;
+  std::uint32_t retainedBindingValue = 0;
   std::optional<SkinTimerPropertyId> timer;
 };
 
 struct RawCustomEvent {
   int id = 0;
   std::uint32_t authoredIndex = 0;
+  std::uint32_t retainedBindingValue = 0;
   SkinEventBindingId action{};
   std::optional<SkinBooleanPropertyId> condition;
   int minimumIntervalMillis = 0;
 };
 
 struct RawSkinGraph {
+  std::uint32_t retainedBindingValue = 0;
   RawSkinImage image;
   int direction = 1;
   int type = 0;
@@ -949,11 +1009,14 @@ struct RawDestinationFrame {
 
 struct RawDestination {
   std::string id;
+  bool idWasNil = false;
   struct Condition {
     std::optional<int> optionId;
     std::optional<SkinBooleanPropertyId> property;
+    std::uint32_t retainedBindingValue = 0;
   };
   std::uint32_t authoredIndex = 0;
+  std::uint32_t retainedBindingValue = 0;
   std::optional<SkinTimerPropertyId> timer;
   int loop = 0;
   int center = 0;
@@ -966,6 +1029,22 @@ struct RawDestination {
   std::optional<SkinBooleanPropertyId> drawCondition;
   std::vector<RawDestinationFrame> frames;
   std::optional<SkinAuthoredRect> mouseRect;
+};
+
+struct RawSongList {
+  std::string id;
+  int center = 0;
+  std::vector<int> clickable;
+  std::vector<RawDestination> listOff;
+  std::vector<RawDestination> listOn;
+  std::vector<RawDestination> text;
+  std::vector<RawDestination> level;
+  std::vector<RawDestination> lamp;
+  std::vector<RawDestination> playerLamp;
+  std::vector<RawDestination> rivalLamp;
+  std::vector<RawDestination> trophy;
+  std::vector<RawDestination> label;
+  std::optional<RawDestination> graph;
 };
 
 struct RawSkinJudge {
@@ -1170,6 +1249,7 @@ struct GameplayDecodeRequest {
   std::vector<RawSkinTimingDistributionGraph> rawTimingDistributionGraphs;
   std::vector<RawSkinPmChara> rawPmCharas;
   std::vector<RawDestination> rawDestinations;
+  std::optional<RawSongList> rawSongList;
   std::vector<RawCustomTimer> rawCustomTimers;
   std::vector<RawCustomEvent> rawCustomEvents;
   std::optional<RawSkinNote> note;
@@ -1296,6 +1376,14 @@ bool numberField(lua_State *state, int index, std::string_view name,
     lua_pop(state, 1);
     return true;
   }
+  if (!request.enforceGameplayLimits) {
+    // Java float fields use LuaValue::tofloat.  Preserve its zero coercion
+    // for non-numbers and its IEEE-754 float narrowing for numeric values.
+    output = static_cast<double>(
+        static_cast<float>(lua_tonumber(state, -1)));
+    lua_pop(state, 1);
+    return true;
+  }
   if (lua_isnumber(state, -1) == 0) {
     lua_pop(state, 1);
     return fail(request, "skin_lua_model_invalid",
@@ -1323,6 +1411,9 @@ bool stringArrayField(lua_State *state, int index, std::string_view name,
   }
   if (!lua_istable(state, -1)) {
     lua_pop(state, 1);
+    if (!request.enforceGameplayLimits) {
+      return true;
+    }
     return fail(request, "skin_lua_model_invalid",
                 "Lua skin string array field is not a table");
   }
@@ -1346,6 +1437,10 @@ bool optionalStringArrayField(lua_State *state, int index,
   }
   if (!lua_istable(state, -1)) {
     lua_pop(state, 1);
+    if (!request.enforceGameplayLimits) {
+      output.emplace();
+      return true;
+    }
     return fail(request, "skin_lua_model_invalid",
                 "Lua skin optional string array field is not a table");
   }
@@ -1462,12 +1557,12 @@ bool decodeRawText(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "overflow", output.overflow, request) &&
          stringField(state, index, "outlineColor", output.outlineColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          numberField(state, index, "outlineWidth", output.outlineWidth,
                      request) &&
          stringField(state, index, "shadowColor", output.shadowColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          numberField(state, index, "shadowOffsetX", output.shadowOffsetX,
                      request) &&
          numberField(state, index, "shadowOffsetY", output.shadowOffsetY,
@@ -1518,6 +1613,20 @@ bool numberArrayField(lua_State *state, int index, std::string_view name,
   if (lua_isnil(state, -1)) {
     lua_pop(state, 1);
     return true;
+  }
+  if (!request.enforceGameplayLimits) {
+    if (!lua_istable(state, -1)) {
+      lua_pop(state, 1);
+      return true;
+    }
+    const bool ok = forEachHeaderTableValue(
+        state, -1, request, [&](lua_State *state, int valueIndex) {
+          output.push_back(static_cast<double>(
+              static_cast<float>(lua_tonumber(state, valueIndex))));
+          return true;
+        });
+    lua_pop(state, 1);
+    return ok;
   }
   std::size_t length = 0;
   if (!strictArrayLength(state, -1,
@@ -1690,6 +1799,26 @@ bool integerArrayField(lua_State *state, int index, std::string_view name,
     lua_pop(state, 1);
     return true;
   }
+  if (!lua_istable(state, -1)) {
+    lua_pop(state, 1);
+    return request.enforceGameplayLimits
+               ? fail(request, "skin_lua_model_invalid",
+                      "Lua skin integer array field is not a table")
+               : true;
+  }
+  if (!request.enforceGameplayLimits) {
+    const bool ok = forEachHeaderTableValue(
+        state, -1, request, [&](lua_State *state, int valueIndex) {
+          int value = 0;
+          if (!integerAt(state, valueIndex, value, request)) {
+            return false;
+          }
+          output.push_back(value);
+          return true;
+        });
+    lua_pop(state, 1);
+    return ok;
+  }
   std::size_t length = 0;
   if (!strictArrayLength(state, -1,
                          LuaSkinTableDecoderPolicy::maxGameplayOffsets, length,
@@ -1720,6 +1849,32 @@ bool destinationConditionsField(lua_State *state, int index,
   if (lua_isnil(state, -1)) {
     lua_pop(state, 1);
     return true;
+  }
+  if (!lua_istable(state, -1)) {
+    lua_pop(state, 1);
+    return request.enforceGameplayLimits
+               ? fail(request, "skin_lua_model_invalid",
+                      "Lua skin destination conditions are not a table")
+               : true;
+  }
+  if (!request.enforceGameplayLimits) {
+    const bool ok = forEachHeaderTableValue(
+        state, -1, request, [&](lua_State *state, int valueIndex) {
+          RawDestination::Condition condition;
+          condition.retainedBindingValue =
+              retainLuaBindingValue(state, valueIndex);
+          if (lua_isnumber(state, valueIndex) != 0) {
+            int option = 0;
+            if (!integerAt(state, valueIndex, option, request)) {
+              return false;
+            }
+            condition.optionId = option;
+          }
+          output.push_back(std::move(condition));
+          return true;
+        });
+    lua_pop(state, 1);
+    return ok;
   }
   std::size_t length = 0;
   if (!strictArrayLength(state, -1,
@@ -1758,6 +1913,10 @@ bool destinationMouseRectField(lua_State *state, int index,
   }
   if (!lua_istable(state, -1)) {
     lua_pop(state, 1);
+    if (!request.enforceGameplayLimits) {
+      output.emplace();
+      return true;
+    }
     return fail(request, "skin_lua_model_invalid",
                 "Lua skin destination mouseRect is not an object");
   }
@@ -1775,7 +1934,13 @@ bool destinationMouseRectField(lua_State *state, int index,
 
 bool decodeRawDestination(lua_State *state, int index, std::size_t depth,
                           RawDestination &output, DecodeRequest &request) {
-  return requireObject(state, index, depth, request) &&
+  if (!requireObject(state, index, depth, request) ||
+      !rawGetField(state, index, "id", request)) {
+    return false;
+  }
+  output.idWasNil = lua_isnil(state, -1);
+  lua_pop(state, 1);
+  return
          stringField(state, index, "id", output.id,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
                      request) &&
@@ -1792,6 +1957,81 @@ bool decodeRawDestination(lua_State *state, int index, std::size_t depth,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 output.frames, request,
                                 decodeRawDestinationFrame);
+}
+
+bool decodeRawSongList(lua_State *state, int index, std::size_t depth,
+                       RawSongList &output, DecodeRequest &request) {
+  if (!request.enforceGameplayLimits && !lua_istable(state, index)) {
+    return true;
+  }
+  if (!requireObject(state, index, depth, request) ||
+      !stringField(state, index, "id", output.id,
+                   LuaSkinTableDecoderPolicy::maxGameplayTextBytes, false,
+                   request) ||
+      !integerField(state, index, "center", output.center, request) ||
+      !integerArrayField(state, index, "clickable", output.clickable,
+                         request) ||
+      !decodeObjectArrayField(state, index, "listoff", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.listOff, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "liston", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.listOn, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "text", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.text, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "level", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.level, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "lamp", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.lamp, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "playerlamp", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.playerLamp, request,
+                              decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "rivallamp", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.rivalLamp, request,
+                              decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "trophy", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.trophy, request, decodeRawDestination) ||
+      !decodeObjectArrayField(state, index, "label", depth,
+                              LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                              output.label, request, decodeRawDestination) ||
+      !rawGetField(state, index, "graph", request)) {
+    return false;
+  }
+  if (!lua_isnil(state, -1)) {
+    output.graph.emplace();
+    if ((request.enforceGameplayLimits || lua_istable(state, -1)) &&
+        !decodeRawDestination(state, -1, depth + 1, *output.graph, request)) {
+      lua_pop(state, 1);
+      return false;
+    }
+  }
+  lua_pop(state, 1);
+
+  const auto setIndices = [](std::vector<RawDestination> &destinations) {
+    for (std::size_t index = 0; index < destinations.size(); ++index) {
+      destinations[index].authoredIndex =
+          static_cast<std::uint32_t>(index + 1);
+    }
+  };
+  setIndices(output.listOff);
+  setIndices(output.listOn);
+  setIndices(output.text);
+  setIndices(output.level);
+  setIndices(output.lamp);
+  setIndices(output.playerLamp);
+  setIndices(output.rivalLamp);
+  setIndices(output.trophy);
+  setIndices(output.label);
+  if (output.graph) {
+    output.graph->authoredIndex = 1;
+  }
+  return true;
 }
 
 bool decodeRawCover(lua_State *state, int index, std::size_t depth,
@@ -1861,12 +2101,32 @@ bool gaugeGraphColorArrayField(lua_State *state, int index,
     lua_pop(state, 1);
     return true;
   }
+  if (!request.enforceGameplayLimits && !lua_istable(state, -1)) {
+    output.colors.emplace();
+    lua_pop(state, 1);
+    return true;
+  }
   if (!lua_istable(state, -1) || !lua_checkstack(state, 3)) {
     lua_pop(state, 1);
     return fail(request, "skin_lua_model_invalid",
                 "Lua skin gaugegraph color field is not a bounded array");
   }
   output.colors.emplace();
+  if (!request.enforceGameplayLimits) {
+    const bool ok = forEachHeaderTableValue(
+        state, -1, request, [&](lua_State *state, int valueIndex) {
+          output.colors->emplace_back();
+          std::string value;
+          if (!copyString(state, valueIndex, value, std::nullopt, true,
+                          request)) {
+            return false;
+          }
+          output.colors->back() = std::move(value);
+          return true;
+        });
+    lua_pop(state, 1);
+    return ok;
+  }
   const int tableIndex = absoluteIndex(state, -1);
   lua_pushnil(state);
   while (lua_next(state, tableIndex) != 0) {
@@ -1912,53 +2172,53 @@ bool decodeRawGaugeGraph(lua_State *state, int index, std::size_t depth,
          stringField(state, index, "assistClearBGColor",
                      output.assistClearBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "assistAndEasyFailBGColor",
                      output.assistEasyFailBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "grooveFailBGColor",
                      output.grooveFailBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "grooveClearAndHardBGColor",
                      output.grooveClearHardBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "exHardBGColor", output.exHardBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "hazardBGColor", output.hazardBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "assistClearLineColor",
                      output.assistClearLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "assistAndEasyFailLineColor",
                      output.assistEasyFailLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "grooveFailLineColor",
                      output.grooveFailLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "grooveClearAndHardLineColor",
                      output.grooveClearHardLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "exHardLineColor", output.exHardLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "hazardLineColor", output.hazardLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "borderlineColor", output.borderLine,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "borderColor", output.borderBackground,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request);
+                     request, AbsentStringDefault::Preserve);
 }
 
 bool decodeRawBpmGraph(lua_State *state, int index, std::size_t depth,
@@ -2022,25 +2282,25 @@ bool decodeRawTimingVisualizer(lua_State *state, int index, std::size_t depth,
          integerField(state, index, "lineWidth", output.lineWidth, request) &&
          stringField(state, index, "lineColor", output.lineColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "centerColor", output.centerColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "PGColor", output.pgColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "GRColor", output.grColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "GDColor", output.gdColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "BDColor", output.bdColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "PRColor", output.prColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          integerField(state, index, "transparent", output.transparent,
                       request) &&
          integerField(state, index, "drawDecay", output.drawDecay, request);
@@ -2057,28 +2317,28 @@ bool decodeRawTimingDistributionGraph(
          integerField(state, index, "lineWidth", output.lineWidth, request) &&
          stringField(state, index, "graphColor", output.graphColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "averageColor", output.averageColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "devColor", output.devColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "PGColor", output.pgColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "GRColor", output.grColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "GDColor", output.gdColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "BDColor", output.bdColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "PRColor", output.prColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          integerField(state, index, "drawAverage", output.drawAverage,
                       request) &&
          integerField(state, index, "drawDev", output.drawDev, request);
@@ -2102,28 +2362,28 @@ bool decodeRawHitErrorVisualizer(lua_State *state, int index,
          integerField(state, index, "emaMode", output.emaMode, request) &&
          stringField(state, index, "lineColor", output.lineColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "centerColor", output.centerColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "PGColor", output.pgColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "GRColor", output.grColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "GDColor", output.gdColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "BDColor", output.bdColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "PRColor", output.prColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          stringField(state, index, "emaColor", output.emaColor,
                      LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
-                     request) &&
+                     request, AbsentStringDefault::Preserve) &&
          numberField(state, index, "alpha", output.alpha, request) &&
          integerField(state, index, "windowLength", output.windowLength,
                       request) &&
@@ -2428,14 +2688,17 @@ bool makeImageObject(GameplayDecodeRequest &request,
                      const RawSkinImage &definition, SkinImageObject &output) {
   const int stateCount = definition.stateCount > 1 ? definition.stateCount : 1;
   const std::size_t frames = definition.sprite.frames.size();
-  if (stateCount <= 0 || frames == 0 ||
-      frames % static_cast<std::size_t>(stateCount) != 0) {
+  if (frames == 0 ||
+      (request.enforceGameplayLimits &&
+       frames % static_cast<std::size_t>(stateCount) != 0)) {
     return fail(request.decoding, "skin_lua_model_invalid",
                 "Lua skin Image.len must evenly partition its frames");
   }
   const std::size_t framesPerState =
       frames / static_cast<std::size_t>(stateCount);
-  if (!consumeMaterializedSpriteFrames(request, frames)) {
+  const std::size_t retainedFrames =
+      framesPerState * static_cast<std::size_t>(stateCount);
+  if (!consumeMaterializedSpriteFrames(request, retainedFrames)) {
     return false;
   }
   output.orderedStates.reserve(static_cast<std::size_t>(stateCount));
@@ -2473,7 +2736,8 @@ bool materializeNumericGlyphAtlas(GameplayDecodeRequest &request,
       {.kind = kind,
        .source = source,
        .format = std::move(format),
-       .budget = {.remainingMaterializedFrames = remaining}});
+       .budget = {.remainingMaterializedFrames = remaining},
+       .pinnedLoaderCompatibility = !request.enforceGameplayLimits});
   if (!normalized.atlas) {
     const bool limit =
         normalized.error == NumericGlyphAtlasError::InputLimitExceeded ||
@@ -2506,6 +2770,15 @@ bool materializeNumericGlyphAtlas(GameplayDecodeRequest &request,
 
 bool makeGaugeObject(GameplayDecodeRequest &request,
                      const RawSkinGauge &definition, SkinGaugeObject &output) {
+  // JsonSelectSkinObjectLoader delegates Gauge construction to the base
+  // loader, but SkinGauge.prepare() immediately disables it when the state is
+  // a music selector (there is no GrooveGauge).  Do not apply gameplay-only
+  // expansion limits or parameter validation to an object which the pinned
+  // selector never draws.
+  if (!request.enforceGameplayLimits) {
+    output = SkinGaugeObject{};
+    return true;
+  }
   SkinGaugeNodeExpansionInput input{
       .nodes = definition.nodes,
       .parts = definition.parts,
@@ -2626,7 +2899,40 @@ std::array<std::uint8_t, 4> parseTextColor(std::string_view value) {
 }
 
 bool makeTextObject(GameplayDecodeRequest &request,
-                    const RawSkinText &definition, SkinTextObject &output) {
+                    const RawSkinText &definition,
+                    std::optional<SkinTextObject> &output) {
+  if (!request.enforceGameplayLimits) {
+    const auto font = std::ranges::find_if(
+        request.fonts, [&](const SkinFontResource &candidate) {
+          return candidate.authoredName == definition.font;
+        });
+    if (font == request.fonts.end()) {
+      output.reset();
+      return true;
+    }
+    output = SkinTextObject{
+        .font = font->id,
+        .value = definition.value
+                     ? std::optional<SkinStringPropertyId>{definition.value}
+                     : std::nullopt,
+        .writer = definition.writer,
+        .literal = definition.literal,
+        .pointSize = definition.pointSize,
+        .alignment = definition.alignment,
+        .wrapping = definition.wrapping,
+        .overflow = definition.overflow,
+        .outlineRgba = parseTextColor(definition.outlineColor),
+        .outlineWidth = definition.outlineWidth,
+        .shadowRgba = parseTextColor(definition.shadowColor),
+        .shadowOffsetX = definition.shadowOffsetX,
+        .shadowOffsetY = definition.shadowOffsetY,
+        .shadowSmoothness = definition.shadowSmoothness,
+        .editable = definition.editable ||
+                    (!definition.writerWasExplicit && definition.writer &&
+                     static_cast<bool>(*definition.writer)),
+    };
+    return true;
+  }
   const auto normalized = normalizeSkinText(
       {.fontName = definition.font,
        .value = definition.value
@@ -2648,6 +2954,10 @@ bool makeTextObject(GameplayDecodeRequest &request,
        .authoredEditable = definition.editable},
       request.fonts);
   if (!normalized.text) {
+    if (normalized.error == SkinTextGraphNormalizationError::MissingFont) {
+      output.reset();
+      return true;
+    }
     request.result.diagnostics.push_back(
         diagnostic("skin_lua_model_text_invalid",
                    "Lua skin Text definition cannot be normalized"));
@@ -2659,7 +2969,8 @@ bool makeTextObject(GameplayDecodeRequest &request,
 }
 
 bool makeGraphObject(GameplayDecodeRequest &request,
-                     const RawSkinGraph &definition, SkinGraphObject &output) {
+                     const RawSkinGraph &definition,
+                     std::optional<SkinGraphObject> &output) {
   SkinGraphNormalizationInput input{
       .fill = definition.image.sprite,
       .isRefNum = definition.isRefNum,
@@ -2681,6 +2992,10 @@ bool makeGraphObject(GameplayDecodeRequest &request,
 
   auto normalized = normalizeSkinGraph(input);
   if (!normalized.graph) {
+    if (!request.enforceGameplayLimits) {
+      output.reset();
+      return true;
+    }
     const bool distribution =
         normalized.error ==
         SkinTextGraphNormalizationError::UnsupportedDistributionGraph;
@@ -2704,20 +3019,23 @@ bool makeNoteDistributionGraphObject(
     GameplayDecodeRequest &request,
     const RawSkinNoteDistributionGraph &definition,
     SkinNoteDistributionGraphObject &output) {
-  SkinNoteDistributionGraphType type;
-  switch (definition.type) {
-  case 0:
-    type = SkinNoteDistributionGraphType::Normal;
-    break;
-  case 1:
-    type = SkinNoteDistributionGraphType::Judge;
-    break;
-  case 2:
-    type = SkinNoteDistributionGraphType::EarlyLate;
-    break;
-  default:
-    return fail(request.decoding, "skin_lua_model_judgegraph_invalid",
-                "Lua skin judgegraph type is outside the pinned range");
+  SkinNoteDistributionGraphType type =
+      static_cast<SkinNoteDistributionGraphType>(definition.type);
+  if (request.decoding.enforceGameplayLimits) {
+    switch (definition.type) {
+    case 0:
+      type = SkinNoteDistributionGraphType::Normal;
+      break;
+    case 1:
+      type = SkinNoteDistributionGraphType::Judge;
+      break;
+    case 2:
+      type = SkinNoteDistributionGraphType::EarlyLate;
+      break;
+    default:
+      return fail(request.decoding, "skin_lua_model_judgegraph_invalid",
+                  "Lua skin judgegraph type is outside the pinned range");
+    }
   }
   output = {
       .type = type,
@@ -3054,10 +3372,12 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto hiddenCover = request.hiddenCovers.find(name);
   const auto liftCover = request.liftCovers.find(name);
   const auto judge = request.judges.find(name);
-  const bool isNote = request.note && request.note->id == name;
+  const bool isPlaySkin = request.enforceGameplayLimits;
+  const bool isNote = isPlaySkin && request.note && request.note->id == name;
   const bool isGauge = request.gauge && request.gauge->id == name;
-  const bool isPractice = request.practice && request.practice->id == name;
-  const bool isBga = request.bga && request.bga->id == name;
+  const bool isPractice = isPlaySkin && request.practice &&
+                          request.practice->id == name;
+  const bool isBga = isPlaySkin && request.bga && request.bga->id == name;
   const std::array candidates{
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Image,
                                     .matches = image != request.images.end()},
@@ -3100,18 +3420,20 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
                                     .matches = isNote},
       SkinObjectResolutionCandidate{
           .kind = SkinObjectResolutionKind::HiddenCover,
-          .matches = hiddenCover != request.hiddenCovers.end()},
+          .matches = isPlaySkin &&
+                     hiddenCover != request.hiddenCovers.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::LiftCover,
-                                    .matches =
+                                    .matches = isPlaySkin &&
                                         liftCover != request.liftCovers.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Practice,
                                     .matches = isPractice},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Bga,
                                     .matches = isBga},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::Judge,
-                                    .matches = judge != request.judges.end()},
+                                    .matches = isPlaySkin &&
+                                               judge != request.judges.end()},
       SkinObjectResolutionCandidate{.kind = SkinObjectResolutionKind::PmChara,
-                                    .matches =
+                                    .matches = isPlaySkin &&
                                         pmChara != request.pmCharas.end()},
   };
   const auto resolved = resolveSkinObjectPrecedence(candidates);
@@ -3185,6 +3507,9 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (number != request.numbers.end()) {
+    // JsonSkinObjectLoader dereferences a matched Value texture directly.
+    // Unlike Image/Slider/Graph, a missing texture aborts selector loading.
+    critical = !request.enforceGameplayLimits;
     NumericGlyphAtlas atlas;
     if (!materializeNumericGlyphAtlas(
             request, NumericGlyphAtlasKind::Number, number->second.image.sprite,
@@ -3207,6 +3532,9 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (floating != request.floats.end()) {
+    // JsonSkinObjectLoader follows the same direct texture path for
+    // FloatValue definitions.
+    critical = !request.enforceGameplayLimits;
     NumericGlyphAtlas atlas;
     if (!materializeNumericGlyphAtlas(
             request, NumericGlyphAtlasKind::Float,
@@ -3263,19 +3591,46 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     return true;
   }
   if (text != request.texts.end()) {
-    SkinTextObject object;
+    std::optional<SkinTextObject> object;
     if (!makeTextObject(request, text->second, object)) {
       return false;
     }
-    output = std::move(object);
+    if (!object) {
+      ignored = true;
+      return true;
+    }
+    output = std::move(*object);
     return true;
   }
   if (graph != request.graphs.end()) {
-    SkinGraphObject object;
+    if (!request.enforceGameplayLimits && graph->second.type < 0) {
+      const auto &sprite = graph->second.image.sprite;
+      // JsonSkinObjectLoader leaves this destination null when getTexture()
+      // cannot resolve its source.  Otherwise its negative Graph types all
+      // construct SkinDistributionGraph (only -1 selects the lamp variant).
+      if (sprite.resource == 0 || sprite.frames.empty()) {
+        ignored = true;
+        return true;
+      }
+      if (!consumeMaterializedSpriteFrames(request, sprite.frames.size())) {
+        return false;
+      }
+      output = SkinSelectDistributionGraphObject{
+          .type = graph->second.type == -1
+                      ? SkinSelectDistributionGraphType::Normal
+                      : SkinSelectDistributionGraphType::Judge,
+          .sprite = sprite};
+      return true;
+    }
+    std::optional<SkinGraphObject> object;
     if (!makeGraphObject(request, graph->second, object)) {
       return false;
     }
-    output = std::move(object);
+    if (!object) {
+      ignored = true;
+      return true;
+    }
+    output = std::move(*object);
     return true;
   }
 
@@ -3391,6 +3746,10 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
     output = std::move(object);
     return true;
   }
+  if (!request.enforceGameplayLimits) {
+    ignored = true;
+    return true;
+  }
   return fail(request.decoding, "skin_lua_model_invalid",
               "Lua skin destination '" + std::string(name) +
                   "' does not resolve to an audited v1 object");
@@ -3401,16 +3760,18 @@ bool normalizeDestination(GameplayDecodeRequest &request,
                           std::uint32_t authoredOrdinal,
                           SkinDestinationBody &output, bool sortFrames) {
   const auto mappedBlend = blendMode(raw.blend);
-  if (!mappedBlend || raw.filter < 0 || raw.filter > 1 || raw.stretch < -1 ||
-      raw.stretch > 10) {
+  if (request.enforceGameplayLimits &&
+      (!mappedBlend || raw.filter < 0 || raw.filter > 1 || raw.stretch < -1 ||
+       raw.stretch > 10)) {
     return fail(request.decoding, "skin_lua_model_invalid",
                 "Lua skin destination presentation mode is unsupported");
   }
   output.loop = raw.loop;
   output.center = raw.center >= 0 && raw.center < 10 ? raw.center : 0;
-  output.blend = *mappedBlend;
-  output.filter = static_cast<SkinFilterMode>(raw.filter);
-  if (raw.stretch >= 0) {
+  output.blend = mappedBlend.value_or(SkinBlendMode::Normal);
+  output.filter = raw.filter == 0 ? SkinFilterMode::Nearest
+                                  : SkinFilterMode::Linear;
+  if (raw.stretch >= 0 && raw.stretch <= 10) {
     output.stretch = static_cast<SkinStretchMode>(raw.stretch);
   }
   output.authoredOrdinal = authoredOrdinal;
@@ -3462,16 +3823,11 @@ bool normalizeDestination(GameplayDecodeRequest &request,
         frame.blue.value_or(current.rgba[2]),
         frame.alpha.value_or(current.rgba[3]),
     };
-    if (std::ranges::any_of(
-            colorValues, [](int value) { return value < 0 || value > 255; })) {
-      return fail(request.decoding, "skin_lua_model_invalid",
-                  "Lua skin destination color is outside byte range");
-    }
     current.rgba = {
-        static_cast<std::uint8_t>(colorValues[0]),
-        static_cast<std::uint8_t>(colorValues[1]),
-        static_cast<std::uint8_t>(colorValues[2]),
-        static_cast<std::uint8_t>(colorValues[3]),
+        static_cast<std::uint8_t>(std::clamp(colorValues[0], 0, 255)),
+        static_cast<std::uint8_t>(std::clamp(colorValues[1], 0, 255)),
+        static_cast<std::uint8_t>(std::clamp(colorValues[2], 0, 255)),
+        static_cast<std::uint8_t>(std::clamp(colorValues[3], 0, 255)),
     };
 
     if (frame.clipX) {
@@ -3610,6 +3966,205 @@ bool makeJudgeObject(GameplayDecodeRequest &request, BeatorajaSkinModel &model,
   return true;
 }
 
+enum class MusicSelectNestedDefinitionKind : std::uint8_t {
+  ImageSet,
+  Image,
+  Text,
+  Value,
+  DistributionGraph,
+};
+
+bool materializeMusicSelectNestedDefinitions(
+    GameplayDecodeRequest &request, BeatorajaSkinModel &model,
+    const SkinSongListDefinition &songList) {
+  std::set<std::pair<MusicSelectNestedDefinitionKind, std::string>> installed;
+  const auto append = [&](std::string_view authoredName,
+                          SkinObjectPayload payload,
+                          std::uint32_t authoredOrdinal,
+                          bool critical = false) {
+    model.objects.push_back(
+        {.id = request.nextSyntheticObjectId++,
+         .authoredName = std::string(authoredName),
+         .payload = std::move(payload),
+         .authoredOrdinal = authoredOrdinal,
+         .critical = critical});
+  };
+
+  const auto appendImageSet = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::ImageSet, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.imageSets.find(name);
+    if (definition == request.imageSets.end()) {
+      return true;
+    }
+    SkinImageObject object;
+    object.definitionKind = SkinImageDefinitionKind::ImageSet;
+    object.orderedStates.reserve(definition->second.imageIds.size());
+    std::optional<SkinTimerPropertyId> timer;
+    int cycle = -1;
+    for (const std::string &imageId : definition->second.imageIds) {
+      const auto image = request.images.find(imageId);
+      if (image == request.images.end()) {
+        object.orderedStates.emplace_back();
+        continue;
+      }
+      if (!consumeMaterializedSpriteFrames(
+              request, image->second.sprite.frames.size())) {
+        return false;
+      }
+      if (!timer && image->second.sprite.timer) {
+        timer = image->second.sprite.timer;
+      }
+      if (cycle == -1) {
+        cycle = image->second.sprite.cycleMillis;
+      }
+      object.orderedStates.push_back(image->second.sprite);
+    }
+    for (auto &state : object.orderedStates) {
+      state.timer = timer;
+      state.cycleMillis = cycle;
+    }
+    append(name, std::move(object), definition->second.authoredIndex);
+    return true;
+  };
+
+  const auto appendImage = [&](std::string_view name, bool critical = false) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::Image, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.images.find(name);
+    if (definition == request.images.end()) {
+      return true;
+    }
+    if (!consumeMaterializedSpriteFrames(
+            request, definition->second.sprite.frames.size())) {
+      return false;
+    }
+    SkinImageObject object{
+        .orderedStates = {definition->second.sprite},
+        .definitionKind = SkinImageDefinitionKind::Image,
+    };
+    append(name, std::move(object), definition->second.authoredIndex,
+           critical);
+    return true;
+  };
+
+  const auto appendText = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::Text, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.texts.find(name);
+    if (definition == request.texts.end()) {
+      return true;
+    }
+    std::optional<SkinTextObject> object;
+    if (!makeTextObject(request, definition->second, object)) {
+      return false;
+    }
+    if (object) {
+      append(name, std::move(*object), definition->second.authoredIndex);
+    }
+    return true;
+  };
+
+  const auto appendValue = [&](std::string_view name) {
+    if (!installed.emplace(MusicSelectNestedDefinitionKind::Value, name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.numbers.find(name);
+    if (definition == request.numbers.end()) {
+      return true;
+    }
+    NumericGlyphAtlas atlas;
+    if (!materializeNumericGlyphAtlas(
+            request, NumericGlyphAtlasKind::Number,
+            definition->second.image.sprite,
+            {.integerDigits = definition->second.digitCount,
+             .zeroPadding = definition->second.zeroPadding,
+             .numberPadding = definition->second.padding,
+             .perDigitOffsets = definition->second.perDigitOffsets},
+            atlas)) {
+      return false;
+    }
+    SkinNumberObject object;
+    object.digits = std::move(atlas.digits);
+    object.value = definition->second.value;
+    object.digitCount = atlas.format.integerDigits;
+    object.spacing = definition->second.spacing;
+    object.alignment = definition->second.alignment;
+    object.zeroPadding = atlas.format.zeroPadding;
+    object.perDigitOffsets = std::move(atlas.format.perDigitOffsets);
+    append(name, std::move(object), definition->second.image.authoredIndex);
+    return true;
+  };
+
+  const auto appendDistributionGraph = [&](std::string_view name) {
+    if (!installed
+             .emplace(MusicSelectNestedDefinitionKind::DistributionGraph,
+                      name)
+             .second) {
+      return true;
+    }
+    const auto definition = request.graphs.find(name);
+    if (definition == request.graphs.end() || definition->second.type >= 0) {
+      return true;
+    }
+    if (!consumeMaterializedSpriteFrames(
+            request, definition->second.image.sprite.frames.size())) {
+      return false;
+    }
+    append(name,
+           SkinSelectDistributionGraphObject{
+               .type = definition->second.type == -1
+                           ? SkinSelectDistributionGraphType::Normal
+                           : SkinSelectDistributionGraphType::Judge,
+               .sprite = definition->second.image.sprite},
+           definition->second.image.authoredIndex);
+    return true;
+  };
+
+  for (const auto &definition : songList.listOn) {
+    if (!appendImageSet(definition.objectName)) {
+      return false;
+    }
+  }
+  const std::array imageFields{
+      std::pair{std::span<const SkinSongListDestinationDefinition>(songList.lamp),
+                false},
+      std::pair{std::span<const SkinSongListDestinationDefinition>(songList.playerLamp),
+                false},
+      std::pair{std::span<const SkinSongListDestinationDefinition>(songList.rivalLamp),
+                true},
+      std::pair{std::span<const SkinSongListDestinationDefinition>(songList.trophy),
+                false},
+      std::pair{std::span<const SkinSongListDestinationDefinition>(songList.label),
+                false},
+  };
+  for (const auto &[definitions, critical] : imageFields) {
+    for (const auto &definition : definitions) {
+      if (!appendImage(definition.objectName, critical)) {
+        return false;
+      }
+    }
+  }
+  for (const auto &definition : songList.text) {
+    if (!appendText(definition.objectName)) {
+      return false;
+    }
+  }
+  for (const auto &definition : songList.level) {
+    if (!appendValue(definition.objectName)) {
+      return false;
+    }
+  }
+  return !songList.graph || appendDistributionGraph(songList.graph->objectName);
+}
+
 void transferDecodeDiagnostics(GameplayDecodeRequest &request) {
   auto &source = request.decoding.result.diagnostics;
   request.result.diagnostics.insert(request.result.diagnostics.end(),
@@ -3640,12 +4195,15 @@ void decodeGameplayProtected(lua_State *state, int index,
     return;
   }
   try {
+    // Gameplay decoding has historically applied the selected host policy to
+    // both the header and model passes.  Set it before the header is copied;
+    // type-5 selection explicitly supplies false and remains source-faithful.
+    request->decoding.enforceGameplayLimits = request->enforceGameplayLimits;
     decodeHeaderProtected(state, index, &request->decoding);
     if (!request->decoding.result.header) {
       transferDecodeDiagnostics(*request);
       return;
     }
-    request->decoding.enforceGameplayLimits = request->enforceGameplayLimits;
 
     request->result.model.emplace();
     auto &model = *request->result.model;
@@ -3782,6 +4340,7 @@ void decodeGameplayProtected(lua_State *state, int index,
          ++ordinal) {
       auto &number = request->rawNumbers[ordinal];
       number.image.authoredIndex = static_cast<std::uint32_t>(ordinal + 1);
+      number.image.retainedBindingValue = number.retainedBindingValue;
       if (!expandImageFrames(*request, number.image)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
@@ -3801,6 +4360,7 @@ void decodeGameplayProtected(lua_State *state, int index,
          ++ordinal) {
       auto &number = request->rawFloats[ordinal];
       number.image.authoredIndex = static_cast<std::uint32_t>(ordinal + 1);
+      number.image.retainedBindingValue = number.retainedBindingValue;
       if (!expandImageFrames(*request, number.image)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
@@ -3820,6 +4380,7 @@ void decodeGameplayProtected(lua_State *state, int index,
          ++ordinal) {
       auto &slider = request->rawSliders[ordinal];
       slider.image.authoredIndex = static_cast<std::uint32_t>(ordinal + 1);
+      slider.image.retainedBindingValue = slider.retainedBindingValue;
       if (!expandImageFrames(*request, slider.image)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
@@ -3853,6 +4414,7 @@ void decodeGameplayProtected(lua_State *state, int index,
          ++ordinal) {
       auto &graph = request->rawGraphs[ordinal];
       graph.image.authoredIndex = static_cast<std::uint32_t>(ordinal + 1);
+      graph.image.retainedBindingValue = graph.retainedBindingValue;
       if (!expandImageFrames(*request, graph.image)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
@@ -3885,16 +4447,18 @@ void decodeGameplayProtected(lua_State *state, int index,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawTimingDistributionGraphs,
                                 request->decoding,
-                                decodeRawTimingDistributionGraph) ||
-        !decodeObjectArrayField(state, index, "pmchara", 1,
-                                LuaSkinTableDecoderPolicy::maxDecodedObjects,
-                                request->rawPmCharas, request->decoding,
-                                decodeRawPmChara)) {
+                                decodeRawTimingDistributionGraph)) {
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
     }
-    if (!decodeObjectArrayField(state, index, "hiddenCover", 1,
+
+    if (model.header.type != 5) {
+      if (!decodeObjectArrayField(state, index, "pmchara", 1,
+                                  LuaSkinTableDecoderPolicy::maxDecodedObjects,
+                                  request->rawPmCharas, request->decoding,
+                                  decodeRawPmChara) ||
+          !decodeObjectArrayField(state, index, "hiddenCover", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawHiddenCovers, request->decoding,
                                 decodeRawHiddenCover) ||
@@ -3931,40 +4495,46 @@ void decodeGameplayProtected(lua_State *state, int index,
       }
     }
 
-    request->bga.emplace();
-    if (!rawGetField(state, index, "bga", request->decoding)) {
-      transferDecodeDiagnostics(*request);
-      request->result.model.reset();
-      return;
-    }
-    if (!lua_isnil(state, -1)) {
-      if (!decodeRawIdentity(state, -1, 2, *request->bga, request->decoding)) {
+    if (model.header.type != 5) {
+      request->bga.emplace();
+      if (!rawGetField(state, index, "bga", request->decoding)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
         return;
       }
-    } else {
-      request->bga.reset();
+      if (!lua_isnil(state, -1)) {
+        if (!decodeRawIdentity(state, -1, 2, *request->bga,
+                               request->decoding)) {
+          transferDecodeDiagnostics(*request);
+          request->result.model.reset();
+          return;
+        }
+      } else {
+        request->bga.reset();
+      }
+      lua_pop(state, 1);
     }
-    lua_pop(state, 1);
 
-    request->practice.emplace();
-    if (!rawGetField(state, index, "practice", request->decoding)) {
-      transferDecodeDiagnostics(*request);
-      request->result.model.reset();
-      return;
-    }
-    if (!lua_isnil(state, -1)) {
-      if (!decodeRawPractice(state, -1, 2, *request->practice,
-                             request->decoding)) {
+    if (model.header.type != 5) {
+      request->practice.emplace();
+      if (!rawGetField(state, index, "practice", request->decoding)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
         return;
       }
-    } else {
-      request->practice.reset();
+      if (!lua_isnil(state, -1)) {
+        if (!decodeRawPractice(state, -1, 2, *request->practice,
+                               request->decoding)) {
+          transferDecodeDiagnostics(*request);
+          request->result.model.reset();
+          return;
+        }
+      } else {
+        request->practice.reset();
+      }
+      lua_pop(state, 1);
     }
-    lua_pop(state, 1);
+    }
 
     request->gauge.emplace();
     if (!rawGetField(state, index, "gauge", request->decoding)) {
@@ -3974,7 +4544,9 @@ void decodeGameplayProtected(lua_State *state, int index,
     }
     if (lua_istable(state, -1) && isEmptyTable(state, -1)) {
       request->gauge.reset();
-    } else if (!lua_isnil(state, -1)) {
+    } else if (!lua_isnil(state, -1) &&
+               (request->decoding.enforceGameplayLimits ||
+                lua_istable(state, -1))) {
       if (!decodeRawGauge(state, -1, 2, *request->gauge, request->decoding)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
@@ -3985,23 +4557,42 @@ void decodeGameplayProtected(lua_State *state, int index,
     }
     lua_pop(state, 1);
 
-    request->note.emplace();
-    if (!rawGetField(state, index, "note", request->decoding)) {
-      transferDecodeDiagnostics(*request);
-      request->result.model.reset();
-      return;
-    }
-    if (!lua_isnil(state, -1)) {
-      if (!decodeRawNote(state, -1, 2, *request->note, request->decoding)) {
+    if (model.header.type != 5) {
+      request->note.emplace();
+      if (!rawGetField(state, index, "note", request->decoding)) {
         transferDecodeDiagnostics(*request);
         request->result.model.reset();
         return;
       }
-    } else {
-      request->note.reset();
+      if (!lua_isnil(state, -1)) {
+        if (!decodeRawNote(state, -1, 2, *request->note,
+                           request->decoding)) {
+          transferDecodeDiagnostics(*request);
+          request->result.model.reset();
+          return;
+        }
+      } else {
+        request->note.reset();
+      }
+      lua_pop(state, 1);
     }
-    lua_pop(state, 1);
 
+    if (model.header.type == 5) {
+      if (!rawGetField(state, index, "destination", request->decoding)) {
+        transferDecodeDiagnostics(*request);
+        request->result.model.reset();
+        return;
+      }
+      const bool invalidDestination = !lua_istable(state, -1);
+      lua_pop(state, 1);
+      if (invalidDestination) {
+        fail(request->decoding, "skin_lua_model_destination_missing",
+             "Lua music-select skin requires a destination array");
+        transferDecodeDiagnostics(*request);
+        request->result.model.reset();
+        return;
+      }
+    }
     if (!decodeObjectArrayField(state, index, "destination", 1,
                                 LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                 request->rawDestinations, request->decoding,
@@ -4014,6 +4605,27 @@ void decodeGameplayProtected(lua_State *state, int index,
          ++ordinal) {
       request->rawDestinations[ordinal].authoredIndex =
           static_cast<std::uint32_t>(ordinal + 1);
+    }
+
+    if (model.header.type == 5) {
+      request->rawSongList.emplace();
+      if (!rawGetField(state, index, "songlist", request->decoding)) {
+        transferDecodeDiagnostics(*request);
+        request->result.model.reset();
+        return;
+      }
+      if (!lua_isnil(state, -1)) {
+        if (!decodeRawSongList(state, -1, 2, *request->rawSongList,
+                               request->decoding)) {
+          lua_pop(state, 1);
+          transferDecodeDiagnostics(*request);
+          request->result.model.reset();
+          return;
+        }
+      } else {
+        request->rawSongList.reset();
+      }
+      lua_pop(state, 1);
     }
 
     // JsonSkinLoader constructs custom events before custom timers, while the
@@ -4059,6 +4671,16 @@ LuaValuePath bindingPath(std::string_view array, std::uint32_t index,
                          std::string_view field) {
   return {LuaValuePathElement::field(array), LuaValuePathElement::index(index),
           LuaValuePathElement::field(field)};
+}
+
+LuaValuePath bindingPath(std::string_view array, std::uint32_t index,
+                         std::uint32_t retainedValue,
+                         std::string_view field) {
+  if (retainedValue != 0) {
+    return {LuaValuePathElement::retainedValue(retainedValue),
+            LuaValuePathElement::field(field)};
+  }
+  return bindingPath(array, index, field);
 }
 
 LuaValuePath bindingPath(std::string_view array, std::uint32_t index,
@@ -4125,6 +4747,9 @@ bool retainBindingFailure(GameplayDecodeRequest &request,
                        "Lua binding decoder returned no typed binding");
   failure.virtualPath = std::move(path);
   const bool fatal = luaSkinBindingFailureIsFatal(failure.code);
+  if (!request.enforceGameplayLimits && !fatal) {
+    return true;
+  }
   request.result.diagnostics.push_back(std::move(failure));
   return !fatal;
 }
@@ -4206,13 +4831,13 @@ bool decodeOptionalBinding(GameplayDecodeRequest &request,
         decoded.failure->code == "skin_lua_binding_missing") {
       return true;
     }
-    output = Id{};
+    output.reset();
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
   const auto *typed = std::get_if<Id>(&*decoded.id);
   if (typed == nullptr || !*typed) {
-    output = Id{};
+    output.reset();
     return retainBindingFailure(request, std::move(decoded),
                                 std::move(pathText));
   }
@@ -4225,7 +4850,8 @@ bool bindImageTimer(GameplayDecodeRequest &request,
                     std::string_view array, RawSkinImage &image) {
   if (!decodeOptionalBinding(
           request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
-          bindingPath(array, image.authoredIndex, "timer"),
+          bindingPath(array, image.authoredIndex, image.retainedBindingValue,
+                      "timer"),
           bindingPathText(array, image.authoredIndex, "timer"),
           image.authoredIndex - 1, image.timer)) {
     return false;
@@ -4308,7 +4934,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
               request, decoder, value,
               {.kind = SkinBindingKind::IntegerProperty,
                .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-              bindingPath("image", image.authoredIndex, "ref"),
+              bindingPath("image", image.authoredIndex,
+                          image.retainedBindingValue, "ref"),
               bindingPathText("image", image.authoredIndex, "ref"),
               image.authoredIndex - 1, image.stateSelector, id)) {
         return false;
@@ -4318,7 +4945,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     if (hasGenericDestination &&
         !decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::Event},
-            bindingPath("image", image.authoredIndex, "act"),
+            bindingPath("image", image.authoredIndex,
+                        image.retainedBindingValue, "act"),
             bindingPathText("image", image.authoredIndex, "act"),
             image.authoredIndex - 1, image.clickEvent)) {
       return false;
@@ -4330,13 +4958,15 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
             request, decoder, value,
             {.kind = SkinBindingKind::IntegerProperty,
              .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-            bindingPath("imageset", imageSet.authoredIndex, "value"),
+            bindingPath("imageset", imageSet.authoredIndex,
+                        imageSet.retainedBindingValue, "value"),
             bindingPathText("imageset", imageSet.authoredIndex, "value"),
             imageSet.authoredIndex - 1, imageSet.stateSelector,
             imageSet.stateIndex) ||
         !decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::Event},
-            bindingPath("imageset", imageSet.authoredIndex, "act"),
+            bindingPath("imageset", imageSet.authoredIndex,
+                        imageSet.retainedBindingValue, "act"),
             bindingPathText("imageset", imageSet.authoredIndex, "act"),
             imageSet.authoredIndex - 1, imageSet.clickEvent)) {
       return false;
@@ -4360,7 +4990,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
             request, decoder, value,
             {.kind = SkinBindingKind::IntegerProperty,
              .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-            bindingPath("value", number.image.authoredIndex, "value"),
+            bindingPath("value", number.image.authoredIndex,
+                        number.image.retainedBindingValue, "value"),
             bindingPathText("value", number.image.authoredIndex, "value"),
             number.image.authoredIndex - 1, number.image.stateSelector,
             number.value)) {
@@ -4374,7 +5005,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
             request, decoder, value,
             {.kind = SkinBindingKind::FloatProperty,
              .floatDomain = SkinFloatPropertyDomain::FloatValue},
-            bindingPath("floatvalue", number.image.authoredIndex, "value"),
+            bindingPath("floatvalue", number.image.authoredIndex,
+                        number.image.retainedBindingValue, "value"),
             bindingPathText("floatvalue", number.image.authoredIndex, "value"),
             number.image.authoredIndex - 1, number.image.stateSelector,
             number.value)) {
@@ -4388,7 +5020,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
             request, decoder, value,
             {.kind = SkinBindingKind::FloatProperty,
              .floatDomain = SkinFloatPropertyDomain::Rate},
-            bindingPath("slider", slider.image.authoredIndex, "value"),
+            bindingPath("slider", slider.image.authoredIndex,
+                        slider.image.retainedBindingValue, "value"),
             bindingPathText("slider", slider.image.authoredIndex, "value"),
             slider.image.authoredIndex - 1, slider.explicitValue)) {
       return false;
@@ -4396,7 +5029,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     if (slider.explicitValue) {
       if (!decodeOptionalBinding(
               request, decoder, value, {.kind = SkinBindingKind::FloatWriter},
-              bindingPath("slider", slider.image.authoredIndex, "event"),
+              bindingPath("slider", slider.image.authoredIndex,
+                          slider.image.retainedBindingValue, "event"),
               bindingPathText("slider", slider.image.authoredIndex, "event"),
               slider.image.authoredIndex - 1, slider.writer)) {
         return false;
@@ -4409,7 +5043,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
               request, decoder, value,
               {.kind = SkinBindingKind::IntegerProperty,
                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-              bindingPath("slider", slider.image.authoredIndex, "type"),
+              bindingPath("slider", slider.image.authoredIndex,
+                          slider.image.retainedBindingValue, "type"),
               bindingPathText("slider", slider.image.authoredIndex, "type"),
               slider.image.authoredIndex - 1, slider.typeSelector, id)) {
         return false;
@@ -4421,7 +5056,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
               request, decoder, value,
               {.kind = SkinBindingKind::FloatProperty,
                .floatDomain = SkinFloatPropertyDomain::Rate},
-              bindingPath("slider", slider.image.authoredIndex, "type"),
+              bindingPath("slider", slider.image.authoredIndex,
+                          slider.image.retainedBindingValue, "type"),
               bindingPathText("slider", slider.image.authoredIndex, "type"),
               slider.image.authoredIndex - 1, slider.typeSelector, id)) {
         return false;
@@ -4432,7 +5068,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       if (slider.changeable && builtins.contains(writerType, selector) &&
           !decodeOptionalBinding(
               request, decoder, value, writerType,
-              bindingPath("slider", slider.image.authoredIndex, "event"),
+              bindingPath("slider", slider.image.authoredIndex,
+                          slider.image.retainedBindingValue, "event"),
               bindingPathText("slider", slider.image.authoredIndex, "event"),
               slider.image.authoredIndex - 1, slider.writer,
               slider.typeSelector, true)) {
@@ -4444,7 +5081,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
   for (auto &text : request.rawTexts) {
     if (!decodeRequiredBinding(
             request, decoder, value, {.kind = SkinBindingKind::StringProperty},
-            bindingPath("text", text.authoredIndex, "value"),
+            bindingPath("text", text.authoredIndex, text.retainedBindingValue,
+                        "value"),
             bindingPathText("text", text.authoredIndex, "value"),
             text.authoredIndex - 1, text.refSelector, text.value)) {
       return false;
@@ -4453,7 +5091,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     if (text.writerFieldPresent) {
       if (!decodeOptionalBinding(
               request, decoder, value, writerType,
-              bindingPath("text", text.authoredIndex, "event"),
+              bindingPath("text", text.authoredIndex,
+                          text.retainedBindingValue, "event"),
               bindingPathText("text", text.authoredIndex, "event"),
               text.authoredIndex - 1, text.writer)) {
         return false;
@@ -4463,7 +5102,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
                    writerType, SkinBuiltinPropertySelector{text.refSelector}) &&
                !decodeOptionalBinding(
                    request, decoder, value, writerType,
-                   bindingPath("text", text.authoredIndex, "event"),
+                   bindingPath("text", text.authoredIndex,
+                               text.retainedBindingValue, "event"),
                    bindingPathText("text", text.authoredIndex, "event"),
                    text.authoredIndex - 1, text.writer, text.refSelector,
                    true)) {
@@ -4477,7 +5117,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
             request, decoder, value,
             {.kind = SkinBindingKind::FloatProperty,
              .floatDomain = SkinFloatPropertyDomain::Rate},
-            bindingPath("graph", graph.image.authoredIndex, "value"),
+            bindingPath("graph", graph.image.authoredIndex,
+                        graph.image.retainedBindingValue, "value"),
             bindingPathText("graph", graph.image.authoredIndex, "value"),
             graph.image.authoredIndex - 1, graph.explicitValue)) {
       return false;
@@ -4491,7 +5132,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
               request, decoder, value,
               {.kind = SkinBindingKind::IntegerProperty,
                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-              bindingPath("graph", graph.image.authoredIndex, "type"),
+              bindingPath("graph", graph.image.authoredIndex,
+                          graph.image.retainedBindingValue, "type"),
               bindingPathText("graph", graph.image.authoredIndex, "type"),
               graph.image.authoredIndex - 1, graph.type, id)) {
         return false;
@@ -4503,7 +5145,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
               request, decoder, value,
               {.kind = SkinBindingKind::FloatProperty,
                .floatDomain = SkinFloatPropertyDomain::Rate},
-              bindingPath("graph", graph.image.authoredIndex, "type"),
+              bindingPath("graph", graph.image.authoredIndex,
+                          graph.image.retainedBindingValue, "type"),
               bindingPathText("graph", graph.image.authoredIndex, "type"),
               graph.image.authoredIndex - 1, graph.type, id)) {
         return false;
@@ -4532,7 +5175,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
   for (auto &destination : request.rawDestinations) {
     if (!decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
-            bindingPath("destination", destination.authoredIndex, "timer"),
+            bindingPath("destination", destination.authoredIndex,
+                        destination.retainedBindingValue, "timer"),
             bindingPathText("destination", destination.authoredIndex, "timer"),
             destination.authoredIndex - 1, destination.timer)) {
       return false;
@@ -4549,11 +5193,16 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
       }
       std::optional<SkinBooleanPropertyId> property;
       const auto oneBased = static_cast<std::uint32_t>(index + 1);
+      const LuaValuePath path = condition.retainedBindingValue != 0
+                                    ? LuaValuePath{LuaValuePathElement::retainedValue(
+                                          condition.retainedBindingValue)}
+                                    : bindingPath("destination",
+                                                  destination.authoredIndex,
+                                                  "op", oneBased);
       if (!decodeOptionalBinding(
               request, decoder, value,
               {.kind = SkinBindingKind::BooleanProperty},
-              bindingPath("destination", destination.authoredIndex, "op",
-                          oneBased),
+              path,
               bindingPathText("destination", destination.authoredIndex, "op",
                               oneBased),
               destination.authoredIndex - 1, property)) {
@@ -4563,9 +5212,104 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
     }
     if (!decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
-            bindingPath("destination", destination.authoredIndex, "draw"),
+            bindingPath("destination", destination.authoredIndex,
+                        destination.retainedBindingValue, "draw"),
             bindingPathText("destination", destination.authoredIndex, "draw"),
             destination.authoredIndex - 1, destination.drawCondition)) {
+      return false;
+    }
+  }
+  const auto bindSongListDestination =
+      [&](RawDestination &destination, std::string_view field,
+          std::optional<std::uint32_t> index) {
+        const auto path = [&](std::string_view child) {
+          LuaValuePath result;
+          if (destination.retainedBindingValue != 0) {
+            result.push_back(LuaValuePathElement::retainedValue(
+                destination.retainedBindingValue));
+          } else {
+            result = {LuaValuePathElement::field("songlist"),
+                      LuaValuePathElement::field(field)};
+            if (index) {
+              result.push_back(LuaValuePathElement::index(*index));
+            }
+          }
+          result.push_back(LuaValuePathElement::field(child));
+          return result;
+        };
+        const auto pathText = [&](std::string_view child) {
+          std::string result = "songlist." + std::string(field);
+          if (index) {
+            result += "[" + std::to_string(*index) + "]";
+          }
+          return result + "." + std::string(child);
+        };
+        const std::uint32_t authoredOrdinal = index.value_or(1) - 1;
+        if (!decodeOptionalBinding(
+                request, decoder, value,
+                {.kind = SkinBindingKind::TimerProperty}, path("timer"),
+                pathText("timer"), authoredOrdinal, destination.timer)) {
+          return false;
+        }
+        for (std::size_t conditionIndex = 0;
+             conditionIndex < destination.conditions.size();
+             ++conditionIndex) {
+          auto &condition = destination.conditions[conditionIndex];
+          if (condition.optionId &&
+              !builtins.contains(
+                  {.kind = SkinBindingKind::BooleanProperty},
+                  SkinBuiltinPropertySelector{*condition.optionId})) {
+            continue;
+          }
+          std::optional<SkinBooleanPropertyId> property;
+          auto conditionPath = condition.retainedBindingValue != 0
+                                   ? LuaValuePath{LuaValuePathElement::retainedValue(
+                                         condition.retainedBindingValue)}
+                                   : path("op");
+          if (condition.retainedBindingValue == 0) {
+            conditionPath.push_back(LuaValuePathElement::index(
+                static_cast<std::uint32_t>(conditionIndex + 1)));
+          }
+          if (!decodeOptionalBinding(
+                  request, decoder, value,
+                  {.kind = SkinBindingKind::BooleanProperty},
+                  std::move(conditionPath),
+                  pathText("op") + "[" +
+                      std::to_string(conditionIndex + 1) + "]",
+                  authoredOrdinal, property)) {
+            return false;
+          }
+          condition.property = property;
+        }
+        return decodeOptionalBinding(
+            request, decoder, value,
+            {.kind = SkinBindingKind::BooleanProperty}, path("draw"),
+            pathText("draw"), authoredOrdinal, destination.drawCondition);
+      };
+  if (request.rawSongList) {
+    const auto bindArray = [&](std::string_view field,
+                               std::vector<RawDestination> &destinations) {
+      for (std::size_t index = 0; index < destinations.size(); ++index) {
+        if (!bindSongListDestination(
+                destinations[index], field,
+                static_cast<std::uint32_t>(index + 1))) {
+          return false;
+        }
+      }
+      return true;
+    };
+    if (!bindArray("listoff", request.rawSongList->listOff) ||
+        !bindArray("liston", request.rawSongList->listOn) ||
+        !bindArray("text", request.rawSongList->text) ||
+        !bindArray("level", request.rawSongList->level) ||
+        !bindArray("lamp", request.rawSongList->lamp) ||
+        !bindArray("playerlamp", request.rawSongList->playerLamp) ||
+        !bindArray("rivallamp", request.rawSongList->rivalLamp) ||
+        !bindArray("trophy", request.rawSongList->trophy) ||
+        !bindArray("label", request.rawSongList->label) ||
+        (request.rawSongList->graph &&
+         !bindSongListDestination(*request.rawSongList->graph, "graph",
+                                  std::nullopt))) {
       return false;
     }
   }
@@ -4647,13 +5391,15 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
   for (auto &customEvent : request.rawCustomEvents) {
     if (!decodeRequiredBinding(
             request, decoder, value, {.kind = SkinBindingKind::Event},
-            bindingPath("customEvents", customEvent.authoredIndex, "action"),
+            bindingPath("customEvents", customEvent.authoredIndex,
+                        customEvent.retainedBindingValue, "action"),
             bindingPathText("customEvents", customEvent.authoredIndex,
                             "action"),
             customEvent.authoredIndex - 1, std::nullopt, customEvent.action) ||
         !decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::BooleanProperty},
-            bindingPath("customEvents", customEvent.authoredIndex, "condition"),
+            bindingPath("customEvents", customEvent.authoredIndex,
+                        customEvent.retainedBindingValue, "condition"),
             bindingPathText("customEvents", customEvent.authoredIndex,
                             "condition"),
             customEvent.authoredIndex - 1, customEvent.condition)) {
@@ -4663,7 +5409,8 @@ bool bindGameplayDefinitions(GameplayDecodeRequest &request,
   for (auto &customTimer : request.rawCustomTimers) {
     if (!decodeOptionalBinding(
             request, decoder, value, {.kind = SkinBindingKind::TimerProperty},
-            bindingPath("customTimers", customTimer.authoredIndex, "timer"),
+            bindingPath("customTimers", customTimer.authoredIndex,
+                        customTimer.retainedBindingValue, "timer"),
             bindingPathText("customTimers", customTimer.authoredIndex, "timer"),
             customTimer.authoredIndex - 1, customTimer.timer)) {
       return false;
@@ -4702,6 +5449,24 @@ void transferBindings(BeatorajaSkinModel &model,
   model.stringWriters.assign(bindings.stringWriters.begin(),
                              bindings.stringWriters.end());
   model.events.assign(bindings.events.begin(), bindings.events.end());
+}
+
+bool selectorObjectLoaderDereferencesDestinationId(
+    const GameplayDecodeRequest &request) noexcept {
+  // JsonSkinObjectLoader reads dst.id only when it visits a populated
+  // definition category. JsonSelectSkinObjectLoader also reads it when a
+  // song list exists. Keep an absent id inert when the pinned loader would
+  // never dereference it.
+  return !request.rawImages.empty() || !request.rawImageSets.empty() ||
+         !request.rawNumbers.empty() || !request.rawFloats.empty() ||
+         !request.rawTexts.empty() || !request.rawSliders.empty() ||
+         !request.rawGraphs.empty() || !request.rawGaugeGraphs.empty() ||
+         !request.rawJudgeGraphs.empty() || !request.rawBpmGraphs.empty() ||
+         !request.rawHitErrorVisualizers.empty() ||
+         !request.rawTimingVisualizers.empty() ||
+         !request.rawTimingDistributionGraphs.empty() ||
+         request.gauge.has_value() ||
+         request.rawSongList.has_value();
 }
 
 bool materializeGameplay(GameplayDecodeRequest &request,
@@ -4788,13 +5553,76 @@ bool materializeGameplay(GameplayDecodeRequest &request,
                          return judge.id;
                        });
 
-  if (request.note && !buildNoteObject(request, *request.note)) {
+  if (request.enforceGameplayLimits && request.note &&
+      !buildNoteObject(request, *request.note)) {
     transferDecodeDiagnostics(request);
     return false;
   }
 
   auto &model = *request.result.model;
   transferBindings(model, decoder.bindings());
+  request.nextSyntheticObjectId =
+      static_cast<SkinObjectId>(request.rawDestinations.size() + 1U);
+  if (request.rawSongList) {
+    SkinSongListDefinition songList{
+        .id = request.rawSongList->id,
+        .center = request.rawSongList->center,
+        .clickable = request.rawSongList->clickable,
+    };
+    const auto materializeDestinations =
+        [&](const std::vector<RawDestination> &source,
+            std::vector<SkinSongListDestinationDefinition> &destination) {
+          destination.reserve(source.size());
+          for (std::size_t index = 0; index < source.size(); ++index) {
+            SkinDestinationBody presentation;
+            if (!normalizeDestination(
+                    request, source[index], static_cast<std::uint32_t>(index),
+                    presentation, true)) {
+              return false;
+            }
+            destination.push_back(
+                {.objectName = source[index].id,
+                 .destination = std::move(presentation)});
+          }
+          return true;
+        };
+    if (!materializeDestinations(request.rawSongList->listOff,
+                                 songList.listOff) ||
+        !materializeDestinations(request.rawSongList->listOn,
+                                 songList.listOn) ||
+        !materializeDestinations(request.rawSongList->text, songList.text) ||
+        !materializeDestinations(request.rawSongList->level,
+                                 songList.level) ||
+        !materializeDestinations(request.rawSongList->lamp, songList.lamp) ||
+        !materializeDestinations(request.rawSongList->playerLamp,
+                                 songList.playerLamp) ||
+        !materializeDestinations(request.rawSongList->rivalLamp,
+                                 songList.rivalLamp) ||
+        !materializeDestinations(request.rawSongList->trophy,
+                                 songList.trophy) ||
+        !materializeDestinations(request.rawSongList->label,
+                                 songList.label)) {
+      transferDecodeDiagnostics(request);
+      return false;
+    }
+    if (request.rawSongList->graph) {
+      SkinDestinationBody presentation;
+      if (!normalizeDestination(request, *request.rawSongList->graph, 0,
+                                presentation, true)) {
+        transferDecodeDiagnostics(request);
+        return false;
+      }
+      songList.graph = SkinSongListDestinationDefinition{
+          .objectName = request.rawSongList->graph->id,
+          .destination = std::move(presentation)};
+    }
+    model.songListDefinition = std::move(songList);
+    if (!materializeMusicSelectNestedDefinitions(
+            request, model, *model.songListDefinition)) {
+      transferDecodeDiagnostics(request);
+      return false;
+    }
+  }
   model.customEvents.reserve(request.rawCustomEvents.size());
   for (const auto &event : request.rawCustomEvents) {
     model.customEvents.push_back(
@@ -4807,13 +5635,18 @@ bool materializeGameplay(GameplayDecodeRequest &request,
   for (const auto &timer : request.rawCustomTimers) {
     model.customTimers.push_back({.id = timer.id, .timer = timer.timer});
   }
-  request.nextSyntheticObjectId =
-      static_cast<SkinObjectId>(request.rawDestinations.size() + 1U);
-  model.objects.reserve(request.rawDestinations.size());
+  model.objects.reserve(model.objects.size() + request.rawDestinations.size());
   model.destinations.reserve(request.rawDestinations.size());
   for (std::size_t ordinal = 0; ordinal < request.rawDestinations.size();
        ++ordinal) {
     const auto &destination = request.rawDestinations[ordinal];
+    if (!request.enforceGameplayLimits && destination.idWasNil &&
+        selectorObjectLoaderDereferencesDestinationId(request)) {
+      fail(request.decoding, "skin_lua_model_destination_id_missing",
+           "Lua music-select destination id is missing");
+      transferDecodeDiagnostics(request);
+      return false;
+    }
     SkinObjectPayload payload;
     bool critical = false;
     bool ignored = false;
@@ -4822,6 +5655,14 @@ bool materializeGameplay(GameplayDecodeRequest &request,
                            ignored)) {
       transferDecodeDiagnostics(request);
       return false;
+    }
+    if (ignored && model.songListDefinition &&
+        destination.id == model.songListDefinition->id) {
+      payload = SkinSongListObject{
+          .center = model.songListDefinition->center,
+          .clickable = model.songListDefinition->clickable,
+      };
+      ignored = false;
     }
     if (ignored) {
       continue;
@@ -4909,6 +5750,43 @@ BeatorajaSkinModelDecodeResult LuaSkinTableDecoder::decodeGameplay(
   return std::move(request.result);
 }
 
+BeatorajaSkinModelDecodeResult LuaSkinTableDecoder::decodeMusicSelect(
+    const LuaValueHandle &value,
+    LuaSkinMusicSelectDecodeContext context) const {
+  GameplayDecodeRequest request{.enforceGameplayLimits = false};
+  if (auto failure =
+          value.withValueProtected(&request, decodeGameplayProtected)) {
+    request.result.model.reset();
+    request.result.diagnostics.push_back(std::move(*failure));
+  } else if (request.allocationFailed || request.decoding.allocationFailed) {
+    request.result.model.reset();
+    request.result.diagnostics.push_back(diagnostic(
+        "skin_lua_model_allocation_failed",
+        "Lua music-select model could not be copied by the host"));
+  } else if (request.result.model && request.result.model->header.type != 5) {
+    request.result.model.reset();
+    request.result.diagnostics.push_back(diagnostic(
+        "skin_lua_model_type_mismatch",
+        "Lua music-select model does not declare Beatoraja type 5"));
+  } else if (request.result.model) {
+    try {
+      if (!materializeGameplay(
+              request, value,
+              {.runtime = context.runtime,
+               .builtins = context.builtins,
+               .safetyPolicy = context.safetyPolicy})) {
+        request.result.model.reset();
+      }
+    } catch (...) {
+      request.result.model.reset();
+      request.result.diagnostics.push_back(diagnostic(
+          "skin_lua_model_allocation_failed",
+          "Lua music-select bindings could not be retained by the host"));
+    }
+  }
+  return std::move(request.result);
+}
+
 std::string
 skinConfigurationDigest(const BeatorajaSkinConfiguration &configuration) {
   return skinConfigurationDigest(EntryProfileSettings{
@@ -4933,7 +5811,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   for (std::size_t optionIndex = 0; optionIndex < header.options.size();
        ++optionIndex) {
     const auto &option = header.options[optionIndex];
-    if (option.name.empty()) {
+    if (header.type != 5 && option.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
                      "Lua skin option has an empty name"));
@@ -5002,7 +5880,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
 
   for (std::size_t fileIndex = 0; fileIndex < header.files.size(); ++fileIndex) {
     const auto &file = header.files[fileIndex];
-    if (file.name.empty()) {
+    if (header.type != 5 && file.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
                      "Lua skin file declaration has an empty name"));
@@ -5093,7 +5971,7 @@ reconcileSkinConfiguration(const BeatorajaSkinHeader &header,
   }
 
   for (const auto &offset : header.offsets) {
-    if (offset.name.empty()) {
+    if (header.type != 5 && offset.name.empty()) {
       result.diagnostics.push_back(
           diagnostic("skin_lua_configuration_invalid",
                      "Lua skin offset has an empty name"));

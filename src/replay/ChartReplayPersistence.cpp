@@ -88,9 +88,11 @@ ChartReplayPersistence::ChartReplayPersistence(
           },
       .stage =
           [&repository](const auto &result, const auto &snapshot,
-                        const auto &replayFile, auto drafts) {
+                        const auto &replayFile, auto averageJudgeMicros,
+                        auto drafts) {
             return repository.StageModernChartResult(result, snapshot,
-                                                     replayFile, drafts);
+                                                     replayFile, drafts,
+                                                     averageJudgeMicros);
           },
       .loadPending =
           [&repository](std::string_view attemptId) {
@@ -221,8 +223,9 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
     }
   }
 
-  const auto staged = dependencies_.stage(attempt.result, attempt.irSnapshot,
-                                          attachment, irDrafts);
+  const auto staged = dependencies_.stage(
+      attempt.result, attempt.irSnapshot, attachment,
+      attempt.averageJudgeMicros, irDrafts);
   switch (staged.status) {
   case ModernChartStageStatus::Invalid:
     if (fileAssociation) {

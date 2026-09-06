@@ -21,6 +21,7 @@ extern "C" {
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -244,6 +245,7 @@ struct LuaSkinHostModulesImpl {
   std::size_t maximumModuleSearchTemplates =
       std::numeric_limits<std::size_t>::max();
   bool allowProcessGlobalOperations = false;
+  bool allowOsLibrary = true;
   ISkinFrameState *frameState = nullptr;
   bool frameCallbackActive = false;
   void *coroutineContext = nullptr;
@@ -458,18 +460,8 @@ int expectedFailure(lua_State *state, std::string_view message) {
   return 2;
 }
 
-std::string_view audioPathArgument(lua_State *state, int index) {
-  std::size_t size = 0;
-  if (const char *value = lua_tolstring(state, index, &size)) {
-    return {value, size};
-  }
-  if (lua_isnoneornil(state, index)) {
-    return "nil";
-  }
-  if (lua_isboolean(state, index)) {
-    return lua_toboolean(state, index) ? "true" : "false";
-  }
-  return lua_typename(state, lua_type(state, index));
+std::string audioPathArgument(lua_State *state, int index) {
+  return luaToJString(state, index);
 }
 
 float audioVolumeArgument(lua_State *state, int index) {
@@ -498,7 +490,7 @@ int returnAudioResult(lua_State *state, LuaSkinHostModulesImpl *impl,
 
 int mainStateAudioPlay(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state);
-  const std::string_view path = audioPathArgument(state, 1);
+  const std::string path = audioPathArgument(state, 1);
   const float volume = audioVolumeArgument(state, 2);
   return returnAudioResult(
       state, impl,
@@ -507,7 +499,7 @@ int mainStateAudioPlay(lua_State *state) {
 
 int mainStateAudioLoop(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state);
-  const std::string_view path = audioPathArgument(state, 1);
+  const std::string path = audioPathArgument(state, 1);
   const float volume = audioVolumeArgument(state, 2);
   return returnAudioResult(
       state, impl,
@@ -633,6 +625,18 @@ int mainStateTimer(lua_State *state) {
                                  ? std::numeric_limits<std::int64_t>::min()
                                  : current->timerProperty({.value = id});
   lua_pushnumber(state, static_cast<lua_Number>(value));
+  return 1;
+}
+
+int mainStateSetTimer(lua_State *state) {
+  auto *current = frameState(state);
+  const int id = boundedIntegerArgument(state, 1, 0, false);
+  const auto value = static_cast<std::int64_t>(lua_tointeger(state, 2));
+  if (current == nullptr || !current->setTimerProperty(id, value)) {
+    return luaL_error(state,
+                      "the timer cannot be changed by the selected skin");
+  }
+  lua_pushboolean(state, 1);
   return 1;
 }
 
@@ -822,7 +826,58 @@ int mainStateVolumeSys(lua_State *state) {
                            "volume_sys");
 }
 
-std::string luaToJString(lua_State *state, int index) {
+int mainStateSetVolume(lua_State *state, int id, std::string_view name) {
+  auto *current = frameState(state);
+  const double value = static_cast<double>(
+      static_cast<float>(lua_tonumber(state, 1)));
+  if (current == nullptr || !current->setFloatProperty(id, value)) {
+    return luaL_error(state, "main_state.%.*s has no writable audio state",
+                      static_cast<int>(name.size()), name.data());
+  }
+  lua_pushboolean(state, 1);
+  return 1;
+}
+
+int mainStateSetVolumeBg(lua_State *state) {
+  return mainStateSetVolume(state, 19, "set_volume_bg");
+}
+
+int mainStateSetVolumeKey(lua_State *state) {
+  return mainStateSetVolume(state, 18, "set_volume_key");
+}
+
+int mainStateSetVolumeSys(lua_State *state) {
+  return mainStateSetVolume(state, 17, "set_volume_sys");
+}
+
+int mainStateKeyPressed(lua_State *state) {
+  auto *impl = host(state);
+  int keyCode = -1;
+  if (lua_type(state, 1) == LUA_TNUMBER) {
+    const double value = static_cast<double>(lua_tonumber(state, 1));
+    std::int64_t asLong = 0;
+    if (std::isnan(value)) {
+      asLong = 0;
+    } else if (value >=
+               static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+      asLong = std::numeric_limits<std::int64_t>::max();
+    } else if (value <=
+               static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
+      asLong = std::numeric_limits<std::int64_t>::min();
+    } else {
+      asLong = static_cast<std::int64_t>(value);
+    }
+    keyCode = static_cast<int>(std::bit_cast<std::int32_t>(
+        static_cast<std::uint32_t>(static_cast<std::uint64_t>(asLong))));
+  } else {
+    keyCode = LuaSkinLegacyInputHost::keyCode(luaToJString(state, 1));
+  }
+  lua_pushboolean(state, keyCode >= 0 && impl->legacyInputHost != nullptr &&
+                             impl->legacyInputHost->isKeyPressed(keyCode));
+  return 1;
+}
+
+std::string luaToJStringImpl(lua_State *state, int index) {
   std::size_t size = 0;
   if (const char *value = lua_tolstring(state, index, &size)) {
     return {value, size};
@@ -833,8 +888,23 @@ std::string luaToJString(lua_State *state, int index) {
     return "nil";
   case LUA_TBOOLEAN:
     return lua_toboolean(state, index) ? "true" : "false";
-  default:
-    return luaL_typename(state, index);
+  default: {
+    const void *identity = lua_topointer(state, index);
+    if (identity == nullptr) {
+      return luaL_typename(state, index);
+    }
+    char hexadecimal[sizeof(std::uintptr_t) * 2U];
+    const auto [end, error] = std::to_chars(
+        std::begin(hexadecimal), std::end(hexadecimal),
+        reinterpret_cast<std::uintptr_t>(identity), 16);
+    if (error != std::errc{}) {
+      return luaL_typename(state, index);
+    }
+    std::string result = luaL_typename(state, index);
+    result.push_back(':');
+    result.append(hexadecimal, end);
+    return result;
+  }
   }
 }
 
@@ -1112,6 +1182,8 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "offset");
   installClosure(state, impl, mainStateTimer);
   lua_setfield(state, -2, "timer");
+  installClosure(state, impl, mainStateSetTimer);
+  lua_setfield(state, -2, "set_timer");
   lua_pushnumber(
       state, static_cast<lua_Number>(std::numeric_limits<std::int64_t>::min()));
   lua_setfield(state, -2, "timer_off_value");
@@ -1145,6 +1217,14 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "volume_key");
   installClosure(state, impl, mainStateVolumeSys);
   lua_setfield(state, -2, "volume_sys");
+  installClosure(state, impl, mainStateSetVolumeBg);
+  lua_setfield(state, -2, "set_volume_bg");
+  installClosure(state, impl, mainStateSetVolumeKey);
+  lua_setfield(state, -2, "set_volume_key");
+  installClosure(state, impl, mainStateSetVolumeSys);
+  lua_setfield(state, -2, "set_volume_sys");
+  installClosure(state, impl, mainStateKeyPressed);
+  lua_setfield(state, -2, "key_pressed");
   installClosure(state, impl, mainStateFileExists);
   lua_setfield(state, -2, "file_exists");
   installClosure(state, impl, mainStateFileMkdir);
@@ -2815,14 +2895,19 @@ void installTableCompatibility(lua_State *state) {
   lua_pop(state, 1);
 }
 
-void installSafeOsLibrary(lua_State *state, bool allowProcessGlobalOperations) {
+void installSafeOsLibrary(lua_State *state, bool allowOsLibrary,
+                          bool allowProcessGlobalOperations) {
+  if (!allowOsLibrary) {
+    setNilGlobal(state, LUA_OSLIBNAME);
+    return;
+  }
   openLibrary(state, LUA_OSLIBNAME, luaopen_os);
   if (allowProcessGlobalOperations) {
     return;
   }
   lua_getglobal(state, LUA_OSLIBNAME);
   for (const char *name : {"execute", "exit", "getenv", "remove", "rename",
-                           "setlocale", "tmpname"}) {
+                           "tmpname"}) {
     lua_pushnil(state);
     lua_setfield(state, -2, name);
   }
@@ -2907,7 +2992,8 @@ int installHost(lua_State *state) {
   installTableCompatibility(state);
   openLibrary(state, LUA_STRLIBNAME, luaopen_string);
   openLibrary(state, LUA_MATHLIBNAME, luaopen_math);
-  installSafeOsLibrary(state, impl->allowProcessGlobalOperations);
+  installSafeOsLibrary(state, impl->allowOsLibrary,
+                       impl->allowProcessGlobalOperations);
 
   for (const char *name : {"ffi", "jit", "debug", "bit"}) {
     setNilGlobal(state, name);
@@ -3078,6 +3164,10 @@ int installPendingConfiguration(lua_State *state) {
 
 } // namespace
 
+std::string luaToJString(lua_State *state, int index) {
+  return luaToJStringImpl(state, index);
+}
+
 LuaSkinHostModulesCreateResult
 LuaSkinHostModules::create(lua_State *state,
                            LuaSkinHostModulesOptions options) {
@@ -3111,6 +3201,7 @@ LuaSkinHostModules::create(lua_State *state,
   impl->maximumSourceBytes = options.maximumSourceBytes;
   impl->maximumModuleSearchTemplates = options.maximumModuleSearchTemplates;
   impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;
+  impl->allowOsLibrary = options.allowOsLibrary;
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
   try {

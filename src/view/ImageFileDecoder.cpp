@@ -294,14 +294,25 @@ decodeLibGdxCim(std::span<const std::byte> encoded,
                                        *bytesPerPixel) {
     return std::nullopt;
   }
-  std::vector<unsigned char> nativePixels(pixels * *bytesPerPixel);
-  if (!inflateExact(stream, nativePixels, options, finished) ||
-      (!finished && !inflateHasNoRemainingOutput(stream, options)) ||
+  auto rgba = std::make_shared<std::vector<unsigned char>>(rgbaBytes);
+  if (format == 4) {
+    // LibGDX's overwhelmingly common RGBA8888 CIM payload is already in the
+    // byte order consumed by our texture device. Inflate it into its final
+    // allocation instead of materializing and copying a second full image.
+    if (!inflateExact(stream, *rgba, options, finished)) {
+      return std::nullopt;
+    }
+  } else {
+    std::vector<unsigned char> nativePixels(pixels * *bytesPerPixel);
+    if (!inflateExact(stream, nativePixels, options, finished)) {
+      return std::nullopt;
+    }
+    expandCimPixels(format, nativePixels, *rgba);
+  }
+  if ((!finished && !inflateHasNoRemainingOutput(stream, options)) ||
       stopped(options)) {
     return std::nullopt;
   }
-  auto rgba = std::make_shared<std::vector<unsigned char>>(rgbaBytes);
-  expandCimPixels(format, nativePixels, *rgba);
   DecodedImageData result{.width = width, .height = height, .rgba = std::move(rgba)};
   return result.valid() ? std::optional<DecodedImageData>(std::move(result))
                         : std::nullopt;

@@ -1,9 +1,12 @@
 #include "PlaySkinSession.h"
 
+#include "../../StartupTiming.h"
+
 #include "GameplaySkinDocumentLoader.h"
 #include "GameplaySkinBuiltinCatalog.h"
 #include "GameplaySkinSourceFormat.h"
 #include "LuaSkinFileSystem.h"
+#include "../SkinTargetTraits.h"
 #include "../../scene/play/StartLaneIndicatorGeometry.h"
 #include "../../rendering/SkinQuadBatchRenderer.h"
 #include "../../rendering/common.h"
@@ -350,6 +353,9 @@ skinModelReferencedResourceIdsForTesting(
             addSprite(object.knob);
           } else if constexpr (std::is_same_v<T, SkinGraphObject>) {
             if (!object.builtinImageReference) addSprite(object.fill);
+          } else if constexpr (
+              std::is_same_v<T, SkinSelectDistributionGraphObject>) {
+            addSprite(object.sprite);
           } else if constexpr (std::is_same_v<T, SkinGaugeObject>) {
             for (const auto &node : object.orderedNodes) addSprite(node);
           } else if constexpr (std::is_same_v<T, SkinNoteObject>) {
@@ -383,6 +389,7 @@ skinModelReferencedResourceIdsForTesting(
               std::is_same_v<T, SkinPracticeObject> ||
               std::is_same_v<T, SkinBuiltinImageObject> ||
               std::is_same_v<T, SkinPmCharaObject> ||
+              std::is_same_v<T, SkinSongListObject> ||
               std::is_same_v<T, SkinInvalidInGameplayObject> ||
               std::is_same_v<T, SkinBlankObject>) {
             // These objects either generate pixels, use a separate auxiliary
@@ -704,6 +711,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Document,
                                  loadingMicros(documentStarted));
+    StartupTiming::instance().mark("skin create: document load done");
     if (audioActivity) {
       result.loadingTelemetry.resources.audioDecodes =
           audioActivity->activityCounters().loadsSucceeded;
@@ -720,9 +728,22 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     }
     LoadedGameplaySkinDocument document = std::move(*loaded.document);
     appendMovedDiagnostics(result.diagnostics, document.diagnostics);
+    const auto target = skinTargetTraitForType(document.model.model.header.type);
+    if (!target || target->kind != SkinTargetKind::Gameplay) {
+      result.diagnostics.push_back(sessionDiagnostic(
+          "skin.session.type_mismatch",
+          "Configured document does not match a Beatoraja gameplay target.",
+          activation.entry.packageRelativePath));
+      return finish();
+    }
 
     const std::vector<std::string> runtimeStrings =
         context.chartModel.runtimeStrings();
+    std::string runtimeDebug = "runtimeStrings:";
+    for (const auto &s : runtimeStrings) {
+      runtimeDebug += " [" + s + "]";
+    }
+    StartupTiming::instance().note(runtimeDebug);
     std::map<int, std::filesystem::path> builtinImagePaths;
     const auto addBuiltinPath = [&](int reference,
                                     const std::filesystem::path &path) {
@@ -746,11 +767,15 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                          PlayfieldGameplayMode::Practice,
          .builtinImagePaths = std::move(builtinImagePaths),
          .builtinImageReader = std::move(context.builtinImageReader),
+         .builtinImageBatchReader = std::move(context.builtinImageBatchReader),
+         .builtinImageCache = context.builtinImageCache,
+         .builtinImageCacheKey = context.builtinImageCacheKey,
          .safetyPolicy = context.safetyPolicy,
          .stop = context.stop});
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::ResourcePreparation,
                                  loadingMicros(resourceStarted));
+    StartupTiming::instance().mark("skin create: decodeAndPlan done");
     appendMovedDiagnostics(result.diagnostics, planned.diagnostics);
     if (planned.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
@@ -785,6 +810,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Movie,
                                  loadingMicros(movieStarted));
+    StartupTiming::instance().mark("skin create: movie prep done");
     appendMovedDiagnostics(result.diagnostics, preparedMovies.diagnostics);
     if (preparedMovies.cancelled || cancelled(context.stop, result)) {
       result.cancelled = true;
@@ -814,6 +840,7 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Upload,
                                  loadingMicros(uploadStarted));
+    StartupTiming::instance().mark("skin create: upload done");
     appendMovedDiagnostics(result.diagnostics, uploaded.diagnostics);
     if (!uploaded.catalog || hasErrors(result.diagnostics)) {
       return finish();

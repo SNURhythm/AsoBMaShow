@@ -423,6 +423,155 @@ void testPlayerConfigurationSkinStringsRoundTrip() {
          "PlayerConfig string values survive settings persistence verbatim");
 }
 
+void testSkinSelectSoundSetPathRoundTrips() {
+  TempDirectory temp;
+  const auto path = temp.path() / "skin-select-sound-set.json";
+  AppSettings defaults;
+  expect(defaults.skinSelectSoundSetPath.empty(),
+         "the music-select sound-set folder defaults empty, keeping the "
+         "bundled assets fallback");
+  expect(defaults.skinSelectSoundSetBookmark.empty(),
+         "the music-select sound-set bookmark defaults empty");
+
+  std::string error;
+  expect(AppSettingsStore::Save(path, defaults, error),
+         "default sound-set folder saves: " + error);
+  const auto emptyLoaded = AppSettingsStore::Load(path);
+  expect(emptyLoaded.status == AppSettingsLoadStatus::Loaded &&
+             emptyLoaded.settings.skinSelectSoundSetPath.empty(),
+         "an empty sound-set folder round-trips as empty");
+
+  AppSettings configured;
+  configured.skinSelectSoundSetPath =
+      "/Users/example/Downloads/Skins/ModernChic/Sound";
+  configured.skinSelectSoundSetBookmark =
+      "/////AQAAAA4AAAACAAQAAAAEAAAAAAAAAAAAAAAAAAAAAAAQAAAAAB4AAAAA";
+  expect(AppSettingsStore::Save(path, configured, error),
+         "configured sound-set folder saves: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinSelectSoundSetPath ==
+                 configured.skinSelectSoundSetPath &&
+             loaded.settings.skinSelectSoundSetBookmark ==
+                 configured.skinSelectSoundSetBookmark,
+         "the configured sound-set path and bookmark survive a JSON round "
+         "trip");
+  expect(readFile(path).find("\"skinSelectSoundSetPath\": "
+                             "\"/Users/example/Downloads/Skins/ModernChic/"
+                             "Sound\"") != std::string::npos,
+         "saved JSON contains the sound-set path");
+  expect(readFile(path).find("\"skinSelectSoundSetBookmark\": "
+                             "\"/////AQAAAA4AAAACAAQAAAAEAAAAAAAAAAAAAAAAAAAA"
+                             "AAAQAAAAAB4AAAAA\"") != std::string::npos,
+         "saved JSON contains the sound-set bookmark");
+}
+
+void testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "music-select-input.json";
+  AppSettings defaults;
+  expect(defaults.skinMusicSelectInput == 0 &&
+             defaults.skinMusicSelectScrollDurationLow == 300 &&
+             defaults.skinMusicSelectScrollDurationHigh == 50 &&
+             defaults.skinMusicSelectAnalogTicksPerScroll == 3 &&
+             defaults.skinMusicSelectMaxSearchBarCount == 10,
+         "music-select input configuration uses Beatoraja defaults");
+
+  AppSettings configured;
+  configured.skinMusicSelectInput = 2;
+  configured.skinMusicSelectScrollDurationLow = 875;
+  configured.skinMusicSelectScrollDurationHigh = 125;
+  configured.skinMusicSelectAnalogTicksPerScroll = 19;
+  configured.skinMusicSelectMaxSearchBarCount = 37;
+  std::string error;
+  expect(AppSettingsStore::Save(path, configured, error),
+         "music-select input configuration saves: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinMusicSelectInput == 2 &&
+             loaded.settings.skinMusicSelectScrollDurationLow == 875 &&
+             loaded.settings.skinMusicSelectScrollDurationHigh == 125 &&
+             loaded.settings.skinMusicSelectAnalogTicksPerScroll == 19 &&
+             loaded.settings.skinMusicSelectMaxSearchBarCount == 37,
+         "music-select input configuration survives persistence");
+
+  AppSettings lower;
+  lower.skinMusicSelectInput = -1;
+  lower.skinMusicSelectScrollDurationLow = 1;
+  lower.skinMusicSelectScrollDurationHigh = 0;
+  lower.skinMusicSelectAnalogTicksPerScroll = 0;
+  lower.skinMusicSelectMaxSearchBarCount = 0;
+  lower.sanitize();
+  expect(lower.skinMusicSelectInput == 0 &&
+             lower.skinMusicSelectScrollDurationLow == 2 &&
+             lower.skinMusicSelectScrollDurationHigh == 1 &&
+             lower.skinMusicSelectAnalogTicksPerScroll == 1 &&
+             lower.skinMusicSelectMaxSearchBarCount == 1,
+         "music-select input configuration uses Beatoraja lower bounds");
+
+  AppSettings upper;
+  upper.skinMusicSelectInput = 3;
+  upper.skinMusicSelectScrollDurationLow = 1001;
+  upper.skinMusicSelectScrollDurationHigh = 1001;
+  upper.skinMusicSelectAnalogTicksPerScroll = 1001;
+  upper.skinMusicSelectMaxSearchBarCount = 101;
+  upper.sanitize();
+  expect(upper.skinMusicSelectInput == 2 &&
+             upper.skinMusicSelectScrollDurationLow == 1000 &&
+             upper.skinMusicSelectScrollDurationHigh == 1000 &&
+             upper.skinMusicSelectAnalogTicksPerScroll == 1000 &&
+             upper.skinMusicSelectMaxSearchBarCount == 100,
+         "music-select input configuration uses Beatoraja upper bounds");
+}
+
+void testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds() {
+  TempDirectory temp;
+  const auto path = temp.path() / "music-select-options.json";
+  AppSettings defaults;
+  expect(defaults.skinPlayer2RandomOption == 0 &&
+             defaults.skinDoublePlayOption == 0 &&
+             defaults.skinBgaMode == 0 && defaults.skinBgaExpandMode == 1,
+         "music-select option configuration uses Beatoraja defaults");
+
+  AppSettings configured;
+  configured.skinPlayer2RandomOption = 9;
+  configured.skinDoublePlayOption = 3;
+  configured.skinBgaMode = 2;
+  configured.skinBgaExpandMode = 2;
+  std::string error;
+  expect(AppSettingsStore::Save(path, configured, error),
+         "music-select option configuration saves: " + error);
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+             loaded.settings.skinPlayer2RandomOption == 9 &&
+             loaded.settings.skinDoublePlayOption == 3 &&
+             loaded.settings.skinBgaMode == 2 &&
+             loaded.settings.skinBgaExpandMode == 2,
+         "music-select option configuration survives persistence");
+
+  AppSettings lower;
+  lower.skinPlayer2RandomOption = -1;
+  lower.skinDoublePlayOption = -1;
+  lower.skinBgaMode = -1;
+  lower.skinBgaExpandMode = -1;
+  lower.sanitize();
+  expect(lower.skinPlayer2RandomOption == 0 &&
+             lower.skinDoublePlayOption == 0 && lower.skinBgaMode == 0 &&
+             lower.skinBgaExpandMode == 0,
+         "music-select option configuration clamps to Beatoraja lower bounds");
+
+  AppSettings upper;
+  upper.skinPlayer2RandomOption = 10;
+  upper.skinDoublePlayOption = 4;
+  upper.skinBgaMode = 3;
+  upper.skinBgaExpandMode = 3;
+  upper.sanitize();
+  expect(upper.skinPlayer2RandomOption == 9 &&
+             upper.skinDoublePlayOption == 3 && upper.skinBgaMode == 2 &&
+             upper.skinBgaExpandMode == 2,
+         "music-select option configuration clamps to Beatoraja upper bounds");
+}
+
 void testConfiguredTargetListSkinStringsRoundTrip() {
   // The bridge must keep PlayerConfig.targetid and targetlist raw: source
   // TargetProperty performs lookup and fallback only when a skin asks.
@@ -455,6 +604,7 @@ void testPlayerConfigurationSkinStringsAreBounded() {
   direct.skinTargetList.assign(
       AppSettings::kMaximumSkinTargetListEntries + 50, "target");
   direct.skinTargetList.front() = oversized;
+  direct.skinSelectSoundSetPath = oversized;
   direct.sanitize();
   std::size_t directTargetBytes = 0;
   for (const auto &target : direct.skinTargetList) {
@@ -474,6 +624,9 @@ void testPlayerConfigurationSkinStringsAreBounded() {
                           AppSettings::kMaximumSkinPropertyStringBytes;
                  }),
          "sanitization bounds every per-frame PlayerConfig skin string");
+  expect(direct.skinSelectSoundSetPath == oversized,
+         "the sound-set folder is a plain path string that sanitization does "
+         "not clamp");
 
   TempDirectory temp;
   const auto path = temp.path() / "bounded-player-config-strings.json";
@@ -491,6 +644,7 @@ void testPlayerConfigurationSkinStringsAreBounded() {
       {"skinChartReplicationMode", oversized},
       {"skinTargetId", oversized},
       {"skinTargetList", std::move(targetList)},
+      {"skinSelectSoundSetPath", oversized},
   };
   writeFile(path, document.dump());
   const auto loaded = AppSettingsStore::Load(path);
@@ -502,9 +656,11 @@ void testPlayerConfigurationSkinStringsAreBounded() {
              loaded.settings.skinTargetId == "MAX" &&
              loaded.settings.skinTargetList.size() <=
                  AppSettings::kMaximumSkinTargetListEntries &&
+             loaded.settings.skinSelectSoundSetPath == oversized &&
              hasDiagnostic(loaded.diagnostics, "skinTargetList", "limit"),
          "settings decode rejects oversized PlayerConfig strings before "
-         "copying them into the runtime settings object");
+         "copying them into the runtime settings object while retaining the "
+         "plain sound-set path string");
 }
 
 void testSkinTargetSelectionsSurviveRestart() {
@@ -1223,6 +1379,7 @@ void testVersionFixturesAndNoRewrite() {
          "missing schema version migrates from v0");
   AppSettings expectedV0 = makeDistinctSettings();
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
+  expectedV0.skinBgaMode = 2;
   expectedV0.hispeedAutoAdjust = false;
   expectedV0.showPastNotes = false;
   expectedV0.notesDisplayTimingMilliseconds = 0;
@@ -1522,6 +1679,9 @@ int main() {
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();
+  testSkinSelectSoundSetPathRoundTrips();
+  testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds();
+  testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds();
   testConfiguredTargetListSkinStringsRoundTrip();
   testPlayerConfigurationSkinStringsAreBounded();
   testSkinTargetSelectionsSurviveRestart();

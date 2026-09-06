@@ -4,6 +4,7 @@
 
 #include "GameplaySkinSettingsController.h"
 #include "GameplaySkinSettingsPresentation.h"
+#include "../library/ChartLibraryPlatform.h"
 #include "../skin/SkinTargetTraits.h"
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../view/BlockingOverlayView.h"
@@ -322,6 +323,29 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
   gameplaySkinControlsBuiltDisabled = false;
+}
+
+void SettingsScene::applyPendingSoundSetFolderPick() {
+  if (soundSetFolderPicker == nullptr) {
+    return;
+  }
+  if (soundSetFolderPicker->active()) {
+    return;
+  }
+  const auto pick = soundSetFolderPicker->consume();
+  if (!pick || !pick->succeed || pick->path.empty()) {
+    return;
+  }
+  context.settings.skinSelectSoundSetPath = pick->path;
+  context.settings.skinSelectSoundSetBookmark = pick->bookmark;
+  if (skinSelectSoundSetInput != nullptr) {
+    skinSelectSoundSetInput->setEditingText(pick->path);
+  }
+  gameplaySkinUiMessage = "Sound set folder updated: " + pick->path;
+  if (gameplaySkinUiMessageText != nullptr) {
+    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+  }
+  persistSettings();
 }
 
 void SettingsScene::updateGameplaySkinSettingsController() {
@@ -890,6 +914,82 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                                                        : std::string{},
       metrics.smallTextSize, ui_theme::textSecondary());
   overview->addView(gameplaySkinUiMessageText);
+  MusicSelectToolbarMode toolbarMode;
+  {
+    std::lock_guard lock(context.applicationUiStateMutex);
+    toolbarMode = context.applicationUiState.musicSelectToolbar.mode;
+  }
+  const auto setToolbarHidden = [this](bool hidden) {
+    {
+      std::lock_guard lock(context.applicationUiStateMutex);
+      context.applicationUiState.musicSelectToolbar.mode =
+          hidden ? MusicSelectToolbarMode::Hidden
+                 : MusicSelectToolbarMode::Expanded;
+    }
+    std::string diagnostic;
+    if (!context.saveApplicationUiState(&diagnostic)) {
+      gameplaySkinUiMessage = diagnostic.empty()
+                                  ? "Toolbar visibility could not be saved."
+                                  : diagnostic;
+      if (gameplaySkinUiMessageText != nullptr) {
+        gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+      }
+    }
+  };
+  overview->addView(makeGameplaySkinChoiceRow(
+      metrics, "Music Select toolbar", true,
+      {{.label = "Visible",
+        .selected = toolbarMode != MusicSelectToolbarMode::Hidden,
+        .action = [setToolbarHidden] { setToolbarHidden(false); }},
+       {.label = "Hidden",
+        .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
+        .action = [setToolbarHidden] { setToolbarHidden(true); }}}));
+  // Typed path (advanced fallback on every platform) because desktop has no
+  // gate-less picker; empty keeps the bundled assets fallback. Resolution
+  // happens live in MusicSelectScene.
+  auto *soundSetRow = new View();
+  soundSetRow->setFlexDirection(FlexDirection::Row);
+  soundSetRow->setFlexWrap(YGWrapWrap);
+  soundSetRow->setAlignItems(YGAlignCenter);
+  soundSetRow->setGap(metrics.compact ? 8.0f : 10.0f);
+  auto *soundSetLabel = makeText("Sound set folder", metrics.smallTextSize,
+                                 ui_theme::textSecondary(), TextView::LEFT,
+                                 TextView::MIDDLE);
+  soundSetLabel->setMinWidth(0.0f);
+  soundSetLabel->setFlexShrink(1.0f);
+  soundSetRow->addView(soundSetLabel);
+  auto *soundSetInput =
+      makeTextInput(metrics, std::max(260, metrics.cardsWidth / 2));
+  soundSetInput->setEditingText(context.settings.skinSelectSoundSetPath);
+  soundSetInput->onEditingFinished(
+      [this, soundSetInput](const std::string &) {
+        context.settings.skinSelectSoundSetPath = soundSetInput->getText();
+        context.settings.skinSelectSoundSetBookmark.clear();
+        lastLayoutWidth = -1;
+        persistSettings();
+      });
+  soundSetRow->addView(soundSetInput);
+  skinSelectSoundSetInput = soundSetInput;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  // The native folder picker is the primary affordance on iOS/Android (it is
+  // also the only way to obtain the security-scoped bookmark / SAF tree URI
+  // that lets the app re-access the folder after relaunch). It runs off the
+  // main thread and the result is committed by applyPendingSoundSetFolderPick
+  // on the next scene update.
+  if (soundSetFolderPicker == nullptr) {
+    soundSetFolderPicker =
+        std::make_unique<chart_library_platform::SoundSetFolderPicker>();
+  }
+  soundSetRow->addView(makeGameplaySkinAction(
+      metrics, "Pick...", ordinaryActionsEnabled,
+      [this]() {
+        if (soundSetFolderPicker != nullptr) {
+          soundSetFolderPicker->request();
+        }
+      },
+      ui_theme::cyan()));
+#endif
+  overview->addView(soundSetRow);
   auto *safetyRow = new View();
   safetyRow->setFlexDirection(FlexDirection::Row);
   safetyRow->setFlexWrap(YGWrapWrap);
@@ -1087,9 +1187,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
 
   std::vector<const skin::GameplaySkinEntryRow *> selectableRows;
   for (const auto &candidate : snapshot.entries) {
-    if (candidate.validation ==
-            skin::SkinValidationDisposition::SelectableGameplay &&
-        candidate.metadata.skinType == gameplaySkinActiveTraitSkinType) {
+    if (skin::gameplaySkinEntrySelectableForTarget(candidate, *activeTrait)) {
       selectableRows.push_back(&candidate);
     }
   }

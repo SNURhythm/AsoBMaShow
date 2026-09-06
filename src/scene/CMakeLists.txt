@@ -1,22 +1,34 @@
 target_sources(main PRIVATE
     ChartFilterSortPanelView.cpp
+    ChartPreloadWorker.cpp
+    ChartRecordsScene.cpp
     ChartViewerScene.cpp
+    CourseGameplaySessionBuilder.cpp
+    DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
     FindBmsProgressPresentation.cpp
     IrUploadsController.cpp
     IrUploadsScene.cpp
+    IntroScene.cpp
+    LibraryTasksScene.cpp
     PracticePanelView.cpp
     MainMenuLibrary.cpp
+    MainMenuPlayOptionsModal.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
+    MusicSelectScene.cpp
+    MusicSelectToolbarView.cpp
+    MusicSelectSkinErrorScene.cpp
     PracticeAnalyticsPresentation.cpp
     PracticeAnalyticsView.cpp
     ProfileSettingsController.cpp
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
     RemoteResultRecallController.cpp
+    ReplayRecordsModal.cpp
     ResultPresentationModel.cpp
     SceneManager.cpp
+    SceneReturnTarget.cpp
     ResultGaugeHistory.cpp
     ResultScene.cpp
     SettingsScene.cpp

@@ -22,6 +22,7 @@ public:
     Fit = 0,
     Fill = 1,
     Stretch = 2,
+    NoExpand = 3,
   };
 
   enum class NotePriorityMode {
@@ -250,6 +251,30 @@ public:
   std::string skinSortId = "TITLE";
   std::string skinDifficultyFilterName = "ALL";
   std::string skinChartReplicationMode = "RIVALCHART";
+  // PlayerConfig.musicselectinput and Config's selector-scroll fields from
+  // the pinned Beatoraja source. The input layout is independent of the
+  // highlighted chart's mode.
+  int skinMusicSelectInput = 0;
+  int skinMusicSelectScrollDurationLow = 300;
+  int skinMusicSelectScrollDurationHigh = 50;
+  int skinMusicSelectAnalogTicksPerScroll = 3;
+  int skinMusicSelectMaxSearchBarCount = 10;
+  // Folder searched before the bundled `assets/` root for every music-select
+  // system sound (the select SEs plus the default select/decide audio), in
+  // Beatoraja extension order. Empty = bundled default unchanged. It is a
+  // plain path string and is not length-clamped like the skin property enums.
+  std::string skinSelectSoundSetPath;
+  // Platform access token for the picked sound-set folder so it stays
+  // reachable after relaunch: an iOS security-scoped bookmark or an Android
+  // SAF tree URI. Empty for desktop or when the path needs no token.
+  std::string skinSelectSoundSetBookmark;
+  // Remaining selector-owned Config/PlayerConfig values. These retain the
+  // pinned source's integer domains because the native settings model cannot
+  // losslessly represent BGA AUTO or every DP option.
+  int skinPlayer2RandomOption = 0;
+  int skinDoublePlayOption = 0;
+  int skinBgaMode = 0;
+  int skinBgaExpandMode = 1;
   // Raw PlayerConfig.targetid and targetlist. TargetProperty performs target
   // lookup only when StringPropertyFactory asks for a neighbouring label, so
   // these remain independent from Aso's selectable pacemaker targets.
