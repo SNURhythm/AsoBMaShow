@@ -107,9 +107,9 @@ def swept_tone(n_samples, f0, f1, amp, harmonics=1, vib_depth=0.0, vib_rate=0.0)
 
 
 # ---------------------------------------------------------------- select BGM
-# A ~10 s menu piece that is bright and energetic: an uplifting I-vi-IV-V
-# progression in a higher register, a driving eighth-note bass pulse, and a
-# brisk upper-voice melody. No tremolo or detune beating.
+# A ~10 s rhythm-game-style menu track: bright, driving, with a clear beat
+# (kick + bass), staccato synth chords, and a catchy lead hook. Uplifting
+# I-V-vi-IV progression in C. No tremolo or detune beating.
 
 EQ = {
     "A1": 55.00, "C1": 32.70, "C2": 65.41, "D2": 73.42, "E2": 82.41,
@@ -122,33 +122,39 @@ EQ = {
     "D6": 1174.66, "E6": 1318.51,
 }
 
-SELECT_SECONDS = 10
-# ~120 BPM -> 0.5 s/beat -> 2.5 s per bar (4 bars in 10 s).
+SELECT_SECONDS = 20
+# ~120 BPM -> 0.5 s/beat -> 2.5 s per bar (8 bars in 20 s).
 BEAT = 0.5
 
 
-def make_chord(start_sec, duration_sec, bass, bass_high, voices, melody):
-    """A bright, energetic bar: chord bed + driving eighth-note bass pulse +
-    a brisk plucked upper melody."""
+def make_kick(when_sec, amp=0.30):
+    """A soft kick: a low sine with a quick pitch drop, ~0.18 s."""
+    n = SR * SELECT_SECONDS
+    out = [0.0] * n
+    on = int(when_sec * SR)
+    dur = int(0.18 * SR)
+    for i in range(on, min(n, on + dur)):
+        t = (i - on) / SR
+        freq = 120.0 * math.exp(-t / 0.03) + 45.0
+        env = min(1.0, t / 0.002) * exp_env(t, 0.05)
+        out[i] += amp * math.sin(2 * math.pi * freq * t) * env
+    return out
+
+
+def make_rhythm_bar(start_sec, duration_sec, bass, bass_high, voices, lead):
+    """A bright rhythm-game bar: kick on each beat, driving eighth-note bass,
+    staccato chord stabs, and a catchy lead hook."""
     n = SR * SELECT_SECONDS
     out = [0.0] * n
     onset = int(start_sec * SR)
     end = min(n, onset + int(duration_sec * SR))
+    beats = int(duration_sec / BEAT)
 
-    def bar_env(t, t_end):
-        attack = min(1.0, t / 0.03)
-        release = min(1.0, (t_end - t) / 0.10)
-        return max(0.0, attack * release)
-
-    t_end = duration_sec
-    # Chord bed (brighter, higher register).
-    for i in range(onset, end):
-        t = (i - onset) / SR
-        env = bar_env(t, t_end)
-        s = 0.0
-        for f, amp in voices:
-            s += amp * math.sin(2 * math.pi * EQ[f] * t)
-        out[i] += s * env
+    # Kick on every beat (the drive).
+    for b in range(beats):
+        kick = make_kick(start_sec + b * BEAT)
+        for i in range(onset, end):
+            out[i] += kick[i]
     # Driving eighth-note bass: root on downbeats, fifth/octave on offbeats.
     step = BEAT / 2
     for beat in range(int(duration_sec / step)):
@@ -157,17 +163,31 @@ def make_chord(start_sec, duration_sec, bass, bass_high, voices, melody):
         on = int(when * SR)
         for i in range(on, min(end, on + int(step * SR))):
             t = (i - on) / SR
-            attack = min(1.0, t / 0.006)
-            release = min(1.0, (step - t) / 0.06)
+            attack = min(1.0, t / 0.005)
+            release = min(1.0, (step - t) / 0.05)
             env = max(0.0, attack * release)
             out[i] += 0.20 * math.sin(2 * math.pi * EQ[freq] * t) * env
-    # Brisk plucked melody on top (brighter register).
-    for m_start, note, amp in melody:
+    # Staccato chord stabs on each beat (bright, short).
+    for b in range(beats):
+        when = start_sec + b * BEAT
+        on = int(when * SR)
+        stab_len = int(0.30 * SR)
+        for i in range(on, min(end, on + stab_len)):
+            t = (i - on) / SR
+            attack = min(1.0, t / 0.004)
+            release = min(1.0, (stab_len / SR - t) / 0.05)
+            env = max(0.0, attack * release)
+            s = 0.0
+            for f, amp in voices:
+                s += amp * math.sin(2 * math.pi * EQ[f] * t)
+            out[i] += s * env
+    # Catchy lead hook (bright, plucky).
+    for m_start, note, amp in lead:
         m_onset = onset + int(m_start * SR)
         for i in range(m_onset, end):
             t = (i - m_onset) / SR
-            attack = min(1.0, t / 0.008)
-            release = min(1.0, (0.22 - t) / 0.07)
+            attack = min(1.0, t / 0.006)
+            release = min(1.0, (0.20 - t) / 0.06)
             env = max(0.0, attack * release)
             out[i] += amp * math.sin(2 * math.pi * EQ[note] * t) * env
     return out
@@ -176,30 +196,50 @@ def make_chord(start_sec, duration_sec, bass, bass_high, voices, melody):
 def make_select():
     n = SR * SELECT_SECONDS
     out = [0.0] * n
-    # Uplifting I - vi - IV - V in C, in a bright register, driving bass.
+    # A fuller rhythm-game track: 8 bars (20 s) with a verse/chorus feel so the
+    # loop is not repetitive. Bright, uplifting I - V - vi - IV in C with a
+    # driving beat and a catchy lead hook.
     sections = [
-        make_chord(0.0, 2.5, "C2", "C3",
-                   [("C4", 0.07), ("E4", 0.07), ("G4", 0.06), ("B4", 0.05)],
-                   [(0.0, "C5", 0.11), (0.5, "E5", 0.11), (1.0, "G5", 0.10),
-                    (1.5, "C6", 0.09), (2.0, "B5", 0.08)]),
-        make_chord(2.5, 2.5, "A1", "A2",
-                   [("A3", 0.07), ("C4", 0.07), ("E4", 0.06), ("G4", 0.05)],
-                   [(2.5, "E5", 0.10), (3.0, "C5", 0.10), (3.5, "A4", 0.09),
-                    (4.0, "E5", 0.09), (4.5, "G5", 0.08)]),
-        make_chord(5.0, 2.5, "F2", "F3",
-                   [("F4", 0.07), ("A4", 0.07), ("C5", 0.06), ("E5", 0.05)],
-                   [(5.0, "A5", 0.10), (5.5, "C6", 0.10), (6.0, "F5", 0.09),
-                    (6.5, "A5", 0.09), (7.0, "C6", 0.08)]),
-        make_chord(7.5, 2.5, "G2", "G3",
-                   [("G4", 0.07), ("B4", 0.07), ("D5", 0.06), ("F5", 0.05)],
-                   [(7.5, "B5", 0.10), (8.0, "D6", 0.10), (8.5, "G5", 0.09),
-                    (9.0, "B5", 0.09), (9.5, "G5", 0.08)]),
+        # Verse (C - G - Am - F), lead hook A.
+        make_rhythm_bar(0.0, 2.5, "C2", "C3",
+                        [("C4", 0.06), ("E4", 0.06), ("G4", 0.05), ("B4", 0.04)],
+                        [(0.0, "E5", 0.11), (0.5, "G5", 0.11), (1.0, "C6", 0.10),
+                         (1.5, "G5", 0.10), (2.0, "E5", 0.09)]),
+        make_rhythm_bar(2.5, 2.5, "G2", "G3",
+                        [("G4", 0.06), ("B4", 0.06), ("D5", 0.05), ("F5", 0.04)],
+                        [(2.5, "D5", 0.10), (3.0, "B5", 0.10), (3.5, "G5", 0.09),
+                         (4.0, "D6", 0.09), (4.5, "B5", 0.08)]),
+        make_rhythm_bar(5.0, 2.5, "A1", "A2",
+                        [("A3", 0.06), ("C4", 0.06), ("E4", 0.05), ("G4", 0.04)],
+                        [(5.0, "C5", 0.10), (5.5, "E5", 0.10), (6.0, "A5", 0.09),
+                         (6.5, "E5", 0.09), (7.0, "C6", 0.08)]),
+        make_rhythm_bar(7.5, 2.5, "F2", "F3",
+                        [("F4", 0.06), ("A4", 0.06), ("C5", 0.05), ("E5", 0.04)],
+                        [(7.5, "A5", 0.10), (8.0, "C6", 0.10), (8.5, "F5", 0.09),
+                         (9.0, "A5", 0.09), (9.5, "C6", 0.08)]),
+        # Chorus (C - Am - F - G), lead hook B (higher, more active).
+        make_rhythm_bar(10.0, 2.5, "C2", "C3",
+                        [("C4", 0.07), ("E4", 0.07), ("G4", 0.06), ("B4", 0.05)],
+                        [(10.0, "G5", 0.11), (10.5, "C6", 0.11), (11.0, "E6", 0.10),
+                         (11.5, "C6", 0.10), (12.0, "G5", 0.09)]),
+        make_rhythm_bar(12.5, 2.5, "A1", "A2",
+                        [("A3", 0.07), ("C4", 0.07), ("E4", 0.06), ("G4", 0.05)],
+                        [(12.5, "E5", 0.10), (13.0, "A5", 0.10), (13.5, "C6", 0.09),
+                         (14.0, "A5", 0.09), (14.5, "E6", 0.08)]),
+        make_rhythm_bar(15.0, 2.5, "F2", "F3",
+                        [("F4", 0.07), ("A4", 0.07), ("C5", 0.06), ("E5", 0.05)],
+                        [(15.0, "A5", 0.10), (15.5, "F5", 0.10), (16.0, "C6", 0.09),
+                         (16.5, "A5", 0.09), (17.0, "F5", 0.08)]),
+        make_rhythm_bar(17.5, 2.5, "G2", "G3",
+                        [("G4", 0.07), ("B4", 0.07), ("D5", 0.06), ("F5", 0.05)],
+                        [(17.5, "B5", 0.10), (18.0, "D6", 0.10), (18.5, "G5", 0.09),
+                         (19.0, "B5", 0.09), (19.5, "D6", 0.08)]),
     ]
     for i in range(n):
         for section in sections:
             out[i] += section[i]
-    # Master fade-in/out so the 10 s loop point is smooth.
-    fade = int(0.4 * SR)
+    # Master fade-in/out so the loop point is smooth.
+    fade = int(0.5 * SR)
     for i in range(fade):
         out[i] *= i / fade
         out[n - 1 - i] *= i / fade

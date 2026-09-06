@@ -122,8 +122,8 @@ void testBundleAwareDecodeBoundedEncodedFallback() {
   std::atomic<bool> cancelled{false};
   const bool decoded = decodeSkinSoundBundleAware(
       fspath_to_path_t(wavPath), pcm, info, cancelled,
-      {.maximumEncodedBytes = 1U * 1024U * 1024U,
-       .maximumPcmSamples = 1U * 1024U * 1024U});
+      {.maximumEncodedBytes = 4U * 1024U * 1024U,
+       .maximumPcmSamples = 4U * 1024U * 1024U});
   expect(decoded && info.channels > 0 && info.samplerate > 0,
          "a bounded budget that fits the file still decodes through the "
          "bundle-aware path");

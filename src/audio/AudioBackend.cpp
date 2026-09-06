@@ -118,12 +118,13 @@ public:
 
 #if TARGET_OS_IPHONE
     ma_context_config contextConfig = ma_context_config_init();
-    // AVAudioSessionCategoryPlayback ignores the iPad's Silent/Mute switch, so
-    // select SEs, BGM, previews, and gameplay keysounds are always audible.
-    // The previous Ambient category (like SoloAmbient) is muted whenever the
-    // device's ringer/side switch or Control Center mute is on, which the select
-    // screen's sounds (and the looping BGM) depend on.
-    contextConfig.coreaudio.sessionCategory = ma_ios_session_category_playback;
+    // AVAudioSessionCategoryAmbient: the app's audio (select SEs/BGM, previews,
+    // gameplay keysounds) is silenced when the iPad's Silent/Mute switch is on,
+    // and does not play in the background. The select-audio bugs were fixed at
+    // the mixer (Bus::System plays while the gameplay clock is stopped) and the
+    // preview default path, not by the session category; keep Ambient so the
+    // app respects the ringer switch and background policy.
+    contextConfig.coreaudio.sessionCategory = ma_ios_session_category_ambient;
     contextConfig.coreaudio.sessionCategoryOptions =
         ma_ios_session_category_option_mix_with_others;
     const ma_result result =
