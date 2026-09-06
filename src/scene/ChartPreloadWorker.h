@@ -5,6 +5,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stop_token>
@@ -79,6 +80,10 @@ private:
   // cancel() stops the worker without joining, so a later request() must be
   // able to respawn the finished thread rather than treating it as live.
   std::atomic_bool threadFinished_{false};
+  // The cancellation flag for the in-flight processor() call, so cancel() and a
+  // superseding request() can abort a long, non-cooperative load (e.g. a
+  // jukebox chart load) instead of blocking until it completes.
+  std::shared_ptr<std::atomic_bool> inFlightCancellation_;
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::optional<ChartMetaRecord> pending_;

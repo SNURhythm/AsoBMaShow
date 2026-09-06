@@ -18,6 +18,13 @@ void ChartPreloadWorker::request(const ChartMetaRecord &record) {
         *inFlightPath_ == fspath_to_path_t(record.meta.BmsPath)) {
       return;  // this exact chart is already being processed
     }
+    // A request that supersedes a different in-flight chart must abort that
+    // load promptly (it may be a long jukebox chart load that only checks its
+    // cancellation flag between phases), so the new selection is served
+    // without blocking on the old one.
+    if (inFlightCancellation_) {
+      inFlightCancellation_->store(true, std::memory_order_release);
+    }
     // A request may arrive after cancel() left stop_ set (the worker thread
     // cooperatively stopping without a join). Re-enable the worker so the new
     // request is processed, and let ensureWorker() respawn the thread if it
@@ -34,6 +41,9 @@ void ChartPreloadWorker::cancel() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     stop_.store(true, std::memory_order_release);
+    if (inFlightCancellation_) {
+      inFlightCancellation_->store(true, std::memory_order_release);
+    }
     pending_.reset();
     inFlightPath_.reset();
   }
@@ -118,14 +128,18 @@ void ChartPreloadWorker::workerLoop(std::stop_token stop) {
       request = std::move(*pending_);
       pending_.reset();
       inFlightPath_ = fspath_to_path_t(request.meta.BmsPath);
+      inFlightCancellation_ = std::make_shared<std::atomic_bool>(false);
     }
-    std::atomic_bool cancelled = false;
+    std::shared_ptr<std::atomic_bool> cancellation = inFlightCancellation_;
     if (processor_) {
-      processor_(request, cancelled);
+      processor_(request, *cancellation);
     }
     {
       std::lock_guard<std::mutex> lock(mutex_);
       inFlightPath_.reset();
+      if (inFlightCancellation_ == cancellation) {
+        inFlightCancellation_.reset();
+      }
     }
     if (onIdle_) {
       onIdle_();

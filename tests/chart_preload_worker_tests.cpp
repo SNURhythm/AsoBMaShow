@@ -174,6 +174,59 @@ void testStopJoinsAndIdleFires() {
   worker.stop();
   expect(true, "stop joins the worker cleanly");
 }
+
+// A processor that models a long, cancellation-checking load (like a jukebox
+// chart load): it loops until its cancellation flag is set, so a superseding
+// request must be able to abort it promptly.
+struct CancellableProcessor {
+  std::mutex mutex;
+  std::condition_variable cv;
+  std::vector<std::string> started;
+  std::atomic<int> completed{0};
+
+  ChartPreloadWorker::Processor make(ChartPreloadWorker &worker) {
+    return [this, &worker](const ChartMetaRecord &record,
+                           std::atomic_bool &cancelled) {
+      {
+        std::lock_guard<std::mutex> lock(mutex);
+        started.push_back(record.meta.Title);
+      }
+      cv.notify_all();
+      while (!cancelled.load(std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+      completed.fetch_add(1, std::memory_order_relaxed);
+      cv.notify_all();
+    };
+  }
+
+  void waitStarted(std::size_t count) {
+    std::unique_lock<std::mutex> lock(mutex);
+    cv.wait(lock, [&] { return started.size() >= count; });
+  }
+
+  void waitCompleted(std::size_t count) {
+    std::unique_lock<std::mutex> lock(mutex);
+    cv.wait(lock, [&] { return completed.load() >= static_cast<int>(count); });
+  }
+};
+
+void testSupersedingRequestAbortsInFlightLoadPromptly() {
+  ChartPreloadWorker worker(std::chrono::milliseconds(20));
+  CancellableProcessor recorder;
+  worker.configure(recorder.make(worker));
+
+  // A starts a long load that only checks its cancellation flag.
+  worker.request(makeRecord("A"));
+  recorder.waitStarted(1);
+  // Changing selection to B must abort A's in-flight load promptly instead of
+  // blocking until A would have completed on its own.
+  worker.request(makeRecord("B"));
+  recorder.waitCompleted(1);  // A's load observes cancellation and returns
+  recorder.waitStarted(2);     // B then starts
+  worker.stop();
+  expect(true, "a superseding request aborts the in-flight load");
+}
 }  // namespace
 
 int main() {
@@ -182,6 +235,7 @@ int main() {
   testCancelWithoutJoinStopsWorker();
   testRequestAfterCancelProcessesNewItem();
   testStopJoinsAndIdleFires();
+  testSupersedingRequestAbortsInFlightLoadPromptly();
   if (failures != 0) {
     std::cerr << failures << " failures\n";
     return 1;
