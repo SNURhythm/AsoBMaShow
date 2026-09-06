@@ -159,6 +159,25 @@ bool hasTextDocumentExtension(const std::filesystem::path &path) {
   return filename.ends_with(".txt");
 }
 
+// Mirrors beatoraja's SQLiteSongDatabaseAccessor.isPreviewFile(): a file whose
+// lowercased name starts with "preview" and ends in a supported audio
+// extension is the folder's fallback preview when a chart has no #PREVIEW.
+bool isPreviewAudioFile(const std::filesystem::path &path) {
+  std::string filename = fspath_to_utf8(path.filename());
+  if (filename.size() < 8) {
+    return false;
+  }
+  for (char &character : filename) {
+    character = static_cast<char>(
+        std::tolower(static_cast<unsigned char>(character)));
+  }
+  if (!filename.starts_with("preview")) {
+    return false;
+  }
+  return filename.ends_with(".wav") || filename.ends_with(".ogg") ||
+         filename.ends_with(".mp3") || filename.ends_with(".flac");
+}
+
 bool folderContainsTextDocument(const std::filesystem::path &folder) {
   // SQLiteSongDatabaseAccessor.BMSFolder.addFile() sets SongData's
   // CONTENT_TEXT flag from any immediate, non-directory child whose
@@ -188,6 +207,9 @@ struct ArchiveScanResult {
   std::uint64_t uncompressedSize = 0;
   std::vector<std::filesystem::path> chartPaths;
   std::unordered_set<path_t> documentedChartPaths;
+  // Inner-folder path -> preview filename (first preview* audio file seen in
+  // that folder), mirroring beatoraja's per-folder preview fallback.
+  std::unordered_map<path_t, path_t> folderPreviews;
 };
 
 ArchiveScanResult
@@ -239,6 +261,12 @@ scanArchiveForChartsOrSolid(const std::filesystem::path &archivePath,
     if (hasTextDocumentExtension(entry.path)) {
       documentedFolders.insert(
           fspath_to_path_t(entry.path.parent_path().lexically_normal()));
+    }
+    if (isPreviewAudioFile(entry.path)) {
+      const path_t innerFolder =
+          fspath_to_path_t(entry.path.parent_path().lexically_normal());
+      result.folderPreviews.emplace(innerFolder,
+                                    fspath_to_path_t(entry.path.filename()));
     }
     if (result.solid ||
         !asobmshow::bms_chart_file::isBmsChartPath(entry.path)) {
@@ -583,6 +611,13 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::unordered_map<path_t, int> knownArchiveChartCounts;
   std::unordered_map<path_t, int> storedArchiveChartCounts;
   std::unordered_set<path_t> scannedArchivePaths;
+  // Folder path (ordinary filesystem folder or archive inner folder) -> preview
+  // filename, mirroring beatoraja's per-folder preview fallback: the first
+  // preview* audio file in a folder is used for any chart there lacking
+  // #PREVIEW. Populated during folder traversal and archive scans; applied when
+  // a chart is inserted (new/refreshed charts; legacy rows without #PREVIEW
+  // stay empty until the user refreshes them).
+  std::unordered_map<path_t, path_t> folderPreviews;
   diffs.reserve(storedChartIdentities.size());
   documentFlagUpdates.reserve(storedChartIdentities.size());
   sourcePreferenceRefreshPaths.reserve(storedChartIdentities.size());
@@ -1599,6 +1634,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         continue;
       }
       const std::filesystem::path path = iterator->path();
+      if (isPreviewAudioFile(path)) {
+        const path_t folder =
+            fspath_to_path_t(path.parent_path().lexically_normal());
+        folderPreviews.emplace(folder, fspath_to_path_t(path.filename()));
+      }
       if (asobmshow::bms_chart_file::isBmsChartPath(path)) {
         if (const auto folder = folderScanNodes.find(
                 path.parent_path().lexically_normal());
@@ -1722,6 +1762,15 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .path = prepared.path,
         .solid = false,
     });
+    // Merge the archive's per-inner-folder preview fallbacks into the global
+    // map, keyed by the virtual folder path (archive path + inner folder) so
+    // parseChartMeta's meta.Folder lookup matches.
+    for (const auto &[innerFolder, preview] : archiveScan.folderPreviews) {
+      folderPreviews.emplace(
+          fspath_to_path_t(archive_file::makeVirtualPath(
+              prepared.path, std::filesystem::path(innerFolder))),
+          preview);
+    }
     if (archiveScan.chartPaths.empty()) {
       archiveCacheDiffs.push_back(cacheDiff);
     } else {
@@ -2264,6 +2313,18 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto insertIndividualChartMeta = [&](ParsedChartMetadata &parsed,
                                        bool hasDocument) -> bool {
+    // Beatoraja preview fallback: a chart without #PREVIEW uses the first
+    // preview* audio file in its folder (SQLiteSongDatabaseAccessor
+    // isPreviewFile). Only newly-parsed/refreshed charts get this; legacy rows
+    // without a #PREVIEW stay empty until the user refreshes them.
+    if (parsed.meta.Preview.empty()) {
+      const path_t folderKey =
+          fspath_to_path_t(parsed.meta.Folder.lexically_normal());
+      if (const auto found = folderPreviews.find(folderKey);
+          found != folderPreviews.end()) {
+        parsed.meta.Preview = found->second;
+      }
+    }
     if (!recordStorageResult(
             scanBatch->UpsertChart(parsed.meta, std::nullopt, hasDocument,
                                    parsed.sequenceFeatures))) {
@@ -2976,6 +3037,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           const bool hasDocument =
               parsedInBatch < batch.hasDocument.size() &&
               batch.hasDocument[parsedInBatch];
+          if (parsed.meta->meta.Preview.empty()) {
+            const path_t folderKey = fspath_to_path_t(
+                parsed.meta->meta.Folder.lexically_normal());
+            if (const auto found = folderPreviews.find(folderKey);
+                found != folderPreviews.end()) {
+              parsed.meta->meta.Preview = found->second;
+            }
+          }
           if (recordStorageResult(scanBatch->UpsertChart(
                   parsed.meta->meta, storedArchiveSourcePreference,
                   hasDocument, parsed.meta->sequenceFeatures))) {

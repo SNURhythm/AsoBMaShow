@@ -412,6 +412,67 @@ void testSequenceFeaturesMatchBeatorajaSongData() {
   assert(!records.records.back().hasBga);
 }
 
+void testFolderPreviewFallbackMatchesBeatorajaPerFolderScan() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto chartFolder = root / "songs";
+  std::filesystem::create_directories(chartFolder);
+  // No #PREVIEW header; the folder has a preview.ogg so beatoraja's fallback
+  // should assign it.
+  const auto chartPath = writeChart(chartFolder, "nopreview", "No Preview");
+  std::filesystem::remove(chartFolder / "sample.wav");
+  {
+    std::ofstream preview(chartFolder / "preview.ogg", std::ios::binary);
+  }
+  // A chart that declares #PREVIEW must keep its authored value.
+  const auto authoredPath = chartFolder / "authored.bms";
+  {
+    std::ofstream chart(authoredPath);
+    chart << "#PLAYER 1\n"
+          << "#TITLE Authored\n"
+          << "#PREVIEW custom.wav\n"
+          << "#WAV01 sample.wav\n"
+          << "#00111:01\n";
+  }
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {root}) == 2);
+
+  const std::array<std::filesystem::path, 2> paths{chartPath, authoredPath};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(records.records.size() == 2);
+  assert(fspath_to_utf8(records.records[0].meta.Preview) == "preview.ogg");
+  assert(fspath_to_utf8(records.records[1].meta.Preview) == "custom.wav");
+}
+
+void testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan() {
+  TempDirectory temporary;
+  const auto archive = writeZip(
+      temporary.path() / "preview.zip",
+      {{"songs/nopreview.bms", chartText("Archive No Preview")},
+       {"songs/preview.ogg", "fake-ogg"}});
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  (void)scanner.Scan(*session, {archive});
+
+  const auto snapshot = session->LoadScanSnapshot();
+  assert(snapshot.charts.size() == 1);
+  const std::array<std::filesystem::path, 1> paths{snapshot.charts[0].BmsPath};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(records.records.size() == 1);
+  assert(fspath_to_utf8(records.records[0].meta.Preview) == "preview.ogg");
+}
+
 void testFolderRecordsMatchBeatorajaFolderTraversal() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2331,6 +2392,8 @@ void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
 int main() {
   testBasicNoOpAndDeleteScan();
   testSequenceFeaturesMatchBeatorajaSongData();
+  testFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
+  testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testFolderRecordsMatchBeatorajaFolderTraversal();
   testFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope();
