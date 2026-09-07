@@ -62,6 +62,7 @@ struct ChartMetaQuery {
   std::optional<std::string> difficultyMaxLevel;
   std::optional<std::filesystem::path> exactFolder;
   std::optional<std::filesystem::path> parentFolder;
+  std::optional<std::filesystem::path> recursiveFolder;
   bool rawSongData = false;
   ChartRecordSortCriterion sortCriterion = ChartRecordSortCriterion::Default;
   ChartRecordSortDirection sortDirection =

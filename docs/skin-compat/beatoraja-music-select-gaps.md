@@ -10,6 +10,26 @@ new `MusicSelectScene`, as designed in
 
 Last updated: 2026-09-08.
 
+## Intentional mixed-folder divergence (2026-09-08)
+
+At the user's request, physical folders that have `song.parent` matches now
+show a flat list of all charts beneath that directory, including direct files
+and deeper descendants. No subfolder rows are appended to that song list.
+Folders without those immediate song entries keep Beatoraja's subfolder
+navigation. Table, search, command, and same-folder lists are unchanged.
+
+Lazy child loading and background folder status use the same scoped recursive
+query after a one-row parent-match probe. The eager projection uses the same
+membership rule. Lamps, ranks, and totals therefore cover the flattened chart
+set, retaining raw source counts before SongBar hash deduplication. Recursive
+queries use folder-index ranges, preserve path boundaries, and support archive
+paths, Windows separators, and missing-folder metadata.
+
+This explicitly overrides the upstream parent-only membership described in
+the historical audit below. Regression coverage includes mixed and category-only
+folders, direct/deep charts, duplicate hashes, lazy-to-eager projection, folder
+properties, and SQLite query plans.
+
 ## Folder-status audit (2026-09-08)
 
 The folder audit found runtime omissions despite the ledger's existing

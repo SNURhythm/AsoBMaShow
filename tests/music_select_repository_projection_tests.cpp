@@ -117,11 +117,11 @@ void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
           "three source command roots");
   const auto *root = projection.find(projection.root.front());
   require(root && root->directoryPath == "/songs" &&
-              root->children.size() == 1 &&
-              child(projection, root, 0)->title == "Child" &&
+              root->children.size() == 2 &&
+              child(projection, root, 0)->title == "Root" &&
+              child(projection, root, 1)->title == "Child" &&
               root->presentation.addDateSeconds == 1'700'001'111,
-          "a physical folder with song.parent matches returns only those songs "
-          "like FolderBar.getChildren and uses FolderData.adddate");
+          "mixed physical folders flatten charts and retain FolderData.adddate");
 }
 
 void testProjectsPersistedEmptyFolderBars() {
@@ -243,7 +243,7 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
   const auto *lampUpdate = projection.find(projection.root[3]);
   const auto *scoreUpdate = projection.find(projection.root[4]);
   require(physical && physical->kind == skin::MusicSelectBarKind::Folder &&
-              physical->title == "songs" && physical->children.size() == 2,
+              physical->title == "songs" && physical->children.size() == 3,
           "configured chart entry becomes the physical root");
   require(courses && courses->kind == skin::MusicSelectBarKind::Table &&
               courses->title == "COURSE" && courses->children.empty(),
@@ -256,17 +256,18 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
           "and URL");
 
   const auto *folder = physical;
-  require(folder && folder->title == "songs" && folder->children.size() == 2,
-          "FolderBar returns songs from child song folders before directories");
-  const auto *second = child(projection, folder, 0);
-  const auto *first = child(projection, folder, 1);
+  require(folder && folder->title == "songs" && folder->children.size() == 3 &&
+              child(projection, folder, 0)->title == "Nested",
+          "mixed FolderBar includes nested charts in the flat song list");
+  const auto *second = child(projection, folder, 1);
+  const auto *first = child(projection, folder, 2);
   require(second && first && second->title == "Second" &&
               first->title == "First",
           "physical SongBars deduplicate first SHA occurrence and reverse "
           "order without appending nested folders");
-  require(folder && folder->presentation.folderLampCounts[0] == 1 &&
+  require(folder && folder->presentation.folderLampCounts[0] == 2 &&
               folder->presentation.folderLampCounts[7] == 2 &&
-              folder->presentation.folderRankCounts[0] == 1 &&
+              folder->presentation.folderRankCounts[0] == 2 &&
               folder->presentation.folderRankCounts[22] == 2 &&
               folder->presentation.lamp == 0,
           "DirectoryBar status counts source rows before SongBar deduplication");
@@ -453,7 +454,7 @@ void testRootProjectionDefersDirectoryContents() {
           "trailing root separators do not create a self-referencing hierarchy");
 }
 
-void testFolderStatusUsesSongParentNotFolderOrRecursiveDescendants() {
+void testMixedFolderFlattensDescendantsAndStatus() {
   MusicSelectRepositoryMetadata metadata;
   metadata.entries.push_back({.path = utf8_to_path_t("/pack")});
   std::vector<ChartMetaRecord> records{
@@ -464,14 +465,36 @@ void testFolderStatusUsesSongParentNotFolderOrRecursiveDescendants() {
   const auto projection = MusicSelectRepositoryProjection{}.project(
       {.records = records, .metadata = &metadata});
   const auto *folder = projection.find({"folder:/pack"});
-  require(folder && folder->presentation.folderLampCounts[0] == 2 &&
-              folder->presentation.folderRankCounts[0] == 2,
-          "FolderBar status counts raw song.parent matches, not direct files "
-          "or recursive descendants");
-  require(folder && folder->children.size() == 1 &&
-              child(projection, folder, 0)->title == "Song",
-          "FolderBar children use the same parent query, then SongBar hash "
-          "deduplication rather than counting visible rows");
+  require(folder && folder->presentation.folderLampCounts[0] == 4 &&
+              folder->presentation.folderRankCounts[0] == 4,
+          "mixed folder status includes direct files and recursive descendants");
+  require(folder && folder->children.size() == 3 &&
+              child(projection, folder, 0)->title == "Deep" &&
+              child(projection, folder, 1)->title == "Song" &&
+              child(projection, folder, 2)->title == "Direct",
+          "mixed folders flatten descendants with SongBar deduplication");
+  require(std::ranges::all_of(folder->children, [&](const auto &id) {
+            return projection.find(id)->kind == skin::MusicSelectBarKind::Song;
+          }), "flattened lists never introduce subfolder rows");
+}
+
+void testCategoryOnlyFolderKeepsSubfolderNavigation() {
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = utf8_to_path_t("/pack")});
+  const std::vector<ChartMetaRecord> records{
+      chart("/pack/category/song/chart.bms", "song", "Song", "",
+            "/pack/category/song")};
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = records, .metadata = &metadata});
+  const auto *root = projection.find({"folder:/pack"});
+  const auto *category = child(projection, root, 0);
+  require(root && root->children.size() == 1 && category &&
+              category->kind == skin::MusicSelectBarKind::Folder &&
+              category->directoryPath == "/pack/category" &&
+              category->children.size() == 1 &&
+              child(projection, category, 0)->title == "Song" &&
+              root->presentation.folderLampCounts == std::array<int, 11>{},
+          "folders without immediate song entries retain Beatoraja navigation");
 }
 
 void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
@@ -530,7 +553,8 @@ void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
 
 int main(int argc, char **argv) {
   testFolderStatusReplacesCountsAndFiltersOnlyMode();
-  testFolderStatusUsesSongParentNotFolderOrRecursiveDescendants();
+  testMixedFolderFlattensDescendantsAndStatus();
+  testCategoryOnlyFolderKeepsSubfolderNavigation();
   testProjectsFoldersSongsScoresAndSourceFlags();
   testOverlappingConfiguredRootsFormOnePhysicalHierarchy();
   testProjectsPersistedEmptyFolderBars();

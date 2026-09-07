@@ -546,6 +546,7 @@ bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
          chartQuery.exactFolder.has_value() ||
          chartQuery.parentFolder.has_value() ||
+         chartQuery.recursiveFolder.has_value() ||
          chartMetaQueryHasBpmFilter(chartQuery) ||
          chartMetaQueryHasScoreFilter(chartQuery) ||
          chartMetaQueryNeedsBestScore(chartQuery);
@@ -556,6 +557,7 @@ bool chartMetaQueryNeedsChartJoinForCourseEntries(
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
          chartQuery.exactFolder.has_value() ||
          chartQuery.parentFolder.has_value() ||
+         chartQuery.recursiveFolder.has_value() ||
          chartMetaQueryHasBpmFilter(chartQuery) ||
          chartMetaQueryHasScoreFilter(chartQuery) ||
          chartMetaQueryNeedsBestScore(chartQuery);
@@ -563,6 +565,23 @@ bool chartMetaQueryNeedsChartJoinForCourseEntries(
 
 void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
                              const ChartMetaQuery &chartQuery) {
+  if (chartQuery.recursiveFolder.has_value()) {
+    const std::string folder = chartAlias + ".folder";
+    const std::string windowsRoot = "replace(@recursive_folder, '/', '\\')";
+    const std::string prefix = "(@recursive_folder || '/')";
+    const std::string pathMatches =
+        "substr(replace(" + chartAlias + ".path, '\\', '/'), 1, length(" +
+        prefix + ")) = " + prefix;
+    query += " AND (" + folder +
+             " = @recursive_folder AND @recursive_folder <> '' OR (" + folder +
+             " >= " + prefix + " AND " + folder +
+             " < (@recursive_folder || '0')) OR " + folder + " = " +
+             windowsRoot + " AND @recursive_folder <> '' OR (" + folder +
+             " >= (" + windowsRoot +
+             " || '\\') AND " + folder + " < (" + windowsRoot +
+             " || ']')) OR (" + folder + " = '' AND " + pathMatches +
+             ") OR (" + folder + " IS NULL AND " + pathMatches + "))";
+  }
   if (chartQuery.parentFolder.has_value()) {
     const std::string folder = chartAlias + ".folder";
     const std::string prefix = "(@parent_folder || '/')";
@@ -604,6 +623,13 @@ void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
 
 void bindExactFolderFilter(sqlite3_stmt *stmt, int &bindIndex,
                            const ChartMetaQuery &chartQuery) {
+  if (chartQuery.recursiveFolder.has_value()) {
+    auto root = chart_storage_identity::StoredFolderPathText(
+        *chartQuery.recursiveFolder);
+    std::ranges::replace(root, '\\', '/');
+    while (!root.empty() && root.back() == '/') root.pop_back();
+    bindSqliteText(stmt, bindIndex++, root);
+  }
   if (chartQuery.parentFolder.has_value()) {
     auto parent =
         chart_storage_identity::StoredFolderPathText(*chartQuery.parentFolder);

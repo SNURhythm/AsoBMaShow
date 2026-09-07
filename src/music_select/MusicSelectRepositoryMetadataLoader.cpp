@@ -15,6 +15,7 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   switch (directory.kind) {
   case skin::MusicSelectBarKind::Folder:
     query.parentFolder = directory.directoryPath;
+    query.limit = 1;
     break;
   case skin::MusicSelectBarKind::Hash:
     query.tableId = directory.tableId;
@@ -59,6 +60,13 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   }
   std::vector<ChartMetaRecord> records;
   session.QueryChartMeta(query, records);
+  if (directory.kind == skin::MusicSelectBarKind::Folder && !records.empty()) {
+    query.parentFolder.reset();
+    query.recursiveFolder = directory.directoryPath;
+    query.limit = 0;
+    records.clear();
+    session.QueryChartMeta(query, records);
+  }
   return records;
 }
 

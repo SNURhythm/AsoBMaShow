@@ -1132,11 +1132,24 @@ void testExactFolderQuery() {
   assert(bars.select(folder.id));
   const auto after = bars.snapshot();
   assert(!after.rows[after.selectedIndex].childrenLoaded);
-  assert(after.rows[after.selectedIndex].presentation.folderRankCounts[0] == 6);
+  assert(after.rows[after.selectedIndex].presentation.folderRankCounts[0] == 8);
   const auto values = projectMusicSelectProperties(AppSettings{}, after, {});
-  assert(values.integers.at(300) == 6);
-  assert(values.integers.at(320) == 6);
+  assert(values.integers.at(300) == 8);
+  assert(values.integers.at(320) == 8);
   assert(values.integers.at(326) == 0);
+  const auto flattened = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, folder, 1);
+  assert(flattened.size() == 8);
+  assert(std::ranges::any_of(flattened, [](const auto &record) {
+    return record.meta.BmsPath == "library/A/nested/three.bms";
+  }));
+  const auto flatProjection = MusicSelectRepositoryProjection{}.project(
+      {.records = flattened, .metadata = &metadata});
+  const auto *flatFolder = flatProjection.find(folder.id);
+  assert(flatFolder && flatFolder->children.size() == 8);
+  assert(std::ranges::all_of(flatFolder->children, [&](const auto &id) {
+    return flatProjection.find(id)->kind == skin::MusicSelectBarKind::Song;
+  }));
 
   query.parentFolder = std::filesystem::path("packs/pack.zip/");
   parentPaths = queryPaths(query);
@@ -1149,6 +1162,25 @@ void testExactFolderQuery() {
   assert(queryPaths(query) == std::vector<std::string>({
       R"(C:\library\A\nested\deep.bms)",
       R"(C:\library\A\nested\stored.bms)"}));
+
+  query = {};
+  query.recursiveFolder = std::filesystem::path("library/A/");
+  assert(queryPaths(query).size() == 5);
+  assert(session->CountChartMeta(query) == 5);
+  assert(session->FindChartMetaIndex(query, "library/B/four.bms") == -1);
+  query.recursiveFolder = std::filesystem::path("library/A/nest");
+  assert(queryPaths(query).empty());
+  query.recursiveFolder = std::filesystem::path("packs/pack.zip/");
+  assert(queryPaths(query).size() == 4);
+  query.recursiveFolder = std::filesystem::path(R"(C:\library\A)");
+  assert(queryPaths(query).size() == 3);
+  query.recursiveFolder = std::filesystem::path("/");
+  assert(queryPaths(query).empty());
+
+  const auto categoryRecords = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, {.kind = skin::MusicSelectBarKind::Folder,
+                 .directoryPath = "packs"}, 1);
+  assert(categoryRecords.empty());
 
   assert(!traced("chart_normalize_stored_folder(cm.folder)"));
   assert(traced("cm.folder = @exact_folder"));
@@ -1169,6 +1201,13 @@ void testExactFolderQuery() {
   const auto parentPlan = repository_test::explainPlan(database.get(), parentCountSql);
   assert(repository_test::planContains(parentPlan, "idx_chart_meta_folder"));
   assert(!repository_test::planContains(parentPlan, "SCAN cm"));
+  const auto recursiveCountSql = tracedStatementContaining(
+      "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1 AND (cm.folder = "
+      "@recursive_folder");
+  assert(!recursiveCountSql.empty());
+  const auto recursivePlan = repository_test::explainPlan(database.get(), recursiveCountSql);
+  assert(repository_test::planContains(recursivePlan, "idx_chart_meta_folder"));
+  assert(!repository_test::planContains(recursivePlan, "SCAN cm"));
 }
 
 void testChartMigrationCompatibilityMatrix() {

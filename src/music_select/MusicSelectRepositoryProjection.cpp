@@ -530,10 +530,14 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
         .sortable = true,
     };
     if (!node.records.empty()) {
-      folder.children = builder.addPhysicalSongs(node.records, folder.id.value);
+      std::vector<const ChartMetaRecord *> descendants;
       std::vector<ChartMetaRecord> values;
-      values.reserve(node.records.size());
-      for (const auto *record : node.records) values.push_back(*record);
+      for (const auto &record : input.records) {
+        if (!pathAtOrInside(physicalFolder(record), node.path)) continue;
+        descendants.push_back(&record);
+        values.push_back(record);
+      }
+      folder.children = builder.addPhysicalSongs(descendants, folder.id.value);
       builder.aggregate(folder, values);
     } else {
       for (const auto &child : node.children) {

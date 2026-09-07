@@ -1426,8 +1426,11 @@ bool MusicSelectScene::loadDirectoryChildren(
     const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
         *chartSession_, directory, selectedLongNoteMode);
     if (!records.empty()) {
+      MusicSelectRepositoryMetadata metadata;
+      metadata.entries.push_back(
+          {.path = fspath_to_path_t(directory.directoryPath)});
       const auto projection =
-          MusicSelectRepositoryProjection{}.project(inputFor(records));
+          MusicSelectRepositoryProjection{}.project(inputFor(records, &metadata));
       children = projectionChildren(projection, directory.id);
       break;
     }
