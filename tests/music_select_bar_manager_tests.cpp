@@ -1,4 +1,7 @@
 #include "music_select/MusicSelectBarManager.h"
+#include "music_select/MusicSelectFolderStatusLoader.h"
+
+#include <future>
 
 #include "music_select_runtime_ledger_assertions.h"
 
@@ -476,7 +479,66 @@ void testSourceSortingKeepsDifficultyTableFolderOrder() {
 
 } // namespace
 
+void testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads() {
+  MusicSelectProjection projection;
+  projection.root = {{"folder:root"}};
+  projection.bars = {{.id = {"folder:root"},
+                     .kind = skin::MusicSelectBarKind::Folder,
+                     .title = "Root",
+                     .presentation = {.kind = skin::MusicSelectBarKind::Folder,
+                                      .title = "Root"},
+                     .selectable = true,
+                     .childrenLoaded = false}};
+  MusicSelectBarManager manager(projection);
+  MusicSelectFolderStatusLoader loader;
+  std::promise<void> started;
+  std::promise<void> release;
+  auto released = release.get_future().share();
+  loader.request(projection.bars, "ALL", 1, [&](const MusicSelectBar &bar) {
+    started.set_value();
+    released.wait();
+    auto frame = bar.presentation;
+    frame.folderLampCounts[1] = 99;
+    return frame;
+  });
+  require(started.get_future().wait_for(std::chrono::seconds(5)) ==
+              std::future_status::ready,
+          "status loading runs off the caller thread");
+  require(!loader.request(projection.bars, "ALL", 1, {}),
+          "selection movement does not restart the same directory status load");
+  const bool changedLn = loader.request(projection.bars, "ALL", 2,
+                                        [](const MusicSelectBar &bar) {
+    auto frame = bar.presentation;
+    frame.folderLampCounts[6] = 3;
+    frame.folderRankCounts[24] = 3;
+    frame.lamp = 6;
+    return frame;
+  });
+  require(changedLn, "LN changes supersede status even with identical rows and mode");
+  release.set_value();
+  std::vector<MusicSelectFolderStatusLoader::Result> results;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (results.empty() && std::chrono::steady_clock::now() < deadline) {
+    results = loader.takeResults();
+    std::this_thread::yield();
+  }
+  require(results.size() == 1 && results.front().frame.folderLampCounts[1] == 0,
+          "a newer status request discards the previous in-flight result");
+  for (const auto &result : results) {
+    manager.installFolderStatus(result.id, result.frame);
+  }
+  const auto snapshot = manager.snapshot();
+  require(snapshot.rows.front().presentation.folderLampCounts[6] == 3 &&
+              snapshot.rows.front().presentation.folderRankCounts[24] == 3 &&
+              snapshot.rows.front().presentation.lamp == 6 &&
+              snapshot.rows.front().title == "Root" &&
+              !snapshot.rows.front().childrenLoaded && snapshot.directory.empty(),
+          "background folder status updates the live unopened row without "
+          "loading children or changing navigation");
+}
+
 int main(int argc, char **argv) {
+  testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads();
   testWrapOpenCloseAndPositionSemantics();
   testClickedDirectoryOpensWithoutMovingTheCenterSelection();
   testBarClassPredicatesDoNotDependOnChildren();

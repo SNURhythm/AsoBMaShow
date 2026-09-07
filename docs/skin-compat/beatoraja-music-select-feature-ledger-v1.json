@@ -6002,7 +6002,7 @@
     {
       "id": "select.bar-behavior.folder-bar.get-children-0",
       "status": "implemented",
-      "implementation": "src/music_select/MusicSelectRepositoryProjection.cpp;src/music_select/MusicSelectTypes.h",
+      "implementation": "src/music_select/MusicSelectRepositoryProjection.cpp;src/music_select/MusicSelectRepositoryMetadataLoader.cpp;src/repositories/ChartRepositoryQueries.cpp;src/music_select/MusicSelectTypes.h",
       "tests": "tests/music_select_repository_projection_tests.cpp",
       "assertion": {
         "runner": "music_select_repository_projection_tests"
@@ -6038,7 +6038,7 @@
     {
       "id": "select.bar-behavior.folder-bar.update-folder-status-0",
       "status": "implemented",
-      "implementation": "src/music_select/MusicSelectRepositoryProjection.cpp;src/music_select/MusicSelectTypes.h",
+      "implementation": "src/music_select/MusicSelectRepositoryProjection.cpp;src/music_select/MusicSelectRepositoryMetadataLoader.cpp;src/music_select/MusicSelectFolderStatusLoader.cpp;src/music_select/MusicSelectBarManager.cpp;src/scene/MusicSelectScene.cpp",
       "tests": "tests/music_select_repository_projection_tests.cpp",
       "assertion": {
         "runner": "music_select_repository_projection_tests"

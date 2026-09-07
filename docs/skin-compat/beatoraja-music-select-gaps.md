@@ -8,7 +8,49 @@ Scope: `SkinType.MUSIC_SELECT` (type 5) `.luaskin` support routed through the
 new `MusicSelectScene`, as designed in
 `docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md`.
 
-Last updated: 2026-09-05.
+Last updated: 2026-09-08.
+
+## Folder-status audit (2026-09-08)
+
+The folder audit found runtime omissions despite the ledger's existing
+`implemented` classifications. The lazy root/child descriptors never received
+the status calculated by the eager projection. The earlier reverted full-library
+query also interpreted Beatoraja's song `parent` as its `folder`.
+
+The select path now loads status for displayed Folder, Hash, SearchWord, and
+Command bars independently of opening their children. A latest-request-wins
+worker publishes by bar ID; navigation, library/profile reloads, mode changes,
+and LN changes invalidate outdated results. Loading children stays lazy and
+does not require a synchronous full-library metadata query. Command queries
+hydrate only their matching chart paths, preserving visibility and feature
+metadata; command rows deduplicate hashes while status counts raw source rows.
+
+Source contracts checked directly in the pinned checkout:
+
+- `BarManager.BarContentsLoader`: update status for displayed directories.
+- `FolderBar` plus `SQLiteSongDatabaseAccessor`: match the chart's grandparent
+  (`song.parent`), not direct files or arbitrary recursive descendants. Scoped
+  queries support Windows separators and archive paths, and query-plan tests
+  require the folder index for both normal and missing-folder metadata.
+- `DirectoryBar`: count installed records before SongBar deduplication, filter
+  mode but not difficulty/visibility, reset counts on refresh, and use score
+  notes to calculate 28 rank buckets. Table, Container, and SameFolder keep
+  their inherited no-op status behavior.
+- `HashBar`: match the authored SHA when present, otherwise MD5, counting all
+  installed matching paths rather than table placeholders or preferred copies.
+- `IntegerPropertyPattern.FOLDER_CLEAR_COUNT`: admit named properties
+  `folder_noplay` through `folder_max`, including upstream's spelling
+  `folder_prefect`, as well as numeric IDs 320–330. Lua `main_state.number`
+  itself takes numeric IDs; names belong to skin property selectors.
+- `SkinDistributionGraph`: both standalone and song-list rank graphs divide
+  by the lamp total and draw nothing when that total is zero.
+
+Regression evidence lives in `chart_repository_tests` (real SQLite → lazy bar
+status → selected-folder properties), `music_select_repository_projection_tests`,
+`music_select_bar_manager_tests` (worker supersession/LN mode),
+`lua_music_select_skin_decoder_tests`, and `skin_draw_command_tests`.
+This focused audit does not certify the remainder of the type-5 surface; the
+older sensory inventory below remains a separate work list.
 
 ## Verdict
 

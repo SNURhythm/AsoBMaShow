@@ -6,6 +6,8 @@
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
 #include "RepositorySqliteTestSupport.h"
+#include "music_select/MusicSelectRepositoryProjection.h"
+#include "music_select/MusicSelectPropertyProjection.h"
 
 #include <array>
 #include <algorithm>
@@ -910,6 +912,58 @@ void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
   assert(libraryRows.size() == 1);
   assert(libraryRows.front().downloadUrl.empty());
   assert(libraryRows.front().appendDownloadUrl.empty());
+
+  auto copy = installed;
+  copy.Folder = temporary.path() / "copy";
+  copy.BmsPath = copy.Folder / "chart.bms";
+  assert(session->InsertChartMeta(copy));
+  const auto scoreFor = [](const bms_parser::ChartMeta &, int) {
+    return std::optional<ScoreBestSnapshot>{{.score = 600, .maxScore = 800,
+                                            .clearType = kClearTypeHardClearRank}};
+  };
+  RecentScoreImprovements improvements;
+  improvements.lamp[0].insert(std::string(installedSha));
+  for (const auto &directory : std::vector<MusicSelectBar>{
+           {.kind = skin::MusicSelectBarKind::Folder,
+            .directoryPath = temporary.path()},
+           {.kind = skin::MusicSelectBarKind::Hash,
+            .tableId = tables.front().id, .tableLevel = "1"},
+           {.id = {"search:Installed"}, .kind = skin::MusicSelectBarKind::SearchWord},
+           {.id = {"command:lamp-update:0"},
+            .kind = skin::MusicSelectBarKind::Command}}) {
+    const auto status = MusicSelectRepositoryProjection::loadFolderStatus(
+        *session, directory,
+        {.scoreFor = scoreFor, .recentScoreImprovements = &improvements});
+    assert(status.folderLampCounts[6] == 2);
+    assert(status.folderRankCounts[20] == 2);
+    assert(status.folderLampCounts[0] == 0);
+    assert(status.lamp == 6);
+  }
+  auto sameMd5 = installed;
+  sameMd5.Folder = temporary.path() / "different-sha";
+  sameMd5.BmsPath = sameMd5.Folder / "chart.bms";
+  sameMd5.SHA256 = std::string(64, 'c');
+  assert(session->InsertChartMeta(sameMd5));
+  const auto hashStatus = MusicSelectRepositoryProjection::loadFolderStatus(
+      *session, {.kind = skin::MusicSelectBarKind::Hash,
+                 .tableId = tables.front().id, .tableLevel = "1"},
+      {.scoreFor = scoreFor});
+  assert(hashStatus.folderLampCounts[6] == 2);
+  table.charts.front().sha256.clear();
+  assert(session->ReplaceDifficultyTable(table));
+  const auto md5Status = MusicSelectRepositoryProjection::loadFolderStatus(
+      *session, {.kind = skin::MusicSelectBarKind::Hash,
+                 .tableId = tables.front().id, .tableLevel = "1"},
+      {.scoreFor = scoreFor});
+  assert(md5Status.folderLampCounts[6] == 3);
+  assert(session->SetSongReviewFavorite(installedSha, 2));
+  const auto commandRecords = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, {.id = {"command:lamp-update:0"},
+                 .kind = skin::MusicSelectBarKind::Command}, 1, &improvements);
+  assert(commandRecords.size() == 2);
+  assert(std::ranges::all_of(commandRecords, [](const auto &record) {
+    return record.songReviewFavorite == 2;
+  }));
 }
 
 void testExactFolderQuery() {
@@ -950,13 +1004,17 @@ void testExactFolderQuery() {
         "('C:\\library\\A\\windows.bms','md5-windows','sha-windows',"
         "'Windows','','','','','',11,0,0),"
         "('C:\\library\\A\\nested\\deep.bms','md5-windows-nested',"
-        "'sha-windows-nested','Windows Nested','','','','','',12,0,0)"));
+        "'sha-windows-nested','Windows Nested','','','','','',12,0,0),"
+        "('C:\\library\\A\\nested\\stored.bms','md5-windows-stored',"
+        "'sha-windows-stored','Windows Stored','','','','',"
+        "'C:\\library\\A\\nested',13,0,0)"));
   }
 
   auto session = charts.OpenSession();
   assert(session.has_value());
   const auto folders = session->SelectChartMetaFolders();
   assert(folders == std::vector<std::filesystem::path>({
+                        R"(C:\library\A\nested)",
                         "library/A", "library/A/nested", "library/B",
                         "packs/pack.zip/A", "packs/pack.zip/B"}));
   auto aliased = chartMeta("library/C/../C");
@@ -1050,6 +1108,48 @@ void testExactFolderQuery() {
                                    "library/C/trailing.bms"}));
   assert(session->CountChartMeta(query) == 2);
 
+  query = {};
+  query.parentFolder = std::filesystem::path("library");
+  auto parentPaths = queryPaths(query);
+  std::ranges::sort(parentPaths);
+  assert(parentPaths == std::vector<std::string>({
+      "library/A/no-folder.bms", "library/A/one.bms", "library/A/two.bms",
+      "library/B/four.bms", "library/C/aliased.bms", "library/C/trailing.bms"}));
+  assert(session->CountChartMeta(query) == 6);
+  assert(session->FindChartMetaIndex(query, "library/A/nested/three.bms") == -1);
+
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = fspath_to_path_t("library")});
+  MusicSelectBarManager bars(MusicSelectRepositoryProjection{}.projectRoot(
+      metadata, {}, 1));
+  const auto before = bars.snapshot();
+  const auto folder = *std::ranges::find(before.rows, MusicSelectBarId{"folder:library"},
+                                        &MusicSelectBar::id);
+  assert(!folder.childrenLoaded);
+  const auto status = MusicSelectRepositoryProjection::loadFolderStatus(
+      *session, folder, {});
+  bars.installFolderStatus(folder.id, status);
+  assert(bars.select(folder.id));
+  const auto after = bars.snapshot();
+  assert(!after.rows[after.selectedIndex].childrenLoaded);
+  assert(after.rows[after.selectedIndex].presentation.folderRankCounts[0] == 6);
+  const auto values = projectMusicSelectProperties(AppSettings{}, after, {});
+  assert(values.integers.at(300) == 6);
+  assert(values.integers.at(320) == 6);
+  assert(values.integers.at(326) == 0);
+
+  query.parentFolder = std::filesystem::path("packs/pack.zip/");
+  parentPaths = queryPaths(query);
+  std::ranges::sort(parentPaths);
+  assert(parentPaths == std::vector<std::string>({
+      "packs/pack.zip/A/five.bms", "packs/pack.zip/A/no-folder.bms",
+      "packs/pack.zip/A/six.bms", "packs/pack.zip/B/seven.bms"}));
+
+  query.parentFolder = std::filesystem::path(R"(C:\library\A)");
+  assert(queryPaths(query) == std::vector<std::string>({
+      R"(C:\library\A\nested\deep.bms)",
+      R"(C:\library\A\nested\stored.bms)"}));
+
   assert(!traced("chart_normalize_stored_folder(cm.folder)"));
   assert(traced("cm.folder = @exact_folder"));
 
@@ -1063,6 +1163,12 @@ void testExactFolderQuery() {
   assert(repository_test::planContains(plan, "MULTI-INDEX OR"));
   assert(repository_test::planContains(plan, "idx_chart_meta_folder"));
   assert(!repository_test::planContains(plan, "SCAN cm"));
+  const auto parentCountSql = tracedStatementContaining(
+      "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1 AND ((cm.folder >= ");
+  assert(!parentCountSql.empty());
+  const auto parentPlan = repository_test::explainPlan(database.get(), parentCountSql);
+  assert(repository_test::planContains(parentPlan, "idx_chart_meta_folder"));
+  assert(!repository_test::planContains(parentPlan, "SCAN cm"));
 }
 
 void testChartMigrationCompatibilityMatrix() {

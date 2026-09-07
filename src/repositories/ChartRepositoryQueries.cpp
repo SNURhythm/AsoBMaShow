@@ -511,7 +511,8 @@ bool chartMetaQueryHasCourseFilter(const ChartMetaQuery &chartQuery) {
 }
 
 bool chartMetaQueryUsesDifficultyEntries(const ChartMetaQuery &chartQuery) {
-  return chartQuery.tableId > 0 && !chartQuery.coursesOnly &&
+  return !chartQuery.rawSongData && chartQuery.tableId > 0 &&
+         !chartQuery.coursesOnly &&
          chartQuery.courseId <= 0 && chartQuery.courseTableId <= 0 &&
          chartQuery.courseGroupName.empty();
 }
@@ -544,6 +545,7 @@ bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
          chartQuery.exactFolder.has_value() ||
+         chartQuery.parentFolder.has_value() ||
          chartMetaQueryHasBpmFilter(chartQuery) ||
          chartMetaQueryHasScoreFilter(chartQuery) ||
          chartMetaQueryNeedsBestScore(chartQuery);
@@ -553,6 +555,7 @@ bool chartMetaQueryNeedsChartJoinForCourseEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
          chartQuery.exactFolder.has_value() ||
+         chartQuery.parentFolder.has_value() ||
          chartMetaQueryHasBpmFilter(chartQuery) ||
          chartMetaQueryHasScoreFilter(chartQuery) ||
          chartMetaQueryNeedsBestScore(chartQuery);
@@ -560,6 +563,30 @@ bool chartMetaQueryNeedsChartJoinForCourseEntries(
 
 void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
                              const ChartMetaQuery &chartQuery) {
+  if (chartQuery.parentFolder.has_value()) {
+    const std::string folder = chartAlias + ".folder";
+    const std::string prefix = "(@parent_folder || '/')";
+    const std::string windowsParent = "replace(@parent_folder, '/', '\\')";
+    const std::string windowsPrefix = "(" + windowsParent + " || '\\')";
+    const std::string remainder =
+        "substr(replace(" + chartAlias + ".path, '\\', '/'), length(" +
+        prefix + ") + 1)";
+    const std::string pathParentMatches =
+        "substr(replace(" + chartAlias + ".path, '\\', '/'), 1, length(" +
+        prefix + ")) = " + prefix + " AND instr(" + remainder +
+        ", '/') > 0 AND instr(substr(" + remainder + ", instr(" +
+        remainder + ", '/') + 1), '/') = 0";
+    query += " AND ((" + folder + " >= " + prefix + " AND " + folder +
+             " < (@parent_folder || '0') AND instr(substr(" + folder +
+             ", length(" + prefix + ") + 1), '/') = 0) OR (" + folder +
+             " >= " + windowsPrefix + " AND " + folder + " < (" +
+             windowsParent + " || ']') AND instr(substr(" + folder +
+             ", length(" + windowsPrefix + ") + 1), '\\') = 0 AND "
+             "instr(substr(" + folder + ", length(" + windowsPrefix +
+             ") + 1), '/') = 0) OR (" + folder + " = '' AND " +
+             pathParentMatches + ") OR (" + folder + " IS NULL AND " +
+             pathParentMatches + "))";
+  }
   if (chartQuery.exactFolder.has_value()) {
     const std::string normalizedPath =
         "replace(" + chartAlias + ".path, '\\', '/')";
@@ -577,6 +604,13 @@ void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
 
 void bindExactFolderFilter(sqlite3_stmt *stmt, int &bindIndex,
                            const ChartMetaQuery &chartQuery) {
+  if (chartQuery.parentFolder.has_value()) {
+    auto parent =
+        chart_storage_identity::StoredFolderPathText(*chartQuery.parentFolder);
+    std::ranges::replace(parent, '\\', '/');
+    while (!parent.empty() && parent.back() == '/') parent.pop_back();
+    bindSqliteText(stmt, bindIndex++, parent);
+  }
   if (chartQuery.exactFolder.has_value()) {
     bindSqliteText(
         stmt, bindIndex++,
@@ -943,6 +977,9 @@ void appendChartMetaFilters(std::string &query,
     query += " FROM difficulty_table_entries dte "
              "WHERE dte.table_id = @table_id AND ";
     query += sqlHashColumnHasValue("dte", "md5");
+    if (chartQuery.rawSongData) {
+      query += " AND (dte.sha256 IS NULL OR dte.sha256 = '')";
+    }
     if (!chartQuery.tableLevel.empty()) {
       query += " AND dte.level = @table_level";
     }
@@ -995,8 +1032,10 @@ void appendChartMetaFilters(std::string &query,
     query += chartFavoriteIndexedPredicate("cm");
   }
 
-  query += " AND ";
-  query += preferredChartPredicate("cm");
+  if (!chartQuery.rawSongData) {
+    query += " AND ";
+    query += preferredChartPredicate("cm");
+  }
 }
 
 void bindChartMetaFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
@@ -1803,7 +1842,7 @@ void queryChartMeta(
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     chartMetas.push_back(std::move(readChartMetaRecord(stmt)));
   }
-  populateDifficultyTableLabels(db, chartMetas);
+  if (!chartQuery.rawSongData) populateDifficultyTableLabels(db, chartMetas);
 }
 
 int countChartMeta(sqlite3 *db,

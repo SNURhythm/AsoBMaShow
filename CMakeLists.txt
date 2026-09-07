@@ -1326,6 +1326,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(intro_scene_navigation_tests PRIVATE cxx_std_23)
         add_executable(music_select_bar_manager_tests
             tests/music_select_bar_manager_tests.cpp
+            src/music_select/MusicSelectFolderStatusLoader.cpp
             src/music_select/MusicSelectBarManager.cpp
             src/music_select/MusicSelectRepositoryProjection.cpp
             src/path.cpp
@@ -3469,6 +3470,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     add_executable(chart_repository_tests
         tests/chart_repository_tests.cpp
+        src/music_select/MusicSelectRepositoryMetadataLoader.cpp
+        src/music_select/MusicSelectRepositoryProjection.cpp
+        src/music_select/MusicSelectBarManager.cpp
+        src/music_select/MusicSelectPropertyProjection.cpp
+        src/settings/AudioVideoSettings.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp

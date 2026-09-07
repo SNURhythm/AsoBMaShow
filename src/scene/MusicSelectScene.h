@@ -8,6 +8,7 @@
 #include "Scene.h"
 #include "../audio/SkinSystemSoundService.h"
 #include "../music_select/MusicSelectBarManager.h"
+#include "../music_select/MusicSelectFolderStatusLoader.h"
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
@@ -95,6 +96,7 @@ private:
   void openSelected();
   [[nodiscard]] bool openDirectory(const MusicSelectBar &);
   [[nodiscard]] bool loadDirectoryChildren(const MusicSelectBar &);
+  void requestFolderStatus(const MusicSelectBarManagerSnapshot &);
   void openSameFolder();
   void copySelectedHash(bool sha256);
   void closeDirectory();
@@ -159,7 +161,8 @@ private:
   skin::GameplaySkinActivationRequest activationRequest_;
   std::string selectedSkinPath_;
   std::optional<ChartRepository::Session> chartSession_;
-  ScoreBestCache scoreCache_;
+  std::shared_ptr<const ScoreBestCache> scoreCache_;
+  std::unique_ptr<MusicSelectFolderStatusLoader> folderStatusLoader_;
   ScoreClearRankCache clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   RecentScoreImprovements recentScoreImprovements_;

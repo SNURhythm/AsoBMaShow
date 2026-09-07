@@ -683,7 +683,9 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   }
   const std::uint64_t loadedRevision =
       context.chartRepository.GetLibraryRevision();
-  scoreCache_ = context.scoreRepository.LoadBestScores();
+  if (folderStatusLoader_) folderStatusLoader_->cancel();
+  scoreCache_ = std::make_shared<const ScoreBestCache>(
+      context.scoreRepository.LoadBestScores());
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
   recentScoreImprovements_ = {};
   recentScoreImprovementsLoaded_ = false;
@@ -732,6 +734,47 @@ std::int64_t MusicSelectScene::elapsedMicros() const {
       .count();
 }
 
+void MusicSelectScene::requestFolderStatus(
+    const MusicSelectBarManagerSnapshot &snapshot) {
+  std::vector<MusicSelectBar> directories;
+  for (const auto &bar : snapshot.rows) {
+    switch (bar.kind) {
+    case skin::MusicSelectBarKind::Folder:
+    case skin::MusicSelectBarKind::Hash:
+    case skin::MusicSelectBarKind::Command:
+    case skin::MusicSelectBarKind::SearchWord:
+      directories.push_back(bar);
+      break;
+    default: break;
+    }
+  }
+  if (!folderStatusLoader_) {
+    folderStatusLoader_ = std::make_unique<MusicSelectFolderStatusLoader>();
+  }
+  const int longNoteMode = long_note_mode::valueFromId(context.settings.selectedLnMode);
+  folderStatusLoader_->request(
+      std::move(directories), snapshot.resolvedModeFilter, longNoteMode,
+      [this, scores = scoreCache_, mode = snapshot.resolvedModeFilter, longNoteMode,
+       session = std::make_shared<std::optional<ChartRepository::Session>>(),
+       improvements = std::optional<RecentScoreImprovements>{},
+       now = unixMillis() / 1'000](const MusicSelectBar &bar) mutable {
+        if (!*session) *session = context.chartRepository.OpenSession();
+        if (!*session) throw std::runtime_error("Unable to open chart database");
+        if (bar.kind == skin::MusicSelectBarKind::Command && !improvements) {
+          improvements = context.scoreRepository.LoadRecentScoreImprovements(
+              now, longNoteMode);
+        }
+        return MusicSelectRepositoryProjection::loadFolderStatus(
+            **session, bar,
+            {.scoreFor = [scores](const bms_parser::ChartMeta &meta, int mode) {
+               return scores->bestFor(meta, mode);
+             },
+             .recentScoreImprovements = improvements ? &*improvements : nullptr,
+             .modeFilter = mode,
+             .selectedLongNoteMode = longNoteMode});
+      });
+}
+
 void MusicSelectScene::selectedBarMoved() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   cancelSelectedChartAnalysis();
@@ -739,6 +782,7 @@ void MusicSelectScene::selectedBarMoved() {
   selectedChartAnalysisStarted_ = false;
 #endif
   const auto snapshot = bars_.snapshot();
+  requestFolderStatus(snapshot);
   // Preload the newly selected chart (parse + jukebox) in the background so a
   // heavy archive chart is ready by the time the user presses Start.
   startPreloadForSelection();
@@ -1353,7 +1397,7 @@ bool MusicSelectScene::loadDirectoryChildren(
     return MusicSelectRepositoryProjectionInput{
         .records = records,
         .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
-          return scoreCache_.bestFor(meta, mode);
+          return scoreCache_->bestFor(meta, mode);
         },
         .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
           return musicSelectExistingChartReplaySlots(
@@ -1379,11 +1423,8 @@ bool MusicSelectScene::loadDirectoryChildren(
   std::vector<MusicSelectBar> children;
   switch (directory.kind) {
   case skin::MusicSelectBarKind::Folder: {
-    ChartMetaQuery query;
-    query.exactFolder = directory.directoryPath;
-    query.selectedLongNoteMode = selectedLongNoteMode;
-    std::vector<ChartMetaRecord> records;
-    chartSession_->QueryChartMeta(query, records);
+    const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+        *chartSession_, directory, selectedLongNoteMode);
     if (!records.empty()) {
       const auto projection =
           MusicSelectRepositoryProjection{}.project(inputFor(records));
@@ -1497,10 +1538,9 @@ bool MusicSelectScene::loadDirectoryChildren(
           unixMillis() / 1'000, selectedLongNoteMode);
       recentScoreImprovementsLoaded_ = true;
     }
-    std::vector<ChartMetaRecord> records;
-    ChartMetaQuery query;
-    query.selectedLongNoteMode = selectedLongNoteMode;
-    chartSession_->QueryChartMeta(query, records);
+    const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+        *chartSession_, directory, selectedLongNoteMode,
+        &recentScoreImprovements_);
     const auto projection = MusicSelectRepositoryProjection{}.project(
         inputFor(records, nullptr, {}, &recentScoreImprovements_));
     children = projectionChildren(projection, directory.id);
@@ -1552,7 +1592,7 @@ void MusicSelectScene::openSameFolder() {
   auto projection = MusicSelectRepositoryProjection{}.project(
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
-         return scoreCache_.bestFor(meta, mode);
+         return scoreCache_->bestFor(meta, mode);
        },
        .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
          return musicSelectExistingChartReplaySlots(
@@ -2893,6 +2933,16 @@ void MusicSelectScene::update(float) {
   // on. Keep controller and keyboard input live across the same interval.
   consumeLogicalInput();
   consumeActions();
+  if (folderStatusLoader_) {
+    for (const auto &result : folderStatusLoader_->takeResults()) {
+      if (result.error.empty()) {
+        bars_.installFolderStatus(result.id, result.frame);
+      } else {
+        SDL_Log("Music-select folder status %s: %s", result.id.value.c_str(),
+                result.error.c_str());
+      }
+    }
+  }
   previewController_.observeSelection(
       previewSelection(bars_.snapshot(),
                        context.settings.archiveChartPreviewEnabled),
@@ -3652,12 +3702,17 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
 
 void MusicSelectScene::updatePlayOptions(
     const std::function<void(main_menu_profile::Selections &)> &update) {
+  const auto previousLongNoteMode = context.settings.selectedLnMode;
   auto selections = main_menu_profile::Selections::fromSettings(context.settings);
   update(selections);
   selections.applyTo(context.settings);
   context.settings.sanitize();
   if (!context.saveSettings()) {
     SDL_Log("Failed to save music-select play options");
+  }
+  if (previousLongNoteMode != context.settings.selectedLnMode) {
+    reloadLibrary();
+    selectedBarMoved();
   }
   refreshPlayOptionsModal();
 }
@@ -3952,6 +4007,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  folderStatusLoader_.reset();
   launchCancelled_.store(true, std::memory_order_release);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (soundSetFolderAccessHandle_ != nullptr) {

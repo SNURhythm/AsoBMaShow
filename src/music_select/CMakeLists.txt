@@ -5,6 +5,7 @@ target_sources(main PRIVATE
     MusicSelectReplaySlots.cpp
     MusicSelectSearchHistory.cpp
     MusicSelectBarManager.cpp
+    MusicSelectFolderStatusLoader.cpp
     MusicSelectPropertyProjection.cpp
     MusicSelectPreview.cpp
     MusicSelectPreviewAudioService.cpp

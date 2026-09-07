@@ -68,14 +68,14 @@ void testProjectsFoldersSongsScoresAndSourceFlags() {
        },
        .selectedLongNoteMode = 2,
        .repositoryRevision = 9});
-  require(projection.repositoryRevision == 9 && projection.root.size() == 5,
+  require(projection.repositoryRevision == 9 && projection.root.size() == 4,
           "physical folders precede COURSE and update containers");
   const auto *folder = projection.find(projection.root.front());
   require(folder && folder->kind == skin::MusicSelectBarKind::Folder &&
-              folder->children.size() == 1 && folder->selectable &&
-              folder->directoryPath == "/songs/a",
-          "each physical folder projects its exact selectable directory");
-  const auto *song = folder ? projection.find(folder->children.front()) : nullptr;
+              folder->children.size() == 2 && folder->selectable &&
+              folder->directoryPath == "/songs",
+          "physical folders group charts by SongData.parent");
+  const auto *song = child(projection, folder, 1);
   require(song && song->kind == skin::MusicSelectBarKind::Song &&
               song->title == "Alpha Another" && song->chart &&
               song->presentation.exists && song->presentation.level == 12 &&
@@ -118,9 +118,9 @@ void testOverlappingConfiguredRootsFormOnePhysicalHierarchy() {
   const auto *root = projection.find(projection.root.front());
   require(root && root->directoryPath == "/songs" &&
               root->children.size() == 1 &&
-              child(projection, root, 0)->title == "Root" &&
+              child(projection, root, 0)->title == "Child" &&
               root->presentation.addDateSeconds == 1'700'001'111,
-          "a physical folder with immediate songs returns only those songs "
+          "a physical folder with song.parent matches returns only those songs "
           "like FolderBar.getChildren and uses FolderData.adddate");
 }
 
@@ -243,7 +243,7 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
   const auto *lampUpdate = projection.find(projection.root[3]);
   const auto *scoreUpdate = projection.find(projection.root[4]);
   require(physical && physical->kind == skin::MusicSelectBarKind::Folder &&
-              physical->title == "songs" && physical->children.size() == 1,
+              physical->title == "songs" && physical->children.size() == 2,
           "configured chart entry becomes the physical root");
   require(courses && courses->kind == skin::MusicSelectBarKind::Table &&
               courses->title == "COURSE" && courses->children.empty(),
@@ -255,9 +255,9 @@ void testProjectsExactRootHierarchyTablesCoursesAndCommands() {
           "difficulty TableBar preserves repository identity, metadata order, "
           "and URL");
 
-  const auto *folder = child(projection, physical, 0);
-  require(folder && folder->title == "A" && folder->children.size() == 2,
-          "FolderBar returns immediate songs before child directories");
+  const auto *folder = physical;
+  require(folder && folder->title == "songs" && folder->children.size() == 2,
+          "FolderBar returns songs from child song folders before directories");
   const auto *second = child(projection, folder, 0);
   const auto *first = child(projection, folder, 1);
   require(second && first && second->title == "Second" &&
@@ -403,7 +403,8 @@ void testProjectsSearchHistoryAfterCommands() {
 void testProjectsRecentScoreImprovementCommandChildren() {
   std::vector<ChartMetaRecord> records{
       chart("/songs/a.bms", "first", "First", "", "/songs"),
-      chart("/songs/b.bms", "second", "Second", "", "/songs")};
+      chart("/songs/b.bms", "second", "Second", "", "/songs"),
+      chart("/copy/a.bms", "first", "Copy", "", "/copy")};
   RecentScoreImprovements updates;
   updates.lamp[0].insert("first");
   updates.score[1].insert("second");
@@ -419,11 +420,13 @@ void testProjectsRecentScoreImprovementCommandChildren() {
               child(projection, yesterday, 0)->title == "Second",
           "update CommandBars expose the charts whose lamp or score first "
           "improved during the exact UTC day");
+  require(today && today->presentation.folderLampCounts[0] == 2,
+          "command status counts duplicate source paths while rows deduplicate");
 }
 
 void testRootProjectionDefersDirectoryContents() {
   MusicSelectRepositoryMetadata metadata;
-  metadata.entries.push_back({.path = utf8_to_path_t("/songs")});
+  metadata.entries.push_back({.path = utf8_to_path_t("/songs/")});
   metadata.tables.push_back(
       {.info = {.id = 42, .name = "Satellite", .symbol = "sl"}});
   const std::vector<std::string> searches{"needle"};
@@ -445,11 +448,89 @@ void testRootProjectionDefersDirectoryContents() {
                    bar.kind == skin::MusicSelectBarKind::Command;
           }),
           "root projection does not materialize table, command, or song children");
+  const auto eager = MusicSelectRepositoryProjection{}.project({.metadata = &metadata});
+  require(eager.find({"folder:/songs"}) != nullptr,
+          "trailing root separators do not create a self-referencing hierarchy");
+}
+
+void testFolderStatusUsesSongParentNotFolderOrRecursiveDescendants() {
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = utf8_to_path_t("/pack")});
+  std::vector<ChartMetaRecord> records{
+      chart("/pack/direct.bms", "direct", "Direct", "", "/pack"),
+      chart("/pack/song/chart.bms", "song", "Song", "", "/pack/song"),
+      chart("/pack/copy/chart.bms", "song", "Copy", "", "/pack/copy"),
+      chart("/pack/sub/song/deep.bms", "deep", "Deep", "", "/pack/sub/song")};
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = records, .metadata = &metadata});
+  const auto *folder = projection.find({"folder:/pack"});
+  require(folder && folder->presentation.folderLampCounts[0] == 2 &&
+              folder->presentation.folderRankCounts[0] == 2,
+          "FolderBar status counts raw song.parent matches, not direct files "
+          "or recursive descendants");
+  require(folder && folder->children.size() == 1 &&
+              child(projection, folder, 0)->title == "Song",
+          "FolderBar children use the same parent query, then SongBar hash "
+          "deduplication rather than counting visible rows");
+}
+
+void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
+  std::vector<ChartMetaRecord> records{
+      chart("/pack/song/chart.bms", "scored", "Scored", "", "/pack/song"),
+      chart("/pack/song/copy.bms", "scored", "Copy", "", "/pack/song"),
+      chart("/pack/other/chart.bms", "unplayed", "Unplayed", "", "/pack/other"),
+      chart("/pack/dp/chart.bms", "dp", "DP", "", "/pack/dp"),
+      chart("", "missing", "Missing", "", "")};
+  records[0].songReviewFavorite = 2;
+  records[1].meta.Difficulty = 1;
+  records[3].meta.IsDP = true;
+  records[4].unavailable = true;
+  MusicSelectBar folder{.kind = skin::MusicSelectBarKind::Folder};
+  MusicSelectRepositoryProjectionInput input{
+      .records = records,
+      .scoreFor = [](const bms_parser::ChartMeta &meta, int mode) {
+        if (meta.SHA256 != "scored") return std::optional<ScoreBestSnapshot>{};
+        return std::optional<ScoreBestSnapshot>{{
+            .score = mode == 2 ? 800 : 600,
+            .maxScore = 800,
+            .clearType = mode == 2 ? kClearTypeFullComboRank
+                                   : kClearTypeHardClearRank}};
+      },
+      .modeFilter = "7KEY",
+      .selectedLongNoteMode = 1};
+  MusicSelectRepositoryProjection::updateFolderStatus(folder, input);
+  require(folder.presentation.folderLampCounts[0] == 1 &&
+              folder.presentation.folderLampCounts[6] == 2 &&
+              folder.presentation.folderRankCounts[20] == 2,
+          "folder status includes hidden/different-difficulty/duplicate records "
+          "but excludes missing and wrong-mode records");
+  input.selectedLongNoteMode = 2;
+  MusicSelectRepositoryProjection::updateFolderStatus(folder, input);
+  require(folder.presentation.folderLampCounts[6] == 0 &&
+              folder.presentation.folderLampCounts[8] == 2 &&
+              folder.presentation.folderRankCounts[27] == 2 &&
+              folder.presentation.folderRankCounts[20] == 0,
+          "LN changes replace rather than accumulate lamp and rank arrays");
+  input.modeFilter = "14KEY";
+  MusicSelectRepositoryProjection::updateFolderStatus(folder, input);
+  require(folder.presentation.folderLampCounts[0] == 1 &&
+              folder.presentation.folderLampCounts[8] == 0,
+          "a mode change removes the previous mode's folder status");
+  for (const auto kind : {skin::MusicSelectBarKind::Table,
+                          skin::MusicSelectBarKind::Container,
+                          skin::MusicSelectBarKind::SameFolder}) {
+    MusicSelectBar noStatus{.kind = kind};
+    MusicSelectRepositoryProjection::updateFolderStatus(noStatus, input);
+    require(noStatus.presentation.folderLampCounts == std::array<int, 11>{},
+            "directory subclasses without updateFolderStatus remain empty");
+  }
 }
 
 } // namespace
 
 int main(int argc, char **argv) {
+  testFolderStatusReplacesCountsAndFiltersOnlyMode();
+  testFolderStatusUsesSongParentNotFolderOrRecursiveDescendants();
   testProjectsFoldersSongsScoresAndSourceFlags();
   testOverlappingConfiguredRootsFormOnePhysicalHierarchy();
   testProjectsPersistedEmptyFolderBars();

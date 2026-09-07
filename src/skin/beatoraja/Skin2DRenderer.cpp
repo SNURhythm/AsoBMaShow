@@ -3648,7 +3648,8 @@ MusicSelectSongListLoweringResult lowerMusicSelectSongList(
           graph->type == SkinSelectDistributionGraphType::Normal
               ? std::span<const int>(command.folderLampCounts)
               : std::span<const int>(command.folderRankCounts);
-      const int total = std::accumulate(counts.begin(), counts.end(), 0);
+      const int total = std::accumulate(command.folderLampCounts.begin(),
+                                         command.folderLampCounts.end(), 0);
       if (total <= 0 || initial.graphFrames.size() != counts.size()) {
         continue;
       }
@@ -4953,7 +4954,8 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
         if (animated.failure || animated.suppressed) {
           continue;
         }
-        const int total = std::accumulate(counts.begin(), counts.end(), 0);
+        const int total = std::accumulate(selectedBar.folderLampCounts.begin(),
+                                           selectedBar.folderLampCounts.end(), 0);
         if (total <= 0) {
           continue;
         }

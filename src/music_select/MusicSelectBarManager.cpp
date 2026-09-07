@@ -368,6 +368,21 @@ bool MusicSelectBarManager::openSelected() {
   return bar != nullptr && open(bar->id);
 }
 
+void MusicSelectBarManager::installFolderStatus(
+    const MusicSelectBarId &id, const skin::MusicSelectBarFrame &frame) {
+  const auto update = [&](std::vector<MusicSelectBar> &bars) {
+    const auto found = std::ranges::find(bars, id, &MusicSelectBar::id);
+    if (found == bars.end() ||
+        !skin::musicSelectIsDirectoryBarKind(found->kind)) return;
+    found->presentation.folderLampCounts = frame.folderLampCounts;
+    found->presentation.folderRankCounts = frame.folderRankCounts;
+    found->presentation.lamp = frame.lamp;
+    found->presentation.rivalLamp = frame.rivalLamp;
+  };
+  update(projection_.bars);
+  update(rows_);
+}
+
 bool MusicSelectBarManager::installChildren(
     const MusicSelectBarId &directory, std::vector<MusicSelectBar> children) {
   const auto parent = std::ranges::find(projection_.bars, directory,

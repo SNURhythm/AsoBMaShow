@@ -22,15 +22,23 @@ std::string chartIdentity(const ChartMetaRecord &record) {
   return "path:" + fspath_to_utf8(record.meta.BmsPath.lexically_normal());
 }
 
+std::filesystem::path normalizedFolderPath(const std::filesystem::path &path) {
+  auto normalized = path.lexically_normal();
+  while (normalized.has_relative_path() && normalized.filename().empty()) {
+    normalized = normalized.parent_path();
+  }
+  return normalized;
+}
+
 std::string folderIdentity(const std::filesystem::path &path) {
-  return "folder:" + fspath_to_utf8(path.lexically_normal());
+  return "folder:" + fspath_to_utf8(normalizedFolderPath(path));
 }
 
 bool pathAtOrInside(const std::filesystem::path &path,
                     const std::filesystem::path &root) {
   if (path.empty() || root.empty()) return false;
-  const auto normalizedPath = path.lexically_normal();
-  const auto normalizedRoot = root.lexically_normal();
+  const auto normalizedPath = normalizedFolderPath(path);
+  const auto normalizedRoot = normalizedFolderPath(root);
   if (normalizedPath == normalizedRoot) return true;
   const auto relative = normalizedPath.lexically_relative(normalizedRoot);
   if (relative.empty() || relative.is_absolute()) return false;
@@ -97,8 +105,8 @@ int songFeatures(const ChartMetaRecord &record) {
 }
 
 std::filesystem::path physicalFolder(const ChartMetaRecord &record) {
-  if (!record.meta.Folder.empty()) return record.meta.Folder.lexically_normal();
-  return record.meta.BmsPath.parent_path().lexically_normal();
+  if (!record.meta.Folder.empty()) return normalizedFolderPath(record.meta.Folder);
+  return normalizedFolderPath(record.meta.BmsPath.parent_path());
 }
 
 skin::MusicSelectCourseConstraint courseConstraint(int id) {
@@ -173,7 +181,11 @@ struct ProjectionBuilder {
   }
 
   void aggregate(MusicSelectBar &directory,
-                 const std::vector<ChartMetaRecord> &records) const {
+                 std::span<const ChartMetaRecord> records) const {
+    directory.presentation.folderLampCounts = {};
+    directory.presentation.folderRankCounts = {};
+    directory.presentation.lamp = 0;
+    directory.presentation.rivalLamp = 0;
     for (const auto &record : records) {
       if (record.unavailable || record.meta.BmsPath.empty() ||
           !modeMatches(input.modeFilter, songMode(record.meta))) {
@@ -185,7 +197,9 @@ struct ProjectionBuilder {
             .folderLampCounts[static_cast<std::size_t>(lamp)];
       int rank = 0;
       if (best && best->maxScore > 0) {
-        rank = std::min(27, best->score * 27 / best->maxScore);
+        rank = static_cast<int>(std::clamp<std::int64_t>(
+            static_cast<std::int64_t>(best->score) * 27 / best->maxScore,
+            0, 27));
       }
       ++directory.presentation
             .folderRankCounts[static_cast<std::size_t>(rank)];
@@ -243,8 +257,10 @@ struct ProjectionBuilder {
               records.push_back(record);
             }
           }
-          child.children =
-              addElementSongs(records, child.id.value);
+          std::vector<const ChartMetaRecord *> physicalRecords;
+          physicalRecords.reserve(records.size());
+          for (const auto &record : records) physicalRecords.push_back(&record);
+          child.children = addPhysicalSongs(physicalRecords, child.id.value);
           aggregate(child, records);
         }
         result.bars.push_back(std::move(child));
@@ -270,7 +286,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
   MusicSelectProjection result{.repositoryRevision = repositoryRevision};
   std::vector<std::filesystem::path> physicalRoots;
   for (const auto &entry : metadata.entries) {
-    const std::filesystem::path path(entry.path);
+    const auto path = normalizedFolderPath(std::filesystem::path(entry.path));
     if (path.empty() ||
         std::ranges::any_of(physicalRoots, [&](const auto &candidate) {
           return pathAtOrInside(path, candidate);
@@ -371,6 +387,19 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
   return result;
 }
 
+void MusicSelectRepositoryProjection::updateFolderStatus(
+    MusicSelectBar &directory, MusicSelectRepositoryProjectionInput input) {
+  switch (directory.kind) {
+  case skin::MusicSelectBarKind::Folder:
+  case skin::MusicSelectBarKind::Hash:
+  case skin::MusicSelectBarKind::SearchWord:
+  case skin::MusicSelectBarKind::Command:
+    ProjectionBuilder{.input = input}.aggregate(directory, input.records);
+    break;
+  default: break;
+  }
+}
+
 MusicSelectProjection MusicSelectRepositoryProjection::project(
     MusicSelectRepositoryProjectionInput input) const {
   ProjectionBuilder builder{.input = input,
@@ -387,20 +416,20 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
   std::vector<std::filesystem::path> physicalRoots;
   const auto ensureFolder = [&](const std::filesystem::path &path)
       -> FolderNode & {
-    const auto normalized = path.lexically_normal();
+    const auto normalized = normalizedFolderPath(path);
     return folders.try_emplace(normalized, FolderNode{.path = normalized})
         .first->second;
   };
   auto addChild = [&](const std::filesystem::path &parent,
                       const std::filesystem::path &child) {
     auto &children = ensureFolder(parent).children;
-    if (std::ranges::find(children, child.lexically_normal()) ==
+    if (std::ranges::find(children, normalizedFolderPath(child)) ==
         children.end()) {
-      children.push_back(child.lexically_normal());
+      children.push_back(normalizedFolderPath(child));
     }
   };
   auto addPhysicalRoot = [&](const std::filesystem::path &path) {
-    const auto normalized = path.lexically_normal();
+    const auto normalized = normalizedFolderPath(path);
     if (std::ranges::any_of(physicalRoots, [&](const auto &candidate) {
           return pathAtOrInside(normalized, candidate);
         })) {
@@ -421,7 +450,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
 
   if (input.metadata != nullptr) {
     for (const auto &record : input.metadata->folders) {
-      const auto path = std::filesystem::path(record.path).lexically_normal();
+      const auto path = normalizedFolderPath(std::filesystem::path(record.path));
       if (!path.empty()) {
         folderAddDates.insert_or_assign(path, record.addDateSeconds);
       }
@@ -435,15 +464,16 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
   }
   for (const auto &record : input.records) {
     const auto folder = physicalFolder(record);
-    ensureFolder(folder).records.push_back(&record);
+    const auto parent = folder.parent_path();
+    ensureFolder(parent).records.push_back(&record);
     const auto root = std::ranges::find_if(
         physicalRoots, [&](const auto &candidate) {
           return pathAtOrInside(folder, candidate);
         });
-    if (root == physicalRoots.end()) addPhysicalRoot(folder);
+    if (root == physicalRoots.end()) addPhysicalRoot(parent);
   }
   const auto connectFolderToRoot = [&](const std::filesystem::path &path) {
-    auto current = path.lexically_normal();
+    auto current = normalizedFolderPath(path);
     const auto root = std::ranges::find_if(
         physicalRoots, [&](const auto &candidate) {
           return pathAtOrInside(current, candidate);
@@ -463,7 +493,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
     // Its persisted rows therefore remain real selector bars even when a
     // branch contains no chart record to otherwise introduce it here.
     for (const auto &record : input.metadata->folders) {
-      const auto path = std::filesystem::path(record.path).lexically_normal();
+      const auto path = normalizedFolderPath(std::filesystem::path(record.path));
       if (path.empty() ||
           std::ranges::none_of(physicalRoots, [&](const auto &root) {
             return pathAtOrInside(path, root);
@@ -506,9 +536,6 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
       for (const auto *record : node.records) values.push_back(*record);
       builder.aggregate(folder, values);
     } else {
-      // FolderBar.getChildren returns immediate SongBars and stops when that
-      // list is nonempty. Its child directories are used only by an empty
-      // physical folder.
       for (const auto &child : node.children) {
         folder.children.push_back(addFolder(child));
       }

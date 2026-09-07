@@ -121,6 +121,46 @@ private:
   std::optional<PreparedSkinRevision> prepared;
 };
 
+void testType5FolderNumbersResolveNumericAndNamedProperties() {
+  Fixture fixture{R"(
+local state = require("main_state")
+if skin_config then
+  assert(state.number(300) == 55)
+  for number = 320, 330 do
+    assert(state.number(number) == number - 320)
+  end
+end
+return {type = 5, w = 1280, h = 720, destination = {}}
+)"};
+  auto created = LuaSkinRuntime::create(
+      {.purpose = LuaRuntimePurpose::MusicSelect,
+       .fileSystem = fixture.fileSystem()});
+  require(created.runtime != nullptr, "folder-number runtime creates");
+  if (!created.runtime) return;
+  auto header = created.runtime->loadHeader();
+  require(header.value.has_value(), "folder-number header executes");
+  MusicSelectSkinFrame frame;
+  frame.properties.integers[300] = 55;
+  for (int lamp = 0; lamp < 11; ++lamp) frame.properties.integers[320 + lamp] = lamp;
+  MusicSelectSkinStateBridge bridge(frame);
+  const std::array<std::string_view, 11> names{
+      "folder_noplay", "folder_failed", "folder_assist", "folder_lightassist",
+      "folder_easy", "folder_normal", "folder_hard", "folder_exhard",
+      "folder_fullcombo", "folder_prefect", "folder_max"};
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const auto value = bridge.integerProperty(
+        {.value = std::string(names[index])}, SkinIntegerPropertyDomain::IntegerValue);
+    require(value.supported && value.value == static_cast<int>(index),
+            "named folder integer properties match IntegerPropertyPattern");
+  }
+  created.runtime->setFrameState(&bridge);
+  auto configured = created.runtime->loadConfigured({});
+  require(configured.value.has_value(),
+          "type-5 Lua resolves numeric and named folder lamp counts");
+  if (configured.failure) std::cerr << configured.failure->message << '\n';
+  created.runtime->setFrameState(nullptr);
+}
+
 void testType5DestinationRemainsRequired() {
   Fixture fixture{"return { type = 5, w = 1280, h = 720 }"};
   auto runtimeFileSystem = fixture.fileSystem();
@@ -777,6 +817,7 @@ void testInstalledAcceptanceSkinsDecodeWhenRequested() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testType5FolderNumbersResolveNumericAndNamedProperties();
   testConfiguredType5SongListPreservesEveryAuthoredValue();
   testType5DestinationRemainsRequired();
   testType5DestinationIdsAndEventAritiesMatchSkinLuaAccessor();

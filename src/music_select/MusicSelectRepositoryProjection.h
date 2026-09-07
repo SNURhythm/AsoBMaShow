@@ -63,6 +63,13 @@ public:
   [[nodiscard]] static std::optional<MusicSelectDifficultyTableSource>
   loadTableMetadata(ChartRepository::Session &, int tableId,
                     int selectedLongNoteMode);
+  [[nodiscard]] static std::vector<ChartMetaRecord>
+  loadDirectoryRecords(ChartRepository::Session &, const MusicSelectBar &,
+                       int selectedLongNoteMode,
+                       const RecentScoreImprovements * = nullptr);
+  [[nodiscard]] static skin::MusicSelectBarFrame
+  loadFolderStatus(ChartRepository::Session &, MusicSelectBar,
+                    MusicSelectRepositoryProjectionInput);
 
   [[nodiscard]] MusicSelectProjection
   projectRoot(const MusicSelectRepositoryMetadata &,
@@ -71,4 +78,7 @@ public:
 
   [[nodiscard]] MusicSelectProjection
   project(MusicSelectRepositoryProjectionInput) const;
+
+  static void updateFolderStatus(MusicSelectBar &,
+                                 MusicSelectRepositoryProjectionInput);
 };

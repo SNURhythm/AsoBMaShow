@@ -722,6 +722,7 @@ void testMusicSelectDistributionGraphLowersDescendingSourceSegments() {
   judge.type = SkinSelectDistributionGraphType::Judge;
   judge.sprite = {.resource = 301, .frames = std::move(judgeFrames)};
   frame.bars[0].folderLampCounts = {};
+  frame.bars[0].folderLampCounts[0] = 8;
   frame.bars[0].folderRankCounts[27] = 1;
   frame.bars[0].folderRankCounts[0] = 3;
   const auto judged = evaluate(renderer, runtime, model, resources, state, 2,
@@ -740,11 +741,31 @@ void testMusicSelectDistributionGraphLowersDescendingSourceSegments() {
   expect(highestRank != nullptr && lowestRank != nullptr &&
              highestRank->resource == 301 && lowestRank->resource == 301 &&
              highestRank->vertices[0].x == 105.0F &&
-             highestRank->vertices[2].x == 115.0F &&
-             lowestRank->vertices[0].x == 115.0F &&
-             lowestRank->vertices[2].x == 145.0F &&
+             highestRank->vertices[2].x == 110.0F &&
+             lowestRank->vertices[0].x == 110.0F &&
+             lowestRank->vertices[2].x == 125.0F &&
              highestRank->vertices[0].u > lowestRank->vertices[0].u,
-         "judge segments also draw descending with proportional widths");
+         "rank segments use the lamp total as their denominator, including "
+         "while background rank counts are incomplete");
+
+  model.model.destinations = {destination(4, 8, 5.0)};
+  const auto standalone = evaluate(renderer, runtime, model, resources, state, 3,
+                                   0, nullptr, std::nullopt, nullptr, 1, false,
+                                   nullptr, nullptr, &frame);
+  expect(standalone.submitReady && standalone.submitReady->commands.size() == 2,
+         "a standalone rank graph reads the selected DirectoryBar status");
+  if (standalone.submitReady && standalone.submitReady->commands.size() == 2) {
+    const auto &segment = std::get<SkinTexturedQuadCommand>(
+        standalone.submitReady->commands.front().payload);
+    expect(segment.vertices[0].x == 5.0F && segment.vertices[2].x == 10.0F,
+           "standalone rank graphs also divide by the folder lamp total");
+  }
+  frame.bars[0].folderLampCounts = {};
+  const auto empty = evaluate(renderer, runtime, model, resources, state, 4,
+                              0, nullptr, std::nullopt, nullptr, 1, false,
+                              nullptr, nullptr, &frame);
+  expect(empty.submitReady && empty.submitReady->commands.empty(),
+         "a folder with no lamp counts draws no rank distribution");
 }
 
 void testPomyuCharaSelectsPreparedTimersFramesAndOrderedLayers() {
