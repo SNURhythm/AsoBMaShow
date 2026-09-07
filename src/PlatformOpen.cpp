@@ -177,8 +177,8 @@ bool openPath(const std::filesystem::path &path, std::string &error) {
 
 bool openExternalUrl(std::string_view url, std::string &error) {
   error.clear();
-  if (url.empty()) {
-    error = "URL is empty";
+  if (!isWebUrl(url)) {
+    error = "Browser URL must be an absolute HTTP or HTTPS URL";
     return false;
   }
   const std::string urlText(url);

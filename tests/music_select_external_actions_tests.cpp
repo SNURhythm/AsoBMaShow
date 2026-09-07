@@ -1,4 +1,5 @@
 #include "music_select/MusicSelectExternalActions.h"
+#include "PlatformOpen.h"
 
 #include <algorithm>
 #include <cassert>
@@ -7,6 +8,24 @@
 #include <set>
 
 namespace {
+
+void testBrowserTargetsAreWebUrls() {
+  for (const std::string_view url : {
+           "local.exe", "C:\\Windows\\notepad.exe", "/tmp/local.exe",
+           "file:///tmp/local.exe", "FILE:///C:/Windows/notepad.exe",
+           "custom:launch", "javascript:alert(1)", "mailto:user@example.test",
+           "//example.test", "", "https://", "https:///path",
+           " https://example.test", "https://example.test\nfile:///tmp/x"}) {
+    assert(!platform_open::isWebUrl(url));
+  }
+  assert(!platform_open::isWebUrl(std::string("https://example.test\0.exe", 25)));
+  for (const std::string_view url : {
+           "http://example.test", "https://example.test/archive.zip?q=a%20b#part",
+           "HTTP://example.test", "hTtPs://example.test/path",
+           "https://localhost:8080/", "https://[::1]/", "https://example.test/日本語"}) {
+    assert(platform_open::isWebUrl(url));
+  }
+}
 
 struct TempDirectory {
   std::filesystem::path path =
@@ -304,6 +323,7 @@ void testTouchGestureDoesNotTreatALeftwardSwipeAsBack() {
 } // namespace
 
 int main() {
+  testBrowserTargetsAreWebUrls();
   testDocumentSelectionMatchesFilesListFilter();
   testArchivedDocumentsUseMaterializedResolverPaths();
   testExplorerBranchPriority();
