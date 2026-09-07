@@ -229,6 +229,75 @@ void testMovementInterpolatesTowardThePinnedAdjacentSlot() {
           "positive movement interpolates halfway toward the following slot");
 }
 
+void testIndexedLargeListMaterializesOnlyAuthoredSlots() {
+  auto songList = completeSongList();
+  songList.listOn.resize(3);
+  songList.listOff.resize(3);
+  songList.clickable = {0, 1, 2};
+  auto rows = std::make_shared<std::vector<MusicSelectBar>>();
+  rows->resize(10'000);
+  for (std::size_t index = 0; index < rows->size(); ++index) {
+    (*rows)[index].presentation = {.title = "Title " + std::to_string(index),
+                                  .exists = true};
+  }
+  MusicSelectSongListFrame frame;
+  frame.indexedBars = rows;
+  frame.selectedIndex = 0;
+  auto plan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(plan.rows[0].barIndex == 9999 && plan.rows[1].barIndex == 0 &&
+              plan.rows[2].barIndex == 1,
+          "virtualized slots wrap against full list absolute indices");
+  std::size_t titles = 0;
+  std::size_t titleBytes = 0;
+  for (const auto &command : plan.commands) {
+    if (command.family == MusicSelectBarDrawFamily::Title) {
+      ++titles;
+      titleBytes += command.text.size();
+      require(command.text == "Title " + std::to_string(command.barIndex),
+              "materialized title matches the absolute bar index");
+    }
+  }
+  require(titles == 3 && titleBytes < 40 && plan.commands.size() < 30 &&
+              frame.bars.empty(),
+          "10,000 indexed rows materialize only three authored title slots");
+  auto pointer = MusicSelectBarRenderer{}.pointer(
+      songList, frame, {.button = 0, .x = 5, .y = 110});
+  require(pointer.selectIndex == 9999,
+          "pointer hit on the wrapped preceding slot returns absolute index 9999");
+  frame.selectedIndex = 9999;
+  frame.movementDirection = 100;
+  frame.wallClockMillis = 1000;
+  frame.movementEndMillis = 1050;
+  plan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(plan.rows[0].barIndex == 9998 && plan.rows[1].barIndex == 9999 &&
+              plan.rows[2].barIndex == 0 && plan.rows[1].x == 15,
+          "moving at the far end retains wraparound and interpolation");
+  songList.center = 1'000'000;
+  frame.selectedIndex = 9999;
+  plan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(plan.rows[0].barIndex == 9999 && plan.rows[0].value == 0,
+          "out-of-range authored centers use normalized full-list wraparound");
+}
+
+void testIndexedTinyAndEmptyLists() {
+  auto songList = completeSongList();
+  MusicSelectSongListFrame empty;
+  empty.indexedBars = std::make_shared<const std::vector<MusicSelectBar>>();
+  require(MusicSelectBarRenderer{}.plan(songList, empty).commands.empty() &&
+              !MusicSelectBarRenderer{}.pointer(
+                  songList, empty, {.button = 0, .x = 15, .y = 110}).consumed,
+          "empty indexed lists neither render nor accept a row hit");
+  MusicSelectSongListFrame single;
+  auto rows = std::make_shared<std::vector<MusicSelectBar>>(1);
+  rows->front().presentation = {.title = "Only", .exists = true};
+  single.indexedBars = rows;
+  const auto plan = MusicSelectBarRenderer{}.plan(songList, single);
+  require(std::ranges::all_of(plan.rows, [](const auto &row) {
+            return row.barIndex == 0 && row.value == 0;
+          }),
+          "single-row lists repeat across the authored slots without invalid access");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -238,6 +307,8 @@ int main(int argc, char **argv) {
   testUndefinedLongNoteUsesBeatorajaLnModeIndex();
   testClickableUsesAuthoredOrderAndInclusiveDestination();
   testMovementInterpolatesTowardThePinnedAdjacentSlot();
+  testIndexedLargeListMaterializesOnlyAuthoredSlots();
+  testIndexedTinyAndEmptyLists();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_bar_renderer_tests", failures,
       "music-select bar renderer test(s) failed",

@@ -2,6 +2,7 @@
 #include "music_select/MusicSelectFolderStatusLoader.h"
 
 #include <future>
+#include <chrono>
 
 #include "music_select_runtime_ledger_assertions.h"
 
@@ -504,7 +505,8 @@ void testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads() {
   require(started.get_future().wait_for(std::chrono::seconds(5)) ==
               std::future_status::ready,
           "status loading runs off the caller thread");
-  require(!loader.request(projection.bars, "ALL", 1, {}),
+  require(!loader.request(projection.bars, "ALL", 1,
+                          MusicSelectFolderStatusLoader::Processor{}),
           "selection movement does not restart the same directory status load");
   const bool changedLn = loader.request(projection.bars, "ALL", 2,
                                         [](const MusicSelectBar &bar) {
@@ -537,7 +539,100 @@ void testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads() {
           "loading children or changing navigation");
 }
 
+void testLargeIndexedListsAndRetainedFrames() {
+  for (const int count : {10'000, 50'000}) {
+    MusicSelectProjection projection;
+    projection.root = {{"large"}};
+    MusicSelectBar parent{.id = {"large"},
+                          .kind = skin::MusicSelectBarKind::Folder,
+                          .title = "Large",
+                          .presentation = {.kind = skin::MusicSelectBarKind::Folder},
+                          .selectable = true};
+    parent.children.reserve(count);
+    projection.bars.reserve(count + 1);
+    projection.bars.push_back(parent);
+    for (int index = 0; index < count; ++index) {
+      const MusicSelectBarId id{"song:" + std::to_string(index)};
+      projection.bars.front().children.push_back(id);
+      projection.bars.push_back(
+          {.id = id, .title = "Song " + std::to_string(index),
+           .presentation = {.title = "Song " + std::to_string(index),
+                            .exists = true},
+           .selectable = true});
+    }
+    MusicSelectBarManager manager({.bars = {parent}, .root = {{"large"}}});
+    const auto started = std::chrono::steady_clock::now();
+    auto children = musicSelectProjectionChildren(projection, {"large"});
+    require(children.size() == static_cast<std::size_t>(count),
+            "indexed extraction retains every child in authored order");
+    require(manager.installChildren({"large"}, std::move(children)) &&
+                manager.openSelected(),
+            "large flat directory installs and opens");
+    const auto elapsed = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+    std::cout << "indexed extract/install/open " << count << " rows: "
+              << elapsed << " ms\n";
+    const auto initial = manager.readView();
+    const auto frame = manager.songListFrame();
+    const auto copiedFrame = frame;
+    require(initial.rows.size() == static_cast<std::size_t>(count) &&
+                frame.size() == static_cast<std::size_t>(count) &&
+                frame.bars.empty() && copiedFrame.bars.empty() &&
+                &frame.at(count - 1) == &initial.rows.back().presentation &&
+                &copiedFrame.at(count - 1) == &frame.at(count - 1),
+            "frame construction and copies retain indexed rows without copying titles");
+    manager.move(false, -100, 1050);
+    const auto wrapped = manager.songListFrame();
+    require(wrapped.selectedIndex == static_cast<std::size_t>(count - 1) &&
+                wrapped.movementDirection == -100 &&
+                wrapped.movementEndMillis == 1050 &&
+                manager.readView().rows.data() == initial.rows.data() &&
+                manager.readView().rowsRevision == initial.rowsRevision,
+            "wrapping changes absolute selection, not row storage or status generation");
+    manager.setSelectedPosition(0.5F);
+    require(manager.songListFrame().selectedIndex ==
+                static_cast<std::size_t>(count / 2),
+            "position writer addresses the entire large list");
+    const auto owned = manager.snapshot();
+    require(manager.close(), "large list closes");
+    manager.refresh({});
+    require(frame.at(count - 1).title == "Song " + std::to_string(count - 1) &&
+                initial.rows.back().id.value == "song:" + std::to_string(count - 1) &&
+                owned.rows.back().title == "Song " + std::to_string(count - 1),
+            "frames, read views, and owning snapshots survive manager rebuilds");
+    require(manager.songListFrame().size() == 0,
+            "empty manager publishes an empty indexed list");
+  }
+}
+
+void testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent() {
+  auto projection = fixture();
+  projection.bars.front().presentation.kind = skin::MusicSelectBarKind::Folder;
+  MusicSelectBarManager manager(std::move(projection));
+  const auto owned = manager.snapshot();
+  const auto view = manager.readView();
+  const auto frame = manager.songListFrame();
+  skin::MusicSelectBarFrame status;
+  status.folderLampCounts[6] = 12'345;
+  status.folderRankCounts[24] = 12'345;
+  manager.installFolderStatus({"folder:a"}, status);
+  require(manager.songListFrame().at(0).folderLampCounts[6] == 12'345 &&
+              manager.songListFrame().at(0).folderRankCounts[24] == 12'345 &&
+              manager.readView().rowsRevision == view.rowsRevision,
+          "large folder statistics update without changing list membership");
+  require(owned.rows[0].presentation.folderLampCounts[6] == 0 &&
+              view.rows[0].presentation.folderLampCounts[6] == 0 &&
+              frame.at(0).folderLampCounts[6] == 0,
+          "published views and owning snapshots are immutable across status patches");
+  manager.refresh({});
+  require(view.rows[0].children.size() == 2 &&
+              owned.rows[0].children.size() == 2,
+          "retained views preserve complete folder children after manager mutation");
+}
+
 int main(int argc, char **argv) {
+  testLargeIndexedListsAndRetainedFrames();
+  testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent();
   testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads();
   testWrapOpenCloseAndPositionSemantics();
   testClickedDirectoryOpensWithoutMovingTheCenterSelection();

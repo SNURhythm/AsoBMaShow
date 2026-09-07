@@ -6,11 +6,14 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <string>
 #include <optional>
 #include <vector>
 
 #include "../repositories/ChartRepository.h"
+
+struct MusicSelectBar;
 
 namespace skin {
 
@@ -140,6 +143,10 @@ struct MusicSelectSongListFrame {
   bool rivalSelected = false;
   int movementDirection = 0;
   std::int64_t movementEndMillis = 0;
+  std::shared_ptr<const std::vector<MusicSelectBar>> indexedBars;
+
+  [[nodiscard]] std::size_t size() const noexcept;
+  [[nodiscard]] const MusicSelectBarFrame &at(std::size_t index) const;
 };
 
 } // namespace skin
@@ -185,3 +192,12 @@ struct MusicSelectProjection {
 
   [[nodiscard]] const MusicSelectBar *find(const MusicSelectBarId &) const;
 };
+
+inline std::size_t skin::MusicSelectSongListFrame::size() const noexcept {
+  return indexedBars ? indexedBars->size() : bars.size();
+}
+
+inline const skin::MusicSelectBarFrame &
+skin::MusicSelectSongListFrame::at(std::size_t index) const {
+  return indexedBars ? indexedBars->at(index).presentation : bars.at(index);
+}

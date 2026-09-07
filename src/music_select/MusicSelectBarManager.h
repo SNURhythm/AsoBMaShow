@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include <string>
+#include <span>
+#include <unordered_map>
 #include <vector>
 
 struct MusicSelectBarManagerConfig {
@@ -12,17 +14,25 @@ struct MusicSelectBarManagerConfig {
   std::string sortId = "TITLE";
 };
 
-struct MusicSelectBarManagerSnapshot {
-  std::vector<MusicSelectBar> rows;
+template <typename Rows> struct MusicSelectBarManagerState {
+  Rows rows;
   std::size_t selectedIndex = 0;
   std::vector<MusicSelectBarId> directory;
-  std::vector<MusicSelectBar> directoryBars;
+  Rows directoryBars;
   std::string directoryText;
   int movementDirection = 0;
   std::int64_t movementEndMillis = 0;
   std::string resolvedModeFilter = "ALL";
   std::string resolvedDifficultyFilter = "ALL";
+  std::shared_ptr<const std::vector<MusicSelectBar>> rowOwner;
+  std::shared_ptr<const std::vector<MusicSelectBar>> directoryOwner;
+  std::uint64_t rowsRevision = 0;
 };
+
+using MusicSelectBarManagerSnapshot =
+    MusicSelectBarManagerState<std::vector<MusicSelectBar>>;
+using MusicSelectBarManagerReadView =
+    MusicSelectBarManagerState<std::span<const MusicSelectBar>>;
 
 struct MusicSelectTableContext {
   std::string name;
@@ -37,7 +47,12 @@ musicSelectFirstExistingReplay(const MusicSelectBar *bar) noexcept;
 [[nodiscard]] std::string
 musicSelectSelectedHash(const MusicSelectBar *bar, bool sha256);
 [[nodiscard]] MusicSelectTableContext musicSelectTableContextForLaunch(
+    const MusicSelectBarManagerReadView &);
+[[nodiscard]] MusicSelectTableContext musicSelectTableContextForLaunch(
     const MusicSelectBarManagerSnapshot &);
+
+[[nodiscard]] std::vector<MusicSelectBar> musicSelectProjectionChildren(
+    const MusicSelectProjection &, const MusicSelectBarId &);
 
 class MusicSelectBarManager final {
 public:
@@ -62,15 +77,26 @@ public:
   void configure(MusicSelectBarManagerConfig);
   void refresh(MusicSelectProjection);
   [[nodiscard]] MusicSelectBarManagerSnapshot snapshot() const;
+  [[nodiscard]] MusicSelectBarManagerReadView readView() const;
+  [[nodiscard]] skin::MusicSelectSongListFrame songListFrame() const;
 
 private:
   [[nodiscard]] const MusicSelectBar *selected() const;
   void rebuildRows(std::optional<MusicSelectBarId> preferred = std::nullopt);
+  void rebuildProjectionIndex();
+  [[nodiscard]] const MusicSelectBar *find(const MusicSelectBarId &) const;
 
   MusicSelectProjection projection_;
   std::vector<MusicSelectBarId> directory_;
   std::vector<MusicSelectBarId> sourceBars_;
-  std::vector<MusicSelectBar> rows_;
+  std::shared_ptr<std::vector<MusicSelectBar>> rows_ =
+      std::make_shared<std::vector<MusicSelectBar>>();
+  std::shared_ptr<std::vector<MusicSelectBar>> directoryBars_ =
+      std::make_shared<std::vector<MusicSelectBar>>();
+  std::string directoryText_;
+  std::unordered_map<std::string, std::size_t> projectionIndex_;
+  std::unordered_map<std::string, std::size_t> rowIndex_;
+  std::uint64_t rowsRevision_ = 0;
   std::size_t selectedIndex_ = 0;
   int movementDirection_ = 0;
   std::int64_t movementEndMillis_ = 0;

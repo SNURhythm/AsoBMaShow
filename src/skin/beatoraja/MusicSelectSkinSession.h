@@ -274,8 +274,6 @@ private:
   std::map<int, std::filesystem::path> pendingBuiltinImagePaths_;
   std::stop_source builtinImagePatchStop_;
   std::future<MusicSelectBuiltinImagePatch> pendingBuiltinImagePatch_;
-  std::map<SkinObjectId, std::vector<std::string>>
-      pendingRuntimeStringsByObject_;
   std::set<SkinObjectId> pendingTextAtlasObjects_;
   std::set<SkinObjectId> unavailableTextAtlasObjects_;
   std::stop_source textAtlasPatchStop_;

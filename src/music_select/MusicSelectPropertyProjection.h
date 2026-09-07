@@ -73,5 +73,10 @@ struct MusicSelectPropertyRuntimeSnapshot {
 
 [[nodiscard]] skin::MusicSelectPropertyValues
 projectMusicSelectProperties(const AppSettings &,
+                             const MusicSelectBarManagerReadView &,
+                             const MusicSelectPropertyRuntimeSnapshot &);
+
+[[nodiscard]] skin::MusicSelectPropertyValues
+projectMusicSelectProperties(const AppSettings &,
                              const MusicSelectBarManagerSnapshot &,
                              const MusicSelectPropertyRuntimeSnapshot &);

@@ -42,6 +42,8 @@ bool hasErrors(const std::vector<SkinDiagnostic> &diagnostics) {
 using RuntimeStringsByObject =
     std::map<SkinObjectId, std::vector<std::string>>;
 
+constexpr int kMusicSelectTitleOverscan = 16;
+
 void appendRuntimeString(RuntimeStringsByObject &strings, SkinObjectId object,
                          std::string_view value) {
   if (value.empty()) return;
@@ -54,7 +56,7 @@ void appendRuntimeString(RuntimeStringsByObject &strings, SkinObjectId object,
 RuntimeStringsByObject musicSelectRuntimeAtlasStrings(
     const ValidatedBeatorajaSkinModel &model,
     const MusicSelectSkinFrame &frame,
-    const RuntimeStringsByObject &observedText = {}) {
+    const RuntimeStringsByObject &observedText = {}, int titleOverscan = 0) {
   RuntimeStringsByObject result;
   MusicSelectSkinStateBridge state(frame);
   for (const auto &definition : model.model.objects) {
@@ -78,17 +80,23 @@ RuntimeStringsByObject musicSelectRuntimeAtlasStrings(
     const auto *songList =
         std::get_if<SkinSongListObject>(&definition.payload);
     if (songList == nullptr) continue;
-    // BarRenderer prepares every title character in the current directory
-    // when its text changes, not merely the sixty rows visible this frame.
-    // Keep the same per-text-object corpus so list scrolling cannot request a
-    // whole resource catalog rebuild for a title which was already known to
-    // the selector's current directory.
-    for (const auto &presentation : songList->text) {
-      if (presentation.object == 0) {
-        continue;
+    const auto plan = MusicSelectBarRenderer{}.plan(*songList, frame.songList);
+    std::map<SkinObjectId, std::set<std::size_t>> nearbyTitles;
+    for (const auto &command : plan.commands) {
+      if (command.family == MusicSelectBarDrawFamily::Title) {
+        appendRuntimeString(result, command.object, command.text);
+        if (titleOverscan == 0) continue;
+        const auto count = static_cast<std::int64_t>(frame.songList.size());
+        for (int offset = -titleOverscan; offset <= titleOverscan; ++offset) {
+          const auto index = static_cast<std::int64_t>(command.barIndex) + offset;
+          nearbyTitles[command.object].insert(
+              static_cast<std::size_t>((index % count + count) % count));
+        }
       }
-      for (const MusicSelectBarFrame &bar : frame.songList.bars) {
-        appendRuntimeString(result, presentation.object, bar.title);
+    }
+    for (const auto &[object, indexes] : nearbyTitles) {
+      for (const auto index : indexes) {
+        appendRuntimeString(result, object, frame.songList.at(index).title);
       }
     }
   }
@@ -96,6 +104,48 @@ RuntimeStringsByObject musicSelectRuntimeAtlasStrings(
     for (const auto &value : values) {
       appendRuntimeString(result, object, value);
     }
+  }
+  return result;
+}
+
+RuntimeStringsByObject mergeRuntimeGlyphs(
+    const RuntimeStringsByObject &resident,
+    const RuntimeStringsByObject &required) {
+  std::map<SkinObjectId, std::set<char32_t>> glyphs;
+  const auto collect = [&](const RuntimeStringsByObject &strings) {
+    for (const auto &[object, values] : strings) {
+      for (const auto &value : values) {
+        for (std::size_t offset = 0; offset < value.size();) {
+          utf8proc_int32_t codepoint = 0;
+          const auto consumed = utf8proc_iterate(
+              reinterpret_cast<const utf8proc_uint8_t *>(value.data() + offset),
+              static_cast<utf8proc_ssize_t>(value.size() - offset), &codepoint);
+          if (consumed <= 0) {
+            codepoint = 0xfffd;
+            ++offset;
+          } else {
+            offset += static_cast<std::size_t>(consumed);
+          }
+          if (codepoint != '\r' && codepoint != '\n') {
+            glyphs[object].insert(static_cast<char32_t>(codepoint));
+          }
+        }
+      }
+    }
+  };
+  collect(resident);
+  collect(required);
+  RuntimeStringsByObject result;
+  for (const auto &[object, codepoints] : glyphs) {
+    std::string text;
+    for (const auto codepoint : codepoints) {
+      std::array<utf8proc_uint8_t, 4> encoded{};
+      const auto size = utf8proc_encode_char(
+          static_cast<utf8proc_int32_t>(codepoint), encoded.data());
+      text.append(reinterpret_cast<const char *>(encoded.data()),
+                  static_cast<std::size_t>(size));
+    }
+    result[object].push_back(std::move(text));
   }
   return result;
 }
@@ -435,7 +485,7 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
     }
 
     auto runtimeAtlasStrings = musicSelectRuntimeAtlasStrings(
-        document.model, context.initialFrame);
+        document.model, context.initialFrame, {}, kMusicSelectTitleOverscan);
     // Beatoraja's selector receives its selected chart artwork from the
     // loader after the skin becomes active. Do not hold first paint for it.
     std::map<int, std::filesystem::path> builtinImagePaths;
@@ -903,17 +953,6 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
     const MusicSelectSkinFrame &frame) {
   const auto strings = musicSelectRuntimeAtlasStrings(
       model_, frame, observedRuntimeStringsByObject_);
-  // Union the newly required titles with the corpus already resident in the
-  // live atlas. The replacement atlas therefore keeps every previously drawn
-  // glyph, so titles from the prior directory remain visible while the patch
-  // builds and the new directory's titles appear the moment it lands instead
-  // of blanking for the whole async window.
-  RuntimeStringsByObject unionStrings = preparedRuntimeStringsByObject_;
-  for (const auto &[object, values] : strings) {
-    for (const auto &value : values) {
-      appendRuntimeString(unionStrings, object, value);
-    }
-  }
   const auto missingObjects = [&] {
     std::set<SkinObjectId> result;
     for (const auto &[object, values] : strings) {
@@ -935,17 +974,12 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
   if (pendingTextAtlasPatch_.valid()) {
     if (pendingTextAtlasPatch_.wait_for(std::chrono::milliseconds(0)) !=
         std::future_status::ready) {
-      if (unionStrings != pendingRuntimeStringsByObject_) {
-        textAtlasPatchStop_.request_stop();
-      }
       return missingObjects().empty();
     }
     MusicSelectTextAtlasPatch patch = pendingTextAtlasPatch_.get();
-    pendingRuntimeStringsByObject_.clear();
     textAtlasPatchStop_ = std::stop_source{};
     const auto targetObjects = std::exchange(pendingTextAtlasObjects_, {});
-    if (!patch.cancelled && patch.runtimeStrings == unionStrings &&
-        resources_) {
+    if (!patch.cancelled && resources_) {
       diagnostics_.insert(
           diagnostics_.end(),
           std::make_move_iterator(patch.diagnostics.begin()),
@@ -978,7 +1012,10 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
   if (pendingTextAtlasPatch_.valid()) {
     return false;
   }
-  pendingRuntimeStringsByObject_ = unionStrings;
+  auto unionStrings = mergeRuntimeGlyphs(
+      preparedRuntimeStringsByObject_,
+      musicSelectRuntimeAtlasStrings(model_, frame, observedRuntimeStringsByObject_,
+                                     kMusicSelectTitleOverscan));
   pendingTextAtlasObjects_ = missing;
   pendingTextAtlasPatch_ = std::async(
       std::launch::async,
@@ -1016,7 +1053,7 @@ bool MusicSelectSkinSession::refreshResources(
       return false;
     }
     auto runtimeAtlasStrings = musicSelectRuntimeAtlasStrings(
-        model_, frame, observedRuntimeStringsByObject_);
+        model_, frame, observedRuntimeStringsByObject_, kMusicSelectTitleOverscan);
     auto builtinImagePaths = musicSelectBuiltinImagePaths(frame);
     auto planned = resourcePreparation_->decodeAndPlan(
         {.revision = revision_.clone(),

@@ -349,7 +349,7 @@ MusicSelectClockFields localClockFields(std::time_t value) {
 }
 
 std::optional<MusicSelectPreviewSelection>
-previewSelection(const MusicSelectBarManagerSnapshot &snapshot,
+previewSelection(const MusicSelectBarManagerReadView &snapshot,
                  bool archivePreviewEnabled) {
   if (snapshot.selectedIndex >= snapshot.rows.size()) return std::nullopt;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
@@ -451,17 +451,6 @@ std::optional<MusicSelectCommandKey> commandKey(const SDL_KeyboardEvent &key) {
   }
 }
 
-std::vector<MusicSelectBar> projectionChildren(
-    const MusicSelectProjection &projection, const MusicSelectBarId &parent) {
-  std::vector<MusicSelectBar> result;
-  const auto *directory = projection.find(parent);
-  if (directory == nullptr) return result;
-  result.reserve(directory->children.size());
-  for (const auto &id : directory->children) {
-    if (const auto *child = projection.find(id)) result.push_back(*child);
-  }
-  return result;
-}
 } // namespace
 
 MusicSelectScene::MusicSelectScene(
@@ -675,8 +664,8 @@ void MusicSelectScene::onResume() {
 
 void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   if (!chartSession_) return;
-  const MusicSelectBarManagerSnapshot previous =
-      preserveDirectory ? bars_.snapshot() : MusicSelectBarManagerSnapshot{};
+  const MusicSelectBarManagerReadView previous =
+      preserveDirectory ? bars_.readView() : MusicSelectBarManagerReadView{};
   std::optional<MusicSelectBarId> previousSelection;
   if (preserveDirectory && previous.selectedIndex < previous.rows.size()) {
     previousSelection = previous.rows[previous.selectedIndex].id;
@@ -684,6 +673,8 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   const std::uint64_t loadedRevision =
       context.chartRepository.GetLibraryRevision();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
+  folderStatusRowsRevision_.reset();
+  folderStatusRetryAt_.reset();
   scoreCache_ = std::make_shared<const ScoreBestCache>(
       context.scoreRepository.LoadBestScores());
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
@@ -701,7 +692,7 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
       repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
   if (preserveDirectory) {
     for (const auto &directoryId : previous.directory) {
-      const auto current = bars_.snapshot();
+      const auto current = bars_.readView();
       const auto found = std::ranges::find(current.rows, directoryId,
                                            &MusicSelectBar::id);
       if (found == current.rows.end()) break;
@@ -714,7 +705,7 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
 }
 
 void MusicSelectScene::syncResolvedFilters() {
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (context.settings.skinModeFilterName == snapshot.resolvedModeFilter &&
       context.settings.skinDifficultyFilterName ==
           snapshot.resolvedDifficultyFilter) {
@@ -735,7 +726,14 @@ std::int64_t MusicSelectScene::elapsedMicros() const {
 }
 
 void MusicSelectScene::requestFolderStatus(
-    const MusicSelectBarManagerSnapshot &snapshot) {
+    const MusicSelectBarManagerReadView &snapshot) {
+  if (folderStatusRowsRevision_ == snapshot.rowsRevision) {
+    if (!folderStatusRetryAt_ ||
+        std::chrono::steady_clock::now() < *folderStatusRetryAt_) return;
+  } else {
+    folderStatusRetryAt_.reset();
+  }
+  folderStatusRowsRevision_ = snapshot.rowsRevision;
   std::vector<MusicSelectBar> directories;
   for (const auto &bar : snapshot.rows) {
     switch (bar.kind) {
@@ -752,7 +750,7 @@ void MusicSelectScene::requestFolderStatus(
     folderStatusLoader_ = std::make_unique<MusicSelectFolderStatusLoader>();
   }
   const int longNoteMode = long_note_mode::valueFromId(context.settings.selectedLnMode);
-  folderStatusLoader_->request(
+  const bool requested = folderStatusLoader_->request(
       std::move(directories), snapshot.resolvedModeFilter, longNoteMode,
       [this, scores = scoreCache_, mode = snapshot.resolvedModeFilter, longNoteMode,
        session = std::make_shared<std::optional<ChartRepository::Session>>(),
@@ -773,6 +771,14 @@ void MusicSelectScene::requestFolderStatus(
              .modeFilter = mode,
              .selectedLongNoteMode = longNoteMode});
       });
+  if (folderStatusRetryAt_) {
+    if (requested) {
+      folderStatusRetryAt_.reset();
+    } else {
+      folderStatusRetryAt_ = std::chrono::steady_clock::now() +
+                             std::chrono::seconds(1);
+    }
+  }
 }
 
 void MusicSelectScene::selectedBarMoved() {
@@ -781,7 +787,7 @@ void MusicSelectScene::selectedBarMoved() {
   selectedChartInformation_.reset();
   selectedChartAnalysisStarted_ = false;
 #endif
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   requestFolderStatus(snapshot);
   // Preload the newly selected chart (parse + jukebox) in the background so a
   // heavy archive chart is ready by the time the user presses Start.
@@ -936,13 +942,13 @@ void MusicSelectScene::setPanelState(int next) {
 }
 
 skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   skin::MusicSelectSkinFrame frame;
   frame.serial = std::max<std::uint64_t>(1, frameSerial_);
   frame.elapsedMillis = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - started_)
                             .count();
-  frame.songList.selectedIndex = snapshot.selectedIndex;
+  frame.songList = bars_.songListFrame();
   frame.songList.elapsedMillis = frame.elapsedMillis;
   const auto wall = unixMillis();
   frame.songList.wallClockMillis = wall;
@@ -955,10 +961,6 @@ skin::MusicSelectSkinFrame MusicSelectScene::makeFrame() const {
       long_note_mode::kLnValue;
   frame.songList.movementDirection = snapshot.movementDirection;
   frame.songList.movementEndMillis = snapshot.movementEndMillis;
-  frame.songList.bars.reserve(snapshot.rows.size());
-  for (const auto &row : snapshot.rows) {
-    frame.songList.bars.push_back(row.presentation);
-  }
 
   const std::time_t wallSeconds = static_cast<std::time_t>(wall / 1000);
   MusicSelectPropertyRuntimeSnapshot propertyRuntime;
@@ -1052,7 +1054,7 @@ void MusicSelectScene::updateSelectedChartAnalysis() {
     return;
   }
 
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song ||
@@ -1157,7 +1159,7 @@ void MusicSelectScene::applySkinPointerResult(
   }
   if (pointer.closeDirectory) closeDirectory();
   if (!pointer.selectIndex) return;
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (*pointer.selectIndex >= snapshot.rows.size()) return;
   const auto &clicked = snapshot.rows[*pointer.selectIndex];
   const bool activate = musicSelectPointerActivatesRow(origin);
@@ -1362,7 +1364,7 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
 }
 
 void MusicSelectScene::openSelected() {
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (skin::musicSelectIsDirectoryBarKind(selected.kind)) {
@@ -1431,7 +1433,7 @@ bool MusicSelectScene::loadDirectoryChildren(
           {.path = fspath_to_path_t(directory.directoryPath)});
       const auto projection =
           MusicSelectRepositoryProjection{}.project(inputFor(records, &metadata));
-      children = projectionChildren(projection, directory.id);
+      children = musicSelectProjectionChildren(projection, directory.id);
       break;
     }
 
@@ -1487,7 +1489,7 @@ bool MusicSelectScene::loadDirectoryChildren(
     metadata.tables.push_back(*table);
     const auto projection = MusicSelectRepositoryProjection{}.project(
         inputFor({}, &metadata));
-    children = projectionChildren(projection, directory.id);
+    children = musicSelectProjectionChildren(projection, directory.id);
     for (auto &child : children) {
       if (child.kind == skin::MusicSelectBarKind::Hash) {
         child.childrenLoaded = false;
@@ -1511,7 +1513,7 @@ bool MusicSelectScene::loadDirectoryChildren(
     metadata.tables.push_back(std::move(table));
     const auto projection = MusicSelectRepositoryProjection{}.project(
         inputFor({}, &metadata));
-    children = projectionChildren(projection, directory.id);
+    children = musicSelectProjectionChildren(projection, directory.id);
     break;
   }
   case skin::MusicSelectBarKind::Container: {
@@ -1546,7 +1548,7 @@ bool MusicSelectScene::loadDirectoryChildren(
         &recentScoreImprovements_);
     const auto projection = MusicSelectRepositoryProjection{}.project(
         inputFor(records, nullptr, {}, &recentScoreImprovements_));
-    children = projectionChildren(projection, directory.id);
+    children = musicSelectProjectionChildren(projection, directory.id);
     break;
   }
   case skin::MusicSelectBarKind::SearchWord: {
@@ -1561,7 +1563,7 @@ bool MusicSelectScene::loadDirectoryChildren(
     const std::array<MusicSelectSearchSource, 1> searches{std::move(source)};
     const auto projection = MusicSelectRepositoryProjection{}.project(
         inputFor({}, nullptr, searches));
-    children = projectionChildren(projection, directory.id);
+    children = musicSelectProjectionChildren(projection, directory.id);
     break;
   }
   case skin::MusicSelectBarKind::SameFolder:
@@ -1575,7 +1577,7 @@ bool MusicSelectScene::loadDirectoryChildren(
 
 void MusicSelectScene::openSameFolder() {
   if (!chartSession_) return;
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
@@ -1628,7 +1630,7 @@ void MusicSelectScene::openSameFolder() {
 }
 
 void MusicSelectScene::copySelectedHash(bool sha256) {
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   const MusicSelectBar *selected =
       snapshot.selectedIndex < snapshot.rows.size()
           ? &snapshot.rows[snapshot.selectedIndex]
@@ -1762,7 +1764,7 @@ void MusicSelectScene::startPreloadForSelection() {
   if (launching_) {
     return;
   }
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
@@ -1846,7 +1848,7 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
   StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   const auto tableContext = musicSelectTableContextForLaunch(snapshot);
   const bool autoKeySound = !context.settings.inputKeysoundEnabled;
   const bool doublePlayFlip = context.settings.skinDoublePlayOption == 1;
@@ -1932,7 +1934,7 @@ bool MusicSelectScene::reusePreloadedChart(
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   audio::diag::SelectAudioLog("[bgm] launchSelected");
   if (launching_) return;
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind == skin::MusicSelectBarKind::Grade ||
@@ -2179,7 +2181,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
     launching_ = false;
     return;
   }
-  const auto tableContext = musicSelectTableContextForLaunch(bars_.snapshot());
+  const auto tableContext = musicSelectTableContextForLaunch(bars_.readView());
   StartOptions options{
       .startPosition = 0,
       .autoKeySound = session->autoKeySound,
@@ -2214,7 +2216,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
 
 void MusicSelectScene::launchSelectedDirectoryAutoplay() {
   if (launching_) return;
-  auto snapshot = bars_.snapshot();
+  auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto directory = snapshot.rows[snapshot.selectedIndex];
   if (!directory.childrenLoaded && !loadDirectoryChildren(directory)) return;
@@ -2232,7 +2234,7 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
 
 void MusicSelectScene::launchCourseReplay(
     const MusicSelectBar &course, int slot,
-    const MusicSelectBarManagerSnapshot &snapshot) {
+    const MusicSelectBarManagerReadView &snapshot) {
   const int lnMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   const auto paths = musicSelectCourseReplaySlotPaths(course, lnMode);
@@ -2322,7 +2324,7 @@ void MusicSelectScene::launchCourseReplay(
 
 void MusicSelectScene::launchSelectedReplay(int slot) {
   if (launching_ || slot < 0 || slot >= 4) return;
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind == skin::MusicSelectBarKind::Grade) {
@@ -2400,7 +2402,7 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
 
 void MusicSelectScene::changeSelectedFavorite(bool song, int direction) {
   if (!chartSession_) return;
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (!selected.chart || selected.chart->meta.BmsPath.empty()) return;
@@ -2498,7 +2500,7 @@ void MusicSelectScene::consumeActions() {
 void MusicSelectScene::consumeLogicalInput() {
   if (!inputBindingAdapter_) return;
   auto &logicalInput = inputBindingAdapter_->state();
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   logicalInput.currentBar = MusicSelectInputBarKind::Other;
   if (snapshot.selectedIndex < snapshot.rows.size()) {
     const auto &selected = snapshot.rows[snapshot.selectedIndex];
@@ -2588,7 +2590,7 @@ void MusicSelectScene::applyInputAction(
     launchSelectedReplay(action.value);
     break;
   case MusicSelectInputActionKind::OpenFolder:
-    if (const auto snapshot = bars_.snapshot();
+    if (const auto snapshot = bars_.readView();
         snapshot.selectedIndex < snapshot.rows.size()) {
       (void)openDirectory(snapshot.rows[snapshot.selectedIndex]);
     }
@@ -2599,7 +2601,7 @@ void MusicSelectScene::applyInputAction(
     closeDirectory();
     break;
   case MusicSelectInputActionKind::CommandNextReplay: {
-    const auto snapshot = bars_.snapshot();
+    const auto snapshot = bars_.readView();
     if (snapshot.selectedIndex < snapshot.rows.size()) {
       selectedReplay_ = musicSelectNextExistingReplay(
           &snapshot.rows[snapshot.selectedIndex], selectedReplay_);
@@ -2673,7 +2675,7 @@ void MusicSelectScene::executeEvent(
     const skin::MusicSelectSkinAction &action) {
   const auto id = numericSelector(action.selector);
   const auto name = selectorName(action.selector);
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   const MusicSelectBar *selected =
       snapshot.selectedIndex < snapshot.rows.size()
           ? &snapshot.rows[snapshot.selectedIndex]
@@ -2943,11 +2945,17 @@ void MusicSelectScene::update(float) {
       } else {
         SDL_Log("Music-select folder status %s: %s", result.id.value.c_str(),
                 result.error.c_str());
+        folderStatusRetryAt_ = std::chrono::steady_clock::now() +
+                               std::chrono::seconds(1);
       }
     }
   }
+  if (folderStatusRetryAt_ &&
+      std::chrono::steady_clock::now() >= *folderStatusRetryAt_) {
+    requestFolderStatus(bars_.readView());
+  }
   previewController_.observeSelection(
-      previewSelection(bars_.snapshot(),
+      previewSelection(bars_.readView(),
                        context.settings.archiveChartPreviewEnabled),
       songBarChangeMicros_);
   if (auto preview = previewController_.update(elapsedMicros(), launching_);
@@ -3054,7 +3062,7 @@ void MusicSelectScene::openMusicPlayer() {
 }
 
 void MusicSelectScene::openChartViewer() {
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
@@ -3069,7 +3077,7 @@ void MusicSelectScene::openChartViewer() {
 }
 
 void MusicSelectScene::openChartRecords() {
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
@@ -3689,7 +3697,7 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
       .pacemakerTarget = selections.pacemakerTarget};
-  const auto snapshot = bars_.snapshot();
+  const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rows.size()) return state;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (!selected.chart) return state;

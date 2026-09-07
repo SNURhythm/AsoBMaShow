@@ -507,6 +507,27 @@ void testProjectsDelayedSelectedSongInformation() {
           "density properties");
 }
 
+void testLargeReadViewProjectsAbsoluteSelectionAndFolderStatistics() {
+  AppSettings settings;
+  auto rows = std::make_shared<std::vector<MusicSelectBar>>(10'000);
+  rows->back() = {.kind = skin::MusicSelectBarKind::Folder,
+                  .title = "Last directory",
+                  .presentation = {.kind = skin::MusicSelectBarKind::Folder}};
+  rows->back().presentation.folderLampCounts[6] = 12'345;
+  MusicSelectBarManagerReadView view{.rows = *rows,
+                                     .selectedIndex = 9999,
+                                     .directoryText = "Parent > ",
+                                     .rowOwner = rows};
+  const auto values = projectMusicSelectProperties(settings, view, {});
+  require(std::abs(values.rates.at(1) - 0.9999) < 0.000001 &&
+              values.strings.at(10) == "Last directory" &&
+              values.strings.at(1000) == "Parent > " &&
+              values.integers.at(300) == 12'345 &&
+              values.integers.at(326) == 12'345 &&
+              values.booleans.at(1),
+          "properties read the actual selected row and full list scroll extent");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -516,6 +537,7 @@ int main(int argc, char **argv) {
   testProjectsExactBarClassConditions();
   testProjectsCourseContract();
   testUnavailableSongRatesStayZeroWithoutNotes();
+  testLargeReadViewProjectsAbsoluteSelectionAndFolderStatistics();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_property_projection_tests", failures,
       "music-select property projection assertion(s) failed",

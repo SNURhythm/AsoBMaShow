@@ -4929,10 +4929,10 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           continue;
         }
         const auto &songList = *inputs.musicSelectSongList;
-        if (songList.selectedIndex >= songList.bars.size()) {
+        if (songList.selectedIndex >= songList.size()) {
           continue;
         }
-        const auto &selectedBar = songList.bars[songList.selectedIndex];
+        const auto &selectedBar = songList.at(songList.selectedIndex);
         if (!musicSelectIsDirectoryBarKind(selectedBar.kind)) {
           continue;
         }

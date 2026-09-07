@@ -30,6 +30,43 @@ the historical audit below. Regression coverage includes mixed and category-only
 folders, direct/deep charts, duplicate hashes, lazy-to-eager projection, folder
 properties, and SQLite query plans.
 
+## Virtualized Lua selector lists (2026-09-08)
+
+Flattened folders retain their complete indexed song list. Scene frames share
+immutable manager row storage instead of copying chart metadata and every title
+on each update, render, or pointer event. The owning `snapshot()` API remains
+value-owned; `readView()` and song-list frames retain their storage across
+navigation, refresh, and copy-on-write folder-status updates. Only authored
+SkinBar slots (the existing upstream sixty-slot contract) materialize titles
+and draw commands. Absolute selection, slider extent, pointer indices,
+wraparound, movement interpolation, and full-folder lamp/rank totals are not
+window-relative or truncated. Unusual authored center values still wrap and are
+not rejected.
+
+Font preparation reads the materialized title commands and current dynamic
+properties, not the directory-wide title corpus for every text object. Missing
+glyphs trigger asynchronous, affected-atlas-only updates; each patch retains
+previously resident glyphs as a compact codepoint union, finishes even while the
+list keeps moving, then services any still-missing visible glyphs. Reordering
+known glyphs does not rebuild an atlas. Initial preparation and missing-visible-
+glyph patches prewarm sixteen nearby rows on either side, including wraparound;
+moving the prewarm boundary alone does not trigger another patch. Existing callback-text and unavailable
+font behavior is preserved; no skin validation or resource restrictions are
+added.
+
+Projection child extraction and manager installation/rebinding use identity
+indexes rather than a linear search for each child. Folder-status request
+construction is tied to row membership revisions, not selection movement.
+The same-folder action queries raw records within the exact physical folder so
+a nonpreferred duplicate selected from the flattened list can reopen its own
+folder rather than being removed by global preferred-copy selection.
+
+Regression coverage exercises 10,000/50,000-row installation and retained
+frames, bounded preparation and steady-render allocations, scrolling atlas
+completion, absolute pointer/wraparound behavior, tiny/empty lists, and large
+folder properties in the existing manager, renderer, property, and session
+test targets.
+
 ## Folder-status audit (2026-09-08)
 
 The folder audit found runtime omissions despite the ledger's existing

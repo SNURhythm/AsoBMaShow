@@ -91,12 +91,12 @@ private:
       play_options::PlayOptionReplayInfo &, int &lnMode);
   void launchSelectedReplay(int slot);
   void launchCourseReplay(const MusicSelectBar &, int slot,
-                          const MusicSelectBarManagerSnapshot &);
+                          const MusicSelectBarManagerReadView &);
   void changeSelectedFavorite(bool song, int direction);
   void openSelected();
   [[nodiscard]] bool openDirectory(const MusicSelectBar &);
   [[nodiscard]] bool loadDirectoryChildren(const MusicSelectBar &);
-  void requestFolderStatus(const MusicSelectBarManagerSnapshot &);
+  void requestFolderStatus(const MusicSelectBarManagerReadView &);
   void openSameFolder();
   void copySelectedHash(bool sha256);
   void closeDirectory();
@@ -163,6 +163,8 @@ private:
   std::optional<ChartRepository::Session> chartSession_;
   std::shared_ptr<const ScoreBestCache> scoreCache_;
   std::unique_ptr<MusicSelectFolderStatusLoader> folderStatusLoader_;
+  std::optional<std::uint64_t> folderStatusRowsRevision_;
+  std::optional<std::chrono::steady_clock::time_point> folderStatusRetryAt_;
   ScoreClearRankCache clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   RecentScoreImprovements recentScoreImprovements_;

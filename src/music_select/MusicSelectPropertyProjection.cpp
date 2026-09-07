@@ -450,7 +450,7 @@ void projectSelectableScore(Properties &out, const ScoreBestSnapshot &score) {
 }
 
 void projectSelectedBar(Properties &out,
-                        const MusicSelectBarManagerSnapshot &bars,
+                        const MusicSelectBarManagerReadView &bars,
                         const MusicSelectPropertyRuntimeSnapshot &runtime) {
   const MusicSelectBar *selected =
       bars.selectedIndex < bars.rows.size() ? &bars.rows[bars.selectedIndex]
@@ -640,6 +640,17 @@ void projectSelectedBar(Properties &out,
 
 skin::MusicSelectPropertyValues projectMusicSelectProperties(
     const AppSettings &settings, const MusicSelectBarManagerSnapshot &bars,
+    const MusicSelectPropertyRuntimeSnapshot &runtime) {
+  return projectMusicSelectProperties(
+      settings,
+      MusicSelectBarManagerReadView{.rows = bars.rows,
+                                   .selectedIndex = bars.selectedIndex,
+                                   .directoryText = bars.directoryText},
+      runtime);
+}
+
+skin::MusicSelectPropertyValues projectMusicSelectProperties(
+    const AppSettings &settings, const MusicSelectBarManagerReadView &bars,
     const MusicSelectPropertyRuntimeSnapshot &runtime) {
   Properties out;
   out.rates[1] = bars.rows.empty()

@@ -50,6 +50,7 @@
 
 namespace session_test_allocation_fault {
 thread_local bool failNext = false;
+thread_local std::size_t allocatedBytes = 0;
 }
 
 void *operator new(std::size_t size) {
@@ -58,6 +59,7 @@ void *operator new(std::size_t size) {
     throw std::bad_alloc();
   }
   if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+    session_test_allocation_fault::allocatedBytes += size;
     return memory;
   }
   throw std::bad_alloc();
@@ -705,6 +707,7 @@ struct ActivationFixtureOptions {
   bool musicSelectBuiltinImageBearing = false;
   bool musicSelectCallbackTextBearing = false;
   bool musicSelectMissingCallbackFontBearing = false;
+  bool musicSelectSongListBearing = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -1027,6 +1030,25 @@ if skin_config then
     destination = {
       {id = "-100", dst = {{x = 0, y = 0, w = 40, h = 20}}}
     }
+  }
+)lua";
+    } else if (options.musicSelectSongListBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "atlas", path = "resources/fixture.png"}},
+    font = {{id = "font", path = "resources/fixture.ttf", type = 0}},
+    image = {{id = "bar", src = "atlas", x = 0, y = 0, w = 40, h = 20}},
+    imageset = {{id = "bars", images = {"bar"}}},
+    text = {{id = "title", font = "font", size = 16}},
+    songlist = {
+      id = "list", center = 0, clickable = {0},
+      liston = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      listoff = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      text = {{id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}},
+              {id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
+    },
+    destination = {{id = "list", dst = {{x = 0, y = 0}}}}
   }
 )lua";
     } else if (options.resourceBearing) {
@@ -3030,6 +3052,31 @@ void testMusicSelectPublishesPointerCapturesAndTextFocus() {
          "writer, and editable text exposes its exact overlay state");
 }
 
+void testMusicSelectTitlePreparationIsBoundedForLargeLists() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  for (int index = 0; index < 10'000; ++index) {
+    context.initialFrame.songList.bars.push_back(
+        {.title = "Directory title " + std::to_string(index), .exists = true});
+  }
+  auto prepared = MusicSelectSkinSession::prepare(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 98},
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = context.initialFrame});
+  expect(prepared.prepared.has_value(), "large songlist prepares");
+  if (!prepared.prepared) return;
+  std::size_t titleBytes = 0;
+  for (const auto &[object, strings] : prepared.prepared->runtimeAtlasStrings) {
+    for (const auto &value : strings) titleBytes += value.size();
+  }
+  expect(titleBytes > 0 && titleBytes < 4096,
+         "10,000-row Lua list prepares only authored titles, not directory corpus");
+}
+
 void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
   if (!fixture.ready()) return;
@@ -3081,6 +3128,129 @@ void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
              fixture.device()->createCalls == createdBefore + 1,
          "music-select text updates only its affected atlas instead of "
          "rebuilding the complete resource catalog for a new glyph");
+}
+
+void testMusicSelectScrollingDoesNotStarveGlyphPatches() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  context.quadBackend = &backend;
+  MusicSelectSkinFrame frame;
+  frame.songList.bars.resize(10'000);
+  for (auto &bar : frame.songList.bars) {
+    bar.title = "0123456789";
+    bar.exists = true;
+  }
+  context.initialFrame = frame;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 99}, std::move(context));
+  expect(created.session != nullptr, "scrolling title fixture creates");
+  if (!created.session) return;
+  const auto uploads = fixture.device()->createCalls;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(2);
+  RenderContext renderContext;
+  bool rendered = true;
+  do {
+    ++frame.serial;
+    frame.songList.selectedIndex = frame.serial % 10'000;
+    frame.songList.bars[frame.songList.selectedIndex].title =
+        "0123456789\u03a9" + std::to_string(frame.serial);
+    rendered = created.session->render(renderContext, frame) && rendered;
+    if (fixture.device()->createCalls > uploads) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  expect(rendered && fixture.device()->createCalls == uploads + 1 &&
+             backend.reservedVertices > 4,
+         "scrolling applies the in-flight glyph atlas and draws titles without starvation");
+  for (int index = 0; index < 100; ++index) {
+    ++frame.serial;
+    frame.songList.selectedIndex = frame.serial % 10'000;
+    frame.songList.bars[frame.songList.selectedIndex].title =
+        std::to_string(frame.serial) + "\u03a99876543210";
+    rendered = created.session->render(renderContext, frame) && rendered;
+  }
+  expect(rendered && fixture.device()->createCalls == uploads + 1 &&
+             backend.reservedVertices > 4,
+         "new titles using resident glyphs do not rebuild an atlas per scroll");
+}
+
+void testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  context.quadBackend = &backend;
+  context.initialFrame.songList.bars = {{.title = "01234567890123456789",
+                                        .exists = true}};
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 100}, std::move(context));
+  expect(created.session != nullptr, "bounded render allocation fixture creates");
+  if (!created.session) return;
+  MusicSelectSkinFrame small;
+  small.songList.bars = {{.title = "01234567890123456789", .exists = true}};
+  MusicSelectSkinFrame large = small;
+  for (int index = 1; index < 10'000; ++index) {
+    large.songList.bars.push_back(
+        {.title = "01234567890123456789" + std::to_string(index), .exists = true});
+  }
+  RenderContext renderContext;
+  std::uint64_t serial = 1;
+  const auto renderBytes = [&](MusicSelectSkinFrame &frame) {
+    frame.serial = serial++;
+    const auto before = session_test_allocation_fault::allocatedBytes;
+    const bool rendered = created.session->render(renderContext, frame);
+    const auto bytes = session_test_allocation_fault::allocatedBytes - before;
+    expect(rendered, "steady virtualized frame renders");
+    return bytes;
+  };
+  (void)renderBytes(small);
+  (void)renderBytes(large);
+  const auto smallBytes = renderBytes(small);
+  const auto largeBytes = renderBytes(large);
+  expect(largeBytes <= smallBytes + 4096,
+         "steady rendering allocates by authored slots, not 10,000 title strings");
+  std::cout << "steady render allocation: one row " << smallBytes
+            << " bytes; 10,000 rows " << largeBytes << " bytes\n";
+}
+
+void testMusicSelectPrewarmsBoundedNearbyGlyphs() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  context.quadBackend = &backend;
+  MusicSelectSkinFrame frame;
+  frame.songList.bars.resize(10'000);
+  for (auto &bar : frame.songList.bars) {
+    bar.title = "0123456789";
+    bar.exists = true;
+  }
+  frame.songList.bars[1].title = "\u03a9";
+  frame.songList.bars[9999].title = "\u00c9";
+  context.initialFrame = frame;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 101}, std::move(context));
+  expect(created.session != nullptr, "nearby glyph fixture creates");
+  if (!created.session) return;
+  const auto uploads = fixture.device()->createCalls;
+  RenderContext renderContext;
+  for (const std::size_t selected : {1u, 9999u, 0u}) {
+    frame.songList.selectedIndex = selected;
+    ++frame.serial;
+    const bool rendered = created.session->render(renderContext, frame);
+    expect(rendered && backend.reservedVertices > 4,
+           "adjacent and wrapped overscan titles have glyphs on their first visible frame");
+  }
+  expect(fixture.device()->createCalls == uploads,
+         "nearby scrolling uses bounded glyph prewarm rather than rebuilding per row");
 }
 
 void testMusicSelectPreparesCallbackTextGlyphsIncrementally() {
@@ -7420,6 +7590,10 @@ int main(int argc, char **argv) {
   testMusicSelectCompatibilityDoesNotAddHostResourcePolicies();
   testMusicSelectPublishesPointerCapturesAndTextFocus();
   testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh();
+  testMusicSelectTitlePreparationIsBoundedForLargeLists();
+  testMusicSelectScrollingDoesNotStarveGlyphPatches();
+  testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
+  testMusicSelectPrewarmsBoundedNearbyGlyphs();
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();

@@ -43,13 +43,13 @@ destinationAt(const SkinSongListPresentation &presentation,
 
 std::optional<std::size_t>
 wrappedBarIndex(const MusicSelectSongListFrame &frame, int row, int center) {
-  if (frame.bars.empty()) {
+  if (frame.size() == 0) {
     return std::nullopt;
   }
-  const std::int64_t count = static_cast<std::int64_t>(frame.bars.size());
+  const std::int64_t count = static_cast<std::int64_t>(frame.size());
   const std::int64_t raw = static_cast<std::int64_t>(frame.selectedIndex) +
-                           count * 100 + row - center;
-  const std::int64_t index = raw % count;
+                           static_cast<std::int64_t>(row) - center;
+  const std::int64_t index = (raw % count + count) % count;
   if (index < 0 || index >= count) {
     return std::nullopt;
   }
@@ -161,14 +161,14 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
       continue;
     }
     row.barIndex = *barIndex;
-    row.value = barValue(frame.bars[*barIndex]);
+    row.value = barValue(frame.at(*barIndex));
     if (row.value == -1) {
       continue;
     }
     row.x = destination->x;
     row.y = destination->y;
     barHeights[rowIndex] = destination->height;
-    row.textSlot = textSlot(songList, frame.bars[*barIndex], row.value,
+    row.textSlot = textSlot(songList, frame.at(*barIndex), row.value,
                             frame.wallClockSeconds);
   }
 
@@ -215,7 +215,7 @@ MusicSelectBarRenderPlan MusicSelectBarRenderer::plan(
   const auto forEachDrawnRow = [&](auto &&action) {
     for (const auto &row : result.rows) {
       if (row.value != -1) {
-        action(row, frame.bars[row.barIndex]);
+        action(row, frame.at(row.barIndex));
       }
     }
   };
