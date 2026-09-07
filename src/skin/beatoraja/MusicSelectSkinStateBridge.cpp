@@ -5,6 +5,7 @@
 #include "BeatorajaStringPropertyNames.h"
 #include "GameplaySkinBuiltinCatalog.h"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -14,6 +15,56 @@ namespace {
 
 template <typename Value> SkinPropertyLookup<Value> supported(Value value) {
   return {.value = std::move(value), .supported = true};
+}
+
+std::optional<int> namedFloatPropertySelector(std::string_view name) {
+  constexpr std::array<std::pair<std::string_view, int>, 71> direct = {{
+      {"musicselect_position", 1}, {"lanecover", 4},
+      {"lanecover2", 5},            {"music_progress", 6},
+      {"skinselect_position", 7},  {"ranking_position", 8},
+      {"mastervolume", 17},         {"keyvolume", 18},
+      {"bgmvolume", 19},            {"practice_position", 20},
+      {"music_progress_bar", 101},  {"load_progress", 102},
+      {"level", 103},                {"level_beginner", 105},
+      {"level_normal", 106},         {"level_hyper", 107},
+      {"level_another", 108},        {"level_insane", 109},
+      {"scorerate", 110},           {"scorerate_final", 111},
+      {"bestscorerate_now", 112},   {"bestscorerate", 113},
+      {"targetscorerate_now", 114}, {"targetscorerate", 115},
+      {"rate_pgreat", 140},          {"rate_great", 141},
+      {"rate_good", 142},            {"rate_bad", 143},
+      {"rate_poor", 144},            {"rate_maxcombo", 145},
+      {"rate_exscore", 147},
+      {"score_rate", 1102},         {"total_rate", 1115},
+      {"score_rate2", 155},         {"duration_average", 372},
+      {"timing_average", 374},       {"timign_stddev", 376},
+      {"perfect_rate", 85},          {"great_rate", 86},
+      {"good_rate", 87},             {"bad_rate", 88},
+      {"poor_rate", 89},             {"rival_perfect_rate", 285},
+      {"rival_great_rate", 286},     {"rival_good_rate", 287},
+      {"rival_bad_rate", 288},       {"rival_poor_rate", 289},
+      {"best_rate", 183},            {"rival_rate", 122},
+      {"target_rate", 135},          {"target_rate2", 157},
+      {"hispeed", 310},              {"groovegauge_1p", 1107},
+      {"chart_averagedensity", 367}, {"chart_enddensity", 362},
+      {"chart_peakdensity", 360},    {"chart_totalgauge", 368},
+      {"loading_progress", 165},     {"ir_totalclearrate", 227},
+      {"ir_totalfullcomborate", 229},
+      {"ir_player_noplay_rate", 203}, {"ir_player_failed_rate", 211},
+      {"ir_player_assist_rate", 205},
+      {"ir_player_lightassist_rate", 207},
+      {"ir_player_easy_rate", 213}, {"ir_player_normal_rate", 215},
+      {"ir_player_hard_rate", 217}, {"ir_player_exhard_rate", 209},
+      {"ir_player_fullcombo_rate", 219},
+      {"ir_player_perfect_rate", 223},
+      {"ir_player_max_rate", 225},
+  }};
+  for (const auto &[candidate, id] : direct) {
+    if (name == candidate) {
+      return id;
+    }
+  }
+  return std::nullopt;
 }
 
 SkinBindingType integerType(SkinIntegerPropertyDomain domain) {
@@ -182,6 +233,21 @@ SkinPropertyLookup<double> MusicSelectSkinStateBridge::floatProperty(
   }
   if (!gameplaySkinBuiltinCatalog().contains(floatType(domain), selector)) {
     return {};
+  }
+  if (const auto *name = std::get_if<std::string>(&selector.value)) {
+    if (const auto id = namedFloatPropertySelector(*name)) {
+      if (domain == SkinFloatPropertyDomain::Rate) {
+        return floatProperty({.value = *id}, domain);
+      }
+      if (const auto value = numericValue({.value = *id}, numeric)) {
+        return supported(*value);
+      }
+    }
+  }
+  if (domain == SkinFloatPropertyDomain::FloatValue &&
+      gameplaySkinBuiltinCatalog().contains(
+          floatType(SkinFloatPropertyDomain::Rate), selector)) {
+    return floatProperty(selector, SkinFloatPropertyDomain::Rate);
   }
   return supported<double>(std::numeric_limits<float>::denorm_min());
 }

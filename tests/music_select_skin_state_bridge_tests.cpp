@@ -83,6 +83,59 @@ void testExactPropertyNamespacesAndAbsentValues() {
           "known absent Timer uses Long.MIN_VALUE");
 }
 
+void testFactoryFloatNamesResolveNumericFrameProperties() {
+  MusicSelectSkinFrame frame;
+  frame.properties.rates = {{1, 0.25}, {17, 0.5}, {147, 0.75}};
+  frame.properties.floats = {{310, 2.5}, {217, 0.125}};
+  MusicSelectSkinStateBridge bridge(
+      frame, {.floatWriter = [](int, double) {}});
+  for (const auto domain : {SkinFloatPropertyDomain::Rate,
+                            SkinFloatPropertyDomain::FloatValue}) {
+    require(bridge.floatProperty(
+                       {.value = std::string("musicselect_position")}, domain)
+                    .value == 0.25 &&
+                bridge.floatProperty(
+                          {.value = std::string("mastervolume")}, domain)
+                        .value == 0.5 &&
+                bridge.floatProperty(
+                          {.value = std::string("rate_exscore")}, domain)
+                        .value == 0.75,
+            "factory Rate names read numeric production snapshots in both domains");
+  }
+  require(bridge.floatProperty({.value = 1},
+                               SkinFloatPropertyDomain::FloatValue).value == 0.25,
+          "numeric Float Value falls back to the Rate factory");
+  require(bridge.floatProperty({.value = std::string("hispeed")},
+                               SkinFloatPropertyDomain::FloatValue).value == 2.5 &&
+              bridge.floatProperty({.value = std::string("ir_player_hard_rate")},
+                                   SkinFloatPropertyDomain::FloatValue).value == 0.125,
+          "Float names and noncontiguous IR patterns resolve numeric values");
+  require(!bridge.floatProperty({.value = std::string("hispeed")},
+                                 SkinFloatPropertyDomain::Rate).supported &&
+              !bridge.floatProperty({.value = std::string("unknown_float")},
+                                     SkinFloatPropertyDomain::FloatValue).supported,
+          "factory fallback does not add Float-only names to the Rate namespace");
+  require(bridge.setFloatProperty(17, 0.875), "volume writer accepts the update");
+  for (const auto domain : {SkinFloatPropertyDomain::Rate,
+                            SkinFloatPropertyDomain::FloatValue}) {
+    require(bridge.floatProperty({.value = std::string("mastervolume")}, domain)
+                    .value == 0.875 &&
+                bridge.floatProperty({.value = 17}, domain).value == 0.875,
+            "named and numeric Rate fallback observe same-frame writer overrides");
+  }
+  frame.properties.namedRates["musicselect_position"] = 0.625;
+  require(bridge.floatProperty({.value = std::string("musicselect_position")},
+                               SkinFloatPropertyDomain::FloatValue).value == 0.625,
+          "Float fallback preserves explicit named Rate values");
+  frame.properties.namedFloats["musicselect_position"] = 0.9375;
+  frame.properties.floats[1] = 0.375;
+  require(bridge.floatProperty({.value = std::string("musicselect_position")},
+                               SkinFloatPropertyDomain::FloatValue).value == 0.9375 &&
+              bridge.floatProperty({.value = 1},
+                                   SkinFloatPropertyDomain::FloatValue).value == 0.375,
+          "explicit Float values retain precedence over Rate fallback");
+}
+
 void testUnknownPropertiesRemainUnsupported() {
   MusicSelectSkinFrame frame;
   MusicSelectSkinStateBridge bridge(frame);
@@ -184,6 +237,7 @@ void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
 
 int main(int argc, char **argv) {
   testExactPropertyNamespacesAndAbsentValues();
+  testFactoryFloatNamesResolveNumericFrameProperties();
   testUnknownPropertiesRemainUnsupported();
   testCustomTimerValuesOverrideTheFrameSnapshot();
   testPublishedSongResourcesOverrideChartPathFlags();
