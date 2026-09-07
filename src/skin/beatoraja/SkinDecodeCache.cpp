@@ -61,7 +61,7 @@ void SkinDecodeCache::evictIfOverBudgetLocked() {
 std::optional<image_decode::DecodedImageData>
 SkinDecodeCache::findSkinImage(std::string_view revisionKey,
                                std::string_view imageKey) const {
-  std::shared_lock lock(mutex_);
+  std::unique_lock lock(mutex_);
   const auto foundRevision = entries_.find(revisionKey);
   if (foundRevision == entries_.end()) {
     return std::nullopt;
@@ -101,7 +101,7 @@ void SkinDecodeCache::storeSkinImage(Key revisionKey, std::string imageKey,
 std::optional<image_decode::DecodedImageData>
 SkinDecodeCache::findFontPage(std::string_view revisionKey,
                               std::string_view physicalKey) const {
-  std::shared_lock lock(mutex_);
+  std::unique_lock lock(mutex_);
   const auto foundRevision = entries_.find(revisionKey);
   if (foundRevision == entries_.end()) {
     return std::nullopt;

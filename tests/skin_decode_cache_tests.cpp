@@ -54,6 +54,42 @@ void testDecodeCacheRetainsFontPagesAndEncodedByteCharges() {
          "dropAll clears cached font pages and their byte charges");
 }
 
+void testConcurrentHitsPreserveEvictionOrder() {
+  skin::SkinDecodeCache cache(24);
+  cache.storeSkinImage("revision", "image", decodedImage());
+  cache.storeFontPage("revision", "font", decodedImage(), 42);
+  std::atomic_bool start = false;
+  std::atomic_bool valid = true;
+  std::vector<std::thread> readers;
+  for (int reader = 0; reader < 8; ++reader) {
+    readers.emplace_back([&] {
+      while (!start.load()) std::this_thread::yield();
+      for (int iteration = 0; iteration < 2000; ++iteration) {
+        if (!cache.findSkinImage("revision", "image") ||
+            !cache.findFontPage("revision", "font")) {
+          valid = false;
+        }
+      }
+    });
+  }
+  start = true;
+  for (auto &reader : readers) reader.join();
+  expect(valid, "simultaneous hits retain both image and font entries");
+  cache.storeSkinImage("revision", "cold", decodedImage());
+  expect(cache.findSkinImage("revision", "image").has_value() &&
+             cache.findFontPage("revision", "font").has_value(),
+         "cache hits promote both entries before eviction");
+  cache.storeSkinImage("revision", "new", decodedImage());
+  expect(!cache.findSkinImage("revision", "cold") &&
+             cache.findSkinImage("revision", "image") &&
+             cache.findFontPage("revision", "font") &&
+             cache.findFontPageEncodedBytes("revision", "font") == 42 &&
+             cache.decodedBytes() == 24,
+         "concurrent hits leave LRU ordering and eviction byte charges intact");
+  cache.dropAll();
+  expect(cache.decodedBytes() == 0, "concurrent-hit cache releases all entries");
+}
+
 void testDecodeCacheConcurrentReadsWritesAndDrops() {
   skin::SkinDecodeCache cache;
   std::thread writer([&] {
@@ -105,6 +141,7 @@ void testDecodeCacheConcurrentReadsWritesAndDrops() {
 int main() {
   testDecodeCacheKeepsEntriesByRevisionAndEvictsOnChange();
   testDecodeCacheRetainsFontPagesAndEncodedByteCharges();
+  testConcurrentHitsPreserveEvictionOrder();
   testDecodeCacheConcurrentReadsWritesAndDrops();
   if (failures) return 1;
   std::cout << "Skin decode cache tests passed\n";
