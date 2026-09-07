@@ -1050,8 +1050,14 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
 
 bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
     std::span<const ChartFolderScanNode> nodes,
-    std::span<const std::filesystem::path> roots) {
+    std::span<const std::filesystem::path> roots,
+    const std::function<bool()> &checkpoint, ChartFolderSyncStats *stats) {
   if (impl_ == nullptr || !impl_->ready || impl_->committed) {
+    return false;
+  }
+  if (stats != nullptr) *stats = {};
+  const auto canContinue = [&] { return !checkpoint || checkpoint(); };
+  if (!canContinue()) {
     return false;
   }
 
@@ -1061,6 +1067,8 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
     std::int64_t addDateSeconds = 0;
   };
   std::map<std::filesystem::path, StoredFolder> stored;
+  std::map<std::filesystem::path, std::vector<std::filesystem::path>>
+      storedChildren;
   SqliteStatementHandle select;
   if (!prepareSqliteStatementLogged(
           impl_->database(), "SELECT path, date, adddate FROM folder", select,
@@ -1069,14 +1077,23 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
   }
   int selectResult = SQLITE_OK;
   while ((selectResult = sqlite3_step(select.get())) == SQLITE_ROW) {
+    if (!canContinue()) {
+      return false;
+    }
+    if (stats != nullptr) ++stats->storedFolders;
     const std::string storedPath = sqliteColumnString(select.get(), 0);
     const auto path = storedPathFromDatabase(storedPath).lexically_normal();
     if (!path.empty()) {
-          stored.emplace(path, StoredFolder{
-                               .storedPath = storedPath,
-                               .dateSeconds = sqlite3_column_int64(select.get(), 1),
-                               .addDateSeconds = sqlite3_column_int64(select.get(), 2),
-                           });
+      const auto [existing, inserted] = stored.emplace(
+          path, StoredFolder{
+                    .storedPath = storedPath,
+                    .dateSeconds = sqlite3_column_int64(select.get(), 1),
+                    .addDateSeconds = sqlite3_column_int64(select.get(), 2),
+                });
+      const auto parent = path.parent_path();
+      if (inserted && parent != path) {
+        storedChildren[parent].push_back(existing->first);
+      }
     }
   }
   if (selectResult != SQLITE_DONE) {
@@ -1088,6 +1105,9 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
   std::map<std::filesystem::path, std::vector<std::filesystem::path>>
       children;
   for (const auto &node : nodes) {
+    if (!canContinue()) {
+      return false;
+    }
     const auto path = std::filesystem::path(node.path).lexically_normal();
     if (path.empty()) {
       continue;
@@ -1095,8 +1115,11 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
     nodesByPath[path] = &node;
   }
   for (const auto &[path, _] : nodesByPath) {
-    const auto parent = path.parent_path().lexically_normal();
-    if (nodesByPath.contains(parent)) {
+    if (!canContinue()) {
+      return false;
+    }
+    const auto parent = path.parent_path();
+    if (parent != path && nodesByPath.contains(parent)) {
       children[parent].push_back(path);
     }
   }
@@ -1119,10 +1142,17 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
 
   std::set<std::filesystem::path> deleted;
   const auto deleteSubtree = [&](const std::filesystem::path &root) {
-    bool succeeded = true;
-    for (const auto &[path, record] : stored) {
-      if (deleted.contains(path) ||
-          (path != root && !pathIsInsideDirectory(path, root))) {
+    for (auto candidate = stored.lower_bound(root); candidate != stored.end();
+         ++candidate) {
+      if (!canContinue()) {
+        return false;
+      }
+      if (stats != nullptr) ++stats->subtreeChecks;
+      const auto &[path, record] = *candidate;
+      if (path != root && !pathIsInsideDirectory(path, root)) {
+        break;
+      }
+      if (deleted.contains(path)) {
         continue;
       }
       sqlite3_reset(erase.get());
@@ -1130,25 +1160,25 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
       bindSqliteText(erase.get(), 1, record.storedPath);
       if (sqlite3_step(erase.get()) != SQLITE_DONE) {
         logSqlError("deleting missing folder scan record", impl_->database());
-        succeeded = false;
-        break;
+        return false;
       }
-          impl_->noteFolderChanged();
+      impl_->noteFolderChanged();
       deleted.insert(path);
     }
-    return succeeded;
+    return true;
   };
 
+  std::set<std::filesystem::path> processed;
   std::function<bool(const std::filesystem::path &, bool)> process;
   process = [&](const std::filesystem::path &path, bool updateFolder) {
+    if (!canContinue()) {
+      return false;
+    }
     const auto node = nodesByPath.find(path);
-    if (node == nodesByPath.end()) {
+    if (node == nodesByPath.end() || !processed.insert(path).second) {
       return true;
     }
-    std::set<std::filesystem::path> presentChildren;
-    for (const auto &child : children[path]) {
-      presentChildren.insert(child);
-    }
+    if (stats != nullptr) ++stats->visitedFolders;
 
     if (!node->second->containsBms) {
       for (const auto &child : children[path]) {
@@ -1167,6 +1197,9 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
     }
 
     if (updateFolder) {
+      if (!canContinue()) {
+        return false;
+      }
       const auto existing = stored.find(path);
       const std::int64_t addDateSeconds =
           existing == stored.end() ||
@@ -1190,26 +1223,34 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
       impl_->noteFolderChanged(valuesChanged);
     }
 
-    for (const auto &[candidate, _] : stored) {
-      if (deleted.contains(candidate) ||
-          candidate.parent_path().lexically_normal() != path ||
-          presentChildren.contains(candidate)) {
-        continue;
-      }
-      if (!deleteSubtree(candidate)) {
-        return false;
+    if (const auto existingChildren = storedChildren.find(path);
+        existingChildren != storedChildren.end()) {
+      for (const auto &candidate : existingChildren->second) {
+        if (!canContinue()) {
+          return false;
+        }
+        if (stats != nullptr) ++stats->childChecks;
+        if (deleted.contains(candidate) || nodesByPath.contains(candidate)) {
+          continue;
+        }
+        if (!deleteSubtree(candidate)) {
+          return false;
+        }
       }
     }
     return true;
   };
 
   for (const auto &root : roots) {
+    if (!canContinue()) {
+      return false;
+    }
     const auto normalized = root.lexically_normal();
     if (nodesByPath.contains(normalized) && !process(normalized, true)) {
       return false;
     }
   }
-  return true;
+  return canContinue();
 }
 
 std::optional<int> ChartRepository::Session::ScanBatch::CountChartsInArchive(

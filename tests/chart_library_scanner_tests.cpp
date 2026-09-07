@@ -16,6 +16,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -528,6 +529,170 @@ void testFolderRecordsMatchBeatorajaFolderTraversal() {
       });
   assert(stableRoot != stableRecords.end());
   assert(stableRoot->addDateSeconds == stableRootAddDate);
+}
+
+struct FolderDeletionTrace {
+  std::atomic_bool enabled{false};
+  std::atomic_bool interrupted{false};
+  int deletedStatements = 0;
+  std::stop_source *stop = nullptr;
+};
+
+FolderDeletionTrace *folderDeletionTrace = nullptr;
+
+int traceFolderDeletion(unsigned, void *context, void *statement, void *) {
+  auto &trace = *static_cast<FolderDeletionTrace *>(context);
+  const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+  if (trace.enabled.load() && sql != nullptr &&
+      std::string_view(sql).starts_with("DELETE FROM folder WHERE path =")) {
+    ++trace.deletedStatements;
+    trace.interrupted.store(true);
+    if (trace.stop != nullptr) {
+      trace.stop->request_stop();
+    }
+  }
+  return 0;
+}
+
+int installFolderDeletionTrace(sqlite3 *database, char **,
+                                const sqlite3_api_routines *) {
+  return sqlite3_trace_v2(database, SQLITE_TRACE_PROFILE, traceFolderDeletion,
+                          folderDeletionTrace);
+}
+
+class ScopedFolderDeletionTrace {
+public:
+  explicit ScopedFolderDeletionTrace(FolderDeletionTrace &trace) {
+    folderDeletionTrace = &trace;
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+               installFolderDeletionTrace)) == SQLITE_OK);
+  }
+
+  ~ScopedFolderDeletionTrace() {
+    sqlite3_reset_auto_extension();
+    folderDeletionTrace = nullptr;
+  }
+};
+
+void testFolderCleanupInterruptionRollsBackBeforeResume() {
+  for (const bool useStopToken : {false, true}) {
+    TempDirectory temporary;
+    const auto root = temporary.path() / "library";
+    const auto scope = root / "scope";
+    const auto removed = scope / "gone";
+    const auto sparseDescendant = removed / "unstored-parent" / "deep";
+    const auto otherRemoved = scope / "z-gone";
+    const auto sibling = root / "scope-other";
+    const auto unvisited = root / "unvisited" / "deep";
+    std::filesystem::create_directories(scope);
+    FolderDeletionTrace trace;
+    std::stop_source stop;
+    const auto stopToken = stop.get_token();
+    if (useStopToken) trace.stop = &stop;
+    ScopedFolderDeletionTrace tracing(trace);
+    TestChartRepository repository(temporary.path() / "chart.db");
+    assert(repository.EnsureReady());
+    for (const auto &path : {scope, removed, sparseDescendant, otherRemoved,
+                            sibling, unvisited}) {
+      seedFolderRecord(repository.DatabasePath(), path, 0, 7);
+    }
+    auto session = repository.OpenSession();
+    assert(session.has_value());
+    const auto folderValues = [&] {
+      std::map<path_t, std::pair<std::int64_t, std::int64_t>> values;
+      for (const auto &record : session->SelectFolderRecords()) {
+        values[record.path] = {record.dateSeconds, record.addDateSeconds};
+      }
+      return values;
+    };
+    const auto before = folderValues();
+    const auto revision = repository.GetLibraryRevision();
+    trace.enabled.store(true);
+    ChartLibraryScanner scanner;
+    const auto result = scanner.ScanScopedWithResult(
+        *session, {scope}, &stopToken, nullptr,
+        [&] { return useStopToken || !trace.interrupted.load(); });
+    trace.enabled.store(false);
+    assert(trace.interrupted.load());
+    assert(!result.completed);
+    assert(!result.committed);
+    assert(trace.deletedStatements == 1);
+    assert(folderValues() == before);
+    assert(repository.GetLibraryRevision() == revision);
+
+    const auto resumed = scanner.ScanScopedWithResult(*session, {scope});
+    assert(resumed.completed);
+    const auto after = folderValues();
+    assert(after.size() == 3);
+    assert(after.contains(fspath_to_path_t(scope)));
+    assert(after.at(fspath_to_path_t(sibling)) ==
+           before.at(fspath_to_path_t(sibling)));
+    assert(after.at(fspath_to_path_t(unvisited)) ==
+           before.at(fspath_to_path_t(unvisited)));
+  }
+}
+
+void testFolderCleanupWorkTracksStoredEdgesNotTheCartesianProduct() {
+  for (const int folderCount : {100, 1'000, 10'000}) {
+    TempDirectory temporary;
+    const auto root = temporary.path() / "library";
+    TestChartRepository repository(temporary.path() / "chart.db");
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session.has_value());
+    std::vector<ChartFolderScanNode> nodes{
+        {.path = fspath_to_path_t(root), .dateSeconds = 42}};
+    for (int index = 0; index < folderCount; ++index) {
+      nodes.push_back({
+          .path = fspath_to_path_t(root / ("folder-" + std::to_string(index))),
+          .dateSeconds = 42,
+          .containsBms = true});
+    }
+    const std::vector<std::filesystem::path> roots{root};
+    auto seed = session->BeginScanBatch();
+    assert(seed.has_value());
+    assert(seed->SynchronizeFolders(nodes, roots));
+    assert(seed->Commit());
+    const auto revision = repository.GetLibraryRevision();
+
+    ChartFolderSyncStats unchangedStats;
+    auto unchanged = session->BeginScanBatch();
+    assert(unchanged.has_value());
+    assert(unchanged->SynchronizeFolders(nodes, roots, {}, &unchangedStats));
+    assert(unchanged->Commit());
+    std::cerr << "Folder sync work: folders=" << folderCount
+              << " childChecks=" << unchangedStats.childChecks
+              << " subtreeChecks=" << unchangedStats.subtreeChecks << '\n';
+    assert(unchangedStats.storedFolders == nodes.size());
+    assert(unchangedStats.visitedFolders == nodes.size());
+    assert(unchangedStats.childChecks == static_cast<std::size_t>(folderCount));
+    assert(unchangedStats.subtreeChecks == 0);
+    assert(repository.GetLibraryRevision() == revision);
+
+    ChartFolderSyncStats overlappingStats;
+    auto overlapping = session->BeginScanBatch();
+    assert(overlapping.has_value());
+    const std::vector<std::filesystem::path> overlappingRoots{
+        root, root, std::filesystem::path(nodes.back().path)};
+    assert(overlapping->SynchronizeFolders(nodes, overlappingRoots, {},
+                                           &overlappingStats));
+    assert(overlapping->Commit());
+    assert(overlappingStats.visitedFolders == nodes.size());
+    assert(overlappingStats.childChecks ==
+           static_cast<std::size_t>(folderCount));
+
+    nodes.resize(1);
+    ChartFolderSyncStats removedStats;
+    auto removed = session->BeginScanBatch();
+    assert(removed.has_value());
+    assert(removed->SynchronizeFolders(nodes, roots, {}, &removedStats));
+    assert(removed->Commit());
+    assert(removedStats.childChecks == static_cast<std::size_t>(folderCount));
+    assert(removedStats.subtreeChecks <=
+           2 * static_cast<std::size_t>(folderCount));
+    assert(session->SelectFolderRecords().size() == 1);
+  }
 }
 
 void testFolderTextDocumentFlagMatchesBeatorajaScanScope() {
@@ -2395,6 +2560,8 @@ int main() {
   testFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testFolderRecordsMatchBeatorajaFolderTraversal();
+  testFolderCleanupWorkTracksStoredEdgesNotTheCartesianProduct();
+  testFolderCleanupInterruptionRollsBackBeforeResume();
   testFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testArchiveFolderTextDocumentFlagMatchesBeatorajaScanScope();
   testKnownChartRefreshesFolderTextDocumentFlag();

@@ -243,7 +243,9 @@ public:
           const std::filesystem::path &archivePath, int priority,
           std::uint64_t archiveSize);
       bool SynchronizeFolders(std::span<const ChartFolderScanNode> nodes,
-                              std::span<const std::filesystem::path> roots);
+                              std::span<const std::filesystem::path> roots,
+                              const std::function<bool()> &checkpoint = {},
+                              ChartFolderSyncStats *stats = nullptr);
       std::optional<int>
       CountChartsInArchive(const std::filesystem::path &path);
       // Records that the given archive's charts were fully parsed and

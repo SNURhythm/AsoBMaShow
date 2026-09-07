@@ -2131,6 +2131,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::vector<ChartFolderScanNode> scannedFolders;
   scannedFolders.reserve(folderScanNodes.size());
   for (const auto &[_, node] : folderScanNodes) {
+    if (shouldStop()) {
+      entityScheduler.cancel();
+      return {};
+    }
     scannedFolders.push_back(node);
   }
   if (!folderScanRoots.empty()) {
@@ -2139,15 +2143,26 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         std::to_string(folderScanRoots.size()) + " nodes=" +
         std::to_string(folderScanNodes.size()));
     const auto syncStart = std::chrono::steady_clock::now();
-    recordStorageResult(
-        scanBatch->SynchronizeFolders(scannedFolders, folderScanRoots));
+    ChartFolderSyncStats syncStats;
+    const bool synchronized = scanBatch->SynchronizeFolders(
+        scannedFolders, folderScanRoots, [&] { return !shouldStop(); },
+        &syncStats);
     const auto syncMillis =
         std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - syncStart)
             .count();
     archive_file::appendDebugLogLine(
-        "Folder synchronization complete in " + std::to_string(syncMillis) +
-        "ms.");
+        std::string("Folder synchronization ") +
+        (synchronized ? "complete" : "aborted") + " in " +
+        std::to_string(syncMillis) + "ms: stored=" +
+        std::to_string(syncStats.storedFolders) + " visited=" +
+        std::to_string(syncStats.visitedFolders) + " childChecks=" +
+        std::to_string(syncStats.childChecks) + " subtreeChecks=" +
+        std::to_string(syncStats.subtreeChecks));
+    if (!synchronized) {
+      entityScheduler.cancel();
+      return {};
+    }
   }
   const auto reconcileLoopStart = scanPhaseStart();
   scanPhase("reconcile-update-loops");

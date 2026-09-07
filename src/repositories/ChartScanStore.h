@@ -2,8 +2,10 @@
 
 #include "../bms_parser.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -72,6 +74,13 @@ struct ChartScanSnapshot {
   std::vector<ArchiveScanCacheRecord> archiveCache;
   std::vector<CompletedArchiveRecord> completedArchives;
   std::optional<ChartScanCheckpoint> checkpoint;
+};
+
+struct ChartFolderSyncStats {
+  std::size_t storedFolders = 0;
+  std::size_t visitedFolders = 0;
+  std::size_t childChecks = 0;
+  std::size_t subtreeChecks = 0;
 };
 
 enum class ChartScanSnapshotLoad {
