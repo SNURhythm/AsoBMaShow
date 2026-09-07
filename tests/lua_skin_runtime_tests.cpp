@@ -462,6 +462,54 @@ void testUnrestrictedRuntimeLiftsSourceBudgetWithoutChangingSafeOs() {
   }
 }
 
+void testBindingArityDoesNotPublishDebugLibrary() {
+  RuntimePackageFixture &package = runtimePackage();
+  writeText(package.roots.visiblePackages / package.package.directoryName /
+                "skin/private-arity.luaskin", R"lua(
+return {
+  zero = function() end,
+  one = function(value) return value end,
+  two = function(first, second) return first end,
+  variadic = function(first, ...) return first end,
+  native = math.floor,
+  visibility = function()
+    local loaded = package.loaded and package.loaded.debug
+    local found = pcall(require, "debug")
+    return debug == nil and loaded == nil and not found
+  end
+}
+)lua");
+  for (const auto policy : {SkinSafetyLevel::Standard,
+                            SkinSafetyLevel::BeatorajaCompatibility,
+                            SkinSafetyLevel::Unrestricted}) {
+    auto harness = makeHarness(LuaRuntimePurpose::Gameplay,
+                                "private-arity.luaskin", false, false, policy);
+    if (!harness) continue;
+    auto header = harness->runtime->loadHeader();
+    expect(header.value.has_value(), "private arity fixture loads");
+    if (!header.value) continue;
+    for (const auto &[name, count] :
+         std::array<std::pair<std::string_view, int>, 5>{{
+             {"zero", 0}, {"one", 1}, {"two", 2}, {"variadic", 1}, {"native", 0}}}) {
+      const auto binding = header.value->lookupBindingSource(
+          {LuaValuePathElement::field(name)});
+      const auto *callback = binding.source
+                                 ? std::get_if<LuaCallbackId>(&*binding.source)
+                                 : nullptr;
+      expect(callback && harness->runtime->callbackParameterCount(*callback) == count,
+             "binding retention preserves fixed callback parameter counts");
+    }
+    const auto visibility = requireCallback(*header.value, "visibility");
+    expect(harness->runtime->loadConfigured({}).value.has_value() &&
+               harness->runtime->enterRenderPhase().ok &&
+               harness->runtime->beginFrame(1).ok,
+           "private arity fixture enters callback phase");
+    const auto result = harness->runtime->invoke(visibility, {});
+    expect(result.value && std::get<bool>(*result.value),
+           "binding callbacks expose neither debug global nor loaded registry library");
+  }
+}
+
 void testCatalogLuaLoadersBoundSourceBeforeHostAllocation() {
   RuntimePackageFixture fixture;
   if (!fixture.prepared) {
@@ -1268,6 +1316,7 @@ int main(int argc, char **argv) {
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testCatalogEntrySourceIsBoundedBeforeHostAllocation();
   testUnrestrictedRuntimeLiftsSourceBudgetWithoutChangingSafeOs();
+  testBindingArityDoesNotPublishDebugLibrary();
   testCatalogLuaLoadersBoundSourceBeforeHostAllocation();
   testStrictTwoPhaseStateMachineUsesOneState();
   testMainStateAccessorsOpenOnlyAtRenderTransition();

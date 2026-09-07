@@ -96,6 +96,7 @@ const char *runtimeFileFailureCode(SkinFileError error) noexcept {
 
 struct LuaRuntimeShared {
   lua_State *state = nullptr;
+  lua_CFunction callbackInfo = nullptr;
   std::size_t allocatedBytes = 0;
   std::size_t maximumAllocatorBytes = 0;
   bool enforceResourceBudget = true;
@@ -569,25 +570,29 @@ enum class BindingLookupFailure : std::uint8_t {
   HostAllocation,
 };
 
+int initializeCallbackInfo(lua_State *state) {
+  auto *shared = runtimeShared(state);
+  luaopen_debug(state);
+  lua_getfield(state, -1, "getinfo");
+  shared->callbackInfo = lua_tocfunction(state, -1);
+  lua_pushnil(state);
+  lua_setglobal(state, "debug");
+  lua_getfield(state, LUA_REGISTRYINDEX, "_LOADED");
+  lua_pushnil(state);
+  lua_setfield(state, -2, "debug");
+  return 0;
+}
+
 std::optional<int> luaFunctionParameterCount(lua_State *state,
                                              int index) noexcept {
-  // LuaJ exposes LuaFunction.narg() through debug.getinfo(..., "u"). Open
-  // the library only for this internal query: the skin never receives a
-  // debug global.
   const int savedTop = lua_gettop(state);
   const int functionIndex = absoluteIndex(state, index);
   const auto restore = [&] { lua_settop(state, savedTop); };
-
-  lua_pushcfunction(state, luaopen_debug);
-  if (lua_pcall(state, 0, 1, 0) != 0 || !lua_istable(state, -1)) {
-    restore();
+  const auto *shared = runtimeShared(state);
+  if (shared == nullptr || shared->callbackInfo == nullptr) {
     return std::nullopt;
   }
-  lua_getfield(state, -1, "getinfo");
-  if (!lua_isfunction(state, -1)) {
-    restore();
-    return std::nullopt;
-  }
+  lua_pushcfunction(state, shared->callbackInfo);
   lua_pushvalue(state, functionIndex);
   lua_pushliteral(state, "u");
   if (lua_pcall(state, 2, 1, 0) != 0 || !lua_istable(state, -1)) {
@@ -1329,6 +1334,12 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
   if (luaJIT_setmode(state, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_OFF) == 0) {
     return {.failure = makeDiagnostic("skin_lua_jit_disable_failed",
                                       "LuaJIT could not be disabled")};
+  }
+
+  lua_pushcfunction(state, initializeCallbackInfo);
+  if (lua_pcall(state, 0, 0, 0) != 0 || shared->callbackInfo == nullptr) {
+    return {.failure = makeDiagnostic("skin_lua_runtime_create_failed",
+                                      "Lua callback metadata initialization failed")};
   }
 
   auto installed = LuaSkinHostModules::create(
