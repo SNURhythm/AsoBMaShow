@@ -152,7 +152,7 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
   }
   session->EnsureSchema();
 
-  bool checkpointPaused = false;
+  std::atomic_bool checkpointPaused{false};
   auto checkpoint = [&] {
     // Non-blocking pause probe: abort to Paused when gameplay pauses instead
     // of blocking the single library thread in waitForResume (which only
@@ -161,7 +161,7 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
     const bool resumed =
         !stopToken.stop_requested() &&
         !(dependencies_.pauseRequested && dependencies_.pauseRequested());
-    checkpointPaused = checkpointPaused || !resumed;
+    if (!resumed) checkpointPaused.store(true, std::memory_order_relaxed);
     return resumed;
   };
   auto publishScanProgress = [&](const ChartScanProgress &value) {
@@ -174,7 +174,8 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
       dependencies_.completeScanFlush);
   SDL_Log("Chart folder refresh changed %d entries", result.changedCount);
 
-  if (stopToken.stop_requested() || checkpointPaused) {
+  if (stopToken.stop_requested() ||
+      checkpointPaused.load(std::memory_order_relaxed)) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
   if (!result.completed) {
@@ -299,7 +300,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     roots.push_back(chart_library_platform::resolveFolderEntryPath(entry));
   }
 
-  bool checkpointPaused = false;
+  std::atomic_bool checkpointPaused{false};
   auto checkpoint = [&] {
     // Non-blocking pause probe: abort to Paused when gameplay pauses instead
     // of blocking the single library thread in waitForResume (which only
@@ -308,7 +309,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     const bool resumed =
         !stopToken.stop_requested() &&
         !(dependencies_.pauseRequested && dependencies_.pauseRequested());
-    checkpointPaused = checkpointPaused || !resumed;
+    if (!resumed) checkpointPaused.store(true, std::memory_order_relaxed);
     return resumed;
   };
   auto publishScanProgress = [&](const ChartScanProgress &value) {
@@ -322,7 +323,8 @@ TaskRunResult ChartLibraryOperations::runRefresh(
       dependencies_.completeScanFlush);
   SDL_Log("Chart library refresh changed %d entries", result.changedCount);
 
-  if (stopToken.stop_requested() || checkpointPaused) {
+  const bool scanPaused = checkpointPaused.load(std::memory_order_relaxed);
+  if (stopToken.stop_requested() || scanPaused) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
   if (!result.completed) {
@@ -332,14 +334,14 @@ TaskRunResult ChartLibraryOperations::runRefresh(
                  static_cast<int>(result.completed),
                  static_cast<int>(result.committed), result.changedCount,
                  static_cast<int>(stopToken.stop_requested()),
-                 static_cast<int>(checkpointPaused));
+                 static_cast<int>(scanPaused));
     archive_file::appendDebugLogLine(
         "Chart library refresh failed: completed=" +
         std::to_string(result.completed) + " committed=" +
         std::to_string(result.committed) + " changed=" +
         std::to_string(result.changedCount) + " stop=" +
         std::to_string(stopToken.stop_requested()) + " pause=" +
-        std::to_string(checkpointPaused));
+        std::to_string(scanPaused));
     throw std::runtime_error("Failed to refresh chart library");
   }
   if (dependencies_.requestReload) {
@@ -463,7 +465,7 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
     roots.push_back(chart_library_platform::resolveFolderEntryPath(entry));
   }
 
-  bool checkpointPaused = false;
+  std::atomic_bool checkpointPaused{false};
   auto checkpoint = [&] {
     // Non-blocking pause probe: abort to Paused when gameplay pauses instead
     // of blocking the single library thread in waitForResume (which only
@@ -472,7 +474,7 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
     const bool resumed =
         !stopToken.stop_requested() &&
         !(dependencies_.pauseRequested && dependencies_.pauseRequested());
-    checkpointPaused = checkpointPaused || !resumed;
+    if (!resumed) checkpointPaused.store(true, std::memory_order_relaxed);
     return resumed;
   };
   auto publishScanProgress = [&](const ChartScanProgress &value) {
@@ -481,7 +483,8 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
   ChartLibraryScanner scanner;
   const ChartScanResult scanResult = scanner.ScanAddedWithResult(
       *session, roots, &stopToken, publishScanProgress, checkpoint);
-  if (stopToken.stop_requested() || checkpointPaused) {
+  if (stopToken.stop_requested() ||
+      checkpointPaused.load(std::memory_order_relaxed)) {
     return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
   }
   if (!scanResult.completed) {

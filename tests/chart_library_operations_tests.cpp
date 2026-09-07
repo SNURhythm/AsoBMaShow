@@ -1,17 +1,22 @@
 #include "library/ChartLibraryOperations.h"
 #include "library/ChartLibraryPlatform.h"
+#include "Utils.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <set>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -165,6 +170,56 @@ void testRefreshScansThroughTheRealRepository() {
          "refresh advances the repository library revision");
   expect(!progress.empty(), "refresh publishes scanner progress");
   expect(reloadRequested, "completed refresh requests selector reload");
+}
+
+void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
+  using namespace chart_library_tasks;
+  if (parallel_worker_count(8) <= 2) return;
+  for (const auto kind : {TaskKind::RefreshLibrary, TaskKind::RefreshPath,
+                          TaskKind::IndexDownloadedPath}) {
+    TempDirectory temporary;
+    const auto root = temporary.path() / "library";
+    for (int index = 0; index < 8; ++index) {
+      writeChart(root, "chart-" + std::to_string(index) + ".bms");
+    }
+    ChartRepository repository(temporary.path() / "chart.db");
+    expect(repository.EnsureReady(), "concurrent pause repository is ready");
+    const auto caller = std::this_thread::get_id();
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::set<std::thread::id> workers;
+    bool timedOut = false;
+    bool reloadRequested = false;
+    auto options = dependencies(
+        repository, temporary.path(), reloadRequested, [&] {
+          const auto thread = std::this_thread::get_id();
+          if (thread == caller) return false;
+          std::unique_lock lock(mutex);
+          workers.insert(thread);
+          changed.notify_all();
+          if (!changed.wait_for(lock, std::chrono::seconds(2),
+                                 [&] { return workers.size() >= 2; })) {
+            timedOut = true;
+          }
+          return true;
+        });
+    ChartLibraryOperations operations(std::move(options));
+    TaskRequest request;
+    request.kind = kind;
+    request.folderToAdd = root;
+    request.refreshPath = root;
+    request.downloadedPath = root;
+    const auto result = operations.run(
+        request, {}, [](const ChartScanProgress &, std::string_view) {},
+        [] { return true; });
+    expect(!timedOut && workers.size() >= 2,
+           "scanner workers meet concurrently inside the operation checkpoint");
+    expect(result.disposition == TaskRunDisposition::Paused,
+           "concurrent checkpoint interruption remains a pause, not a failure");
+    auto session = repository.OpenSession();
+    expect(session.has_value() && session->CountAllChartMeta() == 0,
+           "concurrently interrupted discovery commits no partial charts");
+  }
 }
 
 void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
@@ -547,6 +602,7 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 int main() {
   testRefreshStopsAtTheExistingPauseCheckpoint();
   testRefreshScansThroughTheRealRepository();
+  testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
