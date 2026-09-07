@@ -7,6 +7,7 @@
 
 #include <iostream>
 #include <string_view>
+#include <stdexcept>
 
 namespace {
 
@@ -497,6 +498,30 @@ void testCategoryOnlyFolderKeepsSubfolderNavigation() {
           "folders without immediate song entries retain Beatoraja navigation");
 }
 
+void testFolderStatusCancellationStopsAggregationWithoutPartialPublication() {
+  std::vector<ChartMetaRecord> records(10000,
+      chart("/songs/a/a.bms", "aaa", "Alpha", "", "/songs/a"));
+  MusicSelectBar folder{.kind = skin::MusicSelectBarKind::Folder};
+  folder.presentation.folderRankCounts[0] = 17;
+  std::stop_source cancellation;
+  int scoreReads = 0;
+  bool cancelled = false;
+  try {
+    MusicSelectRepositoryProjection::updateFolderStatus(folder,
+        {.records = records,
+         .scoreFor = [&](const bms_parser::ChartMeta &, int) {
+           if (++scoreReads == 3) cancellation.request_stop();
+           return std::optional<ScoreBestSnapshot>{};
+         }}, cancellation.get_token());
+  } catch (const std::runtime_error &) {
+    cancelled = true;
+  }
+  require(cancelled && scoreReads == 3,
+          "cancellation interrupts aggregation between score lookups");
+  require(folder.presentation.folderRankCounts[0] == 17,
+          "cancelled aggregation never publishes partial counts");
+}
+
 void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
   std::vector<ChartMetaRecord> records{
       chart("/pack/song/chart.bms", "scored", "Scored", "", "/pack/song"),
@@ -553,6 +578,7 @@ void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
 
 int main(int argc, char **argv) {
   testFolderStatusReplacesCountsAndFiltersOnlyMode();
+  testFolderStatusCancellationStopsAggregationWithoutPartialPublication();
   testMixedFolderFlattensDescendantsAndStatus();
   testCategoryOnlyFolderKeepsSubfolderNavigation();
   testProjectsFoldersSongsScoresAndSourceFlags();

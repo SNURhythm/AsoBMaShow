@@ -1248,6 +1248,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_repository_projection_tests PRIVATE cxx_std_23)
+        add_executable(music_select_folder_status_loader_tests
+            tests/music_select_folder_status_loader_tests.cpp
+            src/music_select/MusicSelectFolderStatusLoader.cpp
+        )
+        target_include_directories(music_select_folder_status_loader_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_folder_status_loader_tests PRIVATE cxx_std_23)
         add_executable(course_gameplay_session_builder_tests
             tests/course_gameplay_session_builder_tests.cpp
             src/bms_parser.cpp
@@ -7232,6 +7240,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_repository_projection_tests)
         asobmashow_register_test(music_select_repository_projection_tests)
+    endif()
+    if (TARGET music_select_folder_status_loader_tests)
+        asobmashow_register_test(music_select_folder_status_loader_tests)
     endif()
     if (TARGET course_gameplay_session_builder_tests)
         asobmashow_register_test(course_gameplay_session_builder_tests)

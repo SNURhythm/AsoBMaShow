@@ -34,6 +34,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <stdexcept>
 #include <system_error>
 #include <thread>
 #include <unordered_map>
@@ -53,6 +54,42 @@ using asobmshow::chart_sql::preferredChartPredicate;
 using asobmshow::chart_sql::sqlTextHasValue;
 
 constexpr int kNoPlayClearMarkRank = -1;
+
+void checkReadCancelled(std::stop_token stop) {
+  if (stop.stop_requested()) throw std::runtime_error("chart read cancelled");
+}
+
+class ScopedReadCancellation {
+public:
+  ScopedReadCancellation(sqlite3 *database, std::stop_token stop)
+      : database_(database), stop_(stop) {
+    checkReadCancelled(stop_);
+    if (stop_.stop_possible()) {
+      sqlite3_progress_handler(database_, 256, [](void *context) {
+        return static_cast<ScopedReadCancellation *>(context)
+            ->stop_.stop_requested() ? 1 : 0;
+      }, this);
+    }
+  }
+
+  ~ScopedReadCancellation() {
+    if (stop_.stop_possible()) sqlite3_progress_handler(database_, 0, nullptr, nullptr);
+  }
+
+private:
+  sqlite3 *database_;
+  std::stop_token stop_;
+};
+
+bool stepReadRow(sqlite3 *database, sqlite3_stmt *statement, std::stop_token stop) {
+  checkReadCancelled(stop);
+  const int status = sqlite3_step(statement);
+  checkReadCancelled(stop);
+  if (status != SQLITE_ROW && status != SQLITE_DONE && stop.stop_possible()) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  return status == SQLITE_ROW;
+}
 
 constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.path, ''),"
@@ -1311,7 +1348,8 @@ bool setSongReviewFavorite(sqlite3 *database, std::string_view sha256,
 int countAllChartMeta(sqlite3 *database);
 int countSolidArchives(sqlite3 *database);
 void queryChartMeta(sqlite3 *database, const ChartMetaQuery &query,
-                    std::vector<ChartMetaRecord> &chartMetas);
+                    std::vector<ChartMetaRecord> &chartMetas,
+                    std::stop_token stop = {});
 int countChartMeta(sqlite3 *database, const ChartMetaQuery &query);
 int findChartMetaIndex(sqlite3 *database, const ChartMetaQuery &query,
                        const std::filesystem::path &path);
@@ -1408,30 +1446,59 @@ bool ChartRepository::Session::SetSongReviewFavorite(
 }
 
 void ChartRepository::Session::QueryChartMeta(
-    const ChartMetaQuery &query, std::vector<ChartMetaRecord> &chartMetas) {
+    const ChartMetaQuery &query, std::vector<ChartMetaRecord> &chartMetas,
+    std::stop_token stop) {
+  checkReadCancelled(stop);
   std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
   if (chartMetaQueryNeedsScoreCache(query)) {
     prepared.emplace(impl_->scoreRepository(), *this);
     if (const auto &error = prepared->error()) {
+      checkReadCancelled(stop);
+      if (stop.stop_possible()) throw std::runtime_error(*error);
       SDL_Log("SQL error while preparing score query database: %s",
               error->c_str());
       return;
     }
   }
-  queryChartMeta(impl_->database(), query, chartMetas);
+  ScopedReadCancellation cancellation(impl_->database(), stop);
+  std::vector<ChartMetaRecord> records;
+  queryChartMeta(impl_->database(), query,
+                 stop.stop_possible() ? records : chartMetas, stop);
+  checkReadCancelled(stop);
+  if (stop.stop_possible()) {
+    const int status = sqlite3_errcode(impl_->database());
+    if (status != SQLITE_OK && status != SQLITE_DONE && status != SQLITE_ROW) {
+      throw std::runtime_error(sqlite3_errmsg(impl_->database()));
+    }
+    chartMetas.insert(chartMetas.end(), std::make_move_iterator(records.begin()),
+                       std::make_move_iterator(records.end()));
+  }
 }
 
 ChartMetaPathBatchReadOutcome ChartRepository::Session::SelectChartMetaByPaths(
-    std::span<const std::filesystem::path> paths) {
-  return chart_repository_detail::SelectChartMetaByPaths(impl_->database(),
-                                                         paths);
+    std::span<const std::filesystem::path> paths, std::stop_token stop) {
+  checkReadCancelled(stop);
+  auto result = chart_repository_detail::SelectChartMetaByPaths(
+      impl_->database(), paths, stop);
+  checkReadCancelled(stop);
+  return result;
 }
 
 std::vector<bms_parser::ChartMeta>
 ChartRepository::Session::SelectChartMetaByHash(const std::string &sha256,
-                                                 const std::string &md5) {
-  return chart_repository_detail::SelectChartMetaByHash(impl_->database(),
-                                                         sha256, md5);
+                                                 const std::string &md5,
+                                                 std::stop_token stop) {
+  ScopedReadCancellation cancellation(impl_->database(), stop);
+  auto result = chart_repository_detail::SelectChartMetaByHash(
+      impl_->database(), sha256, md5, stop);
+  checkReadCancelled(stop);
+  if (stop.stop_possible()) {
+    const int status = sqlite3_errcode(impl_->database());
+    if (status != SQLITE_OK && status != SQLITE_DONE && status != SQLITE_ROW) {
+      throw std::runtime_error(sqlite3_errmsg(impl_->database()));
+    }
+  }
+  return result;
 }
 
 int ChartRepository::Session::CountChartMeta(const ChartMetaQuery &query) {
@@ -1694,7 +1761,7 @@ int countSolidArchives(sqlite3 *db) {
 
 void queryChartMeta(
     sqlite3 *db, const ChartMetaQuery &chartQuery,
-    std::vector<ChartMetaRecord> &chartMetas) {
+    std::vector<ChartMetaRecord> &chartMetas, std::stop_token stop) {
   if (db == nullptr) {
     return;
   }
@@ -1730,7 +1797,7 @@ void queryChartMeta(
       sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
     }
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    while (stepReadRow(db, stmt, stop)) {
       int idx = 0;
       ChartMetaRecord record;
       std::filesystem::path path(readPath(stmt, idx++));
@@ -1788,7 +1855,7 @@ void queryChartMeta(
       sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
     }
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    while (stepReadRow(db, stmt, stop)) {
       chartMetas.push_back(std::move(readChartMetaRecord(stmt)));
     }
     return;
@@ -1832,7 +1899,7 @@ void queryChartMeta(
       sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
     }
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    while (stepReadRow(db, stmt, stop)) {
       chartMetas.push_back(std::move(readChartMetaRecord(stmt)));
     }
     return;
@@ -1865,9 +1932,10 @@ void queryChartMeta(
     sqlite3_bind_int(stmt, bindIndex++, std::max(0, chartQuery.offset));
   }
 
-  while (sqlite3_step(stmt) == SQLITE_ROW) {
+  while (stepReadRow(db, stmt, stop)) {
     chartMetas.push_back(std::move(readChartMetaRecord(stmt)));
   }
+  checkReadCancelled(stop);
   if (!chartQuery.rawSongData) populateDifficultyTableLabels(db, chartMetas);
 }
 
@@ -2289,7 +2357,8 @@ std::string difficultyTableLabelsForChart(
 } // namespace
 
 ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
-    sqlite3 *database, std::span<const std::filesystem::path> paths) {
+    sqlite3 *database, std::span<const std::filesystem::path> paths,
+    std::stop_token stop) {
   constexpr std::size_t kMaximumDistinctPaths = 16'384;
   constexpr std::size_t kPathsPerQuery = 256;
   ChartMetaPathBatchReadOutcome outcome;
@@ -2299,6 +2368,7 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
     std::unordered_set<std::string> seenPaths;
     seenPaths.reserve(paths.size());
     for (const auto &path : paths) {
+      checkReadCancelled(stop);
       const std::string normalized =
           chart_storage_identity::StoredPathText(path);
       if (normalized.empty() || !seenPaths.insert(normalized).second) {
@@ -2325,6 +2395,8 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
                            transactionError;
       return outcome;
     }
+
+    ScopedReadCancellation cancellation(database, stop);
 
     std::unordered_map<std::string, ChartMetaRecord> recordsByPath;
     recordsByPath.reserve(normalizedPaths.size());
@@ -2357,6 +2429,7 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
         }
       }
       while (true) {
+        checkReadCancelled(stop);
         const int stepResult = sqlite3_step(statement.get());
         if (stepResult == SQLITE_DONE) {
           break;
@@ -2381,6 +2454,7 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
     outcome.status = ChartMetaPathBatchReadStatus::Loaded;
     outcome.records.reserve(recordsByPath.size());
     for (const std::string &path : normalizedPaths) {
+      checkReadCancelled(stop);
       auto found = recordsByPath.find(path);
       if (found == recordsByPath.end()) {
         ++outcome.missingPaths;
@@ -2398,7 +2472,8 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
 std::vector<bms_parser::ChartMeta>
 chart_repository_detail::SelectChartMetaByHash(sqlite3 *database,
                                                 const std::string &sha256,
-                                                const std::string &md5) {
+                                                const std::string &md5,
+                                                std::stop_token stop) {
   using asobmshow::bms_metadata::normalizedHash;
   const std::string normalizedSha256 = normalizedHash(sha256);
   const std::string normalizedMd5 = normalizedHash(md5);
@@ -2427,6 +2502,7 @@ chart_repository_detail::SelectChartMetaByHash(sqlite3 *database,
 
   std::vector<bms_parser::ChartMeta> matches;
   while (true) {
+    checkReadCancelled(stop);
     const int stepResult = sqlite3_step(statement.get());
     if (stepResult == SQLITE_DONE) {
       break;

@@ -9,6 +9,7 @@
 #include <map>
 #include <ranges>
 #include <set>
+#include <stdexcept>
 
 namespace {
 
@@ -181,19 +182,27 @@ struct ProjectionBuilder {
   }
 
   void aggregate(MusicSelectBar &directory,
-                 std::span<const ChartMetaRecord> records) const {
-    directory.presentation.folderLampCounts = {};
-    directory.presentation.folderRankCounts = {};
-    directory.presentation.lamp = 0;
-    directory.presentation.rivalLamp = 0;
+                 std::span<const ChartMetaRecord> records,
+                 std::stop_token stop = {}) const {
+    const auto checkCancelled = [&] {
+      if (stop.stop_requested()) throw std::runtime_error("folder status cancelled");
+    };
+    checkCancelled();
+    auto frame = directory.presentation;
+    frame.folderLampCounts = {};
+    frame.folderRankCounts = {};
+    frame.lamp = 0;
+    frame.rivalLamp = 0;
     for (const auto &record : records) {
+      checkCancelled();
       if (record.unavailable || record.meta.BmsPath.empty() ||
           !modeMatches(input.modeFilter, songMode(record.meta))) {
         continue;
       }
       const auto best = score(record);
+      checkCancelled();
       const int lamp = best ? beatorajaClearType(best->clearType) : 0;
-      ++directory.presentation
+      ++frame
             .folderLampCounts[static_cast<std::size_t>(lamp)];
       int rank = 0;
       if (best && best->maxScore > 0) {
@@ -201,18 +210,20 @@ struct ProjectionBuilder {
             static_cast<std::int64_t>(best->score) * 27 / best->maxScore,
             0, 27));
       }
-      ++directory.presentation
+      ++frame
             .folderRankCounts[static_cast<std::size_t>(rank)];
     }
     const auto firstLamp = std::ranges::find_if(
-        directory.presentation.folderLampCounts,
+        frame.folderLampCounts,
         [](int count) { return count > 0; });
-    directory.presentation.lamp =
-        firstLamp == directory.presentation.folderLampCounts.end()
+    frame.lamp =
+        firstLamp == frame.folderLampCounts.end()
             ? 0
             : static_cast<int>(std::distance(
-                  directory.presentation.folderLampCounts.begin(),
+                  frame.folderLampCounts.begin(),
                   firstLamp));
+    checkCancelled();
+    directory.presentation = std::move(frame);
   }
 
   void addCommands() {
@@ -388,13 +399,14 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
 }
 
 void MusicSelectRepositoryProjection::updateFolderStatus(
-    MusicSelectBar &directory, MusicSelectRepositoryProjectionInput input) {
+    MusicSelectBar &directory, MusicSelectRepositoryProjectionInput input,
+    std::stop_token stop) {
   switch (directory.kind) {
   case skin::MusicSelectBarKind::Folder:
   case skin::MusicSelectBarKind::Hash:
   case skin::MusicSelectBarKind::SearchWord:
   case skin::MusicSelectBarKind::Command:
-    ProjectionBuilder{.input = input}.aggregate(directory, input.records);
+    ProjectionBuilder{.input = input}.aggregate(directory, input.records, stop);
     break;
   default: break;
   }

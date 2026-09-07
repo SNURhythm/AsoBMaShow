@@ -4,11 +4,17 @@
 
 #include <algorithm>
 #include <charconv>
+#include <stdexcept>
 
 std::vector<ChartMetaRecord>
 MusicSelectRepositoryProjection::loadDirectoryRecords(
     ChartRepository::Session &session, const MusicSelectBar &directory,
-    int selectedLongNoteMode, const RecentScoreImprovements *improvements) {
+    int selectedLongNoteMode, const RecentScoreImprovements *improvements,
+    std::stop_token stop) {
+  const auto checkCancelled = [&] {
+    if (stop.stop_requested()) throw std::runtime_error("folder status cancelled");
+  };
+  checkCancelled();
   ChartMetaQuery query;
   query.selectedLongNoteMode = selectedLongNoteMode;
   query.rawSongData = true;
@@ -41,43 +47,58 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
                              : improvements->score[day];
     std::vector<std::filesystem::path> paths;
     for (const auto &hash : hashes) {
-      for (const auto &meta : session.SelectChartMetaByHash(hash, {})) {
+      checkCancelled();
+      for (const auto &meta : session.SelectChartMetaByHash(hash, {}, stop)) {
+        checkCancelled();
         paths.push_back(meta.BmsPath);
       }
     }
-    std::ranges::sort(paths);
+    checkCancelled();
+    std::ranges::sort(paths, [&](const auto &left, const auto &right) {
+      checkCancelled();
+      return left < right;
+    });
     std::vector<ChartMetaRecord> records;
     constexpr std::size_t batchSize = 1'024;
     for (std::size_t offset = 0; offset < paths.size(); offset += batchSize) {
+      checkCancelled();
       auto batch = session.SelectChartMetaByPaths(std::span(paths).subspan(
-          offset, std::min(batchSize, paths.size() - offset)));
-      if (batch.status != ChartMetaPathBatchReadStatus::Loaded) return {};
-      for (auto &record : batch.records) records.push_back(std::move(record));
+          offset, std::min(batchSize, paths.size() - offset)), stop);
+      if (batch.status != ChartMetaPathBatchReadStatus::Loaded) {
+        throw std::runtime_error(batch.diagnostic);
+      }
+      for (auto &record : batch.records) {
+        checkCancelled();
+        records.push_back(std::move(record));
+      }
     }
     return records;
   }
   default: return {};
   }
   std::vector<ChartMetaRecord> records;
-  session.QueryChartMeta(query, records);
+  checkCancelled();
+  session.QueryChartMeta(query, records, stop);
+  checkCancelled();
   if (directory.kind == skin::MusicSelectBarKind::Folder && !records.empty()) {
     query.parentFolder.reset();
     query.recursiveFolder = directory.directoryPath;
     query.limit = 0;
     records.clear();
-    session.QueryChartMeta(query, records);
+    session.QueryChartMeta(query, records, stop);
+    checkCancelled();
   }
   return records;
 }
 
 skin::MusicSelectBarFrame MusicSelectRepositoryProjection::loadFolderStatus(
     ChartRepository::Session &session, MusicSelectBar directory,
-    MusicSelectRepositoryProjectionInput input) {
+    MusicSelectRepositoryProjectionInput input, std::stop_token stop) {
   auto records = loadDirectoryRecords(session, directory,
                                       input.selectedLongNoteMode,
-                                      input.recentScoreImprovements);
+                                      input.recentScoreImprovements, stop);
   input.records = records;
-  updateFolderStatus(directory, input);
+  updateFolderStatus(directory, input, stop);
   return directory.presentation;
 }
 

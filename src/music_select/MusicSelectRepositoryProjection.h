@@ -66,10 +66,12 @@ public:
   [[nodiscard]] static std::vector<ChartMetaRecord>
   loadDirectoryRecords(ChartRepository::Session &, const MusicSelectBar &,
                        int selectedLongNoteMode,
-                       const RecentScoreImprovements * = nullptr);
+                       const RecentScoreImprovements * = nullptr,
+                       std::stop_token stop = {});
   [[nodiscard]] static skin::MusicSelectBarFrame
   loadFolderStatus(ChartRepository::Session &, MusicSelectBar,
-                    MusicSelectRepositoryProjectionInput);
+                    MusicSelectRepositoryProjectionInput,
+                    std::stop_token stop = {});
 
   [[nodiscard]] MusicSelectProjection
   projectRoot(const MusicSelectRepositoryMetadata &,
@@ -80,5 +82,6 @@ public:
   project(MusicSelectRepositoryProjectionInput) const;
 
   static void updateFolderStatus(MusicSelectBar &,
-                                 MusicSelectRepositoryProjectionInput);
+                                 MusicSelectRepositoryProjectionInput,
+                                 std::stop_token stop = {});
 };

@@ -15,6 +15,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <stop_token>
 #include <vector>
 
 class ScoreRepository;
@@ -292,12 +293,13 @@ public:
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);
     bool SetSongReviewFavorite(std::string_view sha256, int favorite);
     void QueryChartMeta(const ChartMetaQuery &query,
-                        std::vector<ChartMetaRecord> &chartMetas);
+                        std::vector<ChartMetaRecord> &chartMetas,
+                        std::stop_token stop = {});
     ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
-        std::span<const std::filesystem::path> paths);
+        std::span<const std::filesystem::path> paths, std::stop_token stop = {});
     std::vector<bms_parser::ChartMeta>
     SelectChartMetaByHash(const std::string &sha256,
-                          const std::string &md5);
+                          const std::string &md5, std::stop_token stop = {});
     int CountChartMeta(const ChartMetaQuery &query);
     int FindChartMetaIndex(const ChartMetaQuery &query,
                            const std::filesystem::path &path);

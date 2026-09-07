@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -118,13 +119,34 @@ ScanBatchSqlObservation *scanBatchSqlObservation = nullptr;
 std::atomic<int> chartMetadataReleasesToDeny{0};
 std::mutex traceMutex;
 std::vector<std::string> tracedStatements;
+std::stop_source *readCancellation = nullptr;
+std::string cancelReadSql;
+int cancelReadAfterRows = 0;
+int observedReadRows = 0;
+int observedReadVmSteps = 0;
 
 int traceStatement(unsigned mask, void *, void *statement, void *) {
-  if ((mask & SQLITE_TRACE_STMT) == 0 || statement == nullptr) {
+  if (statement == nullptr) {
     return 0;
   }
   const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
   const std::string_view sqlText = sql != nullptr ? sql : "";
+  if (mask == SQLITE_TRACE_PROFILE) {
+    const int steps = sqlite3_stmt_status(static_cast<sqlite3_stmt *>(statement),
+                                          SQLITE_STMTSTATUS_VM_STEP, 0);
+    if (!cancelReadSql.empty() && sqlText.find(cancelReadSql) != std::string::npos) {
+      observedReadVmSteps = steps;
+    }
+    return 0;
+  }
+  if (readCancellation && sqlText.find(cancelReadSql) != std::string::npos) {
+    if (mask == SQLITE_TRACE_ROW) ++observedReadRows;
+    if ((mask == SQLITE_TRACE_STMT && cancelReadAfterRows == 0) ||
+        (mask == SQLITE_TRACE_ROW && observedReadRows == cancelReadAfterRows)) {
+      readCancellation->request_stop();
+    }
+  }
+  if (mask != SQLITE_TRACE_STMT) return 0;
   if (scanBatchSqlObservation != nullptr) {
     if (sqlText.starts_with("BEGIN")) {
       scanBatchSqlObservation->begins.fetch_add(1, std::memory_order_relaxed);
@@ -168,7 +190,8 @@ int observeConnection(sqlite3 *database, char **,
                       const sqlite3_api_routines *) {
   assert(connectionCount != nullptr);
   connectionCount->fetch_add(1, std::memory_order_relaxed);
-  sqlite3_trace_v2(database, SQLITE_TRACE_STMT, traceStatement, nullptr);
+  sqlite3_trace_v2(database, SQLITE_TRACE_STMT | SQLITE_TRACE_ROW |
+                               SQLITE_TRACE_PROFILE, traceStatement, nullptr);
   sqlite3_set_authorizer(database, observeAuthorization, nullptr);
   return SQLITE_OK;
 }
@@ -1182,6 +1205,7 @@ void testExactFolderQuery() {
                  .directoryPath = "packs"}, 1);
   assert(categoryRecords.empty());
 
+
   assert(!traced("chart_normalize_stored_folder(cm.folder)"));
   assert(traced("cm.folder = @exact_folder"));
 
@@ -1208,6 +1232,106 @@ void testExactFolderQuery() {
   const auto recursivePlan = repository_test::explainPlan(database.get(), recursiveCountSql);
   assert(repository_test::planContains(recursivePlan, "idx_chart_meta_folder"));
   assert(!repository_test::planContains(recursivePlan, "SCAN cm"));
+}
+
+void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  {
+    auto database = openDatabase(charts.DatabasePath());
+    assert(execute(database.get(),
+        "WITH RECURSIVE rows(value) AS (SELECT 1 UNION ALL "
+        "SELECT value + 1 FROM rows WHERE value < 50000) "
+        "INSERT INTO chart_meta(path,folder,md5,sha256,title) "
+        "SELECT 'library/song/' || value || '.bms', 'library/song', "
+        "printf('%032d', 0), printf('%064d', 0), "
+        "printf('%06d', 50000-value) FROM rows"));
+  }
+  auto session = charts.OpenSession();
+  assert(session);
+
+  std::stop_source cancelled;
+  readCancellation = &cancelled;
+  cancelReadSql = "@parent_folder";
+  cancelReadAfterRows = 0;
+  observedReadRows = 0;
+  {
+    std::lock_guard lock(traceMutex);
+    tracedStatements.clear();
+  }
+  bool threw = false;
+  try {
+    (void)MusicSelectRepositoryProjection::loadDirectoryRecords(
+        *session, {.kind = skin::MusicSelectBarKind::Folder,
+                   .directoryPath = "library"}, 1, nullptr,
+        cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw && cancelled.stop_requested());
+  assert(!traced("@recursive_folder"));
+
+  ChartMetaQuery query;
+  query.recursiveFolder = "library";
+  query.rawSongData = true;
+  std::vector<ChartMetaRecord> records;
+  for (const int rowLimit : {0, 3}) {
+    cancelled = std::stop_source{};
+    cancelReadSql = "@recursive_folder";
+    cancelReadAfterRows = rowLimit;
+    observedReadRows = 0;
+    observedReadVmSteps = 0;
+    threw = false;
+    try {
+      session->QueryChartMeta(query, records, cancelled.get_token());
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    assert(threw && cancelled.stop_requested());
+    assert(records.empty());
+    assert(observedReadRows == rowLimit);
+    if (rowLimit == 0) assert(observedReadVmSteps < 1000);
+    readCancellation = nullptr;
+    query.limit = 1;
+    session->QueryChartMeta(query, records);
+    assert(records.size() == 1);
+    records.clear();
+    query.limit = 0;
+    readCancellation = &cancelled;
+  }
+  cancelled = std::stop_source{};
+  cancelReadSql = "WHERE cm.sha256 = ?";
+  cancelReadAfterRows = 3;
+  observedReadRows = 0;
+  threw = false;
+  try {
+    (void)session->SelectChartMetaByHash(std::string(64, '0'), {},
+                                         cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw && observedReadRows == 3);
+
+  cancelled = std::stop_source{};
+  cancelReadSql = "WHERE cm.path IN (";
+  cancelReadAfterRows = 1;
+  observedReadRows = 0;
+  const std::vector<std::filesystem::path> paths{
+      "library/song/1.bms", "library/song/2.bms"};
+  threw = false;
+  try {
+    (void)session->SelectChartMetaByPaths(paths, cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw && observedReadRows == 1);
+  readCancellation = nullptr;
+  cancelReadSql.clear();
+  assert(session->SelectChartMetaByPaths(paths).records.size() == 2);
+  assert(session->CountAllChartMeta() == 50000);
 }
 
 void testChartMigrationCompatibilityMatrix() {
@@ -1598,6 +1722,7 @@ int main() {
   testChartQueryBehaviorMatrix();
   testDifficultyEntryDownloadUrlsFollowTheirSourceRows();
   testExactFolderQuery();
+  testFolderProbeAndCancelledReadsDoNotPoisonSession();
   testChartMigrationCompatibilityMatrix();
   testChartMigrationReleaseFailureDoesNotReportSuccess();
   testLegacyIosContainerPathRebasesToCurrentDocuments();

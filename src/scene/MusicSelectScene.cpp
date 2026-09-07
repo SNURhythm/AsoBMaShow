@@ -755,7 +755,8 @@ void MusicSelectScene::requestFolderStatus(
       [this, scores = scoreCache_, mode = snapshot.resolvedModeFilter, longNoteMode,
        session = std::make_shared<std::optional<ChartRepository::Session>>(),
        improvements = std::optional<RecentScoreImprovements>{},
-       now = unixMillis() / 1'000](const MusicSelectBar &bar) mutable {
+       now = unixMillis() / 1'000](const MusicSelectBar &bar,
+                                  std::stop_token stop) mutable {
         if (!*session) *session = context.chartRepository.OpenSession();
         if (!*session) throw std::runtime_error("Unable to open chart database");
         if (bar.kind == skin::MusicSelectBarKind::Command && !improvements) {
@@ -769,7 +770,7 @@ void MusicSelectScene::requestFolderStatus(
              },
              .recentScoreImprovements = improvements ? &*improvements : nullptr,
              .modeFilter = mode,
-             .selectedLongNoteMode = longNoteMode});
+             .selectedLongNoteMode = longNoteMode}, stop);
       });
   if (folderStatusRetryAt_) {
     if (requested) {

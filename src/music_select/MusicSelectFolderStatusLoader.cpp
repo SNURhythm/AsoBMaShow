@@ -4,6 +4,7 @@
 #include <utility>
 
 MusicSelectFolderStatusLoader::~MusicSelectFolderStatusLoader() {
+  cancel();
   worker_.request_stop();
   condition_.notify_all();
 }
@@ -14,29 +15,38 @@ bool MusicSelectFolderStatusLoader::request(std::vector<MusicSelectBar> bars,
   std::vector<MusicSelectBarId> rows;
   rows.reserve(bars.size());
   for (const auto &bar : bars) rows.push_back(bar.id);
-  std::lock_guard lock(mutex_);
+  std::unique_lock lock(mutex_);
   if (rows == rows_ && modeFilter == modeFilter_ &&
       longNoteMode == longNoteMode_) return false;
+  auto previousStop = activeStop_;
+  activeStop_ = std::stop_source{};
   rows_ = std::move(rows);
   modeFilter_ = std::move(modeFilter);
   longNoteMode_ = longNoteMode;
-  pending_ = Request{std::move(bars), std::move(process), ++generation_};
+  pending_ = Request{std::move(bars), std::move(process), ++generation_,
+                     activeStop_.get_token()};
   results_.clear();
   if (!worker_.joinable()) {
     worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
   }
+  lock.unlock();
+  previousStop.request_stop();
   condition_.notify_all();
   return true;
 }
 
 void MusicSelectFolderStatusLoader::cancel() {
-  std::lock_guard lock(mutex_);
+  std::unique_lock lock(mutex_);
+  auto previousStop = activeStop_;
   ++generation_;
   pending_.reset();
   results_.clear();
   rows_.clear();
   modeFilter_.clear();
   longNoteMode_ = -1;
+  lock.unlock();
+  previousStop.request_stop();
+  condition_.notify_all();
 }
 
 std::vector<MusicSelectFolderStatusLoader::Result>
@@ -63,7 +73,7 @@ void MusicSelectFolderStatusLoader::run(std::stop_token stop) {
       }
       Result result{.id = bar.id};
       try {
-        result.frame = request.process(bar);
+        result.frame = request.process(bar, request.stop);
       } catch (const std::exception &error) {
         result.error = error.what();
       }
