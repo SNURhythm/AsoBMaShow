@@ -102,6 +102,46 @@ void testWorkerRunsQueuedTasksOnceInOrder() {
   service.shutdown();
 }
 
+void testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask() {
+  using namespace chart_library_tasks;
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<std::uint64_t> ids;
+  std::vector<bool> rebuildRequests;
+  ChartLibraryTaskService service(
+      [&](const TaskRequest &request, const auto &, auto, auto) {
+        std::lock_guard lock(mutex);
+        const auto attempt = ids.size() + 1;
+        if (attempt <= 2) service.setGameplayPaused(true);
+        ids.push_back(request.id);
+        rebuildRequests.push_back(request.rebuildLibraryMetadata);
+        changed.notify_all();
+        return TaskRunResult{
+            .disposition = attempt <= 2 ? TaskRunDisposition::Paused
+                                       : TaskRunDisposition::Complete,
+            .rebuildLibraryMetadataCleared = attempt == 2};
+      });
+  const auto rebuildId = service.enqueue(
+      {.title = "rebuild", .rebuildLibraryMetadata = true});
+  const auto nextId = service.enqueue({.title = "next"});
+  const auto waitForAttempts = [&](std::size_t count) {
+    std::unique_lock lock(mutex);
+    return changed.wait_for(lock, std::chrono::seconds(2),
+                             [&] { return ids.size() >= count; });
+  };
+  expect(waitForAttempts(1), "rebuild pauses before initialization");
+  service.setGameplayPaused(false);
+  expect(waitForAttempts(2), "rebuild retries its pending initialization");
+  service.setGameplayPaused(false);
+  expect(waitForAttempts(4), "rebuild resumes before the queued next task");
+  service.shutdown();
+  expect(ids == std::vector<std::uint64_t>({rebuildId, rebuildId, rebuildId,
+                                          nextId}),
+         "paused retries retain task identity and FIFO priority");
+  expect(rebuildRequests == std::vector<bool>({true, true, false, false}),
+         "retries clear the destructive request only after successful initialization");
+}
+
 void testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume() {
   std::mutex mutex;
   std::condition_variable changed;
@@ -354,6 +394,7 @@ void testReservedPlatformCopyTaskCanBeQueuedOrFailed() {
 int main() {
   testSnapshotCarriesQueueAndProgressAsValues();
   testWorkerRunsQueuedTasksOnceInOrder();
+  testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask();
   testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume();
   testProgressUpdatesTaskRowAndProgressSnapshotTogether();
   testFailuresCompletionsAndHistoryRemainObservable();

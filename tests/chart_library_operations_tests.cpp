@@ -1,7 +1,11 @@
 #include "library/ChartLibraryOperations.h"
 #include "library/ChartLibraryPlatform.h"
+#include "ArchiveFile.h"
+#include "ArchiveRAII.h"
 #include "Utils.h"
 #include "bms_parser.hpp"
+
+#include <archive_entry.h>
 
 #include <algorithm>
 #include <atomic>
@@ -11,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -83,6 +88,43 @@ readChartIdentity(const std::filesystem::path &chartPath) {
   std::unique_ptr<bms_parser::Chart> chart(parsed);
   return chart ? main_menu_library::findBmsChartIdentity(chart->Meta)
                : main_menu_library::FindBmsChartIdentity{};
+}
+
+std::filesystem::path writeArchiveCharts(const std::filesystem::path &root,
+                                         int count) {
+  const auto source = writeChart(root / "source");
+  std::ifstream input(source);
+  const std::string contents((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+  const auto path = root / "library" / "rebuild.zip";
+  std::filesystem::create_directories(path.parent_path());
+  auto writer = makeArchiveWriteHandle();
+  expect(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK,
+         "rebuild archive uses ZIP format");
+  expect(archive_write_open_filename(writer.get(), path.string().c_str()) ==
+             ARCHIVE_OK,
+         "rebuild archive fixture opens");
+  for (int index = 0; index < count; ++index) {
+    const auto name = "chart-" + std::to_string(index) + ".bms";
+    const auto chart = contents + "#TITLE Rebuild " + std::to_string(index) +
+                       "\n";
+    std::unique_ptr<archive_entry, decltype(&archive_entry_free)> entry(
+        archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name.c_str());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), static_cast<la_int64_t>(chart.size()));
+    expect(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK,
+           "rebuild archive writes chart header");
+    expect(archive_write_data(writer.get(), chart.data(), chart.size()) ==
+               static_cast<la_ssize_t>(chart.size()),
+           "rebuild archive writes chart contents");
+    expect(archive_write_finish_entry(writer.get()) == ARCHIVE_OK,
+           "rebuild archive finishes chart entry");
+  }
+  expect(archive_write_close(writer.get()) == ARCHIVE_OK,
+         "rebuild archive fixture closes");
+  return path;
 }
 
 chart_library_tasks::ChartLibraryOperationsDependencies
@@ -170,6 +212,134 @@ void testRefreshScansThroughTheRealRepository() {
          "refresh advances the repository library revision");
   expect(!progress.empty(), "refresh publishes scanner progress");
   expect(reloadRequested, "completed refresh requests selector reload");
+}
+
+void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto archive = writeArchiveCharts(temporary.path(), 105);
+  archive_file::setArchiveIndexCacheDirectory(temporary.path() / "index-cache");
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "rebuild repository is ready");
+  {
+    auto session = repository.OpenSession();
+    expect(session.has_value() && session->InsertEntry(archive.parent_path()),
+           "rebuild fixture registers its existing library root once");
+  }
+  bool reloadRequested = false;
+  std::atomic_bool gameplayPaused{false};
+  std::atomic_int attempt{0};
+  std::atomic_int parsingCurrent{-1};
+  std::atomic_int clearCount{0};
+  std::atomic_int rowsBeforeResumedScan{-1};
+  std::atomic_bool checkpointBeforeResumedScan{false};
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<TaskRunResult> results;
+  std::vector<bool> rebuildRequests;
+  ChartLibraryTaskService *servicePointer = nullptr;
+  const auto pause = [&] {
+    gameplayPaused.store(true);
+    servicePointer->setGameplayPaused(true);
+  };
+  auto options = dependencies(repository, temporary.path(), reloadRequested,
+                              [&] { return gameplayPaused.load(); });
+  options.importDifficultyTablesFromDirectory =
+      [&](ChartRepository::Session &, const std::filesystem::path &,
+          const DifficultyTableImportCheckpoint &checkpoint) {
+        if (attempt.load() == 1) pause();
+        checkpoint();
+        return 0;
+      };
+  options.pendingScanFlushRequest = [&]() -> std::uint64_t {
+    return attempt.load() == 2 && parsingCurrent.load() >= 49 ? 1 : 0;
+  };
+  options.completeScanFlush = [&](std::uint64_t request) {
+    expect(request == 1, "mid-archive pause follows a durable flush");
+    pause();
+  };
+  ChartLibraryOperations operations(std::move(options));
+  ChartLibraryTaskService service(
+      [&](const TaskRequest &request, const std::stop_token &stop,
+          TaskProgressCallback publish, TaskPauseCallback waitForResume) {
+        const int currentAttempt = attempt.fetch_add(1) + 1;
+        const auto result = operations.run(
+            request, stop,
+            [&](const ChartScanProgress &progress, std::string_view detail) {
+              if (detail == "Clearing library caches") ++clearCount;
+              if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+                parsingCurrent.store(progress.current);
+              }
+              if (currentAttempt == 3 &&
+                  progress.stage == ChartScanProgressStage::PreparingUpdates) {
+                auto session = repository.OpenSession();
+                if (session.has_value()) {
+                  rowsBeforeResumedScan = session->CountAllChartMeta();
+                  checkpointBeforeResumedScan =
+                      session->LoadScanSnapshot().checkpoint.has_value();
+                }
+                pause();
+              }
+              publish(progress, detail);
+            },
+            waitForResume);
+        {
+          std::lock_guard lock(mutex);
+          results.push_back(result);
+          rebuildRequests.push_back(request.rebuildLibraryMetadata);
+        }
+        changed.notify_all();
+        return result;
+      });
+  servicePointer = &service;
+  service.enqueue({.kind = TaskKind::RefreshLibrary,
+                   .title = "Rebuild Library",
+                   .rebuildLibraryMetadata = true});
+  const auto waitForAttempt = [&](std::size_t count) {
+    std::unique_lock lock(mutex);
+    return changed.wait_for(lock, std::chrono::seconds(5),
+                             [&] { return results.size() >= count; });
+  };
+  const auto resume = [&] {
+    gameplayPaused.store(false);
+    service.setGameplayPaused(false);
+  };
+  expect(waitForAttempt(1), "rebuild pauses before destructive initialization");
+  expect(clearCount == 0, "pre-initialization pause does not clear metadata");
+  resume();
+  expect(waitForAttempt(2), "rebuild pauses after a committed archive prefix");
+  {
+    auto session = repository.OpenSession();
+    expect(session.has_value(), "paused rebuild can be read");
+    if (session.has_value()) {
+      const auto snapshot = session->LoadScanSnapshot();
+      expect(snapshot.charts.size() == 50,
+             "paused rebuild has fifty durable archive charts");
+      expect(snapshot.checkpoint && snapshot.checkpoint->subIndex == 50,
+             "paused rebuild has its durable archive checkpoint");
+    }
+  }
+  resume();
+  expect(waitForAttempt(3), "rebuild can pause again before resumed parsing");
+  expect(rowsBeforeResumedScan == 50 && checkpointBeforeResumedScan,
+         "retry retains committed metadata and checkpoint before scanning");
+  expect(clearCount == 1, "rebuild clears metadata once across paused retries");
+  resume();
+  expect(waitForAttempt(4), "resumed rebuild finishes the remaining archive");
+  service.shutdown();
+  expect(rebuildRequests == std::vector<bool>({true, true, false, false}),
+         "retry keeps rebuild pending until initialization actually succeeds");
+  expect(results.size() == 4 &&
+             results[0].disposition == TaskRunDisposition::Paused &&
+             results[1].disposition == TaskRunDisposition::Paused &&
+             results[2].disposition == TaskRunDisposition::Paused &&
+             results[3].disposition == TaskRunDisposition::Complete,
+         "one task resumes after each gameplay pause and completes once");
+  expect(clearCount == 1, "completed rebuild never repeats cache clearing");
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->CountAllChartMeta() == 105,
+         "resumed rebuild keeps every archive chart");
+  archive_file::setArchiveIndexCacheDirectory({});
 }
 
 void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
@@ -602,6 +772,7 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 int main() {
   testRefreshStopsAtTheExistingPauseCheckpoint();
   testRefreshScansThroughTheRealRepository();
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress();
   testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();

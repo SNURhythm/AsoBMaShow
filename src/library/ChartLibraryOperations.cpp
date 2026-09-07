@@ -295,7 +295,9 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   roots.reserve(entries.size());
   for (const auto &entry : entries) {
     if (stopToken.stop_requested()) {
-      return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+      return {.disposition = TaskRunDisposition::Paused,
+              .detail = "Paused",
+              .rebuildLibraryMetadataCleared = request.rebuildLibraryMetadata};
     }
     roots.push_back(chart_library_platform::resolveFolderEntryPath(entry));
   }
@@ -325,7 +327,9 @@ TaskRunResult ChartLibraryOperations::runRefresh(
 
   const bool scanPaused = checkpointPaused.load(std::memory_order_relaxed);
   if (stopToken.stop_requested() || scanPaused) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused,
+            .detail = "Paused",
+            .rebuildLibraryMetadataCleared = request.rebuildLibraryMetadata};
   }
   if (!result.completed) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -347,7 +351,8 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
-  return {.detail = "Complete"};
+  return {.detail = "Complete",
+          .rebuildLibraryMetadataCleared = request.rebuildLibraryMetadata};
 }
 
 bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(

@@ -256,6 +256,9 @@ void ChartLibraryTaskService::run(const std::stop_token &stopToken) {
         setTaskStateLocked(task.id, TaskStatus::Paused, 0.0, 0, 0,
                            result.detail);
         if (!stopToken.stop_requested()) {
+          if (result.rebuildLibraryMetadataCleared) {
+            task.rebuildLibraryMetadata = false;
+          }
           queue_.push_front(std::move(task));
         }
         break;

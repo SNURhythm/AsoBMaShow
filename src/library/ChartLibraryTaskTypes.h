@@ -77,6 +77,7 @@ struct TaskRunResult {
   TaskRunDisposition disposition = TaskRunDisposition::Complete;
   std::string detail = "Complete";
   std::optional<DownloadedIndexCompletion> downloadedIndex;
+  bool rebuildLibraryMetadataCleared = false;
 };
 
 } // namespace chart_library_tasks

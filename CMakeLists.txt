@@ -3863,6 +3863,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(chart_library_operations_tests
         tests/chart_library_operations_tests.cpp
         src/library/ChartLibraryOperations.cpp
+        src/library/ChartLibraryTaskService.cpp
         src/library/ChartLibraryPlatform.cpp
         src/scene/MainMenuLibrary.cpp
         src/DifficultyTableImporter.cpp
