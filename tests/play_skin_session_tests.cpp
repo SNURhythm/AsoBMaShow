@@ -708,6 +708,7 @@ struct ActivationFixtureOptions {
   bool musicSelectCallbackTextBearing = false;
   bool musicSelectMissingCallbackFontBearing = false;
   bool musicSelectSongListBearing = false;
+  bool musicSelectDuplicateSongListDestinations = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -1048,7 +1049,16 @@ if skin_config then
       text = {{id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}},
               {id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
     },
-    destination = {{id = "list", dst = {{x = 0, y = 0}}}}
+    destination = {
+)lua";
+      script += options.musicSelectDuplicateSongListDestinations
+          ? R"lua(
+      {id = "list", op = {1}, dst = {{x = 0, y = 0}}},
+      {id = "list", op = {-1}, dst = {{x = 0, y = 0}}}
+)lua"
+          : R"lua({id = "list", dst = {{x = 0, y = 0}}})lua";
+      script += R"lua(
+    }
   }
 )lua";
     } else if (options.resourceBearing) {
@@ -3050,6 +3060,58 @@ void testMusicSelectPublishesPointerCapturesAndTextFocus() {
              actions[2].stringValue == "replacement",
          "music-select pointer Down and drag publish the topmost slider "
          "writer, and editable text exposes its exact overlay state");
+}
+
+void testMusicSelectDuplicateSongListDestinationsRenderBothConditions() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true,
+                             .musicSelectDuplicateSongListDestinations = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  context.initialFrame.songList.bars = {{.title = "0123456789", .exists = true}};
+  MusicSelectSkinFrame frame = context.initialFrame;
+  auto prepared = MusicSelectSkinSession::prepare(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 101},
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = frame});
+  expect(prepared.prepared.has_value(), "duplicate songlist destinations prepare");
+  if (!prepared.prepared) return;
+  std::size_t songLists = 0;
+  for (const auto &object : prepared.prepared->document.model.model.objects) {
+    if (const auto *songList = std::get_if<SkinSongListObject>(&object.payload)) {
+      ++songLists;
+      expect(songList->listOn.size() == 1 && songList->listOff.size() == 1 &&
+                 songList->text.size() == 2,
+             "every songlist destination receives resolved image and text children");
+    }
+  }
+  expect(songLists == 2, "complementary destinations retain separate songlist objects");
+  SessionQuadBackend backend;
+  auto created = MusicSelectSkinSession::finalize(
+      std::move(*prepared.prepared),
+      {.resourcePreparation = context.resourcePreparation,
+       .textureDevice = context.textureDevice,
+       .movieDevice = context.movieDevice,
+       .liveResourceCounters = context.liveResourceCounters,
+       .quadBackend = &backend});
+  expect(created.session != nullptr, "duplicate songlist session finalizes");
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  if (!created.session) return;
+  RenderContext renderContext;
+  for (const bool folderSelected : {true, false}) {
+    ++frame.serial;
+    frame.properties.booleans[1] = folderSelected;
+    backend.reservedVertices = 0;
+    expect(created.session->render(renderContext, frame) &&
+               backend.reservedVertices > 4,
+           "both complementary songlist conditions draw the bar and title");
+  }
 }
 
 void testMusicSelectTitlePreparationIsBoundedForLargeLists() {
@@ -7591,6 +7653,7 @@ int main(int argc, char **argv) {
   testMusicSelectPublishesPointerCapturesAndTextFocus();
   testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh();
   testMusicSelectTitlePreparationIsBoundedForLargeLists();
+  testMusicSelectDuplicateSongListDestinationsRenderBothConditions();
   testMusicSelectScrollingDoesNotStarveGlyphPatches();
   testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
   testMusicSelectPrewarmsBoundedNearbyGlyphs();

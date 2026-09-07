@@ -231,13 +231,10 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
   if (result.header->type == 5) {
     auto resolved = MusicSelectSkinModelResolver{}.resolve(*decodedModel.model);
     if (resolved.songList) {
-      const auto object = std::ranges::find_if(
-          decodedModel.model->objects, [](const auto &definition) {
-            return std::holds_alternative<SkinSongListObject>(
-                definition.payload);
-          });
-      if (object != decodedModel.model->objects.end()) {
-        object->payload = std::move(*resolved.songList);
+      for (auto &object : decodedModel.model->objects) {
+        if (std::holds_alternative<SkinSongListObject>(object.payload)) {
+          object.payload = *resolved.songList;
+        }
       }
     }
   }
