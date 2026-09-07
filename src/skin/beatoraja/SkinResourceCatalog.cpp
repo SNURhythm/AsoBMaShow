@@ -3229,6 +3229,11 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     std::vector<ResourceUse> aliasUses;
   };
   std::vector<PendingImageDecode> pendingImages;
+  const auto cancelPendingImages = makeScopeExit([&] {
+    for (const auto &pending : pendingImages) {
+      coordinator_.cancel(pending.ticket);
+    }
+  });
   std::map<std::string, std::size_t, std::less<>> pendingImageIndexByPath;
 
   for (const SkinResourceDefinition &definition : input.model.model.resources) {
@@ -3357,6 +3362,9 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
              .maximumDecodedBytes = skinResourceLimit(
                  input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
              .encoded = std::move(owned)});
+        auto cancelUnqueuedTicket = makeScopeExit([&] {
+          coordinator_.cancel(ticket);
+        });
         // Queue the ticket without waiting so all image decodes run in
         // parallel on the coordinator's workers; finalize happens in the
         // wait pass after the loop.
@@ -3369,6 +3377,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
             .use = use->second,
             .candidatePath = candidatePath,
         });
+        cancelUnqueuedTicket.dismiss();
         pendingImageIndexByPath.emplace(candidatePath,
                                         pendingImages.size() - 1);
         continue;

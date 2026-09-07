@@ -3033,6 +3033,111 @@ void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
          "the warm rejection also leaves the decode cache empty");
 }
 
+void testCancelledImagePlansReleaseEveryDecodeTicket() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const auto source = temporary.root / "visible/CancelledImages";
+  fs::create_directories(source / "entry/resources");
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+  constexpr std::size_t imageCount = 6;
+  for (std::size_t index = 0; index < imageCount; ++index) {
+    std::ofstream(source / "entry/resources" /
+                      (std::to_string(index) + ".png"), std::ios::binary)
+        .put(static_cast<char>(index));
+  }
+  const auto package = *skin::normalizePackageId("CancelledImages").package;
+  const auto entry = *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(), "cancelled image package snapshots");
+  if (!snapshot.prepared) return;
+  std::string error;
+  auto lease = std::move(*snapshot.prepared).publish(error);
+  expect(lease.has_value(), "cancelled image revision publishes");
+  if (!lease) return;
+  auto files = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(files.fileSystem != nullptr, "cancelled image filesystem opens");
+  if (!files.fileSystem) return;
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::array<bool, imageCount> entered{};
+  std::array<bool, imageCount> release{};
+  std::array<std::stop_token, imageCount> tokens;
+  std::array<std::weak_ptr<std::vector<unsigned char>>, imageCount> buffers;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token stop)
+          -> std::optional<image_decode::DecodedImageData> {
+        const auto index = std::to_integer<std::size_t>(encoded.front());
+        image_decode::DecodedImageData image{
+            .width = 40, .height = 20,
+            .rgba = std::make_shared<std::vector<unsigned char>>(40 * 20 * 4)};
+        std::unique_lock lock(mutex);
+        tokens[index] = stop;
+        buffers[index] = image.rgba;
+        entered[index] = true;
+        changed.notify_all();
+        changed.wait(lock, [&] { return release[index]; });
+        return image;
+      }, 2);
+  for (std::size_t iteration = 0; iteration < imageCount / 2; ++iteration) {
+    const auto first = iteration * 2;
+    const auto second = first + 1;
+    auto model = singleImageModel("resources/" + std::to_string(first) + ".png");
+    model.model.resources.emplace_back(skin::SkinImageResource{
+        .id = 2, .authoredName = "second",
+        .virtualPath = "resources/" + std::to_string(second) + ".png"});
+    model.model.objects.push_back(
+        {.id = 2, .authoredName = "second",
+         .payload = skin::SkinImageObject{.orderedStates = {{
+             .resource = 2, .frames = {{.w = 40, .h = 20}}}}},
+         .critical = true});
+    skin::BeatorajaSkinConfiguration configuration;
+    std::stop_source stop;
+    std::optional<skin::SkinResourcePlanResult> planned;
+    std::thread planner([&] {
+      planned.emplace(service.decodeAndPlan(
+          {.revision = lease->clone(), .entry = entry,
+           .fileSystem = *files.fileSystem, .model = model,
+           .configuration = configuration, .stop = stop.get_token()}));
+    });
+    {
+      std::unique_lock lock(mutex);
+      expect(changed.wait_for(lock, std::chrono::seconds(5), [&] {
+               return entered[first] && entered[second];
+             }), "both image tickets are queued before plan cancellation");
+    }
+    stop.request_stop();
+    planner.join();
+    expect(planned && planned->cancelled && !planned->plan,
+           "image cancellation publishes no partial plan");
+    std::array<std::weak_ptr<std::vector<unsigned char>>, 2> cancelledBuffers;
+    {
+      std::lock_guard lock(mutex);
+      expect(tokens[first].stop_requested() && tokens[second].stop_requested(),
+             "plan cancellation releases every outstanding decode ticket");
+      cancelledBuffers = {buffers[first], buffers[second]};
+      release[first] = release[second] = true;
+    }
+    changed.notify_all();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while ((!cancelledBuffers[0].expired() || !cancelledBuffers[1].expired()) &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::yield();
+    }
+    expect(cancelledBuffers[0].expired() && cancelledBuffers[1].expired(),
+           "repeated plan cancellation does not retain completed pixel buffers");
+  }
+}
+
 void testSkinImagesAreCachedAcrossDecodeRuns() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
@@ -3151,6 +3256,7 @@ int main() {
   testBitmapFontPagesAreCachedAcrossDecodeRuns();
   testBitmapFontCachedPagesChargeEncodedBudgetConsistently();
   testSkinImagesAreCachedAcrossDecodeRuns();
+  testCancelledImagePlansReleaseEveryDecodeTicket();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
   return 0;
