@@ -1592,6 +1592,7 @@ void MusicSelectScene::openSameFolder() {
   std::vector<ChartMetaRecord> records;
   ChartMetaQuery query;
   query.exactFolder = folder;
+  query.rawSongData = true;
   query.selectedLongNoteMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   chartSession_->QueryChartMeta(query, records);

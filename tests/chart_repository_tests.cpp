@@ -1001,6 +1001,36 @@ void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
   }));
 }
 
+void testRawExactFolderKeepsNonpreferredDuplicate() {
+  TempDirectory temporary;
+  ChartRepository charts(temporary.path() / "chart.db");
+  auto session = charts.OpenSession();
+  assert(session);
+  auto preferred = chartMeta("/a/song");
+  auto duplicate = preferred;
+  duplicate.Folder = "/z/song";
+  duplicate.BmsPath = duplicate.Folder / "chart.bms";
+  assert(session->InsertChartMeta(preferred));
+  assert(session->InsertChartMeta(duplicate));
+
+  ChartMetaQuery query;
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta(query, records);
+  assert(records.size() == 1);
+  assert(records.front().meta.BmsPath == preferred.BmsPath);
+
+  records.clear();
+  query.exactFolder = duplicate.Folder;
+  session->QueryChartMeta(query, records);
+  assert(records.empty());
+
+  query.rawSongData = true;
+  session->QueryChartMeta(query, records);
+  assert(records.size() == 1);
+  assert(records.front().meta.BmsPath == duplicate.BmsPath);
+  assert(records.front().meta.SHA256 == preferred.SHA256);
+}
+
 void testExactFolderQuery() {
   TempDirectory temporary;
   std::atomic<int> connections{0};
@@ -1734,6 +1764,7 @@ void testEntryUpsertPreservesOriginalDatabasePathKey() {
 } // namespace
 
 int main() {
+  testRawExactFolderKeepsNonpreferredDuplicate();
   testScanBatchCommitAndRollback();
   testScanBatchRetainsSessionStorage();
   testScanBatchUpsertPreservesExistingAddDate();
