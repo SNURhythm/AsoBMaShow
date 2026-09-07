@@ -3987,8 +3987,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(skin_sound_bundle_decode_tests
         tests/skin_sound_bundle_decode_tests.cpp
         src/audio/decoder.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
+        src/Utils.cpp
         src/bms_parser.cpp
         src/path.cpp
     )
@@ -4015,6 +4017,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
@@ -5093,6 +5096,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
