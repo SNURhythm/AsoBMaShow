@@ -882,6 +882,7 @@ void testWildcardImagesResolveListedPathsOnlyOnce() {
   fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                     "tests/fixtures/beatoraja_skin/resources/fixture.png",
                 source / "entry/background/a.png");
+  fs::copy_file(source / "entry/background/a.png", source / "entry/a.png");
   const auto package = *skin::normalizePackageId("WildcardImages").package;
   const auto entry = *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
   skin::SkinStorageRoots roots{
@@ -906,25 +907,27 @@ void testWildcardImagesResolveListedPathsOnlyOnce() {
         {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
     expect(files.fileSystem != nullptr, "wildcard image filesystem opens");
     if (!files.fileSystem) continue;
-    const auto model = singleImageModel("background/*.png");
-    for (const bool configured : {false, true}) {
-      skin::BeatorajaSkinConfiguration configuration;
-      if (configured) {
-        configuration.orderedFiles.push_back(
-            {.pattern = "background/*.png", .selectedValue = "a.png"});
+    for (const std::string pattern : {"background/*.png", "*.png"}) {
+      const auto model = singleImageModel(pattern);
+      for (const bool configured : {false, true}) {
+        skin::BeatorajaSkinConfiguration configuration;
+        if (configured) {
+          configuration.orderedFiles.push_back(
+              {.pattern = pattern, .selectedValue = "a.png"});
+        }
+        skin::SkinResourcePreparationService service;
+        const auto validated = service.validateResources(
+            {.revision = lease->readView(), .entry = entry,
+             .fileSystem = *files.fileSystem, .model = model,
+             .configuration = configuration});
+        expect(validated.valid, "wildcard image validates after one path resolution");
+        const auto planned = service.decodeAndPlan(
+            {.revision = lease->clone(), .entry = entry,
+             .fileSystem = *files.fileSystem, .model = model,
+             .configuration = configuration});
+        expect(planned.plan && planned.plan->images.size() == 1,
+               "configured and fallback wildcard images prepare from relative and absolute roots");
       }
-      skin::SkinResourcePreparationService service;
-      const auto validated = service.validateResources(
-          {.revision = lease->readView(), .entry = entry,
-           .fileSystem = *files.fileSystem, .model = model,
-           .configuration = configuration});
-      expect(validated.valid, "wildcard image validates after one path resolution");
-      const auto planned = service.decodeAndPlan(
-          {.revision = lease->clone(), .entry = entry,
-           .fileSystem = *files.fileSystem, .model = model,
-           .configuration = configuration});
-      expect(planned.plan && planned.plan->images.size() == 1,
-             "configured and fallback wildcard images prepare from relative and absolute roots");
     }
   }
 }

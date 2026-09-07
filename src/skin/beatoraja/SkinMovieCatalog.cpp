@@ -77,9 +77,6 @@ ConfiguredMoviePath configuredMoviePath(
       return {.path = std::string(authored)};
     }
     const std::size_t slash = authored.rfind('/', wildcard);
-    if (slash == std::string_view::npos) {
-      return {.path = std::string(authored)};
-    }
     std::string suffix(authored.substr(wildcard + 1));
     if (const std::size_t pipe = authored.find('|'); pipe != std::string_view::npos) {
       suffix = std::string(authored.substr(wildcard + 1, pipe - wildcard - 1));
@@ -87,7 +84,8 @@ ConfiguredMoviePath configuredMoviePath(
         suffix.append(authored.substr(pipe + 1));
       }
     }
-    const auto listed = files.listResourceDirectory(authored.substr(0, slash));
+    const auto listed = files.listResourceDirectory(
+        slash == std::string_view::npos ? "." : authored.substr(0, slash));
     if (listed.failure) {
       return {.path = std::string(authored)};
     }

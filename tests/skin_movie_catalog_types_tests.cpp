@@ -177,25 +177,28 @@ void testWildcardMoviesResolveListedPathsOnlyOnce() {
   fs::create_directories(packageRoot / "entry/background");
   std::ofstream(packageRoot / "entry/play.luaskin") << "return {}\n";
   std::ofstream(packageRoot / "entry/background/a.mp4") << "movie bytes\n";
+  std::ofstream(packageRoot / "entry/a.mp4") << "entry movie bytes\n";
   for (const bool relativeRoot : {false, true}) {
     auto leased = LeasedMoviePackage::create("WildcardMovies", temporary.root,
                                             relativeRoot);
     expect(leased.has_value(), "wildcard movie package root leases");
     if (!leased) continue;
-    const auto model = singleImageModel("background/*.mp4");
-    for (const bool configured : {false, true}) {
-      skin::BeatorajaSkinConfiguration configuration;
-      if (configured) {
-        configuration.orderedFiles.push_back(
-            {.pattern = "background/*.mp4", .selectedValue = "a.mp4"});
+    for (const std::string pattern : {"background/*.mp4", "*.mp4"}) {
+      const auto model = singleImageModel(pattern);
+      for (const bool configured : {false, true}) {
+        skin::BeatorajaSkinConfiguration configuration;
+        if (configured) {
+          configuration.orderedFiles.push_back(
+              {.pattern = pattern, .selectedValue = "a.mp4"});
+        }
+        auto device = std::make_shared<FakeMovieDevice>();
+        auto movies = skin::SkinMovieCatalog::prepare(
+            {.fileSystem = *leased->fileSystem, .model = model,
+             .configuration = configuration, .device = device});
+        expect(movies.catalog && movies.catalog->movieCount() == 1 &&
+                   device->loads == 1 && device->pathExistedDuringLoad,
+               "configured and fallback wildcard movies prepare from relative and absolute roots");
       }
-      auto device = std::make_shared<FakeMovieDevice>();
-      auto movies = skin::SkinMovieCatalog::prepare(
-          {.fileSystem = *leased->fileSystem, .model = model,
-           .configuration = configuration, .device = device});
-      expect(movies.catalog && movies.catalog->movieCount() == 1 &&
-                 device->loads == 1 && device->pathExistedDuringLoad,
-             "configured and fallback wildcard movies prepare from relative and absolute roots");
     }
   }
 }
