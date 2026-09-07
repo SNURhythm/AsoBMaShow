@@ -50,6 +50,7 @@ struct SoundData {
   std::vector<short> outputData;
   size_t sourceFrameCount = 0;
   size_t outputFrameCount = 0;
+  std::atomic_bool retired{false};
   std::atomic<std::uint64_t> ownerControlAcknowledgedSequence{0};
 };
 
@@ -125,13 +126,6 @@ struct AudioCallbackState {
   std::atomic<std::uint32_t> ownerControlCommandCount{0};
   std::atomic<std::uint32_t> ownerRetirementCommandCount{0};
   std::atomic<std::uint64_t> nextCommandSubmissionSequence{1};
-  // Tracked so a device-preserving chart swap can know whether the callback
-  // owns any non-System (jukebox BGM/keysound) voices or staged schedules. When
-  // both are zero the only active audio is Bus::System (select SEs / BGM /
-  // previews), which live in a separate registry, so chart SoundData can be
-  // erased without stopping the device. Maintained on the audio callback thread
-  // (via AppendActiveSound / removeActiveSoundAt / InsertScheduledSound /
-  // RemoveSound / ActivateScheduledSounds / ClearCallbackSounds).
   std::atomic<std::uint32_t> activeNonSystemVoices{0};
   std::atomic<std::uint32_t> scheduledNonSystemSounds{0};
   std::unique_ptr<AudioCommand[]> realtimeCommandQueue;
@@ -187,6 +181,10 @@ public:
 BackendStateObservation InterpretStoppedQueryResult(int result,
                                                     std::string diagnostic);
 bool CanMutateCallbackStateDirectly(BackendRunState state) noexcept;
+BackendOperationResult
+ConfirmBackendStopped(IBackendLifecycle &backend,
+                      const BackendStateObservation &initialState,
+                      std::atomic<BackendRunState> &backendState);
 BackendOperationResult EnsureBackendStartedAtOutputRate(
     IBackendLifecycle &backend, std::span<SoundData *const> sounds,
     AudioCallbackState &callbackState, int targetSampleRate,
@@ -211,7 +209,8 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        float gain = 1.0F, bool loop = false);
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
-void ClearCallbackSounds(AudioCallbackState &state);
+void ClearCallbackSounds(AudioCallbackState &state,
+                          bool preserveSystemSounds = false);
 void RemoveSound(AudioCallbackState &state, SoundData *soundData);
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command,
                     std::uint64_t *submissionSequence = nullptr);

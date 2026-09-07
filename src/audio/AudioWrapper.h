@@ -131,7 +131,10 @@ struct SkinSoundLoadResult {
 
 class RealtimeSoundHandle {
 public:
-  [[nodiscard]] bool valid() const noexcept { return soundData_ != nullptr; }
+  [[nodiscard]] bool valid() const noexcept {
+    return soundData_ != nullptr &&
+           !soundData_->retired.load(std::memory_order_acquire);
+  }
 
 private:
   friend class ::AudioWrapper;

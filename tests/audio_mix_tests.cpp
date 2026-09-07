@@ -1237,6 +1237,48 @@ void testSystemVoiceActivityCountersTrackNonSystemOwnership() {
           "clearing callback sounds resets the non-System counters");
 }
 
+void testClearCallbackSoundsPreservesSystemVoicesAndSchedules() {
+  SoundData systemSound;
+  systemSound.channels = 1;
+  systemSound.outputData = {100, 200, 300, 400};
+  systemSound.outputFrameCount = 4;
+  SoundData chartSound;
+  chartSound.channels = 1;
+  chartSound.outputData = {800, 900};
+  chartSound.outputFrameCount = 2;
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(
+              state, &chartSound, audio::Bus::Keysound, 0) &&
+              audio::playback::AppendActiveSound(
+                  state, &systemSound, audio::Bus::System, 0, 1, 0.5F, true) &&
+              audio::playback::InsertScheduledSound(
+                  state, {.soundData = &chartSound,
+                          .bus = audio::Bus::Bgm,
+                          .startMicros = 100}) &&
+              audio::playback::InsertScheduledSound(
+                  state, {.soundData = &systemSound,
+                          .bus = audio::Bus::System,
+                          .startMicros = 200,
+                          .gain = 0.25F}),
+          "selective clear fixture stages all buses");
+  const auto systemPosition = state.playingSounds[1].sourceFrameQ32;
+  audio::playback::ClearCallbackSounds(state, true);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].soundData == &systemSound &&
+              state.playingSounds[0].sourceFrameQ32 == systemPosition &&
+              state.playingSounds[0].gain == 0.5F &&
+              state.playingSounds[0].loop && state.scheduledSoundCount == 1 &&
+              state.scheduledSounds[0].soundData == &systemSound &&
+              state.scheduledSounds[0].startMicros == 200 &&
+              state.scheduledSounds[0].gain == 0.25F &&
+              state.activeNonSystemVoices.load() == 0 &&
+              state.scheduledNonSystemSounds.load() == 0,
+          "selective clear preserves System playback metadata but no chart references");
+  audio::playback::ClearCallbackSounds(state);
+  require(state.playingSoundCount == 0 && state.scheduledSoundCount == 0,
+          "ordinary clear still removes every bus");
+}
+
 } // namespace
 
 int main() {
@@ -1394,6 +1436,7 @@ int main() {
     testSchedulerWaitConvertsChartDeltaToWallTime();
     testSystemOnlyMixPlaysSystemWhileSkippingBgmKeysoundAndScheduled();
     testSystemVoiceActivityCountersTrackNonSystemOwnership();
+    testClearCallbackSoundsPreservesSystemVoicesAndSchedules();
 
     return 0;
   } catch (const std::exception &error) {

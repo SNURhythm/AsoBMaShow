@@ -1637,32 +1637,44 @@ AudioWrapper::pruneSounds(const std::vector<path_t> &paths) {
     return {.success = true};
   }
 
-  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-  // A chart swap (e.g. the music-select preload) prunes the previous chart's
-  // sounds while only Bus::System voices (select BGM / preview / SE) may be
-  // active. When the callback owns no non-System voices, no staged non-System
-  // schedules, and no realtime reservations in flight, the obsolete chart
-  // SoundData are not referenced by the running callback, so they can be
-  // erased without stopping the device (which would otherwise tear the select
-  // audio down). Otherwise fall back to the full stop so erasures are
-  // quiescent.
-  const auto observed =
-      backend != nullptr
-          ? backend->observeState()
-          : audio::playback::BackendStateObservation{
-                .state = audio::playback::BackendRunState::Stopped};
-  backendState.store(observed.state, std::memory_order_release);
-  const bool callbackOwnsOnlySystem =
-      observed.state == audio::playback::BackendRunState::Running &&
-      callbackState.activeNonSystemVoices.load(std::memory_order_acquire) ==
-          0 &&
-      callbackState.scheduledNonSystemSounds.load(std::memory_order_acquire) ==
-          0 &&
-      realtimeSoundReservations.load(std::memory_order_acquire) == 0;
-  if (!callbackOwnsOnlySystem) {
-    const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
-    if (!stopped.success) {
-      return stopped;
+  bool resumeSystemSounds = false;
+  {
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    closeRealtimeSoundGateAndWait();
+    const auto observed =
+        backend != nullptr
+            ? backend->observeState()
+            : audio::playback::BackendStateObservation{
+                  .state = audio::playback::BackendRunState::Stopped};
+    backendState.store(observed.state, std::memory_order_release);
+    if (backend != nullptr) {
+      const auto stopped = audio::playback::ConfirmBackendStopped(
+          *backend, observed, backendState);
+      if (!stopped.success) {
+        return stopped;
+      }
+    }
+    audio::playback::DrainRealtimeCommands(callbackState);
+    audio::playback::DrainCommands(callbackState);
+    audio::playback::ClearCallbackSounds(callbackState, true);
+    for (const size_t index : removedIndices) {
+      auto &soundData = soundDataList[index];
+      audio::playback::RemoveSound(callbackState, soundData.get());
+      soundData->retired.store(true, std::memory_order_release);
+    }
+    resumeSystemSounds =
+        observed.state == audio::playback::BackendRunState::Running &&
+        (callbackState.playingSoundCount != 0 ||
+         callbackState.scheduledSoundCount != 0);
+  }
+
+  if (resumeSystemSounds) {
+    const auto started = startDeviceWithLifecycleAndSoundLocked();
+    if (!started.success) {
+      for (const size_t index : removedIndices) {
+        soundDataList[index]->retired.store(false, std::memory_order_release);
+      }
+      return started;
     }
   }
 

@@ -6,6 +6,7 @@
 #include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 
 #include <atomic>
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
@@ -327,8 +328,14 @@ struct WrapperFixture {
 
   void waitForStopEntry() {
     std::unique_lock lock(control->mutex);
-    require(control->condition.wait_for(
-                lock, 2s, [this] { return control->stopEntered; }),
+    const bool entered = control->condition.wait_for(
+        lock, 2s, [this] { return control->stopEntered; });
+    if (!entered) {
+      control->releaseStop = true;
+      lock.unlock();
+      control->condition.notify_all();
+    }
+    require(entered,
             "the gated backend receives the stop request");
   }
 
@@ -449,6 +456,177 @@ void testBatchPruneNoOpDoesNotObserveOrDrainBackend() {
           "no-op batch prune does not observe or drain the backend");
   require(fixture.wrapper->getSoundDurationMicros(retainedPath).has_value(),
           "no-op batch prune preserves unrelated storage");
+}
+
+void testPruneDrainsQueuedPlaybackBeforeErasingOwners() {
+  for (const auto bus : {audio::Bus::Bgm, audio::Bus::Keysound,
+                         audio::Bus::System}) {
+    for (const bool scheduled : {false, true}) {
+      Stopwatch stopwatch;
+      auto control = std::make_shared<FactoryControl>();
+      AudioWrapper wrapper(&stopwatch,
+                           std::make_unique<FakeConfigurableFactory>(control));
+      const path_t removedPath = PATH("queued-prune-owner");
+      require(wrapper.loadGeneratedSound(removedPath, {1200, 2400}, 1, 44100),
+              "queued prune fixture loads PCM");
+      require(scheduled ? wrapper.scheduleSound(removedPath, bus, 1'000'000)
+                        : wrapper.playSound(removedPath, bus),
+              "pruned owner is referenced by an undrained command");
+      auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
+      require(state.commandReadCursor.load() != state.commandWriteCursor.load() &&
+                  state.activeNonSystemVoices.load() == 0 &&
+                  state.scheduledNonSystemSounds.load() == 0,
+              "queued commands precede callback activity counters");
+      require(wrapper.unloadSound(removedPath).success,
+              "queued owner unload confirms backend drain");
+      require(state.commandReadCursor.load() == state.commandWriteCursor.load() &&
+                  state.playingSoundCount == 0 && state.scheduledSoundCount == 0,
+              "unload removes queued, active, and scheduled raw PCM references");
+      require(!wrapper.getSoundDurationMicros(removedPath).has_value(),
+              "drained owner is no longer advertised");
+      std::array<std::int16_t, 8> output{};
+      require(wrapper.startDevice().success, "drained backend can restart");
+      control->renderCallback(output.data(), 4, 2, control->renderUserData);
+      require(std::all_of(output.begin(), output.end(),
+                          [](auto sample) { return sample == 0; }),
+              "restarted callback never plays erased PCM");
+    }
+  }
+}
+
+void testPrunePreservesSelectAudioAcrossConfirmedDrain() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t systemPath = PATH("prune-select-loop");
+  const path_t chartPath = PATH("prune-chart-owner");
+  require(wrapper.loadGeneratedSound(systemPath, {100, 200, 300, 400}, 1, 44100) &&
+              wrapper.loadGeneratedSound(chartPath, {800, 900}, 1, 44100),
+          "select prune fixture loads distinct PCM owners");
+  std::atomic_bool cancelled{false};
+  const auto select = wrapper.loadSkinSound(systemPath, cancelled, 1024, 1024);
+  require(select.handle.has_value() &&
+              wrapper.playSkinSound(*select.handle, 1.0F, true),
+          "private select loop is queued");
+  std::array<std::int16_t, 2> output{};
+  control->renderCallback(output.data(), 1, 2, control->renderUserData);
+  auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
+  require(state.playingSoundCount == 1, "select loop entered callback storage");
+  const auto selectPosition = state.playingSounds[0].sourceFrameQ32;
+  require(wrapper.playSound(chartPath, audio::Bus::Keysound) &&
+              wrapper.scheduleSound(chartPath, audio::Bus::Bgm, 1'000'000),
+          "chart playback is queued behind the running select loop");
+  control->events.clear();
+  require(wrapper.pruneSounds({chartPath, systemPath}).success,
+          "chart swap drains before erasing chart and shared source PCM");
+  require(control->events == std::vector<std::string>{"stop:", "start:"},
+          "chart prune positively drains and resumes the shared device");
+  require(state.playingSoundCount == 1 && state.scheduledSoundCount == 0 &&
+              state.playingSounds[0].sourceFrameQ32 == selectPosition,
+          "prune preserves the private select loop position, not chart voices");
+  control->renderCallback(output.data(), 1, 2, control->renderUserData);
+  require(output[0] == 179 && output[1] == 179,
+          "select audio resumes at the next sample with the chart clock stopped: " +
+              std::to_string(output[0]) + ", " + std::to_string(output[1]));
+}
+
+void testPruneRejectsRetainedRealtimeHandleAfterDrain() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t removedPath = PATH("realtime-prune-owner");
+  require(wrapper.loadGeneratedSound(removedPath, {800, 900}, 1, 44100),
+          "realtime prune fixture loads PCM");
+  auto handle = wrapper.resolveRealtimeSound(removedPath);
+  auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  require(handle.has_value() && reservation.has_value() &&
+              wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "realtime raw PCM command is committed before prune");
+  require(wrapper.unloadSound(removedPath).success && wrapper.startDevice().success,
+          "realtime prune drains and the backend can restart");
+  reservation = wrapper.tryReserveRealtimeSoundCommand();
+  require(reservation.has_value(), "restarted backend admits a new reservation");
+  require(!wrapper.commitRealtimeKeysound(*reservation, *handle),
+          "retained realtime handle cannot republish an erased PCM owner");
+  handle.reset();
+  std::array<std::int16_t, 8> output{};
+  control->renderCallback(output.data(), 4, 2, control->renderUserData);
+  require(std::all_of(output.begin(), output.end(),
+                      [](auto sample) { return sample == 0; }),
+          "callback remains safe after the final realtime owner is released");
+}
+
+void testPruneWaitsForRealtimeReservationBeforeDrain() {
+  WrapperFixture fixture;
+  const path_t removedPath = PATH("reserved-prune-owner");
+  fixture.load(removedPath);
+  const auto handle = fixture.wrapper->resolveRealtimeSound(removedPath);
+  const auto reservation = fixture.wrapper->tryReserveRealtimeSoundCommand();
+  require(handle.has_value() && reservation.has_value(),
+          "prune fixture retains an in-flight realtime reservation");
+  auto prune = std::async(std::launch::async, [&] {
+    return fixture.wrapper->unloadSound(removedPath);
+  });
+  const bool waited = prune.wait_for(20ms) == std::future_status::timeout;
+  const int stopsBeforeCommit = fixture.control->stopCalls.load();
+  const bool committed =
+      fixture.wrapper->commitRealtimeKeysound(*reservation, *handle);
+  require(prune.wait_for(2s) == std::future_status::ready,
+          "prune completes after the reserved realtime command is published");
+  require(waited && stopsBeforeCommit == 0 && committed && prune.get().success,
+          "backend drain waits for the reserved command, then erases its owner");
+  require(!handle->valid(),
+          "the committed chart prune revokes the retained realtime handle");
+}
+
+void testPruneFailedConfirmationRetainsQueuedOwner() {
+  WrapperFixture fixture;
+  const path_t removedPath = PATH("unconfirmed-prune-owner");
+  fixture.load(removedPath);
+  require(fixture.wrapper->playSound(removedPath, audio::Bus::Keysound),
+          "unconfirmed prune fixture queues a raw PCM command");
+  const auto handle = fixture.wrapper->resolveRealtimeSound(removedPath);
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->failObserveCall = fixture.control->observeCalls.load() + 2;
+  }
+  const auto result = fixture.wrapper->unloadSound(removedPath);
+  require(!result.success &&
+              fixture.wrapper->getSoundDurationMicros(removedPath).has_value() &&
+              handle.has_value() && handle->valid(),
+          "an unconfirmed post-drain state preserves queued PCM ownership");
+  {
+    std::lock_guard lock(fixture.control->mutex);
+    fixture.control->failObserveCall = -1;
+  }
+  require(fixture.wrapper->unloadSound(removedPath).success && !handle->valid(),
+          "a later confirmed stopped state safely drains and erases the owner");
+}
+
+void testPruneSelectRestartFailureKeepsAdvertisedOwners() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t systemPath = PATH("restart-failed-select-loop");
+  const path_t chartPath = PATH("restart-failed-chart-owner");
+  require(wrapper.loadGeneratedSound(systemPath, {100, 200, 300, 400}, 1, 44100) &&
+              wrapper.loadGeneratedSound(chartPath, {800, 900}, 1, 44100) &&
+              wrapper.playSkinSound(systemPath, 1.0F, true),
+          "restart failure fixture queues select audio");
+  const auto handle = wrapper.resolveRealtimeSound(chartPath);
+  std::unordered_map<int, path_t> currentMap{{1, chartPath}};
+  control->startResults = {false};
+  const auto result = jukebox_sound_resources::PruneAndCommitSoundMap(
+      wrapper, currentMap, {}, {chartPath});
+  require(!result.success && currentMap.at(1) == chartPath &&
+              wrapper.getSoundDurationMicros(chartPath).has_value() &&
+              handle.has_value() && handle->valid(),
+          "select restart failure does not commit a partial owner/map erasure");
+  require(wrapper.pruneSounds({chartPath}).success && !handle->valid(),
+          "a stopped-backend retry can commit the preserved chart owner");
 }
 
 void testBatchPruneUsesOneConfirmationForEveryCandidate() {
@@ -2352,6 +2530,12 @@ int main() {
     testUnloadOneSerializesDrainClearAndEraseAgainstPlay();
     testUnloadAllSerializesDrainClearAndEraseAgainstPlay();
     testBatchPruneNoOpDoesNotObserveOrDrainBackend();
+    testPruneDrainsQueuedPlaybackBeforeErasingOwners();
+    testPrunePreservesSelectAudioAcrossConfirmedDrain();
+    testPruneRejectsRetainedRealtimeHandleAfterDrain();
+    testPruneWaitsForRealtimeReservationBeforeDrain();
+    testPruneFailedConfirmationRetainsQueuedOwner();
+    testPruneSelectRestartFailureKeepsAdvertisedOwners();
     testBatchPruneUsesOneConfirmationForEveryCandidate();
     testBatchPruneFailureKeepsOldMapAndPartiallyLoadedNewOwner();
     testBatchPruneSerializesProducerAgainstWholeErase();

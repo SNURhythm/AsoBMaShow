@@ -220,7 +220,6 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
 }
 
 namespace playback {
-namespace {
 
 BackendOperationResult
 ConfirmBackendStopped(IBackendLifecycle &backend,
@@ -259,8 +258,6 @@ ConfirmBackendStopped(IBackendLifecycle &backend,
   }
   return {.success = true};
 }
-
-} // namespace
 
 BackendStateObservation InterpretStoppedQueryResult(int result,
                                                     std::string diagnostic) {
@@ -574,14 +571,23 @@ bool InsertScheduledSound(AudioCallbackState &state,
   return true;
 }
 
-void ClearCallbackSounds(AudioCallbackState &state) {
-  for (size_t index = 0; index < state.playingSoundCount; ++index) {
-    if (state.playingSounds[index].soundData) {
-      state.playingSounds[index].soundData->playing = false;
+void ClearCallbackSounds(AudioCallbackState &state, bool preserveSystemSounds) {
+  for (size_t index = 0; index < state.playingSoundCount;) {
+    if (preserveSystemSounds && state.playingSounds[index].bus == Bus::System) {
+      ++index;
+    } else {
+      removeActiveSoundAt(state, index);
     }
   }
-  state.playingSoundCount = 0;
-  state.scheduledSoundCount = 0;
+  size_t retained = 0;
+  if (preserveSystemSounds) {
+    for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
+      if (state.scheduledSounds[index].bus == Bus::System) {
+        state.scheduledSounds[retained++] = state.scheduledSounds[index];
+      }
+    }
+  }
+  state.scheduledSoundCount = retained;
   state.activeNonSystemVoices.store(0, std::memory_order_release);
   state.scheduledNonSystemSounds.store(0, std::memory_order_release);
 }
