@@ -3,6 +3,7 @@
 #include "MusicSelectTypes.h"
 
 #include <condition_variable>
+#include <chrono>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -37,6 +38,7 @@ public:
         });
   }
   void cancel();
+  [[nodiscard]] bool retryReady();
   [[nodiscard]] std::vector<Result> takeResults();
 
 private:
@@ -57,5 +59,7 @@ private:
   std::string modeFilter_;
   int longNoteMode_ = -1;
   std::stop_source activeStop_;
+  std::vector<MusicSelectBar> failedBars_;
+  std::optional<std::chrono::steady_clock::time_point> retryAt_;
   std::jthread worker_;
 };

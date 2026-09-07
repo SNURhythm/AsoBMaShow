@@ -16,8 +16,16 @@ bool MusicSelectFolderStatusLoader::request(std::vector<MusicSelectBar> bars,
   rows.reserve(bars.size());
   for (const auto &bar : bars) rows.push_back(bar.id);
   std::unique_lock lock(mutex_);
-  if (rows == rows_ && modeFilter == modeFilter_ &&
-      longNoteMode == longNoteMode_) return false;
+  const bool sameRequest = rows == rows_ && modeFilter == modeFilter_ &&
+                           longNoteMode == longNoteMode_;
+  if (sameRequest) {
+    if (!retryAt_ || std::chrono::steady_clock::now() < *retryAt_) return false;
+    bars = std::move(failedBars_);
+  } else {
+    results_.clear();
+  }
+  retryAt_.reset();
+  failedBars_.clear();
   auto previousStop = activeStop_;
   activeStop_ = std::stop_source{};
   rows_ = std::move(rows);
@@ -25,7 +33,6 @@ bool MusicSelectFolderStatusLoader::request(std::vector<MusicSelectBar> bars,
   longNoteMode_ = longNoteMode;
   pending_ = Request{std::move(bars), std::move(process), ++generation_,
                      activeStop_.get_token()};
-  results_.clear();
   if (!worker_.joinable()) {
     worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
   }
@@ -44,6 +51,8 @@ void MusicSelectFolderStatusLoader::cancel() {
   rows_.clear();
   modeFilter_.clear();
   longNoteMode_ = -1;
+  failedBars_.clear();
+  retryAt_.reset();
   lock.unlock();
   previousStop.request_stop();
   condition_.notify_all();
@@ -53,6 +62,11 @@ std::vector<MusicSelectFolderStatusLoader::Result>
 MusicSelectFolderStatusLoader::takeResults() {
   std::lock_guard lock(mutex_);
   return std::exchange(results_, {});
+}
+
+bool MusicSelectFolderStatusLoader::retryReady() {
+  std::lock_guard lock(mutex_);
+  return retryAt_ && std::chrono::steady_clock::now() >= *retryAt_;
 }
 
 void MusicSelectFolderStatusLoader::run(std::stop_token stop) {
@@ -72,14 +86,29 @@ void MusicSelectFolderStatusLoader::run(std::stop_token stop) {
         if (stop.stop_requested() || request.generation != generation_) break;
       }
       Result result{.id = bar.id};
-      try {
-        result.frame = request.process(bar, request.stop);
-      } catch (const std::exception &error) {
-        result.error = error.what();
+      for (int attempt = 0; attempt < 2; ++attempt) {
+        if (request.stop.stop_requested()) break;
+        try {
+          result.frame = request.process(bar, request.stop);
+          result.error.clear();
+          break;
+        } catch (const std::exception &error) {
+          result.error = error.what();
+        }
+        if (attempt == 0) {
+          std::unique_lock lock(mutex_);
+          condition_.wait_for(lock, request.stop, std::chrono::milliseconds(100),
+                              [&] { return request.generation != generation_; });
+        }
       }
       std::lock_guard lock(mutex_);
       if (stop.stop_requested() || request.generation != generation_) break;
+      if (!result.error.empty()) failedBars_.push_back(bar);
       results_.push_back(std::move(result));
+    }
+    std::lock_guard lock(mutex_);
+    if (request.generation == generation_ && !failedBars_.empty()) {
+      retryAt_ = std::chrono::steady_clock::now() + std::chrono::seconds(1);
     }
   }
 }

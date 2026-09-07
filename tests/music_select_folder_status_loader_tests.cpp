@@ -77,6 +77,57 @@ void testTeardownInterruptsActiveProcessor() {
   assert(destroyed.wait_for(2s) == std::future_status::ready);
 }
 
+void testTransientFailureRetriesWithoutLosingSuccessfulRows() {
+  MusicSelectFolderStatusLoader loader;
+  std::atomic<int> successfulCalls{0};
+  std::atomic<int> failedCalls{0};
+  std::promise<void> completed;
+  assert(loader.request({folder("good"), folder("retry")}, "ALL", 1,
+      [&](const MusicSelectBar &bar) {
+        if (bar.id.value == "good") {
+          ++successfulCalls;
+        } else if (++failedCalls == 1) {
+          throw std::runtime_error("session open temporarily failed");
+        } else {
+          completed.set_value();
+        }
+        return skin::MusicSelectBarFrame{};
+      }));
+  assert(completed.get_future().wait_for(2s) == std::future_status::ready);
+  assert(successfulCalls == 1);
+  assert(failedCalls == 2);
+  const auto results = waitForResults(loader, 2);
+  assert(results[0].id.value == "good" && results[0].error.empty());
+  assert(results[1].id.value == "retry" && results[1].error.empty());
+  assert(!loader.request({folder("good"), folder("retry")}, "ALL", 1,
+      [](const MusicSelectBar &) { return skin::MusicSelectBarFrame{}; }));
+}
+
+void testPersistentFailureIsBoundedAndSameDirectoryCanRetryLater() {
+  MusicSelectFolderStatusLoader loader;
+  std::atomic<int> attempts{0};
+  const auto process = [&](const MusicSelectBar &) -> skin::MusicSelectBarFrame {
+    ++attempts;
+    throw std::runtime_error("status temporarily unavailable");
+  };
+  assert(loader.request({folder("retry")}, "ALL", 1, process));
+  const auto failed = waitForResults(loader, 1);
+  assert(!failed.front().error.empty());
+  assert(attempts == 2);
+  assert(!loader.retryReady());
+  for (int attempt = 0; attempt < 100; ++attempt) {
+    assert(!loader.request({folder("retry")}, "ALL", 1, process));
+  }
+  std::this_thread::sleep_for(1100ms);
+  assert(attempts == 2);
+  assert(loader.retryReady());
+  assert(loader.request({folder("retry")}, "ALL", 1,
+      [](const MusicSelectBar &) { return skin::MusicSelectBarFrame{}; }));
+  const auto recovered = waitForResults(loader, 1);
+  assert(recovered.front().error.empty());
+  assert(!loader.retryReady());
+}
+
 }
 
 int main() {
@@ -86,4 +137,6 @@ int main() {
   }
   testSupersessionInterruptsActiveProcessor();
   testTeardownInterruptsActiveProcessor();
+  testTransientFailureRetriesWithoutLosingSuccessfulRows();
+  testPersistentFailureIsBoundedAndSameDirectoryCanRetryLater();
 }
