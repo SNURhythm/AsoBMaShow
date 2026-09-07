@@ -395,6 +395,30 @@ return {type=0, property=p}
     }
     writeText(source / "skin/crowded/match.png", "fixture");
 
+    for (const int type : {0, 5, 7, 15, 16}) {
+      writeText(source / ("skin/policy-" + std::to_string(type) + ".luaskin"),
+                "local skinType = " + std::to_string(type) + R"lua(
+local note = {id="notes", dst={{x=10, y=20, w=40, h=500}}}
+for _, field in ipairs({"note", "mine", "lnend", "lnstart", "lnbody",
+    "lnbodyActive", "hcnend", "hcnstart", "hcnbody", "hcnbodyActive",
+    "hcnbodyReactive", "hcnbodyMiss"}) do note[field] = {"frame"} end
+return {
+  type=skinType, w=1280, h=720,
+  source={{id="atlas", path="images/bg.png"}},
+  image={{id="frame", src="atlas", w=40, h=20}},
+  note=note, bga={id="bga"}, practice={id="practice", visibleItems=8},
+  hiddenCover={{id="hidden", src="atlas", w=40, h=20}},
+  liftCover={{id="lift", src="atlas", w=40, h=20}},
+  judge={{id="judge", images={{id="frame", dst={{}}}},
+          numbers={{id="missing-number", dst={{}}}}}},
+  destination={{id="frame", dst={{}}}, {id="notes", dst={{}}},
+    {id="bga", dst={{}}}, {id="practice", dst={{}}},
+    {id="hidden", dst={{}}}, {id="lift", dst={{}}},
+    {id="judge", dst={{}}}}
+}
+)lua");
+    }
+
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto snapshot = snapshotter.snapshot(source, package, {}, {});
     expect(snapshot.prepared.has_value(), "header fixture snapshots");
@@ -432,7 +456,10 @@ return {type=0, property=p}
     return LuaSkinTableDecoder{}.decodeHeader(*value.value);
   }
 
-  BeatorajaSkinModelDecodeResult decodeGameplay(std::string_view filename) {
+  BeatorajaSkinModelDecodeResult decodeGameplay(
+      std::string_view filename,
+      SkinSafetyLevel level = SkinSafetyLevel::Standard,
+      bool musicSelect = false) {
     auto runtimeFileSystem = fileSystem(filename);
     auto reconciliationFileSystem = fileSystem(filename);
     expect(runtimeFileSystem != nullptr && reconciliationFileSystem != nullptr,
@@ -452,7 +479,7 @@ return {type=0, property=p}
     if (!headerValue.value) {
       return {};
     }
-    LuaSkinTableDecoder decoder;
+    LuaSkinTableDecoder decoder{SkinSafetyPolicy(level)};
     const auto header = decoder.decodeHeader(*headerValue.value);
     expect(header.header.has_value(), "gameplay header decodes");
     if (!header.header) {
@@ -472,8 +499,14 @@ return {type=0, property=p}
     if (!configured.value) {
       return {};
     }
+    if (musicSelect) {
+      return decoder.decodeMusicSelect(*configured.value,
+                                        {.runtime = *created.runtime,
+                                         .safetyPolicy = SkinSafetyPolicy(level)});
+    }
     return decoder.decodeGameplay(*configured.value,
-                                  {.runtime = *created.runtime});
+                                  {.runtime = *created.runtime,
+                                   .safetyPolicy = SkinSafetyPolicy(level)});
   }
 
   std::unique_ptr<LuaSkinFileSystem>
@@ -1260,6 +1293,48 @@ void testGameplayNumericOffsetsAndCumulativeFrameBudgetAreBounded() {
          "model frame budget");
 }
 
+void testGameplayObjectsFollowSkinTypeInsteadOfSafetyPolicy() {
+  for (const auto policy : {SkinSafetyLevel::Standard,
+                            SkinSafetyLevel::BeatorajaCompatibility,
+                            SkinSafetyLevel::Unrestricted}) {
+    for (const int type : {0, 5, 7, 15, 16}) {
+      const auto decoded = fixture().decodeGameplay(
+          "policy-" + std::to_string(type) + ".luaskin", policy, type == 5);
+      expect(decoded.model.has_value(), "skin type decodes under every safety policy");
+      if (!decoded.model) {
+        for (const auto &diagnostic : decoded.diagnostics) {
+          std::cerr << "type=" << type << " policy=" << static_cast<int>(policy)
+                    << ' ' << diagnostic.code << ": " << diagnostic.message << '\n';
+        }
+        continue;
+      }
+      int notes = 0;
+      int covers = 0;
+      int judges = 0;
+      int backgrounds = 0;
+      int practices = 0;
+      for (const auto &object : decoded.model->objects) {
+        if (const auto *note = std::get_if<SkinNoteObject>(&object.payload)) {
+          ++notes;
+          expect(note->lanes.size() == 1 && !note->lanes.front().visuals.empty(),
+                 "loose gameplay policies materialize note lanes and visuals");
+        }
+        covers += std::holds_alternative<SkinCoverObject>(object.payload);
+        judges += std::holds_alternative<SkinJudgeObject>(object.payload);
+        backgrounds += std::holds_alternative<SkinBgaObject>(object.payload);
+        practices += std::holds_alternative<SkinPracticeObject>(object.payload);
+      }
+      const bool gameplay = type == 0 || type == 16;
+      expect(notes == (gameplay ? 1 : 0) && covers == (gameplay ? 2 : 0) &&
+                 judges == (gameplay ? 1 : 0) && backgrounds == (gameplay ? 1 : 0) &&
+                 practices == (gameplay ? 1 : 0),
+             "only gameplay skin types retain all gameplay object families");
+      expect(!decoded.model->objects.empty(),
+             "non-gameplay skin types still retain their generic images");
+    }
+  }
+}
+
 void testRequestedExternalLuaSkinHeaderDecodes() {
   const char *configuredRoot = std::getenv("ASOBMASHOW_EXTERNAL_LUA_SKIN_ROOT");
   if (configuredRoot == nullptr || *configuredRoot == '\0') {
@@ -1360,6 +1435,7 @@ int main() {
   testConfigurationDigestUsesTheFrozenBigEndianGrammar();
   testGameplayNumericGlyphAtlasesNormalizeIntoModelObjects();
   testGameplayNumericOffsetsAndCumulativeFrameBudgetAreBounded();
+  testGameplayObjectsFollowSkinTypeInsteadOfSafetyPolicy();
   testRequestedExternalLuaSkinHeaderDecodes();
   if (failures != 0) {
     std::cerr << failures << " assertion(s) failed\n";

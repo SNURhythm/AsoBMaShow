@@ -1202,6 +1202,7 @@ struct RawSkinNote {
 struct GameplayDecodeRequest {
   DecodeRequest decoding;
   bool enforceGameplayLimits = true;
+  bool isPlaySkin = false;
   BeatorajaSkinModelDecodeResult result;
   std::map<std::string, SkinResourceId, std::less<>> sourceIds;
   std::map<std::string, RawSkinImage, std::less<>> images;
@@ -3372,7 +3373,7 @@ bool makeObjectPayload(GameplayDecodeRequest &request, std::string_view name,
   const auto hiddenCover = request.hiddenCovers.find(name);
   const auto liftCover = request.liftCovers.find(name);
   const auto judge = request.judges.find(name);
-  const bool isPlaySkin = request.enforceGameplayLimits;
+  const bool isPlaySkin = request.isPlaySkin;
   const bool isNote = isPlaySkin && request.note && request.note->id == name;
   const bool isGauge = request.gauge && request.gauge->id == name;
   const bool isPractice = isPlaySkin && request.practice &&
@@ -4208,13 +4209,15 @@ void decodeGameplayProtected(lua_State *state, int index,
     request->result.model.emplace();
     auto &model = *request->result.model;
     model.header = std::move(*request->decoding.result.header);
-    if (!skinTargetTraitForType(model.header.type)) {
+    const auto target = skinTargetTraitForType(model.header.type);
+    if (!target) {
       fail(request->decoding, "skin_lua_model_type_unsupported",
            "Lua skin requires a supported Beatoraja screen type");
       transferDecodeDiagnostics(*request);
       request->result.model.reset();
       return;
     }
+    request->isPlaySkin = target->kind == SkinTargetKind::Gameplay;
     if (!integerField(state, index, "fadeout", model.timing.fadeoutMillis,
                       request->decoding) ||
         !integerField(state, index, "input", model.timing.inputMillis,
@@ -4453,7 +4456,7 @@ void decodeGameplayProtected(lua_State *state, int index,
       return;
     }
 
-    if (model.header.type != 5) {
+    if (request->isPlaySkin) {
       if (!decodeObjectArrayField(state, index, "pmchara", 1,
                                   LuaSkinTableDecoderPolicy::maxDecodedObjects,
                                   request->rawPmCharas, request->decoding,
@@ -4495,7 +4498,7 @@ void decodeGameplayProtected(lua_State *state, int index,
       }
     }
 
-    if (model.header.type != 5) {
+    if (request->isPlaySkin) {
       request->bga.emplace();
       if (!rawGetField(state, index, "bga", request->decoding)) {
         transferDecodeDiagnostics(*request);
@@ -4515,7 +4518,7 @@ void decodeGameplayProtected(lua_State *state, int index,
       lua_pop(state, 1);
     }
 
-    if (model.header.type != 5) {
+    if (request->isPlaySkin) {
       request->practice.emplace();
       if (!rawGetField(state, index, "practice", request->decoding)) {
         transferDecodeDiagnostics(*request);
@@ -4557,7 +4560,7 @@ void decodeGameplayProtected(lua_State *state, int index,
     }
     lua_pop(state, 1);
 
-    if (model.header.type != 5) {
+    if (request->isPlaySkin) {
       request->note.emplace();
       if (!rawGetField(state, index, "note", request->decoding)) {
         transferDecodeDiagnostics(*request);
@@ -5553,7 +5556,7 @@ bool materializeGameplay(GameplayDecodeRequest &request,
                          return judge.id;
                        });
 
-  if (request.enforceGameplayLimits && request.note &&
+  if (request.isPlaySkin && request.note &&
       !buildNoteObject(request, *request.note)) {
     transferDecodeDiagnostics(request);
     return false;
