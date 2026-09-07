@@ -1842,7 +1842,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     // changes. Only a fully finalized scan (healthy traversal and, for a Full
     // scan, a successful checkpoint clear) may acknowledge, so a scan that
     // reports completed=false does not claim a flush completion.
-    bool finalized = traversalHealthy;
+    bool finalized = traversalHealthy && !shouldStop();
     if (reconcileMode == ReconcileMode::Full) {
       finalized = finalized && session.ClearScanCheckpoint();
       if (finalized) {
@@ -3245,11 +3245,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     archive_file::appendDebugLogLine(
         "Failed to commit final chart scan batch.");
   }
-  if (stopRequested(stopToken)) {
-    interrupted.store(true, std::memory_order_relaxed);
-  }
+  const bool scanInterrupted = shouldStop();
   bool committed = storageHealthy && traversalHealthy && commitSucceeded;
-  if (!stopRequested(stopToken) && committed) {
+  if (!scanInterrupted && committed) {
     bool finalized = true;
     if (reconcileMode == ReconcileMode::Full) {
       finalized = session.ClearScanCheckpoint();

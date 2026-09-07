@@ -1840,6 +1840,74 @@ void testMidArchiveCheckpointResumePreservesValidCacheCount() {
   assert(!resumed.checkpoint.has_value());
 }
 
+void testCheckpointPausePreservesMidArchiveResumeWithoutStopRequest() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto firstArchive = writeZip(
+      root / "00-complete.zip", {{"complete.bms", chartText("Complete")}});
+  std::vector<std::pair<std::string, std::string>> files;
+  for (int index = 0; index < 105; ++index) {
+    files.emplace_back("chart-" + std::to_string(index) + ".bms",
+                       chartText("Paused Archive " + std::to_string(index)));
+  }
+  const auto secondArchive = writeZip(root / "01-paused.zip", files);
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  setMetadataRebuildRequired(repository.DatabasePath(), true);
+  auto session = repository.OpenSession();
+  assert(session.has_value());
+  ChartLibraryScanner scanner;
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  std::atomic_bool paused{false};
+  int parsingCurrent = 0;
+  const auto interruptedResult = scanner.ScanWithResult(
+      *session, {firstArchive, secondArchive}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parsingCurrent = progress.current;
+        }
+      },
+      [&] { return !paused.load(); },
+      [&]() -> std::uint64_t { return parsingCurrent >= 50 ? 1 : 0; },
+      [&](std::uint64_t request) {
+        assert(request == 1);
+        paused.store(true);
+      });
+  assert(paused.load());
+  assert(!stop.stop_requested());
+  assert(!interruptedResult.completed);
+  assert(interruptedResult.committed);
+  const auto interrupted = session->LoadScanSnapshot();
+  assert(interrupted.checkpoint.has_value());
+  assert(interrupted.checkpoint->archivePath == secondArchive);
+  assert(interrupted.checkpoint->subIndex == 50);
+  assert(interrupted.completedArchives.size() == 1);
+  assert(interrupted.completedArchives.front().path == firstArchive);
+  assert(interrupted.charts.size() == 51);
+  assert(metadataRebuildRequired(repository.DatabasePath()));
+
+  paused.store(false);
+  int resumedParsingStart = -1;
+  const auto resumedResult = scanner.ScanWithResult(
+      *session, {firstArchive, secondArchive}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts &&
+            resumedParsingStart < 0) {
+          resumedParsingStart = progress.current;
+        }
+      },
+      [&] { return !paused.load(); });
+  assert(resumedResult.completed);
+  assert(resumedParsingStart == 50);
+  const auto resumed = session->LoadScanSnapshot();
+  assert(resumed.charts.size() == 106);
+  assert(resumed.archiveCache.size() == 2);
+  assert(!resumed.checkpoint.has_value());
+  assert(resumed.completedArchives.empty());
+  assert(!metadataRebuildRequired(repository.DatabasePath()));
+}
+
 void testArchiveStreamFailurePreservesCheckpointPrefix() {
   constexpr int kChartCount = 105;
   TempDirectory temporary;
@@ -2588,6 +2656,7 @@ int main() {
   testMultiEntryArchivePreservesPreparedResultOrderAndCache();
   testArchiveCheckpointResumeUsesOrderedFallbackPipeline();
   testMidArchiveCheckpointResumePreservesValidCacheCount();
+  testCheckpointPausePreservesMidArchiveResumeWithoutStopRequest();
   testArchiveStreamFailurePreservesCheckpointPrefix();
   testUnmodifiedRescanAcknowledgesPendingFlushRequest();
   testInterruptedScanDoesNotAcknowledgeFlush();
