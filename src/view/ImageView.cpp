@@ -428,9 +428,19 @@ image_decode::ImageDecodeCoordinator &imageDecodeCoordinator() {
           -> std::optional<DecodedImage> {
         const auto started = std::chrono::steady_clock::now();
         ImageDecodeTimings timings;
+        int targetWidth = request.targetWidth;
+        int targetHeight = request.targetHeight;
+        if (request.maximumDimension > 0 &&
+            request.maximumDimension < kImageMaximumDimension) {
+          targetWidth = targetWidth > 0
+              ? std::min(targetWidth, request.maximumDimension)
+              : request.maximumDimension;
+          targetHeight = targetHeight > 0
+              ? std::min(targetHeight, request.maximumDimension)
+              : request.maximumDimension;
+        }
         auto decoded = decodeImageFile(request.path, &timings,
-                                       request.targetWidth,
-                                       request.targetHeight, stop);
+                                       targetWidth, targetHeight, stop);
         const auto workerMillis = elapsedMillis(
             started, std::chrono::steady_clock::now());
         if (workerMillis >= 250) {
@@ -619,7 +629,11 @@ void ImageView::applyAsyncImageIfReady() {
   }
   if (resetDroppedAsyncRequest()) {
     const path_t path = currentImagePath;
-    setImageAsync(path, true);
+    if (sharedChartImagePath_) {
+      setImageAsyncShared(path, true);
+    } else {
+      setImageAsync(path, true);
+    }
   }
   if (applyCachedTexture(currentImagePath, currentImageKey)) {
     asyncImagePending = false;
@@ -633,6 +647,7 @@ void ImageView::applyAsyncImageIfReady() {
 }
 
 bool ImageView::loadTexture(const path_t &path) {
+  sharedChartImagePath_.reset();
   asyncImageBound = false;
   asyncTargetWidth = 0;
   asyncTargetHeight = 0;
@@ -689,6 +704,7 @@ bool ImageView::resetDroppedAsyncRequest() {
 
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
+  sharedChartImagePath_.reset();
   resetDroppedAsyncRequest();
   if (asyncTicket != 0 &&
       imageDecodeCoordinator().hasFailed(asyncTicket)) {
@@ -771,7 +787,8 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
   // Decode once at a bounded full-quality dimension (no display-space resize)
   // so the same pixels are usable as the gameplay skin's builtin image, and
   // the load is fast for a multi-megabyte stage image.
-  const std::string key = imageAsyncCacheKey(path, 0, 0);
+  const std::string key = imageAsyncCacheKey(path, 0, 0) + ":shared-max=" +
+                          std::to_string(kSharedChartImageMaxDimension);
   sharedChartImagePath_ = path;
   asyncImageBound = true;
   asyncTargetWidth = 0;
@@ -866,7 +883,7 @@ void ImageView::onThemeChanged() {
 }
 void ImageView::onLayout() {
   View::onLayout();
-  if (!asyncImageBound || currentImagePath.empty()) {
+  if (!asyncImageBound || currentImagePath.empty() || sharedChartImagePath_) {
     return;
   }
   const int targetWidth = std::max(1, getWidth());
