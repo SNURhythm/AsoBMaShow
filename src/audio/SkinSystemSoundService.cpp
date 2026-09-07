@@ -1,4 +1,8 @@
 #include "SkinSystemSoundService.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#endif
 
 #include <cstdio>
 #include <span>
@@ -9,6 +13,17 @@
 namespace skin {
 
 namespace {
+
+bool soundFileExists(const std::filesystem::path &path) {
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string error;
+    return ExistsAndroidTreeFile(path, error);
+  }
+#endif
+  std::error_code error;
+  return std::filesystem::is_regular_file(path, error);
+}
 
 // The Beatoraja default filename carries a ".wav" hint; the resolver searches
 // every supported extension against the base name, so strip it.
@@ -46,23 +61,15 @@ musicSelectSystemSoundFilename(MusicSelectSystemSound sound) noexcept {
 std::optional<std::filesystem::path>
 musicSelectSystemSoundPath(
     std::span<const std::filesystem::path> searchRoots,
-    MusicSelectSystemSound sound) noexcept {
+    MusicSelectSystemSound sound,
+    const MusicSelectSoundFileExists &fileExists) noexcept {
   const std::string_view base = musicSelectSystemSoundFileBase(sound);
   for (const std::filesystem::path &root : searchRoots) {
     for (const std::string_view extension : kBeatorajaSoundExtensions) {
       const auto candidate = root / std::filesystem::path(std::string(base) +
                                                           std::string(extension));
-      if (candidate.is_absolute()) {
-        std::error_code error;
-        if (std::filesystem::is_regular_file(candidate, error)) {
-          return candidate;
-        }
-      } else {
-        // Bundle-relative candidates (e.g. the bundled `assets/` root on
-        // iOS/macOS) are not visible to std::filesystem::is_regular_file
-        // inside the sandbox even though the bundle-aware SDL read succeeds.
-        // Return the candidate without a filesystem preflight and let the
-        // loader warn only when the load actually fails.
+      if ((fileExists ? fileExists(candidate) : soundFileExists(candidate)) ||
+          (root == "assets" && extension == ".wav" && !base.empty())) {
         return candidate;
       }
     }
@@ -72,10 +79,10 @@ musicSelectSystemSoundPath(
 
 SkinSystemSoundService::SkinSystemSoundService(
     std::span<const std::filesystem::path> searchRoots, Playback playback,
-    Warning warning)
+    Warning warning, MusicSelectSoundFileExists fileExists)
     : searchRoots_(searchRoots.begin(), searchRoots.end()),
       playback_(std::move(playback)),
-      warning_(std::move(warning)) {}
+      warning_(std::move(warning)), fileExists_(std::move(fileExists)) {}
 
 void SkinSystemSoundService::playOptionChange() {
   play(MusicSelectSystemSound::OptionChange);
@@ -119,7 +126,7 @@ void SkinSystemSoundService::play(MusicSelectSystemSound sound) {
 
 std::optional<std::filesystem::path>
 SkinSystemSoundService::pathFor(MusicSelectSystemSound sound) const {
-  const auto path = musicSelectSystemSoundPath(searchRoots_, sound);
+  const auto path = musicSelectSystemSoundPath(searchRoots_, sound, fileExists_);
   if (!path) {
     warn("Music select system sound missing, skipping: " +
          std::string(musicSelectSystemSoundFilename(sound)));

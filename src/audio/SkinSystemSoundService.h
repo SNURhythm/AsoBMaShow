@@ -10,6 +10,9 @@
 
 namespace skin {
 
+using MusicSelectSoundFileExists =
+    std::function<bool(const std::filesystem::path &)>;
+
 // Beatoraja AudioDriver.getPaths extension order
 // (AudioDriver.java:158). A music-select system sound resolves against these
 // four extensions in this exact order, matching libsndfile's content-based
@@ -43,7 +46,8 @@ musicSelectSystemSoundFilename(MusicSelectSystemSound sound) noexcept;
 // the caller decides whether to warn. Never throws.
 [[nodiscard]] std::optional<std::filesystem::path>
 musicSelectSystemSoundPath(std::span<const std::filesystem::path> searchRoots,
-                           MusicSelectSystemSound sound) noexcept;
+                           MusicSelectSystemSound sound,
+                           const MusicSelectSoundFileExists &fileExists = {}) noexcept;
 
 // Owns the sound *decision* (which asset to play, and whether it exists) and
 // delegates *playback* to an injected boundary so the sound routing is
@@ -61,7 +65,8 @@ public:
   // root. Missing assets log a warning (see Warning) and are skipped; the
   // scene never fails on them.
   SkinSystemSoundService(std::span<const std::filesystem::path> searchRoots,
-                         Playback playback, Warning warning = {});
+                         Playback playback, Warning warning = {},
+                         MusicSelectSoundFileExists fileExists = {});
 
   void playOptionChange();
   void playOptionOpen();
@@ -82,6 +87,7 @@ private:
   std::vector<std::filesystem::path> searchRoots_;
   Playback playback_;
   Warning warning_;
+  MusicSelectSoundFileExists fileExists_;
 };
 
 } // namespace skin

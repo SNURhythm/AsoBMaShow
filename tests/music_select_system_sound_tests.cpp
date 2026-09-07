@@ -269,15 +269,60 @@ void testBundleRelativeRootSkipsFilesystemPreflight() {
          "bundle-aware loader can attempt it");
 }
 
-void testRelativeSetStillPrefersConfiguredRootOverBundled() {
-  // Two relative roots keep honoring search-root order: the configured set
-  // wins even though neither root is filesystem-visible on the runner.
-  const std::vector<std::filesystem::path> roots{"configured-set", "assets"};
+void testMissingRelativeSetFallsBackToBundled() {
+  SoundSandbox sandbox;
+  const auto missingRoot = std::filesystem::relative(sandbox.root()) / "missing";
+  const std::vector<std::filesystem::path> roots{missingRoot, "assets"};
   const auto select = skin::musicSelectSystemSoundPath(
       roots, MusicSelectSystemSound::FolderOpen);
   expect(select &&
-             *select == std::filesystem::path("configured-set") / "f-open.wav",
-         "relative search roots keep their configured-then-bundled order");
+             *select == std::filesystem::path("assets") / "f-open.wav",
+         "a missing relative configured sound falls back to the bundle");
+}
+
+void testRelativeSetSearchesExtensionsAndFallsBackPerSound() {
+  SoundSandbox sandbox;
+  sandbox.write("select.ogg");
+  const auto relativeRoot = std::filesystem::relative(sandbox.root());
+  const std::vector<std::filesystem::path> roots{relativeRoot, "assets"};
+  const auto select = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::Select);
+  expect(select && *select == relativeRoot / "select.ogg",
+         "a relative set searches past missing wav to existing ogg");
+  const auto scratch = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::Scratch);
+  expect(scratch && *scratch == std::filesystem::path("assets/scratch.wav"),
+         "a missing FX falls back independently of a present select BGM");
+  const std::vector<std::filesystem::path> missingRoots{relativeRoot / "absent"};
+  expect(!skin::musicSelectSystemSoundPath(missingRoots,
+                                         MusicSelectSystemSound::Select),
+         "an arbitrary missing relative root is not treated as bundled");
+}
+
+void testProviderRelativeSetUsesExistenceAndExtensionOrder() {
+  const std::filesystem::path providerRoot("@androidtree@/sound-set");
+  const std::vector<std::filesystem::path> roots{providerRoot, "assets"};
+  std::vector<std::filesystem::path> probes;
+  const auto exists = [&](const std::filesystem::path &path) {
+    probes.push_back(path);
+    return path == providerRoot / "select.ogg";
+  };
+  const auto select = skin::musicSelectSystemSoundPath(
+      roots, MusicSelectSystemSound::Select, exists);
+  expect(select && *select == providerRoot / "select.ogg",
+         "provider existence resolves a relative SAF sound to its real extension");
+  expect(probes == std::vector<std::filesystem::path>{
+                       providerRoot / "select.wav", providerRoot / "select.flac",
+                       providerRoot / "select.ogg"},
+         "provider paths are checked in Beatoraja extension order");
+  std::vector<std::filesystem::path> played;
+  SkinSystemSoundService service(
+      roots, [&](const auto &path) { played.push_back(path); }, {}, exists);
+  service.playSelect();
+  service.playScratch();
+  expect(played == std::vector<std::filesystem::path>{
+                       providerRoot / "select.ogg", "assets/scratch.wav"},
+         "provider-backed service preserves per-sound bundled fallback");
 }
 
 } // namespace
@@ -296,7 +341,9 @@ int main(int argc, char **argv) {
   testMissingEverywhereReturnsNulloptWithWarningAndNoPlayback();
   testServiceIntegrationRoutsConfiguredOggThroughPlayback();
   testBundleRelativeRootSkipsFilesystemPreflight();
-  testRelativeSetStillPrefersConfiguredRootOverBundled();
+  testMissingRelativeSetFallsBackToBundled();
+  testRelativeSetSearchesExtensionsAndFallsBackPerSound();
+  testProviderRelativeSetUsesExistenceAndExtensionOrder();
   return music_select_skin_ledger_evidence::finish(
       argc, argv, "music_select_system_sound_tests", failures,
       {"select.sound.effect.option-change", "select.sound.effect.scratch",
