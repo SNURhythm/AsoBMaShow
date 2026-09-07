@@ -113,7 +113,8 @@ struct LeasedMoviePackage {
 
   static std::optional<LeasedMoviePackage>
   create(const std::string &packageId,
-         const std::filesystem::path &sourceRoot) {
+         const std::filesystem::path &sourceRoot,
+         bool relativePackageRoot = false) {
     LeasedMoviePackage result;
     result.package =
         *skin::normalizePackageId(packageId).package;
@@ -127,8 +128,12 @@ struct LeasedMoviePackage {
         .liveSources = true};
     result.aliases = skin::createPlatformSkinAliasDetector();
     skin::SkinTreeSnapshotter snapshotter(result.roots, *result.aliases);
+    const auto packageRoot = result.roots.visiblePackages / packageId;
     auto snapshot = snapshotter.snapshot(
-        result.roots.visiblePackages / packageId, result.package, {}, {});
+        std::filesystem::absolute(relativePackageRoot
+                                      ? std::filesystem::relative(packageRoot)
+                                      : packageRoot).lexically_normal(),
+        result.package, {}, {});
     if (!snapshot.prepared) {
       return std::nullopt;
     }
@@ -163,6 +168,36 @@ skin::ValidatedBeatorajaSkinModel singleImageModel(std::string virtualPath) {
            .resource = 1, .frames = {{.x = 0, .y = 0, .w = 40, .h = 20}}}}},
        .critical = true});
   return model;
+}
+
+void testWildcardMoviesResolveListedPathsOnlyOnce() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const auto packageRoot = temporary.root / "visible/WildcardMovies";
+  fs::create_directories(packageRoot / "entry/background");
+  std::ofstream(packageRoot / "entry/play.luaskin") << "return {}\n";
+  std::ofstream(packageRoot / "entry/background/a.mp4") << "movie bytes\n";
+  for (const bool relativeRoot : {false, true}) {
+    auto leased = LeasedMoviePackage::create("WildcardMovies", temporary.root,
+                                            relativeRoot);
+    expect(leased.has_value(), "wildcard movie package root leases");
+    if (!leased) continue;
+    const auto model = singleImageModel("background/*.mp4");
+    for (const bool configured : {false, true}) {
+      skin::BeatorajaSkinConfiguration configuration;
+      if (configured) {
+        configuration.orderedFiles.push_back(
+            {.pattern = "background/*.mp4", .selectedValue = "a.mp4"});
+      }
+      auto device = std::make_shared<FakeMovieDevice>();
+      auto movies = skin::SkinMovieCatalog::prepare(
+          {.fileSystem = *leased->fileSystem, .model = model,
+           .configuration = configuration, .device = device});
+      expect(movies.catalog && movies.catalog->movieCount() == 1 &&
+                 device->loads == 1 && device->pathExistedDuringLoad,
+             "configured and fallback wildcard movies prepare from relative and absolute roots");
+    }
+  }
 }
 
 void testMovieExtensionImageResourcePromotesToPreparedMovie() {
@@ -307,6 +342,7 @@ void testStillExtensionImageResourceStaysImage() {
 } // namespace
 
 int main() {
+  testWildcardMoviesResolveListedPathsOnlyOnce();
   testMovieExtensionImageResourcePromotesToPreparedMovie();
   testSharedMovieExtensionPathMaterializesOnce();
   testStillExtensionImageResourceStaysImage();

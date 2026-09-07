@@ -149,6 +149,7 @@ struct CollectedResourceUses {
 
 struct ConfiguredResourcePath {
   std::optional<std::string> path;
+  bool resolved = false;
   std::string error;
 };
 
@@ -197,7 +198,8 @@ ConfiguredResourcePath applyConfiguredFileSelection(
       return {.path=std::string(authored)};
     }
     return {.path=candidates[static_cast<std::size_t>(std::rand()) %
-                             candidates.size()]};
+                             candidates.size()],
+            .resolved = true};
   }
   const std::size_t wildcard = authored.rfind('*');
   if (wildcard == std::string::npos ||
@@ -620,7 +622,8 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
       // resolveResourceCandidates below their entry parent.
       const std::filesystem::path authored(*configured.path);
       const std::filesystem::path candidate =
-          (authored.is_absolute() ? authored : files.skinDirectory() / authored)
+          (configured.resolved || authored.is_absolute()
+               ? authored : files.skinDirectory() / authored)
               .lexically_normal();
       digestWithinPolicy = appendStableFallbackChainEntry(
           digest, candidate.generic_string(), type, safetyPolicy);
@@ -2783,8 +2786,10 @@ SkinResourceValidationResult SkinResourcePreparationService::validateResources(
           use->second.critical));
       continue;
     }
-    const auto candidate = input.fileSystem.resolveResourceCandidates(
-        *configured.path, *configured.path);
+    const auto candidate = configured.resolved
+        ? SkinFileResolveResult{.normalizedVirtualPath = configured.path}
+        : input.fileSystem.resolveResourceCandidates(*configured.path,
+                                                     *configured.path);
     if (!candidate.normalizedVirtualPath) {
       result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical));
       continue;
@@ -3242,8 +3247,10 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
           use->second.critical));
       continue;
     }
-    const auto candidate = input.fileSystem.resolveResourceCandidates(
-        *configured.path, *configured.path);
+    const auto candidate = configured.resolved
+        ? SkinFileResolveResult{.normalizedVirtualPath = configured.path}
+        : input.fileSystem.resolveResourceCandidates(*configured.path,
+                                                     *configured.path);
     if (!candidate.normalizedVirtualPath) { result.diagnostics.push_back(fileDiagnostic(*resource, candidate.failure ? &*candidate.failure : nullptr, use->second.critical)); continue; }
     if (skinResourcePathIsMovie(*candidate.normalizedVirtualPath)) continue;
     const std::string candidatePath = *candidate.normalizedVirtualPath;

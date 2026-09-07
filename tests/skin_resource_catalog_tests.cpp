@@ -873,6 +873,62 @@ skin::ValidatedBeatorajaSkinModel singleFontModel(std::string virtualPath,
   return model;
 }
 
+void testWildcardImagesResolveListedPathsOnlyOnce() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const fs::path source = temporary.root / "visible" / "WildcardImages";
+  fs::create_directories(source / "entry/background");
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+  fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
+                    "tests/fixtures/beatoraja_skin/resources/fixture.png",
+                source / "entry/background/a.png");
+  const auto package = *skin::normalizePackageId("WildcardImages").package;
+  const auto entry = *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays",
+      .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  for (const bool relativeRoot : {false, true}) {
+    skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+    auto snapshot = snapshotter.snapshot(
+        fs::absolute(relativeRoot ? fs::relative(source) : source).lexically_normal(),
+        package, {}, {});
+    expect(snapshot.prepared.has_value(), "wildcard image package root snapshots");
+    if (!snapshot.prepared) continue;
+    std::string error;
+    auto lease = std::move(*snapshot.prepared).publish(error);
+    expect(lease.has_value(), "wildcard image revision publishes");
+    if (!lease) continue;
+    auto files = skin::LuaSkinFileSystem::create(
+        {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+    expect(files.fileSystem != nullptr, "wildcard image filesystem opens");
+    if (!files.fileSystem) continue;
+    const auto model = singleImageModel("background/*.png");
+    for (const bool configured : {false, true}) {
+      skin::BeatorajaSkinConfiguration configuration;
+      if (configured) {
+        configuration.orderedFiles.push_back(
+            {.pattern = "background/*.png", .selectedValue = "a.png"});
+      }
+      skin::SkinResourcePreparationService service;
+      const auto validated = service.validateResources(
+          {.revision = lease->readView(), .entry = entry,
+           .fileSystem = *files.fileSystem, .model = model,
+           .configuration = configuration});
+      expect(validated.valid, "wildcard image validates after one path resolution");
+      const auto planned = service.decodeAndPlan(
+          {.revision = lease->clone(), .entry = entry,
+           .fileSystem = *files.fileSystem, .model = model,
+           .configuration = configuration});
+      expect(planned.plan && planned.plan->images.size() == 1,
+             "configured and fallback wildcard images prepare from relative and absolute roots");
+    }
+  }
+}
+
 void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
@@ -3088,6 +3144,7 @@ int main() {
   testTextAtlasKeyRejectsNegativePaintExtents();
   testScalableFontOutlineWorkIsBounded();
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
+  testWildcardImagesResolveListedPathsOnlyOnce();
   testChartBuiltinReaderOwnsBytesAndAccountingTransaction();
   testBitmapFontEncodedAccountingCommitsWithAtlasTransaction();
   testSecurePreparationLeaseAliasAndCatalogLifetime();

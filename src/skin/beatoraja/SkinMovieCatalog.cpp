@@ -53,7 +53,12 @@ SkinDiagnostic movieDiagnostic(std::string code, std::string message) {
           .severity = DiagnosticSeverity::Error};
 }
 
-std::optional<std::string> configuredMoviePath(
+struct ConfiguredMoviePath {
+  std::optional<std::string> path;
+  bool resolved = false;
+};
+
+ConfiguredMoviePath configuredMoviePath(
     std::string_view authored,
     const BeatorajaSkinConfiguration &configuration,
     const LuaSkinFileSystem &files,
@@ -69,11 +74,11 @@ std::optional<std::string> configuredMoviePath(
   if (match == nullptr) {
     const std::size_t wildcard = authored.rfind('*');
     if (wildcard == std::string_view::npos) {
-      return std::string(authored);
+      return {.path = std::string(authored)};
     }
     const std::size_t slash = authored.rfind('/', wildcard);
     if (slash == std::string_view::npos) {
-      return std::string(authored);
+      return {.path = std::string(authored)};
     }
     std::string suffix(authored.substr(wildcard + 1));
     if (const std::size_t pipe = authored.find('|'); pipe != std::string_view::npos) {
@@ -84,7 +89,7 @@ std::optional<std::string> configuredMoviePath(
     }
     const auto listed = files.listResourceDirectory(authored.substr(0, slash));
     if (listed.failure) {
-      return std::string(authored);
+      return {.path = std::string(authored)};
     }
     std::vector<std::string> candidates;
     for (const auto &candidate : listed.entries) {
@@ -96,16 +101,17 @@ std::optional<std::string> configuredMoviePath(
         candidates.push_back(candidate);
       }
     }
-    return candidates.empty()
-               ? std::optional<std::string>(authored)
-               : std::optional<std::string>(
-                     candidates[static_cast<std::size_t>(std::rand()) %
-                                candidates.size()]);
+    if (candidates.empty()) {
+      return {.path = std::string(authored)};
+    }
+    return {.path = candidates[static_cast<std::size_t>(std::rand()) %
+                               candidates.size()],
+            .resolved = true};
   }
   const std::size_t wildcard = authored.rfind('*');
   if (wildcard == std::string_view::npos ||
       authored.size() < match->pattern.size()) {
-    return std::nullopt;
+    return {};
   }
   const std::size_t suffixSize = authored.size() - match->pattern.size();
   const std::size_t maximumPathBytes = skinResourceLimit(
@@ -114,14 +120,14 @@ std::optional<std::string> configuredMoviePath(
       match->selectedValue.size() > maximumPathBytes - wildcard ||
       suffixSize >
           maximumPathBytes - wildcard - match->selectedValue.size()) {
-    return std::nullopt;
+    return {};
   }
   std::string selected;
   selected.reserve(wildcard + match->selectedValue.size() + suffixSize);
   selected.append(authored, 0, wildcard);
   selected.append(match->selectedValue);
   selected.append(authored, match->pattern.size(), suffixSize);
-  return selected;
+  return {.path = std::move(selected)};
 }
 
 struct ResolvedMovieDefinition {
@@ -164,7 +170,7 @@ std::vector<ResolvedMovieDefinition> resolveMovies(
     const auto configured = configuredMoviePath(
         resource.virtualPath, input.configuration, input.fileSystem,
         input.safetyPolicy);
-    if (!configured) {
+    if (!configured.path) {
       if (std::holds_alternative<SkinMovieResource>(definition)) {
         diagnostics.push_back(movieDiagnostic(
             "skin.movie.configuration_ambiguous",
@@ -172,11 +178,13 @@ std::vector<ResolvedMovieDefinition> resolveMovies(
       }
       continue;
     }
-    const auto candidate = input.fileSystem.resolveResourceCandidates(
-        *configured, *configured);
+    const auto candidate = configured.resolved
+        ? SkinFileResolveResult{.normalizedVirtualPath = configured.path}
+        : input.fileSystem.resolveResourceCandidates(*configured.path,
+                                                     *configured.path);
     if (!candidate.normalizedVirtualPath) {
       if (std::holds_alternative<SkinMovieResource>(definition) ||
-          skinResourcePathIsMovie(*configured)) {
+          skinResourcePathIsMovie(*configured.path)) {
         diagnostics.push_back(movieDiagnostic(
             "skin.movie.path_invalid", "movie resource is unavailable"));
       }
