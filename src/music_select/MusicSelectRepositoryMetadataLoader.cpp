@@ -20,8 +20,9 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   query.rawSongData = true;
   switch (directory.kind) {
   case skin::MusicSelectBarKind::Folder:
-    query.parentFolder = directory.directoryPath;
-    query.limit = 1;
+    if (!session.HasChartMetaForParentFolder(directory.directoryPath, stop)) return {};
+    checkCancelled();
+    query.recursiveFolder = directory.directoryPath;
     break;
   case skin::MusicSelectBarKind::Hash:
     query.tableId = directory.tableId;
@@ -80,14 +81,6 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   checkCancelled();
   session.QueryChartMeta(query, records, stop);
   checkCancelled();
-  if (directory.kind == skin::MusicSelectBarKind::Folder && !records.empty()) {
-    query.parentFolder.reset();
-    query.recursiveFolder = directory.directoryPath;
-    query.limit = 0;
-    records.clear();
-    session.QueryChartMeta(query, records, stop);
-    checkCancelled();
-  }
   return records;
 }
 

@@ -295,6 +295,8 @@ public:
     void QueryChartMeta(const ChartMetaQuery &query,
                         std::vector<ChartMetaRecord> &chartMetas,
                         std::stop_token stop = {});
+    bool HasChartMetaForParentFolder(const std::filesystem::path &folder,
+                                     std::stop_token stop = {});
     ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
         std::span<const std::filesystem::path> paths, std::stop_token stop = {});
     std::vector<bms_parser::ChartMeta>

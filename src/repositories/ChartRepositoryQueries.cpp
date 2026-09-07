@@ -1475,6 +1475,29 @@ void ChartRepository::Session::QueryChartMeta(
   }
 }
 
+bool ChartRepository::Session::HasChartMetaForParentFolder(
+    const std::filesystem::path &folder, std::stop_token stop) {
+  ScopedReadCancellation cancellation(impl_->database(), stop);
+  ChartMetaQuery filter;
+  filter.parentFolder = folder;
+  std::string query = "SELECT 1 FROM chart_meta cm WHERE 1 = 1";
+  appendExactFolderFilter(query, "cm", filter);
+  query += " LIMIT 1";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(impl_->database(), query, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(impl_->database()));
+  }
+  int bindIndex = 1;
+  bindExactFolderFilter(statement, bindIndex, filter);
+  checkReadCancelled(stop);
+  const int status = sqlite3_step(statement);
+  checkReadCancelled(stop);
+  if (status != SQLITE_ROW && status != SQLITE_DONE) {
+    throw std::runtime_error(sqlite3_errmsg(impl_->database()));
+  }
+  return status == SQLITE_ROW;
+}
+
 ChartMetaPathBatchReadOutcome ChartRepository::Session::SelectChartMetaByPaths(
     std::span<const std::filesystem::path> paths, std::stop_token stop) {
   checkReadCancelled(stop);

@@ -124,6 +124,7 @@ std::string cancelReadSql;
 int cancelReadAfterRows = 0;
 int observedReadRows = 0;
 int observedReadVmSteps = 0;
+int observedProbeVmSteps = 0;
 
 int traceStatement(unsigned mask, void *, void *statement, void *) {
   if (statement == nullptr) {
@@ -134,6 +135,9 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
   if (mask == SQLITE_TRACE_PROFILE) {
     const int steps = sqlite3_stmt_status(static_cast<sqlite3_stmt *>(statement),
                                           SQLITE_STMTSTATUS_VM_STEP, 0);
+    if (sqlText.starts_with("SELECT 1 FROM chart_meta cm")) {
+      observedProbeVmSteps = steps;
+    }
     if (!cancelReadSql.empty() && sqlText.find(cancelReadSql) != std::string::npos) {
       observedReadVmSteps = steps;
     }
@@ -241,6 +245,14 @@ std::string tracedStatementContaining(std::string_view expected) {
     if (statement.find(expected) != std::string::npos) {
       return statement;
     }
+  }
+  return {};
+}
+
+std::string tracedStatementStartingWith(std::string_view expected) {
+  std::lock_guard lock(traceMutex);
+  for (const auto &statement : tracedStatements) {
+    if (statement.starts_with(expected)) return statement;
   }
   return {};
 }
@@ -1205,12 +1217,21 @@ void testExactFolderQuery() {
                  .directoryPath = "packs"}, 1);
   assert(categoryRecords.empty());
 
+  const auto probeSql = tracedStatementStartingWith("SELECT 1 FROM chart_meta cm");
+  assert(!probeSql.empty());
+  assert(probeSql.find("ORDER BY") == std::string::npos);
+  assert(probeSql.find("JOIN") == std::string::npos);
+  assert(probeSql.find("LIMIT 1") != std::string::npos);
 
   assert(!traced("chart_normalize_stored_folder(cm.folder)"));
   assert(traced("cm.folder = @exact_folder"));
 
   Database database = openDatabase(chartPath);
   assert(database);
+  const auto probePlan = repository_test::explainPlan(database.get(), probeSql);
+  assert(repository_test::planContains(probePlan, "idx_chart_meta_folder"));
+  assert(!repository_test::planContains(probePlan, "SCAN cm"));
+  assert(!repository_test::planContains(probePlan, "TEMP B-TREE"));
   const std::string countSql = tracedStatementContaining(
       "SELECT COUNT(*) FROM chart_meta cm WHERE 1 = 1 AND (cm.folder = "
       "@exact_folder");
@@ -1252,10 +1273,13 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   }
   auto session = charts.OpenSession();
   assert(session);
+  assert(session->HasChartMetaForParentFolder("library"));
+  assert(observedProbeVmSteps > 0 && observedProbeVmSteps < 1000);
+  assert(!session->HasChartMetaForParentFolder("absent"));
 
   std::stop_source cancelled;
   readCancellation = &cancelled;
-  cancelReadSql = "@parent_folder";
+  cancelReadSql = "SELECT 1 FROM chart_meta cm";
   cancelReadAfterRows = 0;
   observedReadRows = 0;
   {
@@ -1331,6 +1355,7 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   readCancellation = nullptr;
   cancelReadSql.clear();
   assert(session->SelectChartMetaByPaths(paths).records.size() == 2);
+  assert(session->HasChartMetaForParentFolder("library"));
   assert(session->CountAllChartMeta() == 50000);
 }
 
