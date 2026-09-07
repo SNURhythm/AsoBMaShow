@@ -4312,7 +4312,8 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
               // End the idle sleep when the scheduler is told to stop (so a
               // play/load join exits promptly) or playback resumes.
               return !schedulerActive.load(std::memory_order_acquire) ||
-                     isPlaying.load(std::memory_order_acquire);
+                     (isPlaying.load(std::memory_order_acquire) &&
+                      stopwatch->isRunning());
             });
         prevTimestamp = Clock::now();
         continue;

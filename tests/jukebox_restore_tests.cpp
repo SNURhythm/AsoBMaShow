@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <deque>
 #include <filesystem>
 #include <fstream>
@@ -550,6 +551,39 @@ void testPoorBgaScheduleSelectsLatestAndRecomputesOnSeek() {
           "backward seek recomputes the poor-BGA sequence from the immutable schedule");
 }
 
+void testPausedSchedulerSleepsAndWakesForResumeAndStop() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::atomic<unsigned int> ticks = 0;
+  jukebox.onTick([&ticks](long long) { ++ticks; });
+  require(jukebox.play().success, "scheduler playback starts");
+  jukebox.pause();
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  const auto pausedTicks = ticks.load();
+  const auto cpuStart = std::clock();
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  const double cpuSeconds =
+      static_cast<double>(std::clock() - cpuStart) / CLOCKS_PER_SEC;
+  std::cout << "paused scheduler CPU seconds: " << cpuSeconds << '\n';
+  require(ticks.load() == pausedTicks, "paused scheduler does not tick");
+  require(cpuSeconds < 0.2, "paused scheduler uses bounded CPU, not a busy loop");
+  jukebox.resume();
+  const auto resumeDeadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(150);
+  while (ticks.load() == pausedTicks &&
+         std::chrono::steady_clock::now() < resumeDeadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(ticks.load() > pausedTicks, "resume promptly wakes the scheduler");
+  jukebox.pause();
+  const auto stopStart = std::chrono::steady_clock::now();
+  require(jukebox.stop().success, "stopping a paused scheduler succeeds");
+  require(std::chrono::steady_clock::now() - stopStart <
+              std::chrono::milliseconds(150),
+          "stop promptly wakes and joins the paused scheduler");
+}
+
 } // namespace
 
 int main() {
@@ -560,6 +594,7 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    testPausedSchedulerSleepsAndWakesForResumeAndStop();
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
     testVideoMaterializationCompletesBeforePlayback();
     testArchivedVisualsPreloadInOneArchiveBatch();
