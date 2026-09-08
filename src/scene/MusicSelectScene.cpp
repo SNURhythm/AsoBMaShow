@@ -2280,6 +2280,10 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
        clubMode, practice, autoplay, tableContext]() mutable {
         auto resetLaunching = [this]() {
           postDeferred([this]() {
+            if (!sceneActive_ || failed_ ||
+                launchCancelled_.load(std::memory_order_acquire)) {
+              return true;
+            }
             launching_ = false;
             hideDecideOverlay();
             // The launch aborted before gameplay began; lift the silence that
@@ -2288,11 +2292,10 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
             return true;
           });
         };
-        std::atomic_bool cancelled = false;
+        auto &cancelled = launchCancelled_;
         auto chart = play_options::parseChart(record.meta, cancelled,
                                               "music-select start");
-        if (!chart || cancelled ||
-            launchCancelled_.load(std::memory_order_acquire)) {
+        if (!chart || cancelled) {
           resetLaunching();
           return;
         }
@@ -2326,8 +2329,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
         // service), so it cannot race the UI thread.
         context.jukebox.stop();
         const auto loaded = context.jukebox.loadChart(*chart, true, cancelled);
-        if (!loaded.success || cancelled ||
-            launchCancelled_.load(std::memory_order_acquire)) {
+        if (!loaded.success || cancelled) {
           resetLaunching();
           return;
         }
@@ -2339,7 +2341,8 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
              playInfo = std::move(playInfo), lnMode, selections, autoKeySound,
              doublePlayFlip, playback, clubMode, practice, autoplay,
              tableContext]() mutable {
-              if (!launching_) {
+              if (!launching_ || !sceneActive_ || failed_ ||
+                  launchCancelled_.load(std::memory_order_acquire)) {
                 return true;
               }
               StartupTiming::instance().mark("parse + jukebox load done, changing scene");

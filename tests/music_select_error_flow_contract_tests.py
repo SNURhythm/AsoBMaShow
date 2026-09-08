@@ -62,6 +62,16 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_uncached_launch_cleanup_cancels_parser_and_audio_without_handoff(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        launch = function_body(source, "void MusicSelectScene::launchSelected(")
+        worker = launch[launch.index("launchThread_ = std::jthread("):-1]
+        cleanup = function_body(source, "void MusicSelectScene::cleanupScene()")
+        cleanup = cleanup[1:cleanup.index("stopPreloadWorker();")]
+        fixture = (ROOT / "tests/music_select_scene_launch_cancel_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("LAUNCH_WORKER", worker)
+                             .replace("CLEANUP_LAUNCH", cleanup))
+
     def test_failed_fallback_audio_load_does_not_launch_gameplay(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         launch = function_body(source, "void MusicSelectScene::launchSelected(")

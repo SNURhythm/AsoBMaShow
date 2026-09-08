@@ -16,7 +16,7 @@ struct Scene {
   int completions = 0;
   void run() {
     auto chart = std::make_unique<Chart>();
-    std::atomic_bool cancelled = false;
+    auto &cancelled = launchCancelled_;
     auto resetLaunching = [&] { ++aborted; };
     STAGING_BLOCK
     ++completions;
