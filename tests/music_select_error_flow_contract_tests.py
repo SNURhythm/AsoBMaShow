@@ -62,6 +62,11 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_scene_ranking_cache_evicts_oldest_updates_at_capacity(self):
+        self.run_scene_fixture("music_select_scene_ranking_cache_fixture.cpp", [
+            "void MusicSelectScene::updateRanking()",
+        ])
+
     def test_launch_completion_uses_ui_owned_deferred_queue(self):
         header = (ROOT / "src/scene/Scene.h").read_text()
         header = "\n".join(line for line in header.splitlines()

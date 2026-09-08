@@ -959,6 +959,15 @@ void MusicSelectScene::updateRanking() {
   setRanking(std::move(projected));
   if (ranking_.state == MusicSelectRankingState::Finish ||
       ranking_.state == MusicSelectRankingState::Fail) {
+    constexpr std::size_t maxRankingCacheEntries = 64;
+    if (!rankingCache_.contains(rankingCacheKey_) &&
+        rankingCache_.size() >= maxRankingCacheEntries) {
+      const auto oldest = std::ranges::min_element(
+          rankingCache_, {}, [](const auto &entry) {
+            return entry.second.updatedUnixMillis;
+          });
+      rankingCache_.erase(oldest);
+    }
     rankingCache_[rankingCacheKey_] = {
         .snapshot = ranking_, .updatedUnixMillis = unixMillis()};
   }
