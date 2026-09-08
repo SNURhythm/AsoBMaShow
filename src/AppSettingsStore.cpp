@@ -833,8 +833,22 @@ AppSettings settingsFromJson(const json &document,
     // profiles that already disabled BGA.
     settings.skinBgaMode = settings.bgaEnabled ? 0 : 2;
   }
-  readValue(document, "skinBgaExpandMode", settings.skinBgaExpandMode,
-            diagnostics);
+  if (document.contains("skinBgaExpandMode")) {
+    readValue(document, "skinBgaExpandMode", settings.skinBgaExpandMode,
+              diagnostics);
+  } else {
+    switch (settings.bgaDisplayMode) {
+    case AppSettings::BgaDisplayMode::Stretch:
+      settings.skinBgaExpandMode = 0;
+      break;
+    case AppSettings::BgaDisplayMode::NoExpand:
+      settings.skinBgaExpandMode = 2;
+      break;
+    default:
+      settings.skinBgaExpandMode = 1;
+      break;
+    }
+  }
   readBoundedSkinString(document, "skinTargetId", settings.skinTargetId,
                         diagnostics);
   readBoundedSkinTargetList(document, settings.skinTargetList, diagnostics);

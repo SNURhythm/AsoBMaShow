@@ -572,6 +572,58 @@ void testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds() {
          "music-select option configuration clamps to Beatoraja upper bounds");
 }
 
+void testMissingBgaExpandSelectorMigratesFromDisplayMode() {
+  TempDirectory temp;
+  const auto path = temp.path() / "bga-expand.json";
+  for (const int schemaVersion : {1, AppSettingsStore::kCurrentSchemaVersion}) {
+    for (const auto &[displayMode, selector] :
+         {std::pair{AppSettings::BgaDisplayMode::Fit, 1},
+          std::pair{AppSettings::BgaDisplayMode::Fill, 1},
+          std::pair{AppSettings::BgaDisplayMode::Stretch, 0},
+          std::pair{AppSettings::BgaDisplayMode::NoExpand, 2}}) {
+      const nlohmann::json document = {
+          {"schemaVersion", schemaVersion},
+          {"bgaDisplayMode", static_cast<int>(displayMode)}};
+      writeFile(path, document.dump());
+      const auto loaded = AppSettingsStore::Load(path);
+      expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+                 loaded.settings.skinBgaExpandMode == selector &&
+                 loaded.settings.bgaDisplayMode == displayMode,
+             "missing BGA expand selector migrates display mode " +
+                 std::to_string(static_cast<int>(displayMode)) +
+                 " in schema " + std::to_string(schemaVersion));
+    }
+  }
+
+  for (const auto &[encoded, expected] :
+       {std::pair{nlohmann::json(0), 0}, {nlohmann::json(1), 1},
+        {nlohmann::json(2), 2}, {nlohmann::json(-1), 0},
+        {nlohmann::json(3), 2}, {nlohmann::json("bad"), 1},
+        {nlohmann::json(nullptr), 1}}) {
+    const nlohmann::json document = {
+        {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
+        {"bgaDisplayMode", 2}, {"skinBgaExpandMode", encoded}};
+    writeFile(path, document.dump());
+    const auto loaded = AppSettingsStore::Load(path);
+    expect(loaded.status == AppSettingsLoadStatus::Loaded &&
+               loaded.settings.skinBgaExpandMode == expected &&
+               loaded.settings.bgaDisplayMode ==
+                   AppSettings::BgaDisplayMode::Stretch,
+           "explicit BGA expand selector keeps existing validation: " +
+               encoded.dump());
+    if (!encoded.is_number_integer()) {
+      expect(hasDiagnostic(loaded.diagnostics, "skinBgaExpandMode", ""),
+             "invalid explicit BGA expand selector remains diagnostic");
+    }
+  }
+
+  writeFile(path, R"({"schemaVersion":7})");
+  const auto defaults = AppSettingsStore::Load(path);
+  expect(defaults.status == AppSettingsLoadStatus::Loaded &&
+             defaults.settings.skinBgaExpandMode == 1,
+         "missing BGA display mode and selector retain the default");
+}
+
 void testConfiguredTargetListSkinStringsRoundTrip() {
   // The bridge must keep PlayerConfig.targetid and targetlist raw: source
   // TargetProperty performs lookup and fallback only when a skin asks.
@@ -1682,6 +1734,7 @@ int main() {
   testSkinSelectSoundSetPathRoundTrips();
   testMusicSelectInputConfigurationUsesBeatorajaDefaultsAndBounds();
   testMusicSelectOptionConfigurationUsesBeatorajaDefaultsAndBounds();
+  testMissingBgaExpandSelectorMigratesFromDisplayMode();
   testConfiguredTargetListSkinStringsRoundTrip();
   testPlayerConfigurationSkinStringsAreBounded();
   testSkinTargetSelectionsSurviveRestart();
