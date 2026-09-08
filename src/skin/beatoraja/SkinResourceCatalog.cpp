@@ -3087,12 +3087,9 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       virtualPathByReference.emplace(item.reference, item.virtualPath);
     }
     if (input.builtinImageBatchReader) {
-      std::vector<std::filesystem::path> paths;
-      for (const auto &item : wanted) {
-        paths.push_back(item.virtualPath);
-      }
       std::vector<SkinBuiltinImageBatch> batch;
-      if (input.builtinImageBatchReader(paths, batch, input.stop)) {
+      if (input.builtinImageBatchReader(virtualPathByReference, batch,
+                                        input.stop)) {
         for (const auto &item : batch) {
           encodedByReference.emplace(item.reference, std::move(item.bytes));
         }

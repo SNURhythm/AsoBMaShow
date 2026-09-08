@@ -171,7 +171,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                 return ImageView::chartImageCacheKey(path);
               },
           .builtinImageBatchReader =
-              [](const std::vector<std::filesystem::path> &paths,
+              [](const std::map<int, std::filesystem::path> &paths,
                  std::vector<skin::SkinBuiltinImageBatch> &out,
                  std::stop_token stop) {
                 // Group archive entries per archive and read them in one
@@ -182,16 +182,14 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                          std::vector<std::pair<int, std::filesystem::path>>>
                     byArchive;
                 std::vector<std::pair<int, std::filesystem::path>> plain;
-                for (std::size_t i = 0; i < paths.size(); ++i) {
-                  const int reference =
-                      i == 0 ? 100 : (i == 1 ? 101 : 102);
+                for (const auto &[reference, path] : paths) {
                   std::filesystem::path archivePath, innerPath;
-                  if (archive_file::splitVirtualPath(paths[i], archivePath,
+                  if (archive_file::splitVirtualPath(path, archivePath,
                                                      innerPath)) {
                     byArchive[archivePath.generic_string()].emplace_back(
                         reference, innerPath);
                   } else {
-                    plain.emplace_back(reference, paths[i]);
+                    plain.emplace_back(reference, path);
                   }
                 }
                 for (const auto &[reference, path] : plain) {
