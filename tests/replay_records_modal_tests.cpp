@@ -4,6 +4,7 @@
 #include "view/View.h"
 #include "ReplayVideoExporter.h"
 #include "scene/MusicSelectRecords.h"
+#include "scene/MusicSelectGhostBattle.h"
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
@@ -149,6 +150,39 @@ int main() {
   testSelectedModernRecordDispatchesWatchAndExport();
   testNonModernRecordCannotCrossTheActionBoundary();
   testRetainedModalActivatesSelectedRecordThroughOwner();
+  {
+    auto replay = std::make_shared<ReplayData>();
+    replay->playOption = "RANDOM";
+    replay->playOptionSeed = 123;
+    replay->playOption2 = "MIRROR";
+    replay->playOption2Seed = 456;
+    replay->chartMeta.LnMode = 2;
+    replay->assistOption = "LEGACY";
+    replay->initialGaugeType = GaugeType::Normal;
+    main_menu_profile::Selections selections;
+    selections.gaugeType = GaugeType::Hard;
+    result_persistence::ChartScoreWrite score;
+    score.score = 1234;
+    auto *returnScene = reinterpret_cast<Scene *>(std::uintptr_t{0x1234});
+    const auto options = musicSelectGhostBattleOptions(
+        replay, score, selections, true, {.percent = 80}, returnScene);
+    expect(options.gbattleRecordData == replay && !options.replayData &&
+               !options.autoPlay && options.targetScore &&
+               options.targetScore->score == 1234,
+           "G-BATTLE plays live against the saved score, not as replay autoplay");
+    expect(options.gaugeType == GaugeType::Hard && options.autoKeySound &&
+               options.playback.percent == 80 &&
+               options.playOption == replay->playOption &&
+               options.playOptionSeed == replay->playOptionSeed &&
+               options.playOption2 == replay->playOption2 &&
+               options.playOption2Seed == replay->playOption2Seed &&
+               options.longNoteMode == 2 &&
+               options.assistOption == replay->assistOption &&
+               options.pacemakerTarget == pacemaker::kTargetOff &&
+               options.replayGhostRenderingEnabled == false &&
+               options.returnScene == returnScene,
+           "selector G-BATTLE retains its owner and Main Menu play-option parity");
+  }
   {
     ChartMetaRecord chart;
     chart.meta.Title = "Unplayed selector chart";

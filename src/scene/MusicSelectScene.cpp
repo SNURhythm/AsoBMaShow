@@ -1,6 +1,10 @@
 #include "MusicSelectScene.h"
 #include "MusicSelectRecords.h"
+#include "MusicSelectGhostBattle.h"
 #include "MusicSelectDirectoryRestore.h"
+#include "ResultScene.h"
+#include "../ModernResultRecallBuilder.h"
+#include "../ReplayResultStateBuilder.h"
 
 #include "../audio/SelectAudioDiagnostics.h"
 #include "../StartupTiming.h"
@@ -3190,7 +3194,8 @@ MusicSelectScene::loadRecordsForSelector(const ChartMetaRecord &record) {
 }
 
 void MusicSelectScene::launchChartReplay(
-    const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+    const ChartMetaRecord &record, const ModernChartResultRecord &modern,
+    bool ghostBattle) {
   if (launching_ || record.unavailable || record.solidArchive ||
       record.meta.BmsPath.empty()) {
     return;
@@ -3237,7 +3242,16 @@ void MusicSelectScene::launchChartReplay(
       .replayGhostRenderingEnabled = renderGhosts,
       .returnScene = this,
   };
-  applyReplayProvenanceToStartOptions(options, *loaded.replayData);
+  if (ghostBattle) {
+    options = musicSelectGhostBattleOptions(
+        loaded.replayData, modern.result.score,
+        main_menu_profile::Selections::fromSettings(context.settings),
+        !context.settings.inputKeysoundEnabled,
+        {.percent = context.settings.selectedPlaybackRatePercent,
+         .mode = context.settings.selectedPlaybackMode}, this);
+  } else {
+    applyReplayProvenanceToStartOptions(options, *loaded.replayData);
+  }
   if (recordsModal_ != nullptr) {
     recordsModal_->setLoadInProgress(false);
     recordsModal_->hide();
@@ -3247,6 +3261,78 @@ void MusicSelectScene::launchChartReplay(
                                       std::move(options)),
       true);
   launching_ = false;
+}
+
+void MusicSelectScene::launchChartGhostBattle(
+    const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+  if (record.courseStart) return;
+  launchChartReplay(record, modern, true);
+}
+
+void MusicSelectScene::recallChartResult(
+    const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+  if (launching_ || record.courseStart || recordsExportInProgress_.load()) return;
+  launching_ = true;
+  if (recordsModal_) recordsModal_->setResultRecallInProgress(true);
+  const auto fail = [this](const std::string &diagnostic) {
+    launching_ = false;
+    if (recordsModal_) {
+      recordsModal_->setResultRecallInProgress(false);
+      recordsModal_->setStatus(diagnostic.empty()
+                                  ? "Saved chart result could not be recalled."
+                                  : diagnostic);
+    }
+  };
+  stopPreloadWorker();
+  try {
+    const auto exact = context.replayRepository.LoadModernChartResultByAttempt(
+        modern.result.attemptId);
+    if (exact.status != ModernChartResultReadStatus::Loaded || !exact.record) {
+      fail(exact.diagnostic);
+      return;
+    }
+    std::atomic_bool cancelled = false;
+    auto consumer = replay::makeRuntimeChartReplayConsumer(context.replayRepository);
+    auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath, cancelled);
+    std::shared_ptr<ReplayData> retryData;
+    result_recall::ModernChartLoader preparedChartLoader;
+    if (replayLoad.ready()) {
+      retryData = std::move(replayLoad.replayData);
+      auto preparedChart = std::make_shared<std::unique_ptr<bms_parser::Chart>>(
+          std::move(replayLoad.chart));
+      preparedChartLoader = [preparedChart](const std::filesystem::path &,
+                                            std::atomic_bool &) mutable {
+        return std::move(*preparedChart);
+      };
+    }
+    auto recalled = result_recall::BuildChartResult(
+        exact.record->result, cancelled, record.meta.BmsPath,
+        std::move(preparedChartLoader));
+    if (!recalled.value) {
+      fail(recalled.diagnostic);
+      return;
+    }
+    auto &result = *recalled.value;
+    const auto meta = result.chart->Meta;
+    const auto gameplayGraph = retryData
+        ? replay_result::BuildSkinGameplayGraphState(
+              *result.chart, *retryData, result.state)
+        : replay_result::BuildSkinGameplayChartGraphState(
+              *result.chart, result.state);
+    auto scene = std::make_unique<ResultScene>(
+        context, meta, result.state, result.result.score.provenance, nullptr,
+        ResultPersistenceOptions{}, retryData.get(),
+        ResultPracticeOptions{.returnScene = this}, false, ResultCourseOptions{},
+        main_menu_profile::Selections::fromSettings(context.settings).pacemakerTarget,
+        std::move(result.chart), nullptr, std::nullopt, retryData.get(),
+        result.result.attemptId, retryData != nullptr, ResultTableContext{},
+        gameplayGraph, result.result.playedAtUnixMillis);
+    if (recordsModal_) recordsModal_->setResultRecallInProgress(false);
+    context.sceneManager->changeScene(std::move(scene), true);
+    launching_ = false;
+  } catch (...) {
+    fail({});
+  }
 }
 
 void MusicSelectScene::launchCourseReplay(
@@ -3497,16 +3583,11 @@ ReplayRecordsModalCallbacks MusicSelectScene::makeRecordsModalCallbacks() {
   };
   callbacks.gbattle = [this](const ChartMetaRecord &record,
                              const ModernChartResultRecord &modern) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setStatus("G-BATTLE is available from the Main Menu.");
-    }
+    launchChartGhostBattle(record, modern);
   };
   callbacks.recallModernChart =
-      [this](const ChartMetaRecord &, const ModernChartResultRecord &) {
-        if (recordsModal_ != nullptr) {
-          recordsModal_->setStatus(
-              "Result recall is available from the Main Menu.");
-        }
+      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
+        recallChartResult(record, modern);
       };
   callbacks.recallModernCourse =
       [this](const ModernCourseResultRecord &, bool) {

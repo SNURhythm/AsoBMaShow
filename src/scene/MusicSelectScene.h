@@ -127,6 +127,10 @@ private:
   std::vector<ResultRecordSummary>
   loadRecordsForSelector(const ChartMetaRecord &);
   void launchChartReplay(const ChartMetaRecord &,
+                         const ModernChartResultRecord &, bool ghostBattle = false);
+  void launchChartGhostBattle(const ChartMetaRecord &,
+                              const ModernChartResultRecord &);
+  void recallChartResult(const ChartMetaRecord &,
                          const ModernChartResultRecord &);
   void launchCourseReplay(const ChartMetaRecord &,
                           const ModernCourseResultRecord &);

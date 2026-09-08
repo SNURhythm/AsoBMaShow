@@ -118,6 +118,17 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         fixture = (ROOT / "tests" / filename).read_text()
         self.compile_and_run(fixture.replace("SCENE_METHODS", methods))
 
+    def test_records_callbacks_dispatch_selected_chart_and_saved_result(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        callbacks = "\n".join(
+            f"callbacks.{name} = [this](const ChartMetaRecord &record, "
+            "const ModernChartResultRecord &modern) "
+            + function_body(source, f"callbacks.{name} =") + ";"
+            for name in ("gbattle", "recallModernChart")
+        )
+        fixture = (ROOT / "tests/music_select_scene_records_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("SCENE_CALLBACKS", callbacks))
+
     def compile_and_run(self, source, extra_sources=()):
         compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
         frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
