@@ -3308,8 +3308,7 @@ PreparedMusicSelectPresentation prepareMusicSelectPresentation(
               &result.object->payload)) {
     const std::size_t states =
         graph->type == SkinSelectDistributionGraphType::Normal ? 11U : 28U;
-    if (graph->sprite.resource == 0 || graph->sprite.frames.empty() ||
-        graph->sprite.frames.size() % states != 0) {
+    if (graph->sprite.resource == 0 || graph->sprite.frames.size() < states) {
       result.failures.push_back(diagnostic(
           "skin.renderer.music_select.graph_sprite",
           "Song-list distribution graph has an invalid source grid."));
@@ -4942,8 +4941,7 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                 : std::span<const int>(selectedBar.folderRankCounts);
         const std::size_t stateCount = counts.size();
         if (selectDistribution->sprite.resource == 0 ||
-            selectDistribution->sprite.frames.empty() ||
-            selectDistribution->sprite.frames.size() % stateCount != 0) {
+            selectDistribution->sprite.frames.size() < stateCount) {
           continue;
         }
         const auto animated = selectAnimationFrame(

@@ -711,6 +711,59 @@ void testMusicSelectDistributionGraphLowersDescendingSourceSegments() {
                                                   low->vertices[0].u,
          "descending graph segments retain their distinct source states");
 
+  for (const int cellCount : {12, 29, 23, 57, 10, 27}) {
+    for (const bool nested : {false, true}) {
+      auto trailingModel = model;
+      const bool normal = cellCount == 12 || cellCount == 23 || cellCount == 10;
+      const int states = normal ? 11 : 28;
+      auto &trailingGraph = std::get<SkinSelectDistributionGraphObject>(
+          trailingModel.model.objects[2].payload);
+      trailingGraph.type = normal ? SkinSelectDistributionGraphType::Normal
+                                 : SkinSelectDistributionGraphType::Judge;
+      trailingGraph.sprite.frames.clear();
+      trailingGraph.sprite.resource = 500 + cellCount;
+      trailingGraph.sprite.cycleMillis = 100;
+      for (int cell = 0; cell < cellCount; ++cell) {
+        trailingGraph.sprite.frames.push_back({.x = cell, .w = 1, .h = 1});
+      }
+      auto trailingResources = resources;
+      trailingResources.addImageAtlas(500 + cellCount, trailingGraph.sprite.frames, cellCount, 1);
+      if (!nested) trailingModel.model.destinations = {destination(4, 2, 5.0)};
+      for (auto &root : trailingModel.model.destinations) root.presentation.loop = 0;
+      auto &trailingList = std::get<SkinSongListObject>(trailingModel.model.objects[0].payload);
+      for (auto &bar : trailingList.listOn) bar.destination.loop = 0;
+      trailingList.graph->destination.loop = 0;
+      auto trailingFrame = frame;
+      trailingFrame.bars[0].folderRankCounts[27] = 1;
+      trailingFrame.bars[0].folderRankCounts[5] = 3;
+      Skin2DRenderer trailingRenderer;
+      RuntimeHarness trailingRuntime;
+      const auto trailing = evaluate(
+          trailingRenderer, trailingRuntime, trailingModel, trailingResources, state, 1,
+          75'000, nullptr, std::nullopt, nullptr, 1, false, nullptr, nullptr,
+          &trailingFrame);
+      const std::size_t expected = (nested ? 1U : 0U) +
+                                   (cellCount >= states ? 2U : 0U);
+      expect(trailing.submitReady && trailing.submitReady->commands.size() == expected,
+             "standalone and nested graphs floor complete frames and reject only empty grids");
+      if (!trailing.submitReady || trailing.submitReady->commands.size() != expected) {
+        std::cerr << "graph cells=" << cellCount << " nested=" << nested
+                  << " commands=" << (trailing.submitReady ? trailing.submitReady->commands.size() : 999)
+                  << " expected=" << expected << '\n';
+        for (const auto &entry : trailing.diagnostics) std::cerr << entry.code << ": " << entry.message << '\n';
+      }
+      if (cellCount >= states && trailing.submitReady &&
+          trailing.submitReady->commands.size() == expected) {
+        const auto *segment = std::get_if<SkinTexturedQuadCommand>(
+            &trailing.submitReady->commands[nested ? 1 : 0].payload);
+        const float expectedSource = static_cast<float>(
+            states - 1 + (cellCount > states * 2 ? states : 0)) / cellCount;
+        expect(segment && std::abs(segment->vertices[0].u - expectedSource) < 0.00001F,
+               "trailing graph cells do not affect state or animation frame selection");
+      }
+    }
+  }
+
   std::vector<SkinSourceRect> judgeFrames;
   for (int stateIndex = 0; stateIndex < 28; ++stateIndex) {
     judgeFrames.push_back(
