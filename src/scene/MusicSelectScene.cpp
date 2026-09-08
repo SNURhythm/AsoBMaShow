@@ -1503,6 +1503,7 @@ bool MusicSelectScene::loadDirectoryChildren(
         *chartSession_, directory, selectedLongNoteMode);
     if (!records.empty()) {
       MusicSelectRepositoryMetadata metadata;
+      metadata.folders = repositoryMetadata_.folders;
       metadata.entries.push_back(
           {.path = fspath_to_path_t(directory.directoryPath)});
       const auto projection =

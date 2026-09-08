@@ -62,6 +62,13 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_recursive_directory_queries_preserve_persisted_folder_metadata(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        method = function_body(source, "bool MusicSelectScene::loadDirectoryChildren(")
+        branch = function_body(method, "if (!records.empty())")
+        fixture = (ROOT / "tests/music_select_scene_directory_metadata_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("SCENE_FOLDER_BRANCH", branch))
+
     def test_sound_services_follow_changed_paths_and_bookmarks(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signatures = [
