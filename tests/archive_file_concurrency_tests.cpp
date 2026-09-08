@@ -14,9 +14,11 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
@@ -944,6 +946,31 @@ void testArchiveIndexPrunesOrphanedTmpCacheFiles() {
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
+void testArchiveIndexPruningPreservesShortUnrelatedFiles() {
+  bool threw = false;
+  for (const std::string fileName : {"short", "sixsix", "seven77"}) {
+    TempDirectory temporary;
+    const auto cacheDir = temporary.path() / "idx";
+    std::filesystem::create_directories(cacheDir);
+    archive_file::setArchiveIndexCacheDirectory(cacheDir);
+    std::ofstream(cacheDir / fileName) << "unrelated";
+    try {
+      assert(archive_file::pruneArchiveIndexCache({}) == 0);
+    } catch (const std::out_of_range &error) {
+      std::cerr << "FAIL: pruning unrelated filename of length "
+                << fileName.size() << " threw: " << error.what() << '\n';
+      threw = true;
+    }
+    std::ifstream preserved(cacheDir / fileName);
+    std::string content;
+    preserved >> content;
+    assert(content == "unrelated");
+    archive_file::setArchiveIndexCacheDirectory({});
+    archive_file::clearArchiveIndexCacheForTesting();
+  }
+  assert(!threw);
+}
+
 void testCorruptIndexEntryCountIsRejected() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "corrupt-count.zip";
@@ -1263,6 +1290,7 @@ int main() {
   testArchiveIndexPersistsAcrossColdCacheRestart();
   testArchiveIndexPrunesOrphanedCacheFiles();
   testArchiveIndexPrunesOrphanedTmpCacheFiles();
+  testArchiveIndexPruningPreservesShortUnrelatedFiles();
   testCorruptIndexEntryCountIsRejected();
   testSingleFlightWaiterCancellation(false);
   testSingleFlightWaiterCancellation(true);

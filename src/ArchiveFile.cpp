@@ -3522,9 +3522,7 @@ std::size_t pruneArchiveIndexCacheImpl(
     }
     const std::filesystem::path filePath = iterator->path();
     const std::string fileName = filePath.filename().string();
-    const bool orphanTmpIndex =
-        fileName.size() > 4 &&
-        fileName.compare(fileName.size() - 8, 8, ".idx.tmp") == 0;
+    const bool orphanTmpIndex = fileName.ends_with(".idx.tmp");
     if (filePath.extension() != ".idx" && !orphanTmpIndex) {
       continue;
     }
