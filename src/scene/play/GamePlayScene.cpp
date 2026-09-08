@@ -4700,6 +4700,13 @@ void GamePlayScene::recordModernCourseStage(
   };
   auto setup = replay::captureLocalReplaySetup(
       setupFacts, result->score.provenance, diagnostic);
+  if (setup.has_value() &&
+      !replay::validateReplaySetup(*setup,
+                                  replay::ReplaySetupSource::LocalCapture)
+           .valid()) {
+    setup.reset();
+    diagnostic = "Course BRD setup validation failed.";
+  }
 
   replay::CourseReplayStageCapture replayCapture{
       .timeBounds = capture.timeBounds};
@@ -4710,8 +4717,15 @@ void GamePlayScene::recordModernCourseStage(
         .touchSamples = capture.touchSamples,
         .laneCoverEvents = capture.laneCoverEvents,
     };
+    if (!replay::validateReplayPlayback(
+             *replayCapture.playback, replay::ReplaySetupSource::LocalCapture,
+             capture.timeBounds)
+             .valid()) {
+      replayCapture.playback.reset();
+      diagnostic = "Course BRD playback validation failed.";
+    }
   }
-  if (!capture.acceptedInput.has_value() || !setup.has_value()) {
+  if (!replayCapture.playback.has_value()) {
     if (!session->modernCourseDiagnostic.empty()) {
       session->modernCourseDiagnostic += "; ";
     }
@@ -4735,6 +4749,9 @@ void GamePlayScene::recordModernCourseStage(
   }
 
   std::optional<replay::CourseContinuationState> advancedContinuation;
+  session->carriedGauge = state->gaugeSnapshot();
+  session->carriedCombo = state->combo;
+  session->maxCombo = std::max(session->maxCombo, state->maxCombo);
   if (currentContinuation.has_value()) {
     const auto advanced = replay::advanceCourseContinuation(
         *currentContinuation,
@@ -4752,6 +4769,9 @@ void GamePlayScene::recordModernCourseStage(
     }
   }
 
+  if (!advancedContinuation.has_value()) {
+    replayCapture.playback.reset();
+  }
   if (!session->recordModernCourseStage(std::move(*result),
                                         std::move(replayCapture))) {
     session->modernCourseDiagnostic =

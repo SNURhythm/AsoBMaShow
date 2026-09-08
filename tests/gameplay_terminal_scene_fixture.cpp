@@ -495,6 +495,64 @@ void testAbortOutcome() {
   }
 }
 
+void testAuthoredCourseStageLiveCarry() {
+  for (const int authoredMode : {2, 3}) {
+    for (const std::size_t affectedStage : {std::size_t{0}, std::size_t{1}}) {
+      for (const int replayFailure : {0, 1, 2}) {
+        auto session = std::make_shared<CoursePlaySession>();
+        session->entries.resize(3);
+        session->longNoteMode = 1;
+        for (std::size_t stageIndex = 0; stageIndex <= affectedStage; ++stageIndex) {
+          GamePlayScene scene;
+          scene.options.courseSession = session;
+          scene.options.longNoteMode = 1;
+          scene.options.gaugeType = GaugeType::Hard;
+          scene.chart->Meta.LnMode = stageIndex == affectedStage ? authoredMode : 1;
+          scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+          scene.courseStageInitialGauge = scene.state->gaugeSnapshot();
+          session->currentIndex = stageIndex;
+          session->entries[stageIndex].meta = scene.chart->Meta;
+          configureAbortCapture(scene);
+          scene.state->commitJudge(JudgeResult(PGreat, 0));
+          scene.state->commitJudge(JudgeResult(PGreat, 0));
+          auto liveGauge = scene.state->gaugeSnapshot();
+          liveGauge.currentGauge = stageIndex == affectedStage ? 60.0F : 74.0F;
+          scene.state->restoreGaugeState(liveGauge);
+          auto capture = scene.completeModernReplayCapture();
+          if (stageIndex == affectedStage && replayFailure == 1) {
+            capture.acceptedInput.reset();
+          }
+          if (stageIndex == affectedStage && replayFailure == 2) {
+            scene.recordedReplay.laneCoverEvents.push_back(
+                {.noteStartPositionPercent = 101});
+          }
+          const auto completedGauge = scene.state->gaugeSnapshot();
+          scene.recordModernCourseStage(capture);
+          if (!session->modernCourseContinuation) {
+            std::cerr << "authoredMode=" << authoredMode << " stage=" << stageIndex
+                      << " replayFailure=" << replayFailure << " diagnostic="
+                      << session->modernCourseDiagnostic << '\n';
+          }
+          require(session->modernCourseStageResults.size() == stageIndex + 1,
+                  "COR03 actual scene captures contiguous authored-mode stage results");
+          require(session->courseCarriedGauge() &&
+                      session->courseCarriedGauge()->currentGauge == completedGauge.currentGauge &&
+                      session->courseCarriedGauge()->gaugeValues == completedGauge.gaugeValues &&
+                      session->courseCarriedGauge()->gaugeSurvivalFailed == completedGauge.gaugeSurvivalFailed &&
+                      session->courseCarriedCombo() == 2,
+                  "COR03 actual scene preserves exact live carry despite authored mode or replay failure");
+          require(session->modernCourseContinuation &&
+                      session->modernCourseContinuation->nextStageIndex == stageIndex + 1,
+                  "COR03 replay availability cannot break valid live continuation");
+          require(session->modernCourseReplayStages.back().playback.has_value() ==
+                      (stageIndex != affectedStage || replayFailure == 0),
+                  "COR03 failed replay capture is not retained as valid playback");
+        }
+      }
+    }
+  }
+}
+
 void testCourseAbort() {
   for (const bool modern : {false, true}) {
     for (const bool midway : {false, true}) {
@@ -826,6 +884,11 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
 }
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "authored-course-carry") {
+    testAuthoredCourseStageLiveCarry();
+    std::cout << "COR03 actual scene carry tests passed\n";
+    return 0;
+  }
   if (argc > 1 && std::string_view(argv[1]) == "worker-abort") {
     testStoppedWorkerAbortWatch();
     testStoppedWorkerAbortWatch(true);
@@ -874,6 +937,7 @@ int main(int argc, char **argv) {
   testQueuedAbortLifetime();
   std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
   testAbortOutcome();
+  testAuthoredCourseStageLiveCarry();
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();
