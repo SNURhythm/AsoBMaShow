@@ -9,11 +9,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def fixture_compile_command(compiler, frontend, compiler_id, source, executable):
+def fixture_compile_command(compiler, frontend, compiler_id, source, executable,
+                            extra_sources=()):
     if frontend == "MSVC" or compiler_id == "MSVC":
+        objects = (f"/Fo{source.parent}{os.sep}" if extra_sources
+                   else f"/Fo{source.with_suffix('.obj')}")
         return [compiler, "/nologo", "/std:c++20", "/EHsc", str(source),
-                f"/Fo{source.with_suffix('.obj')}", f"/Fe{executable}"]
-    return [compiler, "-std=c++20", "-pthread", str(source), "-o", str(executable)]
+                *map(str, extra_sources), objects, f"/Fe{executable}"]
+    return [compiler, "-std=c++20", "-pthread", str(source),
+            *map(str, extra_sources), "-o", str(executable)]
 
 
 def function_body(source: str, signature: str) -> str:
@@ -82,6 +86,25 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             "void MusicSelectScene::onPause()",
         ])
 
+    def test_modal_reset_preserves_nondefault_timing_and_analog_configuration(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signature = "void MusicSelectScene::resetLogicalInput()"
+        body = function_body(source, signature)
+        fixture = (ROOT / "tests/music_select_scene_input_reset_fixture.cpp").read_text()
+        fixture = fixture.replace("MUSIC_SELECT_INPUT_PROCESSOR_HEADER",
+                                  (ROOT / "src/music_select/MusicSelectInputProcessor.h").as_posix())
+        dependencies = [ROOT / "src/music_select/MusicSelectInputProcessor.cpp"]
+        self.compile_and_run(fixture.replace("SCENE_METHODS", signature + body),
+                             dependencies)
+        layout_only = signature + """{
+          if (inputBindingAdapter_) inputBindingAdapter_->reset();
+          inputProcessor_ = MusicSelectInputProcessor({
+              .layout = musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput)});
+        }"""
+        with self.assertRaises(AssertionError):
+            self.compile_and_run(fixture.replace("SCENE_METHODS", layout_only),
+                                 dependencies)
+
     def run_scene_fixture(self, filename, signatures):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         methods = "\n".join(
@@ -90,7 +113,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         fixture = (ROOT / "tests" / filename).read_text()
         self.compile_and_run(fixture.replace("SCENE_METHODS", methods))
 
-    def compile_and_run(self, source):
+    def compile_and_run(self, source, extra_sources=()):
         compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
         frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
         compiler_id = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_ID", "")
@@ -102,7 +125,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             program.write_text(source)
             subprocess.run(
                 fixture_compile_command(compiler, frontend, compiler_id,
-                                        program, executable),
+                                        program, executable, extra_sources),
                 cwd=directory, check=True, capture_output=True, text=True,
             )
             result = subprocess.run([str(executable)], capture_output=True, text=True,

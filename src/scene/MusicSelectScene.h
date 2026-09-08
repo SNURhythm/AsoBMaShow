@@ -74,6 +74,8 @@ private:
   skin::MusicSelectSkinFrame makeFrame() const;
   void consumeActions();
   void consumeLogicalInput();
+  [[nodiscard]] bool selectorInputBlocked() const;
+  void resetLogicalInput();
   void applyInputAction(const MusicSelectInputAction &);
   void startInputListening();
   void stopInputListening();

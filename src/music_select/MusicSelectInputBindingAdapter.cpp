@@ -141,6 +141,8 @@ void MusicSelectInputBindingAdapter::reset() {
   state_.start = false;
   state_.select = false;
   analogValues_.clear();
+  state_.controlHeld.clear();
+  clearFrameEdges();
 }
 
 void MusicSelectInputBindingAdapter::clearFrameEdges() {

@@ -185,6 +185,20 @@ void testAxisBindingsPublishSourceAnalogTicks() {
 } // namespace
 
 int main() {
+  {
+    MusicSelectInputBindingAdapter adapter({}, MusicSelectKeyLayout::Beat7K);
+    adapter.state().controlPressed.insert(MusicSelectControlKey::Enter);
+    adapter.state().controlHeld.insert(MusicSelectControlKey::Down);
+    adapter.state().commands.insert(MusicSelectCommandKey::AutoplayFolder);
+    adapter.state().wheel = 3;
+    adapter.state().selectedBarChanged = true;
+    adapter.reset();
+    require(adapter.state().controlPressed.empty() &&
+                adapter.state().controlHeld.empty() &&
+                adapter.state().commands.empty() && adapter.state().wheel == 0 &&
+                !adapter.state().selectedBarChanged,
+            "modal input reset discards keyboard, wheel and command actions");
+  }
   testSourceConfigurationLayoutsAndScopes();
   testExactLogicalKeyIndexes();
   testResolverFeedsDigitalAndGlobalOptionState();

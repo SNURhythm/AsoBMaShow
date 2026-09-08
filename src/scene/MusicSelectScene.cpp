@@ -1282,6 +1282,7 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
   if (failed_) return Scene::handleEvents(event);
+  if (selectorInputBlocked()) resetLogicalInput();
   // While a chart is launching, the decide overlay blocks all input so the
   // user cannot scroll or change selection mid-launch.
   if (launching_ && decideOverlay_ != nullptr &&
@@ -2503,8 +2504,38 @@ void MusicSelectScene::consumeActions() {
 #endif
 }
 
+bool MusicSelectScene::selectorInputBlocked() const {
+  return launching_ ||
+         (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
+         (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
+         (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
+          playOptionsModal_->root()->getVisible()) ||
+         (searchOverlay_ != nullptr && searchOverlay_->getVisible())
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+         || (skinTextInput_ != nullptr && skinTextInput_->getSelected())
+#endif
+      ;
+}
+
+void MusicSelectScene::resetLogicalInput() {
+  if (inputBindingAdapter_) inputBindingAdapter_->reset();
+  inputProcessor_ = MusicSelectInputProcessor({
+      .layout = musicSelectKeyLayoutForConfig(
+          context.settings.skinMusicSelectInput),
+      .scrollDurationLowMillis =
+          context.settings.skinMusicSelectScrollDurationLow,
+      .scrollDurationHighMillis =
+          context.settings.skinMusicSelectScrollDurationHigh,
+      .analogTicksPerScroll =
+          context.settings.skinMusicSelectAnalogTicksPerScroll});
+}
+
 void MusicSelectScene::consumeLogicalInput() {
   if (!inputBindingAdapter_) return;
+  if (selectorInputBlocked()) {
+    resetLogicalInput();
+    return;
+  }
   auto &logicalInput = inputBindingAdapter_->state();
   const auto snapshot = bars_.readView();
   logicalInput.currentBar = MusicSelectInputBarKind::Other;
@@ -2521,6 +2552,10 @@ void MusicSelectScene::consumeLogicalInput() {
   for (const auto &action :
        inputProcessor_.process(logicalInput, unixMillis())) {
     applyInputAction(action);
+    if (selectorInputBlocked() || !inputBindingAdapter_) {
+      resetLogicalInput();
+      break;
+    }
   }
   if (inputBindingAdapter_) inputBindingAdapter_->clearFrameEdges();
 }
@@ -2534,6 +2569,10 @@ void MusicSelectScene::startInputListening() {
       context.inputProfile, layout);
   inputSubscription_ = context.inputDeviceRegistry.subscribeInput(
       [this](const input::PhysicalInputEvent &event) {
+        if (selectorInputBlocked()) {
+          resetLogicalInput();
+          return;
+        }
         if (inputBindingAdapter_) inputBindingAdapter_->consume(event);
       });
   inputDeviceSubscription_ = context.inputDeviceRegistry.subscribeDevices(
