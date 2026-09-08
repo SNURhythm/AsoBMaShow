@@ -21,7 +21,9 @@ struct ExtractedArchiveDecision {
 
 ExtractedArchiveDecision
 decideExtractedArchive(const std::filesystem::path &root,
-                       const std::string &archiveKey);
+                       const std::string &archiveKey,
+                       archive_file::PauseCallback pauseCallback = {},
+                       ArchiveVerificationLimits limits = {});
 
 struct DownloadedArchiveWorkflowRequest {
   FindBmsDownloadAttempt attempt;
@@ -43,7 +45,9 @@ struct DownloadedArchiveWorkflowDependencies {
                      ArchiveExtractionCancelled)>
       extractArchive;
   std::function<ExtractedArchiveDecision(const std::filesystem::path &,
-                                         const std::string &)>
+                                         const std::string &,
+                                         archive_file::PauseCallback,
+                                         ArchiveVerificationLimits)>
       decideExtracted;
   std::function<bool(const BmsSearchPendingArtifact &, std::string &,
                      std::vector<std::filesystem::path> &)>

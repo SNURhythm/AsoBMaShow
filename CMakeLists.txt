@@ -5563,6 +5563,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_CURRENT_BINARY_DIR}
     )
     target_compile_features(find_bms_download_tests PRIVATE cxx_std_23)
+    add_test(NAME find_bms_verification_guard_tests
+        COMMAND find_bms_download_tests --verification-guard)
+    set_tests_properties(find_bms_verification_guard_tests PROPERTIES TIMEOUT 30)
+    add_test(NAME find_bms_verification_tests
+        COMMAND find_bms_download_tests --verification)
+    set_tests_properties(find_bms_verification_tests PROPERTIES TIMEOUT 60)
     if(TARGET SDL2::SDL2)
         target_link_libraries(find_bms_download_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)

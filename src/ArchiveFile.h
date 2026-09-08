@@ -175,6 +175,10 @@ bool listEntries(const std::filesystem::path &archivePath,
                  std::vector<Entry> &entries,
                  std::string *errorMessage = nullptr,
                  PauseCallback pauseCallback = nullptr);
+bool listEntriesBounded(const std::filesystem::path &archivePath,
+                        std::vector<Entry> &entries, std::uint64_t maximumEntries,
+                        std::string *errorMessage = nullptr,
+                        PauseCallback pauseCallback = nullptr);
 bool readArchiveEntries(const std::filesystem::path &archivePath,
                         const std::vector<std::filesystem::path> &innerPaths,
                         std::vector<FileData> &files,
@@ -216,6 +220,12 @@ bool readFileBounded(const std::filesystem::path &path,
                      std::size_t maximumBytes,
                      std::string *errorMessage = nullptr,
                      std::stop_token stop = {});
+bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
+                                   std::vector<unsigned char> &bytes,
+                                   std::size_t maximumBytes,
+                                   std::string *errorMessage,
+                                   std::stop_token stop,
+                                   PauseCallback pauseCallback);
 bool isInSolidArchiveFolder(const std::filesystem::path &path);
 SourcePreference sourcePreferenceForPath(const std::filesystem::path &path);
 std::string cacheKeyForPath(const std::filesystem::path &path);

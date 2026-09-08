@@ -974,6 +974,7 @@ bool appendBoundedRead(std::vector<unsigned char> &bytes,
     }
     return false;
   }
+  reserveBoundedAppend(bytes, size, maximumBytes);
   bytes.insert(bytes.end(), data, data + size);
   return true;
 }
@@ -982,7 +983,8 @@ bool readRegularFileBounded(const std::filesystem::path &path,
                             std::vector<unsigned char> &bytes,
                             std::size_t maximumBytes,
                             std::string *errorMessage,
-                            std::stop_token stop) {
+                            std::stop_token stop,
+                            const PauseCallback &pauseCallback) {
   bytes.clear();
   std::array<unsigned char, 64U * 1024U> buffer{};
 #if TARGET_OS_ANDROID
@@ -996,7 +998,7 @@ bool readRegularFileBounded(const std::filesystem::path &path,
     const auto closeDescriptor =
         makeScopeExit([descriptor = *descriptor] { (void)close(descriptor); });
     for (;;) {
-      if (stop.stop_requested()) {
+      if (stop.stop_requested() || !pauseIfNeeded(pauseCallback, errorMessage)) {
         bytes.clear();
         return false;
       }
@@ -1023,7 +1025,7 @@ bool readRegularFileBounded(const std::filesystem::path &path,
   std::ifstream file(path, std::ios::binary);
   if (file) {
     for (;;) {
-      if (stop.stop_requested()) {
+      if (stop.stop_requested() || !pauseIfNeeded(pauseCallback, errorMessage)) {
         bytes.clear();
         return false;
       }
@@ -1056,7 +1058,7 @@ bool readRegularFileBounded(const std::filesystem::path &path,
       SDL_RWFromFile(assetPath.c_str(), "rb"));
   if (input) {
     for (;;) {
-      if (stop.stop_requested()) {
+      if (stop.stop_requested() || !pauseIfNeeded(pauseCallback, errorMessage)) {
         bytes.clear();
         return false;
       }
@@ -1638,11 +1640,15 @@ public:
     if (size > maximumBytes_ - bytes_.size()) {
       return E_FAIL;
     }
-    reserveBoundedAppend(bytes_, size, maximumBytes_);
     const auto *bytes = static_cast<const unsigned char *>(data);
-    bytes_.insert(bytes_.end(), bytes, bytes + size);
-    if (processedSize != nullptr) {
-      *processedSize = size;
+    for (UInt32 offset = 0; offset < size;) {
+      if (!pauseIfNeeded(pauseCallback_)) return E_ABORT;
+      const auto count = maximumBytes_ == std::numeric_limits<std::size_t>::max()
+                             ? size : std::min<UInt32>(64 * 1024, size - offset);
+      reserveBoundedAppend(bytes_, count, maximumBytes_);
+      bytes_.insert(bytes_.end(), bytes + offset, bytes + offset + count);
+      offset += count;
+      if (processedSize != nullptr) *processedSize = offset;
     }
     return S_OK;
   }
@@ -2520,7 +2526,8 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          unsigned char &formatUsed,
                          std::string *errorMessage,
-                         const PauseCallback &pauseCallback) {
+                         const PauseCallback &pauseCallback,
+                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max()) {
   entries.clear();
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
@@ -2547,6 +2554,10 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
     return false;
   }
 
+  if (itemCount > maximumEntries) {
+    if (errorMessage) *errorMessage = "Archive exceeds the verification entry-count limit.";
+    return false;
+  }
   entries.reserve(itemCount);
   std::size_t skippedUnnamed = 0;
   std::size_t skippedUnsafe = 0;
@@ -2913,7 +2924,8 @@ ArchiveReadHandle openArchive(const std::filesystem::path &archivePath,
 bool listEntriesUncached(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          std::string *errorMessage,
-                         const PauseCallback &pauseCallback) {
+                         const PauseCallback &pauseCallback,
+                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max()) {
   entries.clear();
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
@@ -2925,6 +2937,7 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
   archive *archiveHandle = archiveStorage.get();
 
   archive_entry *entry = nullptr;
+  std::uint64_t inspectedEntries = 0;
   for (;;) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       entries.clear();
@@ -2944,6 +2957,12 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
       }
       return false;
     }
+    if (inspectedEntries >= maximumEntries) {
+      if (errorMessage) *errorMessage = "Archive exceeds the verification entry-count limit.";
+      entries.clear();
+      return false;
+    }
+    ++inspectedEntries;
     if (entry == nullptr) {
       archive_read_data_skip(archiveHandle);
       continue;
@@ -3436,7 +3455,8 @@ constexpr mz_uint kZipIndexPauseCheckInterval = 256;
 
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
-                    const PauseCallback &pauseCallback);
+                    const PauseCallback &pauseCallback,
+                    std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max());
 #endif
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
@@ -4733,7 +4753,8 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
 
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
-                    const PauseCallback &pauseCallback) {
+                    const PauseCallback &pauseCallback,
+                    std::uint64_t maximumEntries) {
   entries.clear();
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
@@ -4761,6 +4782,9 @@ bool listZipEntries(const std::filesystem::path &archivePath,
   };
 
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
+  if (fileCount > maximumEntries) {
+    return fail("Archive exceeds the verification entry-count limit.");
+  }
   entries.reserve(fileCount);
   for (mz_uint fileIndex = 0; fileIndex < fileCount; ++fileIndex) {
     if (fileIndex > 0 && fileIndex % kZipIndexPauseCheckInterval == 0 &&
@@ -7833,6 +7857,38 @@ bool listEntries(const std::filesystem::path &archivePath,
   return true;
 }
 
+bool listEntriesBounded(const std::filesystem::path &archivePath,
+                        std::vector<Entry> &entries, std::uint64_t maximumEntries,
+                        std::string *errorMessage, PauseCallback pauseCallback) {
+  entries.clear();
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) return false;
+  const auto finishListing = [&entries](bool listed) {
+    if (listed) filterSystemEntries(entries);
+    return listed;
+  };
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  if (hasZipArchiveExtension(archivePath)) {
+    return finishListing(listZipEntries(archivePath, entries, errorMessage,
+                                         pauseCallback, maximumEntries));
+  }
+#endif
+#if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
+  if (hasSevenZipArchiveExtension(archivePath)) {
+    unsigned char format = 0;
+    return finishListing(listSevenZipEntries(archivePath, entries, format,
+                                              errorMessage, pauseCallback,
+                                              maximumEntries));
+  }
+#endif
+#if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
+  return finishListing(listEntriesUncached(archivePath, entries, errorMessage,
+                                            pauseCallback, maximumEntries));
+#else
+  if (errorMessage) *errorMessage = "Archive format has no bounded listing available.";
+  return false;
+#endif
+}
+
 bool readArchiveEntries(const std::filesystem::path &archivePath,
                         const std::vector<std::filesystem::path> &innerPaths,
                         std::vector<FileData> &files, std::string *errorMessage,
@@ -8640,13 +8696,27 @@ bool readFileBounded(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
                      std::size_t maximumBytes, std::string *errorMessage,
                      std::stop_token stop) {
+  return readFileBoundedWithCheckpoint(path, bytes, maximumBytes, errorMessage,
+                                        stop, nullptr);
+}
+
+bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
+                                   std::vector<unsigned char> &bytes,
+                                   std::size_t maximumBytes,
+                                   std::string *errorMessage,
+                                   std::stop_token stop,
+                                   PauseCallback pauseCallback) {
   bytes.clear();
   if (stop.stop_requested()) return false;
+  const auto keepReading = [stop, pauseCallback] {
+    return !stop.stop_requested() && (!pauseCallback || pauseCallback());
+  };
+  if (!pauseIfNeeded(keepReading, errorMessage)) return false;
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   if (!splitVirtualPath(path, archivePath, innerPath)) {
     return readRegularFileBounded(path, bytes, maximumBytes, errorMessage,
-                                  stop);
+                                  stop, pauseCallback);
   }
   if (isSystemEntryPath(innerPath)) {
     if (errorMessage != nullptr) {
@@ -8656,8 +8726,8 @@ bool readFileBounded(const std::filesystem::path &path,
     return false;
   }
   const auto index = cachedIndexForArchive(
-      archivePath, errorMessage, [stop] { return !stop.stop_requested(); });
-  if (stop.stop_requested()) return false;
+      archivePath, errorMessage, keepReading);
+  if (!pauseIfNeeded(keepReading, errorMessage)) return false;
   if (index == nullptr) return false;
   const Entry *entry = findIndexedEntry(*index, innerPath);
   if (entry == nullptr || entry->directory) {
@@ -8712,7 +8782,7 @@ bool readFileBounded(const std::filesystem::path &path,
     bool zipOversize = false;
     bool zipIntegrityFailure = false;
     if (readZipEntryBounded(archivePath, *entry, bytes, maximumBytes, &zipError,
-                            [stop] { return !stop.stop_requested(); },
+                            keepReading,
                             &zipOversize, &zipIntegrityFailure)) {
       return true;
     }
@@ -8731,8 +8801,8 @@ bool readFileBounded(const std::filesystem::path &path,
     std::vector<FileData> files;
     if (!readSevenZipEntriesByIndex(
             archivePath, {entry->path}, std::nullopt, files, errorMessage,
-            [stop] { return !stop.stop_requested(); }, maximumBytes) ||
-        files.size() != 1 || stop.stop_requested()) {
+            keepReading, maximumBytes) ||
+        files.size() != 1 || !pauseIfNeeded(keepReading, errorMessage)) {
       return false;
     }
     bytes = std::move(files.front().bytes);
@@ -8745,19 +8815,19 @@ bool readFileBounded(const std::filesystem::path &path,
     std::string unarrError;
     if (readUnarrRarEntriesByOffset(
             archivePath, {entry->path}, std::nullopt, files, &unarrError,
-            [stop] { return !stop.stop_requested(); }, maximumBytes) && files.size() == 1 &&
-        !stop.stop_requested()) {
+            keepReading, maximumBytes) && files.size() == 1 &&
+        pauseIfNeeded(keepReading, errorMessage)) {
       bytes = std::move(files.front().bytes);
       return true;
     }
-    if (stop.stop_requested()) return false;
+    if (!pauseIfNeeded(keepReading, errorMessage)) return false;
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
   const bool read = readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
-                          [stop] { return !stop.stop_requested(); },
+                          keepReading,
                           maximumBytes);
-  if (!read || stop.stop_requested()) {
+  if (!read || !pauseIfNeeded(keepReading, errorMessage)) {
     bytes.clear();
     return false;
   }

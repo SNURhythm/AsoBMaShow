@@ -16,6 +16,29 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <cstdlib>
+#include <new>
+#include <iostream>
+
+namespace verification_allocation_guard {
+thread_local bool enabled = false;
+thread_local std::size_t rejected = 0;
+}
+
+void *operator new(std::size_t size) {
+  if (verification_allocation_guard::enabled && size > 1024 * 1024) {
+    verification_allocation_guard::rejected = size;
+    throw std::bad_alloc();
+  }
+  if (void *memory = std::malloc(size ? size : 1)) return memory;
+  throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
 
 namespace {
 
@@ -29,19 +52,24 @@ asobmshow::bms_search::ArchiveReaderDependencies fakeArchiveReader(
       .listEntries =
           [entries = std::move(entries), listSucceeds](
               const std::filesystem::path &,
-              std::vector<archive_file::Entry> &output, std::string *,
+              std::vector<archive_file::Entry> &output, std::uint64_t, std::string *,
               archive_file::PauseCallback) {
             output = entries;
             return listSucceeds;
           },
-      .readEntries =
+      .readMember =
           [files = std::move(files), readSucceeds](
               const std::filesystem::path &,
-              const std::vector<std::filesystem::path> &,
-              std::vector<archive_file::FileData> &output, std::string *,
+              const std::filesystem::path &innerPath, std::size_t,
+              std::vector<unsigned char> &output, std::string *,
               archive_file::PauseCallback) {
-            output = files;
-            return readSucceeds;
+            for (const auto &file : files) {
+              if (readSucceeds && file.path == innerPath) {
+                output = file.bytes;
+                return asobmshow::bms_search::ArchiveMemberReadResult::Read;
+              }
+            }
+            return asobmshow::bms_search::ArchiveMemberReadResult::Unavailable;
           }};
 }
 
@@ -614,7 +642,7 @@ void testDirectArchiveDisabledDoesNotInspect() {
   asobmshow::bms_search::ArchiveReaderDependencies reader;
   reader.listEntries =
       [&listed](const std::filesystem::path &,
-                std::vector<archive_file::Entry> &, std::string *,
+                std::vector<archive_file::Entry> &, std::uint64_t, std::string *,
                 archive_file::PauseCallback) {
         listed = true;
         return true;
@@ -874,7 +902,8 @@ void testWorkflowCommitsFallbackExtractionMatch() {
             return true;
           },
       .decideExtracted =
-          [](const std::filesystem::path &, const std::string &) {
+          [](const std::filesystem::path &, const std::string &,
+             archive_file::PauseCallback, asobmshow::bms_search::ArchiveVerificationLimits) {
             return asobmshow::bms_search::ExtractedArchiveDecision{
                 .disposition = asobmshow::bms_search::
                     ExtractedArchiveDisposition::Match,
@@ -930,7 +959,8 @@ void testWorkflowStagesFallbackExtractionMismatch() {
             return true;
           },
       .decideExtracted =
-          [](const std::filesystem::path &, const std::string &) {
+          [](const std::filesystem::path &, const std::string &,
+             archive_file::PauseCallback, asobmshow::bms_search::ArchiveVerificationLimits) {
             return asobmshow::bms_search::ExtractedArchiveDecision{
                 .disposition = asobmshow::bms_search::
                     ExtractedArchiveDisposition::HashMismatch,
@@ -983,7 +1013,8 @@ void testWorkflowKeepsMismatchDecisionWhenArchiveCleanupFails() {
             return true;
           },
       .decideExtracted =
-          [](const std::filesystem::path &, const std::string &) {
+          [](const std::filesystem::path &, const std::string &,
+             archive_file::PauseCallback, asobmshow::bms_search::ArchiveVerificationLimits) {
             return asobmshow::bms_search::ExtractedArchiveDecision{
                 .disposition = asobmshow::bms_search::
                     ExtractedArchiveDisposition::HashMismatch,
@@ -1030,7 +1061,8 @@ void testWorkflowRejectsInconclusiveExtractedValidation() {
             return true;
           },
       .decideExtracted =
-          [](const std::filesystem::path &, const std::string &) {
+          [](const std::filesystem::path &, const std::string &,
+             archive_file::PauseCallback, asobmshow::bms_search::ArchiveVerificationLimits) {
             return asobmshow::bms_search::ExtractedArchiveDecision{
                 .disposition = asobmshow::bms_search::
                     ExtractedArchiveDisposition::Inconclusive,
@@ -1163,8 +1195,15 @@ void testFindBmsDownloadProgressDisplaysSizes() {
 } // namespace
 
 #include "find_bms_extraction_fixture.h"
+#include "find_bms_verification_fixture.h"
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--verification-guard") {
+    return testVerificationAllocationGuard();
+  }
+  if (argc == 2 && std::string(argv[1]) == "--verification") {
+    return testRealVerification();
+  }
   testExtractionLimitsAndCancellation();
 #if ASOBMSHOW_HAS_LIBARCHIVE
   testUnknownSizeStreamIsBounded();

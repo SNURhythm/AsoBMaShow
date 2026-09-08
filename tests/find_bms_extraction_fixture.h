@@ -305,4 +305,39 @@ void testDownloadAttemptExtractionCleanup() {
   }
 }
 
+int testVerificationAllocationGuard() {
+  using namespace asobmshow::bms_search;
+  CleanupPaths cleanup;
+  std::string error;
+  const auto fixture = createFindBmsDownloadAttempt("verification.zip", error);
+  assert(fixture);
+  cleanup.add(fixture->root);
+  writeExtractionZip(fixture->archivePath, {{"chart.bms", "#TITLE Test\n", 17U * 1024 * 1024}});
+  writeText(fixture->extractedPath / "chart.bms", std::string(17U * 1024 * 1024, 'a'));
+  int failures = 0;
+  for (const bool packed : {true, false}) {
+    verification_allocation_guard::rejected = 0;
+    verification_allocation_guard::enabled = true;
+    bool rejectedCleanly = false;
+    try {
+      if (packed) {
+        const auto decision = decideDownloadedArchive(fixture->archivePath, "", true, {}, defaultArchiveReaderDependencies());
+        rejectedCleanly = decision.disposition != DirectArchiveDisposition::KeepArchive && decision.message.find("limit") != std::string::npos;
+      } else {
+        const auto decision = decideExtractedArchive(fixture->extractedPath, std::string(32, '0'));
+        rejectedCleanly = decision.disposition == ExtractedArchiveDisposition::Inconclusive && decision.message.find("limit") != std::string::npos;
+      }
+    } catch (const std::bad_alloc &) {
+    }
+    verification_allocation_guard::enabled = false;
+    if (!rejectedCleanly || verification_allocation_guard::rejected) {
+      std::cerr << "FAIL: " << (packed ? "packed" : "extracted")
+                << " verification must reject before large allocation; attempted="
+                << verification_allocation_guard::rejected << '\n';
+      ++failures;
+    }
+  }
+  return failures ? 1 : 0;
+}
+
 }

@@ -5,9 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
-#include <fstream>
 #include <limits>
-#include <optional>
 #include <system_error>
 #include <vector>
 
@@ -33,30 +31,6 @@ std::string normalizedKey(const std::string &value) {
                    return static_cast<char>(std::tolower(character));
                  });
   return result;
-}
-
-std::optional<std::vector<unsigned char>>
-readFileBytes(const std::filesystem::path &path) {
-  std::error_code error;
-  const auto size = std::filesystem::file_size(path, error);
-  if (error || size > static_cast<std::uintmax_t>(
-                          std::numeric_limits<std::size_t>::max())) {
-    return std::nullopt;
-  }
-  std::ifstream input(path, std::ios::binary);
-  if (!input) {
-    return std::nullopt;
-  }
-  std::vector<unsigned char> bytes(static_cast<std::size_t>(size));
-  if (!bytes.empty()) {
-    input.read(reinterpret_cast<char *>(bytes.data()),
-               static_cast<std::streamsize>(bytes.size()));
-  }
-  if (input.gcount() != static_cast<std::streamsize>(bytes.size()) ||
-      (!input && !input.eof())) {
-    return std::nullopt;
-  }
-  return bytes;
 }
 
 void reportProgress(const BmsSearchDownloadProgressCallback &callback,
@@ -109,7 +83,16 @@ BmsSearchPendingArtifact extractedArtifact(
 
 ExtractedArchiveDecision
 decideExtractedArchive(const std::filesystem::path &root,
-                       const std::string &archiveKey) {
+                       const std::string &archiveKey,
+                       archive_file::PauseCallback pauseCallback,
+                       ArchiveVerificationLimits limits) {
+  std::atomic_bool cancelled = false;
+  const auto checkpoint = [pauseCallback, &cancelled] {
+    if (cancelled.load()) return false;
+    if (pauseCallback && !pauseCallback()) cancelled.store(true);
+    return !cancelled.load();
+  };
+  if (!checkpoint()) return {.message = "Archive verification cancelled."};
   std::error_code error;
   if (!std::filesystem::is_directory(root, error) || error) {
     return {.message = "Could not inspect extracted archive contents."};
@@ -120,41 +103,62 @@ decideExtractedArchive(const std::filesystem::path &root,
       canonical_digest::isCanonicalLowerHex(key, 64);
   const bool matchMd5 = canonical_digest::isCanonicalLowerHex(key, 32);
   bool foundBmsFile = false;
-  bool incompleteRead = false;
+  std::vector<std::filesystem::path> bmsPaths;
+  std::uint64_t declaredBytes = 0;
+  std::uint64_t inspectedEntries = 0;
   std::filesystem::recursive_directory_iterator iterator(
-      root, std::filesystem::directory_options::skip_permission_denied, error);
+      root, error);
   const auto end = std::filesystem::recursive_directory_iterator();
   while (!error && iterator != end) {
+    if (!checkpoint()) return {.message = "Archive verification cancelled."};
+    if (inspectedEntries >= limits.maxEntries) {
+      return {.message = "Archive exceeds the BMS verification entry-count limit."};
+    }
+    ++inspectedEntries;
     std::error_code entryError;
     if (iterator->is_regular_file(entryError)) {
       if (asobmshow::bms_chart_file::isBmsChartPath(iterator->path())) {
         foundBmsFile = true;
-        if (matchSha256 || matchMd5) {
-          const auto bytes = readFileBytes(iterator->path());
-          if (!bytes) {
-            incompleteRead = true;
-          } else if (matchSha256 && bms_parser::sha256(*bytes) == key) {
-            return {.disposition = ExtractedArchiveDisposition::Match,
-                    .foundBmsFile = true};
-          } else if (matchMd5) {
-            const std::string text(bytes->begin(), bytes->end());
-            if (bms_parser::md5(text) == key) {
-              return {.disposition = ExtractedArchiveDisposition::Match,
-                      .foundBmsFile = true};
-            }
-          }
+        const auto size = iterator->file_size(entryError);
+        if (entryError) return {.message = "Could not size an extracted BMS file."};
+        if (size > limits.maxMemberBytes ||
+            size > limits.maxTotalBytes - declaredBytes) {
+          return {.message = "Archive exceeds the BMS verification byte limit."};
         }
+        declaredBytes += size;
+        bmsPaths.push_back(iterator->path());
       }
     } else if (entryError) {
-      incompleteRead = true;
+      return {.message = "Could not inspect an extracted archive entry."};
     }
     iterator.increment(error);
   }
-  if (error || incompleteRead) {
+  if (error) {
     return {.foundBmsFile = foundBmsFile,
             .message = "Could not read every extracted archive file."};
   }
-  if (!matchSha256 && !matchMd5) {
+  bool matched = !matchSha256 && !matchMd5;
+  std::uint64_t actualBytes = 0;
+  for (const auto &path : bmsPaths) {
+    std::vector<unsigned char> bytes;
+    std::string readError;
+    const auto maximumBytes = static_cast<std::size_t>(std::min({
+        limits.maxMemberBytes, limits.maxTotalBytes - actualBytes,
+        static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())}));
+    if (!archive_file::readFileBoundedWithCheckpoint(
+            path, bytes, maximumBytes, &readError, {}, checkpoint)) {
+      return {.message = cancelled.load() ? "Archive verification cancelled."
+                         : readError.empty()
+                             ? "Could not read an extracted BMS file."
+                             : readError};
+    }
+    actualBytes += bytes.size();
+    const auto match = matchesArchiveChartHash(bytes, key, checkpoint);
+    if (!match) return {.message = "Archive verification cancelled."};
+    matched = matched || *match;
+  }
+  if (!checkpoint()) return {.message = "Archive verification cancelled."};
+  if (matched) {
     return {.disposition = ExtractedArchiveDisposition::Match,
             .foundBmsFile = foundBmsFile,
             .message = foundBmsFile
@@ -198,8 +202,15 @@ bool processDownloadedArchive(
     return false;
   }
 
+  if (directDecision.disposition == DirectArchiveDisposition::Failed) {
+    result.status = BmsSearchResult::Status::DownloadFailed;
+    result.message = directDecision.message;
+    return false;
+  }
+
   if (directDecision.disposition == DirectArchiveDisposition::KeepArchive) {
     reportProgress(progressCallback, "Saving downloaded archive");
+    if (reportCancelled(cancelled, result)) return false;
     const auto artifact = archiveArtifact(request);
     std::string commitError;
     std::vector<std::filesystem::path> removedPaths;
@@ -251,8 +262,17 @@ bool processDownloadedArchive(
     return false;
   }
 
+  ArchiveVerificationLimits verificationLimits;
+  if (directDecision.verificationBytes > verificationLimits.maxTotalBytes) {
+    result.status = BmsSearchResult::Status::DownloadFailed;
+    result.message = "Archive exceeds the BMS verification byte limit.";
+    return false;
+  }
+  verificationLimits.maxTotalBytes -= directDecision.verificationBytes;
   const auto extractedDecision = dependencies.decideExtracted(
-      request.attempt.extractedPath, request.archiveKey);
+      request.attempt.extractedPath, request.archiveKey,
+      [&cancelled] { return !cancelled.load(); }, verificationLimits);
+  if (reportCancelled(cancelled, result)) return false;
   if (extractedDecision.disposition ==
       ExtractedArchiveDisposition::Inconclusive) {
     result.status = BmsSearchResult::Status::DownloadFailed;
