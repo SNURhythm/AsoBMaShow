@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace replay {
 
@@ -46,6 +47,7 @@ withinReplayCountLimit(std::size_t count, std::size_t maximum) noexcept {
 
 struct ReplayTimeBounds {
   std::int64_t completionSongTimeMicros = -1;
+  std::optional<bool> aborted;
 
   bool operator==(const ReplayTimeBounds &) const = default;
 

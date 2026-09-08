@@ -638,7 +638,67 @@ void testContextAndUntrustedStructureFailClosed() {
 
 } // namespace
 
+void testAbortedCompletionSurvivesCodecRoundTrip() {
+  replay::BeatorajaReplayCodec codec;
+  auto document = chartDocument();
+  document.timeBounds.aborted = true;
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(document, 0, diagnostic);
+  expect(encoded.has_value(), "abort fixture encodes");
+  if (!encoded) return;
+  auto json = outerJson(*encoded);
+  expect(json["asobmashow"]["schemaVersion"] == 4,
+         "T2-R1: essential abort uses an extension rejected by the v3 reader");
+  const auto decoded = codec.decode(encodeJson(json), {.stageKeyModes = {7}});
+  expect(decoded.chart.has_value(), "abort extension decodes");
+  if (!decoded.chart) return;
+  const auto reencoded = codec.encodeChart(*decoded.chart, 0, diagnostic);
+  expect(reencoded && outerJson(*reencoded)["asobmashow"].value("aborted", false),
+         "COR02: terminal abort fact must survive decode and encode independently of result summary");
+  auto trusted = context(document);
+  trusted.stageTimeBounds.front().aborted = false;
+  expect(!codec.decode(encodeJson(json), trusted).chart,
+         "COR02: explicit trusted non-abort must reject conflicting abort evidence");
+  trusted.stageTimeBounds.front().aborted = true;
+  json["asobmashow"]["aborted"] = false;
+  expect(!codec.decode(encodeJson(json), trusted).chart,
+         "COR02: explicit trusted abort must reject conflicting non-abort evidence");
+  json["asobmashow"]["aborted"] = "true";
+  expect(!codec.decode(encodeJson(json), {.stageKeyModes = {7}}).chart,
+         "COR02: malformed abort evidence fails closed");
+  json["asobmashow"].erase("aborted");
+  expect(!codec.decode(encodeJson(json), {.stageKeyModes = {7}}).chart,
+         "T2-R1: terminal schema requires its essential abort evidence");
+  json["asobmashow"]["schemaVersion"] = 3;
+  document.timeBounds.aborted.reset();
+  expect(codec.decode(encodeJson(json), context(document)).chart.has_value(),
+         "COR02: absent-field v3 replay retains legacy compatibility");
+  json["asobmashow"]["aborted"] = true;
+  expect(!codec.decode(encodeJson(json), {.stageKeyModes = {7}}).chart,
+         "T2-R1: abort evidence cannot be downgraded into the ordinary schema");
+  const auto ordinary = codec.encodeChart(document, 0, diagnostic);
+  expect(ordinary && outerJson(*ordinary)["asobmashow"]["schemaVersion"] == 3 &&
+             codec.decode(*ordinary, context(document)).chart.has_value(),
+         "T2-R1: ordinary documents continue to write and read the existing v3 schema");
+  replay::ReplayCourseDocument course{
+      .playback = {.stages = {document.playback, document.playback},
+                   .restMicrosAfterStage = {0, 0}},
+      .timeBounds = {document.timeBounds, document.timeBounds}};
+  course.timeBounds.back().aborted = true;
+  const auto courseBytes = codec.encodeCourse(course, 0, diagnostic);
+  expect(courseBytes && outerJson(*courseBytes)[0]["asobmashow"]["schemaVersion"] == 3 &&
+             outerJson(*courseBytes)[1]["asobmashow"]["schemaVersion"] == 4,
+         "T2-R1: course stages retain per-document ordinary and abort capabilities");
+  if (courseBytes) {
+    const auto courseDecoded = codec.decode(*courseBytes, {.stageKeyModes = {7, 7}});
+    expect(courseDecoded.course && courseDecoded.course->timeBounds.back().aborted == true &&
+               !courseDecoded.course->timeBounds.front().aborted.has_value(),
+           "T2-R1: mixed-version course retains its essential terminal evidence");
+  }
+}
+
 int main() {
+  testAbortedCompletionSurvivesCodecRoundTrip();
   testIndependentStockFixtures();
   testLocalChartRoundTripAndStockProjection();
   testStockKeyEncodingMatchesIndependentJavaBytes();

@@ -6209,23 +6209,92 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         DEPENDS tests/gameplay_terminal_scene_extract.py
                 tests/gameplay_terminal_scene_fixture.cpp
                 src/scene/play/GamePlayScene.cpp
+                src/scene/ResultScene.cpp
+                src/ReplayVideoExporter.cpp
         VERBATIM
     )
     add_executable(gameplay_terminal_scene_tests
         ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        src/AtomicFile.cpp
+        src/ArchiveFile.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/MinizBridge.c
+        src/ModernResult.cpp
+        src/ModernResultRecallBuilder.cpp
+        src/ResultPersistenceModel.cpp
+        src/Utils.cpp
+        src/Uuid.cpp
+        src/path.cpp
+        src/sqlite3.c
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ReplayRepository.cpp
+        src/repositories/ReplayRepositoryIrOutbox.cpp
+        src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrUploadCandidates.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
+        src/ir/IrSubmissionSnapshot.cpp
+        src/replay/Base64Url.cpp
+        src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ChartReplayCapture.cpp
+        src/replay/ChartReplayConsumer.cpp
+        src/replay/ChartReplayContext.cpp
+        src/replay/ChartReplayAgreement.cpp
+        src/replay/ReplayReferenceAgreement.cpp
+        src/replay/CourseContinuation.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
+        src/replay/ReplaySetupProvenance.cpp
+        src/replay/ReplayInputRecorder.cpp
+        src/ir/tachi/TachiEligibility.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
         src/ScoreProvenance.cpp
         src/bms_parser.cpp
         src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultFlow.cpp
         src/practice/PracticeSession.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
         src/scene/play/RealtimeGameplayAuthorityPolicy.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
+        src/scene/play/RealtimeGameplayWorker.cpp
     )
     target_include_directories(gameplay_terminal_scene_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/tests
     )
     target_compile_features(gameplay_terminal_scene_tests PRIVATE cxx_std_23)
+    target_link_libraries(gameplay_terminal_scene_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(gameplay_terminal_scene_tests PRIVATE iconv)
+    endif()
 
     add_executable(gameplay_practice_boundary_tests
         tests/gameplay_practice_boundary_tests.cpp

@@ -45,6 +45,8 @@ RealtimeGameplayTerminalAction classifyRealtimeGameplayTerminal(
                : RealtimeGameplayTerminalAction::IntegrityFailure;
   case GameplayTerminalReason::SurvivalGaugeFailed:
     return RealtimeGameplayTerminalAction::SurvivalGaugeFailed;
+  case GameplayTerminalReason::Aborted:
+    return RealtimeGameplayTerminalAction::Abort;
   case GameplayTerminalReason::ReplayCapacityExceeded:
   case GameplayTerminalReason::AutomaticResultCapacityExceeded:
   case GameplayTerminalReason::GaugeHistoryCapacityExceeded:

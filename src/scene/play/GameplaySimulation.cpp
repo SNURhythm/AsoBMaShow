@@ -876,7 +876,33 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
     return {automaticResults_, lastAdvancedMicros_};
   }
 
-  const auto &range = *config_.allowedNoteRange;
+  return finalizePendingNotes(*config_.allowedNoteRange,
+                               finalizationTimeMicros, false);
+}
+
+GameplayAdvanceResult GameplaySimulation::finalizeAbortedAttempt(
+    std::int64_t finalizationTimeMicros) {
+  if (terminal() && terminalReason_ != GameplayTerminalReason::ChartComplete &&
+      terminalReason_ != GameplayTerminalReason::SurvivalGaugeFailed) {
+    return emptyAdvanceResult();
+  }
+  terminalReason_ = GameplayTerminalReason::None;
+  automaticResults_.clear();
+  return finalizePendingNotes(
+      {.startMicros = std::numeric_limits<std::int64_t>::min(),
+       .endMicros = std::numeric_limits<std::int64_t>::max()},
+      finalizationTimeMicros, true);
+}
+
+GameplayAdvanceResult GameplaySimulation::finalizePendingNotes(
+    const GameplayTimeRange &range, std::int64_t finalizationTimeMicros,
+    bool aborted) {
+  const auto finishFinalizationTransaction = [&] {
+    if (aborted) {
+      transactionSurvivalFailed_ = false;
+    }
+    finishTransaction(finalizationTimeMicros);
+  };
   for (const NoteId id : definition_.chronologicalNotes()) {
     const auto &note = definition_.note(id);
     if (!range.contains(note.timingMicros) || note.kind == NoteKind::Landmine) {
@@ -901,7 +927,7 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
       clearPairHolding(id);
       recordAutomaticResult(
           commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
-      finishTransaction(finalizationTimeMicros);
+      finishFinalizationTransaction();
       if (terminal()) {
         return {automaticResults_, lastAdvancedMicros_};
       }
@@ -918,7 +944,7 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
       }
       recordAutomaticResult(
           commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
-      finishTransaction(finalizationTimeMicros);
+      finishFinalizationTransaction();
       if (terminal()) {
         return {automaticResults_, lastAdvancedMicros_};
       }
@@ -934,17 +960,21 @@ GameplaySimulation::finalizePracticeRange(std::int64_t finalizationTimeMicros,
     clearPairHolding(id);
     recordAutomaticResult(
         commitMiss(id, finalizationTimeMicros, finalizationTimeMicros));
-    finishTransaction(finalizationTimeMicros);
+    finishFinalizationTransaction();
     if (terminal()) {
       return {automaticResults_, lastAdvancedMicros_};
     }
+  }
+  if (aborted) {
+    scoreState_.failUnfinishedAttempt();
   }
 
   if (!hasAdvanced_ || finalizationTimeMicros > lastAdvancedMicros_) {
     lastAdvancedMicros_ = finalizationTimeMicros;
   }
   hasAdvanced_ = true;
-  latchTerminal(GameplayTerminalReason::PracticeComplete,
+  latchTerminal(aborted ? GameplayTerminalReason::Aborted
+                        : GameplayTerminalReason::PracticeComplete,
                 finalizationTimeMicros);
   return {automaticResults_, lastAdvancedMicros_};
 }

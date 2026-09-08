@@ -3943,14 +3943,42 @@ void GamePlayScene::abortPlayFromStartSelectControl() {
     finishPractice();
     return;
   }
-  state->isEnding = true;
   context.jukebox.stop();
   stopRealtimeGameplayAuthority(true);
+  const long long finalizationTimeMicros =
+      isReplayPlayback() && options.replayData->abortedAtSongTimeMicros.has_value()
+          ? *options.replayData->abortedAtSongTimeMicros
+          : getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  if (chart != nullptr) {
+    const NoteTimeRange remainingRange{
+        std::numeric_limits<long long>::min(),
+        std::numeric_limits<long long>::max()};
+    for (auto *note : finalizePendingPracticeNotes(
+             *chart, remainingRange, finalizationTimeMicros,
+             options.longNoteMode)) {
+      const JudgeResult miss(Poor,
+                             finalizationTimeMicros - note->Timeline->Timing);
+      onJudge(miss, judgeEventClock(finalizationTimeMicros), false, note);
+      appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
+                        finalizationTimeMicros, finalizationTimeMicros, miss,
+                        false);
+    }
+  }
+  state->failUnfinishedAttempt();
+  recordedReplay.abortedAtSongTimeMicros = finalizationTimeMicros;
+  state->isEnding = true;
   finishReplayRecording();
   recordedAttemptCompleted = options.practiceMode;
   publishPracticeGhost();
   if (isCoursePlayback()) {
-    if (!usesModernCourseContinuation()) {
+    if (options.courseSession->modernCourseContinuation.has_value()) {
+      auto continuation = *options.courseSession->modernCourseContinuation;
+      continuation.gauge = state->gaugeSnapshot();
+      continuation.adoptedGauge = state->gaugeType;
+      continuation.combo = 0;
+      options.courseSession->adoptModernCourseContinuation(
+          std::move(continuation));
+    } else {
       options.courseSession->carriedGauge = state->gaugeSnapshot();
       options.courseSession->carriedCombo = state->combo;
       options.courseSession->maxCombo =
@@ -4589,7 +4617,9 @@ GamePlayScene::completeModernReplayCapture() {
             : std::move(auxiliaryDiagnostic);
   }
   capture.timeBounds = replay::replayCaptureTimeBounds(
-      {.completionSongTimeMicros = completionSongTimeMicros}, {},
+      {.completionSongTimeMicros = completionSongTimeMicros,
+       .aborted = recordedReplay.abortedAtSongTimeMicros.has_value()
+                      ? std::optional(true) : std::nullopt}, {},
       capture.touchSamples, capture.laneCoverEvents);
   if (!completedModernReplayInput.has_value() &&
       modernReplayInputRecorder != nullptr) {
@@ -5652,6 +5682,10 @@ bool GamePlayScene::finishIfGaugeFailed() {
   if (state == nullptr || state->isEnding || !state->activeGaugeFailed()) {
     return false;
   }
+  if (isReplayPlayback() &&
+      options.replayData->abortedAtSongTimeMicros.has_value()) {
+    return false;
+  }
 
   const long long finalGameplayTimeMicros =
       getGameplayTimeMicros(context.jukebox.getTimeMicros());
@@ -5752,6 +5786,9 @@ void GamePlayScene::update(float dt) {
   if (isReplayPlayback()) {
     processReplayEvents(gameplayTimeMicros);
     processReplayLaneCoverEvents(gameplayTimeMicros);
+    if (state->isEnding) {
+      return;
+    }
   }
   if (preparationIndicatorActive(rawSongTimeMicros)) {
     return;
@@ -5785,6 +5822,11 @@ void GamePlayScene::update(float dt) {
         terminalReason, options.practiceSession != nullptr,
         sourcePlaytimeElapsed);
     if (terminalAction == gameplay::RealtimeGameplayTerminalAction::Wait) {
+      return;
+    }
+    if (terminalAction == gameplay::RealtimeGameplayTerminalAction::Abort) {
+      stopRealtimeGameplayAuthority(true);
+      abortPlayFromStartSelectControl();
       return;
     }
     if (terminalAction ==
@@ -5830,6 +5872,10 @@ void GamePlayScene::update(float dt) {
   }
   if (practiceSectionComplete) {
     completePracticeSection(false);
+    return;
+  }
+  if (isReplayPlayback() &&
+      options.replayData->abortedAtSongTimeMicros.has_value()) {
     return;
   }
   if (!realtimeAtFrameStart &&
@@ -6682,6 +6728,10 @@ void GamePlayScene::processReplayEvents(long long gameplayTimeMicros) {
     }
     replayEventCursor++;
   }
+  if (options.replayData->abortedAtSongTimeMicros.has_value() &&
+      gameplayTimeMicros >= *options.replayData->abortedAtSongTimeMicros) {
+    abortPlayFromStartSelectControl();
+  }
 }
 
 void GamePlayScene::processReplayLaneCoverEvents(long long gameplayTimeMicros) {
@@ -7003,7 +7053,8 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
                                       const bms_parser::Note *note,
                                       long long songTimeMicros,
                                       long long judgeTimeMicros,
-                                      const JudgeResult &judgeResult) {
+                                      const JudgeResult &judgeResult,
+                                      bool checkGaugeFailure) {
   const auto capturePolicy = resultCapturePolicy();
   if (state == nullptr || state->isEnding) {
     return;
@@ -7035,7 +7086,7 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
       recordedReplay.events.push_back(event);
     }
   }
-  if (action != ReplayEventAction::MultiBad) {
+  if (checkGaugeFailure && action != ReplayEventAction::MultiBad) {
     (void)finishIfGaugeFailed();
   }
 }

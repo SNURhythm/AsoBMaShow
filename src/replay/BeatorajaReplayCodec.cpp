@@ -31,6 +31,7 @@ using Json = nlohmann::ordered_json;
 using Bytes = std::vector<std::byte>;
 
 constexpr int kAsoSchemaVersion = BeatorajaReplayCodec::kCodecVersion;
+constexpr int kAsoTerminalSchemaVersion = 4;
 constexpr std::size_t kKeyRecordSize = 9;
 
 bool fail(std::string &diagnostic, std::string message) {
@@ -920,7 +921,8 @@ encodeStage(const ReplayPlaybackData &playback, ReplayTimeBounds timeBounds,
   }
 
   Json extension{
-      {"schemaVersion", kAsoSchemaVersion},
+      {"schemaVersion", timeBounds.aborted.has_value()
+                            ? kAsoTerminalSchemaVersion : kAsoSchemaVersion},
       {"envelope", envelope},
       {"stageIndex", stageIndex},
       {"stageCount", stageCount},
@@ -931,6 +933,9 @@ encodeStage(const ReplayPlaybackData &playback, ReplayTimeBounds timeBounds,
       {"touchSamples", encodeTouch(playback.touchSamples)},
       {"laneCoverEvents", encodeLaneCover(playback.laneCoverEvents)},
   };
+  if (timeBounds.aborted.has_value()) {
+    extension["aborted"] = *timeBounds.aborted;
+  }
   return Json{
       {"player", "AsoBMaShow"},
       {"sha256", playback.setup.chart.sha256},
@@ -1005,7 +1010,8 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
   if (!readRequired(*extension, "schemaVersion", schemaVersion, diagnostic)) {
     return false;
   }
-  if (schemaVersion != kAsoSchemaVersion) {
+  if (schemaVersion != kAsoSchemaVersion &&
+      schemaVersion != kAsoTerminalSchemaVersion) {
     output.unsupportedExtension = true;
     if (!expectedTimeBounds.has_value()) {
       return fail(diagnostic,
@@ -1051,11 +1057,24 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
     return false;
   }
   output.timeBounds = {.completionSongTimeMicros = completion};
+  if (schemaVersion == kAsoTerminalSchemaVersion) {
+    bool aborted = false;
+    if (!readRequired(*extension, "aborted", aborted, diagnostic)) {
+      return false;
+    }
+    output.timeBounds.aborted = aborted;
+  } else if (extension->contains("aborted")) {
+    return fail(diagnostic, "Abort evidence requires the terminal replay schema");
+  }
   if (envelope != (course ? "course-stage" : "chart") ||
       output.stageIndex != expectedIndex ||
       output.stageCount != expectedCount ||
       (expectedTimeBounds.has_value() &&
-       output.timeBounds != *expectedTimeBounds) ||
+       (output.timeBounds.completionSongTimeMicros !=
+            expectedTimeBounds->completionSongTimeMicros ||
+        (expectedTimeBounds->aborted.has_value() &&
+         output.timeBounds.aborted.value_or(false) !=
+             *expectedTimeBounds->aborted))) ||
       !validCourseRestMicros(output.restMicrosAfterStage, limits) ||
       (!course && output.restMicrosAfterStage != 0) ||
       output.playback.setup.chart.keyMode != expectedKeyMode) {
