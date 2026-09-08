@@ -206,6 +206,7 @@ void SettingsScene::resetViewState() {
   gameplaySkinControlsBuiltDisabled = false;
   gameplaySkinStatusText = nullptr;
   gameplaySkinUiMessageText = nullptr;
+  skinSelectSoundSetInput = nullptr;
   gameplaySkinConfigurationDigestText = nullptr;
   gameplaySkinSafetyOverlayRoot = nullptr;
   gameplaySkinBusyOverlayRoot = nullptr;
