@@ -62,6 +62,15 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_failed_fallback_audio_load_does_not_launch_gameplay(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        launch = function_body(source, "void MusicSelectScene::launchSelected(")
+        worker = launch[launch.index("launchThread_ = std::jthread("):]
+        start = worker.index("context.jukebox.stop();")
+        finish = worker.index("postDeferred(", start)
+        fixture = (ROOT / "tests/music_select_scene_launch_audio_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("STAGING_BLOCK", worker[start:finish]))
+
     def test_recursive_directory_queries_preserve_persisted_folder_metadata(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         method = function_body(source, "bool MusicSelectScene::loadDirectoryChildren(")

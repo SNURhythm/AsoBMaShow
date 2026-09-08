@@ -2164,8 +2164,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
         // during launching_ is this load (preview uses its own audio
         // service), so it cannot race the UI thread.
         context.jukebox.stop();
-        (void)context.jukebox.loadChart(*chart, true, cancelled);
-        if (cancelled || launchCancelled_.load(std::memory_order_acquire)) {
+        const auto loaded = context.jukebox.loadChart(*chart, true, cancelled);
+        if (!loaded.success || cancelled ||
+            launchCancelled_.load(std::memory_order_acquire)) {
           resetLaunching();
           return;
         }
