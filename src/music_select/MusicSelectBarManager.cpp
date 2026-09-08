@@ -292,7 +292,7 @@ const MusicSelectBar *MusicSelectBarManager::selected() const {
 }
 
 void MusicSelectBarManager::rebuildRows(
-    std::optional<MusicSelectBarId> preferred) {
+    std::optional<MusicSelectBarId> preferred, std::size_t fallbackIndex) {
   ++rowsRevision_;
   rowProvider_.reset();
   rowIndex_.clear();
@@ -321,7 +321,7 @@ void MusicSelectBarManager::rebuildRows(
       config_.modeFilter = std::move(resolved.first);
       config_.difficultyFilter = std::move(resolved.second);
       state.configuration = config_;
-      selectedIndex_ = 0;
+      selectedIndex_ = rowCount() == 0 ? 0 : std::min(fallbackIndex, rowCount() - 1);
       if (preferred) {
         if (const auto index = rowProvider_->indexOf(*preferred);
             index && *index < rowCount()) {
@@ -440,6 +440,7 @@ bool MusicSelectBarManager::installRowProvider(
   if (!provider || !parent ||
       !skin::musicSelectIsDirectoryBarKind(parent->kind)) return false;
   const bool active = !directory_.empty() && directory_.back() == directory;
+  const auto previousIndex = selectedIndex_;
   std::optional<MusicSelectBarId> preferred;
   if (active) {
     if (const auto *bar = selected()) preferred = bar->id;
@@ -449,7 +450,9 @@ bool MusicSelectBarManager::installRowProvider(
     state = {.provider = std::move(provider)};
   }
   projection_.bars[projectionIndex_.at(directory.value)].childrenLoaded = true;
-  if (active) rebuildRows(preferred);
+  if (active) {
+    rebuildRows(preferred, previousIndex);
+  }
   return true;
 }
 

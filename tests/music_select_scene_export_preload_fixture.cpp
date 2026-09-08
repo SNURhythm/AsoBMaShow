@@ -197,6 +197,12 @@ struct Bar {
 };
 using MusicSelectBar = Bar;
 struct Bars {
+  struct Rows {
+    std::string error;
+    const std::string &diagnostic() const { return error; }
+  };
+  std::shared_ptr<Rows> rowProvider;
+  std::vector<Bar> directoryBars;
   void setSelectedPosition(float) {}
   std::vector<Bar> rows{Bar{}};
   std::size_t selectedIndex = 0;

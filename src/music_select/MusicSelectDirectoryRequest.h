@@ -9,6 +9,7 @@ struct MusicSelectDirectoryRequest {
   std::uint64_t libraryRevision = 0;
   std::uint64_t scoreRevision = 0;
   bool autoplay = false;
+  bool reload = false;
 
   [[nodiscard]] bool matches(
       std::uint64_t resultGeneration, const MusicSelectBarManagerReadView &view,
@@ -17,7 +18,8 @@ struct MusicSelectDirectoryRequest {
     return generation == resultGeneration && rowsRevision == view.rowsRevision &&
            libraryRevision == currentLibraryRevision &&
            scoreRevision == currentScoreRevision &&
-           view.selectedIndex < view.rowCount() &&
-           view.rowAt(view.selectedIndex).id == directory.id;
+           (reload ? !view.directory.empty() && view.directory.back() == directory.id
+                   : view.selectedIndex < view.rowCount() &&
+                     view.rowAt(view.selectedIndex).id == directory.id);
   }
 };

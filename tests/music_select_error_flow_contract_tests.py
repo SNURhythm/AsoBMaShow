@@ -230,6 +230,8 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def run_directory_loading_fixture(self, test_name):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signatures = [
+            "void MusicSelectScene::openSelected()",
+            "void MusicSelectScene::closeDirectory()",
             "void MusicSelectScene::requestDirectoryLoad(",
             "void MusicSelectScene::applyDirectoryLoads()",
             "void MusicSelectScene::cancelDirectoryLoad()",
@@ -248,6 +250,9 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             opening = source.index("{", start)
             methods.append(source[start:opening] + function_body(source, signature))
         moved = function_body(source, "void MusicSelectScene::selectedBarMoved()")
+        launch = function_body(source, "void MusicSelectScene::launchSelected(")
+        methods.append("void MusicSelectScene::launchSelected(bool autoplay, bool practice)" +
+                       launch[:launch.index("StartupTiming::instance().beginSession()")] + "}")
         guard_start = moved.index("if (directoryRequest_ &&")
         guard_end = moved.index("requestFolderStatus(snapshot);", guard_start)
         reload = function_body(source, "void MusicSelectScene::reloadLibrary(")
@@ -267,6 +272,11 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                 fixture, [ROOT / "src/music_select/MusicSelectBarManager.cpp"])
         except subprocess.CalledProcessError as error:
             self.fail(error.stderr)
+
+    def test_failed_page_is_visible_and_explicitly_reloads(self):
+        self.run_directory_loading_fixture("testFailedPageRecovery")
+
+
 
     def test_sound_services_follow_changed_paths_and_bookmarks(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()

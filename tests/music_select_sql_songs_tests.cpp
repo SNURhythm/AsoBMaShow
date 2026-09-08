@@ -221,6 +221,52 @@ void testPageErrorsKeepBoundedLogicalSlotsUntilRetry() {
   assert(songs.at(0).chart && reader.reads == 2 && songs.diagnostic().empty());
 }
 
+void testMiddlePageFailureDoesNotRetryAfterCacheEviction() {
+  FakeReader reader;
+  MusicSelectSqlSongs songs("folder:/songs", reader.resolver(), reader.projector());
+  const auto retained = songs.at(0);
+  (void)songs.at(99'999);
+  reader.failPage = true;
+  assertUnavailable(songs.at(50'000));
+  const auto failedReads = reader.reads;
+  for (std::size_t frame = 0; frame < 100; ++frame) {
+    for (std::size_t page = 1; page <= 10; ++page) {
+      assertUnavailable(songs.at(page * 128));
+    }
+    assertUnavailable(songs.at(50'000));
+  }
+  assert(reader.reads == failedReads);
+  assert(retained.chart->meta.Title == "Song 0");
+  reader.failPage = false;
+  songs.retryFailedPages();
+  assert(songs.at(50'000).chart && reader.reads == failedReads + 1);
+}
+
+void testReplacingFailedProviderRetainsFrameAndMiddlePosition() {
+  FakeReader reader;
+  MusicSelectBar directory{.id = {"folder:/songs"},
+      .kind = skin::MusicSelectBarKind::Folder, .childrenLoaded = false};
+  MusicSelectBarManager bars({.bars = {directory}, .root = {directory.id}});
+  auto provider = std::make_shared<MusicSelectSqlSongs>(
+      directory.id.value, reader.resolver(), reader.projector());
+  assert(bars.installRowProvider(directory.id, provider) && bars.open(directory.id));
+  bars.setSelectedPosition(0.5f);
+  reader.failPage = true;
+  const auto retained = bars.songListFrame();
+  const auto selectedIndex = bars.readView().selectedIndex;
+  assertUnavailable(provider->at(selectedIndex));
+  reader.failPage = false;
+  const auto replacement = std::make_shared<MusicSelectSqlSongs>(
+      directory.id.value, reader.resolver(), reader.projector());
+  assert(bars.installRowProvider(directory.id, replacement));
+  const auto refreshed = bars.readView();
+  assert(refreshed.selectedIndex == selectedIndex && refreshed.rowAt(selectedIndex).chart);
+  assert(retained.rowProvider == provider && !retained.at(selectedIndex).exists);
+  assert(reader.resolves == 2 && reader.reads == 2);
+  assert(bars.close());
+  assert(!bars.readView().rowAt(0).childrenLoaded);
+}
+
 void testMalformedPagesDoNotShiftRowsOrPublishLaunchablePlaceholders() {
   for (const auto failure : {0, 1, 2, 3, 4}) {
     FakeReader reader;
@@ -277,6 +323,8 @@ void testCountFailuresPropagateAndFailedReconfigurationPreservesRows() {
 }
 
 int main() {
+  testMiddlePageFailureDoesNotRetryAfterCacheEviction();
+  testReplacingFailedProviderRetainsFrameAndMiddlePosition();
   testFirstAndWrappedPagesDoNotEnumerateTheLibrary();
   testFallbackAliasesKeepPrimedPagesAndReconfigureChangesOrdering();
   testClonesOwnConfigurationCallbacksAndPages();

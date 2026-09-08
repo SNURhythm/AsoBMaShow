@@ -20,12 +20,19 @@ void expect(bool condition, const char *message) {
 }
 
 void SDL_Log(const char *, ...) {}
+namespace audio::diag { void SelectAudioLog(const char *) {} }
 
 namespace long_note_mode {
 int valueFromId(const std::string &) { return 0; }
 }
 
 namespace skin {
+enum class MusicSelectSkinActionKind { Event };
+struct MusicSelectSkinAction {
+  MusicSelectSkinActionKind kind;
+  struct { int value; } selector;
+  std::array<int, 2> arguments;
+};
 struct MusicSelectSkinPointerResult {
   std::optional<int> focusedStringWriter;
   bool closeDirectory = false;
@@ -62,6 +69,25 @@ struct FixtureRepository {
   int normalLoads = 0;
   int autoplayLoads = 0;
   bool emptyAutoplay = false;
+  bool failNormal = false;
+};
+
+struct FailedRows : MusicSelectRowProvider {
+  MusicSelectBar unavailable{.id = {"unavailable:0"}};
+  std::string error = "transient middle page failure";
+  std::shared_ptr<MusicSelectRowProvider> clone() const override {
+    return std::make_shared<FailedRows>(*this);
+  }
+  std::size_t size() const noexcept override { return 1; }
+  const MusicSelectBar &at(std::size_t) const override { return unavailable; }
+  std::optional<std::size_t> indexOf(const MusicSelectBarId &) const override {
+    return std::nullopt;
+  }
+  std::pair<std::string, std::string> configure(
+      const std::string &, const std::string &, const std::string &) override {
+    return {"ALL", "ALL"};
+  }
+  const std::string &diagnostic() const noexcept { return error; }
 };
 
 class MusicSelectDirectoryLoader {
@@ -96,7 +122,11 @@ public:
   void completePending() {
     expect(pending_.has_value(), "fixture requires a pending asynchronous request");
     const auto pending = std::exchange(pending_, std::nullopt);
-    results_.push_back({pending->id, pending->generation, pending->process({}), {}});
+    try {
+      results_.push_back({pending->id, pending->generation, pending->process({}), {}});
+    } catch (const std::exception &error) {
+      results_.push_back({pending->id, pending->generation, {}, error.what()});
+    }
   }
 
   int requests = 0;
@@ -117,6 +147,7 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
     const MusicSelectBar &, int, int, const std::filesystem::path &,
     const MusicSelectBarManagerConfig &, int, std::stop_token) {
   ++repository.normalLoads;
+  if (repository.failNormal) throw std::runtime_error("retry failed");
   return {.children = {song()}};
 }
 
@@ -129,6 +160,7 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectoryAutoplay(
 
 struct SystemSound {
   void playFolderOpen() {}
+  void playFolderClose() {}
 };
 
 struct FixturePreview {
@@ -175,6 +207,7 @@ struct MusicSelectScene {
   std::vector<MusicSelectBar> launchedPlaylists;
 
   void requestDirectoryLoad(const MusicSelectBar &, bool autoplay = false);
+  void openSelected();
   void applyDirectoryLoads();
   void cancelDirectoryLoad();
   void continueDirectoryRestore();
@@ -188,10 +221,11 @@ struct MusicSelectScene {
   void showDirectoryStatus(std::string message) {
     directoryStatusMessage_ = std::move(message);
   }
+  void executeEvent(const skin::MusicSelectSkinAction &) {}
   void syncResolvedFilters() {}
   void configureSoundServices() {}
   void beginSkinTextEditing(int) {}
-  void launchSelected() {}
+  void launchSelected(bool autoplay = false, bool practice = false);
   bool openSameFolder(bool) { return false; }
   bool loadDirectoryChildren(const MusicSelectBar &directory) {
     return bars_.installChildren(directory.id, {song()});
@@ -200,10 +234,7 @@ struct MusicSelectScene {
     expect(autoplay, "directory completion must request autoplay");
     launchedPlaylists.push_back(playlist);
   }
-  void closeDirectory() {
-    if (directoryRequest_) cancelDirectoryLoad();
-    else (void)bars_.close();
-  }
+  void closeDirectory();
   void selectedBarMoved() {
     const auto snapshot = bars_.readView();
     SELECTED_MOVE_GUARD
@@ -216,6 +247,59 @@ struct MusicSelectScene {
 };
 
 SCENE_METHODS
+
+void testFailedPageRecovery() {
+  MusicSelectScene scene;
+  const auto directory = scene.bars_.readView().rowAt(0);
+  auto failed = std::make_shared<FailedRows>();
+  expect(scene.bars_.installRowProvider(directory.id, failed) &&
+             scene.bars_.open(directory.id), "fixture opens failed provider");
+  const auto retained = scene.bars_.songListFrame();
+  for (int frame = 0; frame < 100; ++frame) scene.applyDirectoryLoads();
+  expect(scene.directoryStatusMessage_.find("retry") != std::string::npos &&
+             !scene.directoryLoader_, "page diagnosis is visible without automatic retry storms");
+  scene.applySkinPointerResult({.selectIndex = 0}, MusicSelectPointerOrigin::Mouse);
+  expect(scene.directoryRequest_ && scene.directoryLoader_->requests == 1,
+         "activating unavailable row requests fresh asynchronous snapshot");
+  scene.openSelected();
+  expect(scene.directoryLoader_->requests == 1, "pending explicit retries coalesce");
+  scene.context.chartRepository.failNormal = true;
+  scene.directoryLoader_->completePending();
+  scene.applyDirectoryLoads();
+  for (int frame = 0; frame < 100; ++frame) scene.applyDirectoryLoads();
+  expect(scene.directoryLoader_->requests == 1 && !scene.directoryStatusMessage_.empty(),
+         "repeated storage failure waits for another explicit retry");
+  scene.openSelected();
+  scene.closeDirectory();
+  expect(!scene.directoryRequest_ && scene.bars_.readView().rowProvider == failed,
+         "back cancels reload without replacing the retained failed view");
+  scene.openSelected();
+  ++scene.libraryRevision_;
+  scene.directoryLoader_->completePending();
+  scene.applyDirectoryLoads();
+  expect(scene.bars_.readView().rowProvider == failed,
+         "stale-revision retry completion cannot replace visible rows");
+  scene.context.chartRepository.failNormal = false;
+  scene.openSelected();
+  scene.directoryLoader_->completePending();
+  scene.applyDirectoryLoads();
+  const auto recovered = scene.bars_.readView();
+  expect(recovered.directory == std::vector<MusicSelectBarId>{directory.id} &&
+             recovered.rowAt(0).chart && scene.directoryStatusMessage_.empty(),
+         "retry publishes fresh rows without duplicating the directory stack");
+  expect(!retained.at(0).exists && retained.rowProvider == failed,
+         "retained frame keeps original failed provider after replacement");
+  expect(scene.bars_.installRowProvider(directory.id, failed), "restore failed provider");
+  scene.closeDirectory();
+  const auto root = scene.bars_.readView();
+  expect(!root.rowAt(root.selectedIndex).childrenLoaded,
+         "leaving failed provider invalidates cached directory content");
+  expect(scene.directoryStatusMessage_.empty(), "leaving clears stale failure diagnosis");
+  scene.openSelected();
+  expect(scene.directoryRequest_.has_value(), "reopening requests a fresh snapshot");
+}
+
+
 
 void testAutoplayCompletion() {
   MusicSelectScene scene;

@@ -99,7 +99,8 @@ private:
 
   [[nodiscard]] std::size_t rowCount() const noexcept;
   [[nodiscard]] const MusicSelectBar *selected() const;
-  void rebuildRows(std::optional<MusicSelectBarId> preferred = std::nullopt);
+  void rebuildRows(std::optional<MusicSelectBarId> preferred = std::nullopt,
+                   std::size_t fallbackIndex = 0);
   void rebuildProjectionIndex();
   [[nodiscard]] const MusicSelectBar *find(const MusicSelectBarId &) const;
 

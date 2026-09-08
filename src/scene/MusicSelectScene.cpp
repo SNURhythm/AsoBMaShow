@@ -1534,7 +1534,7 @@ void MusicSelectScene::showDirectoryStatus(std::string message) {
     directoryStatus_->setPosition(Edge::Left, 20);
     directoryStatus_->setPosition(Edge::Top, 20);
     directoryStatus_->setWidth(480);
-    directoryStatus_->setHeight(56);
+    directoryStatus_->setHeight(104);
     directoryStatus_->setZIndex(3000);
     addView(directoryStatus_);
   }
@@ -1590,7 +1590,9 @@ void MusicSelectScene::requestDirectoryLoad(const MusicSelectBar &directory,
       .rowsRevision = snapshot.rowsRevision,
       .libraryRevision = libraryRevision_,
       .scoreRevision = scoreRevision_,
-      .autoplay = autoplay};
+      .autoplay = autoplay,
+      .reload = !snapshot.directory.empty() &&
+                snapshot.directory.back() == directory.id};
   showDirectoryStatus("Loading folder: " + directory.title);
 }
 
@@ -1640,8 +1642,13 @@ void MusicSelectScene::applyDirectoryLoads() {
     cancelDirectoryLoad();
     return;
   }
-  if (!directoryLoader_) return;
   const auto view = bars_.readView();
+  if (!directoryRequest_ && view.rowProvider &&
+      !view.rowProvider->diagnostic().empty()) {
+    showDirectoryStatus("Chart page unavailable.\nSelect a blank row to retry, or go back.\n" +
+        view.rowProvider->diagnostic().substr(0, 120));
+  }
+  if (!directoryLoader_) return;
   if (directoryRequest_ &&
       !directoryRequest_->matches(directoryRequest_->generation, view,
                                    libraryRevision_, scoreRevision_)) {
@@ -1678,11 +1685,11 @@ void MusicSelectScene::applyDirectoryLoads() {
       launchDirectoryAutoplay(request.directory);
       continue;
     }
-    if (!bars_.open(result.id)) {
+    if (!request.reload && !bars_.open(result.id)) {
       cancelDirectoryLoad();
       continue;
     }
-    if (systemSound_) systemSound_->playFolderOpen();
+    if (!request.reload && systemSound_) systemSound_->playFolderOpen();
     if (!restoreDirectories_.empty() && restoreDirectories_.front() == result.id) {
       restoreDirectories_.erase(restoreDirectories_.begin());
       continueDirectoryRestore();
@@ -2044,6 +2051,7 @@ void MusicSelectScene::closeDirectory() {
     return;
   }
   if (bars_.close()) {
+    showDirectoryStatus({});
     if (systemSound_) systemSound_->playFolderClose();
     syncResolvedFilters();
     selectedBarMoved();
@@ -2233,6 +2241,11 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (snapshot.rowProvider && !snapshot.rowProvider->diagnostic().empty() &&
+      !selected.chart && !snapshot.directoryBars.empty()) {
+    requestDirectoryLoad(snapshot.directoryBars.back());
+    return;
+  }
   if (selected.kind == skin::MusicSelectBarKind::Grade ||
       selected.kind == skin::MusicSelectBarKind::RandomCourse) {
     launchCourse(selected, autoplay);

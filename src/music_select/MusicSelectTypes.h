@@ -193,6 +193,10 @@ public:
   virtual ~MusicSelectRowProvider() = default;
   [[nodiscard]] virtual std::shared_ptr<MusicSelectRowProvider> clone() const = 0;
   [[nodiscard]] virtual std::size_t size() const noexcept = 0;
+  [[nodiscard]] virtual const std::string &diagnostic() const noexcept {
+    static const std::string empty;
+    return empty;
+  }
   [[nodiscard]] virtual const MusicSelectBar &at(std::size_t index) const = 0;
   [[nodiscard]] virtual std::optional<std::size_t>
   indexOf(const MusicSelectBarId &) const = 0;

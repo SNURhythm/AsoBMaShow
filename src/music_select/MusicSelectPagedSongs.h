@@ -26,7 +26,7 @@ public:
   indexOf(const MusicSelectBarId &) const override;
   std::pair<std::string, std::string> configure(
       const std::string &, const std::string &, const std::string &) override;
-  [[nodiscard]] const std::string &diagnostic() const noexcept;
+  [[nodiscard]] const std::string &diagnostic() const noexcept override;
   void retryFailedPages();
 
 private:

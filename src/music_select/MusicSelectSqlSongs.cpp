@@ -112,6 +112,12 @@ std::vector<MusicSelectBar> MusicSelectSqlSongs::loadPage(
   const auto count = std::min(limit, size() - offset);
   std::vector<MusicSelectBar> result;
   result.reserve(count);
+  if (!diagnostic_.empty()) {
+    for (std::size_t index = 0; index < count; ++index) {
+      result.push_back(unavailableBar(offset + index));
+    }
+    return result;
+  }
   try {
     const auto records = query_.loadPage(offset, count);
     if (records.size() != count) {

@@ -1486,6 +1486,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(music_select_paged_songs_tests PRIVATE cxx_std_23)
         add_executable(music_select_sql_songs_tests
             tests/music_select_sql_songs_tests.cpp
+            src/music_select/MusicSelectBarManager.cpp
             src/music_select/MusicSelectSqlSongs.cpp
             src/music_select/MusicSelectRepositoryProjection.cpp
             src/path.cpp
