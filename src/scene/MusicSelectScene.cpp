@@ -625,6 +625,7 @@ void MusicSelectScene::init() {
 
 void MusicSelectScene::onPause() {
   audio::diag::SelectAudioLog("[bgm] scene onPause");
+  stopPreloadWorker();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
   skinTouchGesture_.cancel();
@@ -2177,6 +2178,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
   session->playOption2 = playInfo.option2;
   session->playOption2Seed = playInfo.seed2;
 
+  stopPreloadWorker();
   context.jukebox.stop();
   context.jukebox.loadChart(*chart, true, cancelled);
   if (cancelled) {
@@ -2306,6 +2308,7 @@ void MusicSelectScene::launchCourseReplay(
     return;
   }
 
+  stopPreloadWorker();
   context.jukebox.stop();
   context.jukebox.loadChart(*chart, true, cancelled);
   if (cancelled) {
@@ -2374,6 +2377,7 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
     launching_ = false;
     return;
   }
+  stopPreloadWorker();
   context.jukebox.stop();
   context.jukebox.loadChart(*loaded.chart, true, cancelled);
   if (cancelled) {
@@ -3072,6 +3076,7 @@ void MusicSelectScene::openChartViewer() {
       selected.chart->meta.BmsPath.empty()) {
     return;
   }
+  stopPreloadWorker();
   context.jukebox.stop();
   context.sceneManager->changeScene(std::make_unique<ChartViewerScene>(
       context, *selected.chart, std::nullopt, std::nullopt, std::nullopt,
@@ -3148,6 +3153,7 @@ void MusicSelectScene::launchChartReplay(
     launching_ = false;
     return;
   }
+  stopPreloadWorker();
   context.jukebox.stop();
   context.jukebox.loadChart(*loaded.chart, true, cancelled);
   if (cancelled) {
@@ -3218,6 +3224,7 @@ void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
       *chart, selections.playOption);
   applyEffectiveLongNoteModeToChart(
       *chart, long_note_mode::valueFromId(selections.longNoteMode));
+  stopPreloadWorker();
   context.jukebox.stop();
   context.jukebox.loadChart(*chart, true, cancelled);
   if (cancelled) {

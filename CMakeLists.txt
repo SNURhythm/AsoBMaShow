@@ -1983,6 +1983,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest tests/music_select_error_flow_contract_tests.py -v)
     set_tests_properties(music_select_error_flow_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
     )
     if (TARGET beatoraja_skin_model_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger
