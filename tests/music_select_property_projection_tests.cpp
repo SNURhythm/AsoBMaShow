@@ -288,6 +288,43 @@ void testProjectsSelectedSongAndPlayerConfiguration() {
           "FloatPropertyFactory rates retain their source domains");
 }
 
+void testSelectedSongClearIsIndependentOfBestExAttempt() {
+  AppSettings settings;
+  MusicSelectBarManagerSnapshot bars;
+  selectedSong(bars);
+  auto &song = bars.rows.front();
+  song.score->clearType = kClearTypeFailedRank;
+  constexpr std::array<int, 11> clearIds{
+      100, 101, 1100, 1101, 102, 103, 104, 1102, 105, 1103, 1104};
+  for (int lamp = 1; lamp <= 8; ++lamp) {
+    song.presentation.lamp = lamp;
+    const auto values = projectMusicSelectProperties(settings, bars, {});
+    require(values.imageIndexes.at(370) == lamp,
+            "selected Song clear image uses independent best-clear lamp IDs");
+    for (std::size_t index = 0; index < clearIds.size(); ++index) {
+      require(values.booleans.at(clearIds[index]) ==
+                  (static_cast<int>(index) == lamp),
+              "all selected Song clear conditions use independent best clear");
+    }
+    require(values.integers.at(71) == 800 &&
+                values.integers.at(80) == 250 &&
+                values.integers.at(75) == 321 &&
+                song.score->clearType == kClearTypeFailedRank,
+            "lower-EX clear evidence does not replace best-EX attempt fields");
+  }
+  song.kind = skin::MusicSelectBarKind::Grade;
+  song.presentation.kind = skin::MusicSelectBarKind::Grade;
+  song.presentation.lamp = 8;
+  song.score->clearType = kClearTypeHardClearRank;
+  const auto grade = projectMusicSelectProperties(settings, bars, {});
+  require(grade.imageIndexes.at(370) == 6,
+          "Grade clear converts the normal-option native HARD rank to ID 6");
+  for (std::size_t index = 0; index < clearIds.size(); ++index) {
+    require(grade.booleans.at(clearIds[index]) == (index == 6),
+            "all Grade clear conditions retain normal-option score semantics");
+  }
+}
+
 void testProjectsCourseContract() {
   AppSettings settings;
   MusicSelectBar course;
@@ -536,6 +573,7 @@ int main(int argc, char **argv) {
   testProjectsDelayedSelectedSongInformation();
   testProjectsExactBarClassConditions();
   testProjectsCourseContract();
+  testSelectedSongClearIsIndependentOfBestExAttempt();
   testUnavailableSongRatesStayZeroWithoutNotes();
   testLargeReadViewProjectsAbsoluteSelectionAndFolderStatistics();
   return music_select_runtime_ledger_assertions::finish(

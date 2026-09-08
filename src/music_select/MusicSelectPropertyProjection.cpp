@@ -479,7 +479,9 @@ void projectSelectedBar(Properties &out,
   // These properties read SelectableBar::getScore(). GradeBar's normal score
   // deliberately differs from its aggregate normal/mirror/random bar lamp.
   const std::optional<int> clear =
-      selected->score
+      song && (selected->score || selected->presentation.lamp != 0)
+          ? std::optional<int>(selected->presentation.lamp)
+          : selected->score
           ? std::optional<int>(beatorajaClearType(selected->score->clearType))
           : std::nullopt;
   constexpr std::array<int, 11> clearIds{
