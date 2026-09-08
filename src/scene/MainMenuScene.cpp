@@ -4128,7 +4128,7 @@ void MainMenuScene::startCourseDirect(
         play_options::PlayOptionReplayInfo playInfo =
             play_options::applySelectedPlayOptions(
                 *preparedChart, session->requestedPlayOption,
-                session->requestedPlayOption2);
+                session->requestedPlayOption2, session->doublePlayFlip);
         applyEffectiveLongNoteModeToChart(*preparedChart,
                                           selectedLongNoteMode);
         session->playOption = playInfo.option;

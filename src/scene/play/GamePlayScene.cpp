@@ -926,6 +926,9 @@ bool prepareRetryChart(const bms_parser::ChartMeta &meta,
     }
   }
 
+  if (retryOptions.practiceSession == nullptr && retryOptions.doublePlayFlip) {
+    applyDoublePlayFlipToChart(*retryChart);
+  }
   if (playOption.has_value() &&
       !play_options::applyPlayOptionModifier(
           *retryChart, *playOption, std::nullopt, 0, retryOptions.playOption,
@@ -1752,9 +1755,6 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
     std::string_view logContext) {
   applySkinMenuAttemptPlanToStartOptions(options, attempt);
   practice::applySkinMenuPracticeModifier(*chart, attempt);
-  if (chart->Meta.IsDP && options.doublePlayFlip) {
-    practice::applySkinMenuDoublePlayFlip(*chart);
-  }
   if (!applyPracticePlayOptions(*chart, options, logContext)) {
     showPlaybackInitializationFailure(
         "Practice play option could not be applied");
@@ -4427,7 +4427,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     applyCourseConstraintsToChart(*nextChart, session->constraints);
     playInfo = play_options::applySelectedPlayOptions(
         *nextChart, session->requestedPlayOption,
-        session->requestedPlayOption2);
+        session->requestedPlayOption2, session->doublePlayFlip);
     applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
     session->playOption = playInfo.option;
     session->playOptionSeed = playInfo.seed;

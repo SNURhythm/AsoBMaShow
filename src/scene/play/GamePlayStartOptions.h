@@ -156,6 +156,9 @@ inline void applySkinMenuAttemptPlanToStartOptions(
 inline bool applyPracticePlayOptions(bms_parser::Chart &chart,
                                      StartOptions &options,
                                      std::string_view logContext) {
+  if (options.doublePlayFlip) {
+    applyDoublePlayFlipToChart(chart);
+  }
   const auto applyForPlayer = [&](int player,
                                   std::optional<std::string> &option,
                                   std::optional<long long> &seed) {

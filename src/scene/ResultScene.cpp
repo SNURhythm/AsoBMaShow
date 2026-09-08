@@ -3188,7 +3188,7 @@ void ResultScene::continueCourse() {
     applyCourseConstraintsToChart(*nextChart, session->constraints);
     playInfo = play_options::applySelectedPlayOptions(
         *nextChart, session->requestedPlayOption,
-        session->requestedPlayOption2);
+        session->requestedPlayOption2, session->doublePlayFlip);
     applyEffectiveLongNoteModeToChart(*nextChart, session->longNoteMode);
     session->playOption = playInfo.option;
     session->playOptionSeed = playInfo.seed;
@@ -3425,6 +3425,7 @@ void ResultScene::startRetry(bool samePattern) {
             retrySource.chartMeta, local->attemptProvenance);
         options.assistOption = retrySource.assistOption;
         options.clubMode = local->attemptProvenance.clubMode;
+        options.doublePlayFlip = local->attemptProvenance.doublePlayFlip;
         options.pacemakerTarget =
             local->practiceOptions.enabled
                 ? pacemaker::kTargetOff
@@ -3464,6 +3465,10 @@ void ResultScene::startRetry(bool samePattern) {
           }
         }
 
+        if (!reuseCurrentPattern && !sessionBackedPracticeRetry &&
+            options.doublePlayFlip) {
+          applyDoublePlayFlipToChart(*retryChart);
+        }
         if (reuseCurrentPattern) {
           options.playOption = retrySource.playOption;
           options.playOptionSeed = retrySource.playOptionSeed;

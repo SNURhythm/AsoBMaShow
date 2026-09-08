@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ArchiveFile.h"
+#include "ChartLanePreparation.h"
 #include "CoursePlaySession.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
@@ -442,6 +443,9 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
 
 inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
                                    const ReplayData &replay) {
+  if (replay.provenance.doublePlayFlip) {
+    applyDoublePlayFlipToChart(chart);
+  }
   std::optional<std::string> ignoredOption;
   std::optional<long long> ignoredSeed;
   if (replay.playOption.has_value() &&
@@ -460,7 +464,10 @@ inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
 
 inline PlayOptionReplayInfo
 applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option,
-                         const std::string &option2) {
+                         const std::string &option2, bool doublePlayFlip = false) {
+  if (doublePlayFlip) {
+    applyDoublePlayFlipToChart(chart);
+  }
   PlayOptionReplayInfo info;
   if (!applyPlayOptionModifier(chart, option, std::nullopt, 0, info.option,
                                info.seed)) {

@@ -2204,6 +2204,9 @@ bool MusicSelectScene::reusePreloadedChart(
   }
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
+  if (context.settings.skinDoublePlayOption == 1) {
+    applyDoublePlayFlipToChart(*cached);
+  }
   if (!play_options::applyPlayOptionModifier(
           *cached, selections.playOption, std::nullopt, 0, playInfo.option,
           playInfo.seed, "music-select")) {
@@ -2361,6 +2364,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           return;
         }
         play_options::PlayOptionReplayInfo playInfo;
+        if (doublePlayFlip) {
+          applyDoublePlayFlipToChart(*chart);
+        }
         if (!play_options::applyPlayOptionModifier(
                 *chart, selections.playOption, std::nullopt, 0,
                 playInfo.option, playInfo.seed, "music-select")) {
@@ -2505,7 +2511,8 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
         }
         applyCourseConstraintsToChart(*chart, session->constraints);
         const auto playInfo = play_options::applySelectedPlayOptions(
-            *chart, session->requestedPlayOption, session->requestedPlayOption2);
+            *chart, session->requestedPlayOption, session->requestedPlayOption2,
+            session->doublePlayFlip);
         applyEffectiveLongNoteModeToChart(*chart, session->longNoteMode);
         session->playOption = playInfo.option;
         session->playOptionSeed = playInfo.seed;

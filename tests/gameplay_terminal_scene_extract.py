@@ -137,6 +137,105 @@ std::unique_ptr<bms_parser::Chart> PreparedViewerFixture::freshLaunchChart(bool 
   return failed ? nullptr : std::move(practiceChart);
 }
 '''
+    selector_source = (args.root / "src/scene/MusicSelectScene.cpp").read_text()
+    flip_methods = extract(selector_source, 'bool MusicSelectScene::reusePreloadedChart(')
+    flip_methods = (flip_methods.replace('MusicSelectScene::', 'PreparedSelectorFixture::')
+                   .replace('ChartMetaRecord', 'PreparationChartRecord'))
+    flip_methods += '\n' + extract(result_source, 'void ResultScene::startModernCourseRetrySame()').replace(
+        'ResultScene::', 'RetrySameResultFixture::')
+    restored_continue = extract(result_source, 'void ResultScene::continueCourse()')
+    resource_start = restored_continue.index('  context.jukebox.stop();')
+    resource_end = restored_continue.index('  StartOptions nextOptions =', resource_start)
+    restored_continue = restored_continue[:resource_start] + restored_continue[resource_end:]
+    launch_start = restored_continue.index('  context.sceneManager->changeScene(')
+    restored_continue = restored_continue[:launch_start] + '''
+  launchedChart = std::move(nextChart);
+  launchedOptions = std::move(nextOptions);
+}
+'''
+    flip_methods += '\n' + restored_continue.replace('ResultScene::', 'RetrySameResultFixture::')
+    selected_start = selector_source.index('        auto chart = play_options::parseChart(record.meta, cancelled,')
+    selected_end = selector_source.index('        context.jukebox.stop();', selected_start)
+    selected_prefix = selector_source[selected_start:selected_end].replace('auto chart =', 'chart =', 1)
+    flip_methods += '''
+std::unique_ptr<bms_parser::Chart> PreparedSelectorFixture::prepareSelected(const PreparationChartRecord &record) {
+  std::atomic_bool cancelled = false;
+  bool failed = false;
+  const auto resetLaunching = [&]() { failed = true; };
+  const auto selections = main_menu_profile::Selections::fromSettings(context.settings);
+  const auto player2PlayOption = replay::beatorajaReplayOptionName(context.settings.skinPlayer2RandomOption);
+  const bool doublePlayFlip = context.settings.skinDoublePlayOption == 1;
+  std::unique_ptr<bms_parser::Chart> chart;
+  [&]() {
+''' + selected_prefix + '''
+    lastPlayInfo = playInfo;
+    lastLnMode = lnMode;
+  }();
+  return failed ? nullptr : std::move(chart);
+}
+'''
+    course_start = selector_source.index('        auto chart = play_options::parseChart(session->currentMeta()->BmsPath,')
+    course_end = selector_source.index('        context.jukebox.stop();', course_start)
+    course_prefix = selector_source[course_start:course_end].replace('auto chart =', 'chart =', 1)
+    flip_methods += '''
+std::unique_ptr<bms_parser::Chart> PreparedSelectorFixture::prepareCourse(const std::shared_ptr<CoursePlaySession> &session) {
+  std::atomic_bool cancelled = false;
+  bool failed = false;
+  const auto resetLaunching = [&]() { failed = true; };
+  std::unique_ptr<bms_parser::Chart> chart;
+  [&]() {
+''' + course_prefix + '''
+    lastPlayInfo = playInfo;
+    lastLnMode = session->longNoteMode;
+  }();
+  return failed ? nullptr : std::move(chart);
+}
+'''
+    for course_source, signature, condition in [
+        (result_source, 'void ResultScene::continueCourse()', 'fromResult'),
+        (source, 'bool GamePlayScene::startCourseChartAtCurrentIndex()', '!fromResult'),
+    ]:
+        course_method = extract(course_source, signature)
+        start = course_method.index('  std::atomic_bool parseCancelled = false;')
+        end = course_method.index('  context.jukebox.stop();', start)
+        prefix = course_method[start:end].replace(
+            'std::unique_ptr<bms_parser::Chart> nextChart =', 'nextChart =')
+        prefix = prefix.replace('return;', 'return false;')
+        if condition == 'fromResult':
+            flip_methods += '''
+std::unique_ptr<bms_parser::Chart> prepareNextDpCourse(
+    const std::shared_ptr<CoursePlaySession> &session, const StartOptions &options, bool fromResult) {
+  const auto *nextMeta = session->currentMeta();
+  const auto showCourseResult = []() {};
+  std::unique_ptr<bms_parser::Chart> nextChart;
+  const bool ready = [&]() {
+'''
+        flip_methods += '\nif (' + condition + ') {\n' + prefix + '\n}\n'
+    flip_methods += '\nreturn true;\n}();\nreturn ready ? std::move(nextChart) : nullptr;\n}\n'
+    menu_source = (args.root / "src/scene/MainMenuScene.cpp").read_text()
+    menu_start = menu_source.index('        applyCourseConstraintsToChart(*preparedChart, session->constraints);')
+    menu_end = menu_source.index('        context.jukebox.stop();', menu_start)
+    flip_methods += '''
+void prepareMainMenuDpCourse(bms_parser::Chart &chart, const std::shared_ptr<CoursePlaySession> &session) {
+  auto *preparedChart = &chart;
+  const auto selectedLongNoteMode = session->longNoteMode;
+''' + menu_source[menu_start:menu_end] + '\n}\n'
+    retry_method = extract(result_source, 'void ResultScene::startRetry(bool samePattern)')
+    retry_start = retry_method.index('        if (reuseCurrentPattern) {\n          options.playOption')
+    flip_start = retry_method.rfind('        if (!reuseCurrentPattern', 0, retry_start)
+    if flip_start >= 0:
+        retry_start = flip_start
+    retry_end = retry_method.index('        context.jukebox.stop();', retry_start)
+    option_lines = '\n'.join(line for line in retry_method.splitlines()
+                             if 'options.doublePlayFlip = ' in line)
+    flip_methods += '''
+bool prepareResultDpRetry(bms_parser::Chart &chart, const ReplayData &retrySource,
+    const ScoreProvenance &provenance, bool samePattern, bool reuseCurrentPattern,
+    bool sessionBackedPracticeRetry, StartOptions &options) {
+  struct { ScoreProvenance attemptProvenance; } fixture{provenance};
+  const auto *local = &fixture;
+  auto *retryChart = &chart;
+''' + option_lines + '\n' + retry_method[retry_start:retry_end].replace('return true;', 'return false;') + '\nreturn true;\n}\n'
     export_source = (args.root / "src/ReplayVideoExporter.cpp").read_text()
     export_method = extract(export_source, "ReplayVideoExportResult\nReplayVideoExporter::Export(")
     export_prefix = export_method[:export_method.index("  reportReplayExportProgress")]
@@ -149,6 +248,7 @@ std::unique_ptr<bms_parser::Chart> PreparedViewerFixture::freshLaunchChart(bool 
                           .replace("RESULT_PERSIST_HELPERS", result_helpers)
                           .replace("RESULT_PERSIST_METHOD", result_persist)
                           .replace("PREPARATION_IMPLEMENTATIONS", preparation_methods)
+                          .replace("FLIP_IMPLEMENTATIONS", flip_methods)
                           .replace("EXPORT_PREFIXES", export_prefix + "\n" + course_export_prefix))
 
 

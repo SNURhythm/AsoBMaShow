@@ -6266,8 +6266,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 tests/gameplay_terminal_scene_fixture.cpp
                 tests/course_preparation_scene_fixture.h
                 tests/chart_preparation_scene_fixture.h
+                tests/dp_flip_preparation_fixture.h
                 src/ResultPresentationUtils.h
                 src/scene/ChartViewerScene.cpp
+                src/scene/MusicSelectScene.cpp
+                src/scene/MainMenuScene.cpp
                 src/scene/play/GamePlayScene.cpp
                 src/scene/ResultScene.cpp
                 src/ReplayVideoExporter.cpp
@@ -6275,6 +6278,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     add_executable(gameplay_terminal_scene_tests
         ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        src/settings/AudioVideoSettings.cpp
         src/AtomicFile.cpp
         src/ArchiveFile.cpp
         src/CourseIdentity.cpp
@@ -6322,6 +6326,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/CourseReplayAgreement.cpp
         src/replay/CourseReplayPersistence.cpp
         src/replay/CourseResultPersistence.cpp
+        src/replay/CourseReplayConsumer.cpp
+        src/replay/CourseReplayConsumerRuntime.cpp
+        src/replay/CourseReplayContext.cpp
         src/replay/ReplayFileAssociationCoordinator.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayPlayback.cpp

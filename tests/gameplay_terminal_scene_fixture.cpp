@@ -905,8 +905,19 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
 #include "chart_preparation_scene_fixture.h"
 
 PREPARATION_IMPLEMENTATIONS
+#include "dp_flip_preparation_fixture.h"
+
+FLIP_IMPLEMENTATIONS
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "partial-course-retry-same") {
+    testPartialCourseRetrySameRestoresSavedOptions(argc > 2 ? argv[2] : "all");
+    return 0;
+  }
+  if (argc > 2 && std::string_view(argv[1]) == "dp-flip") {
+    testActualDoublePlayFlipPreparation(argv[2]);
+    return 0;
+  }
   if (argc > 2 && std::string_view(argv[1]) == "chart-preparation") {
     testActualChartPreparationOrdering(argv[2]);
     return 0;
@@ -970,8 +981,13 @@ int main(int argc, char **argv) {
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();
   testEffectiveCourseFactsPersistThroughResultScene();
-  for (const auto path : {"constructors", "retry", "practice", "viewer", "in-game-retry"}) {
+  testPartialCourseRetrySameRestoresSavedOptions();
+  for (const auto path : {"constructors", "retry", "practice", "skin-practice", "viewer", "in-game-retry"}) {
     testActualChartPreparationOrdering(path);
+  }
+  for (const auto path : {"selected", "preloaded", "course", "course-next", "course-in-game",
+                          "course-menu", "result-retry", "replay", "retry", "practice", "fallback"}) {
+    testActualDoublePlayFlipPreparation(path);
   }
   testCourseAbort();
   testPracticeTerminalExceptions();
