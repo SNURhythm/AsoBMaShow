@@ -202,10 +202,14 @@ std::optional<std::filesystem::path> findMatchingBmsChartByHash(
 std::optional<std::string>
 htmlBodyFromDownloadedFile(const std::filesystem::path &path);
 
-std::optional<std::string> fetchUrlText(const std::string &url,
-                                        std::string &errorMessage);
-std::optional<std::string> postUrlText(const std::string &url,
-                                       std::string &errorMessage);
+std::optional<std::string> fetchUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled = nullptr,
+    size_t maximumResponseBytes = 16ULL * 1024 * 1024);
+std::optional<std::string> postUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled = nullptr,
+    size_t maximumResponseBytes = 16ULL * 1024 * 1024);
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback);

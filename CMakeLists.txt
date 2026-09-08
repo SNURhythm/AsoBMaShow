@@ -5472,6 +5472,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(profile_settings_persistence_tests PRIVATE cxx_std_23)
     target_link_libraries(profile_settings_persistence_tests PRIVATE ${COMMON_LIBS})
 
+    set(transport_fixture_dir "${CMAKE_SOURCE_DIR}/tests")
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/transport_metadata_methods.inc
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --mode metadata
+                --output ${CMAKE_CURRENT_BINARY_DIR}/transport_metadata_methods.inc
+        DEPENDS ${transport_fixture_dir}/find_bms_transport_extract.py src/bms_search/DownloadSupport.cpp
+        VERBATIM
+    )
+    add_executable(find_bms_metadata_transport_tests
+        ${transport_fixture_dir}/find_bms_metadata_transport_tests.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/transport_metadata_methods.inc
+    )
+    target_include_directories(find_bms_metadata_transport_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+    target_compile_features(find_bms_metadata_transport_tests PRIVATE cxx_std_23)
+    target_link_libraries(find_bms_metadata_transport_tests PRIVATE CURL::libcurl)
+    add_test(NAME find_bms_metadata_transport_tests
+        COMMAND find_bms_metadata_transport_tests)
+    set_tests_properties(find_bms_metadata_transport_tests PROPERTIES TIMEOUT 20)
+    add_test(NAME find_bms_metadata_loopback_transport_tests
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
+                $<TARGET_FILE:find_bms_metadata_transport_tests>)
+    set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
+        TIMEOUT 55 RUN_SERIAL TRUE)
+
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
         COMMAND ${Python3_EXECUTABLE}

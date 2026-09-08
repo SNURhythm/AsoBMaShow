@@ -176,11 +176,11 @@ BmsSearchCandidate HorieYuukaDriver::candidateFromJson(
 HorieCandidateSearchResult HorieYuukaDriver::findCandidates(
     const std::string &query, const std::string &title,
     const std::string &artist, bool requireTitleMatch,
-    bool requireArtistMatch) {
+    bool requireArtistMatch, const std::atomic_bool &cancelled) {
   HorieCandidateSearchResult result;
   for (const char *folder : {"Songs"}) {
     result.sourceUrl = searchUrl(folder, query);
-    const auto body = fetchUrlText(result.sourceUrl, result.errorMessage);
+    const auto body = fetchUrlText(result.sourceUrl, result.errorMessage, &cancelled);
     if (!body) {
       continue;
     }
@@ -257,7 +257,12 @@ bool HorieYuukaDriver::tryDownload(
         titleNeedsExactCandidateMatch(title);
     const auto searchResult = findCandidates(
         trimmedQuery, title, artist, shouldRequireTitleMatch,
-        shouldRequireArtistMatch);
+        shouldRequireArtistMatch, cancelled);
+    if (cancelled.load()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Lookup cancelled.";
+      return true;
+    }
     if (searchResult.candidates.empty()) {
       if (!searchResult.errorMessage.empty()) {
         lastError = searchResult.errorMessage;
@@ -319,7 +324,7 @@ bool HorieYuukaDriver::downloadCandidateById(
       std::string(kHorieApiOrigin) + "/api/v1/files/" + candidate.id +
       "/download-grants";
   std::string grantError;
-  const auto grantBody = postUrlText(grantUrl, grantError);
+  const auto grantBody = postUrlText(grantUrl, grantError, &cancelled);
   if (!grantBody) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
