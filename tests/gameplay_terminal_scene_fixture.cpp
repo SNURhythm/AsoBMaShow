@@ -10,6 +10,8 @@
 #include "practice/PracticeResultFlow.h"
 #include "Uuid.h"
 #include "CourseConstraintUtils.h"
+#include "CourseIdentity.h"
+#include "ResultPersistenceCoordinator.h"
 #include "replay/ReplaySetupProvenance.h"
 #include "replay/CourseReplayConsumer.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
@@ -304,6 +306,12 @@ public:
 
 SCENE_METHODS
 
+struct ResultPersistenceOptions {
+  result_persistence::SaveOutcome outcome;
+};
+
+RESULT_PERSIST_HELPERS
+
 class ResultScene {
 public:
   struct LocalSource {
@@ -313,10 +321,18 @@ public:
     } courseOptions;
     RhythmState resultState{nullptr, false};
     bool courseTransitionStarted = false;
+    ResultPersistenceOptions persistenceOptions;
+    ScoreProvenance attemptProvenance = ScoreProvenance::Legacy();
+    std::int64_t currentScoreDateUnixSeconds = 0;
   } local;
+  struct {
+    std::function<replay::CourseResultPersistenceOutcome(
+        const replay::CapturedCourseReplayAttempt &)> persistModernCourse;
+  } context;
   int summaries = 0;
   LocalSource *localSource() { return &local; }
   bool isCourseStageResult() const { return true; }
+  bool isCourseFinalResult() const { return true; }
   long long recordCourseStageRestTime() { return 0; }
   void showCourseResult() { ++summaries; }
   void showSavedCourseStage() { require(false, "not browsing saved stages"); }
@@ -324,9 +340,11 @@ public:
     require(false, "not a course replay");
   }
   void continueCourse();
+  bool persistModernCourseResult();
 };
 
 RESULT_CONTINUE_PREFIX
+RESULT_PERSIST_METHOD
 
 struct ApplicationContext {
   int resourceStarts = 0;
@@ -883,7 +901,13 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
           "T2-R3: ordinary non-abort survival playback still terminates on its first failure");
 }
 
+#include "course_preparation_scene_fixture.h"
+
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "course-prepared-facts") {
+    testEffectiveCourseFactsPersistThroughResultScene();
+    return 0;
+  }
   if (argc > 1 && std::string_view(argv[1]) == "authored-course-carry") {
     testAuthoredCourseStageLiveCarry();
     std::cout << "COR03 actual scene carry tests passed\n";
@@ -938,6 +962,7 @@ int main(int argc, char **argv) {
   std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();
+  testEffectiveCourseFactsPersistThroughResultScene();
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();

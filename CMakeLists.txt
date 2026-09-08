@@ -6264,6 +6264,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 --output ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
         DEPENDS tests/gameplay_terminal_scene_extract.py
                 tests/gameplay_terminal_scene_fixture.cpp
+                tests/course_preparation_scene_fixture.h
+                src/ResultPresentationUtils.h
                 src/scene/play/GamePlayScene.cpp
                 src/scene/ResultScene.cpp
                 src/ReplayVideoExporter.cpp
@@ -6278,6 +6280,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/MinizBridge.c
         src/ModernResult.cpp
         src/ModernResultRecallBuilder.cpp
+        src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
         src/Utils.cpp
         src/Uuid.cpp
@@ -6313,6 +6316,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/ChartReplayAgreement.cpp
         src/replay/ReplayReferenceAgreement.cpp
         src/replay/CourseContinuation.cpp
+        src/replay/CourseReplayCapture.cpp
+        src/replay/CourseReplayAgreement.cpp
+        src/replay/CourseReplayPersistence.cpp
+        src/replay/CourseResultPersistence.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
         src/replay/GzipCodec.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplayPlaybackDriver.cpp

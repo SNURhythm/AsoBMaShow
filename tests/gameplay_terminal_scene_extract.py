@@ -69,6 +69,21 @@ def main():
     result_method = extract(result_source, "void ResultScene::continueCourse()")
     result_prefix = result_method[:result_method.index("  std::atomic_bool parseCancelled")]
     result_prefix += '  require(false, "unfinished course stage advanced to parsing");\n}'
+    result_util_source = (args.root / "src/ResultPresentationUtils.h").read_text()
+    result_helpers = "namespace result_presentation {\n" + "\n\n".join(
+        extract(result_util_source, signature) for signature in [
+            "inline bms_parser::ChartMeta courseResultMeta(",
+            "inline bool isFullComboCourseResult(",
+        ]) + "\n}\n"
+    result_helpers += "\n\n".join(extract(result_source, signature) for signature in [
+        "std::int64_t nowUnixMillis()",
+        "void applyModernCoursePersistencePresentation(",
+        "int totalNotesForCourse(",
+        "long long totalPlayLengthForCourse(",
+        "bms_parser::ChartMeta\ncourseResultMetaForSession(",
+        "int courseResultClearTypeForSession(",
+    ])
+    result_persist = extract(result_source, "bool ResultScene::persistModernCourseResult()")
     export_source = (args.root / "src/ReplayVideoExporter.cpp").read_text()
     export_method = extract(export_source, "ReplayVideoExportResult\nReplayVideoExporter::Export(")
     export_prefix = export_method[:export_method.index("  reportReplayExportProgress")]
@@ -78,6 +93,8 @@ def main():
     course_export_prefix += '  ++context.resourceStarts;\n  return {.success = true};\n}'
     args.output.write_text(fixture.replace("SCENE_METHODS", methods)
                           .replace("RESULT_CONTINUE_PREFIX", result_prefix)
+                          .replace("RESULT_PERSIST_HELPERS", result_helpers)
+                          .replace("RESULT_PERSIST_METHOD", result_persist)
                           .replace("EXPORT_PREFIXES", export_prefix + "\n" + course_export_prefix))
 
 

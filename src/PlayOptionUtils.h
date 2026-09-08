@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -635,6 +636,87 @@ parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
   return parseChart(path, replay.randomSeed, replay.randomPrng,
                     randomValuesOrNull(replay.randomValues), cancelled,
                     "replay");
+}
+
+inline std::optional<std::vector<result_persistence::ModernCourseEntryFacts>>
+prepareCourseEntryFacts(const CoursePlaySession &session,
+                        std::atomic_bool &cancelled, std::string &diagnostic) {
+  std::vector<result_persistence::ModernCourseEntryFacts> facts;
+  facts.reserve(session.entries.size());
+  try {
+    for (std::size_t index = 0; index < session.entries.size(); ++index) {
+      if (cancelled) {
+        diagnostic = "Course entry fact preparation was cancelled.";
+        return std::nullopt;
+      }
+      if (index < session.modernCourseStageResults.size()) {
+        const auto &stage = session.modernCourseStageResults[index];
+        if (stage.stageIndex != static_cast<int>(index) ||
+            stage.score.maxScore <= 0 || stage.score.maxScore % 2 != 0 ||
+            index >= session.completedResults.size()) {
+          diagnostic = "Completed course entry facts are unavailable.";
+          return std::nullopt;
+        }
+        facts.push_back({
+            .totalNotes = stage.score.maxScore / 2,
+            .playLengthMicros = std::max<std::int64_t>(
+                0, session.completedResults[index].meta.PlayLength),
+        });
+        continue;
+      }
+      std::unique_ptr<bms_parser::Chart> parsed;
+      const bms_parser::Chart *chart =
+          session.hasPreparedCourseChart(index)
+              ? session.preparedCourseCharts[index].get()
+              : nullptr;
+      if (chart == nullptr) {
+        parsed = parseChart(session.entries[index].meta, cancelled,
+                            "course entry facts");
+        chart = parsed.get();
+      }
+      if (chart == nullptr || cancelled) {
+        diagnostic = "Unplayed course entry fact preparation failed.";
+        return std::nullopt;
+      }
+      std::int64_t totalNotes = 0;
+      for (const auto *measure : chart->Measures) {
+        if (measure == nullptr) {
+          continue;
+        }
+        for (const auto *timeline : measure->TimeLines) {
+          if (cancelled) {
+            diagnostic = "Course entry fact preparation was cancelled.";
+            return std::nullopt;
+          }
+          if (timeline == nullptr) {
+            continue;
+          }
+          for (auto *note : timeline->Notes) {
+            if (note != nullptr && !note->IsLandmineNote() &&
+                (!note->IsLongNote() ||
+                 effectiveLongNoteIsCounted(
+                     static_cast<bms_parser::LongNote *>(note), *chart,
+                     session.longNoteMode))) {
+              ++totalNotes;
+            }
+          }
+        }
+      }
+      if (totalNotes <= 0 ||
+          totalNotes > std::numeric_limits<int>::max() / 2) {
+        diagnostic = "Unplayed course entry note count is invalid.";
+        return std::nullopt;
+      }
+      facts.push_back({
+          .totalNotes = static_cast<int>(totalNotes),
+          .playLengthMicros = std::max<std::int64_t>(0, chart->Meta.PlayLength),
+      });
+    }
+  } catch (const std::exception &error) {
+    diagnostic = std::string("Course entry fact preparation failed: ") + error.what();
+    return std::nullopt;
+  }
+  return facts;
 }
 
 inline std::unique_ptr<bms_parser::Chart>

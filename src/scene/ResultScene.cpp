@@ -1229,14 +1229,19 @@ bool ResultScene::persistModernCourseResult() {
       if (session.modernCoursePlayedAtUnixMillis <= 0) {
         session.modernCoursePlayedAtUnixMillis = nowUnixMillis();
       }
-      std::vector<result_persistence::ModernCourseEntryFacts> entryFacts;
-      entryFacts.reserve(session.entries.size());
-      for (const auto &entry : session.entries) {
-        entryFacts.push_back({
-            .totalNotes = entry.meta.TotalNotes,
-            .playLengthMicros =
-                std::max<std::int64_t>(0, entry.meta.PlayLength),
-        });
+      std::atomic_bool preparationCancelled = false;
+      std::string diagnostic;
+      auto entryFacts = play_options::prepareCourseEntryFacts(
+          session, preparationCancelled, diagnostic);
+      if (!entryFacts.has_value()) {
+        session.modernCourseDiagnostic = std::move(diagnostic);
+        session.modernCoursePersistenceOutcome =
+            replay::CourseResultPersistenceOutcome{
+                .state = replay::CourseResultPersistenceState::InvalidAttempt,
+                .diagnostic = session.modernCourseDiagnostic};
+        applyModernCoursePersistencePresentation(session,
+                                                 local->persistenceOptions);
+        return true;
       }
       const int courseLongNoteMode =
           normalizeChartLongNoteModeValue(session.longNoteMode);
@@ -1257,10 +1262,9 @@ bool ResultScene::persistModernCourseResult() {
           .clearType = courseResultClearTypeForSession(
               session, local->resultState, local->attemptProvenance),
           .stages = session.modernCourseStageResults,
-          .entryFacts = std::move(entryFacts),
+          .entryFacts = std::move(*entryFacts),
           .playedAtUnixMillis = session.modernCoursePlayedAtUnixMillis,
       };
-      std::string diagnostic;
       auto result = result_persistence::captureModernCourseResult(resultCapture,
                                                                   diagnostic);
       if (result) {
