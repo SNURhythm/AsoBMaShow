@@ -78,7 +78,7 @@ struct MainMenuScene {
 
   explicit MainMenuScene(ChartPreloadWorker &worker) : previewWorker_(&worker) {
     auto &context = this->context;
-    recyclerView->onSelected = [this, &context](const ChartMetaRecord &item, int idx)
+    recyclerView->onSelected = [this, &context](const ChartMetaRecord &record, int idx)
         SELECTION_CALLBACK;
     onIdle = [this]() IDLE_CALLBACK;
   }

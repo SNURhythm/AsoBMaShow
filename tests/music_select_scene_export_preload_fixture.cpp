@@ -157,6 +157,8 @@ struct Bars {
   std::vector<Bar> rows{Bar{}};
   std::size_t selectedIndex = 0;
   const Bars &readView() const { return *this; }
+  std::size_t rowCount() const { return rows.size(); }
+  const Bar &rowAt(std::size_t index) const { return rows.at(index); }
 };
 struct MusicSelectScene {
   Context context;

@@ -453,7 +453,7 @@ void projectSelectedBar(Properties &out,
                         const MusicSelectBarManagerReadView &bars,
                         const MusicSelectPropertyRuntimeSnapshot &runtime) {
   const MusicSelectBar *selected =
-      bars.selectedIndex < bars.rows.size() ? &bars.rows[bars.selectedIndex]
+      bars.selectedIndex < bars.rowCount() ? &bars.rowAt(bars.selectedIndex)
                                            : nullptr;
   const bool directory =
       selected && skin::musicSelectIsDirectoryBarKind(selected->kind);
@@ -647,7 +647,8 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
       settings,
       MusicSelectBarManagerReadView{.rows = bars.rows,
                                    .selectedIndex = bars.selectedIndex,
-                                   .directoryText = bars.directoryText},
+                                   .directoryText = bars.directoryText,
+                                   .rowProvider = bars.rowProvider},
       runtime);
 }
 
@@ -655,10 +656,10 @@ skin::MusicSelectPropertyValues projectMusicSelectProperties(
     const AppSettings &settings, const MusicSelectBarManagerReadView &bars,
     const MusicSelectPropertyRuntimeSnapshot &runtime) {
   Properties out;
-  out.rates[1] = bars.rows.empty()
+  out.rates[1] = bars.rowsEmpty()
                      ? 0.0
                      : static_cast<double>(bars.selectedIndex) /
-                           static_cast<double>(bars.rows.size());
+                           static_cast<double>(bars.rowCount());
   out.rates[8] = static_cast<double>(runtime.ranking.offset) /
                  std::max(1, runtime.ranking.totalPlayers);
   out.strings[1] = runtime.rivalName;

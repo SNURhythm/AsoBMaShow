@@ -831,32 +831,36 @@ std::string musicPlaylistTextSnapshot(
 void MainMenuScene::ChartListPageCache::reset(
     ChartRepository::Session &chartSession, const ChartMetaQuery &chartQuery,
     int count, std::optional<ChartMetaRecord> leading) {
-  session = &chartSession;
-  query = chartQuery;
+  ChartMetaQuery query = chartQuery;
   query.limit = 0;
   query.offset = 0;
   leadingRecord = std::move(leading);
   totalCount = std::max(0, count) + (leadingRecord.has_value() ? 1 : 0);
-  pages.clear();
-  pageOrder.clear();
+  pageCache.reset(static_cast<std::size_t>(std::max(0, count)),
+                  [&chartSession, query](std::size_t offset, std::size_t limit) {
+                    ChartMetaQuery pageQuery = query;
+                    pageQuery.limit = static_cast<int>(limit);
+                    pageQuery.offset = static_cast<int>(offset);
+                    std::vector<ChartMetaRecord> records;
+                    records.reserve(limit);
+                    chartSession.QueryChartMeta(pageQuery, records);
+                    return records;
+                  });
 }
 
 void MainMenuScene::ChartListPageCache::releasePages() {
-  pages.clear();
-  pageOrder.clear();
+  pageCache.releasePages();
 }
 
 void MainMenuScene::ChartListPageCache::clear() {
-  session = nullptr;
   totalCount = 0;
   leadingRecord.reset();
-  pages.clear();
-  pageOrder.clear();
+  pageCache.clear();
 }
 
 const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
   if (index < 0 || index >= totalCount) {
-    return fallbackRecord;
+    return pageCache.get(pageCache.size());
   }
   if (leadingRecord.has_value()) {
     if (index == 0) {
@@ -864,45 +868,7 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
     }
     index--;
   }
-  if (session == nullptr) {
-    return fallbackRecord;
-  }
-
-  const int pageIndex = index / pageSize;
-  auto pageIt = pages.find(pageIndex);
-  if (pageIt == pages.end()) {
-    ChartMetaQuery pageQuery = query;
-    pageQuery.limit = pageSize;
-    pageQuery.offset = pageIndex * pageSize;
-
-    std::vector<ChartMetaRecord> records;
-    records.reserve(pageSize);
-    session->QueryChartMeta(pageQuery, records);
-    pageIt = pages.emplace(pageIndex, std::move(records)).first;
-  }
-  touchPage(pageIndex);
-
-  const int localIndex = index - (pageIndex * pageSize);
-  if (localIndex < 0 || localIndex >= static_cast<int>(pageIt->second.size())) {
-    return fallbackRecord;
-  }
-  return pageIt->second[localIndex];
-}
-
-void MainMenuScene::ChartListPageCache::touchPage(int pageIndex) const {
-  pageOrder.erase(std::remove(pageOrder.begin(), pageOrder.end(), pageIndex),
-                  pageOrder.end());
-  pageOrder.push_back(pageIndex);
-
-  while (static_cast<int>(pages.size()) > maxPages && !pageOrder.empty()) {
-    const int victim = pageOrder.front();
-    pageOrder.pop_front();
-    if (victim == pageIndex && pages.size() == 1) {
-      pageOrder.push_back(victim);
-      break;
-    }
-    pages.erase(victim);
-  }
+  return pageCache.get(static_cast<std::size_t>(index));
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
@@ -1355,10 +1321,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  recyclerView->onSelected = [this, &context](const ChartMetaRecord &item,
+  recyclerView->onSelected = [this, &context](const ChartMetaRecord &record,
                                               int idx) {
     if (willStart.load())
       return;
+    const ChartMetaRecord item = record;
     chartSelectionGeneration =
         main_menu_library::chartSelectionGenerationAfter(
             chartSelectionGeneration, selectedChartRecord, item);
@@ -3336,7 +3303,7 @@ void MainMenuScene::selectChartByPathAfterReload(
     index += 1;
   }
   if (index >= 0 && index < recyclerView->size()) {
-    const ChartMetaRecord &record = recyclerView->get(index);
+    const ChartMetaRecord record = recyclerView->get(index);
     if (fspath_to_path_t(record.meta.BmsPath) == target) {
       const int previous = recyclerView->selectedIndex;
       if (previous >= 0 && previous < recyclerView->size() &&
@@ -9132,7 +9099,6 @@ void MainMenuScene::cleanupScene() {
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
   chartListCache.clear();
-  chartListCache.session = nullptr;
   chartSession.reset();
   recyclerView = nullptr;
   folderRecyclerView = nullptr;

@@ -82,6 +82,14 @@ public:
   [[nodiscard]] MusicSelectProjection
   project(MusicSelectRepositoryProjectionInput) const;
 
+  [[nodiscard]] static MusicSelectBar
+  projectSong(const ChartMetaRecord &, std::string_view context,
+              MusicSelectRepositoryProjectionInput);
+
+  [[nodiscard]] static std::vector<MusicSelectBar>
+  projectDirectoryFolders(const MusicSelectRepositoryMetadata &,
+                          const std::filesystem::path &);
+
   static void updateFolderStatus(MusicSelectBar &,
                                  MusicSelectRepositoryProjectionInput,
                                  std::stop_token stop = {});

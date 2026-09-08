@@ -37,6 +37,7 @@ struct MusicSelectScene {
   int irExternalUrlGeneration_ = 0;
   ExternalUrlService *irExternalUrlService_ = nullptr;
   void stopInputListening() {}
+  void cancelDirectoryLoad() {}
   void stopPreloadWorker();
   void onPause();
 };

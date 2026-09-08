@@ -99,7 +99,7 @@ MusicSelectRepositoryMetadata MusicSelectRepositoryProjection::loadMetadata(
   MusicSelectRepositoryMetadata metadata;
   metadata.entries = session.SelectEffectiveEntries();
   metadata.folders = session.SelectFolderRecords();
-  const auto chartFolders = session.SelectChartMetaFolders();
+  const auto chartFolders = session.SelectRawChartMetaFolders();
   std::unordered_set<std::filesystem::path> folderPaths;
   folderPaths.reserve(metadata.folders.size() + chartFolders.size());
   for (const auto &folder : metadata.folders) {

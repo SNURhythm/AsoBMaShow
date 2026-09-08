@@ -565,9 +565,48 @@ void testLargeReadViewProjectsAbsoluteSelectionAndFolderStatistics() {
           "properties read the actual selected row and full list scroll extent");
 }
 
+void testPagedReadViewProjectsWithoutMaterializingRows() {
+  class Provider final : public MusicSelectRowProvider {
+  public:
+    mutable int reads = 0;
+    MusicSelectBar bar{.kind = skin::MusicSelectBarKind::Song,
+                       .title = "Last paged song",
+                       .presentation = {.kind = skin::MusicSelectBarKind::Song,
+                                        .title = "Last paged song"}};
+    std::size_t size() const noexcept override { return 100'000; }
+    std::shared_ptr<MusicSelectRowProvider> clone() const override {
+      return std::make_shared<Provider>(*this);
+    }
+    const MusicSelectBar &at(std::size_t index) const override {
+      require(index == 99'999, "properties request only the selected page");
+      ++reads;
+      return bar;
+    }
+    std::optional<std::size_t> indexOf(const MusicSelectBarId &) const override {
+      return std::nullopt;
+    }
+    std::pair<std::string, std::string> configure(
+        const std::string &mode, const std::string &difficulty,
+        const std::string &) override { return {mode, difficulty}; }
+  };
+  const auto provider = std::make_shared<Provider>();
+  MusicSelectBarManagerReadView view{.selectedIndex = 99'999,
+                                     .rowProvider = provider};
+  const auto values = projectMusicSelectProperties(AppSettings{}, view, {});
+  require(std::abs(values.rates.at(1) - 0.99999) < 0.000001 &&
+              values.strings.at(10) == "Last paged song" && provider->reads <= 2,
+          "paged properties use logical count and selected row without a vector");
+  MusicSelectBarManagerSnapshot owned{.selectedIndex = 99'999,
+                                      .rowProvider = provider};
+  const auto ownedValues = projectMusicSelectProperties(AppSettings{}, owned, {});
+  require(ownedValues.strings.at(10) == "Last paged song",
+          "owned snapshots retain their indexed provider during projection");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  testPagedReadViewProjectsWithoutMaterializingRows();
   testProjectsSelectedSongAndPlayerConfiguration();
   testProjectsDirectoryAndFinishedRanking();
   testProjectsDelayedSelectedSongInformation();

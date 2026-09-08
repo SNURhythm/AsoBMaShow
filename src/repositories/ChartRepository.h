@@ -11,6 +11,7 @@
 #include "ScoreRepositoryModels.h"
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -290,6 +291,7 @@ public:
     void SelectAllChartMeta(std::vector<bms_parser::ChartMeta> &chartMetas);
     std::vector<ChartFolderRecord> SelectFolderRecords();
     std::vector<std::filesystem::path> SelectChartMetaFolders();
+    std::vector<std::filesystem::path> SelectRawChartMetaFolders();
     void SelectFavoriteMusicTracks(std::vector<MusicTrackRecord> &tracks);
     int CountFavoriteCharts();
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);
@@ -297,6 +299,12 @@ public:
     void QueryChartMeta(const ChartMetaQuery &query,
                         std::vector<ChartMetaRecord> &chartMetas,
                         std::stop_token stop = {});
+    void VisitChartMetaSelection(
+        const std::filesystem::path &recursiveFolder,
+        const std::function<void(const ChartMetaRecord &)> &visitor,
+        std::stop_token stop = {});
+    bool HasChartMetaForFolderOrParentFolder(
+        const std::filesystem::path &folder, std::stop_token stop = {});
     bool HasChartMetaForParentFolder(const std::filesystem::path &folder,
                                      std::stop_token stop = {});
     ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(

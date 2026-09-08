@@ -74,9 +74,79 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_recursive_directory_queries_preserve_persisted_folder_metadata(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         method = function_body(source, "bool MusicSelectScene::loadDirectoryChildren(")
-        branch = function_body(method, "if (!records.empty())")
+        branch = function_body(method, "case skin::MusicSelectBarKind::Folder:")
         fixture = (ROOT / "tests/music_select_scene_directory_metadata_fixture.cpp").read_text()
         self.compile_and_run(fixture.replace("SCENE_FOLDER_BRANCH", branch))
+
+    def test_async_directory_autoplay_completes_without_reloading(self):
+        self.run_directory_loading_fixture("testAutoplayCompletion")
+
+    def test_async_directory_pointer_targets_clicked_folder(self):
+        self.run_directory_loading_fixture("testPointerTargetsClickedFolder")
+
+    def test_empty_category_autoplay_keeps_directory_reloadable(self):
+        self.run_directory_loading_fixture("testEmptyCategoryAutoplay")
+
+    def test_async_directory_request_honors_latest_autoplay_intent(self):
+        self.run_directory_loading_fixture("testLatestRequestIntent")
+
+    def test_async_restore_preserves_pending_target_across_revisions(self):
+        self.run_directory_loading_fixture("testRestoreSurvivesAnotherRevision")
+
+    def test_foreground_resumes_background_directory_restore(self):
+        self.run_directory_loading_fixture("testForegroundResumesDirectoryRestore")
+
+    def test_failed_scene_cancels_ready_directory_autoplay(self):
+        self.run_directory_loading_fixture("testFailedSceneCancelsReadyAutoplay")
+
+    def test_library_reload_replaces_rows_before_configuring(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        body = function_body(source, "void MusicSelectScene::reloadLibrary(")
+        self.assertLess(
+            body.index("bars_.refresh("), body.index("bars_.configure("),
+            "reload must discard the old provider before configuration can rebuild its index",
+        )
+
+    def run_directory_loading_fixture(self, test_name):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signatures = [
+            "void MusicSelectScene::requestDirectoryLoad(",
+            "void MusicSelectScene::applyDirectoryLoads()",
+            "void MusicSelectScene::cancelDirectoryLoad()",
+            "void MusicSelectScene::continueDirectoryRestore()",
+            "bool MusicSelectScene::openDirectory(",
+            "void MusicSelectScene::launchSelectedDirectoryAutoplay()",
+            "void MusicSelectScene::applySkinPointerResult(",
+            "void MusicSelectScene::onApplicationBackgroundChanged(",
+        ]
+        optional_helper = "void MusicSelectScene::launchDirectoryAutoplay("
+        if optional_helper in source:
+            signatures.append(optional_helper)
+        methods = []
+        for signature in signatures:
+            start = source.index(signature)
+            opening = source.index("{", start)
+            methods.append(source[start:opening] + function_body(source, signature))
+        moved = function_body(source, "void MusicSelectScene::selectedBarMoved()")
+        guard_start = moved.index("if (directoryRequest_ &&")
+        guard_end = moved.index("requestFolderStatus(snapshot);", guard_start)
+        reload = function_body(source, "void MusicSelectScene::reloadLibrary(")
+        capture = reload[1:reload.index("const std::uint64_t loadedRevision")]
+        restore = reload[reload.rindex("if (preserveDirectory)"):]
+        restore = "if (preserveDirectory) " + function_body(
+            restore, "if (preserveDirectory)")
+        fixture = (ROOT / "tests/music_select_scene_directory_loading_fixture.cpp").read_text()
+        fixture = (fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                   .replace("SCENE_METHODS", "\n".join(methods))
+                   .replace("SELECTED_MOVE_GUARD", moved[guard_start:guard_end])
+                   .replace("RELOAD_CAPTURE", capture)
+                   .replace("RELOAD_RESTORE", restore)
+                   .replace("SCENE_TEST", test_name))
+        try:
+            self.compile_and_run(
+                fixture, [ROOT / "src/music_select/MusicSelectBarManager.cpp"])
+        except subprocess.CalledProcessError as error:
+            self.fail(error.stderr)
 
     def test_sound_services_follow_changed_paths_and_bookmarks(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()

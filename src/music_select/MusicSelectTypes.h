@@ -9,11 +9,13 @@
 #include <memory>
 #include <string>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "../repositories/ChartRepository.h"
 
 struct MusicSelectBar;
+class MusicSelectRowProvider;
 
 namespace skin {
 
@@ -144,6 +146,7 @@ struct MusicSelectSongListFrame {
   int movementDirection = 0;
   std::int64_t movementEndMillis = 0;
   std::shared_ptr<const std::vector<MusicSelectBar>> indexedBars;
+  std::shared_ptr<MusicSelectRowProvider> rowProvider;
 
   [[nodiscard]] std::size_t size() const noexcept;
   [[nodiscard]] const MusicSelectBarFrame &at(std::size_t index) const;
@@ -185,6 +188,19 @@ struct MusicSelectBar {
   bool showInvisibleCharts = false;
 };
 
+class MusicSelectRowProvider {
+public:
+  virtual ~MusicSelectRowProvider() = default;
+  [[nodiscard]] virtual std::shared_ptr<MusicSelectRowProvider> clone() const = 0;
+  [[nodiscard]] virtual std::size_t size() const noexcept = 0;
+  [[nodiscard]] virtual const MusicSelectBar &at(std::size_t index) const = 0;
+  [[nodiscard]] virtual std::optional<std::size_t>
+  indexOf(const MusicSelectBarId &) const = 0;
+  virtual std::pair<std::string, std::string> configure(
+      const std::string &modeFilter, const std::string &difficultyFilter,
+      const std::string &sortId) = 0;
+};
+
 struct MusicSelectProjection {
   std::vector<MusicSelectBar> bars;
   std::vector<MusicSelectBarId> root;
@@ -194,10 +210,12 @@ struct MusicSelectProjection {
 };
 
 inline std::size_t skin::MusicSelectSongListFrame::size() const noexcept {
+  if (rowProvider) return rowProvider->size();
   return indexedBars ? indexedBars->size() : bars.size();
 }
 
 inline const skin::MusicSelectBarFrame &
 skin::MusicSelectSongListFrame::at(std::size_t index) const {
+  if (rowProvider) return rowProvider->at(index).presentation;
   return indexedBars ? indexedBars->at(index).presentation : bars.at(index);
 }

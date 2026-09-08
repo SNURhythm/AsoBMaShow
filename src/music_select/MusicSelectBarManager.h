@@ -27,6 +27,15 @@ template <typename Rows> struct MusicSelectBarManagerState {
   std::shared_ptr<const std::vector<MusicSelectBar>> rowOwner;
   std::shared_ptr<const std::vector<MusicSelectBar>> directoryOwner;
   std::uint64_t rowsRevision = 0;
+  std::shared_ptr<MusicSelectRowProvider> rowProvider;
+
+  [[nodiscard]] std::size_t rowCount() const noexcept {
+    return rowProvider ? rowProvider->size() : rows.size();
+  }
+  [[nodiscard]] const MusicSelectBar &rowAt(std::size_t index) const {
+    return rowProvider ? rowProvider->at(index) : rows[index];
+  }
+  [[nodiscard]] bool rowsEmpty() const noexcept { return rowCount() == 0; }
 };
 
 using MusicSelectBarManagerSnapshot =
@@ -63,6 +72,8 @@ public:
   [[nodiscard]] bool openSelected();
   [[nodiscard]] bool installChildren(const MusicSelectBarId &,
                                      std::vector<MusicSelectBar>);
+  [[nodiscard]] bool installRowProvider(const MusicSelectBarId &,
+                                       std::shared_ptr<MusicSelectRowProvider>);
   void installFolderStatus(const MusicSelectBarId &,
                            const skin::MusicSelectBarFrame &);
   [[nodiscard]] bool openTransient(MusicSelectBar directory,
@@ -81,6 +92,12 @@ public:
   [[nodiscard]] skin::MusicSelectSongListFrame songListFrame() const;
 
 private:
+  struct RowProviderState {
+    std::shared_ptr<MusicSelectRowProvider> provider;
+    std::optional<MusicSelectBarManagerConfig> configuration;
+  };
+
+  [[nodiscard]] std::size_t rowCount() const noexcept;
   [[nodiscard]] const MusicSelectBar *selected() const;
   void rebuildRows(std::optional<MusicSelectBarId> preferred = std::nullopt);
   void rebuildProjectionIndex();
@@ -96,6 +113,8 @@ private:
   std::string directoryText_;
   std::unordered_map<std::string, std::size_t> projectionIndex_;
   std::unordered_map<std::string, std::size_t> rowIndex_;
+  std::unordered_map<std::string, RowProviderState> rowProviders_;
+  std::shared_ptr<MusicSelectRowProvider> rowProvider_;
   std::uint64_t rowsRevision_ = 0;
   std::size_t selectedIndex_ = 0;
   int movementDirection_ = 0;

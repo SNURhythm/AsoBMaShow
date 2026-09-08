@@ -407,6 +407,52 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
   return result;
 }
 
+MusicSelectBar MusicSelectRepositoryProjection::projectSong(
+    const ChartMetaRecord &record, std::string_view context,
+    MusicSelectRepositoryProjectionInput input) {
+  ProjectionBuilder builder{.input = std::move(input)};
+  builder.addSong(record, context);
+  return std::move(builder.result.bars.front());
+}
+
+std::vector<MusicSelectBar>
+MusicSelectRepositoryProjection::projectDirectoryFolders(
+    const MusicSelectRepositoryMetadata &metadata,
+    const std::filesystem::path &directory) {
+  const auto parent = normalizedFolderPath(directory);
+  std::map<std::filesystem::path, std::int64_t> children;
+  for (const auto &record : metadata.folders) {
+    const auto candidate = normalizedFolderPath(record.path);
+    const auto relative = candidate.lexically_relative(parent);
+    if (relative.empty() || relative.is_absolute()) continue;
+    const auto first = relative.begin();
+    if (first == relative.end() || *first == "." || *first == "..") continue;
+    const auto path = parent / *first;
+    const auto found = children.try_emplace(path, 0).first;
+    if (candidate == path) found->second = record.addDateSeconds;
+  }
+  std::vector<MusicSelectBar> result;
+  result.reserve(children.size());
+  for (const auto &[path, addDate] : children) {
+    const auto title = path.filename().empty() ? fspath_to_utf8(path)
+                                               : fspath_to_utf8(path.filename());
+    result.push_back({
+        .id = {folderIdentity(path)},
+        .kind = skin::MusicSelectBarKind::Folder,
+        .title = title,
+        .directoryPath = path,
+        .presentation = {.kind = skin::MusicSelectBarKind::Folder,
+                         .title = title,
+                         .exists = true,
+                         .addDateSeconds = addDate},
+        .selectable = true,
+        .sortable = true,
+        .childrenLoaded = false,
+    });
+  }
+  return result;
+}
+
 void MusicSelectRepositoryProjection::updateFolderStatus(
     MusicSelectBar &directory, MusicSelectRepositoryProjectionInput input,
     std::stop_token stop) {

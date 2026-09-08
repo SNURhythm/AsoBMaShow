@@ -298,6 +298,62 @@ void testIndexedTinyAndEmptyLists() {
           "single-row lists repeat across the authored slots without invalid access");
 }
 
+class RenderRowProvider final : public MusicSelectRowProvider {
+public:
+  std::shared_ptr<MusicSelectRowProvider> clone() const override {
+    return std::make_shared<RenderRowProvider>(*this);
+  }
+  std::size_t size() const noexcept override { return 100'000; }
+  const MusicSelectBar &at(std::size_t index) const override {
+    ++atCalls;
+    cached_.presentation = {.title = "Paged " + std::to_string(index),
+                            .exists = true};
+    return cached_;
+  }
+  std::optional<std::size_t> indexOf(const MusicSelectBarId &) const override {
+    return std::nullopt;
+  }
+  std::pair<std::string, std::string> configure(
+      const std::string &mode, const std::string &difficulty,
+      const std::string &) override {
+    return {mode, difficulty};
+  }
+  mutable std::size_t atCalls = 0;
+
+private:
+  mutable MusicSelectBar cached_;
+};
+
+void testPagedRenderingFetchesOnlyVisibleRows() {
+  auto songList = completeSongList();
+  songList.listOn.resize(3);
+  songList.listOff.resize(3);
+  songList.clickable = {0, 1, 2};
+  auto provider = std::make_shared<RenderRowProvider>();
+  MusicSelectSongListFrame frame;
+  frame.rowProvider = provider;
+  frame.indexedBars = std::make_shared<const std::vector<MusicSelectBar>>();
+  const auto plan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(plan.rows[0].barIndex == 99'999 && plan.rows[1].barIndex == 0 &&
+              plan.rows[2].barIndex == 1 && frame.bars.empty(),
+          "provider-backed rendering wraps across 100k rows without an eager vector");
+  std::size_t titles = 0;
+  for (const auto &command : plan.commands) {
+    if (command.family == MusicSelectBarDrawFamily::Title) {
+      ++titles;
+      require(command.text == "Paged " + std::to_string(command.barIndex),
+              "render commands own titles despite single-row provider cache eviction");
+    }
+  }
+  require(titles == 3 && provider->atCalls <= 30,
+          "renderer fetch count is bounded by authored slots, not provider size");
+  const auto beforePointer = provider->atCalls;
+  const auto pointer = MusicSelectBarRenderer{}.pointer(
+      songList, frame, {.button = 0, .x = 5, .y = 110});
+  require(pointer.selectIndex == 99'999 && provider->atCalls <= beforePointer + 3,
+          "pointer selection returns an absolute provider index with bounded access");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -309,6 +365,7 @@ int main(int argc, char **argv) {
   testMovementInterpolatesTowardThePinnedAdjacentSlot();
   testIndexedLargeListMaterializesOnlyAuthoredSlots();
   testIndexedTinyAndEmptyLists();
+  testPagedRenderingFetchesOnlyVisibleRows();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_bar_renderer_tests", failures,
       "music-select bar renderer test(s) failed",

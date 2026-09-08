@@ -1343,6 +1343,50 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_bar_manager_tests PRIVATE cxx_std_23)
+        add_executable(chart_meta_page_cache_tests
+            tests/chart_meta_page_cache_tests.cpp
+        )
+        target_compile_features(chart_meta_page_cache_tests PRIVATE cxx_std_23)
+        add_executable(music_select_song_index_tests
+            tests/music_select_song_index_tests.cpp
+            src/music_select/MusicSelectSongIndex.cpp
+            src/music_select/MusicSelectBarManager.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_song_index_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_song_index_tests PRIVATE cxx_std_23)
+        add_executable(music_select_paged_songs_tests
+            tests/music_select_paged_songs_tests.cpp
+            src/music_select/MusicSelectPagedSongs.cpp
+            src/music_select/MusicSelectSongIndex.cpp
+            src/music_select/MusicSelectBarManager.cpp
+            src/music_select/MusicSelectReplaySlots.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/replay/BeatorajaReplayPath.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_paged_songs_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_paged_songs_tests PRIVATE cxx_std_23)
+        add_executable(music_select_directory_loader_tests
+            tests/music_select_directory_loader_tests.cpp
+            src/music_select/MusicSelectDirectoryLoader.cpp
+        )
+        target_include_directories(music_select_directory_loader_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_directory_loader_tests PRIVATE cxx_std_23)
+        add_executable(music_select_directory_request_tests
+            tests/music_select_directory_request_tests.cpp
+        )
+        target_include_directories(music_select_directory_request_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_directory_request_tests PRIVATE cxx_std_23)
         add_executable(music_select_launch_policy_tests
             tests/music_select_launch_policy_tests.cpp
             src/music_select/MusicSelectLaunchPolicy.cpp
@@ -3493,6 +3537,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     add_executable(chart_repository_tests
         tests/chart_repository_tests.cpp
+        src/music_select/MusicSelectPhysicalDirectory.cpp
+        src/music_select/MusicSelectPagedSongs.cpp
+        src/music_select/MusicSelectSongIndex.cpp
+        src/music_select/MusicSelectReplaySlots.cpp
+        src/replay/BeatorajaReplayPath.cpp
         src/music_select/MusicSelectRepositoryMetadataLoader.cpp
         src/music_select/MusicSelectRepositoryProjection.cpp
         src/music_select/MusicSelectBarManager.cpp
@@ -7289,6 +7338,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_bar_manager_tests)
         asobmashow_register_test(music_select_bar_manager_tests)
+    endif()
+    if (TARGET chart_meta_page_cache_tests)
+        asobmashow_register_test(chart_meta_page_cache_tests)
+    endif()
+    if (TARGET music_select_song_index_tests)
+        asobmashow_register_test(music_select_song_index_tests)
+    endif()
+    if (TARGET music_select_paged_songs_tests)
+        asobmashow_register_test(music_select_paged_songs_tests)
+    endif()
+    if (TARGET music_select_directory_loader_tests)
+        asobmashow_register_test(music_select_directory_loader_tests)
+    endif()
+    if (TARGET music_select_directory_request_tests)
+        asobmashow_register_test(music_select_directory_request_tests)
     endif()
     if (TARGET music_select_launch_policy_tests)
         asobmashow_register_test(music_select_launch_policy_tests)

@@ -8,6 +8,8 @@
 #include "RepositorySqliteTestSupport.h"
 #include "music_select/MusicSelectRepositoryProjection.h"
 #include "music_select/MusicSelectPropertyProjection.h"
+#include "music_select/MusicSelectPhysicalDirectory.h"
+#include "music_select/MusicSelectReplaySlots.h"
 
 #include <array>
 #include <algorithm>
@@ -16,6 +18,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -125,6 +128,8 @@ int cancelReadAfterRows = 0;
 int observedReadRows = 0;
 int observedReadVmSteps = 0;
 int observedProbeVmSteps = 0;
+std::string deniedChartReadColumn;
+bool interruptSelectionRead = false;
 
 int traceStatement(unsigned mask, void *, void *statement, void *) {
   if (statement == nullptr) {
@@ -132,6 +137,10 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
   }
   const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
   const std::string_view sqlText = sql != nullptr ? sql : "";
+  if (interruptSelectionRead && mask == SQLITE_TRACE_STMT &&
+      sqlText.find("@recursive_folder") != std::string_view::npos) {
+    sqlite3_interrupt(sqlite3_db_handle(static_cast<sqlite3_stmt *>(statement)));
+  }
   if (mask == SQLITE_TRACE_PROFILE) {
     const int steps = sqlite3_stmt_status(static_cast<sqlite3_stmt *>(statement),
                                           SQLITE_STMTSTATUS_VM_STEP, 0);
@@ -170,6 +179,12 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
 int observeAuthorization(void *, int action, const char *first,
                          const char *second,
                          const char *, const char *) {
+  if (!deniedChartReadColumn.empty() && action == SQLITE_READ &&
+      first != nullptr && second != nullptr &&
+      std::string_view(first) == "chart_meta" &&
+      deniedChartReadColumn == second) {
+    return SQLITE_DENY;
+  }
   if (action == SQLITE_SAVEPOINT && first != nullptr && second != nullptr &&
       std::string_view(first) == "RELEASE" &&
       std::string_view(second) == "chart_metadata_rebuild_migration") {
@@ -575,6 +590,12 @@ void testFavoriteToggleMaintainsSongReviewChartBit() {
   assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
   assert(loaded.records.size() == 1);
   assert(loaded.records.front().songReviewFavorite == 2);
+  ChartMetaQuery query;
+  query.rawSongData = true;
+  std::vector<ChartMetaRecord> raw;
+  session->QueryChartMeta(query, raw);
+  assert(raw.size() == 1 && raw.front().favorite);
+  assert(loaded.records.front().favorite == raw.front().favorite);
 
   {
     Database reviewDatabase = openDatabase(databasePath);
@@ -588,6 +609,10 @@ void testFavoriteToggleMaintainsSongReviewChartBit() {
   assert(loaded.status == ChartMetaPathBatchReadStatus::Loaded);
   assert(loaded.records.size() == 1);
   assert(loaded.records.front().songReviewFavorite == 13);
+  raw.clear();
+  session->QueryChartMeta(query, raw);
+  assert(raw.size() == 1 && !raw.front().favorite);
+  assert(loaded.records.front().favorite == raw.front().favorite);
 }
 
 void testSongReviewFavoritePersistsExactSourceBitfield() {
@@ -1364,6 +1389,231 @@ void testExactFolderQuery() {
   assert(!repository_test::planContains(recursivePlan, "SCAN cm"));
 }
 
+void testStreamingSelectionMatchesRawRowsWithNarrowPayload() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  auto database = openDatabase(charts.DatabasePath());
+  assert(database);
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,md5,sha256,title) VALUES "
+      "('library/A/z.bms','library/A','duplicate','same','alpha'),"
+      "('library/A/a.bms','library/A','duplicate','same','ALPHA'),"
+      "('library/A/empty.bms','','md5-only','','Beta'),"
+      "('library/A/null.bms',NULL,'','',NULL),"
+      "('library/A/nested/chart.bms','library/A/nested','deep','deep','gamma'),"
+      "('library/A/nested/leaf/chart.bms',NULL,'leaf','leaf','delta'),"
+      "('library/AB/chart.bms','library/AB','sibling','sibling','outside'),"
+      "('C:\\library\\A\\own.bms','C:\\library\\A','win','win','alpha'),"
+      "('C:\\library\\A\\empty.bms','','win-empty','win-empty','Beta'),"
+      "('C:\\library\\A\\nested\\null.bms',NULL,'win-null','win-null','gamma'),"
+      "('C:\\library\\A\\nested\\stored.bms','C:\\library\\A\\nested',"
+      "'win-stored','win-stored','delta'),"
+      "('C:\\library\\AB\\chart.bms','C:\\library\\AB','other','other','outside'),"
+      "('/absolute/song.bms','/absolute','absolute','absolute','absolute')"));
+  assert(execute(database.get(),
+      "UPDATE chart_meta SET artist='Artist', difficulty=4, level=12.5, "
+      "keys=14, player=2, total_notes=901, total_scratch_notes=23, "
+      "total_backspin_notes=17, total_long_notes=41, ln_mode=3, "
+      "min_bpm=87.25, max_bpm=231.5, length=5123456789, "
+      "has_bpm_stop=1, has_scroll_change=1, subtitle='Subtitle', genre='Genre', "
+      "sub_artist='Sub artist', stage_file='stage.png', banner='banner.png', "
+      "back_bmp='back.png', preview='preview.ogg', bpm=150, "
+      "total=200, has_total=1, rank=1, has_document=1, has_bga=1, "
+      "has_random_sequence=1, total_landmine_notes=11, most_prevalent_bpm=155, "
+      "add_date=1234"));
+  assert(execute(database.get(),
+      "UPDATE chart_meta SET artist=NULL, difficulty=NULL, level=NULL, "
+      "keys=NULL, total_notes=NULL, total_scratch_notes=NULL, "
+      "total_backspin_notes=NULL, total_long_notes=NULL, ln_mode=0, "
+      "min_bpm=NULL, max_bpm=NULL, length=NULL, has_bpm_stop=0, "
+      "has_scroll_change=0 WHERE path='library/A/null.bms'"));
+  assert(execute(database.get(),
+      "INSERT INTO review(sha256,favorite) VALUES('same',7)"));
+  auto session = charts.OpenSession();
+  assert(session);
+  for (const auto &folder : std::vector<std::filesystem::path>{
+           "library/A", "library/A/", "library/A/nest", "library/A/nested", "absent",
+           R"(C:\library\A)", "C:/library/A/", "", "/"}) {
+    ChartMetaQuery query;
+    query.recursiveFolder = folder;
+    query.rawSongData = true;
+    std::vector<ChartMetaRecord> expected;
+    session->QueryChartMeta(query, expected);
+    std::size_t visited = 0;
+    std::vector<std::filesystem::path> paths;
+    session->VisitChartMetaSelection(folder, [&](const ChartMetaRecord &record) {
+      assert(visited < expected.size());
+      const auto &rich = expected[visited++];
+      paths.push_back(record.meta.BmsPath);
+      assert(record.meta.BmsPath == rich.meta.BmsPath);
+      assert(record.meta.SHA256 == rich.meta.SHA256);
+      assert(record.meta.MD5 == rich.meta.MD5);
+      assert(record.meta.Title == rich.meta.Title);
+      assert(record.meta.Artist == rich.meta.Artist);
+      assert(record.meta.Difficulty == rich.meta.Difficulty);
+      assert(record.meta.PlayLevel == rich.meta.PlayLevel);
+      assert(record.meta.KeyMode == rich.meta.KeyMode);
+      assert(record.meta.IsDP == rich.meta.IsDP);
+      assert(record.meta.TotalNotes == rich.meta.TotalNotes);
+      assert(record.meta.TotalScratchNotes == rich.meta.TotalScratchNotes);
+      assert(record.meta.TotalBackSpinNotes == rich.meta.TotalBackSpinNotes);
+      assert(record.meta.TotalLongNotes == rich.meta.TotalLongNotes);
+      assert(record.meta.LnMode == rich.meta.LnMode);
+      assert(record.meta.MinBpm == rich.meta.MinBpm);
+      assert(record.meta.MaxBpm == rich.meta.MaxBpm);
+      assert(record.meta.PlayLength == rich.meta.PlayLength);
+      assert(record.songReviewFavorite == rich.songReviewFavorite);
+      assert(record.hasScrollChange == rich.hasScrollChange);
+      assert(record.hasBpmStop == rich.hasBpmStop);
+      assert(record.meta.Folder.empty());
+      assert(record.meta.SubTitle.empty());
+      assert(record.meta.SubArtist.empty());
+      assert(record.meta.Genre.empty());
+      assert(record.meta.StageFile.empty());
+      assert(record.meta.Banner.empty());
+      assert(record.meta.BackBmp.empty());
+      assert(record.meta.Preview.empty());
+      assert(record.meta.Bpm == 0 && record.meta.MostPrevalentBpm == 0);
+      assert(record.meta.Total == 100 && !record.meta.HasTotal);
+      assert(record.meta.Rank == 3 && record.meta.Player == 1);
+      assert(record.meta.TotalLandmineNotes == 0);
+      assert(record.meta.RandomValues.empty());
+      assert(record.addDateSeconds == 0 && !record.hasDocument && !record.hasBga);
+      assert(!record.hasRandomSequence && !record.favorite);
+      assert(record.difficultyTableLabels.empty());
+      assert(record.downloadUrl.empty() && record.appendDownloadUrl.empty());
+      assert(!record.originalMd5s && !record.unavailable && !record.solidArchive);
+    });
+    assert(visited == expected.size());
+    if (folder == "library/A") {
+      assert(paths == std::vector<std::filesystem::path>({
+          "library/A/null.bms", "library/A/a.bms", "library/A/z.bms",
+          "library/A/empty.bms", "library/A/nested/leaf/chart.bms",
+          "library/A/nested/chart.bms"}));
+      assert(expected[1].songReviewFavorite == 7);
+      assert(expected[3].meta.SHA256.empty() && expected[3].meta.MD5 == "md5-only");
+    }
+    if (folder == R"(C:\library\A)") assert(visited == 4);
+    if (folder.empty() || folder == "/") assert(visited == 1);
+  }
+  for (const auto *column : {"stage_file", "banner", "back_bmp", "preview",
+                            "subtitle", "genre", "sub_artist", "bpm",
+                            "total_landmine_notes", "has_document", "has_bga"}) {
+    deniedChartReadColumn = column;
+    int visited = 0;
+    session->VisitChartMetaSelection("library/A", [&](const ChartMetaRecord &) {
+      ++visited;
+    });
+    assert(visited == 6);
+  }
+  deniedChartReadColumn.clear();
+}
+
+void testOwnOrImmediateChildFolderProbe() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  auto database = openDatabase(charts.DatabasePath());
+  assert(database);
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,md5,sha256) "
+      "SELECT column1,column2,'','' FROM (VALUES "
+      "('own/chart.bms','own'),('nested/song/chart.bms','nested/song'),"
+      "('deeper/song/leaf/chart.bms','deeper/song/leaf'),"
+      "('empty-own/chart.bms',''),('null-own/chart.bms',NULL),"
+      "('empty-child/song/chart.bms',''),('null-child/song/chart.bms',NULL),"
+      "('empty-deep/song/leaf/chart.bms',''),"
+      "('null-deep/song/leaf/chart.bms',NULL),"
+      "('C:\\own\\chart.bms','C:\\own'),"
+      "('C:\\nested\\song\\chart.bms','C:\\nested\\song'),"
+      "('C:\\deeper\\song\\leaf\\chart.bms','C:\\deeper\\song\\leaf'),"
+      "('C:\\empty-own\\chart.bms',''),('C:\\null-own\\chart.bms',NULL),"
+      "('C:\\empty-child\\song\\chart.bms',''),"
+      "('C:\\null-child\\song\\chart.bms',NULL),"
+      "('C:\\empty-deep\\song\\leaf\\chart.bms',''),"
+      "('C:\\null-deep\\song\\leaf\\chart.bms',NULL))"));
+  auto session = charts.OpenSession();
+  assert(session);
+  for (const auto *folder : {"own", "own/", "nested", "empty-own", "null-own",
+                            "empty-child", "null-child", R"(C:\own)",
+                            R"(C:\nested)", R"(C:\empty-own)", R"(C:\null-own)",
+                            R"(C:\empty-child)", R"(C:\null-child)"}) {
+    assert(session->HasChartMetaForFolderOrParentFolder(folder));
+  }
+  for (const auto *folder : {"absent", "ow", "deeper", "empty-deep", "null-deep",
+                            R"(C:\deeper)", R"(C:\empty-deep)", R"(C:\null-deep)"}) {
+    assert(!session->HasChartMetaForFolderOrParentFolder(folder));
+  }
+  assert(!session->HasChartMetaForParentFolder("own"));
+  assert(session->HasChartMetaForParentFolder("nested"));
+  const auto sql = tracedStatementContaining("@exact_folder");
+  assert(!sql.empty() && sql.find("LIMIT 1") != std::string::npos);
+  assert(sql.find("ORDER BY") == std::string::npos);
+  assert(sql.find("JOIN") == std::string::npos);
+  const auto plan = repository_test::explainPlan(database.get(), sql);
+  assert(repository_test::planContains(plan, "idx_chart_meta_folder"));
+  assert(!repository_test::planContains(plan, "SCAN cm"));
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  bool threw = false;
+  try {
+    (void)session->HasChartMetaForFolderOrParentFolder("own", cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw);
+  assert(session->HasChartMetaForFolderOrParentFolder("own"));
+}
+
+void testStreamingSelectionFailuresThrowAndReleaseStatement() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  auto session = charts.OpenSession();
+  assert(session);
+  auto meta = chartMeta(temporary.path());
+  assert(session->InsertChartMeta(meta));
+  for (const bool cancellable : {false, true}) {
+    std::stop_source cancellation;
+    const auto stop = cancellable ? cancellation.get_token() : std::stop_token{};
+    for (const bool prepareFailure : {true, false}) {
+      deniedChartReadColumn = prepareFailure ? "title" : "";
+      interruptSelectionRead = !prepareFailure;
+      bool threw = false;
+      int visited = 0;
+      try {
+        session->VisitChartMetaSelection(temporary.path(),
+            [&](const ChartMetaRecord &) { ++visited; }, stop);
+      } catch (const std::runtime_error &) {
+        threw = true;
+      }
+      assert(threw && visited == 0);
+      deniedChartReadColumn.clear();
+      interruptSelectionRead = false;
+    }
+  }
+  bool threw = false;
+  try {
+    session->VisitChartMetaSelection(temporary.path(), [](const ChartMetaRecord &) {
+      throw std::logic_error("visitor failed");
+    });
+  } catch (const std::logic_error &) {
+    threw = true;
+  }
+  assert(threw);
+  int visited = 0;
+  session->VisitChartMetaSelection(temporary.path(),
+      [&](const ChartMetaRecord &) { ++visited; });
+  assert(visited == 1);
+}
+
 void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   TempDirectory temporary;
   std::atomic<int> connections{0};
@@ -1385,6 +1635,10 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   assert(session->HasChartMetaForParentFolder("library"));
   assert(observedProbeVmSteps > 0 && observedProbeVmSteps < 1000);
   assert(!session->HasChartMetaForParentFolder("absent"));
+  assert(session->HasChartMetaForFolderOrParentFolder("library/song"));
+  assert(observedProbeVmSteps > 0 && observedProbeVmSteps < 1000);
+  assert(session->HasChartMetaForFolderOrParentFolder("library"));
+  assert(observedProbeVmSteps > 0 && observedProbeVmSteps < 1000);
 
   std::stop_source cancelled;
   readCancellation = &cancelled;
@@ -1406,6 +1660,50 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   }
   assert(threw && cancelled.stop_requested());
   assert(traced("@recursive_folder"));
+
+  for (const int rowLimit : {0, 3}) {
+    cancelled = std::stop_source{};
+    cancelReadAfterRows = rowLimit;
+    observedReadRows = 0;
+    observedReadVmSteps = 0;
+    int visited = 0;
+    threw = false;
+    try {
+      session->VisitChartMetaSelection("library",
+          [&](const ChartMetaRecord &) { ++visited; }, cancelled.get_token());
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    assert(threw && cancelled.stop_requested());
+    assert(observedReadRows == rowLimit);
+    assert(visited == (rowLimit == 0 ? 0 : rowLimit - 1));
+    if (rowLimit == 0) assert(observedReadVmSteps < 1000);
+  }
+  readCancellation = nullptr;
+  cancelled = std::stop_source{};
+  int visited = 0;
+  threw = false;
+  try {
+    session->VisitChartMetaSelection("library", [&](const ChartMetaRecord &) {
+      if (++visited == 3) cancelled.request_stop();
+    }, cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw && visited == 3);
+  visited = 0;
+  threw = false;
+  try {
+    session->VisitChartMetaSelection("library",
+        [&](const ChartMetaRecord &) { ++visited; }, cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw && visited == 0);
+  session->VisitChartMetaSelection("library",
+      [&](const ChartMetaRecord &) { ++visited; });
+  assert(visited == 50000);
+  readCancellation = &cancelled;
 
   ChartMetaQuery query;
   query.recursiveFolder = "library";
@@ -1886,7 +2184,656 @@ void testMetadataFolderMergePreservesNormalizedDuplicatesAndScales() {
   assert(elapsed < std::chrono::seconds(5));
 }
 
+namespace {
+
+MusicSelectBar physicalDirectory(const std::filesystem::path &path) {
+  return {.id = {"folder:" + path.generic_string()},
+          .kind = skin::MusicSelectBarKind::Folder,
+          .directoryPath = path,
+          .childrenLoaded = false};
+}
+
+void clearPhysicalDirectoryTrace() {
+  std::lock_guard lock(traceMutex);
+  tracedStatements.clear();
+}
+
+std::vector<std::size_t> physicalDirectoryPageSizes() {
+  std::vector<std::size_t> sizes;
+  std::lock_guard lock(traceMutex);
+  for (const auto &statement : tracedStatements) {
+    if (statement.find("WHERE cm.path IN (") != std::string::npos) {
+      sizes.push_back(std::count(statement.begin(), statement.end(), '?'));
+    }
+  }
+  return sizes;
+}
+
+void testPhysicalDirectoryCategoriesAndEmptyFoldersUseOnlyMetadata() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto database = openDatabase(repository.DatabasePath());
+  assert(database);
+  const auto root = temporary.path() / "library";
+  assert(execute(database.get(),
+      "INSERT INTO folder(path,date,adddate) VALUES ('" +
+      (root / "category").generic_string() + "',123,456),('" +
+      (root / "empty").generic_string() + "',789,987)"));
+  auto nested = chartMeta(root / "category" / "song");
+  assert(session->InsertChartMeta(nested));
+  const auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 0);
+  clearPhysicalDirectoryTrace();
+  deniedChartReadColumn = "title";
+  const auto loaded = loadMusicSelectPhysicalDirectory(
+      repository, metadata, physicalDirectory(root), {}, {}, temporary.path(), {}, 0);
+  assert(!loaded.provider);
+  assert(loaded.children.size() == 2);
+  assert(loaded.children[0].directoryPath == root / "category");
+  assert(loaded.children[0].title == "category");
+  assert(loaded.children[0].presentation.addDateSeconds == 456);
+  assert(loaded.children[1].directoryPath == root / "empty");
+  assert(loaded.children[1].presentation.addDateSeconds == 987);
+  for (const auto &child : loaded.children) {
+    assert(child.kind == skin::MusicSelectBarKind::Folder);
+    assert(!child.childrenLoaded);
+    assert(!child.chart);
+  }
+  const auto empty = loadMusicSelectPhysicalDirectory(
+      repository, metadata, physicalDirectory(root / "empty"), {}, {},
+      temporary.path(), {}, 0);
+  assert(empty.children.empty() && !empty.provider);
+  const auto absent = loadMusicSelectPhysicalDirectory(
+      repository, metadata, physicalDirectory(root / "absent"), {}, {},
+      temporary.path(), {}, 0);
+  assert(absent.children.empty() && !absent.provider);
+  deniedChartReadColumn.clear();
+  assert(!traced("@recursive_folder"));
+  assert(physicalDirectoryPageSizes().empty());
+}
+
+void testPhysicalDirectoryOwnAndMixedSongsMatchRawSubtree() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto root = temporary.path() / "songs";
+  const auto directory = physicalDirectory(root);
+  auto own = chartMeta(root);
+  own.Title = "Own";
+  assert(session->InsertChartMeta(own));
+  auto loaded = loadMusicSelectPhysicalDirectory(
+      repository, {}, directory, {}, {}, temporary.path(), {}, 0);
+  assert(loaded.children.empty() && loaded.provider);
+  assert(loaded.provider->size() == 1);
+  assert(loaded.provider->at(0).chart->meta.BmsPath == own.BmsPath);
+  auto nested = chartMeta(root / "nested" / "leaf");
+  nested.Title = "Nested";
+  nested.SHA256.assign(64, 'b');
+  assert(session->InsertChartMeta(nested));
+  auto immediate = chartMeta(root / "immediate");
+  immediate.Title = "Immediate";
+  immediate.SHA256.assign(64, 'c');
+  assert(session->InsertChartMeta(immediate));
+  auto outside = chartMeta(temporary.path() / "songs-other");
+  outside.Title = "Outside";
+  outside.SHA256.assign(64, 'd');
+  assert(session->InsertChartMeta(outside));
+  auto duplicate = own;
+  duplicate.BmsPath = root / "duplicate.bms";
+  assert(session->InsertChartMeta(duplicate));
+  clearPhysicalDirectoryTrace();
+  loaded = loadMusicSelectPhysicalDirectory(
+      repository, {}, directory, {}, {}, temporary.path(), {}, 0);
+  assert(loaded.children.empty() && loaded.provider);
+  assert(loaded.provider->size() == 3);
+  assert(loaded.provider->at(0).chart->meta.BmsPath == immediate.BmsPath);
+  assert(loaded.provider->at(1).chart->meta.BmsPath == nested.BmsPath);
+  assert(loaded.provider->at(2).chart->meta.BmsPath == own.BmsPath);
+  assert(physicalDirectoryPageSizes() == std::vector<std::size_t>{3});
+  const auto streamed = tracedStatementContaining("@recursive_folder");
+  assert(!streamed.empty());
+  assert(streamed.find("stage_file") == std::string::npos);
+  assert(streamed.find("preferred") == std::string::npos);
+}
+
+std::string physicalChartHash(int number) {
+  const auto digits = std::to_string(number);
+  return std::string(64 - digits.size(), '0') + digits;
+}
+
+void seedPhysicalDirectoryPages(ChartRepository &repository,
+                                const std::filesystem::path &root) {
+  auto database = openDatabase(repository.DatabasePath());
+  assert(database);
+  const auto path = root.generic_string();
+  assert(execute(database.get(),
+      "WITH RECURSIVE rows(number) AS (SELECT 1 UNION ALL "
+      "SELECT number+1 FROM rows WHERE number < 320) "
+      "INSERT INTO chart_meta(path,folder,md5,sha256,title) SELECT '" + path +
+      "' || CASE WHEN number<=160 THEN '' WHEN number<=240 THEN '/nested' "
+      "ELSE '/nested/leaf' END || printf('/song-%03d.bms',number), '" + path +
+      "' || CASE WHEN number<=160 THEN '' WHEN number<=240 THEN '/nested' "
+      "ELSE '/nested/leaf' END, printf('%032d',number), printf('%064d',number), "
+      "printf('Song %03d',number) FROM rows"));
+  assert(execute(database.get(),
+      "UPDATE chart_meta SET subtitle='Subtitle', genre='Genre', artist='Artist', "
+      "sub_artist='Sub artist', difficulty=4, level=12.5, keys=14, player=2, "
+      "total_notes=901, total_scratch_notes=23, total_backspin_notes=17, "
+      "total_long_notes=41, ln_mode=0, min_bpm=87.25, max_bpm=231.5, "
+      "length=5123456789, has_bpm_stop=1, has_scroll_change=1, "
+      "stage_file='stage.png', banner='banner.png', back_bmp='back.png', "
+      "preview='preview.ogg', bpm=150, total=200, has_total=1, rank=1, "
+      "has_document=1, has_bga=1, has_random_sequence=1, "
+      "total_landmine_notes=11, most_prevalent_bpm=155, add_date=1234"));
+}
+
+void testPhysicalDirectoryPagesOwnWorkerSessionAndRichProjectionInputs() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root);
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto scoredPath = root / "song-160.bms";
+  const auto hydrated = session->SelectChartMetaByPaths(
+      std::array<std::filesystem::path, 1>{scoredPath});
+  assert(hydrated.status == ChartMetaPathBatchReadStatus::Loaded);
+  const auto record = hydrated.records.front();
+  assert(session->SetFavorite(record.meta, true));
+  assert(session->SetSongReviewFavorite(record.meta.SHA256, 3));
+  ScoreRepository scores(temporary.path() / "score.db");
+  scores.SetChartDatabasePath(repository.DatabasePath());
+  assert(scores.EnsureSchema());
+  seedChartScore(scores.GetDatabasePath(), scoredPath.generic_string(), record.meta.MD5,
+                 record.meta.SHA256, 1, kClearTypeNormalClearRank, 950);
+  seedChartScore(scores.GetDatabasePath(), scoredPath.generic_string(), record.meta.MD5,
+                 record.meta.SHA256, 2, kClearTypeFailedRank, 800);
+  seedChartScore(scores.GetDatabasePath(), scoredPath.generic_string(), record.meta.MD5,
+                 record.meta.SHA256, 2, kClearTypeExHardClearRank, 200);
+  seedChartScore(scores.GetDatabasePath(), "other.bms", std::string(29, '0') + "310",
+                 physicalChartHash(310), 2, kClearTypeNormalClearRank, 600);
+  auto best = std::make_shared<const ScoreBestCache>(scores.LoadBestScores());
+  auto clears =
+      std::make_shared<const ScoreClearRankCache>(scores.LoadBestClearRanks());
+  const auto expectedScore = best->bestFor(record.meta, 2);
+  assert(expectedScore && expectedScore->score == 800);
+  assert(clears->bestRankFor(record.meta, 2) == kClearTypeExHardClearRank);
+  const auto profile = temporary.path() / "profile";
+  std::filesystem::create_directories(profile / "replay");
+  std::ofstream(profile / "replay" / ("C" + physicalChartHash(160) + ".brd"));
+  std::ofstream(profile / "replay" / ("C" + physicalChartHash(160) + "_3.brd"));
+  auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 2);
+  auto directory = physicalDirectory(root);
+  const auto context = directory.id.value;
+  auto replayRoot = profile;
+  MusicSelectBarManagerConfig config{"14KEY", "ALL", "TITLE"};
+  std::stop_source cancellation;
+  clearPhysicalDirectoryTrace();
+  auto worker = std::async(std::launch::async, [&] {
+    const auto workerMetadata = metadata;
+    const auto workerDirectory = directory;
+    const auto workerReplayRoot = replayRoot;
+    const auto workerConfig = config;
+    return loadMusicSelectPhysicalDirectory(
+        repository, workerMetadata, workerDirectory, best, clears,
+        workerReplayRoot, workerConfig, 2, cancellation.get_token());
+  });
+  auto loaded = worker.get();
+  assert(loaded.children.empty() && loaded.provider);
+  assert(loaded.provider->size() == 320);
+  assert(physicalDirectoryPageSizes() == (std::vector<std::size_t>{128, 64}));
+  const auto streamed = tracedStatementContaining("@recursive_folder");
+  assert(!streamed.empty() && streamed.find("stage_file") == std::string::npos);
+  clearPhysicalDirectoryTrace();
+  assert(loaded.provider->at(0).id.value == context + ":sha256:" + physicalChartHash(1));
+  assert(loaded.provider->at(319).id.value == context + ":sha256:" + physicalChartHash(320));
+  assert(physicalDirectoryPageSizes().empty());
+  cancellation.request_stop();
+  best.reset();
+  clears.reset();
+  metadata = {};
+  directory = {};
+  replayRoot.clear();
+  config = {};
+  session.reset();
+  const auto bar = loaded.provider->at(159);
+  assert(physicalDirectoryPageSizes() == std::vector<std::size_t>{128});
+  assert(bar.id.value == context + ":sha256:" + physicalChartHash(160));
+  assert(bar.title == "Song 160 Subtitle");
+  assert(bar.selectable && bar.presentation.exists);
+  assert(bar.chart && bar.chart->meta.BmsPath == scoredPath);
+  const auto &rich = *bar.chart;
+  assert(rich.meta.Folder == root);
+  assert(rich.meta.Title == "Song 160" && rich.meta.SubTitle == "Subtitle");
+  assert(rich.meta.Artist == "Artist" && rich.meta.SubArtist == "Sub artist");
+  assert(rich.meta.Genre == "Genre");
+  assert(rich.meta.StageFile == "stage.png" && rich.meta.Banner == "banner.png");
+  assert(rich.meta.BackBmp == "back.png" && rich.meta.Preview == "preview.ogg");
+  assert(rich.meta.MD5 == std::string(29, '0') + "160");
+  assert(rich.meta.SHA256 == physicalChartHash(160));
+  assert(rich.meta.Bpm == 150 && rich.meta.MostPrevalentBpm == 155);
+  assert(rich.meta.MinBpm == 87.25 && rich.meta.MaxBpm == 231.5);
+  assert(rich.meta.Total == 200 && rich.meta.HasTotal);
+  assert(rich.meta.Rank == 1 && rich.meta.Player == 2);
+  assert(rich.meta.KeyMode == 14 && rich.meta.PlayLevel == 12.5);
+  assert(rich.meta.Difficulty == 4 && rich.meta.LnMode == 0);
+  assert(rich.meta.PlayLength == 5123456789);
+  assert(rich.meta.TotalNotes == 901 && rich.meta.TotalScratchNotes == 23);
+  assert(rich.meta.TotalBackSpinNotes == 17 && rich.meta.TotalLongNotes == 41);
+  assert(rich.meta.TotalLandmineNotes == 11);
+  assert(rich.hasDocument && rich.hasBga && rich.hasRandomSequence);
+  assert(rich.hasBpmStop && rich.hasScrollChange);
+  assert(rich.favorite && rich.songReviewFavorite == 3);
+  assert(rich.addDateSeconds == 1234);
+  assert(!rich.unavailable && !rich.solidArchive);
+  assert(rich.downloadUrl.empty() && rich.appendDownloadUrl.empty());
+  assert(!rich.originalMd5s);
+  assert(bar.presentation.addDateSeconds == 1234);
+  assert(bar.presentation.level == 12 && bar.presentation.difficulty == 4);
+  assert(bar.presentation.lamp == 7);
+  assert(bar.presentation.featureFlags == (skin::MusicSelectFeatureUndefinedLn |
+      skin::MusicSelectFeatureMine | skin::MusicSelectFeatureRandom));
+  assert(bar.replayExists == (std::array<bool, 4>{true, false, false, true}));
+  assert(bar.score && bar.score->score == 800 && bar.score->maxScore == 1000);
+  assert(bar.score->clearType == kClearTypeFailedRank);
+  assert(bar.score->judgementCounts == expectedScore->judgementCounts);
+  assert(bar.score->fast == expectedScore->fast && bar.score->slow == expectedScore->slow);
+  assert(bar.score->playCount == expectedScore->playCount);
+  assert(bar.score->clearCount == expectedScore->clearCount);
+  assert(bar.score->lastPlayedUnixSeconds == expectedScore->lastPlayedUnixSeconds);
+  assert(bar.score->maxCombo == expectedScore->maxCombo);
+  assert(bar.score->comboBreak == expectedScore->comboBreak);
+  assert(bar.score->badPoints == expectedScore->badPoints);
+  assert(bar.score->averageJudgeMicros == expectedScore->averageJudgeMicros);
+  assert(bar.score->finalGauge == expectedScore->finalGauge);
+  assert(bar.score->createdAt == expectedScore->createdAt);
+  assert(bar.score->attemptId == expectedScore->attemptId);
+  assert(bar.score->bestOrderTime == expectedScore->bestOrderTime);
+  assert(bar.score->source == expectedScore->source);
+  for (std::size_t position = 0; position < 320; ++position) {
+    const MusicSelectBarId id{context + ":sha256:" + physicalChartHash(position + 1)};
+    assert(loaded.provider->at(position).id == id);
+    assert(loaded.provider->indexOf(id) == position);
+  }
+  loaded.provider->configure("14KEY", "ALL", "SCORE");
+  assert(loaded.provider->at(0).chart->meta.SHA256 == physicalChartHash(310));
+  assert(loaded.provider->at(1).id == bar.id);
+  loaded.provider->configure("14KEY", "ALL", "CLEAR");
+  assert(loaded.provider->at(0).chart->meta.SHA256 == physicalChartHash(310));
+  assert(loaded.provider->at(1).id == bar.id);
+  assert(loaded.provider->at(1).presentation.lamp == 7);
+}
+
+void testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root);
+  const auto directory = physicalDirectory(root);
+  const std::array phases{
+      std::pair{"", 0}, std::pair{"SELECT 1 FROM chart_meta cm", 0},
+      std::pair{"@recursive_folder", 2}, std::pair{"WHERE cm.path IN (", 0}};
+  for (const auto &[sql, rows] : phases) {
+    clearPhysicalDirectoryTrace();
+    std::stop_source cancellation;
+    readCancellation = &cancellation;
+    cancelReadSql = sql;
+    cancelReadAfterRows = rows;
+    observedReadRows = 0;
+    if (cancelReadSql.empty()) cancellation.request_stop();
+    const auto connectionsBefore = connections.load();
+    bool threw = false;
+    try {
+      (void)loadMusicSelectPhysicalDirectory(repository, {}, directory, {}, {},
+          temporary.path(), {}, 0, cancellation.get_token());
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    readCancellation = nullptr;
+    cancelReadSql.clear();
+    assert(threw && cancellation.stop_requested());
+    if (std::string_view(sql).empty()) assert(connections == connectionsBefore);
+    if (std::string_view(sql) == "WHERE cm.path IN (") {
+      assert(physicalDirectoryPageSizes() == std::vector<std::size_t>{128});
+    } else {
+      assert(physicalDirectoryPageSizes().empty());
+    }
+  }
+  const auto retried = loadMusicSelectPhysicalDirectory(
+      repository, {}, directory, {}, {}, temporary.path(), {}, 0);
+  assert(retried.provider && retried.provider->size() == 320);
+}
+
+void testPhysicalDirectoryStorageFailuresThrowAndRetry() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto record = chartMeta(temporary.path() / "songs");
+  assert(session->InsertChartMeta(record));
+  const auto directory = physicalDirectory(record.Folder);
+  for (const auto *column : {"folder", "title", "stage_file"}) {
+    clearPhysicalDirectoryTrace();
+    deniedChartReadColumn = column;
+    bool threw = false;
+    try {
+      (void)loadMusicSelectPhysicalDirectory(
+          repository, {}, directory, {}, {}, temporary.path(), {}, 0);
+    } catch (const std::runtime_error &error) {
+      threw = true;
+      assert(!std::string_view(error.what()).empty());
+    }
+    deniedChartReadColumn.clear();
+    assert(threw);
+    const auto retried = loadMusicSelectPhysicalDirectory(
+        repository, {}, directory, {}, {}, temporary.path(), {}, 0);
+    assert(retried.provider && retried.provider->size() == 1);
+    assert(retried.provider->at(0).chart);
+  }
+  ChartRepository invalid(temporary.path());
+  bool threw = false;
+  try {
+    (void)loadMusicSelectPhysicalDirectory(
+        invalid, {}, directory, {}, {}, temporary.path(), {}, 0);
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw);
+}
+
+void testPhysicalDirectoryAutoplayKeepsRawOrderHiddenAndWrongModeSongs() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto root = temporary.path() / "songs";
+  auto alpha = chartMeta(root);
+  alpha.BmsPath = root / "alpha.bms";
+  alpha.Title = "Alpha";
+  alpha.KeyMode = 7;
+  alpha.Preview = "preview.ogg";
+  assert(session->InsertChartMeta(alpha));
+  auto duplicate = alpha;
+  duplicate.BmsPath = root / "duplicate.bms";
+  duplicate.Title = "Zulu duplicate";
+  assert(session->InsertChartMeta(duplicate));
+  auto beta = chartMeta(root / "nested" / "leaf");
+  beta.Title = "Beta";
+  beta.SHA256.assign(64, 'b');
+  beta.KeyMode = 14;
+  assert(session->InsertChartMeta(beta));
+  auto delta = chartMeta(root);
+  delta.BmsPath = root / "delta.bms";
+  delta.Title = "Delta";
+  delta.KeyMode = 9;
+  delta.SHA256.clear();
+  delta.MD5.assign(32, 'd');
+  assert(session->InsertChartMeta(delta));
+  auto epsilon = delta;
+  epsilon.BmsPath = root / "epsilon.bms";
+  epsilon.Title = "Epsilon";
+  epsilon.MD5.clear();
+  assert(session->InsertChartMeta(epsilon));
+  auto hidden = chartMeta(root);
+  hidden.BmsPath = root / "hidden.bms";
+  hidden.Title = "Gamma hidden";
+  hidden.KeyMode = 7;
+  hidden.SHA256.assign(64, 'c');
+  assert(session->InsertChartMeta(hidden));
+  assert(session->SetSongReviewFavorite(hidden.SHA256, 4));
+  auto outside = alpha;
+  outside.BmsPath = temporary.path() / "songs-other" / "outside.bms";
+  outside.Folder = outside.BmsPath.parent_path();
+  assert(session->InsertChartMeta(outside));
+  auto database = openDatabase(repository.DatabasePath());
+  assert(database);
+  assert(execute(database.get(),
+      "UPDATE chart_meta SET source_priority=100 WHERE path='" +
+      outside.BmsPath.generic_string() + "'"));
+  const auto directory = physicalDirectory(root);
+  const auto filtered = loadMusicSelectPhysicalDirectory(
+      repository, {}, directory, {}, {}, temporary.path(),
+      {"7KEY", "ALL", "TITLE"}, 2);
+  assert(filtered.provider && filtered.provider->size() == 1);
+  clearPhysicalDirectoryTrace();
+  const auto loaded = loadMusicSelectPhysicalDirectoryAutoplay(repository, directory, 2);
+  assert(!loaded.provider);
+  assert(loaded.children.size() == 4);
+  const std::array expected{hidden.BmsPath, delta.BmsPath, beta.BmsPath, alpha.BmsPath};
+  for (std::size_t position = 0; position < expected.size(); ++position) {
+    const auto &bar = loaded.children[position];
+    assert(bar.kind == skin::MusicSelectBarKind::Song);
+    assert(bar.chart && bar.chart->meta.BmsPath == expected[position]);
+    assert(bar.selectable && bar.presentation.exists);
+    assert(!bar.score && !bar.rivalScore);
+    assert(bar.replayExists == (std::array<bool, 4>{}));
+    assert(bar.presentation.lamp == 0);
+  }
+  assert(loaded.children[0].chart->songReviewFavorite == 4);
+  assert(loaded.children[1].id.value == directory.id.value + ":md5:" + delta.MD5);
+  assert(loaded.children[2].chart->meta.KeyMode == 14);
+  assert(loaded.children[3].id.value == directory.id.value + ":sha256:" + alpha.SHA256);
+  assert(loaded.children[3].chart->meta.Preview == "preview.ogg");
+  assert(physicalDirectoryPageSizes().empty());
+  const auto raw = tracedStatementContaining("@recursive_folder");
+  assert(!raw.empty() && raw.find("stage_file") != std::string::npos);
+  assert(raw.find("preferred") == std::string::npos);
+}
+
+void testPhysicalDirectoryAutoplayCategoriesAndCancellation() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto root = temporary.path() / "category";
+  auto deep = chartMeta(root / "nested" / "song");
+  deep.SHA256.clear();
+  deep.MD5.clear();
+  assert(session->InsertChartMeta(deep));
+  clearPhysicalDirectoryTrace();
+  const auto category = loadMusicSelectPhysicalDirectoryAutoplay(
+      repository, physicalDirectory(root), 0);
+  assert(category.children.empty() && !category.provider);
+  assert(!traced("@recursive_folder"));
+  const auto empty = loadMusicSelectPhysicalDirectoryAutoplay(
+      repository, physicalDirectory(root / "missing"), 0);
+  assert(empty.children.empty() && !empty.provider);
+  const auto directory = physicalDirectory(root / "nested");
+  const auto children = loadMusicSelectPhysicalDirectoryAutoplay(repository, directory, 0);
+  assert(children.children.size() == 1 && !children.provider);
+  assert(children.children.front().id.value == directory.id.value + ":path:" +
+         deep.BmsPath.generic_string());
+  for (const bool alreadyCancelled : {false, true}) {
+    std::stop_source cancellation;
+    if (alreadyCancelled) cancellation.request_stop();
+    readCancellation = &cancellation;
+    cancelReadSql = "@recursive_folder";
+    cancelReadAfterRows = 0;
+    bool threw = false;
+    try {
+      (void)loadMusicSelectPhysicalDirectoryAutoplay(
+          repository, directory, 0, cancellation.get_token());
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    readCancellation = nullptr;
+    cancelReadSql.clear();
+    assert(threw && cancellation.stop_requested());
+  }
+  const auto retried = loadMusicSelectPhysicalDirectoryAutoplay(repository, directory, 0);
+  assert(retried.children.size() == 1);
+}
+
+void testRawPhysicalFolderInventoryRestoresCategoryBranches() {
+  TempDirectory temporary;
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  auto database = openDatabase(charts.DatabasePath());
+  assert(database);
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,md5,sha256,source_priority) VALUES "
+      "('/raw/a/song/one.bms','/raw/a/song','same','same',0),"
+      "('/raw/z/song/copy.bms','/raw/z/song','same','same',3),"
+      "('/raw/empty/song/two.bms','','empty','empty',0),"
+      "('/raw/null/song/three.bms',NULL,'null','null',0),"
+      "('/raw/overlap/song/four.bms','/raw/overlap/song','four','four',0),"
+      "('/raw/overlap/song/five.bms','','five','five',0)"));
+  assert(execute(database.get(),
+      "INSERT INTO folder(path,date,adddate) VALUES "
+      "('/raw/dated',123,456),('/raw/overlap/song',789,987)"));
+  auto session = charts.OpenSession();
+  assert(session);
+  assert(session->SelectChartMetaFolders() == std::vector<std::filesystem::path>({
+      "/raw/a/song", "/raw/overlap/song"}));
+  auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 0);
+  metadata.entries = {{.path = utf8_to_path_t("/raw")}};
+  const auto children = MusicSelectRepositoryProjection::projectDirectoryFolders(metadata, "/raw");
+  std::vector<std::filesystem::path> childPaths;
+  for (const auto &child : children) childPaths.push_back(child.directoryPath);
+  assert(childPaths == std::vector<std::filesystem::path>({
+      "/raw/a", "/raw/dated", "/raw/empty", "/raw/null", "/raw/overlap", "/raw/z"}));
+  assert(metadata.folders.size() == 6);
+  assert(metadata.folders[0].dateSeconds == 123 && metadata.folders[0].addDateSeconds == 456);
+  assert(metadata.folders[1].dateSeconds == 789 && metadata.folders[1].addDateSeconds == 987);
+  MusicSelectRepositoryMetadata eagerMetadata;
+  eagerMetadata.entries = metadata.entries;
+  eagerMetadata.folders = session->SelectFolderRecords();
+  ChartMetaQuery query;
+  query.rawSongData = true;
+  query.recursiveFolder = "/raw";
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta(query, records);
+  assert(records.size() == 6);
+  const auto eager = MusicSelectRepositoryProjection{}.project({
+      .records = records, .metadata = &eagerMetadata});
+  const auto *root = eager.find({"folder:" + fspath_to_utf8(
+      std::filesystem::path("/raw").lexically_normal())});
+  assert(root);
+  std::vector<std::filesystem::path> eagerChildren;
+  for (const auto &id : root->children) {
+    const auto *child = eager.find(id);
+    assert(child);
+    eagerChildren.push_back(child->directoryPath);
+  }
+  std::ranges::sort(eagerChildren);
+  assert(eagerChildren == childPaths);
+}
+
+void testOwnFolderProbeMatchesRecursiveWindowsDelimiters() {
+  TempDirectory temporary;
+  ChartRepository charts(temporary.path() / "chart.db");
+  assert(charts.EnsureReady());
+  auto database = openDatabase(charts.DatabasePath());
+  assert(database);
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,md5,sha256) VALUES "
+      "('C:\\library\\back\\song.bms','C:\\library\\back','back','back'),"
+      "('C:/library/slash/song.bms','C:/library/slash','slash','slash'),"
+      "('C:\\library\\null\\song.bms',NULL,'null','null')"));
+  auto session = charts.OpenSession();
+  assert(session);
+  for (const auto *folder : {"C:/library/back", "C:/library/back/", R"(C:\library\back)",
+                            R"(C:\library\back\)", "C:/library/slash", R"(C:\library\slash)",
+                            R"(C:\library\slash\)", "C:/library/null"}) {
+    ChartMetaQuery query;
+    query.rawSongData = true;
+    query.recursiveFolder = folder;
+    std::vector<ChartMetaRecord> records;
+    session->QueryChartMeta(query, records);
+    assert(records.size() == 1);
+    assert(session->HasChartMetaForFolderOrParentFolder(folder));
+  }
+  assert(!session->HasChartMetaForFolderOrParentFolder("C:/library/absent"));
+  const auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 0);
+  std::vector<std::string> childPaths;
+  for (const auto &child : MusicSelectRepositoryProjection::projectDirectoryFolders(
+           metadata, "C:/library")) {
+    auto text = fspath_to_utf8(child.directoryPath);
+    std::ranges::replace(text, '\\', '/');
+    childPaths.push_back(text);
+  }
+  assert(childPaths == std::vector<std::string>({
+      "C:/library/back", "C:/library/null", "C:/library/slash"}));
+}
+
+}
+
+namespace {
+
+void testPhysicalDirectoryPrimingInterruptsTheActiveRichBatch() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root);
+  for (const int rowLimit : {1, 129}) {
+    std::stop_source cancellation;
+    readCancellation = &cancellation;
+    cancelReadSql = "WHERE cm.path IN (";
+    cancelReadAfterRows = rowLimit;
+    observedReadRows = 0;
+    clearPhysicalDirectoryTrace();
+    bool threw = false;
+    try {
+      (void)loadMusicSelectPhysicalDirectory(
+          repository, {}, physicalDirectory(root), {}, {}, temporary.path(), {},
+          0, cancellation.get_token());
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    readCancellation = nullptr;
+    cancelReadSql.clear();
+    assert(threw && cancellation.stop_requested());
+    assert(observedReadRows == rowLimit);
+    assert(physicalDirectoryPageSizes().size() == (rowLimit == 1 ? 1 : 2));
+  }
+  const auto retried = loadMusicSelectPhysicalDirectory(
+      repository, {}, physicalDirectory(root), {}, {}, temporary.path(), {}, 0);
+  assert(retried.provider && retried.provider->size() == 320);
+  assert(retried.provider->at(159).chart);
+}
+
+}
+
 int main() {
+  testPhysicalDirectoryPrimingInterruptsTheActiveRichBatch();
+  testRawPhysicalFolderInventoryRestoresCategoryBranches();
+  testOwnFolderProbeMatchesRecursiveWindowsDelimiters();
+  testPhysicalDirectoryCategoriesAndEmptyFoldersUseOnlyMetadata();
+  testPhysicalDirectoryOwnAndMixedSongsMatchRawSubtree();
+  testPhysicalDirectoryPagesOwnWorkerSessionAndRichProjectionInputs();
+  testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming();
+  testPhysicalDirectoryStorageFailuresThrowAndRetry();
+  testPhysicalDirectoryAutoplayKeepsRawOrderHiddenAndWrongModeSongs();
+  testPhysicalDirectoryAutoplayCategoriesAndCancellation();
+  testStreamingSelectionMatchesRawRowsWithNarrowPayload();
+  testOwnOrImmediateChildFolderProbe();
+  testStreamingSelectionFailuresThrowAndReleaseStatement();
   testDirectoryRecordsIncludeDirectChartsAndRawDescendants();
   testMetadataFolderMergePreservesNormalizedDuplicatesAndScales();
   testRawExactFolderKeepsNonpreferredDuplicate();

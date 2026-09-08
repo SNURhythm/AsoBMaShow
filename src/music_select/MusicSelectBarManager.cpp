@@ -273,13 +273,21 @@ MusicSelectBarManager::MusicSelectBarManager(MusicSelectProjection projection,
   rebuildRows();
 }
 
+std::size_t MusicSelectBarManager::rowCount() const noexcept {
+  return rowProvider_ ? rowProvider_->size() : rows_->size();
+}
+
 const MusicSelectBar *MusicSelectBarManager::selected() const {
-  return selectedIndex_ < (*rows_).size() ? &(*rows_)[selectedIndex_] : nullptr;
+  if (selectedIndex_ >= rowCount()) return nullptr;
+  return rowProvider_ ? &rowProvider_->at(selectedIndex_)
+                      : &(*rows_)[selectedIndex_];
 }
 
 void MusicSelectBarManager::rebuildRows(
     std::optional<MusicSelectBarId> preferred) {
   ++rowsRevision_;
+  rowProvider_.reset();
+  rowIndex_.clear();
   rows_ = std::make_shared<std::vector<MusicSelectBar>>();
   directoryBars_ = std::make_shared<std::vector<MusicSelectBar>>();
   directoryText_.clear();
@@ -287,6 +295,32 @@ void MusicSelectBarManager::rebuildRows(
     if (const auto *bar = find(id)) {
       directoryBars_->push_back(*bar);
       directoryText_ += bar->title + " > ";
+    }
+  }
+  if (!directory_.empty()) {
+    const auto provider = rowProviders_.find(directory_.back().value);
+    if (provider != rowProviders_.end()) {
+      auto &state = provider->second;
+      if (state.configuration &&
+          (state.configuration->modeFilter != config_.modeFilter ||
+           state.configuration->difficultyFilter != config_.difficultyFilter ||
+           state.configuration->sortId != config_.sortId)) {
+        state.provider = state.provider->clone();
+      }
+      rowProvider_ = state.provider;
+      auto resolved = rowProvider_->configure(
+          config_.modeFilter, config_.difficultyFilter, config_.sortId);
+      config_.modeFilter = std::move(resolved.first);
+      config_.difficultyFilter = std::move(resolved.second);
+      state.configuration = config_;
+      selectedIndex_ = 0;
+      if (preferred) {
+        if (const auto index = rowProvider_->indexOf(*preferred);
+            index && *index < rowCount()) {
+          selectedIndex_ = *index;
+        }
+      }
+      return;
     }
   }
   const std::vector<MusicSelectBarId> *ids = &projection_.root;
@@ -361,26 +395,54 @@ void MusicSelectBarManager::rebuildRows(
 }
 
 bool MusicSelectBarManager::open(const MusicSelectBarId &id) {
-  const auto *bar = find(id);
+  const MusicSelectBarId directoryId = id;
+  const auto *bar = find(directoryId);
   if (bar == nullptr || !skin::musicSelectIsDirectoryBarKind(bar->kind)) {
     return false;
   }
   const auto *source = selected();
   if (source == nullptr) return false;
   const MusicSelectBarId sourceId = source->id;
-  if (bar->children.empty()) {
+  const bool hasProvider = rowProviders_.contains(directoryId.value);
+  if (!hasProvider && bar->children.empty()) {
     rebuildRows(sourceId);
     return false;
   }
   sourceBars_.push_back(sourceId);
-  directory_.push_back(id);
+  directory_.push_back(directoryId);
   rebuildRows();
+  if (hasProvider && rowCount() == 0) {
+    static_cast<void>(close());
+    return false;
+  }
   return true;
 }
 
 bool MusicSelectBarManager::openSelected() {
   const auto *bar = selected();
-  return bar != nullptr && open(bar->id);
+  if (bar == nullptr) return false;
+  const auto id = bar->id;
+  return open(id);
+}
+
+bool MusicSelectBarManager::installRowProvider(
+    const MusicSelectBarId &directory,
+    std::shared_ptr<MusicSelectRowProvider> provider) {
+  const auto *parent = find(directory);
+  if (!provider || !parent ||
+      !skin::musicSelectIsDirectoryBarKind(parent->kind)) return false;
+  const bool active = !directory_.empty() && directory_.back() == directory;
+  std::optional<MusicSelectBarId> preferred;
+  if (active) {
+    if (const auto *bar = selected()) preferred = bar->id;
+  }
+  auto &state = rowProviders_[directory.value];
+  if (state.provider != provider) {
+    state = {.provider = std::move(provider)};
+  }
+  projection_.bars[projectionIndex_.at(directory.value)].childrenLoaded = true;
+  if (active) rebuildRows(preferred);
+  return true;
 }
 
 void MusicSelectBarManager::installFolderStatus(
@@ -409,6 +471,12 @@ bool MusicSelectBarManager::installChildren(
   const auto *parent = find(directory);
   if (!parent || !skin::musicSelectIsDirectoryBarKind(parent->kind)) return false;
   const auto parentIndex = projectionIndex_.at(directory.value);
+  const bool replacingProvider = rowProviders_.erase(directory.value) != 0;
+  const bool active = !directory_.empty() && directory_.back() == directory;
+  std::optional<MusicSelectBarId> preferred;
+  if (replacingProvider && active) {
+    if (const auto *bar = selected()) preferred = bar->id;
+  }
   std::vector<MusicSelectBarId> ids;
   ids.reserve(children.size());
   for (auto &child : children) {
@@ -423,6 +491,7 @@ bool MusicSelectBarManager::installChildren(
   }
   projection_.bars[parentIndex].children = std::move(ids);
   projection_.bars[parentIndex].childrenLoaded = true;
+  if (replacingProvider && active) rebuildRows(preferred);
   return true;
 }
 
@@ -450,16 +519,23 @@ bool MusicSelectBarManager::openTransient(
   };
   for (auto &child : children) install(std::move(child));
   install(std::move(directory));
+  rowProviders_.erase(directoryId.value);
   sourceBars_.push_back(sourceId);
   directory_.push_back(directoryId);
   rebuildRows();
-  return !(*rows_).empty();
+  return rowCount() != 0;
 }
 
 bool MusicSelectBarManager::close() {
   if (directory_.empty()) return false;
   const MusicSelectBarId source =
       sourceBars_.empty() ? directory_.back() : sourceBars_.back();
+  if (rowProviders_.erase(directory_.back().value) != 0) {
+    const auto found = projectionIndex_.find(directory_.back().value);
+    if (found != projectionIndex_.end()) {
+      projection_.bars[found->second].childrenLoaded = false;
+    }
+  }
   directory_.pop_back();
   if (!sourceBars_.empty()) sourceBars_.pop_back();
   rebuildRows(source);
@@ -468,17 +544,24 @@ bool MusicSelectBarManager::close() {
 
 void MusicSelectBarManager::move(bool increase, int movementDirection,
                                  std::int64_t movementEndMillis) {
-  if ((*rows_).empty()) return;
+  const auto count = rowCount();
+  if (count == 0) return;
   if (increase) {
-    selectedIndex_ = (selectedIndex_ + 1) % (*rows_).size();
+    selectedIndex_ = (selectedIndex_ + 1) % count;
   } else {
-    selectedIndex_ = (selectedIndex_ + (*rows_).size() - 1) % (*rows_).size();
+    selectedIndex_ = (selectedIndex_ + count - 1) % count;
   }
   movementDirection_ = movementDirection;
   movementEndMillis_ = movementEndMillis;
 }
 
 bool MusicSelectBarManager::select(const MusicSelectBarId &id) {
+  if (rowProvider_) {
+    const auto index = rowProvider_->indexOf(id);
+    if (!index || *index >= rowCount()) return false;
+    selectedIndex_ = *index;
+    return true;
+  }
   const auto found = rowIndex_.find(id.value);
   if (found == rowIndex_.end()) return false;
   selectedIndex_ = found->second;
@@ -488,6 +571,16 @@ bool MusicSelectBarManager::select(const MusicSelectBarId &id) {
 std::vector<MusicSelectBar>
 MusicSelectBarManager::childrenOf(const MusicSelectBarId &id) const {
   std::vector<MusicSelectBar> result;
+  if (const auto found = rowProviders_.find(id.value);
+      found != rowProviders_.end()) {
+    const auto provider = found->second.provider;
+    const auto count = provider->size();
+    result.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+      result.push_back(provider->at(index));
+    }
+    return result;
+  }
   const auto *directory = find(id);
   if (directory == nullptr) return result;
   result.reserve(directory->children.size());
@@ -498,9 +591,10 @@ MusicSelectBarManager::childrenOf(const MusicSelectBarId &id) const {
 }
 
 void MusicSelectBarManager::setSelectedPosition(float value) {
-  if ((*rows_).empty()) return;
+  const auto count = rowCount();
+  if (count == 0) return;
   if (value >= 0.0F && value < 1.0F) {
-    selectedIndex_ = static_cast<std::size_t>((*rows_).size() * value);
+    selectedIndex_ = static_cast<std::size_t>(count * value);
   }
 }
 
@@ -514,6 +608,8 @@ void MusicSelectBarManager::configure(MusicSelectBarManagerConfig config) {
 void MusicSelectBarManager::refresh(MusicSelectProjection projection) {
   std::optional<MusicSelectBarId> preferred;
   if (const auto *bar = selected()) preferred = bar->id;
+  rowProvider_.reset();
+  rowProviders_.clear();
   projection_ = std::move(projection);
   rebuildProjectionIndex();
   for (std::size_t index = 0; index < directory_.size(); ++index) {
@@ -544,7 +640,9 @@ MusicSelectBarManagerSnapshot MusicSelectBarManager::snapshot() const {
           .movementDirection = movementDirection_,
           .movementEndMillis = movementEndMillis_,
           .resolvedModeFilter = config_.modeFilter,
-          .resolvedDifficultyFilter = config_.difficultyFilter};
+          .resolvedDifficultyFilter = config_.difficultyFilter,
+          .rowsRevision = rowsRevision_,
+          .rowProvider = rowProvider_};
 }
 
 void MusicSelectBarManager::rebuildProjectionIndex() {
@@ -574,7 +672,8 @@ MusicSelectBarManagerReadView MusicSelectBarManager::readView() const {
           .resolvedDifficultyFilter = config_.difficultyFilter,
           .rowOwner = rows_,
           .directoryOwner = directoryBars_,
-          .rowsRevision = rowsRevision_};
+          .rowsRevision = rowsRevision_,
+          .rowProvider = rowProvider_};
 }
 
 MusicSelectTableContext musicSelectTableContextForLaunch(
@@ -589,6 +688,7 @@ skin::MusicSelectSongListFrame MusicSelectBarManager::songListFrame() const {
   result.movementDirection = movementDirection_;
   result.movementEndMillis = movementEndMillis_;
   result.indexedBars = rows_;
+  result.rowProvider = rowProvider_;
   return result;
 }
 

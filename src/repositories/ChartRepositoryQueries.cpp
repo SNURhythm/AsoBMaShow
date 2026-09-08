@@ -601,7 +601,8 @@ bool chartMetaQueryNeedsChartJoinForCourseEntries(
 }
 
 void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
-                             const ChartMetaQuery &chartQuery) {
+                             const ChartMetaQuery &chartQuery,
+                             bool matchExactFolderSeparators = false) {
   if (chartQuery.recursiveFolder.has_value()) {
     const std::string folder = chartAlias + ".folder";
     const std::string windowsRoot = "replace(@recursive_folder, '/', '\\')";
@@ -652,8 +653,16 @@ void appendExactFolderFilter(std::string &query, const std::string &chartAlias,
         "substr(" + normalizedPath + ", 1, length(" + folderPrefix + ")) = " +
         folderPrefix + " AND instr(substr(" + normalizedPath + ", length(" +
         folderPrefix + ") + 1), '/') = 0";
-    query += " AND (" + chartAlias + ".folder = @exact_folder OR (" +
-             chartAlias + ".folder = '' AND " + pathParentMatches + ") OR (" +
+    query += " AND (" + chartAlias + ".folder = @exact_folder";
+    if (matchExactFolderSeparators) {
+      const std::string normalizedFolder =
+          "rtrim(replace(@exact_folder, '\\', '/'), '/')";
+      query += " OR " + chartAlias + ".folder = " + normalizedFolder +
+               " AND " + normalizedFolder + " <> '' OR " + chartAlias +
+               ".folder = replace(" + normalizedFolder + ", '/', '\\') AND " +
+               normalizedFolder + " <> ''";
+    }
+    query += " OR (" + chartAlias + ".folder = '' AND " + pathParentMatches + ") OR (" +
              chartAlias + ".folder IS NULL AND " + pathParentMatches + "))";
   }
 }
@@ -1426,6 +1435,41 @@ ChartRepository::Session::SelectChartMetaFolders() {
   return folders;
 }
 
+std::vector<std::filesystem::path>
+ChartRepository::Session::SelectRawChartMetaFolders() {
+  auto *database = impl_->database();
+  SqliteStatementHandle statement;
+  const std::string query =
+      "SELECT DISTINCT cm.folder, 0 FROM chart_meta cm WHERE cm.folder != '' "
+      "UNION ALL SELECT cm.path, 1 FROM chart_meta cm "
+      "WHERE cm.folder = '' OR cm.folder IS NULL";
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  std::vector<std::filesystem::path> folders;
+  std::unordered_set<std::filesystem::path> seen;
+  while (true) {
+    const int status = sqlite3_step(statement);
+    if (status == SQLITE_DONE) break;
+    if (status != SQLITE_ROW) throw std::runtime_error(sqlite3_errmsg(database));
+    auto text = columnString(statement, 0);
+    std::ranges::replace(text, '\\', '/');
+    std::filesystem::path path(utf8_to_path_t(text));
+    if (path.empty()) continue;
+    chart_storage_identity::ToAbsolutePath(path);
+    if (sqlite3_column_int(statement, 1) != 0) path = path.parent_path();
+    path = path.lexically_normal();
+    while (path.has_relative_path() && path.filename().empty()) {
+      path = path.parent_path();
+    }
+    if (!path.empty() && seen.insert(path).second) {
+      folders.push_back(std::move(path));
+    }
+  }
+  std::ranges::sort(folders);
+  return folders;
+}
+
 void ChartRepository::Session::SelectFavoriteMusicTracks(
     std::vector<MusicTrackRecord> &tracks) {
   selectFavoriteMusicTracks(impl_->database(), tracks);
@@ -1473,6 +1517,93 @@ void ChartRepository::Session::QueryChartMeta(
     chartMetas.insert(chartMetas.end(), std::make_move_iterator(records.begin()),
                        std::make_move_iterator(records.end()));
   }
+}
+
+void ChartRepository::Session::VisitChartMetaSelection(
+    const std::filesystem::path &recursiveFolder,
+    const std::function<void(const ChartMetaRecord &)> &visitor,
+    std::stop_token stop) {
+  auto *database = impl_->database();
+  ScopedReadCancellation cancellation(database, stop);
+  ChartMetaQuery filter;
+  filter.recursiveFolder = recursiveFolder;
+  std::string query =
+      "SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist, "
+      "cm.difficulty, cm.level, cm.keys, cm.total_notes, "
+      "cm.total_scratch_notes, cm.total_backspin_notes, cm.total_long_notes, "
+      "cm.ln_mode, cm.min_bpm, cm.max_bpm, cm.length, "
+      "cm.has_scroll_change, cm.has_bpm_stop, ";
+  query += songReviewFavoriteColumnExpr("cm");
+  query += " FROM chart_meta cm WHERE 1 = 1";
+  appendExactFolderFilter(query, "cm", filter);
+  appendChartMetaOrderBy(query, filter, "cm");
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  int bindIndex = 1;
+  bindExactFolderFilter(statement, bindIndex, filter);
+  while (true) {
+    checkReadCancelled(stop);
+    const int status = sqlite3_step(statement);
+    checkReadCancelled(stop);
+    if (status == SQLITE_DONE) break;
+    if (status != SQLITE_ROW) throw std::runtime_error(sqlite3_errmsg(database));
+    ChartMetaRecord record;
+    int column = 0;
+    record.meta.BmsPath = std::filesystem::path(readPath(statement, column++));
+    if (!record.meta.BmsPath.empty()) {
+      chart_storage_identity::ToAbsolutePath(record.meta.BmsPath);
+    }
+    record.meta.MD5 = columnString(statement, column++);
+    record.meta.SHA256 = columnString(statement, column++);
+    record.meta.Title = columnString(statement, column++);
+    record.meta.Artist = columnString(statement, column++);
+    record.meta.Difficulty = sqlite3_column_int(statement, column++);
+    record.meta.PlayLevel = sqlite3_column_double(statement, column++);
+    record.meta.KeyMode = sqlite3_column_int(statement, column++);
+    record.meta.TotalNotes = sqlite3_column_int(statement, column++);
+    record.meta.TotalScratchNotes = sqlite3_column_int(statement, column++);
+    record.meta.TotalBackSpinNotes = sqlite3_column_int(statement, column++);
+    record.meta.TotalLongNotes = sqlite3_column_int(statement, column++);
+    record.meta.LnMode = sqlite3_column_int(statement, column++);
+    record.meta.MinBpm = sqlite3_column_double(statement, column++);
+    record.meta.MaxBpm = sqlite3_column_double(statement, column++);
+    record.meta.PlayLength = sqlite3_column_int64(statement, column++);
+    record.hasScrollChange = sqlite3_column_int(statement, column++) != 0;
+    record.hasBpmStop = sqlite3_column_int(statement, column++) != 0;
+    record.songReviewFavorite = sqlite3_column_int(statement, column++);
+    visitor(record);
+  }
+}
+
+bool ChartRepository::Session::HasChartMetaForFolderOrParentFolder(
+    const std::filesystem::path &folder, std::stop_token stop) {
+  auto *database = impl_->database();
+  ScopedReadCancellation cancellation(database, stop);
+  ChartMetaQuery exactFilter;
+  exactFilter.exactFolder = folder;
+  ChartMetaQuery parentFilter;
+  parentFilter.parentFolder = folder;
+  std::string query = "SELECT 1 FROM chart_meta cm WHERE 1 = 1";
+  appendExactFolderFilter(query, "cm", exactFilter, true);
+  query += " UNION ALL SELECT 1 FROM chart_meta cm WHERE 1 = 1";
+  appendExactFolderFilter(query, "cm", parentFilter);
+  query += " LIMIT 1";
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  int bindIndex = 1;
+  bindExactFolderFilter(statement, bindIndex, exactFilter);
+  bindExactFolderFilter(statement, bindIndex, parentFilter);
+  checkReadCancelled(stop);
+  const int status = sqlite3_step(statement);
+  checkReadCancelled(stop);
+  if (status != SQLITE_ROW && status != SQLITE_DONE) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  return status == SQLITE_ROW;
 }
 
 bool ChartRepository::Session::HasChartMetaForParentFolder(
@@ -2430,7 +2561,9 @@ ChartMetaPathBatchReadOutcome chart_repository_detail::SelectChartMetaByPaths(
       std::string query = "SELECT ";
       query += kChartMetaSelectColumns;
       query += ", ";
-      query += "'', 0, 0, ";
+      query += "'', 0, ";
+      query += chartFavoriteColumnExpr("cm");
+      query += ", ";
       query += songReviewFavoriteColumnExpr("cm");
       query += ", '', '', NULL";
       query += " FROM chart_meta cm WHERE cm.path IN (";

@@ -708,9 +708,50 @@ void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
   }
 }
 
+void testLazyPhysicalProjectionDoesNotVisitDescendantSongs() {
+  MusicSelectRepositoryMetadata metadata;
+  metadata.folders = {
+      {.path = utf8_to_path_t("/songs/category/empty"), .addDateSeconds = 123},
+      {.path = utf8_to_path_t("/songs/category/deep/album"), .addDateSeconds = 999},
+      {.path = utf8_to_path_t("/songs/category/deep"), .addDateSeconds = 456},
+      {.path = utf8_to_path_t("/songs/category-sibling/elsewhere")}};
+  const auto folders = MusicSelectRepositoryProjection::projectDirectoryFolders(
+      metadata, "/songs/category/");
+  require(folders.size() == 2 && folders.front().title == "deep" &&
+              folders.back().title == "empty",
+          "lazy categories contain only immediate persisted children");
+  require(folders.front().presentation.addDateSeconds == 456 &&
+              folders.back().presentation.addDateSeconds == 123 &&
+              !folders.front().childrenLoaded &&
+              folders.front().children.empty() && !folders.front().chart,
+          "lazy categories preserve folder dates without materializing songs");
+}
+
+void testSingleSongProjectionDoesNotAggregateOrVisitOtherRows() {
+  const auto record = chart("/songs/a.bms", "song", "Song", "Another", "/songs");
+  int scoreReads = 0;
+  int replayReads = 0;
+  const auto song = MusicSelectRepositoryProjection::projectSong(
+      record, "folder:/songs",
+      {.scoreFor = [&](const auto &, int) {
+         ++scoreReads;
+         return std::optional<ScoreBestSnapshot>{};
+       },
+       .replayExistsFor = [&](const auto &, int) {
+         ++replayReads;
+         return std::array<bool, 4>{true, false, false, false};
+       }});
+  require(song.id.value == "folder:/songs:sha256:song" && song.chart &&
+              song.title == "Song Another" && song.replayExists[0] &&
+              scoreReads == 1 && replayReads == 1,
+          "page projection constructs exactly one fully functional SongBar");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  testLazyPhysicalProjectionDoesNotVisitDescendantSongs();
+  testSingleSongProjectionDoesNotAggregateOrVisitOtherRows();
   testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt();
   testClearProviderMissIsAuthoritativeAndClearDoesNotRequireBestEx();
   testFolderStatusCancellationDuringClearLookupPreservesPublishedCounts();

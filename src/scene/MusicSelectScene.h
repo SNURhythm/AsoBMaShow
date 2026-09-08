@@ -9,6 +9,8 @@
 #include "../audio/SkinSystemSoundService.h"
 #include "../music_select/MusicSelectBarManager.h"
 #include "../music_select/MusicSelectFolderStatusLoader.h"
+#include "../music_select/MusicSelectDirectoryLoader.h"
+#include "../music_select/MusicSelectDirectoryRequest.h"
 #include "../music_select/MusicSelectEventController.h"
 #include "../music_select/MusicSelectInputBindingAdapter.h"
 #include "../music_select/MusicSelectInputProcessor.h"
@@ -101,6 +103,12 @@ private:
   void openSelected();
   [[nodiscard]] bool openDirectory(const MusicSelectBar &);
   [[nodiscard]] bool loadDirectoryChildren(const MusicSelectBar &);
+  void requestDirectoryLoad(const MusicSelectBar &, bool autoplay = false);
+  void launchDirectoryAutoplay(const MusicSelectBar &);
+  void applyDirectoryLoads();
+  void cancelDirectoryLoad();
+  void continueDirectoryRestore();
+  void showDirectoryStatus(std::string);
   void requestFolderStatus(const MusicSelectBarManagerReadView &);
   bool openSameFolder(bool notifySelection = true);
   void copySelectedHash(bool sha256);
@@ -172,13 +180,20 @@ private:
   std::optional<ChartRepository::Session> chartSession_;
   std::shared_ptr<const ScoreBestCache> scoreCache_;
   std::unique_ptr<MusicSelectFolderStatusLoader> folderStatusLoader_;
+  std::unique_ptr<MusicSelectDirectoryLoader> directoryLoader_;
+  std::optional<MusicSelectDirectoryRequest> directoryRequest_;
+  std::vector<MusicSelectBarId> restoreDirectories_;
+  std::vector<MusicSelectBar> restoreDirectoryBars_;
+  std::optional<MusicSelectBarId> restoreSelection_;
+  TextView *directoryStatus_ = nullptr;
+  std::string directoryStatusMessage_;
   std::optional<std::uint64_t> folderStatusRowsRevision_;
   std::optional<std::chrono::steady_clock::time_point> folderStatusRetryAt_;
   std::shared_ptr<const ScoreClearRankCache> clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;
-  MusicSelectRepositoryMetadata repositoryMetadata_;
+  std::shared_ptr<const MusicSelectRepositoryMetadata> repositoryMetadata_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
   std::atomic_bool recordsExportInProgress_{false};

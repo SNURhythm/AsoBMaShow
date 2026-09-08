@@ -6,6 +6,7 @@
 #include "../view/RecyclerView.h"
 #include "ChartFilterSortPanelView.h"
 #include "Scene.h"
+#include "../repositories/ChartMetaPageCache.h"
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayRecordFilters.h"
@@ -167,14 +168,8 @@ private:
         coursesByGroup;
   };
   struct ChartListPageCache {
-    ChartRepository::Session *session = nullptr;
-    ChartMetaQuery query;
     int totalCount = 0;
-    int pageSize = 128;
-    int maxPages = 6;
-    mutable std::unordered_map<int, std::vector<ChartMetaRecord>> pages;
-    mutable std::deque<int> pageOrder;
-    mutable ChartMetaRecord fallbackRecord;
+    BoundedPageCache<ChartMetaRecord> pageCache;
     std::optional<ChartMetaRecord> leadingRecord;
     void reset(ChartRepository::Session &chartSession,
                const ChartMetaQuery &chartQuery, int count,
@@ -182,9 +177,6 @@ private:
     void releasePages();
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
-
-  private:
-    void touchPage(int pageIndex) const;
   };
   ChartListPageCache chartListCache;
   View *rootLayout = nullptr;

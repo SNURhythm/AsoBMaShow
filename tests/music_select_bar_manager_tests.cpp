@@ -8,6 +8,7 @@
 #include "music_select_runtime_ledger_assertions.h"
 
 #include <iostream>
+#include <stdexcept>
 #include <string_view>
 
 namespace {
@@ -631,7 +632,273 @@ void testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent() {
           "retained views preserve complete folder children after manager mutation");
 }
 
+class CountingRowProvider final : public MusicSelectRowProvider {
+public:
+  explicit CountingRowProvider(std::size_t count) : count_(count) {}
+
+  std::size_t size() const noexcept override { return empty_ ? 0 : count_; }
+
+  const MusicSelectBar &at(std::size_t index) const override {
+    if (index >= size()) throw std::out_of_range("provider row");
+    ++atCalls;
+    const auto number = reversed_ ? count_ - index - 1 : index;
+    cached_ = {.id = {"paged:" + std::to_string(number)},
+               .title = "Paged " + std::to_string(number),
+               .presentation = {.title = "Paged " + std::to_string(number),
+                                .exists = true},
+               .selectable = true};
+    return cached_;
+  }
+
+  std::optional<std::size_t> indexOf(const MusicSelectBarId &id) const override {
+    ++indexCalls;
+    if (!id.value.starts_with("paged:")) return std::nullopt;
+    const auto number = std::stoull(id.value.substr(6));
+    if (number >= size()) return std::nullopt;
+    return reversed_ ? count_ - number - 1 : number;
+  }
+
+  std::pair<std::string, std::string> configure(
+      const std::string &modeFilter, const std::string &difficultyFilter,
+      const std::string &sortId) override {
+    ++configureCalls;
+    lastConfig = {modeFilter, difficultyFilter, sortId};
+    reversed_ = sortId == "LEVEL";
+    empty_ = modeFilter == "EMPTY";
+    cached_ = {};
+    return {modeFilter == "MISSING" ? "7KEY" : modeFilter,
+            difficultyFilter == "MISSING" ? "NORMAL" : difficultyFilter};
+  }
+
+  std::shared_ptr<MusicSelectRowProvider> clone() const override {
+    ++cloneCalls;
+    return std::make_shared<CountingRowProvider>(*this);
+  }
+
+  mutable std::size_t atCalls = 0;
+  mutable std::size_t indexCalls = 0;
+  mutable std::size_t cloneCalls = 0;
+  std::size_t configureCalls = 0;
+  MusicSelectBarManagerConfig lastConfig;
+
+private:
+  std::size_t count_;
+  bool reversed_ = false;
+  bool empty_ = false;
+  mutable MusicSelectBar cached_;
+};
+
+void testPagedRowsStayLazyAcrossNavigationAndConfiguration() {
+  auto projection = fixture();
+  projection.bars[0].children.clear();
+  projection.bars[0].childrenLoaded = false;
+  MusicSelectBarManager manager(std::move(projection));
+  auto provider = std::make_shared<CountingRowProvider>(100'000);
+  require(!manager.installRowProvider({"missing"}, provider) &&
+              !manager.installRowProvider({"song:1"}, provider) &&
+              !manager.installRowProvider({"folder:a"}, nullptr),
+          "providers require an existing directory and non-null ownership");
+  require(manager.installRowProvider({"folder:a"}, provider) &&
+              manager.select({"folder:b"}) && manager.open({"folder:a"}),
+          "a provider opens a directory without eager child ids");
+  const auto initial = manager.readView();
+  const auto frame = manager.songListFrame();
+  const auto snapshot = manager.snapshot();
+  require(initial.rowCount() == 100'000 && !initial.rowsEmpty() &&
+              initial.rows.empty() && snapshot.rows.empty() &&
+              snapshot.rowCount() == 100'000 && frame.size() == 100'000 &&
+              frame.bars.empty() && initial.rowProvider == provider &&
+              snapshot.rowProvider == provider && frame.rowProvider == provider &&
+              provider->atCalls == 0 && provider->configureCalls == 1 &&
+              provider->cloneCalls == 0,
+          "open, read view, snapshot and frame retain providers without enumeration");
+  manager.move(false, -100, 1050);
+  require(manager.readView().selectedIndex == 99'999 &&
+              manager.songListFrame().movementDirection == -100 &&
+              manager.songListFrame().movementEndMillis == 1050,
+          "provider navigation wraps with movement metadata");
+  manager.move(true, 100, 1100);
+  require(manager.readView().selectedIndex == 0,
+          "provider forward navigation wraps to the first row");
+  manager.setSelectedPosition(0.5F);
+  manager.setSelectedPosition(1.0F);
+  manager.setSelectedPosition(-1.0F);
+  require(manager.readView().selectedIndex == 50'000 && provider->atCalls == 0,
+          "absolute jumps and invalid positions do not fetch rows");
+  require(manager.select({"paged:98765"}) && !manager.select({"missing"}) &&
+              manager.readView().selectedIndex == 98'765 && provider->atCalls == 0 &&
+              provider->indexCalls == 2,
+          "stable-id selection uses provider lookup, not enumeration");
+  require(initial.rowAt(99'999).id.value == "paged:99999" &&
+              snapshot.rowAt(12'345).title == "Paged 12345" &&
+              frame.at(98'765).title == "Paged 98765" && provider->atCalls == 3,
+          "published access fetches only explicitly requested rows");
+  const auto beforeConfigure = provider->atCalls;
+  manager.configure({"MISSING", "MISSING", "LEVEL"});
+  const auto configured = manager.readView();
+  const auto configuredProvider =
+      std::static_pointer_cast<CountingRowProvider>(configured.rowProvider);
+  require(configured.selectedIndex == 1234 &&
+              configured.resolvedModeFilter == "7KEY" &&
+              configured.resolvedDifficultyFilter == "NORMAL" &&
+              configured.rowsRevision > initial.rowsRevision &&
+              configuredProvider->lastConfig.modeFilter == "MISSING" &&
+              configuredProvider->lastConfig.difficultyFilter == "MISSING" &&
+              configuredProvider->lastConfig.sortId == "LEVEL" &&
+              configuredProvider->configureCalls == 2 &&
+              provider->cloneCalls == 1 &&
+              configuredProvider->atCalls <= beforeConfigure + 1 &&
+              provider->atCalls <= beforeConfigure + 1,
+          "global provider configuration resolves filters and preserves id across reorder");
+  require(initial.rowAt(0).id.value == "paged:0" &&
+              snapshot.rowAt(99'999).id.value == "paged:99999" &&
+              frame.at(0).title == "Paged 0" &&
+              configured.rowAt(0).id.value == "paged:99999",
+          "configuration leaves previously published views, snapshots and frames unchanged");
+  const auto beforeNoop = configuredProvider->cloneCalls;
+  manager.configure({"7KEY", "NORMAL", "LEVEL"});
+  require(manager.readView().rowProvider == configuredProvider &&
+              configuredProvider->cloneCalls == beforeNoop,
+          "unchanged effective configuration does not clone the provider index");
+  require(manager.close() && manager.readView().rowAt(1).id.value == "folder:b" &&
+              manager.readView().selectedIndex == 1 && !manager.readView().rowProvider,
+          "closing a clicked provider directory restores the parent center selection");
+  require(!manager.open({"folder:a"}) && !manager.readView().rowAt(0).childrenLoaded,
+          "closing releases the directory binding and marks it for asynchronous reload");
+  require(manager.installRowProvider({"folder:a"},
+                                    std::make_shared<CountingRowProvider>(100'000)) &&
+              manager.open({"folder:a"}) && manager.readView().rowCount() == 100'000,
+          "a closed provider directory reopens after explicit reload");
+  manager.configure({"EMPTY", "ALL", "TITLE"});
+  require(manager.readView().rowsEmpty() && manager.songListFrame().size() == 0,
+          "configuration can empty the provider without eager fallback");
+  manager.move(true, 1, 1);
+  manager.setSelectedPosition(0.5F);
+  require(manager.readView().selectedIndex == 0 && !manager.openSelected() &&
+              !manager.select({"paged:0"}),
+          "empty providers reject row actions without fetching an invalid row");
+}
+
+void testPagedProviderLifetimeAndExplicitEnumeration() {
+  MusicSelectBarManager manager(fixture());
+  auto provider = std::make_shared<CountingRowProvider>(257);
+  require(manager.installRowProvider({"folder:a"}, provider),
+          "provider overrides eager directory children");
+  const auto children = manager.childrenOf({"folder:a"});
+  require(children.size() == 257 && provider->atCalls == 257 &&
+              children.front().id.value == "paged:0" &&
+              children.back().id.value == "paged:256" &&
+              children[128].title == "Paged 128",
+          "explicit enumeration copies every row before a provider cache eviction");
+  require(manager.open({"folder:a"}), "provider lifetime fixture opens");
+  std::weak_ptr<MusicSelectRowProvider> weak = provider;
+  {
+    const auto view = manager.readView();
+    const auto snapshot = manager.snapshot();
+    const auto frame = manager.songListFrame();
+    provider.reset();
+    manager.refresh(fixture(2));
+    require(!weak.expired() && !manager.readView().rowProvider &&
+                manager.readView().rowCount() == 2 &&
+                view.rowAt(256).id.value == "paged:256" &&
+                snapshot.rowAt(0).id.value == "paged:0" &&
+                frame.at(128).title == "Paged 128",
+            "refresh releases installed providers while retained publications stay readable");
+  }
+  require(weak.expired(), "last retained publication releases its provider");
+  auto empty = std::make_shared<CountingRowProvider>(0);
+  require(manager.close() && manager.installRowProvider({"folder:a"}, empty) &&
+              !manager.open({"folder:a"}) && manager.readView().directory.empty() &&
+              empty->atCalls == 0,
+          "empty providers do not open or fall back to eager children");
+  auto unopened = std::make_shared<CountingRowProvider>(100'000);
+  std::weak_ptr<MusicSelectRowProvider> unopenedWeak = unopened;
+  require(manager.installRowProvider({"folder:b"}, unopened),
+          "unopened provider is installed");
+  unopened.reset();
+  manager.refresh(fixture(3));
+  require(unopenedWeak.expired(), "refresh releases unopened directory providers too");
+  auto closing = std::make_shared<CountingRowProvider>(100'000);
+  std::weak_ptr<MusicSelectRowProvider> closingWeak = closing;
+  require(manager.installRowProvider({"folder:a"}, closing) &&
+              manager.open({"folder:a"}), "close ownership fixture opens");
+  closing.reset();
+  require(manager.close() && closingWeak.expired() &&
+              !manager.readView().rowAt(0).childrenLoaded,
+          "close releases the exiting provider and invalidates its directory load flag");
+}
+
+void testProviderReplacementAndNestedBackNavigation() {
+  MusicSelectBarManager manager(fixture());
+  auto provider = std::make_shared<CountingRowProvider>(100'000);
+  require(manager.open({"folder:a"}) &&
+              manager.installRowProvider({"folder:a"}, provider) &&
+              manager.select({"paged:99999"}),
+          "installing a provider on the active directory replaces eager rows");
+  MusicSelectBar child{.id = {"song:transient"}, .title = "Transient song"};
+  MusicSelectBar nested{.id = {"same-folder:paged"},
+                         .kind = skin::MusicSelectBarKind::SameFolder,
+                         .title = "Same Folder",
+                         .children = {child.id}};
+  require(manager.openTransient(nested, {child}) &&
+              !manager.readView().rowProvider && manager.readView().rowCount() == 1 &&
+              manager.close() && manager.readView().selectedIndex == 99'999 &&
+              manager.readView().rowAt(99'999).id.value == "paged:99999",
+          "closing an eager nested directory restores its cached provider source id");
+  require(provider->cloneCalls == 0,
+          "unchanged ancestor provider reopening does not clone the compact index");
+  auto replacement = std::make_shared<CountingRowProvider>(100'000);
+  std::weak_ptr<MusicSelectRowProvider> oldProvider = provider;
+  provider.reset();
+  require(manager.installRowProvider({"folder:a"}, replacement) &&
+              manager.readView().selectedIndex == 99'999 && oldProvider.expired(),
+          "replacing the active provider retains selection and releases the old owner");
+  auto smaller = std::make_shared<CountingRowProvider>(1);
+  require(manager.installRowProvider({"folder:a"}, smaller) &&
+              manager.readView().selectedIndex == 0 && manager.readView().rowCount() == 1,
+          "provider replacement resets selection when the old id is absent");
+  child.id = {"paged:0"};
+  require(manager.installChildren({"folder:a"}, {child}) &&
+              !manager.readView().rowProvider &&
+              manager.readView().rowAt(0).title == "Transient song",
+          "explicit eager children replace an active provider without stale rows");
+  require(manager.close() && manager.installRowProvider({"folder:b"}, smaller),
+          "transient replacement fixture installs an inactive provider");
+  MusicSelectBar transient{.id = {"folder:b"},
+                            .kind = skin::MusicSelectBarKind::Folder,
+                            .title = "Replacement",
+                            .children = {child.id}};
+  require(manager.openTransient(transient, {child}) &&
+              !manager.readView().rowProvider &&
+              manager.readView().rowAt(0).title == "Transient song",
+          "transient directory installation replaces a provider with explicit eager rows");
+}
+
+void testOpeningProviderBackedIdSurvivesSelectedRowCacheEviction() {
+  auto projection = fixture();
+  projection.bars.push_back({.id = {"paged:42"},
+                             .kind = skin::MusicSelectBarKind::Folder,
+                             .title = "Nested",
+                             .children = {{"song:3"}}});
+  MusicSelectBarManager manager(std::move(projection));
+  auto provider = std::make_shared<CountingRowProvider>(100'000);
+  require(manager.installRowProvider({"folder:a"}, provider) &&
+              manager.open({"folder:a"}) && manager.select({"paged:17"}),
+          "cache eviction fixture selects a different row from the clicked id");
+  const auto view = manager.readView();
+  require(manager.open(view.rowAt(42).id) &&
+              manager.readView().directory.back().value == "paged:42" &&
+              manager.readView().rowCount() == 1 &&
+              manager.readView().rowAt(0).id.value == "song:3" &&
+              manager.close() && manager.readView().selectedIndex == 17,
+          "opening copies the clicked id before fetching a cache-evicting selected row");
+}
+
 int main(int argc, char **argv) {
+  testPagedRowsStayLazyAcrossNavigationAndConfiguration();
+  testPagedProviderLifetimeAndExplicitEnumeration();
+  testProviderReplacementAndNestedBackNavigation();
+  testOpeningProviderBackedIdSurvivesSelectedRowCacheEviction();
   {
     MusicSelectBarManager manager(fixture());
     require(manager.open({"folder:a"}) && manager.select({"song:2"}),

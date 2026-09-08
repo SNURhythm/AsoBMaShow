@@ -52,6 +52,8 @@ struct MusicSelectScene {
   void configureSoundServices() { ++soundConfigurations; }
   void stopPreloadWorker() { ++preloadStops; }
   void stopInputListening() {}
+  void cancelDirectoryLoad() {}
+  void continueDirectoryRestore() {}
   void startInputListening() {}
   void hideDecideOverlay() {}
   void syncToolbar() {}
