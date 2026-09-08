@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -1017,6 +1018,126 @@ void testCorruptIndexEntryCountIsRejected() {
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
+void testSingleFlightWaiterCancellation(bool completeBuilderDuringWaiterCallback) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() /
+      (completeBuilderDuringWaiterCallback ? "completed-builder.zip"
+                                          : "paused-builder.zip");
+  const auto callbackArchivePath = temporary.path() / "callback.zip";
+  writeStoredZip(archivePath, {"song.bms"});
+  writeStoredZip(callbackArchivePath, {"callback.bms"});
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::resetSingleFlightWaiterCountForTesting();
+
+  std::promise<void> builderPaused;
+  auto builderPausedFuture = builderPaused.get_future();
+  std::promise<void> resumeBuilder;
+  auto resumeBuilderFuture = resumeBuilder.get_future().share();
+  auto builder = std::async(std::launch::async, [&] {
+    bool paused = false;
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    const bool listed = archive_file::listEntries(
+        archivePath, entries, &error, [&] {
+          if (!paused) {
+            paused = true;
+            builderPaused.set_value();
+            assert(resumeBuilderFuture.wait_for(10s) ==
+                   std::future_status::ready);
+          }
+          return true;
+        });
+    assert(listed);
+    assert(error.empty());
+    assert(entries.size() == 1);
+    assert(entries.front().path == "song.bms");
+  });
+  assert(builderPausedFuture.wait_for(10s) == std::future_status::ready);
+
+  auto healthyWaiter = std::async(std::launch::async, [&] {
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    const bool listed = archive_file::listEntries(archivePath, entries, &error);
+    assert(listed);
+    assert(error.empty());
+    assert(entries.size() == 1);
+    assert(entries.front().path == "song.bms");
+  });
+  std::atomic_bool cancelWaiter{false};
+  std::promise<void> waiterPaused;
+  auto waiterPausedFuture = waiterPaused.get_future();
+  std::promise<void> resumeWaiter;
+  auto resumeWaiterFuture = resumeWaiter.get_future().share();
+  std::vector<archive_file::Entry> cancelledEntries;
+  std::string cancelledError;
+  auto cancelledWaiter = std::async(std::launch::async, [&] {
+    return archive_file::listEntries(
+        archivePath, cancelledEntries, &cancelledError, [&] {
+          if (!cancelWaiter.load(std::memory_order_acquire)) {
+            return true;
+          }
+          waiterPaused.set_value();
+          assert(resumeWaiterFuture.wait_for(10s) == std::future_status::ready);
+          std::vector<archive_file::Entry> callbackEntries;
+          std::string callbackError;
+          const bool listed = archive_file::listEntries(
+              callbackArchivePath, callbackEntries, &callbackError);
+          assert(listed);
+          assert(callbackError.empty());
+          assert(callbackEntries.size() == 1);
+          assert(callbackEntries.front().path == "callback.bms");
+          return false;
+        });
+  });
+
+  const auto registrationDeadline = std::chrono::steady_clock::now() + 10s;
+  while (archive_file::singleFlightWaiterCountForTesting() < 2 &&
+         std::chrono::steady_clock::now() < registrationDeadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  assert(archive_file::singleFlightWaiterCountForTesting() == 2);
+  cancelWaiter.store(true, std::memory_order_release);
+  bool cancelledWhileBuilderPaused = false;
+  if (completeBuilderDuringWaiterCallback) {
+    assert(waiterPausedFuture.wait_for(10s) == std::future_status::ready);
+    resumeBuilder.set_value();
+    assert(builder.wait_for(10s) == std::future_status::ready);
+    assert(healthyWaiter.wait_for(10s) == std::future_status::ready);
+    resumeWaiter.set_value();
+  } else {
+    resumeWaiter.set_value();
+    cancelledWhileBuilderPaused =
+        cancelledWaiter.wait_for(2s) == std::future_status::ready;
+    assert(builder.wait_for(0ms) == std::future_status::timeout);
+    assert(healthyWaiter.wait_for(0ms) == std::future_status::timeout);
+    resumeBuilder.set_value();
+  }
+  assert(builder.wait_for(10s) == std::future_status::ready);
+  assert(healthyWaiter.wait_for(10s) == std::future_status::ready);
+  assert(cancelledWaiter.wait_for(10s) == std::future_status::ready);
+  builder.get();
+  healthyWaiter.get();
+  const bool cancelledListed = cancelledWaiter.get();
+  assert(completeBuilderDuringWaiterCallback || cancelledWhileBuilderPaused);
+  assert(!cancelledListed);
+  assert(cancelledEntries.empty());
+  assert(cancelledError == "Operation cancelled");
+
+  std::vector<archive_file::Entry> cachedEntries;
+  std::string cachedError;
+  assert(archive_file::listEntries(archivePath, cachedEntries, &cachedError));
+  assert(cachedError.empty());
+  assert(cachedEntries.size() == 1);
+  assert(cachedEntries.front().path == "song.bms");
+  const auto logLines = archive_file::debugLogLines();
+  const auto indexAttempts = std::count_if(
+      logLines.begin(), logLines.end(), [&](const std::string &line) {
+        return line.find("Indexing archive:") != std::string::npos &&
+               line.find(archivePath.filename().string()) != std::string::npos;
+      });
+  assert(indexAttempts == 1);
+}
+
 void testSingleFlightWaitersDoNotEachReindexAfterFailedBuild() {
   constexpr int kWorkerCount = 6;
   TempDirectory temporary;
@@ -1143,6 +1264,8 @@ int main() {
   testArchiveIndexPrunesOrphanedCacheFiles();
   testArchiveIndexPrunesOrphanedTmpCacheFiles();
   testCorruptIndexEntryCountIsRejected();
+  testSingleFlightWaiterCancellation(false);
+  testSingleFlightWaiterCancellation(true);
   testSingleFlightWaitersDoNotEachReindexAfterFailedBuild();
   testDebugLogRetainsNewestThousandLines();
   return 0;

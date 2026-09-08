@@ -3814,7 +3814,14 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     gSingleFlightWaiterCountForTesting.fetch_add(1, std::memory_order_relaxed);
 #endif
-    gIndexBuildCv.wait(buildLock, [&] { return !gIndexBuildActive[key]; });
+    bool keepGoing = true;
+    do {
+      gIndexBuildCv.wait_for(buildLock, std::chrono::milliseconds(20),
+                            [&] { return !gIndexBuildActive[key]; });
+      buildLock.unlock();
+      keepGoing = pauseIfNeeded(pauseCallback, errorMessage);
+      buildLock.lock();
+    } while (keepGoing && gIndexBuildActive[key]);
     const bool builtOk = gIndexBuildDone[key];
     const bool builtFailed = gIndexBuildFailed[key];
     if (--gIndexBuildWaiters[key] == 0 && !gIndexBuildActive[key]) {
@@ -3824,6 +3831,9 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
       gIndexBuildWaiters.erase(key);
     }
     buildLock.unlock();
+    if (!keepGoing) {
+      return nullptr;
+    }
     std::lock_guard<std::mutex> cacheLock(gIndexMutex);
     const auto cacheIt = gIndexCache.find(key);
     if (builtOk && cacheIt != gIndexCache.end() &&
