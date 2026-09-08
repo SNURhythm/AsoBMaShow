@@ -11,10 +11,12 @@ import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.provider.MediaStore;
 import android.security.NetworkSecurityPolicy;
+import android.system.Os;
 import android.util.Base64;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -45,6 +47,11 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            File cacheDirectory = getTargetContext().getCacheDir();
+            require(cacheDirectory.getAbsolutePath().equals(Os.getenv("SQLITE_TMPDIR")),
+                    "Target application did not configure SQLite private temporary storage");
+            File temporary = File.createTempFile("sqlite-boundary-", ".tmp", cacheDirectory);
+            require(temporary.delete(), "Could not remove owned SQLite storage probe");
             if ("seed-saf".equals(arguments.getString("mode"))) {
                 ContentValues values = new ContentValues();
                 values.put(MediaStore.MediaColumns.DISPLAY_NAME, "smoke.bms");

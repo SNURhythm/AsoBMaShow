@@ -36,6 +36,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
+        android:name=".AsoBMaShowApplication"
         android:allowBackup="true"
         android:backupAgent=".AsoBMaShowBackupAgent"
         android:dataExtractionRules="@xml/data_extraction_rules"

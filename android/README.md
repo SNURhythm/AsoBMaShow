@@ -71,6 +71,14 @@ SHADERC=../bgfx/bgfx/.build/osx-arm64/bin/shadercRelease python3 make.py
 
 ## Platform boundary smoke tests
 
+The Android application configures `SQLITE_TMPDIR` to its private cache before
+the SDL activity starts. Bundled SQLite needs writable temporary files during
+schema migration; Android's working directory and standard Unix temp paths
+are not writable app storage. This keeps migration temporary data private and
+does not move profile databases or force potentially large operations into RAM.
+The platform smoke runner verifies process initialization and a bounded owned
+cache-file probe before its network checks.
+
 Both flavors permit legacy public HTTP table/archive hosts, including
 user-configured hosts that cannot be covered by a fixed domain allowlist.
 HTTP content can be observed or modified in transit; prefer HTTPS sources.
