@@ -5683,6 +5683,59 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(playfield_chart_visual_model_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(playfield_chart_visual_model_tests PRIVATE cxx_std_23)
 
+    add_executable(bounded_duration_graph_tests
+        tests/bounded_duration_graph_tests.cpp
+        src/bms_parser.cpp
+        src/scene/play/PlayfieldChartVisualModel.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
+    )
+    target_include_directories(bounded_duration_graph_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(bounded_duration_graph_tests PRIVATE cxx_std_23)
+    target_compile_definitions(bounded_duration_graph_tests PRIVATE
+        GRAPH_FIXTURE_ROOT="${CMAKE_SOURCE_DIR}/tests/fixtures"
+    )
+
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/graph_selector_fixture.cpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/graph_selector_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/graph_selector_fixture.cpp
+        DEPENDS tests/graph_selector_extract.py tests/graph_selector_fixture.cpp
+            tests/graph_allocation_guard.h src/scene/MusicSelectScene.cpp
+        VERBATIM
+    )
+    add_executable(graph_selector_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/graph_selector_fixture.cpp
+        src/bms_parser.cpp
+        src/scene/play/PlayfieldChartVisualModel.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
+    )
+    target_include_directories(graph_selector_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_compile_features(graph_selector_tests PRIVATE cxx_std_23)
+    target_compile_definitions(graph_selector_tests PRIVATE
+        GRAPH_FIXTURE_ROOT="${CMAKE_SOURCE_DIR}/tests/fixtures")
+
+    add_executable(graph_simulation_tests
+        tests/graph_simulation_tests.cpp
+        src/bms_parser.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/SkinGameplayGraphState.cpp
+        src/scene/play/Judge.cpp
+        src/scene/play/RhythmLaneInputController.cpp
+    )
+    target_include_directories(graph_simulation_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(graph_simulation_tests PRIVATE cxx_std_23)
+    target_compile_definitions(graph_simulation_tests PRIVATE BX_CONFIG_DEBUG=1)
+    target_link_libraries(graph_simulation_tests PRIVATE
+        $<IF:$<TARGET_EXISTS:SDL2_ttf::SDL2_ttf>,SDL2_ttf::SDL2_ttf,SDL2_ttf::SDL2_ttf-static>)
+
     add_executable(playfield_projection_tests
         tests/playfield_projection_tests.cpp
         src/bms_parser.cpp
@@ -8165,6 +8218,25 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(score_provenance_tests foundation_provenance_contract)
     asobmashow_register_test(gameplay_ruleset_tests)
     asobmashow_register_test(playfield_chart_visual_model_tests)
+    asobmashow_register_test(bounded_duration_graph_tests)
+    asobmashow_register_test(graph_selector_tests)
+    asobmashow_register_test(graph_simulation_tests)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/graph_result_fixture.cpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/graph_result_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/graph_result_fixture.cpp
+        DEPENDS tests/graph_result_extract.py tests/graph_result_fixture.cpp src/scene/ResultScene.cpp
+        VERBATIM
+    )
+    get_target_property(GRAPH_RESULT_SOURCES replay_summary_list_tests SOURCES)
+    list(REMOVE_ITEM GRAPH_RESULT_SOURCES tests/replay_summary_list_tests.cpp)
+    add_executable(graph_result_tests ${CMAKE_CURRENT_BINARY_DIR}/graph_result_fixture.cpp ${GRAPH_RESULT_SOURCES})
+    target_include_directories(graph_result_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/tests)
+    target_compile_features(graph_result_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(graph_result_tests)
+    set_tests_properties(graph_result_tests PROPERTIES TIMEOUT 15)
+    set_tests_properties(bounded_duration_graph_tests graph_selector_tests graph_simulation_tests PROPERTIES TIMEOUT 15)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)

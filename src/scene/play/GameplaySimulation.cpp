@@ -113,7 +113,7 @@ makeSkinGameplayGraphNotes(const GameplayDefinition &definition) {
                              note.longNoteRule == LongNoteRule::Classic;
     result.push_back({
         .sourceId = id,
-        .second = static_cast<int>(note.timingMicros / 1'000'000),
+        .second = note.timingMicros / 1'000'000,
         .countsTowardJudgement =
             note.kind != NoteKind::Landmine && !classicTail,
         .redirectSourceId = classicTail ? note.pairId
@@ -159,13 +159,8 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
           : config_.attempt.lightAssistClearMark
                 ? AssistClearMark::LightAssistedEasy
                 : AssistClearMark::None);
-  const std::size_t graphSecondCount =
-      static_cast<std::size_t>(
-          std::max<std::int64_t>(0,
-                                 definition_.metadata()
-                                     .finalTimelineTimeMicros) /
-          1'000'000) +
-      1;
+  const std::uint64_t graphSecondCount = skinGameplayGraphSecondCount(
+      definition_.metadata().finalTimelineTimeMicros);
   skinGameplayGraph_.reset(
       makeSkinGameplayGraphNotes(definition_), graphSecondCount,
       skinJudgeWindows(config_.judge), config_.attempt.gaugeHistoryCapacity);

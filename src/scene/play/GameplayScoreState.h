@@ -607,9 +607,10 @@ public:
   }
 
   void configureBoundedGaugeHistory(std::size_t capacity) {
-    gaugeHistory.reserve(capacity);
+    const std::size_t initialCapacity = std::min<std::size_t>(capacity, 4096);
+    gaugeHistory.reserve(initialCapacity);
     for (auto &history : gaugeHistories) {
-      history.reserve(capacity);
+      history.reserve(initialCapacity);
     }
     gaugeHistoryCapacity_ = capacity;
     boundedGaugeHistory_ = true;

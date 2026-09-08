@@ -1990,10 +1990,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       std::max<std::size_t>(4096, definition.noteCount() * 3 + 1024);
   const std::size_t gaugeHistoryCapacity = std::max(
       automaticCapacity,
-      static_cast<std::size_t>(std::max<std::int64_t>(
-          0, definition.metadata().finalTimelineTimeMicros) /
-                               500'000) +
-          2);
+      skinGameplayGaugeHistoryCapacityHint(
+          definition.metadata().finalTimelineTimeMicros));
   const std::size_t replayCapacity = gameplay::realtimeGameplayReplayCapacity(
       definition.noteCount(), definition.metadata().finalTimelineTimeMicros);
   gameplay::GameplaySimulationConfig simulationConfig{
@@ -5109,7 +5107,7 @@ void GamePlayScene::resetSkinGameplayGraph() {
                      playfieldChartVisualModel.timelines.back().timeMicros);
   const std::size_t gaugeHistoryCapacity = std::max({
       std::size_t{4096}, playfieldChartVisualModel.notes.size(),
-      static_cast<std::size_t>(lastTimelineMicros / 500'000) + 2,
+      skinGameplayGaugeHistoryCapacityHint(lastTimelineMicros),
   });
   skinGameplayGraph.reset(
       playfieldChartVisualModel.skinGameplayGraph.judgementNotes,

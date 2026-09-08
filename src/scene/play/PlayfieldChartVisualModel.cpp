@@ -409,20 +409,20 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
       }
     }
   }
-  const std::size_t bucketCount =
-      static_cast<std::size_t>(std::max(0LL, lastTimeMicros / 1'000'000)) +
+  const std::uint64_t bucketCount =
+      static_cast<std::uint64_t>(std::max(0LL, lastTimeMicros / 1'000'000)) +
       2U;
   // SongInformation uses one bucket per elapsed second. Retaining every zero
   // bucket lets a distant malformed timeline allocate gigabytes, while its
   // aggregate results only depend on sparse note changes. Keep the source's
   // inclusive per-second semantics as delta intervals instead.
-  std::unordered_map<std::size_t, long long> noteCountDeltas;
+  std::unordered_map<std::uint64_t, long long> noteCountDeltas;
   if (chart.Meta.TotalNotes > 0) {
-    noteCountDeltas.reserve(std::min<std::size_t>(
-        static_cast<std::size_t>(chart.Meta.TotalNotes) * 2U + 2U,
+    noteCountDeltas.reserve(std::min<std::uint64_t>(
+        static_cast<std::uint64_t>(chart.Meta.TotalNotes) * 2U + 2U,
         1U << 20U));
   }
-  const auto addNoteRange = [&](std::size_t start, std::size_t end) {
+  const auto addNoteRange = [&](std::uint64_t start, std::uint64_t end) {
     if (start > end) {
       return;
     }
@@ -433,7 +433,7 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
       static_cast<double>(chart.Meta.TotalNotes) *
       (1.0 - 100.0 / chart.Meta.Total);
   int border = javaDoubleToIntForSongInformation(borderValue);
-  std::size_t borderPosition = 0;
+  std::uint64_t borderPosition = 0;
   for (const auto *measure : chart.Measures) {
     if (measure == nullptr) {
       continue;
@@ -442,8 +442,8 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
       if (timeline == nullptr) {
         continue;
       }
-      const std::size_t second =
-          static_cast<std::size_t>(timeline->Timing / 1'000'000);
+      const std::uint64_t second =
+          static_cast<std::uint64_t>(timeline->Timing / 1'000'000);
       for (const auto *note : timeline->Notes) {
         if (note == nullptr) {
           continue;
@@ -452,7 +452,7 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
         if (longNote != nullptr && !longNote->IsTail()) {
           const long long tailMillis =
               longNote->Tail->Timeline->Timing / 1'000'000;
-          const std::size_t tailSecond = static_cast<std::size_t>(tailMillis);
+          const std::uint64_t tailSecond = static_cast<std::uint64_t>(tailMillis);
           addNoteRange(second, tailSecond);
         }
 
@@ -477,26 +477,26 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
   }
 
   const int bucketCountForMinimum =
-      bucketCount > static_cast<std::size_t>(std::numeric_limits<int>::max())
+      bucketCount > static_cast<std::uint64_t>(std::numeric_limits<int>::max())
           ? std::numeric_limits<int>::max()
           : static_cast<int>(bucketCount);
   const int minimumDensity =
       chart.Meta.TotalNotes / bucketCountForMinimum / 4;
   PlayfieldSongInformation result;
-  std::vector<std::pair<std::size_t, long long>> orderedNoteCountDeltas(
+  std::vector<std::pair<std::uint64_t, long long>> orderedNoteCountDeltas(
       noteCountDeltas.begin(), noteCountDeltas.end());
   std::ranges::sort(orderedNoteCountDeltas, {},
                     [](const auto &entry) { return entry.first; });
   struct NoteCountSegment {
-    std::size_t start = 0;
-    std::size_t end = 0;
+    std::uint64_t start = 0;
+    std::uint64_t end = 0;
     long long notes = 0;
   };
   std::vector<NoteCountSegment> segments;
   segments.reserve(noteCountDeltas.size() + 1U);
-  std::size_t segmentStart = 0;
+  std::uint64_t segmentStart = 0;
   long long currentNotes = 0;
-  const auto appendSegment = [&](std::size_t end) {
+  const auto appendSegment = [&](std::uint64_t end) {
     if (segmentStart < end) {
       segments.push_back(
           {.start = segmentStart, .end = end, .notes = currentNotes});
@@ -526,31 +526,31 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
   }
   result.density = static_cast<double>(densityTotal / densityCount);
 
-  const std::size_t window =
-      std::min<std::size_t>(5U, bucketCount - borderPosition - 1U);
-  const std::size_t lastWindowStart = bucketCount - window - 1U;
-  std::set<std::size_t> windowStarts = {borderPosition, lastWindowStart};
+  const std::uint64_t window =
+      std::min<std::uint64_t>(5U, bucketCount - borderPosition - 1U);
+  const std::uint64_t lastWindowStart = bucketCount - window - 1U;
+  std::set<std::uint64_t> windowStarts = {borderPosition, lastWindowStart};
   for (const auto &[second, delta] : orderedNoteCountDeltas) {
     (void)delta;
-    const std::size_t first =
-        second > window ? second - window : static_cast<std::size_t>(0);
-    const std::size_t last = std::min(second, lastWindowStart);
-    for (std::size_t start = std::max(first, borderPosition); start <= last;
+    const std::uint64_t first =
+        second > window ? second - window : static_cast<std::uint64_t>(0);
+    const std::uint64_t last = std::min(second, lastWindowStart);
+    for (std::uint64_t start = std::max(first, borderPosition); start <= last;
          ++start) {
       windowStarts.insert(start);
     }
   }
-  const auto notesAt = [&segments](std::size_t second) {
+  const auto notesAt = [&segments](std::uint64_t second) {
     const auto it = std::upper_bound(
         segments.begin(), segments.end(), second,
-        [](std::size_t value, const NoteCountSegment &segment) {
+        [](std::uint64_t value, const NoteCountSegment &segment) {
           return value < segment.start;
         });
     return std::prev(it)->notes;
   };
-  for (const std::size_t start : windowStarts) {
+  for (const std::uint64_t start : windowStarts) {
     long long notes = 0;
-    for (std::size_t next = 0; next < window; ++next) {
+    for (std::uint64_t next = 0; next < window; ++next) {
       notes += notesAt(start + next);
     }
     result.endDensity = std::max(result.endDensity,
@@ -921,16 +921,16 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     graph.averageDensity = information->density;
     graph.totalGauge = information->total;
   }
-  const std::size_t distributionSeconds =
+  graph.judgementDistributionSeconds =
       result.timelines.empty()
           ? 0
-          : static_cast<std::size_t>(
-                std::max(0LL, result.timelines.back().timeMicros) /
-                1'000'000) +
-                2;
-  graph.normalDistribution.assign(distributionSeconds, {});
-  graph.judgementDistributionSeconds =
-      distributionSeconds == 0 ? 0 : distributionSeconds - 1;
+          : skinGameplayGraphSecondCount(result.timelines.back().timeMicros);
+  const std::size_t distributionSeconds =
+      skinGameplayGraphDistributionSize(graph.judgementDistributionSeconds);
+  graph.distributionOmitted = graph.judgementDistributionSeconds != 0 &&
+                              distributionSeconds == 0;
+  graph.normalDistribution.assign(
+      distributionSeconds == 0 ? 0 : distributionSeconds + 1, {});
 
   std::unordered_map<ChartVisualId, long long> graphTimelineTimes;
   graphTimelineTimes.reserve(result.timelines.size());
@@ -941,9 +941,9 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
     const auto timeline = graphTimelineTimes.find(note.timelineId);
     return timeline == graphTimelineTimes.end()
                ? -1
-               : static_cast<int>(timeline->second / 1'000'000);
+               : timeline->second / 1'000'000;
   };
-  std::unordered_map<ChartVisualId, int> graphSecondsByNoteId;
+  std::unordered_map<ChartVisualId, std::int64_t> graphSecondsByNoteId;
   graphSecondsByNoteId.reserve(result.notes.size());
   for (const auto &note : result.notes) {
     graphSecondsByNoteId.emplace(note.id, graphSecond(note));
@@ -951,7 +951,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
   const auto graphScratchLanes = chart.Meta.GetScratchLaneIndices();
   graph.judgementNotes.reserve(result.notes.size());
   for (const auto &note : result.notes) {
-    const int second = graphSecondsByNoteId.at(note.id);
+    const std::int64_t second = graphSecondsByNoteId.at(note.id);
     const bool classicTail = note.source == ChartVisualNoteSource::Playable &&
                              note.kind == ChartVisualNoteKind::LongTail &&
                              note.longNoteMode == ChartLongNoteMode::LN;
@@ -964,7 +964,7 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
          .countsTowardJudgement = countsTowardJudgement,
          .redirectSourceId = classicTail ? note.pairId
                                          : kInvalidSkinGameplayGraphSourceId});
-    if (second < 0 || static_cast<std::size_t>(second) >=
+    if (second < 0 || static_cast<std::uint64_t>(second) >=
                           graph.normalDistribution.size()) {
       continue;
     }
@@ -983,13 +983,13 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
         if (pair == graphSecondsByNoteId.end()) {
           continue;
         }
-        const int tailSecond = pair->second;
+        const std::int64_t tailSecond = pair->second;
         if (tailSecond < second || tailSecond < 0 ||
-            static_cast<std::size_t>(tailSecond) >=
+            static_cast<std::uint64_t>(tailSecond) >=
                 graph.normalDistribution.size()) {
           continue;
         }
-        for (int index = second; index <= tailSecond; ++index) {
+        for (std::int64_t index = second; index <= tailSecond; ++index) {
           ++graph.normalDistribution[index][scratch ? 1 : 4];
         }
       }

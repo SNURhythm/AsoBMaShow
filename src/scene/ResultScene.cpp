@@ -467,21 +467,27 @@ int totalNotesForCourse(const CoursePlaySession &session) {
 SkinGameplayGraphState
 courseGraphPaddingForEntry(const CoursePlayEntry &entry, GaugeType gaugeType) {
   const std::int64_t playLength = std::max(0LL, entry.meta.PlayLength);
-  const std::size_t judgementSeconds =
-      static_cast<std::size_t>(playLength / 1'000'000LL) + 1;
-  const int gaugeSamples =
-      std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
+  const std::uint64_t judgementSeconds = skinGameplayGraphSecondCount(playLength);
+  const std::size_t distributionSize =
+      skinGameplayGraphDistributionSize(judgementSeconds);
+  const std::uint64_t gaugeSamples =
+      static_cast<std::uint64_t>(playLength) / 500'000U + 1U;
 
   auto chart = std::make_shared<SkinGameplayChartGraphState>();
-  chart->normalDistribution.assign(judgementSeconds + 1, {});
+  chart->normalDistribution.assign(
+      distributionSize == 0 ? 0 : distributionSize + 1, {});
   chart->judgementDistributionSeconds = judgementSeconds;
+  chart->distributionOmitted = distributionSize == 0;
 
   auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
-  dynamic->judgementDistribution.assign(judgementSeconds, {});
-  dynamic->earlyLateDistribution.assign(judgementSeconds, {});
+  dynamic->judgementDistribution.assign(distributionSize, {});
+  dynamic->earlyLateDistribution.assign(distributionSize, {});
+  dynamic->distributionOmitted = chart->distributionOmitted;
+  dynamic->gaugeHistoryOmitted = gaugeSamples > kSkinMaximumGaugeGraphSamples;
   dynamic->gaugeType = gaugeType;
   for (auto &history : dynamic->gaugeHistories) {
-    history.assign(static_cast<std::size_t>(gaugeSamples), 0.0F);
+    history.assign(dynamic->gaugeHistoryOmitted
+                       ? 0 : static_cast<std::size_t>(gaugeSamples), 0.0F);
   }
   return {.chart = std::move(chart), .dynamic = std::move(dynamic)};
 }
@@ -491,7 +497,18 @@ SkinGameplayGraphState courseGameplayGraphForSession(
   std::vector<SkinGameplayGraphState> stages;
   stages.reserve(session.entries.size());
   for (const auto &stage : session.completedResults) {
-    stages.push_back(stage.gameplayGraph);
+    auto graph = stage.gameplayGraph;
+    if (graph.chart == nullptr) {
+      auto chart = std::make_shared<SkinGameplayChartGraphState>();
+      chart->judgementDistributionSeconds =
+          skinGameplayGraphSecondCount(stage.meta.PlayLength);
+      chart->distributionOmitted = true;
+      graph.chart = std::move(chart);
+    }
+    if (graph.dynamic == nullptr) {
+      graph.dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+    }
+    stages.push_back(std::move(graph));
   }
   for (std::size_t index = session.completedResults.size();
        index < session.entries.size(); ++index) {
@@ -505,16 +522,14 @@ SkinGameplayGraphState courseGameplayGraphForSession(
   }
 
   auto chart = std::make_shared<SkinGameplayChartGraphState>(*combined.chart);
-  const std::int64_t courseDurationMicros =
-      static_cast<std::int64_t>(chart->judgementDistributionSeconds) *
-      1'000'000LL;
+  const auto courseDurationMicros = skinGameplayGraphDurationMicros(*chart);
   const auto lastBpm = std::find_if(
       chart->bpmSeries.rbegin(), chart->bpmSeries.rend(),
       [](const SkinBpmGraphPoint &point) { return point.emitsGraphPoint; });
-  if (lastBpm != chart->bpmSeries.rend() &&
-      lastBpm->chartTimeMicros < courseDurationMicros) {
+  if (courseDurationMicros && lastBpm != chart->bpmSeries.rend() &&
+      lastBpm->chartTimeMicros < *courseDurationMicros) {
     auto continuation = *lastBpm;
-    continuation.chartTimeMicros = courseDurationMicros;
+    continuation.chartTimeMicros = *courseDurationMicros;
     continuation.emitsGraphPoint = true;
     continuation.synthetic = true;
     chart->bpmSeries.push_back(continuation);
@@ -526,14 +541,17 @@ SkinGameplayGraphState courseGameplayGraphForSession(
   if (gaugeType >= 0 &&
       static_cast<std::size_t>(gaugeType) < dynamic->gaugeHistories.size()) {
     const std::size_t gaugeIndex = static_cast<std::size_t>(gaugeType);
-    if (dynamic->gaugeHistories[gaugeIndex].empty() &&
+    if (!dynamic->gaugeHistoryOmitted &&
+        dynamic->gaugeHistories[gaugeIndex].empty() &&
         !courseState.gaugeHistory.empty()) {
       // A legacy/no-graph result has no source-equivalent 500 ms log. Keep
       // the available state history, but do not attach stage offsets whose
       // sample coordinates cannot match it.
-      dynamic->gaugeHistories[gaugeIndex] = courseState.gaugeHistory;
+      copySkinGameplayGaugeHistoryForDisplay(
+          *dynamic, dynamic->gaugeHistories, courseState.gaugeHistory,
+          courseState.gaugeType);
       dynamic->gaugeHistorySections.clear();
-    } else {
+    } else if (!dynamic->gaugeHistoryOmitted) {
       // SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.
       // `combined` already has exactly those samples, including the source's
       // zero-filled entries for unplayed stages; only add its cumulative
@@ -604,15 +622,19 @@ courseResultMetaForSession(const CoursePlaySession &session) {
 void appendMissingCourseGaugeHistory(RhythmState &state,
                                      const CoursePlaySession &session,
                                      std::size_t startIndex) {
-  for (std::size_t i = startIndex; i < session.entries.size(); ++i) {
+  if (state.gaugeHistory.size() > kSkinMaximumGaugeGraphSamples) return;
+  std::size_t additionalSamples = 0;
+  for (std::size_t index = startIndex; index < session.entries.size(); ++index) {
     const long long playLength =
-        std::max(0LL, session.entries[i].meta.PlayLength);
-    const int samples =
-        std::max(1, static_cast<int>((playLength + 500000LL) / 500000LL));
-    for (int sample = 0; sample < samples; ++sample) {
-      state.gaugeHistory.push_back(0.0f);
-    }
+        std::max(0LL, session.entries[index].meta.PlayLength);
+    const std::uint64_t samples =
+        static_cast<std::uint64_t>(playLength) / 500'000U + 1U;
+    if (samples > kSkinMaximumGaugeGraphSamples - state.gaugeHistory.size() -
+                      additionalSamples) return;
+    additionalSamples += static_cast<std::size_t>(samples);
   }
+  state.gaugeHistory.reserve(state.gaugeHistory.size() + additionalSamples);
+  state.gaugeHistory.insert(state.gaugeHistory.end(), additionalSamples, 0.0F);
 }
 
 RhythmState courseResultStateForSession(const CoursePlaySession &session) {

@@ -387,8 +387,8 @@ MusicSelectSkinStateBridge::gameplayGraphState() const noexcept {
     return result;
   }
   const auto &chart = *frame_->gameplayGraph.chart;
-  result.normalDistribution = chart.normalDistribution;
-  result.bpmSeries = chart.bpmSeries;
+  if (!chart.distributionOmitted) result.normalDistribution = chart.normalDistribution;
+  if (!chart.bpmSeriesOmitted) result.bpmSeries = chart.bpmSeries;
   result.mainBpm = chart.mainBpm;
   result.minimumBpm = chart.minimumBpm;
   result.maximumBpm = chart.maximumBpm;

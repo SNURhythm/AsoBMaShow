@@ -9,33 +9,57 @@ namespace {
 void advanceRevision(std::uint64_t &value) noexcept {
   value = value == std::numeric_limits<std::uint64_t>::max() ? 1U : value + 1U;
 }
+
+void omitGaugeHistory(SkinGameplayDynamicGraphState &state) {
+  for (auto &history : state.gaugeHistories) history.clear();
+  state.gaugeHistorySections.clear();
+  state.gaugeHistoryOmitted = true;
+}
+
+template <typename Sample>
+bool appendGraphSamples(std::vector<Sample> &target,
+                        const std::vector<Sample> &source,
+                        std::size_t maximum) {
+  if (target.size() > maximum || source.size() > maximum - target.size()) {
+    return false;
+  }
+  if (!source.empty() && target.capacity() < maximum) target.reserve(maximum);
+  target.insert(target.end(), source.begin(), source.end());
+  return true;
+}
 } // namespace
 
 SkinGameplayGraphStateView
 skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
   SkinGameplayGraphStateView view;
   if (state.chart != nullptr) {
-    view.normalDistribution = state.chart->normalDistribution;
-    view.bpmSeries = state.chart->bpmSeries;
+    if (!state.chart->distributionOmitted) {
+      view.normalDistribution = state.chart->normalDistribution;
+    }
+    if (!state.chart->bpmSeriesOmitted) view.bpmSeries = state.chart->bpmSeries;
     view.mainBpm = state.chart->mainBpm;
     view.minimumBpm = state.chart->minimumBpm;
     view.maximumBpm = state.chart->maximumBpm;
   }
   if (state.dynamic != nullptr) {
-    view.judgementDistribution = state.dynamic->judgementDistribution;
-    view.earlyLateDistribution = state.dynamic->earlyLateDistribution;
+    if (!state.dynamic->distributionOmitted) {
+      view.judgementDistribution = state.dynamic->judgementDistribution;
+      view.earlyLateDistribution = state.dynamic->earlyLateDistribution;
+    }
     view.judgeWindows = state.dynamic->judgeWindows;
     view.recentJudgeTimingsMillis = state.dynamic->recentJudgeTimingsMillis;
     view.recentJudgeTimingIndex = state.dynamic->recentJudgeTimingIndex;
     view.judgementRevision = state.dynamic->judgementRevision;
     const int gaugeIndex = gaugeTypeIndex(state.dynamic->gaugeType);
-    if (gaugeIndex >= 0 &&
+    if (!state.dynamic->gaugeHistoryOmitted && gaugeIndex >= 0 &&
         static_cast<std::size_t>(gaugeIndex) <
             state.dynamic->gaugeHistories.size()) {
       view.gaugeHistory =
           state.dynamic->gaugeHistories[static_cast<std::size_t>(gaugeIndex)];
     }
-    view.gaugeHistorySections = state.dynamic->gaugeHistorySections;
+    if (!state.dynamic->gaugeHistoryOmitted) {
+      view.gaugeHistorySections = state.dynamic->gaugeHistorySections;
+    }
     view.gaugeType = gaugeIndex;
     view.gaugeMinimum = state.dynamic->gaugeMinimum;
     view.gaugeMaximum = state.dynamic->gaugeMaximum;
@@ -46,37 +70,100 @@ skinGameplayGraphStateView(const SkinGameplayGraphState &state) noexcept {
   return view;
 }
 
+void copySkinGameplayGaugeHistoryForDisplay(
+    SkinGameplayDynamicGraphState &target,
+    const SkinGaugeHistoryCollection &histories,
+    std::span<const float> fallback, GaugeType type) {
+  const int activeIndex = gaugeTypeIndex(type);
+  const bool useFallback = activeIndex >= 0 &&
+                           static_cast<std::size_t>(activeIndex) < histories.size() &&
+                           histories[activeIndex].empty();
+  if (target.gaugeHistoryOmitted ||
+      (useFallback && fallback.size() > kSkinMaximumGaugeGraphSamples) ||
+      std::ranges::any_of(histories, [](const auto &history) {
+        return history.size() > kSkinMaximumGaugeGraphSamples;
+      })) {
+    omitGaugeHistory(target);
+    return;
+  }
+  target.gaugeHistories = histories;
+  if (useFallback) {
+    target.gaugeHistories[activeIndex].assign(fallback.begin(), fallback.end());
+  }
+}
+
 SkinGameplayGraphState
 combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
   auto chart = std::make_shared<SkinGameplayChartGraphState>();
   auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->gaugeHistoryOmitted = stages.size() > kSkinMaximumGaugeGraphSamples;
   std::vector<std::int64_t> recentJudgeTimings;
   recentJudgeTimings.reserve(kSkinRecentJudgeTimingCapacity);
   bool hasGraph = false;
-  std::int64_t chartTimeOffset = 0;
+  std::array<bool, kGaugeTypeCount> hasGaugeSamples{};
+  std::array<bool, kGaugeTypeCount> missingGaugeSamples{};
   for (const auto &stage : stages) {
     if (stage.chart == nullptr || stage.dynamic == nullptr) {
+      chart->durationUnavailable = true;
+      chart->judgementDistributionSeconds = 0;
+      chart->distributionOmitted = true;
+      chart->normalDistribution.clear();
+      chart->bpmSeriesOmitted = true;
+      chart->bpmSeries.clear();
+      dynamic->distributionOmitted = true;
+      dynamic->judgementDistribution.clear();
+      dynamic->earlyLateDistribution.clear();
+      omitGaugeHistory(*dynamic);
       continue;
     }
     hasGraph = true;
     const auto &stageChart = *stage.chart;
     const auto &stageDynamic = *stage.dynamic;
-    if (!chart->normalDistribution.empty() &&
-        !stageChart.normalDistribution.empty()) {
-      chart->normalDistribution.pop_back();
+    const auto chartTimeOffset = skinGameplayGraphDurationMicros(*chart);
+    if (chart->durationUnavailable || stageChart.durationUnavailable ||
+        stageChart.judgementDistributionSeconds >
+            std::numeric_limits<std::uint64_t>::max() -
+                chart->judgementDistributionSeconds) {
+      chart->durationUnavailable = true;
+      chart->judgementDistributionSeconds = 0;
+    } else {
+      chart->judgementDistributionSeconds +=
+          stageChart.judgementDistributionSeconds;
     }
-    chart->normalDistribution.insert(chart->normalDistribution.end(),
-                                     stageChart.normalDistribution.begin(),
-                                     stageChart.normalDistribution.end());
+    const bool distributionTooLong = chart->durationUnavailable ||
+        chart->judgementDistributionSeconds >= kSkinMaximumNormalGraphSamples;
+    chart->distributionOmitted = chart->distributionOmitted ||
+        stageChart.distributionOmitted || distributionTooLong ||
+        (stageChart.judgementDistributionSeconds != 0 &&
+         stageChart.normalDistribution.empty());
+    if (!chart->distributionOmitted) {
+      if (!chart->normalDistribution.empty() &&
+          !stageChart.normalDistribution.empty()) {
+        chart->normalDistribution.pop_back();
+      }
+      chart->distributionOmitted = !appendGraphSamples(
+          chart->normalDistribution, stageChart.normalDistribution,
+          kSkinMaximumNormalGraphSamples);
+    }
+    if (chart->distributionOmitted) chart->normalDistribution.clear();
     chart->judgementNotes.insert(chart->judgementNotes.end(),
                                  stageChart.judgementNotes.begin(),
                                  stageChart.judgementNotes.end());
-    for (auto point : stageChart.bpmSeries) {
-      point.chartTimeMicros += chartTimeOffset;
-      chart->bpmSeries.push_back(point);
+    chart->bpmSeriesOmitted = chart->bpmSeriesOmitted ||
+        stageChart.bpmSeriesOmitted || !chartTimeOffset ||
+        !skinGameplayGraphDurationMicros(*chart);
+    if (!chart->bpmSeriesOmitted) {
+      for (auto point : stageChart.bpmSeries) {
+        if (point.chartTimeMicros >
+            std::numeric_limits<std::int64_t>::max() - *chartTimeOffset) {
+          chart->bpmSeriesOmitted = true;
+          break;
+        }
+        point.chartTimeMicros += *chartTimeOffset;
+        chart->bpmSeries.push_back(point);
+      }
     }
-    chart->judgementDistributionSeconds +=
-        stageChart.judgementDistributionSeconds;
+    if (chart->bpmSeriesOmitted) chart->bpmSeries.clear();
     if (stageChart.mainBpm > 0.0) {
       chart->mainBpm = stageChart.mainBpm;
     }
@@ -140,19 +227,46 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
     if (stageChart.hasBpmStop) {
       chart->hasBpmStop = stageChart.hasBpmStop;
     }
-    dynamic->judgementDistribution.insert(
-        dynamic->judgementDistribution.end(),
-        stageDynamic.judgementDistribution.begin(),
-        stageDynamic.judgementDistribution.end());
-    dynamic->earlyLateDistribution.insert(
-        dynamic->earlyLateDistribution.end(),
-        stageDynamic.earlyLateDistribution.begin(),
-        stageDynamic.earlyLateDistribution.end());
-    for (std::size_t index = 0; index < dynamic->gaugeHistories.size();
-         ++index) {
-      const auto &history = stageDynamic.gaugeHistories[index];
-      dynamic->gaugeHistories[index].insert(
-          dynamic->gaugeHistories[index].end(), history.begin(), history.end());
+    dynamic->distributionOmitted = dynamic->distributionOmitted ||
+        stageDynamic.distributionOmitted || distributionTooLong ||
+        (stageChart.judgementDistributionSeconds != 0 &&
+         (stageDynamic.judgementDistribution.empty() ||
+          stageDynamic.earlyLateDistribution.empty()));
+    if (!dynamic->distributionOmitted) {
+      dynamic->distributionOmitted = !appendGraphSamples(
+          dynamic->judgementDistribution, stageDynamic.judgementDistribution,
+          kSkinMaximumNormalGraphSamples - 1) ||
+          !appendGraphSamples(dynamic->earlyLateDistribution,
+                              stageDynamic.earlyLateDistribution,
+                              kSkinMaximumNormalGraphSamples - 1);
+    }
+    if (dynamic->distributionOmitted) {
+      dynamic->judgementDistribution.clear();
+      dynamic->earlyLateDistribution.clear();
+    }
+    for (std::size_t index = 0; index < hasGaugeSamples.size(); ++index) {
+      const bool stageHasSamples = !stageDynamic.gaugeHistories[index].empty();
+      hasGaugeSamples[index] = hasGaugeSamples[index] || stageHasSamples;
+      missingGaugeSamples[index] = missingGaugeSamples[index] ||
+          (!stageHasSamples && stageChart.judgementDistributionSeconds != 0);
+      if (hasGaugeSamples[index] && missingGaugeSamples[index]) {
+        omitGaugeHistory(*dynamic);
+      }
+    }
+    if (stageDynamic.gaugeHistoryOmitted ||
+        !skinGameplayGaugeDurationAdmitted(chart->judgementDistributionSeconds) ||
+        chart->durationUnavailable) {
+      omitGaugeHistory(*dynamic);
+    }
+    if (!dynamic->gaugeHistoryOmitted) {
+      for (std::size_t index = 0; index < dynamic->gaugeHistories.size(); ++index) {
+        if (!appendGraphSamples(dynamic->gaugeHistories[index],
+                                stageDynamic.gaugeHistories[index],
+                                kSkinMaximumGaugeGraphSamples)) {
+          omitGaugeHistory(*dynamic);
+          break;
+        }
+      }
     }
     for (std::size_t offset = 1;
          offset <= stageDynamic.recentJudgeTimingsMillis.size(); ++offset) {
@@ -177,8 +291,6 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
     dynamic->gaugeSupported = stageDynamic.gaugeSupported;
     dynamic->judgementRevision += stageDynamic.judgementRevision;
     dynamic->gaugeRevision += stageDynamic.gaugeRevision;
-    chartTimeOffset += static_cast<std::int64_t>(
-        stageChart.judgementDistributionSeconds) * 1'000'000LL;
   }
   for (const std::int64_t timing : recentJudgeTimings) {
     dynamic->recentJudgeTimingIndex =
@@ -192,24 +304,28 @@ combineSkinGameplayGraphStates(std::span<const SkinGameplayGraphState> stages) {
 }
 
 SkinGameplayGraphAccumulator::SkinGameplayGraphAccumulator(
-    std::vector<SkinGameplayGraphNote> notes, std::size_t secondCount,
+    std::vector<SkinGameplayGraphNote> notes, std::uint64_t secondCount,
     std::array<SkinJudgeWindow, 5> judgeWindows,
     std::size_t gaugeHistoryCapacity) {
   reset(std::move(notes), secondCount, judgeWindows, gaugeHistoryCapacity);
 }
 
 void SkinGameplayGraphAccumulator::reset(
-    std::vector<SkinGameplayGraphNote> notes, std::size_t secondCount,
+    std::vector<SkinGameplayGraphNote> notes, std::uint64_t secondCount,
     std::array<SkinJudgeWindow, 5> judgeWindows,
     std::size_t gaugeHistoryCapacity) {
   state_ = {};
   state_.judgeWindows = judgeWindows;
-  state_.judgementDistribution.assign(secondCount, {});
-  state_.earlyLateDistribution.assign(secondCount, {});
+  const std::size_t distributionSize = skinGameplayGraphDistributionSize(secondCount);
+  state_.distributionOmitted = secondCount != 0 && distributionSize == 0;
+  state_.judgementDistribution.assign(distributionSize, {});
+  state_.earlyLateDistribution.assign(distributionSize, {});
+  state_.gaugeHistoryOmitted = !skinGameplayGaugeDurationAdmitted(secondCount);
+  gaugeHistoryCapacity_ = state_.gaugeHistoryOmitted ? 0 :
+      std::min(gaugeHistoryCapacity, kSkinMaximumGaugeGraphSamples);
   for (auto &history : state_.gaugeHistories) {
-    history.reserve(gaugeHistoryCapacity);
+    history.reserve(gaugeHistoryCapacity_);
   }
-  gaugeHistoryCapacity_ = gaugeHistoryCapacity;
   gaugeValues_ = {};
   nextGaugeSampleMicros_ = 0;
   gaugeValuesInitialized_ = false;
@@ -224,7 +340,7 @@ void SkinGameplayGraphAccumulator::reset(
     notes_.push_back({.definition = std::move(note)});
     const auto &stored = notes_.back().definition;
     if (!stored.countsTowardJudgement || stored.second < 0 ||
-        static_cast<std::size_t>(stored.second) >= secondCount) {
+        static_cast<std::uint64_t>(stored.second) >= distributionSize) {
       continue;
     }
     ++state_.judgementDistribution[stored.second][0];
@@ -287,23 +403,22 @@ void SkinGameplayGraphAccumulator::applyJudge(
   }
 
   NoteState *note = resolvedNote(sourceId);
-  if (note == nullptr || note->definition.second < 0 ||
-      static_cast<std::size_t>(note->definition.second) >=
-          state_.judgementDistribution.size()) {
+  if (note == nullptr || note->definition.second < 0) {
     return;
   }
   const std::int64_t nextPlayTimeMillis = -(judge.Diff / 1000);
   const int previousEarlyLate =
       earlyLateBucket(note->state, note->playTimeMillis);
   const int nextEarlyLate = earlyLateBucket(nextState, nextPlayTimeMillis);
-  auto &judgements =
-      state_.judgementDistribution[note->definition.second];
-  auto &earlyLate =
-      state_.earlyLateDistribution[note->definition.second];
-  --judgements[static_cast<std::size_t>(note->state)];
-  ++judgements[static_cast<std::size_t>(nextState)];
-  --earlyLate[static_cast<std::size_t>(previousEarlyLate)];
-  ++earlyLate[static_cast<std::size_t>(nextEarlyLate)];
+  if (static_cast<std::uint64_t>(note->definition.second) <
+      state_.judgementDistribution.size()) {
+    auto &judgements = state_.judgementDistribution[note->definition.second];
+    auto &earlyLate = state_.earlyLateDistribution[note->definition.second];
+    --judgements[static_cast<std::size_t>(note->state)];
+    ++judgements[static_cast<std::size_t>(nextState)];
+    --earlyLate[static_cast<std::size_t>(previousEarlyLate)];
+    ++earlyLate[static_cast<std::size_t>(nextEarlyLate)];
+  }
   note->state = nextState;
   note->playTimeMillis = nextPlayTimeMillis;
 
@@ -361,7 +476,8 @@ bool SkinGameplayGraphAccumulator::updateGaugeState(
 bool SkinGameplayGraphAccumulator::advanceGaugeHistoryTo(
     std::int64_t playTimeMicros) {
   constexpr std::int64_t sampleIntervalMicros = 500'000;
-  if (!gaugeValuesInitialized_ || playTimeMicros < nextGaugeSampleMicros_) {
+  if (!gaugeValuesInitialized_ || state_.gaugeHistoryOmitted ||
+      gaugeHistoryCapacity_ == 0 || playTimeMicros < nextGaugeSampleMicros_) {
     return false;
   }
 
@@ -370,6 +486,11 @@ bool SkinGameplayGraphAccumulator::advanceGaugeHistoryTo(
   const std::size_t existing = state_.gaugeHistories.front().size();
   const std::size_t available =
       existing < gaugeHistoryCapacity_ ? gaugeHistoryCapacity_ - existing : 0;
+  if (due > available) {
+    omitGaugeHistory(state_);
+    advanceRevision(state_.gaugeRevision);
+    return true;
+  }
   const std::size_t appended = static_cast<std::size_t>(
       std::min<std::uint64_t>(due, available));
   for (std::size_t type = 0; type < state_.gaugeHistories.size(); ++type) {

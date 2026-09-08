@@ -17,6 +17,8 @@ inline constexpr std::size_t kSkinNormalDistributionBucketCount = 7;
 inline constexpr std::size_t kSkinJudgeDistributionBucketCount = 6;
 inline constexpr std::size_t kSkinEarlyLateDistributionBucketCount = 10;
 inline constexpr std::size_t kSkinRecentJudgeTimingCapacity = 100;
+inline constexpr std::size_t kSkinMaximumNormalGraphSamples = 1638;
+inline constexpr std::size_t kSkinMaximumGaugeGraphSamples = 4096;
 inline constexpr std::int64_t kSkinEmptyJudgeTimingMillis =
     std::numeric_limits<std::int64_t>::min();
 inline constexpr std::uint32_t kInvalidSkinGameplayGraphSourceId =
@@ -30,6 +32,34 @@ using SkinEarlyLateDistribution =
     std::array<int, kSkinEarlyLateDistributionBucketCount>;
 using SkinGaugeHistoryCollection =
     std::array<std::vector<float>, kGaugeTypeCount>;
+
+[[nodiscard]] constexpr std::uint64_t
+skinGameplayGraphSecondCount(std::int64_t timeMicros) noexcept {
+  return static_cast<std::uint64_t>(timeMicros > 0 ? timeMicros : 0) /
+             1'000'000U +
+         1U;
+}
+
+[[nodiscard]] constexpr std::size_t
+skinGameplayGraphDistributionSize(std::uint64_t seconds) noexcept {
+  return seconds < kSkinMaximumNormalGraphSamples
+             ? static_cast<std::size_t>(seconds)
+             : 0;
+}
+
+[[nodiscard]] constexpr bool
+skinGameplayGaugeDurationAdmitted(std::uint64_t seconds) noexcept {
+  return seconds <= kSkinMaximumGaugeGraphSamples / 2;
+}
+
+[[nodiscard]] constexpr std::size_t
+skinGameplayGaugeHistoryCapacityHint(std::int64_t timeMicros) noexcept {
+  const std::uint64_t samples =
+      static_cast<std::uint64_t>(timeMicros > 0 ? timeMicros : 0) / 500'000U + 2U;
+  return samples > std::numeric_limits<std::size_t>::max()
+             ? std::numeric_limits<std::size_t>::max()
+             : static_cast<std::size_t>(samples);
+}
 
 struct SkinBpmGraphPoint {
   std::int64_t chartTimeMicros = 0;
@@ -47,7 +77,7 @@ struct SkinBpmGraphPoint {
 
 struct SkinGameplayGraphNote {
   std::uint32_t sourceId = kInvalidSkinGameplayGraphSourceId;
-  int second = 0;
+  std::int64_t second = 0;
   bool countsTowardJudgement = false;
   std::uint32_t redirectSourceId = kInvalidSkinGameplayGraphSourceId;
 
@@ -56,7 +86,10 @@ struct SkinGameplayGraphNote {
 
 struct SkinGameplayChartGraphState {
   std::vector<SkinNormalDistribution> normalDistribution;
-  std::size_t judgementDistributionSeconds = 0;
+  std::uint64_t judgementDistributionSeconds = 0;
+  bool distributionOmitted = false;
+  bool durationUnavailable = false;
+  bool bpmSeriesOmitted = false;
   std::vector<SkinBpmGraphPoint> bpmSeries;
   std::vector<SkinGameplayGraphNote> judgementNotes;
   double mainBpm = 0.0;
@@ -85,6 +118,18 @@ struct SkinGameplayChartGraphState {
   bool operator==(const SkinGameplayChartGraphState &) const = default;
 };
 
+[[nodiscard]] inline std::optional<std::int64_t>
+skinGameplayGraphDurationMicros(const SkinGameplayChartGraphState &chart) noexcept {
+  if (chart.durationUnavailable ||
+      chart.judgementDistributionSeconds >
+          static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) /
+              1'000'000U) {
+    return std::nullopt;
+  }
+  return static_cast<std::int64_t>(chart.judgementDistributionSeconds) *
+         1'000'000LL;
+}
+
 struct SkinJudgeWindow {
   Judgement judgement = None;
   int minimumTimingMillis = 0;
@@ -104,6 +149,8 @@ emptySkinRecentJudgeTimings() noexcept {
 struct SkinGameplayDynamicGraphState {
   std::vector<SkinJudgeDistribution> judgementDistribution;
   std::vector<SkinEarlyLateDistribution> earlyLateDistribution;
+  bool distributionOmitted = false;
+  bool gaugeHistoryOmitted = false;
   std::array<std::int64_t, kSkinRecentJudgeTimingCapacity>
       recentJudgeTimingsMillis = emptySkinRecentJudgeTimings();
   // JudgeManager increments the index before storing a timing. Consumers use
@@ -161,6 +208,11 @@ struct SkinGameplayGraphStateView {
 [[nodiscard]] SkinGameplayGraphStateView
 skinGameplayGraphStateView(const SkinGameplayGraphState &) noexcept;
 
+void copySkinGameplayGaugeHistoryForDisplay(
+    SkinGameplayDynamicGraphState &target,
+    const SkinGaugeHistoryCollection &histories,
+    std::span<const float> fallback, GaugeType type);
+
 // Course result consumers concatenate completed chart snapshots. Keeping the
 // merge here lets interactive, saved, and exported results share the same
 // graph authority.
@@ -171,12 +223,12 @@ class SkinGameplayGraphAccumulator {
 public:
   SkinGameplayGraphAccumulator() = default;
   SkinGameplayGraphAccumulator(
-      std::vector<SkinGameplayGraphNote> notes, std::size_t secondCount,
+      std::vector<SkinGameplayGraphNote> notes, std::uint64_t secondCount,
       std::array<SkinJudgeWindow, 5> judgeWindows,
       std::size_t gaugeHistoryCapacity);
 
   void reset(std::vector<SkinGameplayGraphNote> notes,
-             std::size_t secondCount,
+             std::uint64_t secondCount,
              std::array<SkinJudgeWindow, 5> judgeWindows,
              std::size_t gaugeHistoryCapacity);
   void applyJudge(std::uint32_t sourceId, const JudgeResult &judge);
