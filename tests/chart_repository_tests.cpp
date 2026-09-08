@@ -9,7 +9,9 @@
 #include "music_select/MusicSelectRepositoryProjection.h"
 #include "music_select/MusicSelectPropertyProjection.h"
 #include "music_select/MusicSelectPhysicalDirectory.h"
+#include "music_select/MusicSelectPagedSongs.h"
 #include "music_select/MusicSelectReplaySlots.h"
+#include "music_select/MusicSelectSqlSongs.h"
 
 #include <array>
 #include <algorithm>
@@ -19,6 +21,9 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iomanip>
+#include <iostream>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -130,6 +135,12 @@ int observedReadVmSteps = 0;
 int observedProbeVmSteps = 0;
 std::string deniedChartReadColumn;
 bool interruptSelectionRead = false;
+struct PhysicalDirectoryPageObservation {
+  std::size_t limit = 0;
+  std::size_t offset = 0;
+  std::size_t rows = 0;
+};
+std::vector<PhysicalDirectoryPageObservation> physicalDirectoryPages;
 
 int traceStatement(unsigned mask, void *, void *statement, void *) {
   if (statement == nullptr) {
@@ -137,6 +148,25 @@ int traceStatement(unsigned mask, void *, void *statement, void *) {
   }
   const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
   const std::string_view sqlText = sql != nullptr ? sql : "";
+  if (sqlText.find("LIMIT @selector_limit OFFSET @selector_offset") !=
+      std::string_view::npos) {
+    std::lock_guard lock(traceMutex);
+    if (mask == SQLITE_TRACE_STMT) {
+      char *expanded = sqlite3_expanded_sql(static_cast<sqlite3_stmt *>(statement));
+      assert(expanded != nullptr);
+      const std::string text(expanded);
+      sqlite3_free(expanded);
+      const auto limitPosition = text.rfind(" LIMIT ");
+      const auto offsetPosition = text.rfind(" OFFSET ");
+      assert(limitPosition != std::string::npos && offsetPosition != std::string::npos);
+      physicalDirectoryPages.push_back({
+          std::stoull(text.substr(limitPosition + 7)),
+          std::stoull(text.substr(offsetPosition + 8)), 0});
+    } else if (mask == SQLITE_TRACE_ROW) {
+      assert(!physicalDirectoryPages.empty());
+      ++physicalDirectoryPages.back().rows;
+    }
+  }
   if (interruptSelectionRead && mask == SQLITE_TRACE_STMT &&
       sqlText.find("@recursive_folder") != std::string_view::npos) {
     sqlite3_interrupt(sqlite3_db_handle(static_cast<sqlite3_stmt *>(statement)));
@@ -2196,15 +2226,14 @@ MusicSelectBar physicalDirectory(const std::filesystem::path &path) {
 void clearPhysicalDirectoryTrace() {
   std::lock_guard lock(traceMutex);
   tracedStatements.clear();
+  physicalDirectoryPages.clear();
 }
 
 std::vector<std::size_t> physicalDirectoryPageSizes() {
   std::vector<std::size_t> sizes;
   std::lock_guard lock(traceMutex);
-  for (const auto &statement : tracedStatements) {
-    if (statement.find("WHERE cm.path IN (") != std::string::npos) {
-      sizes.push_back(std::count(statement.begin(), statement.end(), '?'));
-    }
+  for (const auto &page : physicalDirectoryPages) {
+    sizes.push_back(page.limit);
   }
   return sizes;
 }
@@ -2298,10 +2327,12 @@ void testPhysicalDirectoryOwnAndMixedSongsMatchRawSubtree() {
   assert(loaded.provider->at(1).chart->meta.BmsPath == nested.BmsPath);
   assert(loaded.provider->at(2).chart->meta.BmsPath == own.BmsPath);
   assert(physicalDirectoryPageSizes() == std::vector<std::size_t>{3});
-  const auto streamed = tracedStatementContaining("@recursive_folder");
-  assert(!streamed.empty());
-  assert(streamed.find("stage_file") == std::string::npos);
-  assert(streamed.find("preferred") == std::string::npos);
+  const auto page = tracedStatementContaining("LIMIT @selector_limit OFFSET @selector_offset");
+  assert(!page.empty());
+  assert(page.find("stage_file") != std::string::npos);
+  assert(page.find("representative.path") != std::string::npos);
+  assert(page.find("preferred") == std::string::npos);
+  assert(!traced("WHERE cm.path IN ("));
 }
 
 std::string physicalChartHash(int number) {
@@ -2310,13 +2341,14 @@ std::string physicalChartHash(int number) {
 }
 
 void seedPhysicalDirectoryPages(ChartRepository &repository,
-                                const std::filesystem::path &root) {
+                                const std::filesystem::path &root,
+                                int count = 320) {
   auto database = openDatabase(repository.DatabasePath());
   assert(database);
   const auto path = root.generic_string();
   assert(execute(database.get(),
       "WITH RECURSIVE rows(number) AS (SELECT 1 UNION ALL "
-      "SELECT number+1 FROM rows WHERE number < 320) "
+      "SELECT number+1 FROM rows WHERE number < " + std::to_string(count) + ") "
       "INSERT INTO chart_meta(path,folder,md5,sha256,title) SELECT '" + path +
       "' || CASE WHEN number<=160 THEN '' WHEN number<=240 THEN '/nested' "
       "ELSE '/nested/leaf' END || printf('/song-%03d.bms',number), '" + path +
@@ -2393,8 +2425,9 @@ void testPhysicalDirectoryPagesOwnWorkerSessionAndRichProjectionInputs() {
   assert(loaded.children.empty() && loaded.provider);
   assert(loaded.provider->size() == 320);
   assert(physicalDirectoryPageSizes() == (std::vector<std::size_t>{128, 64}));
-  const auto streamed = tracedStatementContaining("@recursive_folder");
-  assert(!streamed.empty() && streamed.find("stage_file") == std::string::npos);
+  const auto page = tracedStatementContaining("LIMIT @selector_limit OFFSET @selector_offset");
+  assert(!page.empty() && page.find("stage_file") != std::string::npos);
+  assert(!traced("WHERE cm.path IN ("));
   clearPhysicalDirectoryTrace();
   assert(loaded.provider->at(0).id.value == context + ":sha256:" + physicalChartHash(1));
   assert(loaded.provider->at(319).id.value == context + ":sha256:" + physicalChartHash(320));
@@ -2475,7 +2508,37 @@ void testPhysicalDirectoryPagesOwnWorkerSessionAndRichProjectionInputs() {
   assert(loaded.provider->at(1).presentation.lamp == 7);
 }
 
-void testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming() {
+void testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root);
+  clearPhysicalDirectoryTrace();
+  const auto loaded = loadMusicSelectPhysicalDirectory(
+      repository, {}, physicalDirectory(root), {}, {}, temporary.path(), {}, 0);
+  assert(loaded.provider && loaded.provider->size() == 320);
+  assert(loaded.provider->at(0).chart.has_value());
+  assert(!traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+  assert(!traced("WHERE cm.path IN ("));
+  assert(physicalDirectoryPageSizes() == (std::vector<std::size_t>{128, 64}));
+  {
+    std::lock_guard lock(traceMutex);
+    assert(physicalDirectoryPages[0].offset == 0);
+    assert(physicalDirectoryPages[0].rows == 128);
+    assert(physicalDirectoryPages[1].offset == 0);
+    assert(physicalDirectoryPages[1].rows == 64);
+  }
+  clearPhysicalDirectoryTrace();
+  assert(loaded.provider->at(127).chart.has_value());
+  assert(loaded.provider->at(256).chart->meta.SHA256 == physicalChartHash(257));
+  assert(loaded.provider->at(319).chart->meta.SHA256 == physicalChartHash(320));
+  assert(physicalDirectoryPageSizes().empty());
+}
+
+void testPhysicalDirectoryCancellationAcrossProbeCountAndPriming() {
   TempDirectory temporary;
   std::atomic<int> connections{0};
   ScopedConnectionObserver observer(connections);
@@ -2486,7 +2549,8 @@ void testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming() {
   const auto directory = physicalDirectory(root);
   const std::array phases{
       std::pair{"", 0}, std::pair{"SELECT 1 FROM chart_meta cm", 0},
-      std::pair{"@recursive_folder", 2}, std::pair{"WHERE cm.path IN (", 0}};
+      std::pair{"SELECT COUNT(*) FROM (SELECT cm.sha256 FROM chart_meta cm", 1},
+      std::pair{"LIMIT @selector_limit OFFSET @selector_offset", 0}};
   for (const auto &[sql, rows] : phases) {
     clearPhysicalDirectoryTrace();
     std::stop_source cancellation;
@@ -2507,7 +2571,7 @@ void testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming() {
     cancelReadSql.clear();
     assert(threw && cancellation.stop_requested());
     if (std::string_view(sql).empty()) assert(connections == connectionsBefore);
-    if (std::string_view(sql) == "WHERE cm.path IN (") {
+    if (std::string_view(sql) == "LIMIT @selector_limit OFFSET @selector_offset") {
       assert(physicalDirectoryPageSizes() == std::vector<std::size_t>{128});
     } else {
       assert(physicalDirectoryPageSizes().empty());
@@ -2516,6 +2580,142 @@ void testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming() {
   const auto retried = loadMusicSelectPhysicalDirectory(
       repository, {}, directory, {}, {}, temporary.path(), {}, 0);
   assert(retried.provider && retried.provider->size() == 320);
+}
+
+void testPhysicalDirectoryDurationOverflowMatchesLegacyIndex() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto root = temporary.path() / "songs";
+  const auto directory = physicalDirectory(root);
+  for (int number = 1; number <= 3; ++number) {
+    auto meta = chartMeta(root);
+    meta.BmsPath = root / (std::to_string(number) + ".bms");
+    meta.Title = "Song " + std::to_string(number);
+    meta.SHA256 = physicalChartHash(number);
+    meta.TotalLongNotes = 0;
+    meta.TotalBackSpinNotes = 0;
+    meta.LnMode = 0;
+    assert(session->InsertChartMeta(meta));
+  }
+  const auto clears = std::make_shared<const ScoreClearRankCache>();
+  {
+    ScoreBestCache scores;
+    const std::array<std::int64_t, 3> durations{
+        0, 1, static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 1};
+    for (std::size_t position = 0; position < durations.size(); ++position) {
+      scores.scoreBySha256[physicalChartHash(static_cast<int>(position) + 1)]
+          .snapshots[0] = ScoreBestSnapshot{.averageJudgeMicros = durations[position]};
+    }
+    const auto best = std::make_shared<const ScoreBestCache>(std::move(scores));
+    MusicSelectSongIndex reference(directory.id.value);
+    session->VisitChartMetaSelection(root, [&](const ChartMetaRecord &record) {
+      reference.add(record, best->bestFor(record.meta, 0),
+                    clears->bestRankFor(record.meta, 0));
+    });
+    reference.finish();
+    const auto resolved = reference.configure("ALL", "ALL", "DURATION");
+    assert(reference.size() == 3);
+    const auto verify = [&](const std::shared_ptr<MusicSelectRowProvider> &provider) {
+      assert(provider && provider->size() == reference.size());
+      for (std::size_t position = 0; position < reference.size(); ++position) {
+        const auto &bar = provider->at(position);
+        assert(bar.id == reference.idAt(position));
+        assert(bar.chart && bar.chart->meta.BmsPath == reference.pathAt(position));
+        assert(bar.score && bar.score->averageJudgeMicros ==
+            best->bestFor(bar.chart->meta, 0)->averageJudgeMicros);
+        assert(provider->indexOf(bar.id) == position);
+      }
+    };
+    clearPhysicalDirectoryTrace();
+    const auto initial = loadMusicSelectPhysicalDirectory(repository, {}, directory,
+        best, clears, temporary.path(), {"ALL", "ALL", "DURATION"}, 0);
+    assert(initial.children.empty());
+    verify(initial.provider);
+    assert(traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+    assert(traced("WHERE cm.path IN ("));
+
+    clearPhysicalDirectoryTrace();
+    const auto configured = loadMusicSelectPhysicalDirectory(repository, {}, directory,
+        best, clears, temporary.path(), {"ALL", "ALL", "TITLE"}, 0);
+    assert(configured.provider && configured.provider->size() == 3);
+    assert(!traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+    clearPhysicalDirectoryTrace();
+    assert(configured.provider->configure("ALL", "ALL", "DURATION") == resolved);
+    verify(configured.provider);
+    assert(traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+    assert(traced("WHERE cm.path IN ("));
+
+    clearPhysicalDirectoryTrace();
+    configured.provider->configure("ALL", "ALL", "TITLE");
+    assert(configured.provider->at(0).chart->meta.SHA256 == physicalChartHash(1));
+    assert(!traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+    assert(traced("LIMIT @selector_limit OFFSET @selector_offset"));
+  }
+}
+
+void testPhysicalDirectoryDurationFallbackRejectsReplacedIdentity() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  const auto directory = physicalDirectory(root);
+  seedPhysicalDirectoryPages(repository, root);
+  auto session = repository.OpenSession();
+  assert(session);
+  ScoreBestCache scores;
+  for (int number = 1; number <= 320; ++number) {
+    const auto duration = number == 320
+        ? static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 2
+        : 0;
+    scores.scoreBySha256[physicalChartHash(number)].snapshots[2] =
+        ScoreBestSnapshot{.averageJudgeMicros = duration};
+  }
+  const auto best = std::make_shared<const ScoreBestCache>(std::move(scores));
+  const auto clears = std::make_shared<const ScoreClearRankCache>();
+  MusicSelectSongIndex reference(directory.id.value);
+  session->VisitChartMetaSelection(root, [&](const ChartMetaRecord &record) {
+    reference.add(record, best->bestFor(record.meta, 2),
+                  clears->bestRankFor(record.meta, 2));
+  });
+  reference.finish();
+  reference.configure("ALL", "ALL", "DURATION");
+  assert(reference.size() == 320);
+  constexpr std::size_t position = 128;
+  const auto originalId = reference.idAt(position);
+  const auto replacedPath = reference.pathAt(position);
+  const std::string replacementHash(64, 'f');
+  const MusicSelectBarId replacementId{
+      directory.id.value + ":sha256:" + replacementHash};
+  clearPhysicalDirectoryTrace();
+  const auto loaded = loadMusicSelectPhysicalDirectory(repository, {}, directory,
+      best, clears, temporary.path(), {"ALL", "ALL", "DURATION"}, 2);
+  const auto provider = std::dynamic_pointer_cast<MusicSelectSqlSongs>(loaded.provider);
+  assert(provider && provider->size() == 320 && provider->diagnostic().empty());
+  assert(traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+  assert(traced("WHERE cm.path IN ("));
+  assert(provider->at(0).id == reference.idAt(0));
+  assert(provider->at(319).id == reference.idAt(319));
+  assert(provider->indexOf(originalId) == position);
+  auto database = openDatabase(repository.DatabasePath());
+  assert(database);
+  assert(execute(database.get(), "UPDATE chart_meta SET sha256='" +
+      replacementHash + "' WHERE path='" + fspath_to_utf8(replacedPath) + "'"));
+  assert(sqlite3_changes(database.get()) == 1);
+  clearPhysicalDirectoryTrace();
+  const auto &bar = provider->at(position);
+  assert(traced("WHERE cm.path IN ("));
+  assert(!bar.chart && !bar.selectable && !bar.presentation.exists);
+  assert(bar.id != replacementId);
+  assert(!provider->diagnostic().empty());
+  assert(provider->indexOf(originalId) == position);
+  assert(!provider->indexOf(replacementId));
 }
 
 void testPhysicalDirectoryStorageFailuresThrowAndRetry() {
@@ -2794,7 +2994,7 @@ void testPhysicalDirectoryPrimingInterruptsTheActiveRichBatch() {
   for (const int rowLimit : {1, 129}) {
     std::stop_source cancellation;
     readCancellation = &cancellation;
-    cancelReadSql = "WHERE cm.path IN (";
+    cancelReadSql = "LIMIT @selector_limit OFFSET @selector_offset";
     cancelReadAfterRows = rowLimit;
     observedReadRows = 0;
     clearPhysicalDirectoryTrace();
@@ -2820,14 +3020,359 @@ void testPhysicalDirectoryPrimingInterruptsTheActiveRichBatch() {
 
 }
 
-int main() {
+namespace {
+
+using BenchmarkClock = std::chrono::steady_clock;
+
+struct FirstPageBenchmarkSample {
+  double countMillis = 0;
+  double firstPageMillis = 0;
+  double wrapMillis = 0;
+  double totalMillis = 0;
+  std::size_t count = 0;
+  std::size_t firstVisibleCount = 0;
+};
+
+struct BenchmarkSqlObservation {
+  int connections = 0;
+  std::vector<BenchmarkClock::time_point> richPageStarts;
+};
+
+BenchmarkSqlObservation *benchmarkSqlObservation = nullptr;
+
+int traceBenchmarkStatement(unsigned, void *, void *rawStatement, void *) {
+  const auto started = BenchmarkClock::now();
+  auto *statement = static_cast<sqlite3_stmt *>(rawStatement);
+  bool hasPath = false;
+  bool hasStageFile = false;
+  for (int column = 0; column < sqlite3_column_count(statement); ++column) {
+    const std::string_view name = sqlite3_column_name(statement, column);
+    hasPath = hasPath || name == "path";
+    hasStageFile = hasStageFile || name == "stage_file";
+  }
+  if (hasPath && hasStageFile) {
+    benchmarkSqlObservation->richPageStarts.push_back(started);
+  }
+  return 0;
+}
+
+int observeBenchmarkConnection(sqlite3 *database, char **,
+                               const sqlite3_api_routines *) {
+  ++benchmarkSqlObservation->connections;
+  return sqlite3_trace_v2(database, SQLITE_TRACE_STMT,
+                          traceBenchmarkStatement, nullptr);
+}
+
+class ScopedBenchmarkSqlObserver {
+public:
+  explicit ScopedBenchmarkSqlObserver(BenchmarkSqlObservation &observation) {
+    assert(benchmarkSqlObservation == nullptr && connectionCount == nullptr);
+    benchmarkSqlObservation = &observation;
+    sqlite3_reset_auto_extension();
+    if (sqlite3_auto_extension(reinterpret_cast<void (*)()>(
+            observeBenchmarkConnection)) != SQLITE_OK) {
+      benchmarkSqlObservation = nullptr;
+      throw std::runtime_error("Unable to observe benchmark SQL");
+    }
+  }
+
+  ~ScopedBenchmarkSqlObserver() {
+    sqlite3_reset_auto_extension();
+    benchmarkSqlObservation = nullptr;
+  }
+};
+
+double benchmarkMillis(BenchmarkClock::time_point begin,
+                        BenchmarkClock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - begin).count();
+}
+
+FirstPageBenchmarkSample benchmarkFirstPage(
+    std::string_view mode, ChartRepository &repository,
+    const std::filesystem::path &root, const std::filesystem::path &replayRoot,
+    const std::shared_ptr<const ScoreBestCache> &best,
+    const std::shared_ptr<const ScoreClearRankCache> &clears) {
+  constexpr std::size_t pageSize = 128;
+  const auto directory = physicalDirectory(root);
+  FirstPageBenchmarkSample sample;
+  BenchmarkSqlObservation observation;
+  ScopedBenchmarkSqlObserver observer(observation);
+  const auto started = BenchmarkClock::now();
+  if (mode == "main") {
+    auto session = repository.OpenSession();
+    if (!session) throw std::runtime_error("Unable to open benchmark session");
+    ChartMetaQuery query;
+    query.limit = pageSize;
+    const int count = session->CountChartMeta(query);
+    if (count <= 0) throw std::runtime_error("Benchmark count failed");
+    sample.count = static_cast<std::size_t>(count);
+    const auto counted = BenchmarkClock::now();
+    std::vector<ChartMetaRecord> first;
+    session->QueryChartMeta(query, first);
+    const auto firstLoaded = BenchmarkClock::now();
+    sample.firstVisibleCount = first.size();
+    query.offset = static_cast<int>((sample.count - 1) / pageSize * pageSize);
+    std::vector<ChartMetaRecord> wrapped;
+    if (query.offset != 0) session->QueryChartMeta(query, wrapped);
+    const auto finished = BenchmarkClock::now();
+    if (first.size() != std::min(pageSize, sample.count) ||
+        (query.offset != 0 && wrapped.size() != sample.count - query.offset)) {
+      throw std::runtime_error("MainMenu benchmark returned an incomplete page");
+    }
+    sample.countMillis = benchmarkMillis(started, counted);
+    sample.firstPageMillis = benchmarkMillis(counted, firstLoaded);
+    sample.wrapMillis = benchmarkMillis(firstLoaded, finished);
+    sample.totalMillis = benchmarkMillis(started, finished);
+  } else {
+    std::shared_ptr<MusicSelectRowProvider> provider;
+    if (mode == "indexed") {
+      auto opened = repository.OpenSession();
+      if (!opened) throw std::runtime_error("Unable to open benchmark session");
+      auto session = std::make_shared<ChartRepository::Session>(std::move(*opened));
+      if (!session->HasChartMetaForFolderOrParentFolder(root)) {
+        throw std::runtime_error("Benchmark folder probe failed");
+      }
+      MusicSelectRepositoryProjectionInput input;
+      input.scoreFor = [best](const bms_parser::ChartMeta &meta, int mode) {
+        return best->bestFor(meta, mode);
+      };
+      input.clearFor = [clears](const bms_parser::ChartMeta &meta, int mode) {
+        return clears->bestRankFor(meta, mode);
+      };
+      input.replayExistsFor = [replayRoot](const ChartMetaRecord &record, int mode) {
+        return musicSelectExistingChartReplaySlots(record, mode, replayRoot);
+      };
+      MusicSelectSongIndex index(directory.id.value);
+      session->VisitChartMetaSelection(root, [&](const ChartMetaRecord &record) {
+        index.add(record, input.scoreFor(record.meta, 0),
+                  input.clearFor(record.meta, 0));
+      });
+      index.finish();
+      index.configure("ALL", "ALL", "TITLE");
+      auto indexed = std::make_shared<MusicSelectPagedSongs>(
+          std::move(index),
+          [session](std::span<const std::filesystem::path> paths) {
+            return session->SelectChartMetaByPaths(paths);
+          },
+          [context = directory.id.value, input](const ChartMetaRecord &record) {
+            return MusicSelectRepositoryProjection::projectSong(record, context, input);
+          });
+      if (indexed->size() != 0) {
+        (void)indexed->at(0);
+        (void)indexed->at(indexed->size() - 1);
+      }
+      if (!indexed->diagnostic().empty()) {
+        throw std::runtime_error(indexed->diagnostic());
+      }
+      provider = std::move(indexed);
+    } else {
+      provider = loadMusicSelectPhysicalDirectory(
+          repository, {}, directory, best, clears, replayRoot, {}, 0).provider;
+    }
+    const auto finished = BenchmarkClock::now();
+    if (!provider || provider->size() == 0) {
+      throw std::runtime_error("Selector benchmark returned no songs");
+    }
+    sample.count = provider->size();
+    sample.firstVisibleCount = std::min(pageSize, sample.count);
+    if (observation.richPageStarts.size() != (sample.count > pageSize ? 2 : 1)) {
+      throw std::runtime_error("Selector benchmark did not execute bounded rich pages");
+    }
+    const auto firstStarted = observation.richPageStarts.front();
+    const auto wrapStarted = observation.richPageStarts.size() == 2
+        ? observation.richPageStarts.back() : finished;
+    sample.countMillis = benchmarkMillis(started, firstStarted);
+    sample.firstPageMillis = benchmarkMillis(firstStarted, wrapStarted);
+    sample.wrapMillis = benchmarkMillis(wrapStarted, finished);
+    sample.totalMillis = benchmarkMillis(started, finished);
+    for (std::size_t position = 0; position < sample.firstVisibleCount; ++position) {
+      if (!provider->at(position).chart) {
+        throw std::runtime_error("Selector benchmark first page was not hydrated");
+      }
+    }
+    if (!provider->at(sample.count - 1).chart) {
+      throw std::runtime_error("Selector benchmark wrap page was not hydrated");
+    }
+  }
+  if (observation.connections != 1) {
+    throw std::runtime_error("Benchmark must open exactly one fresh SQLite connection");
+  }
+  return sample;
+}
+
+void printFirstPageBenchmark(std::string_view mode, std::string_view pass,
+                             const FirstPageBenchmarkSample &sample) {
+  std::cout << std::fixed << std::setprecision(3)
+            << "mode=" << mode << " pass=" << pass
+            << " count=" << sample.count
+            << " first_visible=" << sample.firstVisibleCount
+            << " count_prepare_ms=" << sample.countMillis
+            << " first_page_ms=" << sample.firstPageMillis
+            << " wrap_ms=" << sample.wrapMillis
+            << " total_ms=" << sample.totalMillis << std::endl;
+}
+
+int runFirstPageBenchmark(int argc, char **argv) {
+  if (argc != 4) throw std::invalid_argument(
+      "Usage: chart_repository_tests --benchmark-first-page main|indexed|sql|all COUNT");
+  const std::string mode = argv[2];
+  if (mode != "main" && mode != "indexed" && mode != "sql" && mode != "all") {
+    throw std::invalid_argument("Unknown first-page benchmark mode");
+  }
+  std::size_t parsed = 0;
+  const auto requested = std::stoll(argv[3], &parsed);
+  if (parsed != std::string_view(argv[3]).size() || requested <= 0 ||
+      requested > std::numeric_limits<int>::max()) {
+    throw std::invalid_argument("COUNT must be a positive SQLite page-range integer");
+  }
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  if (!repository.EnsureReady()) throw std::runtime_error("Unable to seed benchmark DB");
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root, static_cast<int>(requested));
+  {
+    auto database = openDatabase(repository.DatabasePath());
+    if (!database || !execute(database.get(),
+        "UPDATE chart_meta SET title=printf('Song %010d', "
+        "(rowid * 1103515245 + 12345) % 2147483647)")) {
+      throw std::runtime_error("Unable to seed pseudorandom benchmark titles");
+    }
+  }
+  const auto best = std::make_shared<const ScoreBestCache>();
+  const auto clears = std::make_shared<const ScoreClearRankCache>();
+  const std::vector<std::string> modes = mode == "all"
+      ? std::vector<std::string>{"main", "indexed", "sql"}
+      : std::vector<std::string>{mode};
+  std::vector<std::vector<FirstPageBenchmarkSample>> samples(modes.size());
+  std::cout << "SQLite first-page benchmark: same seeded DB; OS filesystem warm from seed; "
+               "new SQLite connection each pass; six runs per mode; empty immutable score caches.\n"
+               "count_prepare includes session open and count (indexed: full visitor/index/sort; "
+               "sql: probe/resolve/count); selector page phases include SQL/decode/projectSong/"
+               "replay existence checks; main pages are QueryChartMeta only; wrap aligned to 128.\n";
+  for (int pass = 0; pass < 6; ++pass) {
+    for (std::size_t modeIndex = 0; modeIndex < modes.size(); ++modeIndex) {
+      auto sample = benchmarkFirstPage(modes[modeIndex], repository, root,
+                                        temporary.path() / "profile", best, clears);
+      if (sample.count != static_cast<std::size_t>(requested)) {
+        throw std::runtime_error("Benchmark modes must select the entire identical dataset");
+      }
+      samples[modeIndex].push_back(sample);
+      printFirstPageBenchmark(modes[modeIndex],
+          pass == 0 ? "first" : "warm-" + std::to_string(pass), sample);
+    }
+  }
+  for (std::size_t modeIndex = 0; modeIndex < modes.size(); ++modeIndex) {
+    auto median = samples[modeIndex].front();
+    for (auto member : {&FirstPageBenchmarkSample::countMillis,
+                        &FirstPageBenchmarkSample::firstPageMillis,
+                        &FirstPageBenchmarkSample::wrapMillis,
+                        &FirstPageBenchmarkSample::totalMillis}) {
+      std::vector<double> values;
+      for (std::size_t pass = 1; pass < samples[modeIndex].size(); ++pass) {
+        values.push_back(samples[modeIndex][pass].*member);
+      }
+      std::ranges::sort(values);
+      median.*member = values[values.size() / 2];
+    }
+    printFirstPageBenchmark(modes[modeIndex], "warm-median-5", median);
+  }
+  return 0;
+}
+
+}
+
+void testSelectorQueryRejectsStaleSnapshots() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root);
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartSelectorQuery query{.recursiveFolder = root};
+  assert(session->ResolveChartSelectorQuery(query) == 320);
+  auto other = openDatabase(repository.DatabasePath());
+  assert(execute(other.get(), "UPDATE chart_meta SET title='Changed title' "
+      "WHERE sha256='" + physicalChartHash(160) + "'"));
+  const auto rejected = [](auto operation) {
+    bool threw = false;
+    try { operation(); } catch (const std::runtime_error &) { threw = true; }
+    assert(threw);
+  };
+  rejected([&] { session->SelectChartSelectorPage(query, 128, 128); });
+  rejected([&] {
+    session->FindChartSelectorIndex(query, "sha256:" + physicalChartHash(160));
+  });
+  assert(session->ResolveChartSelectorQuery(query) == 320);
+  assert(session->SelectChartSelectorPage(query, 128, 128).size() == 128);
+  assert(session->SetSongReviewFavorite(physicalChartHash(160), 4));
+  rejected([&] { session->SelectChartSelectorPage(query, 128, 128); });
+  assert(session->ResolveChartSelectorQuery(query) == 319);
+  assert(session->SelectChartSelectorPage(query, 128, 128).size() == 128);
+}
+
+void testSelectorPathIdentityUsesNormalizedStoredAliases() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  auto database = openDatabase(repository.DatabasePath());
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,sha256,md5,title) VALUES ('" +
+      fspath_to_utf8(root / "alias" / ".." / "song.bms") + "','" +
+      fspath_to_utf8(root) + "','','','Song')"));
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartSelectorQuery query{.recursiveFolder = root};
+  assert(session->ResolveChartSelectorQuery(query) == 1);
+  const auto records = session->SelectChartSelectorPage(query, 0, 1);
+  assert(records.size() == 1);
+  const auto identity = "path:" +
+      fspath_to_utf8(records.front().meta.BmsPath.lexically_normal());
+  const auto found = session->FindChartSelectorIndex(query, identity);
+  assert(found && *found == 0);
+}
+
+int main(int argc, char **argv) {
+  if (argc > 1) {
+    try {
+      if (argc == 2 && std::string_view(argv[1]) == "--duration-compat-test") {
+        testPhysicalDirectoryDurationOverflowMatchesLegacyIndex();
+        return 0;
+      }
+      if (argc == 2 && std::string_view(argv[1]) == "--duration-stale-identity-test") {
+        testPhysicalDirectoryDurationFallbackRejectsReplacedIdentity();
+        return 0;
+      }
+      if (argc == 2 && std::string_view(argv[1]) == "--sql-snapshot-tests") {
+        testSelectorQueryRejectsStaleSnapshots();
+        return 0;
+      }
+      if (argc == 2 && std::string_view(argv[1]) == "--sql-path-identity-test") {
+        testSelectorPathIdentityUsesNormalizedStoredAliases();
+        return 0;
+      }
+      if (std::string_view(argv[1]) != "--benchmark-first-page") {
+        throw std::invalid_argument("Unknown chart repository test argument");
+      }
+      return runFirstPageBenchmark(argc, argv);
+    } catch (const std::exception &error) {
+      std::cerr << error.what() << '\n';
+      return 1;
+    }
+  }
+  testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder();
+  testSelectorQueryRejectsStaleSnapshots();
+  testSelectorPathIdentityUsesNormalizedStoredAliases();
+  testPhysicalDirectoryDurationOverflowMatchesLegacyIndex();
+  testPhysicalDirectoryDurationFallbackRejectsReplacedIdentity();
   testPhysicalDirectoryPrimingInterruptsTheActiveRichBatch();
   testRawPhysicalFolderInventoryRestoresCategoryBranches();
   testOwnFolderProbeMatchesRecursiveWindowsDelimiters();
   testPhysicalDirectoryCategoriesAndEmptyFoldersUseOnlyMetadata();
   testPhysicalDirectoryOwnAndMixedSongsMatchRawSubtree();
   testPhysicalDirectoryPagesOwnWorkerSessionAndRichProjectionInputs();
-  testPhysicalDirectoryCancellationAcrossProbeIndexAndPriming();
+  testPhysicalDirectoryCancellationAcrossProbeCountAndPriming();
   testPhysicalDirectoryStorageFailuresThrowAndRetry();
   testPhysicalDirectoryAutoplayKeepsRawOrderHiddenAndWrongModeSongs();
   testPhysicalDirectoryAutoplayCategoriesAndCancellation();

@@ -1211,6 +1211,11 @@ static bool createChartMetaTable(sqlite3 *db) {
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_title ON chart_meta(title)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_title_path "
       "ON chart_meta(title, path)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_selector_representative "
+      "ON chart_meta(sha256, title COLLATE NOCASE, path, folder)",
+      "CREATE INDEX IF NOT EXISTS idx_chart_meta_selector_title "
+      "ON chart_meta(lower(COALESCE(title,'')), "
+      "COALESCE(difficulty,0), title COLLATE NOCASE DESC, path DESC, folder, sha256)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256 ON chart_meta(sha256)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_md5 ON chart_meta(md5)",
       "CREATE INDEX IF NOT EXISTS idx_chart_meta_sha256_source "

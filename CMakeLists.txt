@@ -1372,6 +1372,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(music_select_paged_songs_tests PRIVATE cxx_std_23)
+        add_executable(music_select_sql_songs_tests
+            tests/music_select_sql_songs_tests.cpp
+            src/music_select/MusicSelectSqlSongs.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_sql_songs_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_sql_songs_tests PRIVATE cxx_std_23)
         add_executable(music_select_directory_loader_tests
             tests/music_select_directory_loader_tests.cpp
             src/music_select/MusicSelectDirectoryLoader.cpp
@@ -3538,6 +3548,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(chart_repository_tests
         tests/chart_repository_tests.cpp
         src/music_select/MusicSelectPhysicalDirectory.cpp
+        src/music_select/MusicSelectSqlSongs.cpp
         src/music_select/MusicSelectPagedSongs.cpp
         src/music_select/MusicSelectSongIndex.cpp
         src/music_select/MusicSelectReplaySlots.cpp
@@ -3591,6 +3602,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(WIN32)
         target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
     endif()
+    get_target_property(CHART_SELECTOR_QUERY_TEST_SOURCES chart_repository_tests SOURCES)
+    list(REMOVE_ITEM CHART_SELECTOR_QUERY_TEST_SOURCES tests/chart_repository_tests.cpp)
+    add_executable(chart_selector_query_tests
+        tests/chart_selector_query_tests.cpp
+        ${CHART_SELECTOR_QUERY_TEST_SOURCES}
+    )
+    target_include_directories(chart_selector_query_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_selector_query_tests PRIVATE cxx_std_23)
+    get_target_property(CHART_SELECTOR_QUERY_TEST_LIBRARIES chart_repository_tests LINK_LIBRARIES)
+    target_link_libraries(chart_selector_query_tests PRIVATE ${CHART_SELECTOR_QUERY_TEST_LIBRARIES})
     add_executable(chart_scan_work_scheduler_tests
         tests/chart_scan_work_scheduler_tests.cpp
         src/ChartScanWorkScheduler.cpp
@@ -7009,6 +7030,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_upload_candidates_tests
         music_playlist_repository_tests
         chart_repository_tests
+        chart_selector_query_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
         difficulty_table_importer_tests
@@ -7214,6 +7236,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         best_replay_resolver_tests
         music_playlist_repository_tests
         chart_repository_tests
+        chart_selector_query_tests
         chart_scan_work_scheduler_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
@@ -7347,6 +7370,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET music_select_paged_songs_tests)
         asobmashow_register_test(music_select_paged_songs_tests)
+    endif()
+    if (TARGET music_select_sql_songs_tests)
+        asobmashow_register_test(music_select_sql_songs_tests)
     endif()
     if (TARGET music_select_directory_loader_tests)
         asobmashow_register_test(music_select_directory_loader_tests)

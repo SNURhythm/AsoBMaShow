@@ -7,6 +7,7 @@ target_sources(main PRIVATE
     MusicSelectBarManager.cpp
     MusicSelectSongIndex.cpp
     MusicSelectPagedSongs.cpp
+    MusicSelectSqlSongs.cpp
     MusicSelectDirectoryLoader.cpp
     MusicSelectPhysicalDirectory.cpp
     MusicSelectFolderStatusLoader.cpp

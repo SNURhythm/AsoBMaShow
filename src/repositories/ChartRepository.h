@@ -17,6 +17,7 @@
 #include <span>
 #include <string>
 #include <stop_token>
+#include <stdexcept>
 #include <vector>
 
 class ScoreRepository;
@@ -110,6 +111,26 @@ struct ChartMetaRecord {
   std::string downloadUrl;
   std::string appendDownloadUrl;
   std::optional<std::vector<std::string>> originalMd5s;
+};
+
+struct ChartSelectorQueryResolution;
+
+struct ChartSelectorQuery {
+  std::filesystem::path recursiveFolder;
+  std::string modeFilter = "ALL";
+  std::string difficultyFilter = "ALL";
+  std::string sortId = "TITLE";
+  int selectedLongNoteMode = 0;
+  std::shared_ptr<const ScoreBestCache> best;
+  std::shared_ptr<const ScoreClearRankCache> clears;
+  bool includeHidden = false;
+  std::shared_ptr<const ChartSelectorQueryResolution> resolution;
+};
+
+class ChartSelectorDurationCompatibilityRequired : public std::runtime_error {
+public:
+  ChartSelectorDurationCompatibilityRequired()
+      : std::runtime_error("selector DURATION ordering requires legacy overflow compatibility") {}
 };
 
 struct ChartSequenceFeatures {
@@ -302,6 +323,14 @@ public:
     void VisitChartMetaSelection(
         const std::filesystem::path &recursiveFolder,
         const std::function<void(const ChartMetaRecord &)> &visitor,
+        std::stop_token stop = {});
+    std::size_t ResolveChartSelectorQuery(ChartSelectorQuery &query,
+                                           std::stop_token stop = {});
+    std::vector<ChartMetaRecord> SelectChartSelectorPage(
+        const ChartSelectorQuery &query, std::size_t offset, std::size_t limit,
+        std::stop_token stop = {});
+    std::optional<std::size_t> FindChartSelectorIndex(
+        const ChartSelectorQuery &query, std::string_view identity,
         std::stop_token stop = {});
     bool HasChartMetaForFolderOrParentFolder(
         const std::filesystem::path &folder, std::stop_token stop = {});

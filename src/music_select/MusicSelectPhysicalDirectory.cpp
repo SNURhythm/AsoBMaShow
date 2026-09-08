@@ -1,7 +1,8 @@
 #include "MusicSelectPhysicalDirectory.h"
 
-#include "MusicSelectPagedSongs.h"
+#include "MusicSelectSqlSongs.h"
 #include "MusicSelectReplaySlots.h"
+#include "MusicSelectSongIndex.h"
 
 #include <stdexcept>
 #include <unordered_set>
@@ -13,6 +14,57 @@ void checkCancelled(std::stop_token stop) {
   if (stop.stop_requested()) {
     throw std::runtime_error("Physical directory loading cancelled");
   }
+}
+
+MusicSelectSqlSongs::ResolvedQuery resolveLegacyDurationQuery(
+    const std::shared_ptr<ChartRepository::Session> &session,
+    const ChartSelectorQuery &query, const std::string &context,
+    const std::shared_ptr<std::stop_token> &stop) {
+  auto index = std::make_shared<MusicSelectSongIndex>(context);
+  session->VisitChartMetaSelection(query.recursiveFolder,
+      [&](const ChartMetaRecord &record) {
+        checkCancelled(*stop);
+        const auto score = query.best
+            ? query.best->bestFor(record.meta, query.selectedLongNoteMode)
+            : std::nullopt;
+        const int clearRank = query.clears
+            ? query.clears->bestRankFor(record.meta, query.selectedLongNoteMode)
+            : score ? score->clearType : kNoClearTypeRank;
+        index->add(record, score, clearRank);
+      }, *stop);
+  index->finish(*stop);
+  const auto filters = index->configure(query.modeFilter, query.difficultyFilter,
+                                         query.sortId, *stop);
+  std::shared_ptr<const MusicSelectSongIndex> rows = std::move(index);
+  return {.count = rows->size(),
+          .resolvedFilters = filters,
+          .loadPage = [session, rows, stop, context](std::size_t offset, std::size_t limit) {
+            std::vector<std::filesystem::path> paths;
+            for (std::size_t position = offset;
+                 position < rows->size() && paths.size() < limit; ++position) {
+              checkCancelled(*stop);
+              paths.push_back(rows->pathAt(position));
+            }
+            auto loaded = session->SelectChartMetaByPaths(paths, *stop);
+            if (loaded.status != ChartMetaPathBatchReadStatus::Loaded) {
+              throw std::runtime_error(loaded.diagnostic.empty()
+                  ? "Unable to load chart page." : loaded.diagnostic);
+            }
+            for (std::size_t position = 0; position < loaded.records.size(); ++position) {
+              checkCancelled(*stop);
+              const auto &meta = loaded.records[position].meta;
+              const auto identity = !meta.SHA256.empty() ? "sha256:" + meta.SHA256
+                  : !meta.MD5.empty() ? "md5:" + meta.MD5
+                  : "path:" + fspath_to_utf8(meta.BmsPath.lexically_normal());
+              if (rows->idAt(offset + position).value != context + ":" + identity) {
+                throw std::runtime_error("The library changed while loading this folder.");
+              }
+            }
+            return std::move(loaded.records);
+          },
+          .findIndex = [rows, context](std::string_view identity) {
+            return rows->indexOf({context + ":" + std::string(identity)});
+          }};
 }
 
 }
@@ -37,6 +89,11 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
     return {.children = std::move(children)};
   }
 
+  ChartSelectorQuery selectorQuery{
+      .recursiveFolder = directory.directoryPath,
+      .selectedLongNoteMode = selectedLongNoteMode,
+      .best = best,
+      .clears = clears};
   MusicSelectRepositoryProjectionInput input;
   input.selectedLongNoteMode = selectedLongNoteMode;
   if (best) {
@@ -56,26 +113,33 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
     return musicSelectExistingChartReplaySlots(record, longNoteMode, replayRoot);
   };
 
-  MusicSelectSongIndex index(directory.id.value);
-  session->VisitChartMetaSelection(directory.directoryPath,
-      [&](const ChartMetaRecord &record) {
-        checkCancelled(stop);
-        const auto score = input.scoreFor
-            ? input.scoreFor(record.meta, selectedLongNoteMode) : std::nullopt;
-        const int clearRank = input.clearFor
-            ? input.clearFor(record.meta, selectedLongNoteMode)
-            : score ? score->clearType : kNoClearTypeRank;
-        index.add(record, score, clearRank);
-      }, stop);
-  index.finish(stop);
-  index.configure(config.modeFilter, config.difficultyFilter, config.sortId, stop);
-  checkCancelled(stop);
   auto primingStop = std::make_shared<std::stop_token>(stop);
-  auto provider = std::make_shared<MusicSelectPagedSongs>(
-      std::move(index),
-      [session = std::move(session), primingStop](
-          std::span<const std::filesystem::path> paths) {
-        return session->SelectChartMetaByPaths(paths, *primingStop);
+  auto provider = std::make_shared<MusicSelectSqlSongs>(
+      directory.id.value,
+      [session = std::move(session), selectorQuery, primingStop,
+       context = directory.id.value](
+          const MusicSelectBarManagerConfig &requested) {
+        auto query = selectorQuery;
+        query.modeFilter = requested.modeFilter;
+        query.difficultyFilter = requested.difficultyFilter;
+        query.sortId = requested.sortId;
+        std::size_t count;
+        try {
+          count = session->ResolveChartSelectorQuery(query, *primingStop);
+        } catch (const ChartSelectorDurationCompatibilityRequired &) {
+          return resolveLegacyDurationQuery(session, query, context, primingStop);
+        }
+        return MusicSelectSqlSongs::ResolvedQuery{
+            .count = count,
+            .resolvedFilters = {query.modeFilter, query.difficultyFilter},
+            .loadPage = [session, query, primingStop](std::size_t offset,
+                                                     std::size_t limit) {
+              return session->SelectChartSelectorPage(query, offset, limit,
+                                                       *primingStop);
+            },
+            .findIndex = [session, query, primingStop](std::string_view identity) {
+              return session->FindChartSelectorIndex(query, identity, *primingStop);
+            }};
       },
       [context = directory.id.value, input = std::move(input), primingStop](
           const ChartMetaRecord &record) {
