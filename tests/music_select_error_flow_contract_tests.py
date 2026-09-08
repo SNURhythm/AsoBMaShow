@@ -62,6 +62,13 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_failed_audio_preload_is_not_published(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signature = "[this](const ChartMetaRecord &request, std::atomic_bool &cancelled)"
+        callback = signature + function_body(source, signature)
+        fixture = (ROOT / "tests/music_select_scene_preload_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("PRELOAD_CALLBACK", callback))
+
     def test_background_audio_resumes_only_for_active_foreground_selector(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signatures = ["void MusicSelectScene::onPause()",
