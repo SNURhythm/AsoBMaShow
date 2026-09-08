@@ -754,6 +754,12 @@ DeliveryOutcome TachiDriver::pollBatch(std::span<const IrOutboxEntry> entries,
     return blocked("insecure_server_origin",
                    "Authenticated Tachi polling requires HTTPS");
   }
+  const auto configuredOrigin = normalizeServerOrigin(config.serverOrigin);
+  if (!configuredOrigin || *configuredOrigin != *origin) {
+    return blocked("remote_origin_mismatch",
+                   "Restore the deferred job's server origin and its API key "
+                   "before retrying");
+  }
   for (const auto &entry : entries.subspan(1)) {
     const auto entryOrigin = normalizeServerOrigin(entry.remoteOrigin);
     if (entry.remoteJobId != first.remoteJobId || !entryOrigin ||

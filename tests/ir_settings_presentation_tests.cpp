@@ -3,6 +3,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -416,6 +417,7 @@ void testSettingsActionsPublishOnlyAfterDurableStore() {
 
 void testAuthenticatedSettingsActionsRequireHttps() {
   FakeActions fake;
+  fake.credentialPresent = true;
   auto settings = initialSettings();
   settings.enabled = true;
   settings.autoSubmit = true;
@@ -427,6 +429,10 @@ void testAuthenticatedSettingsActionsRequireHttps() {
                                    .deferredSubmission = true},
                                   settings, true, fake.dependencies());
 
+  REQUIRE(!model.setServerOrigin("http://local.example").succeeded());
+  REQUIRE(model.settings().serverOrigin == "https://boku.tachi.ac");
+  REQUIRE(fake.quiesceCalls == 0);
+  REQUIRE(model.removeCredential().succeeded());
   const auto originResult = model.setServerOrigin("http://local.example");
   REQUIRE(originResult.succeeded());
   REQUIRE(model.settings().serverOrigin == "http://local.example");
@@ -441,7 +447,7 @@ void testAuthenticatedSettingsActionsRequireHttps() {
   const auto credentialResult = model.replaceCredential("replacement-key");
   REQUIRE(credentialResult.status ==
           ir::IrSettingsActionResult::Status::Invalid);
-  REQUIRE(fake.quiesceCalls == 0);
+  REQUIRE(fake.quiesceCalls == 1);
   REQUIRE(fake.replaceCredentialCalls == 0);
 
   const auto retryResult = model.retryAll();
@@ -450,6 +456,36 @@ void testAuthenticatedSettingsActionsRequireHttps() {
 
   REQUIRE(model.removeCredential().succeeded());
   REQUIRE(!model.hasCredential());
+}
+
+void testOriginChangesFailClosedWithoutAnAuthoritativeRead() {
+  for (const int failureKind : {0, 1, 2}) {
+    FakeActions fake;
+    fake.credentialPresent = true;
+    auto dependencies = fake.dependencies();
+    if (failureKind == 0) {
+      dependencies.loadCredential = {};
+    } else if (failureKind == 1) {
+      fake.credentialLoadSucceeds = false;
+    } else {
+      dependencies.loadCredential = [](std::optional<std::string> &,
+                                       std::string &) -> bool {
+        throw std::runtime_error("unreadable credential backend");
+      };
+    }
+    ir::IrSettingsActionModel model(
+        "tachi", {.scoreSubmission = true}, initialSettings(), false,
+        std::move(dependencies));
+    REQUIRE(model.setServerOrigin("HTTPS://BOKU.TACHI.AC:443/").succeeded());
+    REQUIRE(fake.loadCredentialCalls == 0);
+    REQUIRE(model.setServerOrigin("https://other.example").status ==
+            ir::IrSettingsActionResult::Status::StorageFailure);
+    REQUIRE(model.settings().serverOrigin == "https://boku.tachi.ac");
+    REQUIRE(fake.settingsStores == 0);
+    REQUIRE(fake.settingsPublishes == 0);
+    REQUIRE(fake.reactivationCalls == 0);
+    REQUIRE(fake.credentialPresent);
+  }
 }
 
 void testCredentialActionsNeverRetainKeyAndPublishAfterStore() {
@@ -768,6 +804,7 @@ int main() {
   testRecordSyncProjectsEveryPhaseAndBoundedMutationSummary();
   testSettingsActionsPublishOnlyAfterDurableStore();
   testAuthenticatedSettingsActionsRequireHttps();
+  testOriginChangesFailClosedWithoutAnAuthoritativeRead();
   testCredentialActionsNeverRetainKeyAndPublishAfterStore();
   testFailedCredentialReplacementPreservesExistingAccountEvidence();
   testUnchangedCredentialPreservesExistingAccountEvidence();
