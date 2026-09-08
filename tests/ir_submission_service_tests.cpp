@@ -147,8 +147,13 @@ public:
   std::string_view providerId() const noexcept override { return "fake"; }
   ir::IrDriverCapabilities capabilities() const noexcept override {
     ++capabilitiesCalls_;
+    if (capabilitiesObserved) {
+      capabilitiesObserved();
+    }
     return capabilities_;
   }
+
+  std::function<void()> capabilitiesObserved;
 
   [[nodiscard]] int capabilitiesCalls() const noexcept {
     return capabilitiesCalls_.load();
@@ -2986,6 +2991,107 @@ void testPauseCancelsReconciliationBetweenLocalCandidatePages() {
          "snapshot apply");
 }
 
+void testDefaultWaitRetainsWorkQueuedDuringInspection() {
+  for (const bool reconciliation : {true, false}) {
+    TemporaryDirectory temp;
+    ReplayRepository repository(temp.path() / "replays.db");
+    expect(repository.EnsureSchema(), "default waiter schema initializes");
+    auto driver = std::make_shared<FakeDriver>(ir::IrDriverCapabilities{
+        .scoreSubmission = true,
+        .deferredSubmission = true,
+        .scoreReconciliation = true});
+    driver->releaseReconciliationStage(2);
+    ir::IrDriverRegistry registry;
+    std::string diagnostic;
+    expect(registry.registerDriver(driver, diagnostic),
+           "default waiter driver registers");
+    FakeHttpClient http;
+    const auto callerThread = std::this_thread::get_id();
+    const std::int64_t now = 1'000'000'000'000LL;
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool entered = false;
+    bool released = false;
+    int workerCapabilityCalls = 0;
+    const auto enterGate = [&] {
+      std::unique_lock lock(gateMutex);
+      if (entered) return;
+      entered = true;
+      gateChanged.notify_all();
+      gateChanged.wait(lock, [&] { return released; });
+    };
+    if (!reconciliation) {
+      driver->capabilitiesObserved = [&] {
+        if (std::this_thread::get_id() != callerThread &&
+            ++workerCapabilityCalls == 2) {
+          enterGate();
+        }
+      };
+    }
+    ir::IrSubmissionServiceOptions options;
+    options.wallNowUnixMillis = [&] {
+      if (reconciliation && std::this_thread::get_id() != callerThread) {
+        enterGate();
+      }
+      return now;
+    };
+    options.credentialLookup = [](std::string_view, std::string_view) {
+      return std::string("dummy-default-wait-key");
+    };
+    ir::IrSubmissionService service(repository, registry, http,
+                                    std::move(options));
+    const auto value = draft(233, now);
+    if (!reconciliation) {
+      const auto result = canonicalModernResult(value, temp.path());
+      const auto snapshot = ir::captureIrSubmissionSnapshot(result, diagnostic);
+      expect(repository.StageModernChartResult(result, snapshot, std::nullopt)
+                     .status == ModernChartStageStatus::Staged,
+             "default waiter stages the canonical upload before work inspection");
+    }
+    service.start(profile(true));
+    {
+      std::unique_lock lock(gateMutex);
+      expect(gateChanged.wait_for(lock, 3s, [&] { return entered; }),
+             "worker pauses after command inspection or the empty due query");
+    }
+    if (reconciliation) {
+      expect(service.requestUserScoreReconciliation("fake") ==
+                 ir::IrReconciliationRequestStatus::Accepted,
+             "record import is accepted while the worker inspects empty work");
+      expect(service.reconciliationStatus("fake").phase ==
+                 ir::IrReconciliationPhase::Queued,
+             "record import publishes queued before its only notification");
+    } else {
+      expect(service.enqueueManual(value).status ==
+                 ir::IrOutboxInsertStatus::Inserted,
+             "newly due upload is enqueued after the worker's empty due query");
+    }
+    {
+      std::lock_guard lock(gateMutex);
+      released = true;
+      gateChanged.notify_all();
+    }
+    expect(reconciliation ? driver->waitForReconciliationCalls(1)
+                          : driver->waitForCalls(1),
+           "the production waiter retains the sole work notification");
+    bool succeeded = false;
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      succeeded = reconciliation
+                      ? service.reconciliationStatus("fake").phase ==
+                            ir::IrReconciliationPhase::Succeeded
+                      : service.status("fake", value.attemptId).state ==
+                            ir::IrOutboxState::Succeeded;
+      if (succeeded) break;
+      std::this_thread::yield();
+    }
+    expect(succeeded,
+           "accepted work completes with no second signal or periodic deadline");
+    service.stop();
+    repository.Shutdown();
+  }
+}
+
 void testReconciliationCoalescesAndSerializesNewOutboxDelivery() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
@@ -3645,6 +3751,7 @@ int main() {
   testPauseCancelsAQueuedReconciliationBeforeAnyApply();
   testPauseCancelsReconciliationBetweenLocalCandidatePages();
   testReconciliationCoalescesAndSerializesNewOutboxDelivery();
+  testDefaultWaitRetainsWorkQueuedDuringInspection();
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
   testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();
