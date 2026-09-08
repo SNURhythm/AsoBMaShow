@@ -259,6 +259,9 @@ void ChartLibraryTaskService::run(const std::stop_token &stopToken) {
           if (result.rebuildLibraryMetadataCleared) {
             task.rebuildLibraryMetadata = false;
           }
+          if (result.folderRegistrationCompleted) {
+            task.folderRegistrationCompleted = true;
+          }
           queue_.push_front(std::move(task));
         }
         break;

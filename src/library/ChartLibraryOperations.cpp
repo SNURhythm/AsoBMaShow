@@ -201,17 +201,24 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   }
   session->EnsureSchema();
 
+  TaskRunResult pausedResult{
+      .disposition = TaskRunDisposition::Paused,
+      .detail = "Paused",
+      .folderRegistrationCompleted = request.folderRegistrationCompleted};
   std::vector<ChartEntry> entries;
   if (!request.folderToAdd.empty()) {
-    progress({.current = 1,
-              .total = 100,
-              .stage = ChartScanProgressStage::Preparing},
-             "Adding folder");
-    if (!session->InsertEntry(request.folderToAdd, request.iosBookmark)) {
-      throw std::runtime_error("Failed to add folder");
-    }
-    if (dependencies_.requestReload) {
-      dependencies_.requestReload(true);
+    if (!request.folderRegistrationCompleted) {
+      progress({.current = 1,
+                .total = 100,
+                .stage = ChartScanProgressStage::Preparing},
+               "Adding folder");
+      if (!session->InsertEntry(request.folderToAdd, request.iosBookmark)) {
+        throw std::runtime_error("Failed to add folder");
+      }
+      pausedResult.folderRegistrationCompleted = true;
+      if (dependencies_.requestReload) {
+        dependencies_.requestReload(true);
+      }
     }
     entries.push_back({.path = fspath_to_path_t(request.folderToAdd),
                        .iosBookmark = request.iosBookmark});
@@ -222,14 +229,14 @@ TaskRunResult ChartLibraryOperations::runRefresh(
             .stage = ChartScanProgressStage::Preparing},
            "Importing difficulty tables");
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return pausedResult;
   }
   bool tableImportInterrupted = false;
   const auto seedCompleted = seedDefaultDifficultyTablesIfNeeded(
       *session, stopToken, progress, waitForResume);
   tableImportInterrupted = tableImportInterrupted || !seedCompleted;
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return pausedResult;
   }
   const DifficultyTableImportCheckpoint tableImportCheckpoint = [&] {
     // Non-blocking: a gameplay pause must abort the import to Paused rather
@@ -244,7 +251,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   const int importedTables = dependencies_.importDifficultyTablesFromDirectory(
       *session, dependencies_.tablesDirectory, tableImportCheckpoint);
   if (tableImportInterrupted || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return pausedResult;
   }
   if (importedTables > 0 &&
       dependencies_.requestReload) {
@@ -255,7 +262,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     entries = session->SelectEffectiveEntries();
   }
   if (stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return pausedResult;
   }
   if (entries.empty() && dependencies_.selectInitialFolder) {
     const auto selected = dependencies_.selectInitialFolder();
@@ -271,7 +278,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   }
 
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return pausedResult;
   }
 
   // iOS refresh tears down all current security-scoped handles before opening
@@ -289,15 +296,14 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     if (!session->ClearChartMeta()) {
       throw std::runtime_error("Failed to clear chart metadata cache");
     }
+    pausedResult.rebuildLibraryMetadataCleared = true;
   }
 
   std::vector<std::filesystem::path> roots;
   roots.reserve(entries.size());
   for (const auto &entry : entries) {
     if (stopToken.stop_requested()) {
-      return {.disposition = TaskRunDisposition::Paused,
-              .detail = "Paused",
-              .rebuildLibraryMetadataCleared = request.rebuildLibraryMetadata};
+      return pausedResult;
     }
     roots.push_back(chart_library_platform::resolveFolderEntryPath(entry));
   }
@@ -327,9 +333,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
 
   const bool scanPaused = checkpointPaused.load(std::memory_order_relaxed);
   if (stopToken.stop_requested() || scanPaused) {
-    return {.disposition = TaskRunDisposition::Paused,
-            .detail = "Paused",
-            .rebuildLibraryMetadataCleared = request.rebuildLibraryMetadata};
+    return pausedResult;
   }
   if (!result.completed) {
     SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,
@@ -352,7 +356,8 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     dependencies_.requestReload(true);
   }
   return {.detail = "Complete",
-          .rebuildLibraryMetadataCleared = request.rebuildLibraryMetadata};
+          .rebuildLibraryMetadataCleared = pausedResult.rebuildLibraryMetadataCleared,
+          .folderRegistrationCompleted = pausedResult.folderRegistrationCompleted};
 }
 
 bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(

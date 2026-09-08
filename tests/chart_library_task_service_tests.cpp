@@ -108,21 +108,27 @@ void testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask() {
   std::condition_variable changed;
   std::vector<std::uint64_t> ids;
   std::vector<bool> rebuildRequests;
+  std::vector<bool> registeredFolders;
+  std::vector<std::filesystem::path> folderScopes;
   ChartLibraryTaskService service(
       [&](const TaskRequest &request, const auto &, auto, auto) {
         std::lock_guard lock(mutex);
         const auto attempt = ids.size() + 1;
-        if (attempt <= 2) service.setGameplayPaused(true);
+        if (attempt <= 3) service.setGameplayPaused(true);
         ids.push_back(request.id);
         rebuildRequests.push_back(request.rebuildLibraryMetadata);
+        registeredFolders.push_back(request.folderRegistrationCompleted);
+        folderScopes.push_back(request.folderToAdd);
         changed.notify_all();
         return TaskRunResult{
-            .disposition = attempt <= 2 ? TaskRunDisposition::Paused
+            .disposition = attempt <= 3 ? TaskRunDisposition::Paused
                                        : TaskRunDisposition::Complete,
-            .rebuildLibraryMetadataCleared = attempt == 2};
+            .rebuildLibraryMetadataCleared = attempt == 3,
+            .folderRegistrationCompleted = attempt == 2};
       });
   const auto rebuildId = service.enqueue(
-      {.title = "rebuild", .rebuildLibraryMetadata = true});
+      {.title = "rebuild", .folderToAdd = "added-root",
+       .rebuildLibraryMetadata = true});
   const auto nextId = service.enqueue({.title = "next"});
   const auto waitForAttempts = [&](std::size_t count) {
     std::unique_lock lock(mutex);
@@ -133,13 +139,21 @@ void testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask() {
   service.setGameplayPaused(false);
   expect(waitForAttempts(2), "rebuild retries its pending initialization");
   service.setGameplayPaused(false);
-  expect(waitForAttempts(4), "rebuild resumes before the queued next task");
+  expect(waitForAttempts(3), "registered folder still retries pending rebuild");
+  service.setGameplayPaused(false);
+  expect(waitForAttempts(5), "rebuild resumes before the queued next task");
   service.shutdown();
   expect(ids == std::vector<std::uint64_t>({rebuildId, rebuildId, rebuildId,
-                                          nextId}),
+                                          rebuildId, nextId}),
          "paused retries retain task identity and FIFO priority");
-  expect(rebuildRequests == std::vector<bool>({true, true, false, false}),
+  expect(rebuildRequests == std::vector<bool>({true, true, true, false, false}),
          "retries clear the destructive request only after successful initialization");
+  expect(registeredFolders == std::vector<bool>({false, false, true, true, false}),
+         "registration completion survives later pauses without leaking to the next task");
+  expect(folderScopes == std::vector<std::filesystem::path>(
+                             {"added-root", "added-root", "added-root",
+                              "added-root", ""}),
+         "registration completion does not broaden the resumed folder scope");
 }
 
 void testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume() {

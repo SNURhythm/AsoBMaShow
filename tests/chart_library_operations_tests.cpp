@@ -4,6 +4,7 @@
 #include "ArchiveRAII.h"
 #include "Utils.h"
 #include "bms_parser.hpp"
+#include "sqlite3.h"
 
 #include <archive_entry.h>
 
@@ -214,23 +215,37 @@ void testRefreshScansThroughTheRealRepository() {
   expect(reloadRequested, "completed refresh requests selector reload");
 }
 
-void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
+void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(
+    bool addFolder = false, bool rebuild = true,
+    bool pauseBeforeRegistration = false) {
   using namespace chart_library_tasks;
   TempDirectory temporary;
   const auto archive = writeArchiveCharts(temporary.path(), 105);
   archive_file::setArchiveIndexCacheDirectory(temporary.path() / "index-cache");
   ChartRepository repository(temporary.path() / "chart.db");
   expect(repository.EnsureReady(), "rebuild repository is ready");
-  {
+  if (!addFolder) {
     auto session = repository.OpenSession();
     expect(session.has_value() && session->InsertEntry(archive.parent_path()),
            "rebuild fixture registers its existing library root once");
+  } else {
+    const auto existingRoot = temporary.path() / "unrelated-library";
+    writeChart(existingRoot);
+    auto session = repository.OpenSession();
+    expect(session->InsertEntry(existingRoot), "unrelated root is registered");
+    auto batch = session->BeginScanBatch();
+    expect(batch && batch->CheckpointAndContinue(
+                        {.found = true, .phase = "archive", .subIndex = 7}),
+           "Add Folder starts with an existing checkpoint to invalidate");
   }
   bool reloadRequested = false;
   std::atomic_bool gameplayPaused{false};
   std::atomic_int attempt{0};
   std::atomic_int parsingCurrent{-1};
   std::atomic_int clearCount{0};
+  std::atomic_int registrationCount{0};
+  std::atomic_int resumedParsingCurrent{-1};
+  std::atomic_bool initialCheckpointInvalidated{false};
   std::atomic_int rowsBeforeResumedScan{-1};
   std::atomic_bool checkpointBeforeResumedScan{false};
   std::mutex mutex;
@@ -245,9 +260,13 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
   auto options = dependencies(repository, temporary.path(), reloadRequested,
                               [&] { return gameplayPaused.load(); });
   options.importDifficultyTablesFromDirectory =
-      [&](ChartRepository::Session &, const std::filesystem::path &,
+      [&](ChartRepository::Session &session, const std::filesystem::path &,
           const DifficultyTableImportCheckpoint &checkpoint) {
-        if (attempt.load() == 1) pause();
+        if (addFolder && attempt.load() == (pauseBeforeRegistration ? 2 : 1)) {
+          initialCheckpointInvalidated =
+              !session.LoadScanSnapshot().checkpoint.has_value();
+        }
+        if (attempt.load() == 1 && !pauseBeforeRegistration) pause();
         checkpoint();
         return 0;
       };
@@ -267,8 +286,12 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
             request, stop,
             [&](const ChartScanProgress &progress, std::string_view detail) {
               if (detail == "Clearing library caches") ++clearCount;
+              if (detail == "Adding folder") ++registrationCount;
               if (progress.stage == ChartScanProgressStage::ParsingCharts) {
                 parsingCurrent.store(progress.current);
+                if (currentAttempt == 4 && resumedParsingCurrent == -1) {
+                  resumedParsingCurrent = progress.current;
+                }
               }
               if (currentAttempt == 3 &&
                   progress.stage == ChartScanProgressStage::PreparingUpdates) {
@@ -282,7 +305,13 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
               }
               publish(progress, detail);
             },
-            waitForResume);
+            [&] {
+              if (currentAttempt == 1 && pauseBeforeRegistration) {
+                pause();
+                return false;
+              }
+              return waitForResume();
+            });
         {
           std::lock_guard lock(mutex);
           results.push_back(result);
@@ -293,8 +322,11 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
       });
   servicePointer = &service;
   service.enqueue({.kind = TaskKind::RefreshLibrary,
-                   .title = "Rebuild Library",
-                   .rebuildLibraryMetadata = true});
+                   .title = addFolder ? "Add Folder" : "Rebuild Library",
+                   .folderToAdd = addFolder ? archive.parent_path()
+                                           : std::filesystem::path{},
+                   .iosBookmark = addFolder ? "added-bookmark" : "",
+                   .rebuildLibraryMetadata = rebuild});
   const auto waitForAttempt = [&](std::size_t count) {
     std::unique_lock lock(mutex);
     return changed.wait_for(lock, std::chrono::seconds(5),
@@ -306,6 +338,12 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
   };
   expect(waitForAttempt(1), "rebuild pauses before destructive initialization");
   expect(clearCount == 0, "pre-initialization pause does not clear metadata");
+  if (addFolder) {
+    auto session = repository.OpenSession();
+    const auto entries = session->SelectAllEntries();
+    expect(entries.size() == (pauseBeforeRegistration ? 1 : 2),
+           "pre-registration pause leaves registration pending");
+  }
   resume();
   expect(waitForAttempt(2), "rebuild pauses after a committed archive prefix");
   {
@@ -323,11 +361,12 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
   expect(waitForAttempt(3), "rebuild can pause again before resumed parsing");
   expect(rowsBeforeResumedScan == 50 && checkpointBeforeResumedScan,
          "retry retains committed metadata and checkpoint before scanning");
-  expect(clearCount == 1, "rebuild clears metadata once across paused retries");
+  expect(clearCount == (rebuild ? 1 : 0),
+         "rebuild clears metadata once across paused retries");
   resume();
   expect(waitForAttempt(4), "resumed rebuild finishes the remaining archive");
   service.shutdown();
-  expect(rebuildRequests == std::vector<bool>({true, true, false, false}),
+  expect(rebuildRequests == std::vector<bool>({rebuild, rebuild, false, false}),
          "retry keeps rebuild pending until initialization actually succeeds");
   expect(results.size() == 4 &&
              results[0].disposition == TaskRunDisposition::Paused &&
@@ -335,11 +374,90 @@ void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress() {
              results[2].disposition == TaskRunDisposition::Paused &&
              results[3].disposition == TaskRunDisposition::Complete,
          "one task resumes after each gameplay pause and completes once");
-  expect(clearCount == 1, "completed rebuild never repeats cache clearing");
+  expect(clearCount == (rebuild ? 1 : 0),
+         "completed rebuild never repeats cache clearing");
+  expect(registrationCount == (addFolder ? 1 : 0),
+         "Add Folder registers only once across paused retries");
+  expect(!addFolder || initialCheckpointInvalidated,
+         "first Add Folder registration still invalidates the old checkpoint");
+  expect(resumedParsingCurrent == 50,
+         "resumed archive parsing starts at the durable fifty-chart prefix");
   auto session = repository.OpenSession();
   expect(session.has_value() && session->CountAllChartMeta() == 105,
          "resumed rebuild keeps every archive chart");
+  if (addFolder && session.has_value()) {
+    const auto entries = session->SelectAllEntries();
+    expect(entries.size() == 2 &&
+               std::ranges::any_of(entries, [](const ChartEntry &entry) {
+                 return entry.iosBookmark == "added-bookmark";
+               }),
+           "resumed Add Folder retains its registered bookmark");
+    expect(session->LoadScanSnapshot().charts.size() == 105,
+           "Add Folder retries stay scoped to the added root, not unrelated roots");
+  }
   archive_file::setArchiveIndexCacheDirectory({});
+}
+
+void testFailedFolderRegistrationCanBeRetriedThroughTheService() {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  writeChart(root);
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  expect(repository.EnsureReady(), "registration failure repository is ready");
+  sqlite3 *database = nullptr;
+  expect(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK,
+         "registration failure fixture opens database");
+  expect(sqlite3_exec(database,
+                     "CREATE TRIGGER fail_registration BEFORE INSERT ON entries "
+                     "BEGIN SELECT RAISE(FAIL, 'registration rejected'); END",
+                     nullptr, nullptr, nullptr) == SQLITE_OK,
+         "fixture rejects the first real InsertEntry");
+  bool reloadRequested = false;
+  ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  ChartLibraryTaskService service(
+      [&](const TaskRequest &request, const std::stop_token &stop,
+          TaskProgressCallback publish, TaskPauseCallback waitForResume) {
+        return operations.run(request, stop, publish, waitForResume);
+      });
+  const TaskRequest request{.title = "Add Folder", .folderToAdd = root,
+                            .iosBookmark = "retry-bookmark",
+                            .rebuildLibraryMetadata = true};
+  const auto id = service.enqueue(request);
+  const auto waitForStatus = [&](TaskStatus status) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto snapshot = service.snapshot();
+      if (std::ranges::any_of(snapshot.tasks, [&](const TaskInfo &task) {
+            return task.id == id && task.status == status;
+          })) return true;
+      std::this_thread::yield();
+    }
+    return false;
+  };
+  expect(waitForStatus(TaskStatus::Failed),
+         "a failed InsertEntry is reported as failure, not completed registration");
+  {
+    auto session = repository.OpenSession();
+    expect(session->SelectAllEntries().empty() &&
+               session->CountAllChartMeta() == 0,
+           "failed registration does not scan or register the folder");
+  }
+  expect(sqlite3_exec(database, "DROP TRIGGER fail_registration", nullptr,
+                     nullptr, nullptr) == SQLITE_OK,
+         "fixture removes the registration failure");
+  expect(service.enqueueReserved(id, request), "failed Add Folder can retry");
+  expect(waitForStatus(TaskStatus::Complete), "registration retry completes");
+  service.shutdown();
+  auto session = repository.OpenSession();
+  const auto entries = session->SelectAllEntries();
+  expect(entries.size() == 1 && entries.front().iosBookmark == "retry-bookmark" &&
+             session->CountAllChartMeta() == 1,
+         "retry performs the previously failed registration and scans its chart");
+  expect(sqlite3_close(database) == SQLITE_OK, "failure fixture closes database");
 }
 
 void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
@@ -773,6 +891,10 @@ int main() {
   testRefreshStopsAtTheExistingPauseCheckpoint();
   testRefreshScansThroughTheRealRepository();
   testRebuildTaskRetriesPreserveInitializationAndArchiveProgress();
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, false);
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true);
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true, true);
+  testFailedFolderRegistrationCanBeRetriedThroughTheService();
   testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();

@@ -36,6 +36,7 @@ struct TaskRequest {
   std::filesystem::path androidImportPath;
   bool androidImportFolder = false;
   bool rebuildLibraryMetadata = false;
+  bool folderRegistrationCompleted = false;
 };
 
 struct TaskInfo {
@@ -78,6 +79,7 @@ struct TaskRunResult {
   std::string detail = "Complete";
   std::optional<DownloadedIndexCompletion> downloadedIndex;
   bool rebuildLibraryMetadataCleared = false;
+  bool folderRegistrationCompleted = false;
 };
 
 } // namespace chart_library_tasks
