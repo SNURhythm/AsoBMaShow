@@ -1378,7 +1378,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   auto scheduleOrdinaryChart = [&](const std::filesystem::path &path,
                                    bool hasDocument) {
     const path_t key = fspath_to_path_t(path);
-    if (knownChartPaths.contains(key)) {
+    if (reconcileMode != ReconcileMode::Scoped && knownChartPaths.contains(key)) {
       documentFlagUpdates.emplace_back(path, hasDocument);
       return;
     }

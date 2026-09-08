@@ -451,6 +451,43 @@ void testFolderPreviewFallbackMatchesBeatorajaPerFolderScan() {
   assert(fspath_to_utf8(records.records[1].meta.Preview) == "custom.wav");
 }
 
+void testScopedRefreshUpdatesSameArchivePathAndPreview() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "target";
+  const auto sibling = temporary.path() / "sibling";
+  std::filesystem::create_directories(root);
+  const auto archive = writeZip(root / "charts.zip",
+      {{"songs/chart.bms", chartText("Archive Before")},
+       {"songs/preview-old.ogg", "old"}});
+  const auto siblingPath = writeChart(sibling, "chart", "Sibling Before");
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {root, sibling}).completed);
+  const std::array paths{archive_file::makeVirtualPath(archive, "songs/chart.bms"),
+                         siblingPath};
+  const auto before = session->SelectChartMetaByPaths(paths);
+  assert(before.records.size() == 2);
+  const auto oldMtime = std::filesystem::last_write_time(archive);
+  writeZip(archive, {{"songs/chart.bms", chartText("Archive After Refresh")},
+                    {"songs/preview-new.ogg", "new preview"}});
+  std::filesystem::last_write_time(archive, oldMtime + std::chrono::seconds(1));
+  writeChart(sibling, "chart", "Sibling On Disk Changed");
+  const auto refreshed = scanner.ScanScopedWithResult(*session, {root});
+  assert(refreshed.completed && refreshed.committed);
+  const auto after = session->SelectChartMetaByPaths(paths);
+  assert(after.records.size() == 2);
+  assert(after.records[0].meta.Title == "Archive After Refresh");
+  assert(after.records[0].meta.SHA256 != before.records[0].meta.SHA256);
+  assert(after.records[0].meta.Preview == "preview-new.ogg");
+  assert(after.records[1].meta.SHA256 == before.records[1].meta.SHA256);
+  assert(after.records[1].meta.Title == "Sibling Before");
+  assert(scanner.ScanScopedWithResult(*session, {root}).completed);
+  assert(session->SelectChartMetaByPaths(paths).records[0].meta.SHA256 ==
+         after.records[0].meta.SHA256);
+}
+
 void testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan() {
   TempDirectory temporary;
   const auto archive = writeZip(
@@ -1221,6 +1258,34 @@ void testStorageFailureLeavesNoChart() {
   assert(session->CountAllChartMeta() == 0);
   denyChartInsert.store(false, std::memory_order_relaxed);
   assert(metadataRebuildRequired(databasePath));
+}
+
+void testScopedSamePathRefreshStorageFailureRollsBack() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "target";
+  const auto chartPath = writeChart(root, "chart", "Before Failure");
+  ScopedInsertDenial denial;
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  ChartLibraryScanner scanner;
+  assert(scanner.Scan(*session, {root}) == 1);
+  const std::array paths{chartPath};
+  const auto before = session->SelectChartMetaByPaths(paths);
+  writeChart(root, "chart", "After Failure");
+  denyChartInsert.store(true);
+  std::uint64_t acknowledged = 0;
+  const auto failed = scanner.ScanScopedWithResult(*session, {root}, nullptr,
+      nullptr, nullptr, [] { return 7; },
+      [&](std::uint64_t request) { acknowledged = request; });
+  denyChartInsert.store(false);
+  assert(!failed.completed && !failed.committed);
+  assert(acknowledged == 0);
+  const auto unchanged = session->SelectChartMetaByPaths(paths);
+  assert(unchanged.records[0].meta.SHA256 == before.records[0].meta.SHA256);
+  assert(unchanged.records[0].meta.Title == "Before Failure");
+  assert(scanner.ScanScopedWithResult(*session, {root}).completed);
+  assert(session->SelectChartMetaByPaths(paths).records[0].meta.Title == "After Failure");
 }
 
 void testRebuildFlagClearFailureDoesNotReportCompletedScan() {
@@ -2627,6 +2692,7 @@ int main() {
   testSequenceFeaturesMatchBeatorajaSongData();
   testFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
+  testScopedRefreshUpdatesSameArchivePathAndPreview();
   testFolderRecordsMatchBeatorajaFolderTraversal();
   testFolderCleanupWorkTracksStoredEdgesNotTheCartesianProduct();
   testFolderCleanupInterruptionRollsBackBeforeResume();
@@ -2640,6 +2706,7 @@ int main() {
   testArchiveCheckpointResumeSurvivesArchiveOrderChanges();
   testResumeWithArchiveCheckpointStillProcessesIndividualDiffs();
   testStorageFailureLeavesNoChart();
+  testScopedSamePathRefreshStorageFailureRollsBack();
   testRebuildFlagClearFailureDoesNotReportCompletedScan();
   testMissingFullScanRootPreservesMetadataRebuildState();
   testAddedScanStorageFailureDoesNotQualifyExistingChart();

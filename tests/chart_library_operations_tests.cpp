@@ -9,6 +9,7 @@
 #include <archive_entry.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -621,6 +622,58 @@ void testPathRefreshReconcilesOnlyTheRequestedSubtree() {
   expect(reloadRequested, "targeted refresh requests selector reload");
 }
 
+void testPathRefreshReparsesSamePathAndFolderPreview() {
+  TempDirectory temporary;
+  const auto target = temporary.path() / "target";
+  const auto sibling = temporary.path() / "sibling";
+  const auto chartPath = writeChart(target);
+  const auto fallbackPath = writeChart(target, "fallback.bms");
+  const auto siblingPath = writeChart(sibling);
+  std::ofstream(target / "preview-old.ogg").close();
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "same-path repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  for (const auto &root : {target, sibling}) {
+    operations.run({.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+                    .folderToAdd = root}, {},
+                   [](const ChartScanProgress &, std::string_view) {},
+                   [] { return true; });
+  }
+  const auto oldIdentity = readChartIdentity(chartPath);
+  std::ofstream(chartPath, std::ios::app)
+      << "#TITLE Refreshed Same Path\n#PREVIEW authored-new.ogg\n#00211:0101\n";
+  std::ofstream(siblingPath, std::ios::app) << "#TITLE Do Not Refresh\n";
+  std::filesystem::remove(target / "preview-old.ogg");
+  std::ofstream(target / "preview-new.ogg").close();
+  const auto newIdentity = readChartIdentity(chartPath);
+  expect(newIdentity.sha256 != oldIdentity.sha256, "fixture content identity changes");
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshPath, .refreshPath = target}, {},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
+         "same-path refresh completes");
+  auto session = repository.OpenSession();
+  const std::array paths{chartPath, fallbackPath, siblingPath};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  expect(records.records.size() == 3, "refresh preserves all charts");
+  if (records.records.size() != 3) return;
+  expect(records.records[0].meta.Title == "Refreshed Same Path",
+         "scoped refresh updates same-path title");
+  expect(main_menu_library::findBmsChartIdentity(records.records[0].meta).sha256 ==
+             newIdentity.sha256, "scoped refresh replaces same-path SHA identity");
+  expect(records.records[0].meta.Preview == "authored-new.ogg",
+         "scoped refresh updates authored preview");
+  expect(records.records[0].meta.TotalNotes == 3,
+         "scoped refresh updates same-path note metadata");
+  expect(records.records[1].meta.Preview == "preview-new.ogg",
+         "scoped refresh updates unchanged chart's folder preview");
+  expect(records.records[2].meta.Title == "Shared Operations",
+         "scoped refresh leaves another root's metadata unchanged");
+  expect(session->SelectAllEntries().size() == 2, "scoped refresh preserves registered roots");
+}
+
 void testDownloadedPathIndexesAndReturnsTheSelectionHandoff() {
   TempDirectory temporary;
   const auto downloadedRoot = temporary.path() / "downloaded";
@@ -898,6 +951,7 @@ int main() {
   testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
+  testPathRefreshReparsesSamePathAndFolderPreview();
   testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
   testRefreshSeedsTheExactDefaultTablesOnce();
   testRefreshPausesInsideDefaultTableSeeding();
