@@ -6200,6 +6200,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(practice_session_tests PRIVATE cxx_std_23)
 
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/gameplay_terminal_scene_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --output ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        DEPENDS tests/gameplay_terminal_scene_extract.py
+                tests/gameplay_terminal_scene_fixture.cpp
+                src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
+    add_executable(gameplay_terminal_scene_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        src/ScoreProvenance.cpp
+        src/bms_parser.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeSession.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/Judge.cpp
+        src/scene/play/RealtimeGameplayAuthorityPolicy.cpp
+    )
+    target_include_directories(gameplay_terminal_scene_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(gameplay_terminal_scene_tests PRIVATE cxx_std_23)
+
     add_executable(gameplay_practice_boundary_tests
         tests/gameplay_practice_boundary_tests.cpp
     )
@@ -7994,6 +8021,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(gameplay_bga_target_tests)
     asobmashow_register_test(bgfx_skin_texture_device_tests)
     asobmashow_register_test(practice_session_tests)
+    asobmashow_register_test(gameplay_terminal_scene_tests)
     asobmashow_register_test(gameplay_practice_boundary_tests)
     asobmashow_register_test(gameplay_playback_startup_tests)
     asobmashow_register_test(gameplay_practice_input_boundary_tests)

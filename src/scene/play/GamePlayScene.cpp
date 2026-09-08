@@ -5829,15 +5829,14 @@ void GamePlayScene::update(float dt) {
     completePracticeSection(false);
     return;
   }
-  if (options.practiceSession != nullptr) {
-    completePracticeSection(false);
-    return;
-  }
-
   if (!realtimeAtFrameStart &&
       !gameplay::shouldCompleteLegacyGameplayState(
           playtimeMillis.has_value(), sourcePlaytimeElapsed,
           state->passedMeasureCount == chart->Measures.size())) {
+    return;
+  }
+  if (options.practiceSession != nullptr) {
+    completePracticeSection(false);
     return;
   }
 
