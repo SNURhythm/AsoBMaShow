@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -33,9 +34,10 @@ struct LoadGate {
 };
 LoadGate parseGate;
 LoadGate audioGate;
+const auto uiThread = std::this_thread::get_id();
 
 namespace bms_parser {
-struct Chart { struct { bool IsDP = false; } Meta; };
+struct Chart { struct { bool IsDP = true; } Meta; };
 }
 struct ChartMetaRecord { struct { int LnMode = 0; } meta; };
 namespace play_options {
@@ -45,11 +47,19 @@ std::unique_ptr<bms_parser::Chart> parseChart(
   parseGate.run(cancelled);
   return std::make_unique<bms_parser::Chart>();
 }
-bool applyPlayOptionModifier(bms_parser::Chart &, const auto &, std::nullopt_t,
-                             int, int &, int &, const char *) { return true; }
+bool applyPlayOptionModifier(bms_parser::Chart &, const auto &option, std::nullopt_t,
+                             int side, int &, int &, const char *) {
+  if constexpr (std::is_same_v<std::decay_t<decltype(option)>, std::string>) {
+    assert(side == 1 && option == "NORMAL");
+  }
+  return true;
+}
 }
 namespace replay {
-std::optional<std::string> beatorajaReplayOptionName(int) { return "NORMAL"; }
+std::optional<std::string> beatorajaReplayOptionName(int value) {
+  assert(std::this_thread::get_id() == uiThread && "capture player-two settings before the worker");
+  return value == 0 ? "NORMAL" : "MIRROR";
+}
 }
 namespace long_note_mode { int valueFromId(int value) { return value; } }
 int normalizeChartLongNoteModeValue(int value) { return value; }
@@ -101,6 +111,7 @@ struct MusicSelectScene {
   } context;
   SceneManager manager;
   std::atomic_bool launchCancelled_ = false;
+  std::uint64_t launchGeneration_ = 0;
   std::jthread launchThread_;
   bool sceneActive_ = true;
   bool failed_ = false;
@@ -196,10 +207,35 @@ void testActiveCompletionAndFailure() {
   assert(scene.previewAudio_->resumes == 1);
 }
 
+void testQueuedCompletionAfterResume(bool oldSuccess) {
+  MusicSelectScene scene;
+  scene.context.jukebox.success = oldSuccess;
+  scene.launch();
+  scene.launchThread_.join();
+  scene.cleanupScene();
+  scene.sceneActive_ = true;
+  scene.launching_ = true;
+  scene.context.jukebox.success = true;
+  audioGate.entered = false;
+  audioGate.block = true;
+  scene.launch();
+  audioGate.wait();
+  scene.context.settings.skinPlayer2RandomOption = 1;
+  scene.drain();
+  assert(scene.manager.launches == 0 && scene.launching_ && scene.overlayVisible &&
+         scene.previewAudio_->resumes == 0 &&
+         "old normal launch completion must not consume or reset a resumed launch");
+  scene.cleanupScene();
+  scene.drain();
+  audioGate.block = false;
+}
+
 int main() {
   testCancellation(false);
   testCancellation(true);
   testQueuedCompletionAfterCleanup();
   testQueuedCompletionAfterError();
   testActiveCompletionAndFailure();
+  testQueuedCompletionAfterResume(false);
+  testQueuedCompletionAfterResume(true);
 }

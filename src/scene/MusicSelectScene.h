@@ -217,8 +217,9 @@ private:
   // The launch parse runs off the UI thread so a large archive chart does not
   // freeze the selector between Start and the gameplay scene. Completion is
   // published on the next deferred pass.
-  std::jthread launchThread_;
   std::atomic_bool launchCancelled_{false};
+  std::uint64_t launchGeneration_ = 0;
+  std::jthread launchThread_;
   // Background preload of the selected chart's parse + jukebox load so Start
   // is near-instant even for a heavy archive chart. A single worker thread
   // lives for the scene and processes the latest selection request (debounced

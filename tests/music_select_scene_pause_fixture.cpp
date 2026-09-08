@@ -31,6 +31,9 @@ struct Worker {
 };
 
 struct MusicSelectScene {
+  std::atomic_bool launchCancelled_ = false;
+  std::uint64_t launchGeneration_ = 0;
+  std::jthread launchThread_;
   struct { std::atomic_bool appInBackground = false; } context;
   bool sceneActive_ = true;
   bool launching_ = false, failed_ = false;

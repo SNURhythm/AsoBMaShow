@@ -661,6 +661,12 @@ void MusicSelectScene::onPause() {
   folderStatusRowsRevision_.reset();
   folderStatusRetryAt_.reset();
   sceneActive_ = false;
+  ++launchGeneration_;
+  launchCancelled_.store(true, std::memory_order_release);
+  if (launchThread_.joinable()) {
+    launchThread_.request_stop();
+    launchThread_.join();
+  }
   audio::diag::SelectAudioLog("[bgm] scene onPause");
   stopPreloadWorker();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -2319,13 +2325,16 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     launchThread_.join();
   }
   launchCancelled_.store(false, std::memory_order_release);
+  const auto generation = ++launchGeneration_;
+  const auto player2PlayOption = replay::beatorajaReplayOptionName(
+      context.settings.skinPlayer2RandomOption);
   launchThread_ = std::jthread(
       [this, record, selections, autoKeySound, doublePlayFlip, playback,
-       clubMode, practice, autoplay, tableContext]() mutable {
-        auto resetLaunching = [this]() {
-          postDeferred([this]() {
-            if (!sceneActive_ || failed_ ||
-                launchCancelled_.load(std::memory_order_acquire)) {
+       clubMode, practice, autoplay, tableContext, generation,
+       player2PlayOption]() mutable {
+        auto resetLaunching = [this, generation]() {
+          postDeferred([this, generation]() {
+            if (!sceneActive_ || failed_ || generation != launchGeneration_) {
               return true;
             }
             launching_ = false;
@@ -2351,11 +2360,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           return;
         }
         if (chart->Meta.IsDP) {
-          const auto player2 = replay::beatorajaReplayOptionName(
-              context.settings.skinPlayer2RandomOption);
-          if (!player2 ||
+          if (!player2PlayOption ||
               !play_options::applyPlayOptionModifier(
-                  *chart, std::string(*player2), std::nullopt, 1,
+                  *chart, std::string(*player2PlayOption), std::nullopt, 1,
                   playInfo.option2, playInfo.seed2, "music-select")) {
             resetLaunching();
             return;
@@ -2384,8 +2391,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
                      std::move(chart)),
              playInfo = std::move(playInfo), lnMode, selections, autoKeySound,
              doublePlayFlip, playback, clubMode, practice, autoplay,
-             tableContext]() mutable {
+             tableContext, generation]() mutable {
               if (!launching_ || !sceneActive_ || failed_ ||
+                  generation != launchGeneration_ ||
                   launchCancelled_.load(std::memory_order_acquire)) {
                 return true;
               }
@@ -2450,60 +2458,100 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
   if (firstMeta == nullptr || firstMeta->BmsPath.empty()) return;
 
   launching_ = true;
-  std::atomic_bool cancelled = false;
-  auto chart = play_options::parseChart(firstMeta->BmsPath, cancelled,
-                                        "music-select course");
-  if (!chart || cancelled) {
-    launching_ = false;
-    return;
-  }
-  applyCourseConstraintsToChart(*chart, session->constraints);
-  const auto playInfo = play_options::applySelectedPlayOptions(
-      *chart, session->requestedPlayOption, session->requestedPlayOption2);
-  applyEffectiveLongNoteModeToChart(*chart, session->longNoteMode);
-  session->playOption = playInfo.option;
-  session->playOptionSeed = playInfo.seed;
-  session->playOption2 = playInfo.option2;
-  session->playOption2Seed = playInfo.seed2;
-
-  stopPreloadWorker();
-  context.jukebox.stop();
-  const auto loaded = context.jukebox.loadChart(*chart, true, cancelled);
-  if (!loaded.success || cancelled) {
-    launching_ = false;
-    return;
-  }
+  showDecideOverlay(bar.courseCharts.front());
+  previewController_.reset();
+  if (previewAudio_) previewAudio_->silence();
   const auto tableContext = musicSelectTableContextForLaunch(bars_.readView());
-  StartOptions options{
-      .startPosition = 0,
-      .autoKeySound = session->autoKeySound,
-      .autoPlay = autoplay,
-      .gaugeType = session->gaugeType,
-      .gaugeProfile = session->gaugeProfile,
-      .gaugeAutoShift = session->gaugeAutoShift,
-      .gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound,
-      .playOption = playInfo.option,
-      .playOptionSeed = playInfo.seed,
-      .playOption2 = playInfo.option2,
-      .playOption2Seed = playInfo.seed2,
-      .doublePlayFlip = session->doublePlayFlip,
-      .longNoteMode = session->longNoteMode,
-      .assistOption = session->assistOption,
-      .tableName = tableContext.name,
-      .tableLevel = tableContext.level,
-      .playback = course_rules::kRequiredPlaybackRate,
-      .clubMode = context.settings.gameplayClubModeEnabled,
-      .courseSession = session,
-      .courseConstraints = session->constraints,
-      .ruleset = session->ruleset,
-      .requiredRulesetDescriptor = session->rulesetDescriptor,
-      .ownsChart = true,
-      .returnScene = this,
-  };
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(chart),
-                                      std::move(options)),
-      true);
+  const bool clubMode = context.settings.gameplayClubModeEnabled;
+  stopPreloadWorker();
+  if (launchThread_.joinable()) {
+    launchThread_.join();
+  }
+  launchCancelled_.store(false, std::memory_order_release);
+  const auto generation = ++launchGeneration_;
+  launchThread_ = std::jthread(
+      [this, session = std::move(session), tableContext, clubMode, autoplay,
+       generation]() mutable {
+        auto resetLaunching = [this, generation]() {
+          postDeferred([this, generation]() {
+            if (!sceneActive_ || failed_ || generation != launchGeneration_) {
+              return true;
+            }
+            launching_ = false;
+            hideDecideOverlay();
+            if (previewAudio_ &&
+                !context.appInBackground.load(std::memory_order_acquire)) {
+              previewAudio_->resumeDefaultBgm();
+            }
+            return true;
+          });
+        };
+        auto &cancelled = launchCancelled_;
+        auto chart = play_options::parseChart(session->currentMeta()->BmsPath,
+                                              cancelled, "music-select course");
+        if (!chart || cancelled) {
+          resetLaunching();
+          return;
+        }
+        applyCourseConstraintsToChart(*chart, session->constraints);
+        const auto playInfo = play_options::applySelectedPlayOptions(
+            *chart, session->requestedPlayOption, session->requestedPlayOption2);
+        applyEffectiveLongNoteModeToChart(*chart, session->longNoteMode);
+        session->playOption = playInfo.option;
+        session->playOptionSeed = playInfo.seed;
+        session->playOption2 = playInfo.option2;
+        session->playOption2Seed = playInfo.seed2;
+
+        context.jukebox.stop();
+        const auto loaded = context.jukebox.loadChart(*chart, true, cancelled);
+        if (!loaded.success || cancelled) {
+          resetLaunching();
+          return;
+        }
+        postDeferred(
+            [this, session = std::move(session),
+             preparedChart =
+                 std::make_shared<std::unique_ptr<bms_parser::Chart>>(
+                     std::move(chart)),
+             playInfo, tableContext, clubMode, autoplay, generation]() mutable {
+              if (!launching_ || !sceneActive_ || failed_ ||
+                  generation != launchGeneration_ ||
+                  launchCancelled_.load(std::memory_order_acquire)) {
+                return true;
+              }
+              StartOptions options{
+                  .startPosition = 0,
+                  .autoKeySound = session->autoKeySound,
+                  .autoPlay = autoplay,
+                  .gaugeType = session->gaugeType,
+                  .gaugeProfile = session->gaugeProfile,
+                  .gaugeAutoShift = session->gaugeAutoShift,
+                  .gaugeAutoShiftLowerBound = session->gaugeAutoShiftLowerBound,
+                  .playOption = playInfo.option,
+                  .playOptionSeed = playInfo.seed,
+                  .playOption2 = playInfo.option2,
+                  .playOption2Seed = playInfo.seed2,
+                  .doublePlayFlip = session->doublePlayFlip,
+                  .longNoteMode = session->longNoteMode,
+                  .assistOption = session->assistOption,
+                  .tableName = tableContext.name,
+                  .tableLevel = tableContext.level,
+                  .playback = course_rules::kRequiredPlaybackRate,
+                  .clubMode = clubMode,
+                  .courseSession = session,
+                  .courseConstraints = session->constraints,
+                  .ruleset = session->ruleset,
+                  .requiredRulesetDescriptor = session->rulesetDescriptor,
+                  .ownsChart = true,
+                  .returnScene = this,
+              };
+              context.sceneManager->changeScene(
+                  std::make_unique<GamePlayScene>(context, std::move(*preparedChart),
+                                                  std::move(options)),
+                  true);
+              return true;
+            });
+      });
 }
 
 void MusicSelectScene::launchSelectedDirectoryAutoplay() {
@@ -4460,6 +4508,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 
 void MusicSelectScene::cleanupScene() {
   sceneActive_ = false;
+  ++launchGeneration_;
   cancelDirectoryLoad();
   directoryLoader_.reset();
   folderStatusLoader_.reset();

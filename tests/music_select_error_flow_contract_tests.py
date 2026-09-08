@@ -78,7 +78,6 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                                      .replace("SCENE_METHODS", methods)
                                      .replace("SCENE_TEST", f"testReplayAudio({path})"))
 
-
     def test_folder_statistics_prioritize_selection_and_survive_navigation(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         method = function_body(source, "void MusicSelectScene::requestFolderStatus(")
@@ -99,17 +98,34 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_cancelled_course_audio_still_blocks_gameplay(self):
         self.run_course_audio_fixture("testCancelledCourseAudio()")
 
+    def test_course_real_worker_cancellation_and_stale_deferred_completion(self):
+        self.run_course_audio_fixture("testAsyncCourseLifecycle()")
+
+    def test_folder_autoplay_real_worker_cancellation_and_stale_deferred_completion(self):
+        self.run_course_audio_fixture("testAsyncCourseLifecycle(true)")
+
+    def test_course_real_worker_captures_options_and_recovers_from_parse_failure(self):
+        self.run_course_audio_fixture("testAsyncCourseOptionsAndParseRetry()")
+
+    def test_course_deferred_failure_does_not_revive_background_audio(self):
+        self.run_course_audio_fixture("testCourseFailureWhileApplicationBackgrounded()")
+
     def run_course_audio_fixture(self, test_name):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signatures = [
             "void MusicSelectScene::launchCourse(const MusicSelectBar &bar, bool autoplay)",
             "void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory)",
+            "void MusicSelectScene::onPause()",
+            "void MusicSelectScene::onResume()",
         ]
         methods = "\n".join(
             signature + function_body(source, signature.split("(")[0] + "(")
             for signature in signatures)
         fixture = (ROOT / "tests/music_select_scene_course_audio_fixture.cpp").read_text()
+        cleanup = function_body(source, "void MusicSelectScene::cleanupScene()")
+        cleanup = cleanup[1:cleanup.index("stopPreloadWorker();")]
         self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                             .replace("CLEANUP_LAUNCH", cleanup)
                              .replace("SCENE_METHODS", methods)
                              .replace("SCENE_TEST", test_name))
 
@@ -149,7 +165,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_uncached_launch_cleanup_cancels_parser_and_audio_without_handoff(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         launch = function_body(source, "void MusicSelectScene::launchSelected(")
-        worker = launch[launch.index("launchThread_ = std::jthread("):-1]
+        worker = launch[launch.index("if (launchThread_.joinable())"):-1]
         cleanup = function_body(source, "void MusicSelectScene::cleanupScene()")
         cleanup = cleanup[1:cleanup.index("stopPreloadWorker();")]
         fixture = (ROOT / "tests/music_select_scene_launch_cancel_fixture.cpp").read_text()

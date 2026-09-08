@@ -2,6 +2,7 @@
 #include <cassert>
 #include <initializer_list>
 #include <optional>
+#include <thread>
 
 namespace audio::diag {
 void SelectAudioLog(const char *) {}
@@ -33,6 +34,9 @@ struct ExternalUrlService {
 };
 
 struct MusicSelectScene {
+  std::atomic_bool launchCancelled_ = false;
+  std::uint64_t launchGeneration_ = 0;
+  std::jthread launchThread_;
   struct FolderStatusLoader { void cancel() {} };
   FolderStatusLoader *folderStatusLoader_ = nullptr;
   std::optional<int> folderStatusRowsRevision_, folderStatusRetryAt_;
