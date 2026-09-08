@@ -88,6 +88,7 @@ private:
   // never spawns or joins a per-selection thread on the UI thread.
   ChartPreloadWorker *previewWorker_ = nullptr;
   std::mutex previewJukeboxLoadMutex;
+  std::mutex previewCleanupMutex;
   bool pendingStopAndClearSelectedChartAfterPreview = false;
   std::jthread findBmsThread;
   std::jthread replayLoadThread;

@@ -1381,7 +1381,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = true;
       }
       if (previewWorker_ != nullptr) {
@@ -1400,7 +1400,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
         (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
     {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      std::lock_guard<std::mutex> lock(previewCleanupMutex);
       pendingStopAndClearSelectedChartAfterPreview = true;
     }
     if (previewWorker_ != nullptr) {
@@ -1467,7 +1467,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
     {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      std::lock_guard<std::mutex> lock(previewCleanupMutex);
       pendingStopAndClearSelectedChartAfterPreview = false;
     }
     if (previewWorker_ != nullptr) {
@@ -1549,7 +1549,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   previewWorker_->setOnIdle([this]() {
     bool shouldStopPreviewAudio = false;
     {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      std::lock_guard<std::mutex> lock(previewCleanupMutex);
       if (pendingStopAndClearSelectedChartAfterPreview) {
         pendingStopAndClearSelectedChartAfterPreview = false;
         shouldStopPreviewAudio = true;
@@ -1736,7 +1736,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
         previewWorker_->stop();
       }
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = false;
       }
       stopAndClearSelectedChart();
@@ -1761,7 +1761,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
         previewWorker_->stop();
       }
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = false;
       }
       stopAndClearSelectedChart();
@@ -2199,7 +2199,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       previewWorker_->stop();
     }
     {
-      std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+      std::lock_guard<std::mutex> lock(previewCleanupMutex);
       pendingStopAndClearSelectedChartAfterPreview = false;
     }
     stopAndClearSelectedChart();
@@ -4128,7 +4128,7 @@ void MainMenuScene::startCourseDirect(
           previewWorker_->stop();
         }
         {
-          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::lock_guard<std::mutex> lock(previewCleanupMutex);
           pendingStopAndClearSelectedChartAfterPreview = false;
         }
         clearSelectedChart();
@@ -4313,7 +4313,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           previewWorker_->stop();
         }
         {
-          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::lock_guard<std::mutex> lock(previewCleanupMutex);
           pendingStopAndClearSelectedChartAfterPreview = false;
         }
 
@@ -4471,7 +4471,7 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   archive_file::appendDebugLogLine(
@@ -4768,7 +4768,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   stopAndClearSelectedChart();
@@ -5764,7 +5764,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
@@ -5846,7 +5846,7 @@ void MainMenuScene::playSavedMusicPlaylist() {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
@@ -5876,7 +5876,7 @@ void MainMenuScene::playRandomMusicLibrary() {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
@@ -5936,7 +5936,7 @@ void MainMenuScene::playNextMusicTrack() {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
@@ -5952,7 +5952,7 @@ void MainMenuScene::playPreviousMusicTrack() {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
@@ -7392,7 +7392,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
           previewWorker_->stop();
         }
         {
-          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::lock_guard<std::mutex> lock(previewCleanupMutex);
           pendingStopAndClearSelectedChartAfterPreview = false;
         }
 
@@ -7465,7 +7465,7 @@ void MainMenuScene::startModernReplayPlayback(
     previewWorker_->cancel();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = true;
   }
   startReplayLoadWorker(
@@ -7477,7 +7477,7 @@ void MainMenuScene::startModernReplayPlayback(
             previewWorker_->stop();
           }
           {
-            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard<std::mutex> lock(previewCleanupMutex);
             pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
@@ -7578,7 +7578,7 @@ void MainMenuScene::startModernGBattlePlayback(
     previewWorker_->cancel();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = true;
   }
   startReplayLoadWorker(
@@ -7590,7 +7590,7 @@ void MainMenuScene::startModernGBattlePlayback(
             previewWorker_->stop();
           }
           {
-            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard<std::mutex> lock(previewCleanupMutex);
             pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
@@ -7703,7 +7703,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
     previewWorker_->cancel();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = true;
   }
   startReplayLoadWorker(
@@ -7715,7 +7715,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
             previewWorker_->stop();
           }
           {
-            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard<std::mutex> lock(previewCleanupMutex);
             pendingStopAndClearSelectedChartAfterPreview = false;
           }
 
@@ -8072,7 +8072,7 @@ void MainMenuScene::startAutoPlayVideoExport(
         previewWorker_->stop();
       }
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = false;
       }
       context.jukebox.stop();
@@ -8173,7 +8173,7 @@ void MainMenuScene::startModernReplayVideoExport(
         previewWorker_->stop();
       }
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = false;
       }
       context.jukebox.stop();
@@ -8272,7 +8272,7 @@ void MainMenuScene::startModernCourseReplayVideoExport(
         previewWorker_->stop();
       }
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = false;
       }
       context.jukebox.stop();
@@ -8444,7 +8444,7 @@ void MainMenuScene::startModernReplayIrUpload(
             previewWorker_->stop();
           }
           {
-            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard<std::mutex> lock(previewCleanupMutex);
             pendingStopAndClearSelectedChartAfterPreview = false;
           }
           const auto snapshot =
@@ -8518,7 +8518,7 @@ void MainMenuScene::startModernReplayResultRecall(
     previewWorker_->cancel();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = true;
   }
   startReplayLoadWorker(
@@ -8529,7 +8529,7 @@ void MainMenuScene::startModernReplayResultRecall(
             previewWorker_->stop();
           }
           {
-            std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard<std::mutex> lock(previewCleanupMutex);
             pendingStopAndClearSelectedChartAfterPreview = false;
           }
           const auto exact = context.replayRepository
@@ -8642,7 +8642,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
     previewWorker_->cancel();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = true;
   }
   startReplayLoadWorker([this, modern = std::move(modern), retrySameAllowed,
@@ -8654,7 +8654,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
         previewWorker_->stop();
       }
       {
-        std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+        std::lock_guard<std::mutex> lock(previewCleanupMutex);
         pendingStopAndClearSelectedChartAfterPreview = false;
       }
       const auto exact =
@@ -8841,7 +8841,7 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
           previewWorker_->stop();
         }
         {
-          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::lock_guard<std::mutex> lock(previewCleanupMutex);
           pendingStopAndClearSelectedChartAfterPreview = false;
         }
 
@@ -9106,7 +9106,7 @@ void MainMenuScene::cleanupScene() {
     previewWorker_->stop();
   }
   {
-    std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+    std::lock_guard<std::mutex> lock(previewCleanupMutex);
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   stopReplayLoadWorker();
