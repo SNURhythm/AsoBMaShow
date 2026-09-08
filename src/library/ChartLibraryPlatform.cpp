@@ -208,7 +208,7 @@ void FolderActionService::requestAddFolder() {
           std::filesystem::path folder;
           std::string treeUri;
           std::string error;
-          if (!PickAndroidChartFolder(folder, treeUri, error)) {
+          if (!PickAndroidChartFolder(folder, treeUri, error, stopToken)) {
             if (!error.empty()) {
               SDL_Log("Failed to pick Android library folder: %s",
                       error.c_str());
@@ -264,7 +264,7 @@ struct SoundSetFolderPicker::Impl {
     std::filesystem::path folder;
     std::string treeUri;
     std::string error;
-    if (PickAndroidChartFolder(folder, treeUri, error)) {
+    if (PickAndroidChartFolder(folder, treeUri, error, stopToken)) {
       result.path = fspath_to_utf8(folder);
       result.bookmark = treeUri;
       result.succeed = true;

@@ -59,7 +59,8 @@ std::optional<std::string> ConvertAndroidMs932ToUtf8(std::string_view value);
 bool AndroidBuildHasManageExternalStorage();
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
-                            std::string &errorMessage);
+                            std::string &errorMessage,
+                            std::stop_token stopToken = {});
 bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
                                  std::string &errorMessage);
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,

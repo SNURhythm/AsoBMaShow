@@ -639,6 +639,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
 
+    add_test(NAME android_folder_picker_lifecycle_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_folder_picker_lifecycle_tests.py -v)
+    set_tests_properties(android_folder_picker_lifecycle_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     if (NOT IOS)
         add_executable(curl_redirect_policy_tests
             tests/curl_redirect_policy_tests.cpp

@@ -55,9 +55,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
-    private static final int REQUEST_OPEN_TREE = 0x41534f42;
     private static final int REQUEST_OPEN_ARCHIVE = 0x41534f44;
-    private static final int REQUEST_MANAGE_EXTERNAL_STORAGE = 0x41534f45;
     private static final int REQUEST_OPEN_IMPORT_FOLDER = 0x41534f46;
     private static final int REQUEST_POST_NOTIFICATIONS = 0x41534f47;
     private static final int FIRST_DOCUMENT_HANDOFF_REQUEST = 0x5300;
@@ -75,9 +73,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static final long NATIVE_MUSIC_UNKNOWN_QUEUE_ID = -1L;
     private boolean notificationPermissionRequestStarted;
 
-    private final Object pickerLock = new Object();
-    private CountDownLatch pickerLatch;
-    private final AtomicReference<String> pickerResult = new AtomicReference<>("");
+    private final NativeFolderPickerRequests folderPickerRequests =
+            new NativeFolderPickerRequests();
     private final Object archivePickerLock = new Object();
     private CountDownLatch archivePickerLatch;
     private final AtomicReference<Uri> archivePickerUri = new AtomicReference<>(null);
@@ -96,8 +93,6 @@ public class AsoBMaShowActivity extends SDLActivity {
                             TAG,
                             "Could not restore an empty export destination."));
     private boolean documentHandoffDestroyed = false;
-    private final Object manageStorageLock = new Object();
-    private CountDownLatch manageStorageLatch;
     private final Object pendingArchiveImportLock = new Object();
     private final ArrayDeque<PendingImportRequest> pendingArchiveImportRequests =
             new ArrayDeque<>();
@@ -228,6 +223,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        folderPickerRequests.destroy();
         cancelPendingChartImports();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = false;
@@ -273,6 +269,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                                                                long downloadedBytes,
                                                                long totalBytes);
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
+    private static native boolean nativeChartFolderPickerCancelled(String cancellationToken);
     private static native boolean nativeDownloadUrlTextCheckpoint(long checkpointToken);
     private static native boolean nativeDownloadUrlTextPauseRequested(long checkpointToken);
     private static native int nativeBeginChartImport(String token, boolean isTree);
@@ -354,7 +351,11 @@ public class AsoBMaShowActivity extends SDLActivity {
         return BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE ? "1" : "0";
     }
 
-    public String ensureManageExternalStorageAccess() {
+    public String ensureManageExternalStorageAccess(String cancellationToken) {
+        if (folderPickerRequests.cancelled(
+                () -> nativeChartFolderPickerCancelled(cancellationToken))) {
+            return CANCELLED_RESULT;
+        }
         if (!BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE) {
             return "0";
         }
@@ -365,83 +366,49 @@ public class AsoBMaShowActivity extends SDLActivity {
             return ERROR_PREFIX + "All-files permission cannot block the UI thread.";
         }
 
-        CountDownLatch latch;
-        synchronized (manageStorageLock) {
-            if (manageStorageLatch != null) {
-                return ERROR_PREFIX + "All-files permission request is already open.";
-            }
-            latch = new CountDownLatch(1);
-            manageStorageLatch = latch;
-        }
+        NativeFolderPickerRequests.Request request = folderPickerRequests.begin(
+                true, () -> nativeChartFolderPickerCancelled(cancellationToken));
+        if (request == null) return CANCELLED_RESULT;
 
-        runOnUiThread(() -> {
+        runOnUiThread(() -> folderPickerRequests.dispatch(request, () -> {
             Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
             intent.setData(Uri.parse("package:" + getPackageName()));
             try {
-                startActivityForResult(intent, REQUEST_MANAGE_EXTERNAL_STORAGE);
+                startActivityForResult(intent, request.code);
             } catch (Exception e) {
                 try {
                     startActivityForResult(
                             new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
-                            REQUEST_MANAGE_EXTERNAL_STORAGE);
+                            request.code);
                 } catch (Exception ignored) {
-                    finishManageStorageRequest();
+                    folderPickerRequests.complete(request.code, "0");
                 }
             }
-        });
-
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return ERROR_PREFIX + "All-files permission request was interrupted.";
-        }
-
-        synchronized (manageStorageLock) {
-            manageStorageLatch = null;
-        }
-        return hasManageExternalStorageAccess() ? "1" : "0";
+        }));
+        return folderPickerRequests.await(request);
     }
 
-    public String pickChartFolder() {
+    public String pickChartFolder(String cancellationToken) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return ERROR_PREFIX + "Folder picker cannot block the UI thread.";
         }
 
-        CountDownLatch latch;
-        synchronized (pickerLock) {
-            if (pickerLatch != null) {
-                return ERROR_PREFIX + "Folder picker is already open.";
-            }
-            pickerResult.set("");
-            latch = new CountDownLatch(1);
-            pickerLatch = latch;
-        }
+        NativeFolderPickerRequests.Request request = folderPickerRequests.begin(
+                false, () -> nativeChartFolderPickerCancelled(cancellationToken));
+        if (request == null) return CANCELLED_RESULT;
 
-        runOnUiThread(() -> {
+        runOnUiThread(() -> folderPickerRequests.dispatch(request, () -> {
             Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                     | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
             try {
-                startActivityForResult(intent, REQUEST_OPEN_TREE);
+                startActivityForResult(intent, request.code);
             } catch (Exception e) {
-                pickerResult.set(ERROR_PREFIX + e.getMessage());
-                finishPicker();
+                folderPickerRequests.complete(request.code, ERROR_PREFIX + e.getMessage());
             }
-        });
-
-        try {
-            latch.await();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return ERROR_PREFIX + "Folder picker was interrupted.";
-        }
-
-        synchronized (pickerLock) {
-            pickerLatch = null;
-        }
-        return pickerResult.get();
+        }));
+        return folderPickerRequests.await(request);
     }
 
     @Override
@@ -463,7 +430,13 @@ public class AsoBMaShowActivity extends SDLActivity {
                 return;
             }
         }
-        if (requestCode == REQUEST_OPEN_TREE) {
+        if (folderPickerRequests.handles(requestCode)) {
+            if (!folderPickerRequests.pending(requestCode)) return;
+            if (folderPickerRequests.permission(requestCode)) {
+                folderPickerRequests.complete(requestCode,
+                        hasManageExternalStorageAccess() ? "1" : "0");
+                return;
+            }
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
                 Uri treeUri = data.getData();
                 int flags = data.getFlags();
@@ -479,11 +452,11 @@ public class AsoBMaShowActivity extends SDLActivity {
                 }
                 String displayName = displayNameForTree(treeUri);
                 String directPath = directPathForTree(treeUri);
-                pickerResult.set(treeUri.toString() + "\n" + displayName + "\n" + directPath);
+                folderPickerRequests.complete(requestCode,
+                        treeUri.toString() + "\n" + displayName + "\n" + directPath);
             } else {
-                pickerResult.set(ERROR_PREFIX + "Folder selection was cancelled.");
+                folderPickerRequests.complete(requestCode, CANCELLED_RESULT);
             }
-            finishPicker();
             return;
         }
         if (requestCode == REQUEST_OPEN_ARCHIVE ||
@@ -536,10 +509,6 @@ public class AsoBMaShowActivity extends SDLActivity {
                 archivePickerError.set("");
             }
             finishArchivePicker();
-            return;
-        }
-        if (requestCode == REQUEST_MANAGE_EXTERNAL_STORAGE) {
-            finishManageStorageRequest();
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);
@@ -2201,26 +2170,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         });
     }
 
-    private void finishPicker() {
-        synchronized (pickerLock) {
-            if (pickerLatch != null) {
-                pickerLatch.countDown();
-            }
-        }
-    }
-
     private void finishArchivePicker() {
         synchronized (archivePickerLock) {
             if (archivePickerLatch != null) {
                 archivePickerLatch.countDown();
-            }
-        }
-    }
-
-    private void finishManageStorageRequest() {
-        synchronized (manageStorageLock) {
-            if (manageStorageLatch != null) {
-                manageStorageLatch.countDown();
             }
         }
     }

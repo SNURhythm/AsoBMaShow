@@ -63,6 +63,28 @@ std::unordered_map<jlong, AndroidDownloadProgressBridge *>
     gAndroidDownloadProgressBridges;
 jlong gNextAndroidDownloadProgressToken = 1;
 
+std::mutex gAndroidFolderPickerMutex;
+std::unordered_map<std::string, std::stop_token> gAndroidFolderPickerStops;
+std::uint64_t gNextAndroidFolderPickerToken = 1;
+
+struct AndroidFolderPickerCancellation {
+  explicit AndroidFolderPickerCancellation(std::stop_token stopToken) {
+    std::lock_guard lock(gAndroidFolderPickerMutex);
+    token = std::to_string(gNextAndroidFolderPickerToken++);
+    gAndroidFolderPickerStops.emplace(token, stopToken);
+  }
+
+  ~AndroidFolderPickerCancellation() {
+    std::lock_guard lock(gAndroidFolderPickerMutex);
+    gAndroidFolderPickerStops.erase(token);
+  }
+
+  AndroidFolderPickerCancellation(const AndroidFolderPickerCancellation &) = delete;
+  AndroidFolderPickerCancellation &operator=(const AndroidFolderPickerCancellation &) = delete;
+
+  std::string token;
+};
+
 struct UniqueFd {
   explicit UniqueFd(int fd) : value(fd) {}
   ~UniqueFd() {
@@ -751,6 +773,16 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileCancelle
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartFolderPickerCancelled(
+    JNIEnv *env, jclass, jstring cancellationToken) {
+  const std::string token = jstringToUtf8(env, cancellationToken);
+  std::lock_guard lock(gAndroidFolderPickerMutex);
+  const auto found = gAndroidFolderPickerStops.find(token);
+  return found == gAndroidFolderPickerStops.end() || found->second.stop_requested()
+             ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextCheckpoint(
     JNIEnv *, jclass, jlong checkpointToken) {
   AndroidDownloadCheckpoint *checkpoint = nullptr;
@@ -899,9 +931,12 @@ bool AndroidBuildHasManageExternalStorage() {
 
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
-                            std::string &errorMessage) {
+                            std::string &errorMessage,
+                            std::stop_token stopToken) {
   rootPath.clear();
   treeUri.clear();
+  if (stopToken.stop_requested()) return false;
+  AndroidFolderPickerCancellation cancellation(stopToken);
   RequestAndroidExternalActivityRenderPause();
   struct ExternalActivityPauseReset {
     ~ExternalActivityPauseReset() { FinishAndroidExternalActivityRenderPause(); }
@@ -910,8 +945,12 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
   {
     std::string permissionError;
     const std::string permissionResult = callActivityStringMethod(
-        "ensureManageExternalStorageAccess", "()Ljava/lang/String;", nullptr,
+        "ensureManageExternalStorageAccess", "(Ljava/lang/String;)Ljava/lang/String;",
+        cancellation.token.c_str(),
         permissionError);
+    if (stopToken.stop_requested() || permissionResult == "__CANCELLED__") {
+      return false;
+    }
     if (!permissionError.empty()) {
       SDL_Log("Android all-files permission request failed: %s",
               permissionError.c_str());
@@ -925,8 +964,9 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
 
   std::string callError;
   const std::string result =
-      callActivityStringMethod("pickChartFolder", "()Ljava/lang/String;",
-                               nullptr, callError);
+      callActivityStringMethod("pickChartFolder", "(Ljava/lang/String;)Ljava/lang/String;",
+                               cancellation.token.c_str(), callError);
+  if (stopToken.stop_requested() || result == "__CANCELLED__") return false;
   if (!callError.empty()) {
     errorMessage = callError;
     return false;
