@@ -14,7 +14,8 @@ void ChartPreloadWorker::request(const ChartMetaRecord &record) {
             fspath_to_path_t(record.meta.BmsPath)) {
       return;  // this exact chart is already queued
     }
-    if (inFlightPath_ &&
+    if (inFlightPath_ && inFlightCancellation_ &&
+        !inFlightCancellation_->load(std::memory_order_acquire) &&
         *inFlightPath_ == fspath_to_path_t(record.meta.BmsPath)) {
       return;  // this exact chart is already being processed
     }

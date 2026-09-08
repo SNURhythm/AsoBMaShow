@@ -116,6 +116,45 @@ void testDedupSamePath() {
   worker.stop();
 }
 
+void testReselectCancelledInFlightPathReplacesPending() {
+  ChartPreloadWorker worker(std::chrono::milliseconds(0));
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool release = false;
+  std::vector<std::string> started;
+  std::vector<bool> cancelledAtCompletion;
+  worker.configure([&](const ChartMetaRecord &record, std::atomic_bool &cancelled) {
+    std::unique_lock lock(mutex);
+    started.push_back(record.meta.Title);
+    cv.notify_all();
+    cv.wait(lock, [&] { return release; });
+    cancelledAtCompletion.push_back(cancelled.load(std::memory_order_acquire));
+    cv.notify_all();
+  });
+
+  worker.request(makeRecord("A"));
+  {
+    std::unique_lock lock(mutex);
+    expect(cv.wait_for(lock, std::chrono::seconds(2), [&] { return !started.empty(); }),
+           "A starts before the B-to-A reselection");
+  }
+  worker.request(makeRecord("B"));
+  worker.request(makeRecord("A"));
+  {
+    std::unique_lock lock(mutex);
+    release = true;
+    cv.notify_all();
+    expect(cv.wait_for(lock, std::chrono::seconds(2),
+                       [&] { return cancelledAtCompletion.size() >= 2; }),
+           "reselecting cancelled A schedules a fresh load");
+    expect(started == std::vector<std::string>({"A", "A"}),
+           "A-to-B-to-A processes only the original and latest A, never B");
+    expect(cancelledAtCompletion == std::vector<bool>({true, false}),
+           "the original A stays cancelled and the latest A can publish");
+  }
+  worker.stop();
+}
+
 void testCancelWithoutJoinStopsWorker() {
   ChartPreloadWorker worker(std::chrono::milliseconds(20));
   RecordingProcessor recorder;
@@ -322,6 +361,7 @@ void testActiveCancelDefersCleanupUntilProcessorReturns() {
 int main() {
   testLatestWinsSupersedesQueued();
   testDedupSamePath();
+  testReselectCancelledInFlightPathReplacesPending();
   testCancelWithoutJoinStopsWorker();
   testRequestAfterCancelProcessesNewItem();
   testStopJoinsAndIdleFires();
