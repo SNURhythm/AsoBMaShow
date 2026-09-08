@@ -12,6 +12,8 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -28,6 +30,38 @@
 #endif
 
 namespace {
+
+class ScopedTimezone {
+public:
+  explicit ScopedTimezone(const char *timezone) {
+    if (const auto *previous = std::getenv("TZ")) previous_ = previous;
+    set(timezone);
+  }
+
+  ~ScopedTimezone() {
+    set(previous_ ? previous_->c_str() : nullptr);
+  }
+
+  ScopedTimezone(const ScopedTimezone &) = delete;
+  ScopedTimezone &operator=(const ScopedTimezone &) = delete;
+
+private:
+  static void set(const char *timezone) {
+#if TARGET_OS_WINDOWS
+    assert(_putenv_s("TZ", timezone ? timezone : "") == 0);
+    _tzset();
+#else
+    if (timezone) {
+      assert(setenv("TZ", timezone, 1) == 0);
+    } else {
+      assert(unsetenv("TZ") == 0);
+    }
+    tzset();
+#endif
+  }
+
+  std::optional<std::string> previous_;
+};
 
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
@@ -1118,6 +1152,7 @@ void testProjectedScoreUsesReplayTimestamp(const std::filesystem::path &root) {
 
 void testRecentScoreImprovementsMatchScoreLogDayFolders(
     const std::filesystem::path &root) {
+  ScopedTimezone timezone("UTC0");
   const auto path = root / "recent-score-improvements" / "score.db";
   ScoreRepository helper(path);
   auto save = [&](std::string_view chart, char hashDigit, int suffix,
@@ -1165,6 +1200,73 @@ void testRecentScoreImprovementsMatchScoreLogDayFolders(
          !updates.lamp[0].contains(std::string(64, 'e')));
   assert(updates.score[0].contains(std::string(64, 'f')) &&
          updates.lamp[0].contains(std::string(64, 'f')));
+}
+
+void testRecentScoreImprovementsUseLocalCalendarDays(
+    const std::filesystem::path &root) {
+  struct CalendarFixture {
+    const char *name;
+    const char *timezone;
+    const char *now;
+    std::array<const char *, 4> boundaries;
+  };
+  const std::array fixtures{
+      CalendarFixture{"utc", "UTC0", "2026-01-01 12:00:00",
+                      {"2026-01-02 00:00:00", "2026-01-01 00:00:00",
+                       "2025-12-31 00:00:00", "2025-12-03 00:00:00"}},
+      CalendarFixture{"east", "JST-9", "2025-12-31 16:00:00",
+                      {"2026-01-01 15:00:00", "2025-12-31 15:00:00",
+                       "2025-12-30 15:00:00", "2025-12-02 15:00:00"}},
+      CalendarFixture{"west", "EST5EDT", "2026-01-02 02:00:00",
+                      {"2026-01-02 05:00:00", "2026-01-01 05:00:00",
+                       "2025-12-31 05:00:00", "2025-12-03 05:00:00"}},
+      CalendarFixture{"spring", "EST5EDT", "2026-03-09 16:00:00",
+                      {"2026-03-10 04:00:00", "2026-03-09 04:00:00",
+                       "2026-03-08 05:00:00", "2026-02-08 05:00:00"}},
+      CalendarFixture{"fall", "EST5EDT", "2026-11-02 17:00:00",
+                      {"2026-11-03 05:00:00", "2026-11-02 05:00:00",
+                       "2026-11-01 04:00:00", "2026-10-04 04:00:00"}}};
+  bool allMatched = true;
+  for (const auto &fixture : fixtures) {
+    ScopedTimezone timezone(fixture.timezone);
+    const auto path = root / (std::string("calendar-") + fixture.name) / "score.db";
+    ScoreRepository helper(path);
+    assert(helper.EnsureSchema());
+    auto database = openDatabase(path);
+    const auto now = queryInt(database.get(),
+        "SELECT unixepoch('" + std::string(fixture.now) + "')");
+    constexpr std::array expectedDays{0, -1, 1, 0, 2, 1, -1, 29};
+    for (std::size_t sample = 0; sample < expectedDays.size(); ++sample) {
+      const auto timestamp = queryText(database.get(),
+          "SELECT datetime('" + std::string(fixture.boundaries[sample / 2]) +
+          "', '" + (sample % 2 == 0 ? "-1 second" : "+0 seconds") + "')");
+      auto pending = samplePendingScore(root,
+          std::string(fixture.name) + std::to_string(sample), 400 + sample,
+          timestamp);
+      pending.score.chartSha256.assign(64, "0123456789abcdef"[sample]);
+      pending.score.longNoteMode = long_note_mode::kLnValue;
+      pending.score.score = 100;
+      pending.score.clearType = kClearTypeNormalClearRank;
+      assert(helper.SaveProjectedScore(pending).status ==
+             result_persistence::ProjectionStatus::Inserted);
+    }
+    database.reset();
+    const auto updates = helper.LoadRecentScoreImprovements(
+        now, long_note_mode::kLnValue);
+    for (std::size_t sample = 0; sample < expectedDays.size(); ++sample) {
+      const std::string hash(64, "0123456789abcdef"[sample]);
+      for (std::size_t day = 0; day < updates.score.size(); ++day) {
+        const bool expected = static_cast<int>(day) == expectedDays[sample];
+        if (updates.score[day].contains(hash) != expected ||
+            updates.lamp[day].contains(hash) != expected) {
+          std::cerr << "Calendar fixture " << fixture.name << ", sample "
+                    << sample << ", day " << day << std::endl;
+          allMatched = false;
+        }
+      }
+    }
+  }
+  assert(allMatched);
 }
 
 void testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(
@@ -3311,6 +3413,7 @@ int main() {
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
   testRecentScoreImprovementsMatchScoreLogDayFolders(root);
+  testRecentScoreImprovementsUseLocalCalendarDays(root);
   testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(root);
   testPlayerHistoryUsesPinnedLastPlayableNoteDuration(root);
   testVersion12BackfillsLocalPlayDurationFromChartMetadata(root);

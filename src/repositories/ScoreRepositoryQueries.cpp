@@ -19,11 +19,13 @@
 
 #include <SDL2/SDL.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <functional>
 #include <limits>
@@ -1455,14 +1457,32 @@ ScoreRepository::LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
           "loading recent score improvements", logSqlErrorText)) {
     return result;
   }
-  const std::int64_t today = nowUnixSeconds / 86'400 * 86'400;
-  const std::int64_t firstDay = today - 29 * 86'400;
+  const auto now = static_cast<std::time_t>(nowUnixSeconds);
+  std::tm localToday{};
+#ifdef _WIN32
+  if (localtime_s(&localToday, &now) != 0) return result;
+#else
+  if (localtime_r(&now, &localToday) == nullptr) return result;
+#endif
+  std::array<std::int64_t, 31> dayStarts{};
+  for (std::size_t boundary = 0; boundary < dayStarts.size(); ++boundary) {
+    auto localDay = localToday;
+    localDay.tm_mday += static_cast<int>(boundary) -
+                        static_cast<int>(result.score.size()) + 1;
+    localDay.tm_hour = 0;
+    localDay.tm_min = 0;
+    localDay.tm_sec = 0;
+    localDay.tm_isdst = -1;
+    const auto start = std::mktime(&localDay);
+    if (start == static_cast<std::time_t>(-1)) return result;
+    dayStarts[boundary] = static_cast<std::int64_t>(start);
+  }
   const int normalizedLongNoteMode =
       long_note_mode::normalizeSelectedValue(selectedLongNoteMode);
   if (sqlite3_bind_int(statement.get(), 1, normalizedLongNoteMode) !=
           SQLITE_OK ||
-      sqlite3_bind_int64(statement.get(), 2, firstDay) != SQLITE_OK ||
-      sqlite3_bind_int64(statement.get(), 3, today + 86'400) != SQLITE_OK) {
+      sqlite3_bind_int64(statement.get(), 2, dayStarts.front()) != SQLITE_OK ||
+      sqlite3_bind_int64(statement.get(), 3, dayStarts.back()) != SQLITE_OK) {
     logSqlErrorText("binding recent score improvement range",
                     sqlite3_errmsg(impl_->sessionDatabase));
     return result;
@@ -1470,9 +1490,10 @@ ScoreRepository::LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
   while (sqlite3_step(statement.get()) == SQLITE_ROW) {
     const std::string hash = sqliteColumnString(statement.get(), 0);
     const auto playedAt = sqlite3_column_int64(statement.get(), 1);
-    const auto day = static_cast<std::size_t>(today / 86'400 -
-                                              playedAt / 86'400);
-    if (day >= result.score.size()) continue;
+    const auto boundary = std::ranges::upper_bound(dayStarts, playedAt);
+    if (boundary == dayStarts.begin() || boundary == dayStarts.end()) continue;
+    const auto day = result.score.size() -
+                     static_cast<std::size_t>(boundary - dayStarts.begin());
     if (sqlite3_column_int(statement.get(), 2) != 0) {
       result.score[day].insert(hash);
     }
