@@ -14,11 +14,13 @@ struct Chart {
   inline static int alive = 0;
   Chart() { ++alive; }
   ~Chart() { --alive; }
+  int longNoteMode = 0;
 };
 }
 struct ChartMetaRecord {
   struct { std::filesystem::path BmsPath = "chart.bms"; } meta;
   bool unavailable = false, solidArchive = false;
+  bool courseStart = false;
 };
 struct ModernChartResultRecord { struct { int score = 51; } result; };
 struct ModernCourseResultRecord { struct { std::vector<int> stages{1, 2}; } result; };
@@ -108,18 +110,46 @@ auto makeCourseReplayLaunchSession(Loaded, CourseReplayLaunchMode) {
 namespace main_menu_profile {
 struct Selections {
   int pacemakerTarget = 43;
+  std::string playOption = "RANDOM";
+  int longNoteMode = 2;
+  int gaugeType = 3, gaugeAutoShift = 4, gaugeAutoShiftLowerBound = 5;
+  int assistOption = 6, ruleset = 7;
   static Selections fromSettings(const auto &) { return {}; }
 };
 }
+bool parseAvailable = true;
+namespace play_options {
+struct PlayOptionReplayInfo {
+  std::string option;
+  int seed;
+  std::string option2;
+  int seed2;
+};
+auto parseChart(const auto &, std::atomic_bool &, const char *) {
+  return parseAvailable ? std::make_unique<bms_parser::Chart>() : nullptr;
+}
+PlayOptionReplayInfo applySelectedPlayOptions(bms_parser::Chart &, const std::string &option) {
+  return {option, 12, "MIRROR", 34};
+}
+}
+void applyEffectiveLongNoteModeToChart(bms_parser::Chart &chart, int mode) { chart.longNoteMode = mode; }
 namespace pacemaker { constexpr int kTargetOff = -1; }
+struct Playback { int percent, mode; };
 struct StartOptions {
   int startPosition = 0;
   bool autoKeySound = false, autoPlay = false;
   int gaugeType = 0, gaugeAutoShift = 0;
+  int gaugeAutoShiftLowerBound = 0;
+  std::string playOption;
+  int playOptionSeed = 0;
+  std::string playOption2;
+  int playOption2Seed = 0, longNoteMode = 0, assistOption = 0;
   std::shared_ptr<ReplayData> replayData;
   int pacemakerTarget = 0;
   std::string tableName, tableLevel;
+  Playback playback;
   bool touchVisualizationEnabled = false, replayGhostRenderingEnabled = false;
+  int ruleset = 0;
   void *returnScene = nullptr;
   int provenance = 0;
   bool ghost = false;
@@ -133,7 +163,6 @@ StartOptions makeCourseReplayStageStartOptions(std::shared_ptr<CourseSession> se
 void applyReplayProvenanceToStartOptions(StartOptions &options, const ReplayData &) {
   options.provenance = 77;
 }
-struct Playback { int percent, mode; };
 StartOptions musicSelectGhostBattleOptions(std::shared_ptr<ReplayData> data, int,
     main_menu_profile::Selections, bool, Playback, void *scene) {
   return {.replayData = data, .returnScene = scene, .provenance = 78, .ghost = true};
@@ -196,6 +225,10 @@ struct MusicSelectScene {
   void launchCourseReplay(const MusicSelectBar &, int, const MusicSelectBarManagerReadView &);
   void launchSelectedReplay(int);
   void launchChartReplay(const ChartMetaRecord &, const ModernChartResultRecord &, bool);
+  void launchAutoPlay(const ChartMetaRecord &);
+  auto watchAutoPlay() {
+    return [this](const ChartMetaRecord &record) AUTOPLAY_CALLBACK;
+  }
 };
 
 SCENE_METHODS
@@ -237,6 +270,35 @@ void testReplayAudio(int path) {
       assert(options.pacemakerTarget == pacemaker::kTargetOff);
     }
   }
+}
+
+void testAutoPlayAudio() {
+  MusicSelectScene scene;
+  for (int failure = 0; failure < 3; ++failure) {
+    parseAvailable = failure != 0;
+    scene.context.jukebox.success = failure == 2;
+    scene.context.jukebox.cancel = failure == 2;
+    scene.modal.loading = true;
+    scene.watchAutoPlay()({});
+    assert(scene.manager.transitions == 0 && "failed or cancelled AutoPlay audio must not launch");
+    assert(!scene.launching_ && !scene.modal.loading && scene.modal.visible &&
+           "AutoPlay rejection must restore recoverable Records state");
+    assert(bms_parser::Chart::alive == 0 && "rejected AutoPlay must release its chart");
+  }
+  scene.context.jukebox.success = true;
+  scene.context.jukebox.cancel = false;
+  scene.modal.loading = true;
+  scene.watchAutoPlay()({});
+  assert(scene.manager.transitions == 1 && !scene.launching_);
+  assert(!scene.modal.loading && !scene.modal.visible);
+  const auto &options = scene.manager.gameplay->options;
+  assert(options.autoPlay && options.autoKeySound && options.returnScene == &scene);
+  assert(options.playOption == "RANDOM" && options.playOptionSeed == 12);
+  assert(options.playOption2 == "MIRROR" && options.playOption2Seed == 34);
+  assert(options.gaugeType == 3 && options.gaugeAutoShift == 4 && options.gaugeAutoShiftLowerBound == 5);
+  assert(options.longNoteMode == 2 && options.assistOption == 6 && options.ruleset == 7);
+  assert(options.pacemakerTarget == pacemaker::kTargetOff && options.playback.percent == 100);
+  assert(scene.manager.gameplay->chart->longNoteMode == 2 && bms_parser::Chart::alive == 1);
 }
 
 int main() { SCENE_TEST; }

@@ -62,21 +62,31 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_records_autoplay_audio_failure_cancel_and_retry(self):
+        self.run_replay_audio_fixture([4])
+
     def test_replay_audio_failure_cancel_and_success_preserve_launch_options(self):
+        self.run_replay_audio_fixture(range(4))
+
+    def run_replay_audio_fixture(self, paths):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signatures = [
             "void MusicSelectScene::launchCourseReplay(const MusicSelectBar &course, int slot, const MusicSelectBarManagerReadView &snapshot)",
             "void MusicSelectScene::launchSelectedReplay(int slot)",
             "void MusicSelectScene::launchChartReplay(const ChartMetaRecord &record, const ModernChartResultRecord &modern, bool ghostBattle)",
+            "void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record)",
         ]
         methods = "\n".join(signature + function_body(source, signature.split("(")[0] + "(")
                             for signature in signatures)
         fixture = (ROOT / "tests/music_select_scene_replay_audio_fixture.cpp").read_text()
-        for path in range(4):
+        callback = function_body(source, "callbacks.watchAutoPlay =")
+        for path in paths:
             with self.subTest(path=path):
                 self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
                                      .replace("SCENE_METHODS", methods)
-                                     .replace("SCENE_TEST", f"testReplayAudio({path})"))
+                                     .replace("AUTOPLAY_CALLBACK", callback)
+                                     .replace("SCENE_TEST", "testAutoPlayAudio()" if path == 4
+                                              else f"testReplayAudio({path})"))
 
     def test_folder_statistics_prioritize_selection_and_survive_navigation(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()

@@ -3685,6 +3685,7 @@ void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
     return;
   }
   launching_ = true;
+  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
   std::atomic_bool cancelled = false;
   auto chart = play_options::parseChart(record.meta, cancelled, "autoplay");
   if (!chart || cancelled) {
@@ -3703,8 +3704,12 @@ void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
       *chart, long_note_mode::valueFromId(selections.longNoteMode));
   stopPreloadWorker();
   context.jukebox.stop();
-  context.jukebox.loadChart(*chart, true, cancelled);
-  if (cancelled) {
+  const auto audioLoaded = context.jukebox.loadChart(*chart, true, cancelled);
+  if (!audioLoaded.success || cancelled) {
+    if (recordsModal_ != nullptr) {
+      recordsModal_->setLoadInProgress(false);
+      recordsModal_->setStatus("Autoplay audio could not be prepared.");
+    }
     launching_ = false;
     return;
   }
@@ -3727,7 +3732,10 @@ void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
       .ruleset = selections.ruleset,
       .returnScene = this,
   };
-  if (recordsModal_ != nullptr) recordsModal_->hide();
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setLoadInProgress(false);
+    recordsModal_->hide();
+  }
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(chart),
                                       std::move(options)),
