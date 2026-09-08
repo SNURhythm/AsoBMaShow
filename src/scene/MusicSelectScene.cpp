@@ -1782,7 +1782,7 @@ void MusicSelectScene::closeDirectory() {
 }
 
 void MusicSelectScene::startPreloadForSelection() {
-  if (launching_) {
+  if (launching_ || recordsExportInProgress_.load()) {
     return;
   }
   const auto snapshot = bars_.readView();
@@ -3437,6 +3437,7 @@ void MusicSelectScene::launchChartReplayExport(
         if (!loaded.ready() || loaded.chart == nullptr || cancelled) {
           std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
           pendingRecordsExportResult_ = ReplayVideoExportResult{
+  stopPreloadWorker();
               .success = false,
               .message = "Replay export could not be prepared.",
           };
@@ -3493,6 +3494,7 @@ void MusicSelectScene::launchAutoPlayExport(const ChartMetaRecord &record,
                                               "autoplay export");
         if (!chart || cancelled) {
           std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
+  stopPreloadWorker();
           pendingRecordsExportResult_ = ReplayVideoExportResult{
               .success = false, .message = "Autoplay export failed."};
           return;
