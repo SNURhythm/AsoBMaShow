@@ -552,7 +552,8 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
     const std::map<SkinObjectId, std::vector<std::string>>
         &runtimeStringsByObject,
     std::vector<SkinDiagnostic> &diagnostics,
-    const SkinSafetyPolicy &safetyPolicy) {
+    const SkinSafetyPolicy &safetyPolicy,
+    const SkinTextKerningPairsByObject &runtimePairsByObject = {}) {
   std::map<SkinResourceId, FontResourceView> resources;
   for (const auto &definition : model.model.resources) {
     if (const auto *font = std::get_if<SkinFontResource>(&definition)) {
@@ -693,6 +694,10 @@ std::vector<FontAtlasRequest> collectFontAtlasRequests(
       recordFontAtlasRequestCount(requests.size());
     }
     request->second.objects.push_back(text.object);
+    if (const auto pairs = runtimePairsByObject.find(text.object);
+        pairs != runtimePairsByObject.end()) {
+      request->second.pairs.insert(pairs->second.begin(), pairs->second.end());
+    }
     request->second.critical = request->second.critical || text.critical;
     if (!appendUtf8(text.literal, request->second.codepoints,
                     request->second.pairs, safetyPolicy))
@@ -1122,7 +1127,8 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
     std::size_t &remainingScalableFontPaintAttemptWork,
     image_decode::ImageDecodeCoordinator &coordinator,
     SkinDecodeCache *decodeCache,
-    SkinResourcePreparationService *textAtlasCacheOwner) {
+    SkinResourcePreparationService *textAtlasCacheOwner,
+    bool metricsOnly = false) {
   if (request.resolvedFaces.empty()) return std::nullopt;
   if (request.font.bitmap) {
     const auto faces = readBitmapFontFaces(
@@ -1136,7 +1142,7 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
   }
   const std::string contentKey = scalableTextAtlasContentKey(
       request.key, request.codepoints, request.pairs, safetyPolicy);
-  if (textAtlasCacheOwner != nullptr) {
+  if (textAtlasCacheOwner != nullptr && !metricsOnly) {
     if (auto cached = textAtlasCacheOwner->findCachedTextAtlas(
             files.revision().lowercaseSha256, contentKey);
         cached) {
@@ -1196,8 +1202,9 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
                                       remainingScalableFontPaintAttemptWork),
                                   cancellationRequested, reservePaintAttemptWork,
                                   textAtlasCacheOwner != nullptr ? &glyphCache
-                                                                 : nullptr);
-  if (built.atlas && textAtlasCacheOwner != nullptr) {
+                                                                 : nullptr,
+                                  metricsOnly);
+  if (built.atlas && textAtlasCacheOwner != nullptr && !metricsOnly) {
     textAtlasCacheOwner->storeCachedTextAtlas(
         files.revision().lowercaseSha256, contentKey, *built.atlas);
   }
@@ -2303,7 +2310,7 @@ bool SkinResourceCatalog::replaceBuiltinImage(
 
 bool SkinResourceCatalog::replaceTextAtlas(
     SkinPreparedGlyphAtlas &&atlas,
-    std::span<const SkinObjectId> objects) noexcept {
+    std::span<const SkinObjectId> objects, bool metricsOnly) noexcept {
   if (!renderPhase_ || !device_ || !device_->ownsCurrentThread() ||
       std::this_thread::get_id() != owner_) {
     return false;
@@ -2328,6 +2335,25 @@ bool SkinResourceCatalog::replaceTextAtlas(
   }
   if (current == atlases_.end()) {
     return false;
+  }
+
+  const auto maximumPairs = skinResourceLimit(
+      safetyPolicy_, SkinResourcePolicy::maximumKerningPairs);
+  std::size_t pairCount = atlas.kerning.size();
+  if (pairCount > maximumPairs) return false;
+  for (const auto &[id, resident] : atlases_) {
+    if (id == current->first) continue;
+    if (resident.kerning.size() > maximumPairs - pairCount) return false;
+    pairCount += resident.kerning.size();
+  }
+  if (metricsOnly) {
+    if (atlas.key != current->second.key) return false;
+    for (const auto &[pair, amount] : atlas.kerning) {
+      if (!current->second.glyphs.contains(pair.first) ||
+          !current->second.glyphs.contains(pair.second)) return false;
+    }
+    current->second.kerning = std::move(atlas.kerning);
+    return true;
   }
 
   PreparedSkinTextAtlas replacement{
@@ -3690,7 +3716,7 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
   const auto requests = collectFontAtlasRequests(
       input.model, uses, input.fileSystem, input.configuration, {},
       input.requiredRuntimeStringsByObject, result.diagnostics,
-      input.safetyPolicy);
+      input.safetyPolicy, input.requiredKerningPairsByObject);
   SkinTextAtlasUpdatePlan plan;
   SkinResourceSessionAccounting session(input.safetyPolicy);
   BitmapFontPreparationCache bitmapFontCache;
@@ -3711,12 +3737,17 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
     }
     SkinResourceSessionAccounting fontSession = session;
     BitmapFontAccountingIdentities requestAccounting;
+    const bool metricsOnly = std::ranges::all_of(
+        request.objects, [&](SkinObjectId object) {
+          return !input.targetObjects.contains(object) ||
+                 input.metricsOnlyObjects.contains(object);
+        });
     const auto built = prepareFontAtlas(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,
         [this, &input] { return cancellationRequested(input.stop); },
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
         remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_,
-        this);
+        this, metricsOnly);
     if (cancellationRequested(input.stop)) {
       result.cancelled = true;
       return result;
@@ -3729,7 +3760,9 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
       }
       continue;
     }
-    const auto delta = atlasAccountingDelta(*built->atlas, accountedBitmapPages);
+    const auto delta = metricsOnly
+        ? std::optional{AtlasAccountingDelta{}}
+        : atlasAccountingDelta(*built->atlas, accountedBitmapPages);
     if (!delta ||
         !fontSession.addAtlas(delta->decodedBytes, built->atlas->glyphs.size(),
                               built->atlas->kerning.size(),
@@ -3751,7 +3784,8 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
       }
     }
     plan.atlases.push_back(
-        {.atlas = *built->atlas, .objects = std::move(objects)});
+        {.atlas = *built->atlas, .objects = std::move(objects),
+         .metricsOnly = metricsOnly});
     ++atlasId;
   }
   {

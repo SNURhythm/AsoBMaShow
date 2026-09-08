@@ -340,6 +340,9 @@ struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool
 
 // Selector title changes use the same font preparation as the initial plan,
 // but do not revisit images, movies, or unrelated text objects.
+using SkinTextKerningPairsByObject =
+    std::map<SkinObjectId, std::set<std::pair<char32_t, char32_t>>>;
+
 struct SkinTextAtlasPreparationInputs {
   SkinRevisionLease revision;
   SkinEntryId entry;
@@ -349,6 +352,8 @@ struct SkinTextAtlasPreparationInputs {
   std::map<SkinObjectId, std::vector<std::string>>
       requiredRuntimeStringsByObject;
   std::set<SkinObjectId> targetObjects;
+  SkinTextKerningPairsByObject requiredKerningPairsByObject;
+  std::set<SkinObjectId> metricsOnlyObjects;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
@@ -358,6 +363,7 @@ struct SkinPreparedTextAtlasUpdate {
   // catalog uses their resident bindings rather than assuming an atlas key is
   // globally unique across a pre-existing compatibility catalog.
   std::vector<SkinObjectId> objects;
+  bool metricsOnly = false;
 };
 struct SkinTextAtlasUpdatePlan {
   std::vector<SkinPreparedTextAtlasUpdate> atlases;
@@ -582,7 +588,8 @@ public:
   // select the same resident SkinText instances that prepared this refresh.
   [[nodiscard]] bool
   replaceTextAtlas(SkinPreparedGlyphAtlas &&atlas,
-                   std::span<const SkinObjectId> objects) noexcept;
+                   std::span<const SkinObjectId> objects,
+                   bool metricsOnly = false) noexcept;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 private:
   struct OwnedTexture { bgfx::TextureHandle handle = BGFX_INVALID_HANDLE; };

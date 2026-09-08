@@ -141,7 +141,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     std::size_t maximumPaintBlendOperations,
     const std::function<bool()> &cancellationRequested,
     const std::function<bool(std::size_t)> &reservePaintBlendOperations,
-    const ScalableGlyphCacheAccessor *glyphCache) {
+    const ScalableGlyphCacheAccessor *glyphCache, bool metricsOnly) {
   SkinTextAtlasBuildResult result;
   if (!safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
     // Pinned SkinTextFont does not apply the bitmap-font distance-field paint
@@ -195,6 +195,62 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     item.font = TTF_OpenFontRW(rw, 1, key.pointSize);
     if (!item.font) { result.error = "font bytes are not a supported TTF or OTF"; return result; }
     opened.push_back(std::move(item));
+  }
+
+  const auto selectGlyphSource = [&](char32_t codepoint) {
+    std::size_t faceIndex = opened.size();
+    char32_t sourceCodepoint = codepoint;
+    for (std::size_t index = 0; index < opened.size(); ++index)
+      if (TTF_GlyphIsProvided32(opened[index].font,
+                                static_cast<Uint32>(codepoint))) {
+        faceIndex = index;
+        break;
+      }
+    if (faceIndex == opened.size() &&
+        !safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
+      constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
+      for (const char32_t candidate : missing) {
+        for (std::size_t index = 0; index < opened.size(); ++index) {
+          if (TTF_GlyphIsProvided32(opened[index].font,
+                                    static_cast<Uint32>(candidate))) {
+            faceIndex = index;
+            sourceCodepoint = candidate;
+            break;
+          }
+        }
+        if (faceIndex != opened.size()) break;
+      }
+    }
+    return std::pair{faceIndex, sourceCodepoint};
+  };
+  std::map<std::pair<char32_t, char32_t>, int> kerning;
+  std::map<char32_t, std::size_t> kerningFaces;
+  const auto kerningFace = [&](char32_t codepoint) {
+    const auto found = kerningFaces.find(codepoint);
+    if (found != kerningFaces.end()) return found->second;
+    const auto selected = selectGlyphSource(codepoint);
+    const auto face = selected.first == opened.size() ? 0 : selected.first;
+    kerningFaces.emplace(codepoint, face);
+    return face;
+  };
+  for (const auto &[left, right] : pairs) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
+    const auto leftFace = kerningFace(left);
+    const auto rightFace = kerningFace(right);
+    const int amount = leftFace == rightFace && codepoints.contains(left) &&
+                               codepoints.contains(right)
+        ? TTF_GetFontKerningSizeGlyphs32(opened[leftFace].font,
+              static_cast<Uint32>(left), static_cast<Uint32>(right))
+        : 0;
+    kerning.emplace(std::pair{left, right}, amount);
+  }
+  if (metricsOnly) {
+    result.atlas = SkinPreparedGlyphAtlas{.id = id, .key = std::move(key),
+                                        .kerning = std::move(kerning)};
+    return result;
   }
 
   constexpr std::u32string_view capCharacters =
@@ -291,29 +347,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   const auto rasterizeGlyph = [&](char32_t codepoint)
       -> std::optional<GlyphBitmap> {
     if (codepoint == U'\n' || codepoint == U'\r') return std::nullopt;
-    std::size_t faceIndex = opened.size();
-    char32_t sourceCodepoint = codepoint;
-    for (std::size_t index = 0; index < opened.size(); ++index)
-      if (TTF_GlyphIsProvided32(opened[index].font,
-                                static_cast<Uint32>(codepoint))) {
-        faceIndex = index;
-        break;
-      }
-    if (faceIndex == opened.size() &&
-        !safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
-      constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
-      for (const char32_t candidate : missing) {
-        for (std::size_t index = 0; index < opened.size(); ++index) {
-          if (TTF_GlyphIsProvided32(opened[index].font,
-                                    static_cast<Uint32>(candidate))) {
-            faceIndex = index;
-            sourceCodepoint = candidate;
-            break;
-          }
-        }
-        if (faceIndex != opened.size()) break;
-      }
-    }
+    auto [faceIndex, sourceCodepoint] = selectGlyphSource(codepoint);
     // Unsupported codepoints (commonly from chart runtime strings such as the
     // title or artist) fall back to the synthetic missing-glyph box below
     // instead of rejecting the whole atlas. Rejecting here made legitimate
@@ -581,21 +615,6 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   for (const int height : pageHeights) {
     pagePixels.push_back(std::make_shared<std::vector<unsigned char>>(
         static_cast<std::size_t>(atlasWidth) * height * 4U, 0));
-  }
-  std::map<std::pair<char32_t, char32_t>, int> kerning;
-  for (const auto &[left, right] : pairs) {
-    if (cancellationRequested && cancellationRequested()) {
-      result.error = "font atlas preparation cancelled";
-      return result;
-    }
-    const auto leftGlyph = std::find_if(glyphs.begin(), glyphs.end(), [left] (const GlyphBitmap &item) { return item.codepoint == left; });
-    const auto rightGlyph = std::find_if(glyphs.begin(), glyphs.end(), [right] (const GlyphBitmap &item) { return item.codepoint == right; });
-    if (leftGlyph == glyphs.end() || rightGlyph == glyphs.end() || leftGlyph->face != rightGlyph->face) {
-      kerning.emplace(std::pair{left, right}, 0);
-      continue;
-    }
-    int amount = TTF_GetFontKerningSizeGlyphs32(opened[leftGlyph->face].font, static_cast<Uint32>(left), static_cast<Uint32>(right));
-    kerning.emplace(std::pair{left, right}, amount);
   }
   if (paintBlendOperations != 0 && reservePaintBlendOperations &&
       !reservePaintBlendOperations(paintBlendOperations)) {

@@ -67,7 +67,8 @@ struct SkinTextAtlasBuildResult {
         SkinResourcePolicy::maximumScalableFontPaintBlendOperations,
     const std::function<bool()> &cancellationRequested = {},
     const std::function<bool(std::size_t)> &reservePaintBlendOperations = {},
-    const ScalableGlyphCacheAccessor *glyphCache = nullptr);
+    const ScalableGlyphCacheAccessor *glyphCache = nullptr,
+    bool metricsOnly = false);
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 void resetSkinTextAtlasPaintBlendOperationsForTesting() noexcept;

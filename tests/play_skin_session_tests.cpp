@@ -18,6 +18,7 @@
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/beatoraja/SkinTextAtlas.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinArchiveImporter.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -714,6 +715,7 @@ struct ActivationFixtureOptions {
   std::string musicSelectCallbackDispatch;
   bool musicSelectDuplicateTimers = false;
   int musicSelectDistributionGraph = 0;
+  bool musicSelectKerningFont = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -756,7 +758,9 @@ public:
                         "tests/fixtures/beatoraja_skin/resources/fixture.png",
                     source / "skin/resources/fixture.png");
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
-                        "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
+                        (options.musicSelectKerningFont
+                             ? "bgfx/bgfx/examples/runtime/font/signika-regular.ttf"
+                             : "tests/fixtures/beatoraja_skin/resources/fixture.ttf"),
                     source / "skin/resources/fixture.ttf");
     }
     if (options.movieBearing) {
@@ -3337,6 +3341,105 @@ void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
              fixture.device()->createCalls == createdBefore + 1,
          "music-select text updates only its affected atlas instead of "
          "rebuilding the complete resource catalog for a new glyph");
+}
+
+void testMusicSelectRuntimeGlyphPatchesPreserveKerning() {
+  std::ifstream fontFile(fs::path(ASOBMASHOW_SOURCE_DIR) /
+      "bgfx/bgfx/examples/runtime/font/signika-regular.ttf", std::ios::binary);
+  const std::vector<char> fontBytes{std::istreambuf_iterator<char>(fontFile),
+                                   std::istreambuf_iterator<char>()};
+  const auto encoded = std::as_bytes(std::span(fontBytes));
+  const auto metrics = buildSkinTextAtlas(1, {.font = 1, .pointSize = 16,
+                                             .fallbackChainDigest = "signika"},
+      {{.encoded = {encoded.begin(), encoded.end()}}}, {U'A', U'V'},
+      {{U'A', U'V'}, {U'V', U'A'}});
+  expect(metrics.atlas && metrics.atlas->kerning.at({U'A', U'V'}) != 0 &&
+             metrics.atlas->kerning.at({U'V', U'A'}) != 0,
+         "runtime kerning fixture has real nonzero AV and VA pairs");
+  const auto metricsOnly = buildSkinTextAtlas(1,
+      {.font = 1, .pointSize = 16, .fallbackChainDigest = "signika"},
+      {{.encoded = {encoded.begin(), encoded.end()}}}, {U'A', U'V'},
+      {{U'A', U'V'}, {U'V', U'A'}}, SkinSafetyPolicy{}, 0, {}, {}, nullptr, true);
+  expect(metrics.atlas && metricsOnly.atlas &&
+             metricsOnly.atlas->kerning == metrics.atlas->kerning &&
+             metricsOnly.atlas->glyphs.empty() && metricsOnly.atlas->pages.empty() &&
+             metricsOnly.atlas->pixels.byteSize() == 0 &&
+             metricsOnly.atlas->paintBlendOperations == 0,
+         "kerning-only preparation preserves real metrics without rasterizing or retaining pixels");
+  const auto gap = [](const SessionQuadBackend &backend) {
+    return backend.submittedVertices.size() == 12
+        ? backend.submittedVertices[8].x - backend.submittedVertices[4].x : -999.0F;
+  };
+  float expectedReversedGap = 0;
+  {
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectKerningFont = true});
+    if (!fixture.ready()) return;
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend backend;
+    backend.captureVertices = true;
+    context.quadBackend = &backend;
+    MusicSelectSkinFrame frame;
+    frame.serial = 1;
+    frame.properties.strings[10] = "VA";
+    context.initialFrame = frame;
+    auto created = MusicSelectSkinSession::create(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = 107}, std::move(context));
+    expect(created.session != nullptr, "fresh VA session creates");
+    if (!created.session) return;
+    RenderContext renderContext;
+    expect(created.session->render(renderContext, frame), "fresh VA renders");
+    expectedReversedGap = gap(backend);
+    expect(expectedReversedGap != -999.0F, "fresh VA draws both glyphs");
+  }
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectKerningFont = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  backend.captureVertices = true;
+  context.quadBackend = &backend;
+  MusicSelectSkinFrame frame;
+  frame.properties.strings[10] = "AV";
+  context.initialFrame = frame;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 108}, std::move(context));
+  expect(created.session != nullptr, "dynamic kerning session creates");
+  if (!created.session) return;
+  RenderContext renderContext;
+  const auto render = [&](std::string_view title) {
+    frame.properties.strings[10] = title;
+    ++frame.serial;
+    backend.submittedVertices.clear();
+    expect(created.session->render(renderContext, frame), "dynamic kerning frame renders");
+  };
+  render("AV");
+  const auto originalGap = gap(backend);
+  expect(originalGap != -999.0F, "initial AV draws both glyphs");
+  const auto uploads = fixture.device()->createCalls;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  do {
+    render("B");
+    if (fixture.device()->createCalls > uploads) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  expect(fixture.device()->createCalls == uploads + 1, "new B adds one glyph atlas upload");
+  render("AV");
+  expect(gap(backend) == originalGap,
+         "adding B preserves resident AV kerning and layout instead of replacing pairs with ABV");
+  const auto pairDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  do {
+    render("VA");
+    if (gap(backend) == expectedReversedGap) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < pairDeadline);
+  expect(gap(backend) == expectedReversedGap,
+         "new ordering of resident glyphs learns VA metrics without missing kerning");
+  for (int index = 0; index < 100; ++index) render(index % 2 == 0 ? "AV" : "VA");
+  expect(fixture.device()->createCalls == uploads + 1,
+         "pair-only changes and repeated titles never rebuild the glyph texture");
 }
 
 void testMusicSelectScrollingDoesNotStarveGlyphPatches() {
@@ -8187,6 +8290,7 @@ int main(int argc, char **argv) {
   testMusicSelectTitlePreparationIsBoundedForLargeLists();
   testMusicSelectDuplicateSongListDestinationsRenderBothConditions();
   testMusicSelectScrollingDoesNotStarveGlyphPatches();
+  testMusicSelectRuntimeGlyphPatchesPreserveKerning();
   testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
   testMusicSelectPrewarmsBoundedNearbyGlyphs();
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();
