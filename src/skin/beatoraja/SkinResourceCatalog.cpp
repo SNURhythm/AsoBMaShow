@@ -275,6 +275,7 @@ CollectedResourceUses collectResourceUses(
         }
       }
       else if constexpr (std::is_same_v<T, SkinSliderObject>) addSprite(object.knob, critical);
+      else if constexpr (std::is_same_v<T, SkinSelectDistributionGraphObject>) addSprite(object.sprite, critical);
       else if constexpr (std::is_same_v<T, SkinGraphObject>) {
         if (object.builtinImageReference) {
           result.builtinImages.insert(*object.builtinImageReference);

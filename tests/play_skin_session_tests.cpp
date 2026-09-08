@@ -713,6 +713,7 @@ struct ActivationFixtureOptions {
   bool musicSelectDuplicateSongListDestinations = false;
   std::string musicSelectCallbackDispatch;
   bool musicSelectDuplicateTimers = false;
+  int musicSelectDistributionGraph = 0;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -763,6 +764,10 @@ public:
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                         "tests/fixtures/beatoraja_skin/resources/fixture.png",
                     source / "skin/resources/source.MP4");
+    }
+    if (options.musicSelectDistributionGraph != 0) {
+      fs::copy_file(source / "skin/resources/fixture.png",
+                    source / "skin/resources/graph.png");
     }
     const bool hasPomyu = options.repeatedPomyu ||
                           options.oversizedPomyuWithSibling ||
@@ -945,7 +950,36 @@ if skin_config then
   assert(math.abs(main_state.volume_bg() - 0.25) < 0.000001)
 )lua";
     }
-    if (options.musicSelectDuplicateTimers) {
+    if (options.musicSelectDistributionGraph != 0) {
+      script += "\n  local shared = " + std::string(
+          options.musicSelectDistributionGraph % 2 == 0 ? "true" : "false");
+      script += "\n  local nested = " + std::string(
+          options.musicSelectDistributionGraph > 2 ? "true" : "false");
+      script += R"lua(
+  local result = {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "graph-source", path = shared and "resources/fixture.png" or "resources/graph.png"},
+              {id = "bar-source", path = "resources/fixture.png"}},
+    graph = {{id = "graph", src = "graph-source", type = -1, w = 22, h = 10, divx = 11}},
+    destination = {{id = "graph", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
+  }
+  if nested or shared then
+    result.image = {{id = "bar", src = "bar-source", w = 40, h = 20}}
+    result.imageset = {{id = "bars", images = {"bar"}}}
+  end
+  if nested then
+    result.songlist = {
+      id = "list", center = 0,
+      liston = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      graph = {id = "graph", dst = {{x = 0, y = 0, w = 100, h = 20}}}
+    }
+    result.destination = {{id = "list", dst = {{x = 0, y = 0}}}}
+  elseif shared then
+    table.insert(result.destination, 1, {id = "bar", dst = {{x = 0, y = 0, w = 100, h = 20}}})
+  end
+  return result
+)lua";
+    } else if (options.musicSelectDuplicateTimers) {
       script += R"lua(
   local checked = false
   return {
@@ -2970,6 +3004,40 @@ void testMusicSelectDuplicateTimersUseWinningDefinition() {
   expect(actions.size() == 1 &&
              std::get<int>(actions.front().selector.value) == 210,
          "winning passive timer accepts writes and active timer ignores them across frames");
+}
+
+void testMusicSelectDistributionGraphsUseProductionResources() {
+  for (const int mode : {1, 2, 3, 4}) {
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectDistributionGraph = mode});
+    if (!fixture.ready()) continue;
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend backend;
+    backend.captureVertices = true;
+    context.quadBackend = &backend;
+    MusicSelectSkinFrame frame;
+    frame.serial = 1;
+    frame.songList.bars = {{.kind = MusicSelectBarKind::Folder, .title = "folder"}};
+    frame.songList.bars[0].folderLampCounts[10] = 1;
+    frame.songList.bars[0].folderLampCounts[5] = 3;
+    context.initialFrame = frame;
+    auto created = MusicSelectSkinSession::create(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = 106}, std::move(context));
+    expect(created.session != nullptr, "production graph resource session creates");
+    if (!created.session) continue;
+    RenderContext renderContext;
+    const bool rendered = created.session->render(renderContext, frame);
+    const std::size_t graphStart = mode == 1 ? 0 : 4;
+    expect(rendered && backend.submittedVertices.size() == graphStart + 8,
+           "Lua graphs survive production planning upload and standalone or nested lowering");
+    if (backend.submittedVertices.size() != graphStart + 8) continue;
+    expect(std::abs(backend.submittedVertices[graphStart].u - 0.5F) < 0.00001F &&
+               std::abs(backend.submittedVertices[graphStart + 4].u - 0.25F) < 0.00001F,
+           "graph-only and shared textures retain the graph's distinct grid regions");
+    expect(fixture.device()->createCalls == (mode == 3 ? 2 : 1),
+           "graph textures upload once per physical source");
+  }
 }
 
 void testMusicSelectPreparationDefersRenderOwnedResources() {
@@ -8110,6 +8178,7 @@ int main(int argc, char **argv) {
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
   testMusicSelectDuplicateTimersUseWinningDefinition();
+  testMusicSelectDistributionGraphsUseProductionResources();
   testMusicSelectPreparationDefersRenderOwnedResources();
   testMusicSelectMainStateWritesVolumesAndReadsCurrentInput();
   testMusicSelectCompatibilityDoesNotAddHostResourcePolicies();
