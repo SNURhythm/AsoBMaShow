@@ -7382,7 +7382,10 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
           return failReplayLoad();
         }
 
-        if (recordsModal_ != nullptr) recordsModal_->hide();
+        if (recordsModal_ != nullptr) {
+          recordsModal_->setLoadInProgress(false);
+          recordsModal_->hide();
+        }
         changeToGameplayScene(
             chart, {
                          .startPosition = 0,
@@ -7928,7 +7931,11 @@ void MainMenuScene::stopReplayLoadWorker() {
     replayLoadThread.join();
   }
   replayLoadInProgress.store(false, std::memory_order_release);
-  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
+  replayResultRecallInProgress = false;
+  if (recordsModal_ != nullptr) {
+    recordsModal_->setLoadInProgress(false);
+    recordsModal_->setResultRecallInProgress(false);
+  }
   std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
   pendingReplayLoadCompletion = {};
 }
@@ -7965,6 +7972,7 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
     pendingReplayExportProgress.reset();
   }
   if (recordsModal_ != nullptr) {
+    recordsModal_->setExportInProgress(true);
     recordsModal_->showExportProgress(progressTitle, progressMessage);
     recordsModal_->setStatus(statusMessage);
   }
@@ -8573,6 +8581,9 @@ void MainMenuScene::startModernReplayResultRecall(
                     : replay_result::BuildSkinGameplayChartGraphState(
                           *chart, result.state);
             replayResultRecallInProgress = false;
+            if (recordsModal_ != nullptr) {
+              recordsModal_->setResultRecallInProgress(false);
+            }
             context.sceneManager->changeScene(
                 std::make_unique<ResultScene>(
                     context, meta, result.state, provenance, nullptr,
@@ -8764,6 +8775,9 @@ void MainMenuScene::startModernCourseReplayResultRecall(
           session->applyReplayStagePlayOptions(*firstReplay);
         }
         replayResultRecallInProgress = false;
+        if (recordsModal_ != nullptr) {
+          recordsModal_->setResultRecallInProgress(false);
+        }
         context.sceneManager->changeScene(
             std::make_unique<ResultScene>(
                 context, first.meta, first.state, firstProvenance, firstReplay,
@@ -8833,6 +8847,9 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
               auto next =
                   std::make_unique<ResultScene>(context, std::move(remote));
               replayResultRecallInProgress = false;
+              if (recordsModal_ != nullptr) {
+                recordsModal_->setResultRecallInProgress(false);
+              }
               context.jukebox.stop();
               context.sceneManager->changeScene(std::move(next),
                                                 retainCurrentScene);

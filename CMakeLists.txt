@@ -2184,6 +2184,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
     )
+    add_test(NAME main_menu_records_lifecycle
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/main_menu_records_lifecycle_tests.py -v)
+    set_tests_properties(main_menu_records_lifecycle PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+    )
     add_test(NAME gameplay_builtin_image_batch
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/gameplay_builtin_image_batch_tests.py -v)
