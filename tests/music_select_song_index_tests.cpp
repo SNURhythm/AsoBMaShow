@@ -196,6 +196,66 @@ void compareWithEager(MusicSelectSongIndex &index,
   }
 }
 
+void testPinnedAvailabilityOrdering() {
+  for (const std::string_view sort : {"ARTIST", "BPM", "LENGTH", "LEVEL"}) {
+    for (bool reverse : {false, true}) {
+      for (bool emptyPath : {false, true}) {
+        auto installed = chart("installed", "Zulu");
+        installed.meta.Artist = "Zulu";
+        installed.meta.MaxBpm = 200;
+        installed.meta.PlayLength = 200;
+        installed.meta.PlayLevel = 12;
+        auto missing = chart("missing", "Alpha");
+        missing.meta.Artist = "Alpha";
+        missing.meta.MaxBpm = 0;
+        missing.meta.PlayLength = 0;
+        missing.meta.PlayLevel = 0;
+        missing.unavailable = !emptyPath;
+        if (emptyPath) missing.meta.BmsPath.clear();
+        MusicSelectSongIndex index("folder:/songs");
+        const auto add = [&](const ChartMetaRecord &record) {
+          const bool isInstalled = record.meta.SHA256 == "installed";
+          index.add(record, ScoreBestSnapshot{.score = isInstalled ? 100 : 10,
+                                              .maxScore = 100},
+                    isInstalled ? kClearTypeHardClearRank : kNoClearTypeRank);
+        };
+        if (reverse) { add(missing); add(installed); }
+        else { add(installed); add(missing); }
+        index.finish();
+        index.configure("ALL", "ALL", sort);
+        require(index.idAt(0).value == "folder:/songs:sha256:installed" &&
+                    index.idAt(1).value == "folder:/songs:sha256:missing",
+                "pinned metadata sorts put installed before unavailable or pathless songs in either input order");
+        require(index.indexOf({"folder:/songs:sha256:installed"}) == 0 &&
+                    index.indexOf({"folder:/songs:sha256:missing"}) == 1,
+                "availability reordering updates compact identity positions");
+        for (const std::string_view otherSort : {"TITLE", "SCORE", "CLEAR"}) {
+          index.configure("ALL", "ALL", otherSort);
+          require(index.idAt(0).value == "folder:/songs:sha256:missing",
+                  "TITLE and score sorts remain independent of availability");
+        }
+        installed.unavailable = true;
+        MusicSelectSongIndex unavailable("folder:/songs");
+        if (reverse) {
+          unavailable.add(missing, std::nullopt, kNoClearTypeRank);
+          unavailable.add(installed, std::nullopt, kNoClearTypeRank);
+        } else {
+          unavailable.add(installed, std::nullopt, kNoClearTypeRank);
+          unavailable.add(missing, std::nullopt, kNoClearTypeRank);
+        }
+        unavailable.finish();
+        unavailable.configure("ALL", "ALL", "TITLE");
+        unavailable.configure("ALL", "ALL", sort);
+        require(unavailable.idAt(0).value == (reverse ? "folder:/songs:sha256:installed"
+                                                     : "folder:/songs:sha256:missing") &&
+                    unavailable.idAt(1).value == (reverse ? "folder:/songs:sha256:missing"
+                                                         : "folder:/songs:sha256:installed"),
+                "two unavailable songs compare equal and restore the authored reverse-unique order");
+      }
+    }
+  }
+}
+
 void testEveryFilterAndSortAgainstEager() {
   Fixture fixture;
   constexpr std::array modes{0, 5, 7, 9, 10, 14, 24, 48};
@@ -408,6 +468,7 @@ void testHundredThousandCompactEntries() {
 }
 
 int main() {
+  testPinnedAvailabilityOrdering();
   testRepresentativeAndIdentitySemantics();
   testDedupBeforeHidingAndFallback();
   testEveryFilterAndSortAgainstEager();

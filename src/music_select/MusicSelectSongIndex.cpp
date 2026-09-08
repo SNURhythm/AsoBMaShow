@@ -139,6 +139,7 @@ void MusicSelectSongIndex::add(const ChartMetaRecord &record,
       .modes = modeMask(meta),
       .difficulties = difficultyMask(record),
       .hidden = (record.songReviewFavorite & (4 | 8)) != 0,
+      .exists = !record.unavailable && !meta.BmsPath.empty(),
       .hasScore = score.has_value(),
       .hasScoreRate = scoreNotes != 0,
       .hasDuration = score && score->averageJudgeMicros.has_value()};
@@ -270,6 +271,11 @@ std::pair<std::string, std::string> MusicSelectSongIndex::configure(
 
 int MusicSelectSongIndex::compare(const Entry &left, const Entry &right,
                                   std::string_view sort) {
+  if (sort == "ARTIST" || sort == "BPM" || sort == "LENGTH" || sort == "LEVEL") {
+    if (!left.exists && !right.exists) return 0;
+    if (!left.exists) return 1;
+    if (!right.exists) return -1;
+  }
   if (sort == "ARTIST") {
     return left.artistKey < right.artistKey ? -1 : left.artistKey > right.artistKey;
   }

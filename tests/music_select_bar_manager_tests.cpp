@@ -480,6 +480,47 @@ void testSourceSortingKeepsDifficultyTableFolderOrder() {
           "HashBar still applies the selected song sorter");
 }
 
+void testPinnedUnavailableSongOrdering() {
+  for (const std::string sort : {"ARTIST", "BPM", "LENGTH", "LEVEL"}) {
+    for (bool reverse : {false, true}) {
+      MusicSelectBar installed{.id = {"installed"}, .title = "Zulu",
+                               .chart = ChartMetaRecord{},
+                               .presentation = {.exists = true}};
+      installed.chart->meta.Title = "Zulu";
+      installed.chart->meta.Artist = "Zulu";
+      installed.chart->meta.MaxBpm = 200;
+      installed.chart->meta.PlayLength = 200;
+      installed.chart->meta.PlayLevel = 12;
+      MusicSelectBar missing{.id = {"missing"}, .title = "Alpha",
+                             .chart = ChartMetaRecord{},
+                             .presentation = {.exists = false}};
+      missing.chart->unavailable = true;
+      missing.chart->meta.Title = "Alpha";
+      missing.chart->meta.Artist = "Alpha";
+      missing.chart->meta.MaxBpm = 0;
+      missing.chart->meta.PlayLength = 0;
+      missing.chart->meta.PlayLevel = 0;
+      MusicSelectProjection projection;
+      projection.bars = {installed, missing};
+      projection.root = reverse ? std::vector{installed.id, missing.id}
+                                : std::vector{missing.id, installed.id};
+      MusicSelectBarManager manager(projection, {.sortId = sort});
+      require(manager.readView().rowAt(0).id == installed.id &&
+                  manager.readView().rowAt(1).id == missing.id,
+              sort + " must place installed songs before unavailable songs in either input order");
+      projection.bars.front().chart->unavailable = true;
+      projection.bars.front().presentation.exists = false;
+      MusicSelectBarManager unavailable(projection, {.sortId = sort});
+      require(unavailable.readView().rowAt(0).id == projection.root[0] &&
+                  unavailable.readView().rowAt(1).id == projection.root[1],
+              sort + " must treat two unavailable songs as equal and preserve authored order");
+      manager.configure({.sortId = "TITLE"});
+      require(manager.readView().rowAt(0).id == missing.id,
+              "TITLE must retain title ordering regardless of availability");
+    }
+  }
+}
+
 } // namespace
 
 void testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads() {
@@ -994,6 +1035,7 @@ void testOpeningProviderBackedIdSurvivesSelectedRowCacheEviction() {
 }
 
 int main(int argc, char **argv) {
+  testPinnedUnavailableSongOrdering();
   testPagedRowsStayLazyAcrossNavigationAndConfiguration();
   testPagedProviderLifetimeAndExplicitEnumeration();
   testProviderReplacementAndNestedBackNavigation();

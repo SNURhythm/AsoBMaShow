@@ -42,6 +42,7 @@ private:
     std::uint16_t modes = 0;
     std::uint16_t difficulties = 0;
     bool hidden = false;
+    bool exists = false;
     bool hasScore = false;
     bool hasScoreRate = false;
     bool hasDuration = false;

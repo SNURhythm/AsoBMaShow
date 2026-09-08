@@ -119,6 +119,14 @@ int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
   if (sortId == "TITLE" || !left.chart || !right.chart) {
     return titleCompare(left, right);
   }
+  if ((sortId == "ARTIST" || sortId == "BPM" || sortId == "LENGTH" ||
+       sortId == "LEVEL") &&
+      left.kind == skin::MusicSelectBarKind::Song &&
+      right.kind == skin::MusicSelectBarKind::Song) {
+    if (!left.presentation.exists && !right.presentation.exists) return 0;
+    if (!left.presentation.exists) return 1;
+    if (!right.presentation.exists) return -1;
+  }
   const auto &a = left.chart->meta;
   const auto &b = right.chart->meta;
   if (sortId == "ARTIST") {
