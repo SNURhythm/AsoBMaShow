@@ -214,8 +214,10 @@ struct MusicSelectScene {
     ReplayRepository replayRepository;
     Jukebox jukebox;
     SceneManager *sceneManager;
+    std::atomic_bool appInBackground = false;
   } context;
   bool launching_ = false;
+  bool sceneActive_ = true, failed_ = false;
   int preloadStops = 0;
   Bars bars_;
   RecordsModal modal;
@@ -241,6 +243,17 @@ void testReplayAudio(int path) {
     if (path >= 2) scene.launchChartReplay({}, {}, path == 3);
     else scene.launchSelectedReplay(0);
   };
+  for (int blocked = 0; blocked < 3; ++blocked) {
+    scene.sceneActive_ = blocked != 0;
+    scene.failed_ = blocked == 1;
+    scene.context.appInBackground = blocked == 2;
+    launch();
+    assert(scene.context.jukebox.loads == 0 && scene.preloadStops == 0 &&
+           scene.manager.transitions == 0);
+  }
+  scene.sceneActive_ = true;
+  scene.failed_ = false;
+  scene.context.appInBackground = false;
   for (bool cancel : {false, true}) {
     scene.context.jukebox.success = cancel;
     scene.context.jukebox.cancel = cancel;
@@ -274,6 +287,10 @@ void testReplayAudio(int path) {
 
 void testAutoPlayAudio() {
   MusicSelectScene scene;
+  scene.sceneActive_ = false;
+  scene.launchAutoPlay({});
+  assert(scene.context.jukebox.loads == 0 && scene.preloadStops == 0);
+  scene.sceneActive_ = true;
   for (int failure = 0; failure < 3; ++failure) {
     parseAvailable = failure != 0;
     scene.context.jukebox.success = failure == 2;

@@ -40,6 +40,7 @@ WORKER_DECLARATION
 WORKER_METHODS
 
 struct Settings {
+  struct { struct { double masterVolume = 1, keysoundVolume = 1, bgmVolume = 1; } audio; } audioVideo;
   int skinPlayer2RandomOption = 0;
   int selectedPlaybackRatePercent = 100;
   int selectedPlaybackMode = 0;
@@ -137,6 +138,14 @@ struct Repository {
   std::uint64_t GetLibraryRevision() const { return revision; }
 };
 struct Context {
+  struct {
+    std::atomic_int stops = 0, loads = 0;
+    void stop() { ++stops; }
+    struct Result { bool success = true; };
+    Result loadChart(bms_parser::Chart &, bool, std::atomic_bool &) { ++loads; return {}; }
+  } jukebox;
+  struct { void apply(const auto &) {} } audioDeviceManager;
+  bool saveSettings() { return true; }
   Settings settings;
   int replayRepository = 0;
   Repository chartRepository;
@@ -161,8 +170,21 @@ struct ReplayVideoExporter {
   }
 };
 namespace skin {
-enum class MusicSelectBarKind { Song, Hash, Folder, SameFolder };
+enum class MusicSelectBarKind { Song, Hash, Folder, SameFolder, SearchWord, Grade, RandomCourse };
+enum class MusicSelectSkinActionKind { Event, FloatWriter, StringWriter };
+struct Action {
+  MusicSelectSkinActionKind kind = MusicSelectSkinActionKind::Event;
+  int selector = 15;
+  double floatValue = 0;
+  std::string stringValue;
+};
 }
+std::optional<int> numericSelector(int value) { return value; }
+std::string selectorName(int) { return {}; }
+struct PublishedActions {
+  std::vector<skin::Action> actions;
+  auto takePublishedActions() { return std::exchange(actions, {}); }
+};
 struct MusicSelectBarId {
   std::string value;
   bool operator==(const MusicSelectBarId &) const = default;
@@ -175,6 +197,7 @@ struct Bar {
 };
 using MusicSelectBar = Bar;
 struct Bars {
+  void setSelectedPosition(float) {}
   std::vector<Bar> rows{Bar{}};
   std::size_t selectedIndex = 0;
   const Bars &readView() const { return *this; }
@@ -220,10 +243,12 @@ struct GamePlayScene {
       : chart(std::move(value)) {}
 };
 struct SceneManager {
+  int launches = 0;
   std::function<void()> pause;
   std::unique_ptr<GamePlayScene> gameplay;
   void changeScene(std::unique_ptr<GamePlayScene> value, bool retained) {
     assert(retained);
+    ++launches;
     pause();
     gameplay = std::move(value);
   }
@@ -235,6 +260,7 @@ auto musicSelectTableContextForLaunch(const Bars &) {
 struct StartupTiming {
   static StartupTiming &instance() { static StartupTiming timing; return timing; }
   void mark(const char *) {}
+  void beginSession() {}
 };
 namespace rendering { int window_width = 1280, window_height = 720; }
 namespace platform_open { bool openExternalUrl(const std::string &, std::string &) { return true; } }
@@ -261,9 +287,32 @@ struct Preview {
   void switchTo(std::optional<std::filesystem::path>) {}
   void reset() {}
   void silence() {}
+  void resumeDefaultBgm() {}
+  void playDecide() {}
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  PublishedActions *skinSession_ = nullptr;
+  Preview *systemSound_ = nullptr;
+  int rankingOffset_ = 0;
+  struct { int totalPlayers = 0, offset = 0; } ranking_;
+  int eventsDispatched = 0;
+  void executeEvent(const skin::Action &) { ++eventsDispatched; launchSelected(false, false); }
+  void search(const std::string &) {}
+  void launchCourse(const Bar &, bool) {}
+  void showDecideOverlay(const ChartMetaRecord &) {}
+  void hideDecideOverlay() {}
+  void syncToolbar() {}
+  void configureSoundServices() {}
+  void startInputListening() {}
+  void onApplicationBackgroundChanged(bool) {}
+  std::mutex postedMutex_;
+  std::vector<std::function<bool()>> posted_;
+  void postDeferred(std::function<bool()> callback) {
+    std::lock_guard lock(postedMutex_);
+    posted_.push_back(std::move(callback));
+  }
+  void onResume();
   Context context;
   Bars bars_;
   bool launching_ = false;

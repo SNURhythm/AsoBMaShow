@@ -37,6 +37,57 @@ def export_preload_fixture(source=None):
 
 
 class MusicSelectExportPreloadTests(unittest.TestCase):
+    def test_real_published_batch_stops_at_pause_and_rejects_inactive_launch(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        fixture = export_preload_fixture(source)
+        fixture = fixture.replace(
+            "void consumeActions() { ++inputConsumptions; if (actionHandoff) actionHandoff(); }",
+            "void consumeActions();")
+        fixture = fixture.replace("void launchSelected(bool, bool) {}",
+                                  "void launchSelected(bool, bool);")
+        methods = []
+        for signature in ("void MusicSelectScene::consumeActions()",
+                          "void MusicSelectScene::launchSelected(bool autoplay, bool practice)",
+                          "void MusicSelectScene::onResume()"):
+            method = signature + scene_fixture.function_body(source, signature)
+            if "consumeActions" in signature:
+                method = "#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1\n" + method + "\n#undef ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS\n"
+            methods.append(method)
+        fixture = fixture[:fixture.index("int main() {")] + "\n".join(methods) + r'''
+int main() {
+  MusicSelectScene scene;
+  SceneManager manager;
+  scene.context.sceneManager = &manager;
+  manager.pause = [&] { scene.onPause(); };
+  PublishedActions published;
+  scene.skinSession_ = &published;
+  scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
+  scene.preloadedPath_ = scene.preloadedChart_->Meta.BmsPath;
+  published.actions = {skin::Action{}, skin::Action{}};
+  scene.consumeActions();
+  const bool workerStarted = scene.launchThread_.joinable();
+  if (workerStarted) scene.launchThread_.join();
+  expect(manager.launches == 1 && scene.eventsDispatched == 1,
+         "real published batch must stop dispatch immediately after synchronous pause");
+  expect(!workerStarted && scene.context.jukebox.stops == 0 && scene.context.jukebox.loads == 0,
+         "second Play must not stage shared audio or start a launch worker after handoff");
+  scene.launchSelected(false, false);
+  const bool inactiveWorker = scene.launchThread_.joinable();
+  if (inactiveWorker) scene.launchThread_.join();
+  expect(!inactiveWorker && scene.context.jukebox.stops == 0,
+         "direct launch entry must reject inactive ownership");
+  scene.onResume();
+  scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
+  scene.preloadedPath_ = scene.preloadedChart_->Meta.BmsPath;
+  published.actions = {skin::Action{}};
+  scene.consumeActions();
+  expect(manager.launches == 2 && !scene.sceneActive_ && !scene.launchThread_.joinable(),
+         "legitimate resume permits a fresh ready-chart launch");
+  return failures == 0 ? 0 : 1;
+}
+'''
+        self.run_fixture(fixture)
+
     def test_pending_handoff_stops_same_tick_hash_restore_and_shared_audio(self):
         fixture = export_preload_fixture()
         fixture = fixture[:fixture.index("int main() {")] + r'''

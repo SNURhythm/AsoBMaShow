@@ -2228,7 +2228,8 @@ bool MusicSelectScene::reusePreloadedChart(
 
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   audio::diag::SelectAudioLog("[bgm] launchSelected");
-  if (launching_) return;
+  if (!sceneActive_ || failed_ || launching_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
@@ -2434,6 +2435,8 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
 
 void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
                                     bool autoplay) {
+  if (!sceneActive_ || failed_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   if (launching_ || bar.courseCharts.empty() || !bar.presentation.exists) {
     return;
   }
@@ -2556,7 +2559,8 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
 }
 
 void MusicSelectScene::launchSelectedDirectoryAutoplay() {
-  if (launching_) return;
+  if (!sceneActive_ || failed_ || launching_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto directory = snapshot.rowAt(snapshot.selectedIndex);
@@ -2585,6 +2589,8 @@ void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory) 
 void MusicSelectScene::launchCourseReplay(
     const MusicSelectBar &course, int slot,
     const MusicSelectBarManagerReadView &snapshot) {
+  if (!sceneActive_ || failed_ || launching_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   const int lnMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   const auto paths = musicSelectCourseReplaySlotPaths(course, lnMode);
@@ -2674,6 +2680,8 @@ void MusicSelectScene::launchCourseReplay(
 }
 
 void MusicSelectScene::launchSelectedReplay(int slot) {
+  if (!sceneActive_ || failed_ || launching_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   if (launching_ || slot < 0 || slot >= 4) return;
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
@@ -2796,6 +2804,8 @@ void MusicSelectScene::consumeActions() {
   if (!skinSession_) return;
   bool audioSettingsChanged = false;
   for (const auto &action : skinSession_->takePublishedActions()) {
+    if (!sceneActive_ || failed_ ||
+        context.appInBackground.load(std::memory_order_acquire)) return;
     switch (action.kind) {
     case skin::MusicSelectSkinActionKind::Event:
       executeEvent(action);
@@ -2840,6 +2850,8 @@ void MusicSelectScene::consumeActions() {
     }
     }
   }
+  if (!sceneActive_ || failed_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   if (audioSettingsChanged) {
     (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
     if (!context.saveSettings()) {
@@ -3529,6 +3541,8 @@ MusicSelectScene::loadRecordsForSelector(const ChartMetaRecord &record) {
 void MusicSelectScene::launchChartReplay(
     const ChartMetaRecord &record, const ModernChartResultRecord &modern,
     bool ghostBattle) {
+  if (!sceneActive_ || failed_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   if (launching_ || record.unavailable || record.solidArchive ||
       record.meta.BmsPath.empty()) {
     return;
@@ -3680,6 +3694,8 @@ void MusicSelectScene::launchCourseReplay(
 }
 
 void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
+  if (!sceneActive_ || failed_ ||
+      context.appInBackground.load(std::memory_order_acquire)) return;
   if (launching_ || record.courseStart || record.unavailable ||
       record.solidArchive || record.meta.BmsPath.empty()) {
     return;
