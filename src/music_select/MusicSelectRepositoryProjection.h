@@ -42,6 +42,7 @@ struct MusicSelectRepositoryProjectionInput {
   std::span<const ChartMetaRecord> records;
   std::function<std::optional<ScoreBestSnapshot>(const bms_parser::ChartMeta &,
                                                  int)> scoreFor;
+  std::function<int(const bms_parser::ChartMeta &, int)> clearFor;
   std::function<std::array<bool, 4>(const ChartMetaRecord &, int)>
       replayExistsFor;
   std::function<MusicSelectCourseOptionScores(std::string_view, int, int, bool)>

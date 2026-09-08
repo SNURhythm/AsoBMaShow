@@ -167,7 +167,7 @@ private:
   std::unique_ptr<MusicSelectFolderStatusLoader> folderStatusLoader_;
   std::optional<std::uint64_t> folderStatusRowsRevision_;
   std::optional<std::chrono::steady_clock::time_point> folderStatusRetryAt_;
-  ScoreClearRankCache clearRankCache_;
+  std::shared_ptr<const ScoreClearRankCache> clearRankCache_;
   PlayerScoreHistorySnapshot playerHistory_;
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;

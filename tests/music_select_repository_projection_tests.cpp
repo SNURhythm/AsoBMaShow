@@ -522,6 +522,140 @@ void testFolderStatusCancellationStopsAggregationWithoutPartialPublication() {
           "cancelled aggregation never publishes partial counts");
 }
 
+void testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt() {
+  std::vector<ChartMetaRecord> records{
+      chart("/songs/a/a.bms", "aaa", "Alpha", "", "/songs/a")};
+  records.front().meta.LnMode = 0;
+  const std::array<int, 3> bestExScores{1000, 1100, 1200};
+  const std::array<int, 3> bestClearRanks{
+      kClearTypeHardClearRank, kClearTypeExHardClearRank, kClearTypeFullComboRank};
+  const std::array<int, 3> expectedLamps{6, 7, 8};
+  const std::array<int, 3> expectedRanks{22, 24, 27};
+  MusicSelectBar folderStatus{.kind = skin::MusicSelectBarKind::Folder};
+  for (int selectedMode = 1; selectedMode <= 3; ++selectedMode) {
+    const auto modeIndex = static_cast<std::size_t>(selectedMode - 1);
+    const ScoreBestSnapshot bestExAttempt{
+        .score = bestExScores[modeIndex],
+        .maxScore = 1200,
+        .judgementCounts = {450, 100, 20, 10, 20},
+        .badPoints = 30,
+        .finalGauge = 0.0f,
+        .clearType = kClearTypeFailedRank,
+        .createdAt = "2026-09-08T10:00:00Z",
+        .attemptId = "higher-ex-lower-clear",
+        .source = ScoreBestSource::ImportedIr};
+    const ScoreBestSnapshot bestClearAttempt{
+        .score = 800,
+        .maxScore = 1200,
+        .clearType = bestClearRanks[modeIndex],
+        .attemptId = "lower-ex-higher-clear"};
+    const MusicSelectRepositoryProjectionInput input{
+        .records = records,
+        .scoreFor = [&](const bms_parser::ChartMeta &meta, int mode) {
+          return meta.SHA256 == "aaa" && meta.LnMode == 0 && mode == selectedMode
+                     ? std::optional<ScoreBestSnapshot>{bestExAttempt}
+                     : std::nullopt;
+        },
+        .clearFor = [&](const bms_parser::ChartMeta &meta, int mode) {
+          return meta.SHA256 == "aaa" && meta.LnMode == 0 && mode == selectedMode
+                     ? bestClearAttempt.clearType : kNoClearTypeRank;
+        },
+        .selectedLongNoteMode = selectedMode};
+    const auto projection = MusicSelectRepositoryProjection{}.project(input);
+    const auto *folder = projection.find({"folder:/songs"});
+    const auto *song = child(projection, folder, 0);
+    require(song && song->presentation.lamp == expectedLamps[modeIndex],
+            "song lamp uses the lower-EX attempt's better clear in the selected LN mode");
+    require(song && song->score && song->score->score == bestExScores[modeIndex] &&
+                song->score->maxScore == 1200 &&
+                song->score->clearType == kClearTypeFailedRank &&
+                song->score->attemptId == "higher-ex-lower-clear" &&
+                song->score->createdAt == "2026-09-08T10:00:00Z" &&
+                song->score->source == ScoreBestSource::ImportedIr &&
+                song->score->judgementCounts ==
+                    std::array<int, 5>{450, 100, 20, 10, 20} &&
+                song->score->badPoints == 30 && song->score->finalGauge == 0.0f,
+            "best-EX score and per-attempt clear, timing, source and judgements stay intact");
+    std::array<int, 11> expectedLampCounts{};
+    expectedLampCounts[expectedLamps[modeIndex]] = 1;
+    std::array<int, 28> expectedRankCounts{};
+    expectedRankCounts[expectedRanks[modeIndex]] = 1;
+    require(folder && folder->presentation.lamp == expectedLamps[modeIndex] &&
+                folder->presentation.folderLampCounts == expectedLampCounts &&
+                folder->presentation.folderRankCounts == expectedRankCounts,
+            "projected folder lamp uses best clear while rank uses best EX in the same LN mode");
+    MusicSelectRepositoryProjection::updateFolderStatus(folderStatus, input);
+    require(folderStatus.presentation.lamp == expectedLamps[modeIndex] &&
+                folderStatus.presentation.folderLampCounts == expectedLampCounts &&
+                folderStatus.presentation.folderRankCounts == expectedRankCounts,
+            "folder status refresh replaces both LN-mode histograms using independent bests");
+  }
+}
+
+void testClearProviderMissIsAuthoritativeAndClearDoesNotRequireBestEx() {
+  std::vector<ChartMetaRecord> records{
+      chart("/songs/a/a.bms", "aaa", "Alpha", "", "/songs/a")};
+  MusicSelectRepositoryProjectionInput input{
+      .records = records,
+      .scoreFor = [](const bms_parser::ChartMeta &, int) {
+        return std::optional<ScoreBestSnapshot>{{
+            .score = 1000, .maxScore = 1200, .clearType = kClearTypeHardClearRank}};
+      },
+      .clearFor = [](const bms_parser::ChartMeta &, int) {
+        return kNoClearTypeRank;
+      }};
+  const auto missingClear = MusicSelectRepositoryProjection{}.project(input);
+  const auto *folder = missingClear.find({"folder:/songs"});
+  const auto *song = child(missingClear, folder, 0);
+  require(song && song->presentation.lamp == 0 && song->score &&
+              song->score->clearType == kClearTypeHardClearRank && folder &&
+              folder->presentation.lamp == 0 &&
+              folder->presentation.folderLampCounts[0] == 1 &&
+              folder->presentation.folderRankCounts[22] == 1,
+          "an explicit no-clear result does not fall back to the best-EX attempt's clear");
+
+  input.scoreFor = {};
+  input.clearFor = [](const bms_parser::ChartMeta &, int) {
+    return kClearTypeHardClearRank;
+  };
+  const auto clearOnly = MusicSelectRepositoryProjection{}.project(input);
+  folder = clearOnly.find({"folder:/songs"});
+  song = child(clearOnly, folder, 0);
+  require(song && song->presentation.lamp == 6 && !song->score && folder &&
+              folder->presentation.lamp == 6 &&
+              folder->presentation.folderLampCounts[6] == 1 &&
+              folder->presentation.folderRankCounts[0] == 1,
+          "independent clear evidence supplies lamps even without a best-EX snapshot");
+}
+
+void testFolderStatusCancellationDuringClearLookupPreservesPublishedCounts() {
+  std::vector<ChartMetaRecord> records(10,
+      chart("/songs/a/a.bms", "aaa", "Alpha", "", "/songs/a"));
+  MusicSelectBar folder{.kind = skin::MusicSelectBarKind::Folder};
+  folder.presentation.lamp = 7;
+  folder.presentation.folderLampCounts[7] = 17;
+  folder.presentation.folderRankCounts[0] = 17;
+  std::stop_source cancellation;
+  int clearReads = 0;
+  bool cancelled = false;
+  try {
+    MusicSelectRepositoryProjection::updateFolderStatus(folder,
+        {.records = records,
+         .clearFor = [&](const bms_parser::ChartMeta &, int) {
+           if (++clearReads == 3) cancellation.request_stop();
+           return kClearTypeHardClearRank;
+         }}, cancellation.get_token());
+  } catch (const std::runtime_error &) {
+    cancelled = true;
+  }
+  require(cancelled && clearReads == 3,
+          "cancellation interrupts aggregation during independent clear lookups");
+  require(folder.presentation.lamp == 7 &&
+              folder.presentation.folderLampCounts[7] == 17 &&
+              folder.presentation.folderRankCounts[0] == 17,
+          "cancelled clear aggregation preserves the published lamp and both histograms");
+}
+
 void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
   std::vector<ChartMetaRecord> records{
       chart("/pack/song/chart.bms", "scored", "Scored", "", "/pack/song"),
@@ -577,6 +711,9 @@ void testFolderStatusReplacesCountsAndFiltersOnlyMode() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt();
+  testClearProviderMissIsAuthoritativeAndClearDoesNotRequireBestEx();
+  testFolderStatusCancellationDuringClearLookupPreservesPublishedCounts();
   testFolderStatusReplacesCountsAndFiltersOnlyMode();
   testFolderStatusCancellationStopsAggregationWithoutPartialPublication();
   testMixedFolderFlattensDescendantsAndStatus();

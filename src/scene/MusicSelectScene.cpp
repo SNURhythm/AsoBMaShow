@@ -678,6 +678,8 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   folderStatusRetryAt_.reset();
   scoreCache_ = std::make_shared<const ScoreBestCache>(
       context.scoreRepository.LoadBestScores());
+  clearRankCache_ = std::make_shared<const ScoreClearRankCache>(
+      context.scoreRepository.LoadBestClearRanks());
   playerHistory_ = context.scoreRepository.LoadPlayerScoreHistory();
   recentScoreImprovements_ = {};
   recentScoreImprovementsLoaded_ = false;
@@ -753,7 +755,8 @@ void MusicSelectScene::requestFolderStatus(
   const int longNoteMode = long_note_mode::valueFromId(context.settings.selectedLnMode);
   const bool requested = folderStatusLoader_->request(
       std::move(directories), snapshot.resolvedModeFilter, longNoteMode,
-      [this, scores = scoreCache_, mode = snapshot.resolvedModeFilter, longNoteMode,
+      [this, scores = scoreCache_, clears = clearRankCache_,
+       mode = snapshot.resolvedModeFilter, longNoteMode,
        session = std::make_shared<std::optional<ChartRepository::Session>>(),
        improvements = std::optional<RecentScoreImprovements>{},
        now = unixMillis() / 1'000](const MusicSelectBar &bar,
@@ -768,6 +771,9 @@ void MusicSelectScene::requestFolderStatus(
             **session, bar,
             {.scoreFor = [scores](const bms_parser::ChartMeta &meta, int mode) {
                return scores->bestFor(meta, mode);
+             },
+             .clearFor = [clears](const bms_parser::ChartMeta &meta, int mode) {
+               return clears->bestRankFor(meta, mode);
              },
              .recentScoreImprovements = improvements ? &*improvements : nullptr,
              .modeFilter = mode,
@@ -1404,6 +1410,9 @@ bool MusicSelectScene::loadDirectoryChildren(
         .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
           return scoreCache_->bestFor(meta, mode);
         },
+        .clearFor = [this](const bms_parser::ChartMeta &meta, int mode) {
+          return clearRankCache_->bestRankFor(meta, mode);
+        },
         .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
           return musicSelectExistingChartReplaySlots(
               record, mode, context.replayRepository.GetResolvedProfileRoot());
@@ -1602,6 +1611,9 @@ void MusicSelectScene::openSameFolder() {
       {.records = records,
        .scoreFor = [this](const bms_parser::ChartMeta &meta, int mode) {
          return scoreCache_->bestFor(meta, mode);
+       },
+       .clearFor = [this](const bms_parser::ChartMeta &meta, int mode) {
+         return clearRankCache_->bestRankFor(meta, mode);
        },
        .replayExistsFor = [this](const ChartMetaRecord &record, int mode) {
          return musicSelectExistingChartReplaySlots(

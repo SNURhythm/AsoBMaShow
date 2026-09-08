@@ -124,12 +124,20 @@ struct ProjectionBuilder {
                : std::nullopt;
   }
 
+  int clearLamp(const ChartMetaRecord &record,
+                const std::optional<ScoreBestSnapshot> &best) const {
+    const int rank = input.clearFor
+                         ? input.clearFor(record.meta, input.selectedLongNoteMode)
+                         : best ? best->clearType : kNoClearTypeRank;
+    return beatorajaClearType(rank);
+  }
+
   MusicSelectBarId addSong(const ChartMetaRecord &record,
                            std::string_view context) {
     const MusicSelectBarId id{std::string(context) + ":" +
                               chartIdentity(record)};
     auto best = score(record);
-    const int lamp = best ? beatorajaClearType(best->clearType) : 0;
+    const int lamp = clearLamp(record, best);
     const std::string title = fullTitle(record.meta);
     result.bars.push_back(
         {.id = id,
@@ -201,7 +209,8 @@ struct ProjectionBuilder {
       }
       const auto best = score(record);
       checkCancelled();
-      const int lamp = best ? beatorajaClearType(best->clearType) : 0;
+      const int lamp = clearLamp(record, best);
+      checkCancelled();
       ++frame
             .folderLampCounts[static_cast<std::size_t>(lamp)];
       int rank = 0;
