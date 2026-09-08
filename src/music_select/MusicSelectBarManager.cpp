@@ -464,6 +464,14 @@ void MusicSelectBarManager::installFolderStatus(
     }
     update((*rows_)[found->second]);
   }
+  for (std::size_t index = 0; index < directoryBars_->size(); ++index) {
+    if ((*directoryBars_)[index].id != id) continue;
+    if (directoryBars_.use_count() != 1) {
+      directoryBars_ =
+          std::make_shared<std::vector<MusicSelectBar>>(*directoryBars_);
+    }
+    update((*directoryBars_)[index]);
+  }
 }
 
 bool MusicSelectBarManager::installChildren(

@@ -632,6 +632,105 @@ void testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent() {
           "retained views preserve complete folder children after manager mutation");
 }
 
+void testAfterOpenFolderStatusKeepsDirectoryViewsConsistent() {
+  auto projection = fixture();
+  projection.bars[0].children = {{"folder:b"}};
+  MusicSelectBarManager manager(std::move(projection));
+  const auto statusWithCount = [](int count, int lamp, int rivalLamp) {
+    skin::MusicSelectBarFrame status;
+    status.folderLampCounts[6] = count;
+    status.folderRankCounts[24] = count;
+    status.lamp = lamp;
+    status.rivalLamp = rivalLamp;
+    return status;
+  };
+  const auto sameStatus = [](const skin::MusicSelectBarFrame &actual,
+                             const skin::MusicSelectBarFrame &expected) {
+    return actual.folderLampCounts == expected.folderLampCounts &&
+           actual.folderRankCounts == expected.folderRankCounts &&
+           actual.lamp == expected.lamp && actual.rivalLamp == expected.rivalLamp;
+  };
+  const auto requireFreshDirectories = [&] {
+    const auto view = manager.readView();
+    const auto snapshot = manager.snapshot();
+    require(view.directoryBars.size() == snapshot.directoryBars.size(),
+            "fresh directory views and snapshots have matching depth");
+    for (std::size_t index = 0; index < view.directoryBars.size(); ++index) {
+      require(view.directoryBars[index].id == snapshot.directoryBars[index].id &&
+                  sameStatus(view.directoryBars[index].presentation,
+                             snapshot.directoryBars[index].presentation),
+              "fresh read view directory stats match fresh snapshot after late install");
+    }
+  };
+  const auto parentInitial = statusWithCount(3, 2, 1);
+  const auto parentUpdated = statusWithCount(5, 6, 4);
+  const auto childUpdated = statusWithCount(7, 5, 3);
+  manager.installFolderStatus({"folder:a"}, parentInitial);
+  require(manager.open({"folder:a"}), "after-open stats fixture opens parent");
+  const auto parentView = manager.readView();
+  const auto parentSnapshot = manager.snapshot();
+  const auto parentFrame = manager.songListFrame();
+  manager.installFolderStatus({"folder:a"}, parentUpdated);
+  manager.installFolderStatus({"folder:b"}, childUpdated);
+  requireFreshDirectories();
+  const auto updatedParentView = manager.readView();
+  require(sameStatus(updatedParentView.directoryBars[0].presentation, parentUpdated) &&
+              sameStatus(updatedParentView.rowAt(0).presentation, childUpdated) &&
+              sameStatus(manager.songListFrame().at(0), childUpdated) &&
+              updatedParentView.rowsRevision == parentView.rowsRevision &&
+              updatedParentView.selectedIndex == parentView.selectedIndex &&
+              updatedParentView.directoryText == parentView.directoryText,
+          "late parent and visible child stats update without changing list revision or navigation");
+  require(sameStatus(parentView.directoryBars[0].presentation, parentInitial) &&
+              sameStatus(parentSnapshot.directoryBars[0].presentation, parentInitial) &&
+              parentView.rowAt(0).presentation.folderLampCounts[6] == 0 &&
+              parentSnapshot.rowAt(0).presentation.folderLampCounts[6] == 0 &&
+              parentFrame.at(0).folderLampCounts[6] == 0,
+          "retained parent views, snapshots and frames keep their pre-install stats");
+
+  require(manager.open({"folder:b"}), "after-open stats fixture opens nested child");
+  requireFreshDirectories();
+  const auto nestedView = manager.readView();
+  const auto nestedSnapshot = manager.snapshot();
+  const auto nestedFrame = manager.songListFrame();
+  const auto parentNested = statusWithCount(9, 7, 5);
+  const auto childNested = statusWithCount(11, 8, 6);
+  manager.installFolderStatus({"folder:a"}, parentNested);
+  manager.installFolderStatus({"folder:b"}, childNested);
+  requireFreshDirectories();
+  const auto updatedNestedView = manager.readView();
+  require(sameStatus(updatedNestedView.directoryBars[0].presentation, parentNested) &&
+              sameStatus(updatedNestedView.directoryBars[1].presentation, childNested) &&
+              updatedNestedView.rowsRevision == nestedView.rowsRevision &&
+              updatedNestedView.rows.data() == nestedView.rows.data() &&
+              updatedNestedView.selectedIndex == nestedView.selectedIndex &&
+              updatedNestedView.rowAt(0).id.value == "song:3" &&
+              updatedNestedView.rowAt(0).presentation.folderLampCounts[6] == 0,
+          "nested late installs update each matching ancestor without rebuilding or changing song rows");
+  require(sameStatus(nestedView.directoryBars[0].presentation, parentUpdated) &&
+              sameStatus(nestedView.directoryBars[1].presentation, childUpdated) &&
+              sameStatus(nestedSnapshot.directoryBars[0].presentation, parentUpdated) &&
+              sameStatus(nestedSnapshot.directoryBars[1].presentation, childUpdated) &&
+              sameStatus(updatedParentView.directoryBars[0].presentation, parentUpdated) &&
+              sameStatus(updatedParentView.rowAt(0).presentation, childUpdated) &&
+              nestedFrame.at(0).folderLampCounts[6] == 0,
+          "nested late installs preserve every previously published directory view and frame");
+
+  require(manager.close(), "back navigation returns to parent after late stats");
+  requireFreshDirectories();
+  require(sameStatus(manager.readView().directoryBars[0].presentation, parentNested) &&
+              sameStatus(manager.readView().rowAt(0).presentation, childNested),
+          "back navigation keeps updated parent directory and child row stats");
+  require(manager.openSelected(), "updated child reopens after back navigation");
+  requireFreshDirectories();
+  require(sameStatus(manager.readView().directoryBars[1].presentation, childNested),
+          "reopening child keeps its latest installed stats");
+  require(manager.close() && manager.close(), "back navigation returns to root");
+  require(sameStatus(manager.readView().rowAt(0).presentation, parentNested) &&
+              manager.readView().directoryBars.empty(),
+          "root row retains the latest parent stats after closing nested directories");
+}
+
 class CountingRowProvider final : public MusicSelectRowProvider {
 public:
   explicit CountingRowProvider(std::size_t count) : count_(count) {}
@@ -936,6 +1035,7 @@ int main(int argc, char **argv) {
   }
   testLargeIndexedListsAndRetainedFrames();
   testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent();
+  testAfterOpenFolderStatusKeepsDirectoryViewsConsistent();
   testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads();
   testWrapOpenCloseAndPositionSemantics();
   testClickedDirectoryOpensWithoutMovingTheCenterSelection();
