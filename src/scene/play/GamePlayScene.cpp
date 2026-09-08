@@ -5698,6 +5698,9 @@ void GamePlayScene::update(float dt) {
     drainRealtimeInputCommands();
     drainRealtimeStartSelectInputs();
     drainRealtimeTouchSamples();
+    if (!realtimeGameplayAuthorityActive()) {
+      return;
+    }
     bool spinScratchAdvanced = true;
     {
       std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);

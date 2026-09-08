@@ -24,6 +24,7 @@ void require(bool condition, std::string_view message) {
 
 void SDL_Log(const char *, ...) {}
 void SDL_LogError(int, const char *, ...) {}
+void SDL_LogWarn(int, const char *, ...) {}
 
 struct FixtureJukebox {
   long long time = 0;
@@ -58,6 +59,8 @@ struct FixtureRealtimeSession {
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool touchRoutingRecoveryRequested{false};
   std::unique_ptr<FixtureWorker> worker;
+  gameplay::BoundedMpscQueue<gameplay::StartSelectControlInput, 16> startSelectInputs;
+  std::atomic_bool startSelectInputOverflow{false};
 };
 
 class GamePlayScene {
@@ -75,6 +78,9 @@ public:
   bool touchVisualizerLoaded = false;
   bool recordedAttemptCompleted = false;
   bool resultTransitionScheduled = false;
+  bool startButtonPressed = false;
+  bool selectButtonPressed = false;
+  bool playfieldChangeLiftTarget = false;
   ReplayData recordedReplay;
   ReplayData analyticsReplay;
   ScoreProvenance attemptProvenance = ScoreProvenance::Legacy();
@@ -104,20 +110,30 @@ public:
   void finalizePracticeRangeMisses();
   void completePracticeAttempt();
   void finishReplayRecording();
+  void abortPlayFromStartSelectControl();
+  void consumeStartSelectInput(const gameplay::StartSelectControlInput &input);
+  void drainRealtimeStartSelectInputs();
 
   bool realtimeGameplayAuthorityActive() const {
     return realtimeGameplaySession != nullptr;
   }
   void applyPendingBestReplay() {}
   void drainRealtimeInputCommands() {}
-  void drainRealtimeStartSelectInputs() {}
   void drainRealtimeTouchSamples() {}
   long long nowMicros() const { return clock; }
   void startPracticeAttemptFromMenu() { require(false, "unexpected practice menu"); }
   bool isReplayPlayback() const { return false; }
   void applyStartSelectControlActions(
       const std::vector<gameplay::StartSelectControlAction> &actions) {
-    require(actions.empty(), "unexpected Start/Select action");
+    for (const auto &action : actions) {
+      if (action.kind == gameplay::StartSelectControlActionKind::Exit) {
+        abortPlayFromStartSelectControl();
+      } else {
+        require(action.kind == gameplay::StartSelectControlActionKind::ToggleLiftHiddenTarget,
+                "fixture permits only the conjunction's preceding lift toggle");
+        playfieldChangeLiftTarget = !playfieldChangeLiftTarget;
+      }
+    }
   }
   void updateCoursePauseHoldProgress(long long) {}
   long long getAudioOffsetMicros() const { return offset; }
@@ -147,6 +163,13 @@ public:
   bool isCoursePlayback() const { return options.courseSession != nullptr; }
   bool usesModernCourseContinuation() const { return false; }
   bool shouldRecordReplay() const { return true; }
+  void cancelGameplaySkinPreparation() {}
+  void finishPractice() {
+    options.practiceSession->abandonAttempt();
+    state->isEnding = true;
+    context.jukebox.stop();
+    scheduleResultTransition(0);
+  }
   void scheduleResultTransition(std::uint64_t) {
     require(state->isEnding, "transition must capture terminal state");
     if (!resultTransitionScheduled) {
@@ -236,7 +259,36 @@ void testPractice(bool loop, bool chartTerminal, long long offset) {
           "COR01: repeated terminal update cannot duplicate completion");
 }
 
-int main() {
+void testQueuedAbortLifetime() {
+  for (const auto kind : {replay::LogicalControlKind::Lane,
+                          replay::LogicalControlKind::ScratchClockwise}) {
+    GamePlayScene scene;
+    scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+    scene.startSelectControl.emplace(gameplay::StartSelectControl::Configuration{});
+    auto &queue = scene.realtimeGameplaySession->startSelectInputs;
+    require(queue.tryPush({.control = {.kind = replay::LogicalControlKind::Start},
+                           .pressed = true, .timestampMicros = 10'000'000}), "queue Start");
+    require(queue.tryPush({.control = {.kind = replay::LogicalControlKind::Select},
+                           .pressed = true, .timestampMicros = 10'000'100}), "queue Select");
+    require(queue.tryPush({.control = {.kind = kind, .player = 1, .lane = 0},
+                           .pressed = true, .timestampMicros = 11'000'101}),
+            "queue lane/scratch after exit hold duration");
+    scene.clock = 11'000'102;
+    scene.update(0.016F);
+    require(scene.realtimeGameplaySession == nullptr && scene.state->isEnding &&
+                scene.transitions == 1,
+            "GAME01: drain destroys authority and transitions exactly once");
+    scene.update(0.016F);
+    require(scene.transitions == 1, "GAME01: no duplicate terminal transition");
+  }
+}
+
+int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "game01") {
+    testQueuedAbortLifetime();
+    std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
+    return 0;
+  }
   for (const bool loop : {false, true}) {
     for (const bool chartTerminal : {false, true}) {
       for (const long long offset : {-100'000LL, 0LL, 100'000LL}) {
@@ -245,4 +297,6 @@ int main() {
     }
   }
   std::cout << "COR01 actual scene practice tests passed\n";
+  testQueuedAbortLifetime();
+  std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
 }

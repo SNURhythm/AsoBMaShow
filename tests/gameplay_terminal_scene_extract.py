@@ -28,6 +28,9 @@ def main():
         "void GamePlayScene::finalizePracticeRangeMisses()",
         "void GamePlayScene::completePracticeAttempt()",
         "void GamePlayScene::finishReplayRecording()",
+        "void GamePlayScene::abortPlayFromStartSelectControl()",
+        "void GamePlayScene::consumeStartSelectInput(",
+        "void GamePlayScene::drainRealtimeStartSelectInputs()",
     ]
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     methods = "\n\n".join(extract(source, signature) for signature in signatures)
