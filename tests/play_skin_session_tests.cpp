@@ -3398,6 +3398,231 @@ void testMusicSelectStopsRetryingAnUnavailableCallbackFont() {
          "without retrying the whole selector frame");
 }
 
+void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 99,
+  };
+  std::ifstream imageFile(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+      std::ios::binary);
+  const std::vector<unsigned char> imageBytes{
+      std::istreambuf_iterator<char>(imageFile),
+      std::istreambuf_iterator<char>()};
+  std::promise<void> readerStarted;
+  auto started = readerStarted.get_future();
+  std::promise<void> releaseReader;
+  auto released = releaseReader.get_future().share();
+  std::atomic_int reads = 0;
+  std::atomic_bool cancellationObserved = false;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  context.builtinImageReader =
+      [&](const fs::path &path, std::vector<unsigned char> &bytes,
+          std::size_t, std::string *, std::stop_token stop) {
+        if (reads.fetch_add(1) == 0) {
+          readerStarted.set_value();
+          released.wait();
+          cancellationObserved = stop.stop_requested();
+          return false;
+        }
+        if (path != "chart-a.png") return false;
+        bytes = imageBytes;
+        return true;
+      };
+  auto created = MusicSelectSkinSession::create(std::move(request),
+                                               std::move(context));
+  if (!created.session) {
+    expect(false, "cancelled selector artwork fixture creates");
+    return;
+  }
+  const auto uploads = fixture.device()->createCalls;
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 2;
+  frame.stageFile = "chart-a.png";
+  bool rendered = created.session->render(renderContext, frame);
+  const bool startedRead = started.wait_for(std::chrono::seconds(1)) ==
+                           std::future_status::ready;
+  ++frame.serial;
+  frame.stageFile = "chart-b.png";
+  rendered = created.session->render(renderContext, frame) && rendered;
+  ++frame.serial;
+  frame.stageFile = "chart-a.png";
+  rendered = created.session->render(renderContext, frame) && rendered;
+  releaseReader.set_value();
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(1);
+  while (fixture.device()->createCalls == uploads &&
+         std::chrono::steady_clock::now() < deadline) {
+    ++frame.serial;
+    rendered = created.session->render(renderContext, frame) && rendered;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  expect(startedRead && cancellationObserved && rendered && reads == 2 &&
+             fixture.device()->createCalls == uploads + 1 &&
+             quadBackend.submitCalls > 0,
+         "returning to chart A before its cancelled artwork read finishes "
+         "retries and publishes the image instead of marking nulls prepared");
+}
+
+void testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation() {
+  for (const bool changeBanner : {false, true}) {
+    ActivationFixture fixture(
+        {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+    if (!fixture.ready()) return;
+    GameplaySkinActivationRequest request{
+        .activation = fixture.takeActivation(),
+        .profileId = fixture.profile(),
+        .sessionSerial = 100,
+    };
+    std::ifstream imageFile(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+        std::ios::binary);
+    const std::vector<unsigned char> imageBytes{
+        std::istreambuf_iterator<char>(imageFile),
+        std::istreambuf_iterator<char>()};
+    std::promise<void> readerStarted;
+    auto started = readerStarted.get_future();
+    std::promise<void> releaseReader;
+    auto released = releaseReader.get_future().share();
+    std::promise<void> retryStarted;
+    auto retry = retryStarted.get_future();
+    std::promise<void> releaseRetry;
+    auto retryReleased = releaseRetry.get_future().share();
+    std::atomic_bool restoring = false;
+    std::atomic_bool cancellationObserved = false;
+    std::atomic_int restoredImageReads = 0;
+    const fs::path restoredPath = changeBanner ? "banner-a.png" : "stage-a.png";
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend quadBackend;
+    context.quadBackend = &quadBackend;
+    context.builtinImageReader =
+        [&](const fs::path &path, std::vector<unsigned char> &bytes,
+            std::size_t, std::string *, std::stop_token stop) {
+          if (path == "chart-b.png") {
+            readerStarted.set_value();
+            released.wait();
+            cancellationObserved = stop.stop_requested();
+            return false;
+          }
+          if (path == restoredPath) {
+            ++restoredImageReads;
+            if (restoring) {
+              retryStarted.set_value();
+              retryReleased.wait();
+            }
+          }
+          bytes = imageBytes;
+          return true;
+        };
+    auto created = MusicSelectSkinSession::create(std::move(request),
+                                                 std::move(context));
+    if (!created.session) {
+      expect(false, "prepared selector artwork fixture creates");
+      return;
+    }
+    const auto uploads = fixture.device()->createCalls;
+    const auto destroys = fixture.device()->destroyCalls;
+    RenderContext renderContext;
+    MusicSelectSkinFrame frame;
+    frame.serial = 2;
+    frame.stageFile = "stage-a.png";
+    frame.banner = "banner-a.png";
+    bool rendered = true;
+    const auto renderUntil = [&](const auto &finished) {
+      const auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::seconds(2);
+      while (!finished() && std::chrono::steady_clock::now() < deadline) {
+        ++frame.serial;
+        rendered = created.session->render(renderContext, frame) && rendered;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    };
+    renderUntil([&] { return fixture.device()->createCalls == uploads + 2; });
+    expect(fixture.device()->createCalls == uploads + 2,
+           "chart A stage and banner are fully prepared before navigation");
+    ++frame.serial;
+    (changeBanner ? frame.banner : frame.stageFile) = "chart-b.png";
+    rendered = created.session->render(renderContext, frame) && rendered;
+    const bool startedRead = started.wait_for(std::chrono::seconds(2)) ==
+                             std::future_status::ready;
+    expect(fixture.device()->destroyCalls == destroys + 1,
+           "navigation clears only the changed stage or banner texture");
+    restoring = true;
+    ++frame.serial;
+    (changeBanner ? frame.banner : frame.stageFile) = restoredPath;
+    rendered = created.session->render(renderContext, frame) && rendered;
+    releaseReader.set_value();
+    renderUntil([&] {
+      return retry.wait_for(std::chrono::milliseconds(0)) ==
+             std::future_status::ready;
+    });
+    expect(fixture.device()->destroyCalls == destroys + 1,
+           "retrying cleared artwork preserves the other image's prepared state");
+    releaseRetry.set_value();
+    renderUntil([&] { return fixture.device()->createCalls == uploads + 3; });
+    expect(startedRead && cancellationObserved && rendered &&
+               restoredImageReads == 2 &&
+               fixture.device()->createCalls == uploads + 3,
+           "returning to prepared A after cancelling B restores cleared artwork");
+  }
+}
+
+void testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 101,
+  };
+  std::atomic_int reads = 0;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  context.builtinImageReader =
+      [&](const fs::path &, std::vector<unsigned char> &, std::size_t,
+          std::string *, std::stop_token) {
+        ++reads;
+        return false;
+      };
+  auto created = MusicSelectSkinSession::create(std::move(request),
+                                               std::move(context));
+  if (!created.session) {
+    expect(false, "missing selector artwork fixture creates");
+    return;
+  }
+  const auto uploads = fixture.device()->createCalls;
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 2;
+  frame.stageFile = "missing-stage.png";
+  frame.banner = "missing-banner.png";
+  bool rendered = true;
+  for (const bool emptySelection : {false, true}) {
+    if (emptySelection) {
+      frame.stageFile.clear();
+      frame.banner.clear();
+    }
+    for (int frameIndex = 0; frameIndex < 100; ++frameIndex) {
+      ++frame.serial;
+      rendered = created.session->render(renderContext, frame) && rendered;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(rendered && reads == 2 && fixture.device()->createCalls == uploads,
+           "missing artwork is attempted once and empty selections do not retry it");
+  }
+}
+
 void testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed() {
   ActivationFixture fixture(
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
@@ -7660,6 +7885,9 @@ int main(int argc, char **argv) {
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
+  testMusicSelectRetriesCancelledArtworkAfterReturningToChart();
+  testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
+  testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();
   testMusicSelectLuaSessionContainsRecursiveCustomEventFailure();
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();

@@ -151,6 +151,7 @@ struct MusicSelectSkinPointerTarget {
 struct MusicSelectBuiltinImagePatch {
   std::map<int, std::filesystem::path> paths;
   std::map<int, std::optional<image_decode::DecodedImageData>> images;
+  bool cancelled = false;
 };
 
 struct MusicSelectTextAtlasPatch {

@@ -211,6 +211,7 @@ MusicSelectBuiltinImagePatch prepareBuiltinImagePatch(
          .stop = stop});
     result.images.emplace(reference, std::move(decoded));
   }
+  result.cancelled = stop.stop_requested();
   return result;
 }
 
@@ -901,8 +902,10 @@ void MusicSelectSkinSession::updateBuiltinImages(
     }
     MusicSelectBuiltinImagePatch patch = pendingBuiltinImagePatch_.get();
     pendingBuiltinImagePaths_.clear();
+    const bool cancelled = patch.cancelled ||
+                           builtinImagePatchStop_.stop_requested();
     builtinImagePatchStop_ = std::stop_source{};
-    if (patch.paths == paths && resources_) {
+    if (!cancelled && patch.paths == paths && resources_) {
       for (auto &[reference, pixels] : patch.images) {
         (void)resources_->replaceBuiltinImage(reference, std::move(pixels));
       }
@@ -925,6 +928,7 @@ void MusicSelectSkinSession::updateBuiltinImages(
         // pixmap. Do not show the former chart while this replacement is
         // pending or after the new image fails to decode.
         (void)resources_->replaceBuiltinImage(reference, std::nullopt);
+        preparedBuiltinImagePaths_.erase(reference);
       }
     }
   }
