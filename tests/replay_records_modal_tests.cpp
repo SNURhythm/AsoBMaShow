@@ -3,6 +3,7 @@
 #include "scene/ReplayRecordsModal.h"
 #include "view/View.h"
 #include "ReplayVideoExporter.h"
+#include "scene/MusicSelectRecords.h"
 
 #include <SDL2/SDL.h>
 #include <bgfx/bgfx.h>
@@ -148,6 +149,37 @@ int main() {
   testSelectedModernRecordDispatchesWatchAndExport();
   testNonModernRecordCannotCrossTheActionBoundary();
   testRetainedModalActivatesSelectedRecordThroughOwner();
+  {
+    ChartMetaRecord chart;
+    chart.meta.Title = "Unplayed selector chart";
+    chart.meta.TotalNotes = 100;
+    main_menu_profile::Selections selections;
+    selections.longNoteMode = "CN";
+    const auto records = musicSelectChartRecords(chart, selections, {}, {});
+    expect(records.size() == 1 &&
+               std::holds_alternative<AutoPlayRecordId>(records.front().identity) &&
+               records.front().capabilities.watch &&
+               records.front().capabilities.videoExport,
+           "selector loader exposes watchable and exportable autoplay without history");
+    View root(0, 0, 640, 480);
+    bool watched = false;
+    bool exported = false;
+    std::vector<ResultRecordSummary> loaded;
+    auto modal = std::unique_ptr<ReplayRecordsModal>(ReplayRecordsModal::Create(
+        &root, {.loadRecords = [&](const ChartMetaRecord &selected) {
+                  loaded = musicSelectChartRecords(selected, selections, {}, {});
+                  return loaded;
+                },
+                .watchAutoPlay = [&](const ChartMetaRecord &) { watched = true; },
+                .exportAutoPlay = [&](const ChartMetaRecord &,
+                                      ReplayVideoExportOptions) { exported = true; }}));
+    modal->showChart(chart);
+    if (!loaded.empty()) modal->selectRecord(loaded.front());
+    expect(modal->activate(ReplayRecordsModalAction::Watch) && watched,
+           "unplayed selector chart watches autoplay through the actual modal loader");
+    expect(modal->activate(ReplayRecordsModalAction::VideoExport) && exported,
+           "unplayed selector chart exports autoplay through the actual modal loader");
+  }
   bgfx::shutdown();
   return failures == 0 ? 0 : 1;
 }

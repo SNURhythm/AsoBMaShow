@@ -1,4 +1,5 @@
 #include "MusicSelectScene.h"
+#include "MusicSelectRecords.h"
 #include "MusicSelectDirectoryRestore.h"
 
 #include "../audio/SelectAudioDiagnostics.h"
@@ -3182,9 +3183,10 @@ MusicSelectScene::loadRecordsForSelector(const ChartMetaRecord &record) {
       }
     }
   }
-  return mergeResultRecords(std::span<const ReplaySummary>{}, projected,
-                            std::span<const ir::IrRemoteScore>{},
-                            std::string_view{}, std::string_view{});
+  return musicSelectChartRecords(
+      record, main_menu_profile::Selections::fromSettings(context.settings),
+      {.percent = context.settings.selectedPlaybackRatePercent,
+       .mode = context.settings.selectedPlaybackMode}, projected);
 }
 
 void MusicSelectScene::launchChartReplay(
