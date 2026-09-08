@@ -5,6 +5,14 @@
 #include "../input/SDLPointerEvent.h"
 
 namespace scene_event_routing {
+template <typename SceneType>
+void dispatchApplicationBackgroundChange(SceneType *currentScene,
+                                         bool background) {
+  if (currentScene != nullptr) {
+    currentScene->onApplicationBackgroundChanged(background);
+  }
+}
+
 [[nodiscard]] inline constexpr bool shouldDispatchToScene(Uint32 eventType) {
   switch (eventType) {
   case SDL_QUIT:

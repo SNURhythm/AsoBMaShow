@@ -62,6 +62,21 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_background_audio_resumes_only_for_active_foreground_selector(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signatures = ["void MusicSelectScene::onPause()",
+                      "void MusicSelectScene::onResume()"]
+        methods = "\n".join(signature + function_body(source, signature)
+                            for signature in signatures)
+        background = "void MusicSelectScene::onApplicationBackgroundChanged(bool background)"
+        methods += "\n" + background + (function_body(source, background)
+                                        if background in source else " {}")
+        fixture = (ROOT / "tests/music_select_scene_background_fixture.cpp").read_text()
+        for enabled in (0, 1):
+            self.compile_and_run(
+                f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n"
+                + fixture.replace("SCENE_METHODS", methods))
+
     def test_fixture_uses_configured_msvc_and_clang_cl_frontends(self):
         for compiler_id in ("MSVC", "Clang"):
             command = fixture_compile_command(

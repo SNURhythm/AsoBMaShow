@@ -948,6 +948,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (previous == background) {
       return;
     }
+    scene_event_routing::dispatchApplicationBackgroundChange(
+        sceneManager.currentScene, background);
     context.setIrApplicationActive(!background);
     context.jukebox.setVisualsSuspended(background);
     if (!background) {

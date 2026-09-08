@@ -27,6 +27,7 @@ struct Worker {
 };
 
 struct MusicSelectScene {
+  bool sceneActive_ = true;
   Worker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<int> preloadedChart_;

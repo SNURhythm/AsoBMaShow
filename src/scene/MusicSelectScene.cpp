@@ -467,6 +467,7 @@ MusicSelectScene::MusicSelectScene(
           musicSelectSkinEntryPath(activationRequest_.activation.entry)) {}
 
 void MusicSelectScene::init() {
+  sceneActive_ = true;
   started_ = std::chrono::steady_clock::now();
   // Search the user-configured sound-set folder (when set) before the bundled
   // `assets/` root, resolving each sound across Beatoraja's extension order.
@@ -517,6 +518,9 @@ void MusicSelectScene::init() {
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
       musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm),
       selectBgm);
+  if (context.appInBackground.load(std::memory_order_acquire)) {
+    onApplicationBackgroundChanged(true);
+  }
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
       selectSoundRoots,
       musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
@@ -630,6 +634,7 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  sceneActive_ = false;
   audio::diag::SelectAudioLog("[bgm] scene onPause");
   stopPreloadWorker();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -649,24 +654,48 @@ void MusicSelectScene::onPause() {
 }
 
 void MusicSelectScene::onResume() {
+  sceneActive_ = true;
   audio::diag::SelectAudioLog("[bgm] scene onResume");
   launching_ = false;
   hideDecideOverlay();
+  const bool background =
+      context.appInBackground.load(std::memory_order_acquire);
+  if (background) onApplicationBackgroundChanged(true);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (reactivateSkinOnResume_) {
     reactivateSkinOnResume_ = false;
     if (!reactivateSkinAfterSettings()) return;
   }
-  if (skinSession_) skinSession_->resumeAudio();
+  if (!background && !failed_ && skinSession_) skinSession_->resumeAudio();
 #endif
   syncToolbar();
   reloadLibrary();
   if (!failed_) {
     // Resume the looping select BGM after pause silenced it.
-    if (previewAudio_) previewAudio_->resumeDefaultBgm();
+    if (!background && previewAudio_) previewAudio_->resumeDefaultBgm();
     selectedBarMoved();
     startInputListening();
   }
+}
+
+void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
+  if (background) {
+    previewController_.reset();
+    if (previewAudio_) previewAudio_->silence();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (skinSession_) skinSession_->suspendAudio();
+#endif
+    return;
+  }
+  if (!sceneActive_ || failed_ || launching_ ||
+      context.appInBackground.load(std::memory_order_acquire)) {
+    return;
+  }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinSession_) skinSession_->resumeAudio();
+#endif
+  if (previewAudio_) previewAudio_->resumeDefaultBgm();
+  selectedBarMoved();
 }
 
 void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
@@ -4081,6 +4110,10 @@ void MusicSelectScene::finalizeSkinPreparationIfReady() {
     return;
   }
   skinSession_ = std::move(finalized.session);
+  if (!sceneActive_ ||
+      context.appInBackground.load(std::memory_order_acquire)) {
+    skinSession_->suspendAudio();
+  }
   if (skinLoadingView_ != nullptr) skinLoadingView_->setVisible(false);
 }
 
@@ -4168,6 +4201,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  sceneActive_ = false;
   folderStatusLoader_.reset();
   launchCancelled_.store(true, std::memory_order_release);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

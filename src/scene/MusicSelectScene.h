@@ -55,6 +55,7 @@ public:
   void init() override;
   void onPause() override;
   void onResume() override;
+  void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &) override;
   void update(float) override;
   void renderScene() override;
@@ -266,6 +267,7 @@ private:
   View *errorView_ = nullptr;
   bool failed_ = false;
   bool launching_ = false;
+  bool sceneActive_ = false;
   bool reactivateSkinOnResume_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
