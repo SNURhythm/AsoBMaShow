@@ -1001,6 +1001,84 @@ void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
   }));
 }
 
+void testDirectoryRecordsIncludeDirectChartsAndRawDescendants() {
+  TempDirectory temporary;
+  ChartRepository charts(temporary.path() / "chart.db");
+  auto session = charts.OpenSession();
+  assert(session);
+  const auto root = temporary.path() / "library";
+  auto direct = chartMeta(root);
+  assert(session->InsertChartMeta(direct));
+  const MusicSelectBar directory{.id = {"folder:" + root.string()},
+                                 .kind = skin::MusicSelectBarKind::Folder,
+                                 .directoryPath = root};
+  auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, directory, 1);
+  assert(records.size() == 1);
+  assert(records.front().meta.BmsPath == direct.BmsPath);
+  MusicSelectRepositoryMetadata directMetadata;
+  directMetadata.entries.push_back({.path = fspath_to_path_t(root)});
+  const auto directProjection = MusicSelectRepositoryProjection{}.project(
+      {.records = records, .metadata = &directMetadata});
+  const auto *directFolder = directProjection.find(directory.id);
+  assert(directFolder && directFolder->children.size() == 1);
+  assert(directFolder->presentation.folderRankCounts[0] == 1);
+  const auto *directSong = directProjection.find(directFolder->children.front());
+  assert(directSong && directSong->kind == skin::MusicSelectBarKind::Song);
+  assert(directSong->chart && directSong->chart->meta.BmsPath == direct.BmsPath);
+
+  auto duplicate = direct;
+  duplicate.Folder = root / "nested" / "leaf";
+  duplicate.BmsPath = duplicate.Folder / "copy.bms";
+  assert(session->InsertChartMeta(duplicate));
+  auto immediate = direct;
+  immediate.Folder = root / "song";
+  immediate.BmsPath = immediate.Folder / "immediate.bms";
+  assert(session->InsertChartMeta(immediate));
+  auto sibling = direct;
+  sibling.Folder = temporary.path() / "library-other";
+  sibling.BmsPath = sibling.Folder / "other.bms";
+  assert(session->InsertChartMeta(sibling));
+  records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, directory, 1);
+  assert(records.size() == 3);
+  assert(std::ranges::any_of(records, [&](const auto &record) {
+    return record.meta.BmsPath == duplicate.BmsPath;
+  }));
+  const auto status = MusicSelectRepositoryProjection::loadFolderStatus(
+      *session, directory, {});
+  assert(status.folderRankCounts[0] == 3);
+  MusicSelectRepositoryMetadata metadata;
+  metadata.entries.push_back({.path = fspath_to_path_t(root)});
+  const auto projection = MusicSelectRepositoryProjection{}.project(
+      {.records = records, .metadata = &metadata});
+  const auto *folder = projection.find(directory.id);
+  assert(folder && folder->children.size() == 1);
+  assert(folder->presentation.folderRankCounts[0] == 3);
+  assert(projection.find(folder->children.front())->kind ==
+         skin::MusicSelectBarKind::Song);
+
+  const auto leafRecords = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, {.kind = skin::MusicSelectBarKind::Folder,
+                 .directoryPath = duplicate.Folder}, 1);
+  assert(leafRecords.size() == 1);
+  assert(leafRecords.front().meta.BmsPath == duplicate.BmsPath);
+  MusicSelectRepositoryMetadata leafMetadata;
+  leafMetadata.entries.push_back({.path = fspath_to_path_t(duplicate.Folder)});
+  const auto leafProjection = MusicSelectRepositoryProjection{}.project(
+      {.records = leafRecords, .metadata = &leafMetadata});
+  const auto *leafFolder = leafProjection.find(
+      {"folder:" + duplicate.Folder.string()});
+  assert(leafFolder && leafFolder->children.size() == 1);
+  assert(leafFolder->presentation.folderRankCounts[0] == 1);
+  const auto *leafSong = leafProjection.find(leafFolder->children.front());
+  assert(leafSong && leafSong->kind == skin::MusicSelectBarKind::Song);
+  assert(leafSong->chart && leafSong->chart->meta.BmsPath == duplicate.BmsPath);
+  assert(MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, {.kind = skin::MusicSelectBarKind::Folder,
+                 .directoryPath = root / "empty"}, 1).empty());
+}
+
 void testRawExactFolderKeepsNonpreferredDuplicate() {
   TempDirectory temporary;
   ChartRepository charts(temporary.path() / "chart.db");
@@ -1245,8 +1323,9 @@ void testExactFolderQuery() {
   const auto categoryRecords = MusicSelectRepositoryProjection::loadDirectoryRecords(
       *session, {.kind = skin::MusicSelectBarKind::Folder,
                  .directoryPath = "packs"}, 1);
-  assert(categoryRecords.empty());
+  assert(categoryRecords.size() == 4);
 
+  assert(session->HasChartMetaForParentFolder("library"));
   const auto probeSql = tracedStatementStartingWith("SELECT 1 FROM chart_meta cm");
   assert(!probeSql.empty());
   assert(probeSql.find("ORDER BY") == std::string::npos);
@@ -1309,7 +1388,7 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
 
   std::stop_source cancelled;
   readCancellation = &cancelled;
-  cancelReadSql = "SELECT 1 FROM chart_meta cm";
+  cancelReadSql = "@recursive_folder";
   cancelReadAfterRows = 0;
   observedReadRows = 0;
   {
@@ -1326,7 +1405,7 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
     threw = true;
   }
   assert(threw && cancelled.stop_requested());
-  assert(!traced("@recursive_folder"));
+  assert(traced("@recursive_folder"));
 
   ChartMetaQuery query;
   query.recursiveFolder = "library";
@@ -1808,6 +1887,7 @@ void testMetadataFolderMergePreservesNormalizedDuplicatesAndScales() {
 }
 
 int main() {
+  testDirectoryRecordsIncludeDirectChartsAndRawDescendants();
   testMetadataFolderMergePreservesNormalizedDuplicatesAndScales();
   testRawExactFolderKeepsNonpreferredDuplicate();
   testScanBatchCommitAndRollback();

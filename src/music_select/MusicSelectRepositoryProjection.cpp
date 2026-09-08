@@ -486,6 +486,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
   for (const auto &record : input.records) {
     const auto folder = physicalFolder(record);
     const auto parent = folder.parent_path();
+    ensureFolder(folder).records.push_back(&record);
     ensureFolder(parent).records.push_back(&record);
     const auto root = std::ranges::find_if(
         physicalRoots, [&](const auto &candidate) {

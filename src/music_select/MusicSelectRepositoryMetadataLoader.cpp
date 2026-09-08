@@ -21,8 +21,6 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   query.rawSongData = true;
   switch (directory.kind) {
   case skin::MusicSelectBarKind::Folder:
-    if (!session.HasChartMetaForParentFolder(directory.directoryPath, stop)) return {};
-    checkCancelled();
     query.recursiveFolder = directory.directoryPath;
     break;
   case skin::MusicSelectBarKind::Hash:
