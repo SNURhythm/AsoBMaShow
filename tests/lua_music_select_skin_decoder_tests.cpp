@@ -816,7 +816,16 @@ void testInstalledAcceptanceSkinsDecodeWhenRequested() {
 
 } // namespace
 
+#if ASOBMASHOW_SETTINGS_RETENTION_TESTS
+int musicSelectSettingsRuntimeTests();
+#endif
+
 int main(int argc, char **argv) {
+#if ASOBMASHOW_SETTINGS_RETENTION_TESTS
+  if (argc == 2 && std::string_view(argv[1]) == "--settings-retention") {
+    return musicSelectSettingsRuntimeTests();
+  }
+#endif
   testType5FolderNumbersResolveNumericAndNamedProperties();
   testConfiguredType5SongListPreservesEveryAuthoredValue();
   testType5DestinationRemainsRequired();

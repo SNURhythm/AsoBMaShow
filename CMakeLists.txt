@@ -2177,6 +2177,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
     )
+    if (TARGET lua_music_select_skin_decoder_tests)
+        set(SELECTOR_SETTINGS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/music_select_settings_runtime_fixture.cpp)
+        add_custom_command(OUTPUT ${SELECTOR_SETTINGS_FIXTURE}
+            COMMAND ${Python3_EXECUTABLE} -m tests.music_select_settings_runtime_fixture
+                    --output ${SELECTOR_SETTINGS_FIXTURE}
+            DEPENDS tests/music_select_settings_runtime_fixture.py
+                    tests/music_select_settings_runtime_fixture.cpp
+                    tests/music_select_error_flow_contract_tests.py
+                    src/scene/MusicSelectScene.cpp src/scene/MusicSelectScene.h
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            VERBATIM)
+        target_sources(lua_music_select_skin_decoder_tests PRIVATE
+            ${SELECTOR_SETTINGS_FIXTURE}
+            src/music_select/MusicSelectLaunchPolicy.cpp)
+        set_source_files_properties(tests/lua_music_select_skin_decoder_tests.cpp
+            PROPERTIES COMPILE_DEFINITIONS ASOBMASHOW_SETTINGS_RETENTION_TESTS=1)
+        add_test(NAME music_select_settings_runtime
+            COMMAND lua_music_select_skin_decoder_tests --settings-retention)
+        set_tests_properties(music_select_settings_runtime PROPERTIES
+            ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        )
+    endif()
     add_test(NAME main_menu_preview_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/main_menu_preview_lifecycle_tests.py -v)

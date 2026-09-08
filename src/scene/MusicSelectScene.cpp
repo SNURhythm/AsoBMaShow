@@ -4437,6 +4437,16 @@ void MusicSelectScene::finalizeSkinPreparationIfReady() {
 
 bool MusicSelectScene::activateSkin(
     skin::GameplaySkinActivationRequest request) {
+  const SkinActivationIdentity identity{
+      .profileId = request.profileId,
+      .entry = request.activation.entry,
+      .revisionDigest = request.activation.revision.revision().lowercaseSha256,
+      .revisionRoot = request.activation.revision.root(),
+      .configuration = request.activation.reconciledSettings,
+      .configurationDigest = request.activation.configurationDigest,
+      .viewport = request.viewport,
+      .safetyLevel = request.safetyLevel};
+  if (!failed_ && skinSession_ && activeSkinIdentity_ == identity) return true;
   cancelSkinPreparation();
   skinSession_.reset();
   failed_ = false;
@@ -4449,6 +4459,7 @@ bool MusicSelectScene::activateSkin(
         .message = "Music-select skin session services are unavailable."}});
     return false;
   }
+  activeSkinIdentity_ = identity;
   skinPreparationStop_ = std::stop_source{};
   const auto initialGeneration =
       context.inputDeviceRegistry.legacyInputGeneration(

@@ -289,6 +289,18 @@ private:
   bool sceneActive_ = false;
   bool reactivateSkinOnResume_ = false;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  struct SkinActivationIdentity {
+    skin::SkinProfileId profileId;
+    skin::SkinEntryId entry;
+    std::string revisionDigest;
+    std::filesystem::path revisionRoot;
+    skin::EntryProfileSettings configuration;
+    std::string configurationDigest;
+    skin::ViewportSettings viewport;
+    skin::SkinSafetyLevel safetyLevel;
+    bool operator==(const SkinActivationIdentity &) const = default;
+  };
+  std::optional<SkinActivationIdentity> activeSkinIdentity_;
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
   std::future<skin::MusicSelectSkinSessionPreparationResult>
       skinPreparation_;
