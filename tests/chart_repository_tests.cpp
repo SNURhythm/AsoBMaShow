@@ -1763,7 +1763,52 @@ void testEntryUpsertPreservesOriginalDatabasePathKey() {
 
 } // namespace
 
+void testMetadataFolderMergePreservesNormalizedDuplicatesAndScales() {
+  TempDirectory temporary;
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  Database database = openDatabase(databasePath);
+  assert(database);
+  assert(execute(database.get(),
+      "INSERT INTO folder(path,date,adddate) VALUES "
+      "('/songs/alias/../kept',123,456),('/songs/kept',789,987)"));
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,md5,sha256) VALUES "
+      "('/songs/kept/chart.bms','/songs/kept','',''),"
+      "('/songs/new/a.bms','/songs/alias/../new','',''),"
+      "('/songs/new/b.bms','/songs/new','','')"));
+  const auto originalFolders = session->SelectFolderRecords();
+  const auto merged = MusicSelectRepositoryProjection::loadMetadata(*session, 0);
+  assert(merged.folders.size() == 3);
+  for (std::size_t index = 0; index < originalFolders.size(); ++index) {
+    assert(merged.folders[index].path == originalFolders[index].path);
+    assert(merged.folders[index].dateSeconds == originalFolders[index].dateSeconds);
+    assert(merged.folders[index].addDateSeconds == originalFolders[index].addDateSeconds);
+  }
+  assert(std::filesystem::path(merged.folders.back().path).lexically_normal() ==
+         std::filesystem::path("/songs/new"));
+  assert(merged.folders.back().dateSeconds == 0);
+  assert(merged.folders.back().addDateSeconds == 0);
+  assert(execute(database.get(),
+      "WITH RECURSIVE sequence(number) AS (SELECT 1 UNION ALL "
+      "SELECT number+1 FROM sequence WHERE number < 12000) "
+      "INSERT INTO chart_meta(path,folder,md5,sha256) SELECT "
+      "'/library/folder-'||number||'/chart.bms',"
+      "'/library/folder-'||number,'','' FROM sequence"));
+  const auto started = std::chrono::steady_clock::now();
+  const auto large = MusicSelectRepositoryProjection::loadMetadata(*session, 0);
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  std::fprintf(stderr, "12000-folder metadata merge: %.3f seconds\n",
+               std::chrono::duration<double>(elapsed).count());
+  assert(large.folders.size() == 12003);
+  assert(elapsed < std::chrono::seconds(5));
+}
+
 int main() {
+  testMetadataFolderMergePreservesNormalizedDuplicatesAndScales();
   testRawExactFolderKeepsNonpreferredDuplicate();
   testScanBatchCommitAndRollback();
   testScanBatchRetainsSessionStorage();

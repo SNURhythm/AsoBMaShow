@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <charconv>
 #include <stdexcept>
+#include <unordered_set>
 
 std::vector<ChartMetaRecord>
 MusicSelectRepositoryProjection::loadDirectoryRecords(
@@ -100,13 +101,14 @@ MusicSelectRepositoryMetadata MusicSelectRepositoryProjection::loadMetadata(
   MusicSelectRepositoryMetadata metadata;
   metadata.entries = session.SelectEffectiveEntries();
   metadata.folders = session.SelectFolderRecords();
-  for (const auto &path : session.SelectChartMetaFolders()) {
-    const auto exists = std::ranges::any_of(
-        metadata.folders, [&](const ChartFolderRecord &folder) {
-          return std::filesystem::path(folder.path).lexically_normal() ==
-                 path.lexically_normal();
-        });
-    if (!exists) {
+  const auto chartFolders = session.SelectChartMetaFolders();
+  std::unordered_set<std::filesystem::path> folderPaths;
+  folderPaths.reserve(metadata.folders.size() + chartFolders.size());
+  for (const auto &folder : metadata.folders) {
+    folderPaths.insert(std::filesystem::path(folder.path).lexically_normal());
+  }
+  for (const auto &path : chartFolders) {
+    if (folderPaths.insert(path.lexically_normal()).second) {
       metadata.folders.push_back({.path = fspath_to_path_t(path)});
     }
   }
