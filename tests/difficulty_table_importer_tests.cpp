@@ -12,7 +12,17 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
+
+#if !defined(_WIN32)
+#include <arpa/inet.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -132,6 +142,124 @@ public:
     sqlite3_reset_auto_extension();
   }
 };
+
+#if !defined(_WIN32)
+class LoopbackTableServer {
+public:
+  LoopbackTableServer(std::string header, std::string data,
+                      bool contentLength)
+      : header_(std::move(header)), data_(std::move(data)),
+        contentLength_(contentLength) {
+    listener_ = ::socket(AF_INET, SOCK_STREAM, 0);
+    assert(listener_ >= 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    assert(::bind(listener_, reinterpret_cast<sockaddr *>(&address),
+                  sizeof(address)) == 0);
+    assert(::listen(listener_, 4) == 0);
+    socklen_t addressSize = sizeof(address);
+    assert(::getsockname(listener_, reinterpret_cast<sockaddr *>(&address),
+                         &addressSize) == 0);
+    url_ = "http://127.0.0.1:" + std::to_string(ntohs(address.sin_port)) +
+           "/header.json";
+    worker_ = std::jthread([this](std::stop_token stop) {
+      while (!stop.stop_requested()) {
+        pollfd pending{listener_, POLLIN, 0};
+        if (::poll(&pending, 1, 50) <= 0) continue;
+        const int client = ::accept(listener_, nullptr, nullptr);
+        if (client < 0) return;
+#if defined(__APPLE__)
+        const int noSigPipe = 1;
+        ::setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe,
+                      sizeof(noSigPipe));
+#endif
+        const timeval timeout{2, 0};
+        ::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        ::setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+        std::string request;
+        char buffer[4096];
+        while (request.find("\r\n\r\n") == std::string::npos &&
+               request.size() < sizeof(buffer)) {
+          const auto received = ::recv(client, buffer, sizeof(buffer), 0);
+          if (received <= 0) break;
+          request.append(buffer, static_cast<std::size_t>(received));
+        }
+        const auto &body = request.starts_with("GET /data.json ")
+                               ? data_ : header_;
+        std::string response = "HTTP/1.1 200 OK\r\nConnection: close\r\n";
+        if (contentLength_) {
+          response += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+        }
+        response += "\r\n";
+        if (sendAll(client, response)) sendAll(client, body);
+        ::close(client);
+      }
+    });
+  }
+
+  ~LoopbackTableServer() {
+    worker_.request_stop();
+    worker_.join();
+    ::close(listener_);
+  }
+
+  const std::string &url() const { return url_; }
+
+private:
+  static bool sendAll(int client, std::string_view bytes) {
+    while (!bytes.empty()) {
+#if defined(MSG_NOSIGNAL)
+      constexpr int flags = MSG_NOSIGNAL;
+#else
+      constexpr int flags = 0;
+#endif
+      const auto sent = ::send(client, bytes.data(),
+                               std::min(bytes.size(), std::size_t{4096}), flags);
+      if (sent <= 0) return false;
+      bytes.remove_prefix(static_cast<std::size_t>(sent));
+    }
+    return true;
+  }
+
+  int listener_ = -1;
+  std::string header_;
+  std::string data_;
+  bool contentLength_;
+  std::string url_;
+  std::jthread worker_;
+};
+
+void testDesktopDownloadsEnforceIncrementalResponseBudget() {
+  constexpr std::size_t responseBudget = 16 * 1024 * 1024;
+  for (const bool oversizedHeader : {false, true}) {
+    for (const auto responseSize :
+         {responseBudget - 1, responseBudget, responseBudget + 1}) {
+      Fixture fixture;
+      auto &padded = oversizedHeader ? fixture.headerJson : fixture.dataJson;
+      padded.resize(responseSize, ' ');
+      LoopbackTableServer server(fixture.headerJson, fixture.dataJson,
+                                 responseSize < responseBudget);
+      TempDirectory temporary;
+      ChartRepository repository(temporary.path() / "chart.db");
+      assert(repository.EnsureReady());
+      auto session = repository.OpenSession();
+      assert(session.has_value());
+      DifficultyTableImporter importer;
+      std::string error;
+      const bool imported = importer.ImportFromUrl(*session, server.url(), &error);
+      if (responseSize > responseBudget) {
+        assert(!imported);
+        assert(error.find("16 MiB") != std::string::npos);
+        assert(session->SelectDifficultyTables().empty());
+      } else {
+        assert(imported);
+        assert(session->SelectDifficultyTables().size() == 1);
+      }
+    }
+  }
+}
+#endif
 
 void testParseAndReplacementRollback() {
   const Fixture fixture;
@@ -365,6 +493,9 @@ void testListImportKeepsBoundedConcurrencyAndSkipsExistingSources() {
 } // namespace
 
 int main() {
+#if !defined(_WIN32)
+  testDesktopDownloadsEnforceIncrementalResponseBudget();
+#endif
   testParseAndReplacementRollback();
   testInjectedFetcherAndProgress();
   testHttpsTableRejectsInsecureDataUrl();

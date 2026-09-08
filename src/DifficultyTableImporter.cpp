@@ -112,11 +112,23 @@ std::optional<std::string> readTextFile(const std::filesystem::path &path) {
 #if !(TARGET_OS_IOS || TARGET_OS_SIMULATOR)
 std::once_flag curlInitFlag;
 
+constexpr std::size_t kMaxTextDownloadBytes = 16 * 1024 * 1024;
+
+struct DifficultyTableCurlResponse {
+  std::string body;
+  bool sizeLimitExceeded = false;
+};
+
 size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
                           void *userdata) {
+  auto *response = static_cast<DifficultyTableCurlResponse *>(userdata);
+  if (size != 0 &&
+      nmemb > (kMaxTextDownloadBytes - response->body.size()) / size) {
+    response->sizeLimitExceeded = true;
+    return 0;
+  }
   const size_t byteCount = size * nmemb;
-  auto *response = static_cast<std::string *>(userdata);
-  response->append(ptr, byteCount);
+  response->body.append(ptr, byteCount);
   return byteCount;
 }
 
@@ -185,7 +197,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     return std::nullopt;
   }
 
-  std::string body;
+  DifficultyTableCurlResponse response;
   char curlError[CURL_ERROR_SIZE] = {};
   curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
@@ -194,7 +206,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
   curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
   curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
-  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &response);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
@@ -212,8 +224,10 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
   if (result != CURLE_OK) {
     if (errorMessage != nullptr) {
-      *errorMessage =
-          curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
+      *errorMessage = response.sizeLimitExceeded
+                          ? "Text download exceeds the 16 MiB limit: " + url
+                          : curlError[0] != '\0' ? curlError
+                                                : curl_easy_strerror(result);
     }
     return std::nullopt;
   }
@@ -225,7 +239,7 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     return std::nullopt;
   }
   return difficultyTableCheckpoint(checkpoint, errorMessage)
-             ? std::optional<std::string>{std::move(body)}
+             ? std::optional<std::string>{std::move(response.body)}
              : std::nullopt;
 #endif
 }
