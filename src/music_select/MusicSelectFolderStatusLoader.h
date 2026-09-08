@@ -10,6 +10,7 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <unordered_set>
 
 class MusicSelectFolderStatusLoader final {
 public:
@@ -25,18 +26,19 @@ public:
 
   ~MusicSelectFolderStatusLoader();
   bool request(std::vector<MusicSelectBar>, std::string modeFilter,
-               int longNoteMode, Processor);
+               int longNoteMode, Processor, MusicSelectBarId priority = {});
   template <typename Process>
     requires std::is_invocable_r_v<skin::MusicSelectBarFrame, Process &,
                                     const MusicSelectBar &>
   bool request(std::vector<MusicSelectBar> bars, std::string modeFilter,
-               int longNoteMode, Process process) {
+               int longNoteMode, Process process, MusicSelectBarId priority = {}) {
     return request(std::move(bars), std::move(modeFilter), longNoteMode,
         [process = std::move(process)](const MusicSelectBar &bar,
                                        std::stop_token) mutable {
           return process(bar);
-        });
+        }, std::move(priority));
   }
+  void prioritize(const MusicSelectBarId &);
   void cancel();
   [[nodiscard]] bool retryReady();
   [[nodiscard]] std::vector<Result> takeResults();
@@ -44,12 +46,12 @@ public:
 private:
   struct Request {
     std::vector<MusicSelectBar> bars;
-    Processor process;
+    std::shared_ptr<Processor> process;
     std::uint64_t generation = 0;
-    std::stop_token stop;
   };
 
   void run(std::stop_token);
+  std::optional<std::stop_source> prioritizeLocked(const MusicSelectBarId &);
   std::mutex mutex_;
   std::condition_variable_any condition_;
   std::optional<Request> pending_;
@@ -59,6 +61,10 @@ private:
   std::string modeFilter_;
   int longNoteMode_ = -1;
   std::stop_source activeStop_;
+  std::optional<MusicSelectBarId> activeId_;
+  std::uint64_t activeGeneration_ = 0;
+  MusicSelectBarId priority_;
+  std::unordered_set<std::string> completed_;
   std::vector<MusicSelectBar> failedBars_;
   std::optional<std::chrono::steady_clock::time_point> retryAt_;
   std::jthread worker_;

@@ -62,6 +62,17 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_folder_statistics_prioritize_selection_and_survive_navigation(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        method = function_body(source, "void MusicSelectScene::requestFolderStatus(")
+        prefix = method[1:method.index("const int longNoteMode")]
+        fixture = (ROOT / "tests/music_select_folder_status_fixture.cpp").read_text()
+        self.compile_and_run(
+            fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                   .replace("SCENE_REQUEST_PREFIX", prefix),
+            [ROOT / "src/music_select/MusicSelectFolderStatusLoader.cpp",
+             ROOT / "src/music_select/MusicSelectBarManager.cpp"])
+
     def test_course_audio_failure_blocks_gameplay_and_allows_successful_retry(self):
         self.run_course_audio_fixture("testCourseAudioFailure(false)")
 

@@ -807,6 +807,9 @@ std::int64_t MusicSelectScene::elapsedMicros() const {
 
 void MusicSelectScene::requestFolderStatus(
     const MusicSelectBarManagerReadView &snapshot) {
+  const auto priority = snapshot.selectedIndex < snapshot.rows.size()
+      ? snapshot.rows[snapshot.selectedIndex].id : MusicSelectBarId{};
+  if (folderStatusLoader_) folderStatusLoader_->prioritize(priority);
   if (folderStatusRowsRevision_ == snapshot.rowsRevision) {
     if (!folderStatusRetryAt_ ||
         std::chrono::steady_clock::now() < *folderStatusRetryAt_) return;
@@ -826,6 +829,13 @@ void MusicSelectScene::requestFolderStatus(
     default: break;
     }
   }
+  for (const auto &bar : snapshot.directoryBars) {
+    if (bar.kind == skin::MusicSelectBarKind::Folder &&
+        std::ranges::find(directories, bar.id, &MusicSelectBar::id) == directories.end()) {
+      directories.push_back(bar);
+    }
+  }
+  if (directories.empty() && !folderStatusLoader_) return;
   if (!folderStatusLoader_) {
     folderStatusLoader_ = std::make_unique<MusicSelectFolderStatusLoader>();
   }
@@ -855,7 +865,7 @@ void MusicSelectScene::requestFolderStatus(
              .recentScoreImprovements = improvements ? &*improvements : nullptr,
              .modeFilter = mode,
              .selectedLongNoteMode = longNoteMode}, stop);
-      });
+      }, priority);
   if (folderStatusRetryAt_) {
     if (requested) {
       folderStatusRetryAt_.reset();
