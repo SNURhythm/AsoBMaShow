@@ -57,6 +57,21 @@ struct MusicSelectRepositoryProjectionInput {
   std::uint64_t repositoryRevision = 0;
 };
 
+class MusicSelectFolderStatusAccumulator final {
+public:
+  MusicSelectFolderStatusAccumulator(skin::MusicSelectBarFrame,
+                                    MusicSelectRepositoryProjectionInput,
+                                    std::stop_token);
+  void add(const bms_parser::ChartMeta &, bool available);
+  [[nodiscard]] skin::MusicSelectBarFrame finish();
+
+private:
+  void checkCancelled() const;
+  skin::MusicSelectBarFrame frame_;
+  MusicSelectRepositoryProjectionInput input_;
+  std::stop_token stop_;
+};
+
 class MusicSelectRepositoryProjection final {
 public:
   [[nodiscard]] static MusicSelectRepositoryMetadata

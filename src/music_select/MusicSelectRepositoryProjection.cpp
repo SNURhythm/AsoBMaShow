@@ -114,6 +114,57 @@ skin::MusicSelectCourseConstraint courseConstraint(int id) {
   return static_cast<skin::MusicSelectCourseConstraint>(id - 1);
 }
 
+}
+
+MusicSelectFolderStatusAccumulator::MusicSelectFolderStatusAccumulator(
+    skin::MusicSelectBarFrame frame, MusicSelectRepositoryProjectionInput input,
+    std::stop_token stop)
+    : frame_(std::move(frame)), input_(input), stop_(stop) {
+  checkCancelled();
+  frame_.folderLampCounts = {};
+  frame_.folderRankCounts = {};
+  frame_.lamp = 0;
+  frame_.rivalLamp = 0;
+}
+
+void MusicSelectFolderStatusAccumulator::add(const bms_parser::ChartMeta &meta,
+                                            bool available) {
+  checkCancelled();
+  if (!available || !modeMatches(input_.modeFilter, songMode(meta))) return;
+  const auto best = input_.scoreFor
+                        ? input_.scoreFor(meta, input_.selectedLongNoteMode)
+                        : std::nullopt;
+  checkCancelled();
+  const int clear = input_.clearFor
+                        ? input_.clearFor(meta, input_.selectedLongNoteMode)
+                        : best ? best->clearType : kNoClearTypeRank;
+  checkCancelled();
+  ++frame_.folderLampCounts[static_cast<std::size_t>(beatorajaClearType(clear))];
+  int rank = 0;
+  if (best && best->maxScore > 0) {
+    rank = static_cast<int>(std::clamp<std::int64_t>(
+        static_cast<std::int64_t>(best->score) * 27 / best->maxScore, 0, 27));
+  }
+  ++frame_.folderRankCounts[static_cast<std::size_t>(rank)];
+}
+
+skin::MusicSelectBarFrame MusicSelectFolderStatusAccumulator::finish() {
+  const auto firstLamp = std::ranges::find_if(
+      frame_.folderLampCounts, [](int count) { return count > 0; });
+  frame_.lamp = firstLamp == frame_.folderLampCounts.end()
+                    ? 0
+                    : static_cast<int>(std::distance(
+                          frame_.folderLampCounts.begin(), firstLamp));
+  checkCancelled();
+  return std::move(frame_);
+}
+
+void MusicSelectFolderStatusAccumulator::checkCancelled() const {
+  if (stop_.stop_requested()) throw std::runtime_error("folder status cancelled");
+}
+
+namespace {
+
 struct ProjectionBuilder {
   MusicSelectRepositoryProjectionInput input;
   MusicSelectProjection result;
@@ -192,47 +243,11 @@ struct ProjectionBuilder {
   void aggregate(MusicSelectBar &directory,
                  std::span<const ChartMetaRecord> records,
                  std::stop_token stop = {}) const {
-    const auto checkCancelled = [&] {
-      if (stop.stop_requested()) throw std::runtime_error("folder status cancelled");
-    };
-    checkCancelled();
-    auto frame = directory.presentation;
-    frame.folderLampCounts = {};
-    frame.folderRankCounts = {};
-    frame.lamp = 0;
-    frame.rivalLamp = 0;
+    MusicSelectFolderStatusAccumulator accumulator(directory.presentation, input, stop);
     for (const auto &record : records) {
-      checkCancelled();
-      if (record.unavailable || record.meta.BmsPath.empty() ||
-          !modeMatches(input.modeFilter, songMode(record.meta))) {
-        continue;
-      }
-      const auto best = score(record);
-      checkCancelled();
-      const int lamp = clearLamp(record, best);
-      checkCancelled();
-      ++frame
-            .folderLampCounts[static_cast<std::size_t>(lamp)];
-      int rank = 0;
-      if (best && best->maxScore > 0) {
-        rank = static_cast<int>(std::clamp<std::int64_t>(
-            static_cast<std::int64_t>(best->score) * 27 / best->maxScore,
-            0, 27));
-      }
-      ++frame
-            .folderRankCounts[static_cast<std::size_t>(rank)];
+      accumulator.add(record.meta, !record.unavailable && !record.meta.BmsPath.empty());
     }
-    const auto firstLamp = std::ranges::find_if(
-        frame.folderLampCounts,
-        [](int count) { return count > 0; });
-    frame.lamp =
-        firstLamp == frame.folderLampCounts.end()
-            ? 0
-            : static_cast<int>(std::distance(
-                  frame.folderLampCounts.begin(),
-                  firstLamp));
-    checkCancelled();
-    directory.presentation = std::move(frame);
+    directory.presentation = accumulator.finish();
   }
 
   void addCommands() {

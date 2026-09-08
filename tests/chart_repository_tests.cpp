@@ -142,12 +142,36 @@ struct PhysicalDirectoryPageObservation {
 };
 std::vector<PhysicalDirectoryPageObservation> physicalDirectoryPages;
 
+struct FolderStatisticsSqlObservation {
+  int statements = 0;
+  int rows = 0;
+  int richRows = 0;
+  int maximumColumns = 0;
+  int sorts = 0;
+};
+FolderStatisticsSqlObservation *folderStatisticsSqlObservation = nullptr;
+
 int traceStatement(unsigned mask, void *, void *statement, void *) {
   if (statement == nullptr) {
     return 0;
   }
   const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
   const std::string_view sqlText = sql != nullptr ? sql : "";
+  if (folderStatisticsSqlObservation != nullptr &&
+      sqlText.find("FROM chart_meta cm") != std::string_view::npos) {
+    auto &observation = *folderStatisticsSqlObservation;
+    if (mask == SQLITE_TRACE_STMT) ++observation.statements;
+    if (mask == SQLITE_TRACE_ROW) {
+      const int columns = sqlite3_column_count(static_cast<sqlite3_stmt *>(statement));
+      ++observation.rows;
+      if (columns >= 29) ++observation.richRows;
+      observation.maximumColumns = std::max(observation.maximumColumns, columns);
+    }
+    if (mask == SQLITE_TRACE_PROFILE) {
+      observation.sorts += sqlite3_stmt_status(static_cast<sqlite3_stmt *>(statement),
+                                               SQLITE_STMTSTATUS_SORT, 0);
+    }
+  }
   if (sqlText.find("LIMIT @selector_limit OFFSET @selector_offset") !=
       std::string_view::npos) {
     std::lock_guard lock(traceMutex);
@@ -3024,6 +3048,199 @@ namespace {
 
 using BenchmarkClock = std::chrono::steady_clock;
 
+void testPhysicalFolderStatisticsStreamWithoutRichRowsOrSorting() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root, 4096);
+  auto session = repository.OpenSession();
+  assert(session);
+  FolderStatisticsSqlObservation observation;
+  folderStatisticsSqlObservation = &observation;
+  clearPhysicalDirectoryTrace();
+  const auto status = MusicSelectRepositoryProjection::loadFolderStatus(
+      *session, physicalDirectory(root), {});
+  folderStatisticsSqlObservation = nullptr;
+  assert(status.folderRankCounts[0] == 4096);
+  assert(observation.statements == 1 && observation.rows == 4096);
+  assert(observation.richRows == 0);
+  assert(observation.maximumColumns <= 6 && observation.sorts == 0);
+  assert(!traced("chart_favorites") && !traced("FROM review"));
+  for (const auto *column : {"title", "md5", "stage_file", "difficulty",
+                            "player", "total_notes", "length", "has_bga"}) {
+    deniedChartReadColumn = column;
+    const auto narrow = MusicSelectRepositoryProjection::loadFolderStatus(
+        *session, physicalDirectory(root), {});
+    assert(narrow.folderRankCounts[0] == 4096);
+  }
+  deniedChartReadColumn.clear();
+
+  for (const bool cancelInClear : {false, true}) {
+    std::stop_source cancellation;
+    int scoreReads = 0;
+    int clearReads = 0;
+    observation = {};
+    folderStatisticsSqlObservation = &observation;
+    bool threw = false;
+    try {
+      (void)MusicSelectRepositoryProjection::loadFolderStatus(
+          *session, physicalDirectory(root),
+          {.scoreFor = [&](const bms_parser::ChartMeta &, int) {
+             if (++scoreReads == 3 && !cancelInClear) cancellation.request_stop();
+             return std::optional<ScoreBestSnapshot>{};
+           },
+           .clearFor = [&](const bms_parser::ChartMeta &, int) {
+             if (++clearReads == 3 && cancelInClear) cancellation.request_stop();
+             return kClearTypeHardClearRank;
+           }}, cancellation.get_token());
+    } catch (const std::runtime_error &) {
+      threw = true;
+    }
+    folderStatisticsSqlObservation = nullptr;
+    assert(threw && scoreReads == 3 && clearReads == (cancelInClear ? 3 : 2));
+    assert(observation.rows == 3 && observation.sorts == 0);
+  }
+  assert(MusicSelectRepositoryProjection::loadFolderStatus(
+      *session, physicalDirectory(root), {}).folderRankCounts[0] == 4096);
+}
+
+void testPhysicalFolderStatisticsMatchRawAggregationContracts() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto database = openDatabase(repository.DatabasePath());
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,sha256,keys,ln_mode,total_long_notes,"
+      "total_backspin_notes,difficulty,md5) SELECT *, '' FROM (VALUES "
+      "('library/a.bms','library','shared',7,0,3,0,1),"
+      "('library/nested/copy.bms','library/nested','shared',7,0,3,0,5),"
+      "('library/backspin.bms','','backspin',14,0,0,2,2),"
+      "('library/fixed.bms',NULL,'fixed',24,3,1,0,3),"
+      "('library/plain.bms','library','plain',5,0,0,0,0),"
+      "('library/unknown.bms','library','',NULL,0,NULL,NULL,NULL),"
+      "('library/empty.bms','library','',9,2,2,0,4),"
+      "('','library','no-path',7,1,1,0,4),"
+      "(NULL,'library','null-path',7,1,1,0,4),"
+      "('library-other/out.bms','library-other','outside',7,1,1,0,4),"
+      "('C:\\library\\song.bms','C:\\library','windows',48,1,1,0,4),"
+      "('C:\\library\\nested\\song.bms',NULL,'windows',10,2,0,1,4),"
+      "('/absolute/chart.bms','/absolute','absolute',7,0,1,0,4))"));
+  assert(execute(database.get(),
+      "INSERT INTO review(sha256,favorite) VALUES('shared',12),('',4)"));
+  auto session = repository.OpenSession();
+  assert(session);
+  const auto scoreFor = [](const bms_parser::ChartMeta &meta, int selected) {
+    const int mode = scoreLongNoteModeForClearLamp(meta, selected);
+    if (meta.SHA256.empty() || meta.SHA256 == "plain") {
+      return std::optional<ScoreBestSnapshot>{};
+    }
+    return std::optional<ScoreBestSnapshot>{{.score = mode * 100, .maxScore = 300,
+                                            .clearType = kClearTypeFailedRank}};
+  };
+  const auto clearFor = [](const bms_parser::ChartMeta &meta, int selected) {
+    if (meta.SHA256.empty()) return kNoClearTypeRank;
+    const int mode = scoreLongNoteModeForClearLamp(meta, selected);
+    return mode == 3 ? kClearTypeFullComboRank : kClearTypeHardClearRank;
+  };
+  for (const auto &root : std::vector<std::filesystem::path>{
+           "library", "library/", "library/nested", "absent", "", "/",
+           R"(C:\library)", "C:/library/"}) {
+    const auto directory = physicalDirectory(root);
+    auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+        *session, directory, 0);
+    for (const auto *filter : {"ALL", "7KEY", "14KEY", "9KEY", "5KEY", "10KEY",
+                               "24KEY", "48KEY", "SINGLE", "DOUBLE", "unknown"}) {
+      for (int selected = 1; selected <= 3; ++selected) {
+        MusicSelectRepositoryProjectionInput input{
+            .records = records, .scoreFor = scoreFor, .clearFor = clearFor,
+            .modeFilter = filter, .selectedLongNoteMode = selected};
+        auto expected = directory;
+        MusicSelectRepositoryProjection::updateFolderStatus(expected, input);
+        const auto actual = MusicSelectRepositoryProjection::loadFolderStatus(
+            *session, directory, input);
+        assert(actual.folderLampCounts == expected.presentation.folderLampCounts);
+        assert(actual.folderRankCounts == expected.presentation.folderRankCounts);
+        assert(actual.lamp == expected.presentation.lamp);
+        if (root == "library" && std::string_view(filter) == "7KEY") {
+          assert(actual.folderRankCounts[9 * selected] == 2);
+          assert(actual.folderLampCounts[selected == 3 ? 8 : 6] == 2);
+          assert(actual.folderRankCounts[0] == 1);
+        }
+      }
+    }
+  }
+}
+
+void testSelectorAllCountSkipsPerHashReviewsOnlyWhenNoneAreHidden() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root, 4096);
+  auto database = openDatabase(repository.DatabasePath());
+  auto session = repository.OpenSession();
+  assert(session);
+  cancelReadSql = "SELECT COUNT(*) FROM (SELECT cm.sha256 FROM chart_meta cm";
+  ChartSelectorQuery query{.recursiveFolder = root};
+  assert(session->ResolveChartSelectorQuery(query) == 4096);
+  const int unhiddenSteps = observedReadVmSteps;
+  assert(unhiddenSteps > 0 && unhiddenSteps < 4096 * 35);
+  assert(execute(database.get(),
+      "INSERT INTO review(sha256,favorite) SELECT sha256, "
+      "CASE WHEN rowid%2=0 THEN 3 ELSE NULL END FROM chart_meta"));
+  assert(session->ResolveChartSelectorQuery(query) == 4096);
+  assert(execute(database.get(), "UPDATE review SET favorite=4 WHERE rowid%10=0"));
+  assert(session->ResolveChartSelectorQuery(query) == 3687);
+  assert(observedReadVmSteps > unhiddenSteps);
+  assert(execute(database.get(),
+      "UPDATE chart_meta SET sha256='' WHERE rowid IN (1,2);"
+      "UPDATE chart_meta SET sha256='duplicate' WHERE rowid IN (3,4);"
+      "INSERT INTO review(sha256,favorite) VALUES('',8)"));
+  assert(session->ResolveChartSelectorQuery(query) == 3684);
+  assert(execute(database.get(), "DELETE FROM review"));
+  assert(session->ResolveChartSelectorQuery(query) == 4094);
+  const auto countSql = tracedStatementContaining(cancelReadSql);
+  auto nullable = openDatabase(temporary.path() / "nullable.db");
+  assert(execute(nullable.get(),
+      "CREATE TABLE chart_meta(path TEXT,folder TEXT,sha256 TEXT,title TEXT);"
+      "CREATE INDEX idx_chart_meta_selector_representative "
+      "ON chart_meta(sha256,title COLLATE NOCASE,path,folder);"
+      "CREATE TABLE review(sha256 TEXT PRIMARY KEY,favorite INTEGER);"
+      "INSERT INTO chart_meta(path,folder,sha256) VALUES "
+      "('/songs/a','/songs','same'),('/songs/b','/songs','same'),"
+      "('/songs/c','/songs',''),('/songs/d','/songs',''),"
+      "('/songs/e','/songs',NULL),('/songs/f','/songs',NULL)"));
+  const auto nullableCount = [&] {
+    SqliteStatementHandle statement;
+    assert(prepareSqliteStatement(nullable.get(), countSql, statement) == SQLITE_OK);
+    assert(sqlite3_bind_text(statement, sqlite3_bind_parameter_index(
+        statement, "@recursive_folder"), "/songs", -1, SQLITE_STATIC) == SQLITE_OK);
+    assert(sqlite3_step(statement) == SQLITE_ROW);
+    return sqlite3_column_int(statement, 0);
+  };
+  assert(nullableCount() == 3);
+  assert(execute(nullable.get(),
+      "INSERT INTO review(sha256,favorite) VALUES(NULL,12),('same',NULL),('',3)"));
+  assert(nullableCount() == 3);
+  assert(execute(nullable.get(), "UPDATE review SET favorite=8 WHERE sha256=''"));
+  assert(nullableCount() == 2);
+  assert(execute(nullable.get(), "UPDATE review SET favorite=4 WHERE sha256='same'"));
+  assert(nullableCount() == 1);
+  assert(execute(database.get(),
+      "INSERT INTO review(sha256,favorite) SELECT DISTINCT sha256,3 FROM chart_meta;"
+      "INSERT INTO chart_meta(path,folder,sha256,md5) "
+      "VALUES('/tiny/song.bms','/tiny','tiny-song','')"));
+  query.recursiveFolder = "/tiny";
+  assert(session->ResolveChartSelectorQuery(query) == 1);
+  assert(observedReadVmSteps > 0 && observedReadVmSteps < 1000);
+  cancelReadSql.clear();
+}
+
 struct FirstPageBenchmarkSample {
   double countMillis = 0;
   double firstPageMillis = 0;
@@ -3352,6 +3569,15 @@ int main(int argc, char **argv) {
         testSelectorPathIdentityUsesNormalizedStoredAliases();
         return 0;
       }
+      if (argc == 2 && std::string_view(argv[1]) == "--physical-folder-stats-test") {
+        testPhysicalFolderStatisticsStreamWithoutRichRowsOrSorting();
+        testPhysicalFolderStatisticsMatchRawAggregationContracts();
+        return 0;
+      }
+      if (argc == 2 && std::string_view(argv[1]) == "--selector-count-guard-test") {
+        testSelectorAllCountSkipsPerHashReviewsOnlyWhenNoneAreHidden();
+        return 0;
+      }
       if (std::string_view(argv[1]) != "--benchmark-first-page") {
         throw std::invalid_argument("Unknown chart repository test argument");
       }
@@ -3362,6 +3588,9 @@ int main(int argc, char **argv) {
     }
   }
   testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder();
+  testPhysicalFolderStatisticsStreamWithoutRichRowsOrSorting();
+  testPhysicalFolderStatisticsMatchRawAggregationContracts();
+  testSelectorAllCountSkipsPerHashReviewsOnlyWhenNoneAreHidden();
   testSelectorQueryRejectsStaleSnapshots();
   testSelectorPathIdentityUsesNormalizedStoredAliases();
   testPhysicalDirectoryDurationOverflowMatchesLegacyIndex();

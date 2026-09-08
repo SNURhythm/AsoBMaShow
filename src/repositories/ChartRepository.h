@@ -115,6 +115,15 @@ struct ChartMetaRecord {
 
 struct ChartSelectorQueryResolution;
 
+struct ChartFolderStatisticsRow {
+  std::string_view sha256;
+  int keyMode = 0;
+  int longNoteMode = 0;
+  int totalLongNotes = 0;
+  int totalBackSpinNotes = 0;
+  bool hasPath = false;
+};
+
 struct ChartSelectorQuery {
   std::filesystem::path recursiveFolder;
   std::string modeFilter = "ALL";
@@ -323,6 +332,10 @@ public:
     void VisitChartMetaSelection(
         const std::filesystem::path &recursiveFolder,
         const std::function<void(const ChartMetaRecord &)> &visitor,
+        std::stop_token stop = {});
+    void VisitRawPhysicalFolderStatistics(
+        const std::filesystem::path &recursiveFolder,
+        const std::function<void(const ChartFolderStatisticsRow &)> &visitor,
         std::stop_token stop = {});
     std::size_t ResolveChartSelectorQuery(ChartSelectorQuery &query,
                                            std::stop_token stop = {});

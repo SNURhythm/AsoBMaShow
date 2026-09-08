@@ -86,6 +86,20 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
 skin::MusicSelectBarFrame MusicSelectRepositoryProjection::loadFolderStatus(
     ChartRepository::Session &session, MusicSelectBar directory,
     MusicSelectRepositoryProjectionInput input, std::stop_token stop) {
+  if (directory.kind == skin::MusicSelectBarKind::Folder) {
+    MusicSelectFolderStatusAccumulator accumulator(directory.presentation, input, stop);
+    bms_parser::ChartMeta meta;
+    session.VisitRawPhysicalFolderStatistics(directory.directoryPath,
+        [&](const ChartFolderStatisticsRow &row) {
+          meta.SHA256 = row.sha256;
+          meta.KeyMode = row.keyMode;
+          meta.LnMode = row.longNoteMode;
+          meta.TotalLongNotes = row.totalLongNotes;
+          meta.TotalBackSpinNotes = row.totalBackSpinNotes;
+          accumulator.add(meta, row.hasPath);
+        }, stop);
+    return accumulator.finish();
+  }
   auto records = loadDirectoryRecords(session, directory,
                                       input.selectedLongNoteMode,
                                       input.recentScoreImprovements, stop);

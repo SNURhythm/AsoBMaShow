@@ -1623,7 +1623,11 @@ std::string selectorCount(const ChartSelectorQuery &query, bool broadFolder) {
   appendExactFolderFilter(sql, "cm", folder);
   sql += " GROUP BY cm.sha256) cm";
   if (!query.includeHidden) {
-    sql += " WHERE (" + songReviewFavoriteColumnExpr("cm") + " & 12) = 0";
+    const auto filtered = sql + " WHERE (" + songReviewFavoriteColumnExpr("cm") +
+                          " & 12) = 0";
+    if (!broadFolder) return filtered;
+    return "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM review WHERE "
+           "(favorite & 12) != 0) THEN (" + sql + ") ELSE (" + filtered + ") END";
   }
   return sql;
 }
@@ -2003,6 +2007,52 @@ std::optional<std::size_t> ChartRepository::Session::FindChartSelectorIndex(
   validateSelectorSnapshot(snapshot,
       readSelectorSnapshot(database, impl_->storage, query, stop));
   return result;
+}
+
+void ChartRepository::Session::VisitRawPhysicalFolderStatistics(
+    const std::filesystem::path &recursiveFolder,
+    const std::function<void(const ChartFolderStatisticsRow &)> &visitor,
+    std::stop_token stop) {
+  auto *database = impl_->database();
+  ScopedReadCancellation cancellation(database, stop);
+  ChartMetaQuery filter;
+  filter.recursiveFolder = recursiveFolder;
+  std::string query =
+      "SELECT cm.sha256, cm.keys, cm.ln_mode, cm.total_long_notes, "
+      "cm.total_backspin_notes, cm.path FROM chart_meta cm WHERE 1 = 1";
+  appendExactFolderFilter(query, "cm", filter);
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  int bindIndex = 1;
+  bindExactFolderFilter(statement, bindIndex, filter);
+  while (true) {
+    checkReadCancelled(stop);
+    const int status = sqlite3_step(statement);
+    checkReadCancelled(stop);
+    if (status == SQLITE_DONE) break;
+    if (status != SQLITE_ROW) throw std::runtime_error(sqlite3_errmsg(database));
+    const auto *sha256 = sqlite3_column_text(statement, 0);
+    const auto *path = sqlite3_column_text(statement, 5);
+    const ChartFolderStatisticsRow row{
+        .sha256 = sha256 != nullptr
+                      ? std::string_view(reinterpret_cast<const char *>(sha256),
+                                         sqlite3_column_bytes(statement, 0))
+                      : std::string_view{},
+        .keyMode = sqlite3_column_int(statement, 1),
+        .longNoteMode = sqlite3_column_int(statement, 2),
+        .totalLongNotes = sqlite3_column_int(statement, 3),
+        .totalBackSpinNotes = sqlite3_column_int(statement, 4),
+#ifdef _WIN32
+        .hasPath = path != nullptr && sqlite3_column_bytes(statement, 5) > 0,
+#else
+        .hasPath = path != nullptr && *path != '\0',
+#endif
+    };
+    visitor(row);
+    checkReadCancelled(stop);
+  }
 }
 
 void ChartRepository::Session::VisitChartMetaSelection(
