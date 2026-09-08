@@ -3408,6 +3408,7 @@ void MusicSelectScene::launchChartReplayExport(
   if (recordsExportInProgress_.exchange(true)) {
     return;
   }
+  stopPreloadWorker();
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(true);
     recordsModal_->showExportProgress("Exporting Replay", "Preparing export");
@@ -3437,7 +3438,6 @@ void MusicSelectScene::launchChartReplayExport(
         if (!loaded.ready() || loaded.chart == nullptr || cancelled) {
           std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
           pendingRecordsExportResult_ = ReplayVideoExportResult{
-  stopPreloadWorker();
               .success = false,
               .message = "Replay export could not be prepared.",
           };
@@ -3465,6 +3465,7 @@ void MusicSelectScene::launchAutoPlayExport(const ChartMetaRecord &record,
   if (recordsExportInProgress_.exchange(true)) {
     return;
   }
+  stopPreloadWorker();
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(true);
     recordsModal_->showExportProgress("Exporting Replay", "Preparing export");
@@ -3494,7 +3495,6 @@ void MusicSelectScene::launchAutoPlayExport(const ChartMetaRecord &record,
                                               "autoplay export");
         if (!chart || cancelled) {
           std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
-  stopPreloadWorker();
           pendingRecordsExportResult_ = ReplayVideoExportResult{
               .success = false, .message = "Autoplay export failed."};
           return;
