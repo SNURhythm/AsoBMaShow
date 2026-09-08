@@ -62,6 +62,23 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_replay_audio_failure_cancel_and_success_preserve_launch_options(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signatures = [
+            "void MusicSelectScene::launchCourseReplay(const MusicSelectBar &course, int slot, const MusicSelectBarManagerReadView &snapshot)",
+            "void MusicSelectScene::launchSelectedReplay(int slot)",
+            "void MusicSelectScene::launchChartReplay(const ChartMetaRecord &record, const ModernChartResultRecord &modern, bool ghostBattle)",
+        ]
+        methods = "\n".join(signature + function_body(source, signature.split("(")[0] + "(")
+                            for signature in signatures)
+        fixture = (ROOT / "tests/music_select_scene_replay_audio_fixture.cpp").read_text()
+        for path in range(4):
+            with self.subTest(path=path):
+                self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                                     .replace("SCENE_METHODS", methods)
+                                     .replace("SCENE_TEST", f"testReplayAudio({path})"))
+
+
     def test_folder_statistics_prioritize_selection_and_survive_navigation(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         method = function_body(source, "void MusicSelectScene::requestFolderStatus(")
@@ -362,7 +379,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                                         program, executable, extra_sources),
                 cwd=directory, check=True, capture_output=True, text=True,
             )
-            result = subprocess.run([str(executable)], capture_output=True, text=True,
+            result = subprocess.run([str(executable)], cwd=directory, capture_output=True, text=True,
                                     timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
 

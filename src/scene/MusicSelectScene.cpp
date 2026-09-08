@@ -2607,8 +2607,8 @@ void MusicSelectScene::launchCourseReplay(
 
   stopPreloadWorker();
   context.jukebox.stop();
-  context.jukebox.loadChart(*chart, true, cancelled);
-  if (cancelled) {
+  const auto audioLoaded = context.jukebox.loadChart(*chart, true, cancelled);
+  if (!audioLoaded.success || cancelled) {
     launching_ = false;
     return;
   }
@@ -2676,8 +2676,8 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
   }
   stopPreloadWorker();
   context.jukebox.stop();
-  context.jukebox.loadChart(*loaded.chart, true, cancelled);
-  if (cancelled) {
+  const auto audioLoaded = context.jukebox.loadChart(*loaded.chart, true, cancelled);
+  if (!audioLoaded.success || cancelled) {
     launching_ = false;
     return;
   }
@@ -3499,8 +3499,8 @@ void MusicSelectScene::launchChartReplay(
   }
   stopPreloadWorker();
   context.jukebox.stop();
-  context.jukebox.loadChart(*loaded.chart, true, cancelled);
-  if (cancelled) {
+  const auto audioLoaded = context.jukebox.loadChart(*loaded.chart, true, cancelled);
+  if (!audioLoaded.success || cancelled) {
     if (recordsModal_ != nullptr) {
       recordsModal_->setLoadInProgress(false);
     }
