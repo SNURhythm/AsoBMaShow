@@ -11,6 +11,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -18,10 +19,32 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace bounded_allocation_probe {
+thread_local bool enabled = false;
+thread_local std::size_t largest = 0;
+thread_local std::stop_source *cancelOnChunk = nullptr;
+}
+
+void *operator new(std::size_t size) {
+  if (bounded_allocation_probe::enabled) {
+    bounded_allocation_probe::largest =
+        std::max(bounded_allocation_probe::largest, size);
+  }
+  if (bounded_allocation_probe::cancelOnChunk != nullptr && size >= 64 * 1024) {
+    bounded_allocation_probe::cancelOnChunk->request_stop();
+  }
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  throw std::bad_alloc();
+}
+
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
 
 namespace {
 
@@ -595,6 +618,82 @@ void testBoundedReadRejectsOversizedSevenZipEntry() {
       payload.size() - 1U, &error));
   assert(bytes.empty());
   assert(error.find("exceeds bounded read limit") != std::string::npos);
+}
+
+void testBzipZipFallbackStopsBeforeOversizedAllocation() {
+  constexpr unsigned char fixture[] = {
+      0x50,0x4b,0x03,0x04,0x2e,0x00,0x00,0x00,0x0c,0x00,0x61,0xae,0x28,0x5d,0xc9,0xbe,
+      0xf6,0x81,0x30,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x0b,0x00,0x00,0x00,0x61,0x72,
+      0x74,0x77,0x6f,0x72,0x6b,0x2e,0x70,0x6e,0x67,0x42,0x5a,0x68,0x39,0x31,0x41,0x59,
+      0x26,0x53,0x59,0x6d,0xc2,0x25,0x57,0x00,0x08,0x0a,0x44,0x00,0x80,0x04,0x20,0x00,
+      0x00,0x08,0x20,0x00,0x30,0xcc,0x05,0x49,0xea,0x71,0x06,0x01,0x40,0x60,0x1e,0x2e,
+      0xe4,0x8a,0x70,0xa1,0x20,0xdb,0x84,0x4a,0xae,0x50,0x4b,0x01,0x02,0x2e,0x03,0x2e,
+      0x00,0x00,0x00,0x0c,0x00,0x61,0xae,0x28,0x5d,0xc9,0xbe,0xf6,0x81,0x30,0x00,0x00,
+      0x00,0x00,0x00,0x10,0x00,0x0b,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x80,0x01,0x00,0x00,0x00,0x00,0x61,0x72,0x74,0x77,0x6f,0x72,0x6b,0x2e,0x70,
+      0x6e,0x67,0x50,0x4b,0x05,0x06,0x00,0x00,0x00,0x00,0x01,0x00,0x01,0x00,0x39,0x00,
+      0x00,0x00,0x59,0x00,0x00,0x00,0x00,0x00};
+  TempDirectory temporary;
+  const auto valid = temporary.path() / "valid-bzip.zip";
+  const auto forged = temporary.path() / "forged-bzip.zip";
+  for (const auto &path : {valid, forged}) {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
+  }
+  assert(understateZipUncompressedSizes(forged, "artwork.png", 1));
+  {
+    std::fstream output(forged, std::ios::binary | std::ios::in | std::ios::out);
+    const unsigned char declaredSize[] = {1, 0, 0, 0};
+    output.seekp(22);
+    output.write(reinterpret_cast<const char *>(declaredSize), sizeof(declaredSize));
+  }
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(forged, entries, &error));
+  assert(entries.size() == 1 && entries.front().size == 1);
+  for (const std::size_t budget : {128u * 1024u, 350000u}) {
+    std::vector<unsigned char> bytes;
+    bounded_allocation_probe::largest = 0;
+    bounded_allocation_probe::enabled = true;
+    const bool succeeded = archive_file::readFileBounded(
+        archive_file::makeVirtualPath(forged, "artwork.png"), bytes, budget, &error);
+    bounded_allocation_probe::enabled = false;
+    std::cerr << "BZIP2 fallback largest allocation: "
+              << bounded_allocation_probe::largest << " budget: " << budget << '\n';
+    assert(!succeeded && bytes.empty());
+    assert(bounded_allocation_probe::largest <= budget);
+    assert(error.find("exceeds bounded read limit") != std::string::npos);
+  }
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(valid, "artwork.png"), bytes, 1048576, &error));
+  assert(bytes.size() == 1048576);
+  assert(std::ranges::all_of(bytes, [](unsigned char value) { return value == 'A'; }));
+  const auto corrupt = temporary.path() / "corrupt-bzip.zip";
+  {
+    auto corruptedFixture = std::to_array(fixture);
+    corruptedFixture[14] ^= 1;
+    corruptedFixture[105] ^= 1;
+    std::ofstream output(corrupt, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(corruptedFixture.data()),
+                 corruptedFixture.size());
+  }
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(corrupt, "artwork.png"), bytes, 1048576, &error));
+  assert(bytes.empty());
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(forged, "artwork.png"), bytes, 1048576, &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") == std::string::npos);
+  std::vector<unsigned char> cancelledBytes;
+  std::stop_source stop;
+  bounded_allocation_probe::cancelOnChunk = &stop;
+  const bool cancelledRead = archive_file::readFileBounded(
+      archive_file::makeVirtualPath(forged, "artwork.png"), cancelledBytes,
+      1048576, &error, stop.get_token());
+  bounded_allocation_probe::cancelOnChunk = nullptr;
+  assert(stop.stop_requested());
+  assert(!cancelledRead && cancelledBytes.empty());
 }
 
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
@@ -1283,6 +1382,7 @@ int main() {
   testBoundedReadFallsBackToAlternativeAudioExtension();
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
   testBoundedReadRejectsOversizedSevenZipEntry();
+  testBzipZipFallbackStopsBeforeOversizedAllocation();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();

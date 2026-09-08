@@ -677,6 +677,17 @@ void reserveBufferedBytes(std::vector<unsigned char> &bytes,
   }
 }
 
+void reserveBoundedAppend(std::vector<unsigned char> &bytes,
+                           std::size_t count, std::size_t maximumBytes) {
+  if (maximumBytes == std::numeric_limits<std::size_t>::max() ||
+      bytes.size() + count <= bytes.capacity()) {
+    return;
+  }
+  const auto grown = bytes.capacity() > maximumBytes / 2
+                         ? maximumBytes : bytes.capacity() * 2;
+  bytes.reserve(std::min(maximumBytes, std::max(bytes.size() + count, grown)));
+}
+
 #ifdef _WIN32
 std::string windowsErrorMessage(DWORD error) {
   LPWSTR buffer = nullptr;
@@ -1580,8 +1591,11 @@ private:
 class SevenZipMemoryOutStream final : public ISequentialOutStream {
 public:
   SevenZipMemoryOutStream(std::vector<unsigned char> &bytes,
-                          PauseCallback pauseCallback)
-      : bytes_(bytes), pauseCallback_(std::move(pauseCallback)) {}
+                          PauseCallback pauseCallback,
+                          std::size_t maximumBytes =
+                              std::numeric_limits<std::size_t>::max())
+      : bytes_(bytes), pauseCallback_(std::move(pauseCallback)),
+        maximumBytes_(maximumBytes) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -1621,6 +1635,10 @@ public:
     if (data == nullptr) {
       return E_FAIL;
     }
+    if (size > maximumBytes_ - bytes_.size()) {
+      return E_FAIL;
+    }
+    reserveBoundedAppend(bytes_, size, maximumBytes_);
     const auto *bytes = static_cast<const unsigned char *>(data);
     bytes_.insert(bytes_.end(), bytes, bytes + size);
     if (processedSize != nullptr) {
@@ -1632,6 +1650,7 @@ public:
 private:
   std::vector<unsigned char> &bytes_;
   PauseCallback pauseCallback_;
+  std::size_t maximumBytes_;
   ULONG refCount_ = 0;
 };
 
@@ -1706,9 +1725,10 @@ class SevenZipExtractCallback final : public IArchiveExtractCallback {
 public:
   explicit SevenZipExtractCallback(
       std::unordered_map<UInt32, FileData *> targets,
-      PauseCallback pauseCallback)
+      PauseCallback pauseCallback,
+      std::size_t maximumBytes = std::numeric_limits<std::size_t>::max())
       : targets_(std::move(targets)),
-        pauseCallback_(std::move(pauseCallback)) {}
+        pauseCallback_(std::move(pauseCallback)), maximumBytes_(maximumBytes) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -1767,7 +1787,8 @@ public:
     currentTarget_ = it->second;
     currentTarget_->bytes.clear();
     auto *stream =
-        new SevenZipMemoryOutStream(currentTarget_->bytes, pauseCallback_);
+        new SevenZipMemoryOutStream(currentTarget_->bytes, pauseCallback_,
+                                     maximumBytes_);
     ISequentialOutStream *streamInterface = stream;
     streamInterface->AddRef();
     *outStream = streamInterface;
@@ -1799,6 +1820,7 @@ public:
 private:
   std::unordered_map<UInt32, FileData *> targets_;
   PauseCallback pauseCallback_;
+  std::size_t maximumBytes_;
   FileData *currentTarget_ = nullptr;
   ULONG refCount_ = 0;
   bool failed_ = false;
@@ -3017,8 +3039,12 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
       if (!pauseIfNeeded(pauseCallback, errorMessage)) {
         return false;
       }
+      const auto remaining = maximumBytes - bytes.size();
+      const auto readSize = remaining < buffer.size()
+                                ? static_cast<std::size_t>(remaining) + 1
+                                : buffer.size();
       const la_ssize_t count =
-          archive_read_data(archiveHandle, buffer.data(), buffer.size());
+          archive_read_data(archiveHandle, buffer.data(), readSize);
       if (count == 0) {
         return true;
       }
@@ -3036,6 +3062,9 @@ bool readArchiveEntry(const std::filesystem::path &archivePath,
         bytes.clear();
         return false;
       }
+      reserveBoundedAppend(bytes, static_cast<std::size_t>(count),
+                            static_cast<std::size_t>(std::min<std::uintmax_t>(
+                                maximumBytes, std::numeric_limits<std::size_t>::max())));
       bytes.insert(bytes.end(), buffer.begin(), buffer.begin() + count);
     }
   }
@@ -5092,6 +5121,7 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
                       entry.path.generic_string(),
                   true);
     }
+    reserveBoundedAppend(bytes, produced, maximumBytes);
     bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + produced);
   }
   if (!mz_zip_reader_extract_iter_free(iterator)) {
@@ -5725,7 +5755,8 @@ bool readUnarrRarEntriesByOffset(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    std::size_t maximumBytes = std::numeric_limits<std::size_t>::max()) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
@@ -5822,7 +5853,8 @@ bool readUnarrRarEntriesByOffset(
     }
 
     const size_t entrySize = ar_entry_get_size(archive.get());
-    if (static_cast<std::uint64_t>(entrySize) != target.size) {
+    if (static_cast<std::uint64_t>(entrySize) != target.size ||
+        entrySize > maximumBytes) {
       if (errorMessage != nullptr) {
         *errorMessage = "unarr RAR entry size did not match cached index.";
       }
@@ -5837,13 +5869,21 @@ bool readUnarrRarEntriesByOffset(
       files.clear();
       return false;
     }
-    if (entrySize > 0 &&
-        !ar_entry_uncompress(archive.get(), file.bytes.data(), entrySize)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "unarr could not extract RAR entry.";
+    for (std::size_t offset = 0; offset < entrySize;) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        files.clear();
+        return false;
       }
-      files.clear();
-      return false;
+      const auto chunkSize = maximumBytes == std::numeric_limits<std::size_t>::max()
+                                 ? entrySize : std::min<std::size_t>(64 * 1024, entrySize - offset);
+      if (!ar_entry_uncompress(archive.get(), file.bytes.data() + offset, chunkSize)) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "unarr could not extract RAR entry.";
+        }
+        files.clear();
+        return false;
+      }
+      offset += chunkSize;
     }
     files.push_back(std::move(file));
   }
@@ -6416,7 +6456,8 @@ bool readSevenZipEntriesByIndex(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, std::vector<FileData> &files,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    std::size_t maximumBytes = std::numeric_limits<std::size_t>::max()) {
   files.clear();
   if (innerPaths.empty()) {
     return true;
@@ -6561,6 +6602,13 @@ bool readSevenZipEntriesByIndex(
       ++solidTargets;
     }
 
+    if (target.size > maximumBytes) {
+      if (errorMessage != nullptr) {
+        *errorMessage = "Archive entry exceeds bounded read limit.";
+      }
+      files.clear();
+      return false;
+    }
     FileData file;
     file.path = target.entryPath;
     if (target.size > 0) {
@@ -6572,7 +6620,8 @@ bool readSevenZipEntriesByIndex(
   }
 
   auto *callback =
-      new SevenZipExtractCallback(std::move(outputTargets), pauseCallback);
+      new SevenZipExtractCallback(std::move(outputTargets), pauseCallback,
+                                   maximumBytes);
   IArchiveExtractCallback *callbackInterface = callback;
   callbackInterface->AddRef();
   CMyComPtr<IArchiveExtractCallback> callbackHandle;
@@ -8654,10 +8703,6 @@ bool readFileBounded(const std::filesystem::path &path,
     }
     return false;
   }
-  // Read through the offset-based random-access batch reader (miniz ZIP seek,
-  // unarr RAR4, or 7-Zip index) so a single entry is decompressed without
-  // streaming through the whole archive. The libarchive fallback below stays
-  // only for formats the fast backends cannot index.
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
   // The ZIP backend is fed through a chunked streaming decompress so the bound
   // is enforced as data is produced, not after a lying central directory has
@@ -8681,41 +8726,47 @@ bool readFileBounded(const std::filesystem::path &path,
     bytes.clear();
   }
 #endif
-  std::vector<FileData> files;
-  std::string batchError;
-  if (readArchiveEntries(archivePath, {entry->path}, files, &batchError,
-                         [stop] { return !stop.stop_requested(); }) &&
-      files.size() == 1) {
-    if (files.front().bytes.size() > maximumBytes) {
-      // The RAR/7-Zip indexed readers size their output to the declared entry
-      // size, which a lying header can under-declare and then decompress
-      // larger. Fail cleanly instead of falling through to a fallback read
-      // that could hand the truncated buffer straight back.
-      bytes.clear();
-      if (errorMessage != nullptr) {
-        *errorMessage = "Archive entry exceeds bounded read limit: " +
-                        entry->path.generic_string();
-      }
+#if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
+  if (index->backend == ArchiveIndexBackend::SevenZip) {
+    std::vector<FileData> files;
+    if (!readSevenZipEntriesByIndex(
+            archivePath, {entry->path}, std::nullopt, files, errorMessage,
+            [stop] { return !stop.stop_requested(); }, maximumBytes) ||
+        files.size() != 1 || stop.stop_requested()) {
       return false;
     }
     bytes = std::move(files.front().bytes);
     return true;
   }
+#endif
+#if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
+  if (index->backend == ArchiveIndexBackend::UnarrRar && !entry->solid) {
+    std::vector<FileData> files;
+    std::string unarrError;
+    if (readUnarrRarEntriesByOffset(
+            archivePath, {entry->path}, std::nullopt, files, &unarrError,
+            [stop] { return !stop.stop_requested(); }, maximumBytes) && files.size() == 1 &&
+        !stop.stop_requested()) {
+      bytes = std::move(files.front().bytes);
+      return true;
+    }
+    if (stop.stop_requested()) return false;
+  }
+#endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
-  return readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
+  const bool read = readArchiveEntry(archivePath, entry->path, bytes, errorMessage,
                           [stop] { return !stop.stop_requested(); },
                           maximumBytes);
-#else
-  // The indexed size remains a pre-extraction bound for backends unavailable
-  // to libarchive; the platform build used by ImageView includes libarchive.
-  if (!readFile(path, bytes, errorMessage) || bytes.size() > maximumBytes) {
+  if (!read || stop.stop_requested()) {
     bytes.clear();
-    if (errorMessage != nullptr && errorMessage->empty()) {
-      *errorMessage = "Archive entry exceeds bounded read limit.";
-    }
     return false;
   }
   return true;
+#else
+  if (errorMessage != nullptr) {
+    *errorMessage = "Archive format has no bounded reader available.";
+  }
+  return false;
 #endif
 }
 
