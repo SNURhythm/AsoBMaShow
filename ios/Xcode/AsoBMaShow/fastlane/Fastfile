@@ -120,6 +120,26 @@ def app_store_key_id
   key_id.empty? ? "7459U6UPUW" : key_id
 end
 
+def configure_distribution_signing(type)
+  prefix = "sigh_com.snurhythm.AsoBMaShow_#{type}"
+  signing = {
+    profile_name: "profile-name",
+    team_id: "team-id",
+    code_sign_identity: "certificate-name"
+  }.transform_values do |suffix|
+    value = ENV["#{prefix}_#{suffix}"].to_s.strip
+    UI.user_error!("match did not provide #{suffix} for #{type} signing") if value.empty?
+    value
+  end
+  update_code_signing_settings(
+    path: "AsoBMaShow.xcodeproj",
+    targets: ["AsoBMaShow"],
+    build_configurations: ["Release"],
+    use_automatic_signing: false,
+    **signing
+  )
+end
+
 platform :ios do
   desc "Build and distribute a pull request to Firebase App Distribution"
   lane :firebase do
@@ -139,6 +159,7 @@ platform :ios do
     match(type: "adhoc", git_basic_authorization: ENV["GIT_BASIC_AUTHORIZATION"], api_key: api_key)
     build_number = firebase_build_number
     identity = release_build_identity
+    configure_distribution_signing("adhoc")
     xcargs = build_identity_xcargs(
       "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0",
       identity
@@ -147,6 +168,7 @@ platform :ios do
     build_options = {
       scheme: "AsoBMaShow",
       workspace: "AsoBMaShow.xcworkspace",
+      configuration: "Release",
       export_method: "ad-hoc",
       derived_data_path: derived_data_path,
       xcargs: "#{xcargs} OBJROOT=#{Shellwords.escape(firebase_archive_objroot(derived_data_path))}",
@@ -186,6 +208,7 @@ platform :ios do
 
     build_number = latest_testflight_build_number(initial_build_number: 0) + 1
     identity = release_build_identity
+    configure_distribution_signing("appstore")
     xcargs = build_identity_xcargs(
       "-allowProvisioningUpdates CURRENT_PROJECT_VERSION=#{build_number} IPHONEOS_DEPLOYMENT_TARGET=14.0",
       identity
@@ -193,6 +216,7 @@ platform :ios do
     build_app(
       scheme: "AsoBMaShow",
       workspace: "AsoBMaShow.xcworkspace",
+      configuration: "Release",
       export_method: "app-store",
       xcargs: xcargs,
       clean: true
