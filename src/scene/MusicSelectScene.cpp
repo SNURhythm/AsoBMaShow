@@ -2455,8 +2455,8 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
 
   stopPreloadWorker();
   context.jukebox.stop();
-  context.jukebox.loadChart(*chart, true, cancelled);
-  if (cancelled) {
+  const auto loaded = context.jukebox.loadChart(*chart, true, cancelled);
+  if (!loaded.success || cancelled) {
     launching_ = false;
     return;
   }

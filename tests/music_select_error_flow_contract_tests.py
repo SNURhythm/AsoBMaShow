@@ -62,6 +62,29 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_course_audio_failure_blocks_gameplay_and_allows_successful_retry(self):
+        self.run_course_audio_fixture("testCourseAudioFailure(false)")
+
+    def test_folder_autoplay_audio_failure_blocks_gameplay_and_allows_successful_retry(self):
+        self.run_course_audio_fixture("testCourseAudioFailure(true)")
+
+    def test_cancelled_course_audio_still_blocks_gameplay(self):
+        self.run_course_audio_fixture("testCancelledCourseAudio()")
+
+    def run_course_audio_fixture(self, test_name):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signatures = [
+            "void MusicSelectScene::launchCourse(const MusicSelectBar &bar, bool autoplay)",
+            "void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory)",
+        ]
+        methods = "\n".join(
+            signature + function_body(source, signature.split("(")[0] + "(")
+            for signature in signatures)
+        fixture = (ROOT / "tests/music_select_scene_course_audio_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                             .replace("SCENE_METHODS", methods)
+                             .replace("SCENE_TEST", test_name))
+
     def test_runtime_error_keyboard_and_controller_settings_recovery(self):
         self.run_error_recovery_fixture("testSettingsRecovery")
 
