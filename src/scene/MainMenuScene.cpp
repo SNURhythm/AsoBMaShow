@@ -1380,12 +1380,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
-      if (previewWorker_ != nullptr) {
-        previewWorker_->cancel();
-      }
       {
         std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
         pendingStopAndClearSelectedChartAfterPreview = true;
+      }
+      if (previewWorker_ != nullptr) {
+        previewWorker_->cancel();
       }
       clearSelectedChart();
       jacketView->freeImage();
@@ -1399,12 +1399,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
         item.unavailable && !item.solidArchive &&
         (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
-    if (previewWorker_ != nullptr) {
-      previewWorker_->cancel();
-    }
     {
       std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
       pendingStopAndClearSelectedChartAfterPreview = true;
+    }
+    if (previewWorker_ != nullptr) {
+      previewWorker_->cancel();
     }
     clearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {

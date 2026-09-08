@@ -227,6 +227,96 @@ void testSupersedingRequestAbortsInFlightLoadPromptly() {
   worker.stop();
   expect(true, "a superseding request aborts the in-flight load");
 }
+
+void testIdleCancelRunsCleanupOnWorker() {
+  ChartPreloadWorker worker(std::chrono::milliseconds(0));
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool cleanupPending = false;
+  int idleCount = 0;
+  int cleanupCount = 0;
+  std::thread::id cleanupThread;
+  worker.configure([](const ChartMetaRecord &, std::atomic_bool &) {});
+  worker.setOnIdle([&] {
+    std::lock_guard lock(mutex);
+    ++idleCount;
+    if (cleanupPending) {
+      cleanupPending = false;
+      ++cleanupCount;
+      cleanupThread = std::this_thread::get_id();
+    }
+    cv.notify_all();
+  });
+  worker.request(makeRecord("A"));
+  {
+    std::unique_lock lock(mutex);
+    expect(cv.wait_for(lock, std::chrono::seconds(2), [&] { return idleCount > 0; }),
+           "preview load finishes before idle cancellation");
+  }
+  for (int iteration = 1; iteration <= 3; ++iteration) {
+    {
+      std::lock_guard lock(mutex);
+      cleanupPending = true;
+    }
+    worker.cancel();
+    std::unique_lock lock(mutex);
+    expect(cv.wait_for(lock, std::chrono::seconds(2),
+                       [&] { return cleanupCount == iteration; }),
+           "each idle cancellation runs pending preview cleanup");
+    expect(cleanupThread != std::this_thread::get_id(),
+           "idle cancellation never mutates the jukebox on the UI thread");
+  }
+  worker.stop();
+}
+
+void testActiveCancelDefersCleanupUntilProcessorReturns() {
+  ChartPreloadWorker worker(std::chrono::milliseconds(0));
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool entered = false;
+  bool release = false;
+  bool finished = false;
+  bool cleanupPending = false;
+  bool cleaned = false;
+  bool concurrentCleanup = false;
+  worker.configure([&](const ChartMetaRecord &, std::atomic_bool &) {
+    std::unique_lock lock(mutex);
+    entered = true;
+    cv.notify_all();
+    cv.wait(lock, [&] { return release; });
+    finished = true;
+  });
+  worker.setOnIdle([&] {
+    std::lock_guard lock(mutex);
+    if (cleanupPending) {
+      concurrentCleanup = !finished;
+      cleaned = true;
+      cleanupPending = false;
+    }
+    cv.notify_all();
+  });
+  worker.request(makeRecord("blocked archive enumeration"));
+  {
+    std::unique_lock lock(mutex);
+    expect(cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; }),
+           "the uninterruptible processor starts");
+    cleanupPending = true;
+  }
+  const auto started = std::chrono::steady_clock::now();
+  worker.cancel();
+  expect(std::chrono::steady_clock::now() - started < std::chrono::milliseconds(250),
+         "active cancellation returns without waiting for the processor");
+  {
+    std::unique_lock lock(mutex);
+    expect(!cleaned, "cleanup cannot overlap the active processor");
+    release = true;
+    cv.notify_all();
+    expect(cv.wait_for(lock, std::chrono::seconds(2), [&] { return cleaned; }),
+           "active cancellation eventually cleans up");
+    expect(!concurrentCleanup, "the processor relinquishes jukebox ownership first");
+  }
+  worker.stop();
+}
 }  // namespace
 
 int main() {
@@ -236,6 +326,8 @@ int main() {
   testRequestAfterCancelProcessesNewItem();
   testStopJoinsAndIdleFires();
   testSupersedingRequestAbortsInFlightLoadPromptly();
+  testIdleCancelRunsCleanupOnWorker();
+  testActiveCancelDefersCleanupUntilProcessorReturns();
   if (failures != 0) {
     std::cerr << failures << " failures\n";
     return 1;

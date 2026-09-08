@@ -27,7 +27,8 @@
 // between phases. request() is latest-wins and dedups a re-request for the
 // same path. cancel() stops cooperatively without joining; stop() joins (for
 // teardown and before launching gameplay). onIdle fires on the worker thread
-// after each processed request finishes, whether published or abandoned.
+// after each processed request finishes, whether published or abandoned, and
+// after cancellation, including cancellation while idle.
 class ChartPreloadWorker {
 public:
   using Processor = std::function<void(const ChartMetaRecord &,
@@ -76,10 +77,6 @@ private:
   std::chrono::milliseconds debounceDelay_;
   std::jthread thread_;
   std::atomic_bool stop_{false};
-  // True once the worker loop has returned but the thread has not been joined.
-  // cancel() stops the worker without joining, so a later request() must be
-  // able to respawn the finished thread rather than treating it as live.
-  std::atomic_bool threadFinished_{false};
   // The cancellation flag for the in-flight processor() call, so cancel() and a
   // superseding request() can abort a long, non-cooperative load (e.g. a
   // jukebox chart load) instead of blocking until it completes.
@@ -87,6 +84,7 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::optional<ChartMetaRecord> pending_;
+  bool idleNotificationPending_ = false;
   std::optional<path_t> inFlightPath_;
   std::chrono::steady_clock::time_point pendingSince_{};
 };

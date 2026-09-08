@@ -25,10 +25,8 @@ void ChartPreloadWorker::request(const ChartMetaRecord &record) {
     if (inFlightCancellation_) {
       inFlightCancellation_->store(true, std::memory_order_release);
     }
-    // A request may arrive after cancel() left stop_ set (the worker thread
-    // cooperatively stopping without a join). Re-enable the worker so the new
-    // request is processed, and let ensureWorker() respawn the thread if it
-    // has fully returned.
+    // A request may arrive after cancel() left stop_ set. Re-enable processing
+    // on the idle worker; ensureWorker() starts a thread after stop() joined it.
     stop_.store(false, std::memory_order_release);
     pending_ = record;
     pendingSince_ = std::chrono::steady_clock::now();
@@ -46,6 +44,7 @@ void ChartPreloadWorker::cancel() {
     }
     pending_.reset();
     inFlightPath_.reset();
+    idleNotificationPending_ = true;
   }
   cv_.notify_all();
 }
@@ -80,14 +79,8 @@ void ChartPreloadWorker::setOnIdle(std::function<void()> onIdle) {
 }
 
 void ChartPreloadWorker::ensureWorker() {
-  if (thread_.joinable() && !threadFinished_.load(std::memory_order_acquire)) {
-    return;
-  }
   if (thread_.joinable()) {
-    // The previous worker loop returned (e.g. after cancel()) but was never
-    // joined; reclaim it before starting a fresh thread.
-    thread_.join();
-    threadFinished_.store(false, std::memory_order_release);
+    return;
   }
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -103,16 +96,21 @@ void ChartPreloadWorker::workerLoop(std::stop_token stop) {
     {
       std::unique_lock<std::mutex> lock(mutex_);
       while (true) {
-        if (stop.stop_requested() ||
-            stop_.load(std::memory_order_acquire)) {
-          threadFinished_.store(true, std::memory_order_release);
+        if (idleNotificationPending_) {
+          idleNotificationPending_ = false;
+          lock.unlock();
+          if (onIdle_) onIdle_();
+          lock.lock();
+          continue;
+        }
+        if (stop.stop_requested()) {
           return;
         }
-        if (!pending_.has_value()) {
+        if (stop_.load(std::memory_order_acquire) || !pending_.has_value()) {
           cv_.wait(lock, [&] {
             return stop.stop_requested() ||
-                   stop_.load(std::memory_order_acquire) ||
-                   pending_.has_value();
+                   idleNotificationPending_ ||
+                   (!stop_.load(std::memory_order_acquire) && pending_.has_value());
           });
           continue;
         }
@@ -122,6 +120,7 @@ void ChartPreloadWorker::workerLoop(std::stop_token stop) {
         }
         cv_.wait_for(lock, debounceDelay_ - elapsed, [&] {
           return stop.stop_requested() ||
+                 idleNotificationPending_ ||
                  stop_.load(std::memory_order_acquire);
         });
       }
@@ -149,8 +148,11 @@ void ChartPreloadWorker::workerLoop(std::stop_token stop) {
 
 void ChartPreloadWorker::joinIfRunning() {
   if (thread_.joinable()) {
-    thread_.request_stop();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      thread_.request_stop();
+    }
+    cv_.notify_all();
     thread_.join();
   }
-  threadFinished_.store(false, std::memory_order_release);
 }
