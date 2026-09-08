@@ -3124,9 +3124,12 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     if (input.builtinImageBatchReader) {
       std::vector<SkinBuiltinImageBatch> batch;
       if (input.builtinImageBatchReader(virtualPathByReference, batch,
-                                        input.stop)) {
-        for (const auto &item : batch) {
-          encodedByReference.emplace(item.reference, std::move(item.bytes));
+                                        maximumEncodedBytes, input.stop)) {
+        for (auto &item : batch) {
+          if (virtualPathByReference.contains(item.reference) &&
+              item.bytes.size() <= maximumEncodedBytes) {
+            encodedByReference.emplace(item.reference, std::move(item.bytes));
+          }
         }
       }
     }

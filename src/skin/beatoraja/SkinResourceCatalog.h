@@ -310,7 +310,7 @@ struct SkinBuiltinImageBatch {
 };
 using SkinBuiltinImageBatchReader = std::function<bool(
     const std::map<int, std::filesystem::path> &,
-    std::vector<SkinBuiltinImageBatch> &, std::stop_token)>;
+    std::vector<SkinBuiltinImageBatch> &, std::size_t, std::stop_token)>;
 struct SkinResourcePreparationInputs {
   SkinRevisionLease revision;
   SkinEntryId entry;

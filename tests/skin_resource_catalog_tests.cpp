@@ -24,6 +24,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <tuple>
 
 namespace {
 int failures = 0;
@@ -1103,6 +1104,8 @@ void testChartBuiltinBatchPreservesSparseReferences() {
   skin::BeatorajaSkinConfiguration configuration;
   for (const std::vector<int> &references :
        {std::vector<int>{101}, {100, 102}, {102}, {100, 101, 102}}) {
+    for (const auto policy : {skin::SkinSafetyPolicy{},
+                             skin::SkinSafetyPolicy{skin::SkinSafetyLevel::BeatorajaCompatibility}}) {
     skin::ValidatedBeatorajaSkinModel model;
     std::map<int, fs::path> requestedPaths;
     for (const int reference : references) {
@@ -1115,6 +1118,7 @@ void testChartBuiltinBatchPreservesSparseReferences() {
     }
     int fallbackReads = 0;
     std::map<int, fs::path> receivedPaths;
+    std::size_t receivedLimit = 0;
     skin::SkinResourcePreparationService service;
     const auto planned = service.decodeAndPlan(
         {.revision = lease->clone(),
@@ -1132,14 +1136,20 @@ void testChartBuiltinBatchPreservesSparseReferences() {
          .builtinImageBatchReader =
              [&](const std::map<int, fs::path> &paths,
                  std::vector<skin::SkinBuiltinImageBatch> &batch,
-                 std::stop_token) {
+                 auto... arguments) {
+               if constexpr (sizeof...(arguments) == 2) {
+                 receivedLimit = std::get<0>(std::tuple{arguments...});
+               }
                receivedPaths = paths;
                for (const auto &[reference, path] : paths) {
                  batch.push_back({.reference = reference,
                                   .bytes = imageBytes});
                }
                return true;
-             }});
+             }, .safetyPolicy = policy});
+    expect(receivedLimit == (policy.enforces(skin::SkinSafetyGuard::ResourceAllocationLimit)
+               ? 32U * 1024U * 1024U : std::numeric_limits<std::size_t>::max()),
+           "batch reader receives the active policy bound before reading any payload");
     expect(receivedPaths == requestedPaths && fallbackReads == 0,
            "batch requests preserve authored references when unused built-ins "
            "are omitted");
@@ -1149,6 +1159,7 @@ void testChartBuiltinBatchPreservesSparseReferences() {
                  return planned.plan->builtinImageResources.contains(reference);
                }),
            "a sparse built-in batch publishes exactly the requested references");
+    }
   }
 }
 

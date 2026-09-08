@@ -173,7 +173,21 @@ gameplaySkinSessionServices(ApplicationContext &context) {
           .builtinImageBatchReader =
               [](const std::map<int, std::filesystem::path> &paths,
                  std::vector<skin::SkinBuiltinImageBatch> &out,
-                 std::stop_token stop) {
+                 std::size_t maximumBytes, std::stop_token stop) {
+                if (stop.stop_requested()) return false;
+                if (maximumBytes != std::numeric_limits<std::size_t>::max()) {
+                  for (const auto &[reference, path] : paths) {
+                    if (stop.stop_requested()) return false;
+                    std::vector<unsigned char> bytes;
+                    std::string readError;
+                    if (archive_file::readFileBounded(
+                            path, bytes, maximumBytes, &readError, stop)) {
+                      out.push_back({.reference = reference,
+                                     .bytes = std::move(bytes)});
+                    }
+                  }
+                  return !stop.stop_requested();
+                }
                 // Group archive entries per archive and read them in one
                 // offset-based pass (fast random access) instead of a
                 // per-image stream, which for an audio-heavy archived chart
@@ -196,7 +210,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                   std::vector<unsigned char> bytes;
                   std::string readError;
                   if (archive_file::readFileBounded(
-                          path, bytes, 32U * 1024U * 1024U, &readError, stop)) {
+                          path, bytes, maximumBytes, &readError, stop)) {
                     out.push_back({.reference = reference,
                                    .bytes = std::move(bytes)});
                   }
@@ -213,7 +227,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                           std::filesystem::path(archive), innerPaths, files,
                           &batchError,
                           [&stop] { return !stop.stop_requested(); })) {
-                    for (const auto &file : files) {
+                    for (auto &file : files) {
                       for (const auto &[reference, inner] : items) {
                         if (file.path == inner) {
                           out.push_back(
@@ -236,13 +250,13 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                     if (archive_file::readFileBounded(
                             archive_file::makeVirtualPath(
                                 std::filesystem::path(archive), inner),
-                            bytes, 32U * 1024U * 1024U, &readError, stop)) {
+                            bytes, maximumBytes, &readError, stop)) {
                       out.push_back({.reference = reference,
                                      .bytes = std::move(bytes)});
                     }
                   }
                 }
-                return true;
+                return !stop.stop_requested();
               },
           .liveResourceCounters = context.skinLiveResourceCounters,
           .createHttpTransport = [](std::stop_token stop) {
