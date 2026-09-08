@@ -300,7 +300,8 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         self.run_scene_fixture("music_select_scene_pause_fixture.cpp", [
             "void MusicSelectScene::stopPreloadWorker()",
             "void MusicSelectScene::onPause()",
-        ])
+            "void MusicSelectScene::onResume()",
+        ], [ROOT / "src/music_select/MusicSelectFolderStatusLoader.cpp"])
 
     def test_score_revisions_refresh_once_without_a_library_change(self):
         self.run_scene_fixture("music_select_scene_revision_fixture.cpp", [
@@ -326,13 +327,14 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             self.compile_and_run(fixture.replace("SCENE_METHODS", layout_only),
                                  dependencies)
 
-    def run_scene_fixture(self, filename, signatures):
+    def run_scene_fixture(self, filename, signatures, extra_sources=()):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         methods = "\n".join(
             signature + function_body(source, signature) for signature in signatures
         )
         fixture = (ROOT / "tests" / filename).read_text()
-        self.compile_and_run(fixture.replace("SCENE_METHODS", methods))
+        self.compile_and_run(fixture.replace("SCENE_METHODS", methods)
+                             .replace("REPOSITORY_ROOT", ROOT.as_posix()), extra_sources)
 
     def test_records_callbacks_dispatch_selected_chart_and_saved_result(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()

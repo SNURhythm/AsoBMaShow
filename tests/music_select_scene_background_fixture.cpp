@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cassert>
 #include <initializer_list>
+#include <optional>
 
 namespace audio::diag {
 void SelectAudioLog(const char *) {}
@@ -32,6 +33,9 @@ struct ExternalUrlService {
 };
 
 struct MusicSelectScene {
+  struct FolderStatusLoader { void cancel() {} };
+  FolderStatusLoader *folderStatusLoader_ = nullptr;
+  std::optional<int> folderStatusRowsRevision_, folderStatusRetryAt_;
   struct Context { std::atomic_bool appInBackground = false; } context;
   bool sceneActive_ = true;
   bool failed_ = false;

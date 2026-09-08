@@ -657,6 +657,9 @@ void MusicSelectScene::init() {
 
 void MusicSelectScene::onPause() {
   cancelDirectoryLoad();
+  if (folderStatusLoader_) folderStatusLoader_->cancel();
+  folderStatusRowsRevision_.reset();
+  folderStatusRetryAt_.reset();
   sceneActive_ = false;
   audio::diag::SelectAudioLog("[bgm] scene onPause");
   stopPreloadWorker();
