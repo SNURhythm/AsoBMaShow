@@ -450,6 +450,89 @@ void testZipBoundedReadStreamsFullInBoundsEntry() {
                           bytes.size()) == payload);
 }
 
+void testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc() {
+  TempDirectory temporary;
+  const auto validPath = temporary.path() / "valid-pcm.zip";
+  const auto corruptPath = temporary.path() / "corrupt-pcm.zip";
+  std::string payload(44 + 128 * 1024, '\0');
+  payload.replace(0, 4, "RIFF");
+  payload.replace(8, 8, "WAVEfmt ");
+  payload.replace(36, 4, "data");
+  auto *header = reinterpret_cast<unsigned char *>(payload.data());
+  writeLeU32(header + 4, static_cast<std::uint32_t>(payload.size() - 8));
+  writeLeU32(header + 16, 16);
+  payload[20] = 1;
+  payload[22] = 1;
+  writeLeU32(header + 24, 44100);
+  writeLeU32(header + 28, 88200);
+  payload[32] = 2;
+  payload[34] = 16;
+  writeLeU32(header + 40, static_cast<std::uint32_t>(payload.size() - 44));
+  writeStoredZipContents(validPath, "preview.wav", payload);
+
+  std::ifstream input(validPath, std::ios::binary);
+  assert(input);
+  std::string archiveBytes((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+  const auto payloadOffset = archiveBytes.find(payload);
+  assert(payloadOffset != std::string::npos);
+  archiveBytes[payloadOffset + 44 + 65536] ^= 1;
+  std::ofstream output(corruptPath, std::ios::binary);
+  assert(output);
+  output.write(archiveBytes.data(),
+               static_cast<std::streamsize>(archiveBytes.size()));
+  output.close();
+  assert(std::filesystem::file_size(validPath) ==
+         std::filesystem::file_size(corruptPath));
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  const auto validVirtualPath =
+      archive_file::makeVirtualPath(validPath, "preview.wav");
+  assert(archive_file::readFileBounded(validVirtualPath, bytes,
+                                      payload.size(), &error));
+  assert(std::string(bytes.begin(), bytes.end()) == payload);
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(corruptPath, entries, &error));
+  assert(entries.size() == 1 && entries.front().size == payload.size());
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(corruptPath, "preview.wav"), bytes,
+      payload.size(), &error));
+  assert(bytes.empty());
+  assert(error.find("CRC") != std::string::npos);
+
+  error.clear();
+  assert(!archive_file::readFileBounded(validVirtualPath, bytes,
+                                       payload.size() - 1, &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+  std::stop_source stopped;
+  stopped.request_stop();
+  bytes.assign(1, 0xff);
+  error.clear();
+  assert(!archive_file::readFileBounded(validVirtualPath, bytes,
+                                       payload.size(), &error,
+                                       stopped.get_token()));
+  assert(bytes.empty());
+  assert(error.empty());
+  assert(archive_file::readFileBounded(validVirtualPath, bytes,
+                                      payload.size(), &error));
+  assert(std::string(bytes.begin(), bytes.end()) == payload);
+}
+
+void testZipBoundedReadAcceptsEmptyStoredEntry() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "empty-entry.zip";
+  writeStoredZipContents(archivePath, "empty.bin", "");
+  std::vector<unsigned char> bytes{0xff};
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "empty.bin"), bytes, 0,
+      &error));
+  assert(bytes.empty());
+  assert(error.empty());
+}
+
 void testBoundedReadFallsBackToAlternativeAudioExtension() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "preview-extension.zip";
@@ -1047,6 +1130,8 @@ int main() {
   // these bounded-read tests index real archives, which would otherwise pollute
   // that assertion's retained debug-log window.
   testZipBoundedReadStreamsFullInBoundsEntry();
+  testZipBoundedReadAcceptsEmptyStoredEntry();
+  testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc();
   testBoundedReadFallsBackToAlternativeAudioExtension();
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
   testBoundedReadRejectsOversizedSevenZipEntry();

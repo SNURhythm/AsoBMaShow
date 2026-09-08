@@ -4994,8 +4994,10 @@ bool readZipEntriesByName(
 bool readZipEntryBounded(const std::filesystem::path &archivePath,
                          const Entry &entry, std::vector<unsigned char> &bytes,
                          std::size_t maximumBytes, std::string *errorMessage,
-                         const PauseCallback &pauseCallback, bool *oversize) {
+                         const PauseCallback &pauseCallback, bool *oversize,
+                         bool *integrityFailure) {
   *oversize = false;
+  *integrityFailure = false;
   bytes.clear();
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
@@ -5084,7 +5086,10 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
     }
     bytes.insert(bytes.end(), chunk.begin(), chunk.begin() + produced);
   }
-  mz_zip_reader_extract_iter_free(iterator);
+  if (!mz_zip_reader_extract_iter_free(iterator)) {
+    *integrityFailure = true;
+    return fail("ZIP entry extraction failed integrity/CRC validation.");
+  }
   if (bytes.size() != static_cast<std::size_t>(stat.m_uncomp_size)) {
     return fail("ZIP entry extraction did not produce the declared size.");
   }
@@ -8652,12 +8657,13 @@ bool readFileBounded(const std::filesystem::path &path,
   if (hasZipArchiveExtension(archivePath)) {
     std::string zipError;
     bool zipOversize = false;
+    bool zipIntegrityFailure = false;
     if (readZipEntryBounded(archivePath, *entry, bytes, maximumBytes, &zipError,
                             [stop] { return !stop.stop_requested(); },
-                            &zipOversize)) {
+                            &zipOversize, &zipIntegrityFailure)) {
       return true;
     }
-    if (zipOversize || archiveReadCancelled(zipError)) {
+    if (zipOversize || zipIntegrityFailure || archiveReadCancelled(zipError)) {
       if (errorMessage != nullptr) {
         *errorMessage = zipError;
       }
