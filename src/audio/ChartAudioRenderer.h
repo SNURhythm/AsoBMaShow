@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +17,10 @@ namespace chart_audio {
 
 inline constexpr int kOutputSampleRate = 44100;
 inline constexpr int kOutputChannels = 2;
+inline constexpr std::size_t kMaxOutputFrames =
+    128U * 1024U * 1024U / (sizeof(float) * kOutputChannels);
+inline constexpr std::size_t kMaxMixedFrames =
+    static_cast<std::size_t>(kOutputSampleRate) * 60U * 60U;
 
 inline long long outputTimeMicros(long long chartTimeMicros,
                                   audio::PlaybackRate playback) {
@@ -25,12 +30,20 @@ inline long long outputTimeMicros(long long chartTimeMicros,
 inline long long outputTimeMicrosFromTimelineStart(
     long long chartTimeMicros, long long timelineStartMicros,
     audio::PlaybackRate playback) {
+  if (timelineStartMicros < 0 &&
+      chartTimeMicros > std::numeric_limits<long long>::max() + timelineStartMicros) {
+    return outputTimeMicros(std::numeric_limits<long long>::max(), playback);
+  }
+  if (timelineStartMicros > 0 &&
+      chartTimeMicros < std::numeric_limits<long long>::min() + timelineStartMicros) {
+    return outputTimeMicros(std::numeric_limits<long long>::min(), playback);
+  }
   return outputTimeMicros(chartTimeMicros - timelineStartMicros, playback);
 }
 
 inline long long replayEventRawTimeMicros(long long gameplayTimeMicros,
                                           long long audioOffsetMicros) {
-  return gameplayTimeMicros - audioOffsetMicros;
+  return outputTimeMicrosFromTimelineStart(gameplayTimeMicros, audioOffsetMicros, {});
 }
 
 [[nodiscard]] inline bool isScheduledBeforePlaybackEnd(
@@ -79,6 +92,8 @@ struct RenderOptions {
   const prep_metronome::PrepMetronomePlan *prepMetronomePlan = nullptr;
   std::atomic_bool *isCancelled = nullptr;
   LogCallback log;
+  std::size_t maxOutputFrames = kMaxOutputFrames;
+  std::size_t maxMixedFrames = kMaxMixedFrames;
 };
 
 struct RenderResult {

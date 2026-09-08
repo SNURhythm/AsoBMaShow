@@ -4362,6 +4362,45 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
     endif()
 
+    set(_chart_audio_fixture ${CMAKE_CURRENT_BINARY_DIR}/chart_audio_renderer_fixture.cpp)
+    add_custom_command(
+        OUTPUT ${_chart_audio_fixture}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/chart_audio_renderer_extract.py
+                ${CMAKE_SOURCE_DIR} ${_chart_audio_fixture}
+        DEPENDS tests/chart_audio_renderer_extract.py tests/chart_audio_renderer_tests.cpp
+                src/audio/MusicPlayerService.cpp
+        VERBATIM
+    )
+    add_executable(chart_audio_renderer_tests
+        ${_chart_audio_fixture}
+        src/AtomicFile.cpp
+        src/audio/ChartAudioRenderer.cpp
+        src/audio/ChartMusicCache.cpp
+        src/audio/ClubBeat.cpp
+        src/audio/PrepMetronomeSound.cpp
+        src/audio/decoder.cpp
+        src/audio/SelectAudioDiagnostics.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/ReplayKeysoundSchedule.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/Utils.cpp
+        src/Uuid.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(chart_audio_renderer_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_audio_renderer_tests PRIVATE cxx_std_23)
+    target_link_libraries(chart_audio_renderer_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(chart_audio_renderer_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(chart_audio_renderer_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME chart_audio_renderer_tests COMMAND chart_audio_renderer_tests)
+    set_tests_properties(chart_audio_renderer_tests PROPERTIES TIMEOUT 30)
+
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
         src/audio/AudioMix.cpp
