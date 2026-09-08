@@ -5498,6 +5498,36 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 $<TARGET_FILE:find_bms_metadata_transport_tests>)
     set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
         TIMEOUT 55 RUN_SERIAL TRUE)
+    if(APPLE AND NOT IOS)
+        add_custom_command(
+            OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
+            COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_extract.py
+                    --root ${CMAKE_SOURCE_DIR}
+                    --mode native
+                    --output ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
+            DEPENDS ${transport_fixture_dir}/find_bms_transport_extract.py
+                    src/iOSNatives.mm src/iOSNatives.hpp
+                    src/bms_search/DownloadSupport.cpp
+            VERBATIM
+        )
+        add_executable(find_bms_ios_file_bridge_tests
+            ${transport_fixture_dir}/find_bms_ios_file_bridge_tests.mm
+            ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
+        )
+        set_source_files_properties(${transport_fixture_dir}/find_bms_ios_file_bridge_tests.mm
+            PROPERTIES LANGUAGE CXX)
+        target_compile_features(find_bms_ios_file_bridge_tests PRIVATE cxx_std_23)
+        target_include_directories(find_bms_ios_file_bridge_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
+        target_compile_options(find_bms_ios_file_bridge_tests PRIVATE
+            -x objective-c++ -fobjc-arc)
+        target_link_libraries(find_bms_ios_file_bridge_tests PRIVATE "-framework Foundation")
+        add_test(NAME find_bms_ios_file_bridge_tests
+            COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
+                    $<TARGET_FILE:find_bms_ios_file_bridge_tests>)
+        set_tests_properties(find_bms_ios_file_bridge_tests PROPERTIES
+            TIMEOUT 55 RUN_SERIAL TRUE)
+    endif()
 
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc

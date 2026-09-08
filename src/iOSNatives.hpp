@@ -153,6 +153,13 @@ bool DownloadURLBinaryIOS(const std::string &url,
                           IOSDownloadProgressCallback progressCallback =
                               nullptr,
                           void *progressContext = nullptr);
+bool DownloadURLToFileIOS(const std::string &url,
+                          const std::filesystem::path &path,
+                          std::atomic_bool &cancelled,
+                          std::uint64_t maximumBytes,
+                          std::string &errorMessage,
+                          IOSDownloadProgressCallback progressCallback = nullptr,
+                          void *progressContext = nullptr);
 bool OpenURLInIOSBrowser(const std::string &url, std::string &errorMessage);
 bool RevealIOSFileInFiles(const std::string &filePath,
                           const IOSNormalizedRect &sourceAnchor,

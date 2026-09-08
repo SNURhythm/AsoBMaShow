@@ -171,32 +171,21 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }
-  std::vector<unsigned char> data;
+  constexpr std::uint64_t maximumArchiveBytes = 8ULL * 1024 * 1024 * 1024;
   IOSDownloadProgressContext progressContext{
       .progressCallback = &progressCallback};
-  if (!DownloadURLBinaryIOS(url, data, errorMessage,
-                            reportIOSDownloadProgress, &progressContext)) {
-    return false;
-  }
-  if (cancelled.load()) {
-    errorMessage = "Download cancelled.";
-    return false;
-  }
-  std::ofstream file(path, std::ios::binary);
-  if (!file) {
-    errorMessage = "Could not create downloaded archive.";
-    return false;
-  }
-  file.write(reinterpret_cast<const char *>(data.data()),
-             static_cast<std::streamsize>(data.size()));
-  if (!file) {
-    errorMessage = "Could not write downloaded archive.";
+  if (!DownloadURLToFileIOS(url, path, cancelled, maximumArchiveBytes,
+                            errorMessage, reportIOSDownloadProgress,
+                            &progressContext)) {
     return false;
   }
   if (progressCallback) {
+    std::error_code sizeError;
+    const auto size = std::filesystem::file_size(path, sizeError);
+    const auto byteCount = sizeError ? 0 : static_cast<std::uint64_t>(size);
     progressCallback({.message = "Download complete",
-                      .downloadedBytes = data.size(),
-                      .totalBytes = data.size()});
+                      .downloadedBytes = byteCount,
+                      .totalBytes = byteCount});
   }
   return true;
 }

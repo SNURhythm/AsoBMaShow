@@ -25,6 +25,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -2361,6 +2363,230 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
 }
 @end
 
+@interface AsoFileDownloadDelegate
+    : AsoHttpsRedirectDelegate <NSURLSessionDownloadDelegate> {
+ @public
+  std::atomic_bool abortRequested;
+  std::mutex progressMutex;
+  std::mutex stagingMutex;
+  std::filesystem::path stagingDirectory;
+  std::filesystem::path stagedPath;
+  std::uint64_t maximumBytes;
+  BOOL hasDownloadedFile;
+  NSString *failureMessage;
+  NSURLResponse *urlResponse;
+  NSError *requestError;
+  dispatch_semaphore_t semaphore;
+  IOSDownloadProgressCallback progressCallback;
+  void *progressContext;
+}
+- (void)detachProgress;
+- (void)cleanupStaging;
+@end
+
+@implementation AsoFileDownloadDelegate
+- (instancetype)init {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+  abortRequested.store(false);
+  maximumBytes = 0;
+  hasDownloadedFile = NO;
+  semaphore = dispatch_semaphore_create(0);
+  progressCallback = nullptr;
+  progressContext = nullptr;
+  return self;
+}
+
+- (void)detachProgress {
+  std::lock_guard lock(progressMutex);
+  progressCallback = nullptr;
+  progressContext = nullptr;
+}
+
+- (void)cleanupStaging {
+  std::lock_guard lock(stagingMutex);
+  if (!stagingDirectory.empty()) {
+    std::error_code ignored;
+    std::filesystem::remove_all(stagingDirectory, ignored);
+    stagingDirectory.clear();
+    stagedPath.clear();
+    hasDownloadedFile = NO;
+  }
+}
+
+- (void)dealloc {
+  [self cleanupStaging];
+}
+
+- (BOOL)admitResponse:(NSURLResponse *)response
+                 task:(NSURLSessionTask *)task {
+  if (abortRequested.load()) {
+    [task cancel];
+    return NO;
+  }
+  if (rejectedInsecureRedirect || rejectedInvalidRedirect) {
+    [task cancel];
+    return NO;
+  }
+  if (![response isKindOfClass:[NSHTTPURLResponse class]]) {
+    failureMessage = @"Download did not return an HTTP response.";
+    [task cancel];
+    return NO;
+  }
+  NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+  if (httpResponse.statusCode >= 400) {
+    failureMessage = [NSString stringWithFormat:@"HTTP %ld while downloading archive.",
+                                               (long)httpResponse.statusCode];
+    [task cancel];
+    return NO;
+  }
+  const long long expected = response.expectedContentLength;
+  if (expected > 0 && static_cast<std::uint64_t>(expected) > maximumBytes) {
+    failureMessage = @"Archive download exceeds the byte limit.";
+    [task cancel];
+    return NO;
+  }
+  return failureMessage == nil;
+}
+
+- (void)URLSession:(NSURLSession *)session
+                 downloadTask:(NSURLSessionDownloadTask *)downloadTask
+                 didWriteData:(int64_t)bytesWritten
+            totalBytesWritten:(int64_t)totalBytesWritten
+    totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
+  (void)session;
+  (void)bytesWritten;
+  if (![self admitResponse:downloadTask.response task:downloadTask]) {
+    return;
+  }
+  if (totalBytesWritten < 0 ||
+      static_cast<std::uint64_t>(totalBytesWritten) > maximumBytes ||
+      (totalBytesExpectedToWrite > 0 &&
+       static_cast<std::uint64_t>(totalBytesExpectedToWrite) > maximumBytes)) {
+    failureMessage = @"Archive download exceeds the byte limit.";
+    [downloadTask cancel];
+    return;
+  }
+  std::lock_guard lock(progressMutex);
+  if (abortRequested.load() || progressCallback == nullptr) {
+    return;
+  }
+  try {
+    progressCallback(progressContext,
+                     static_cast<std::uint64_t>(totalBytesWritten),
+                     totalBytesExpectedToWrite > 0
+                         ? static_cast<std::uint64_t>(totalBytesExpectedToWrite)
+                         : 0);
+  } catch (...) {
+    failureMessage = @"Download progress callback failed.";
+    [downloadTask cancel];
+  }
+}
+
+- (void)URLSession:(NSURLSession *)session
+                 downloadTask:(NSURLSessionDownloadTask *)downloadTask
+    didFinishDownloadingToURL:(NSURL *)location {
+  (void)session;
+  urlResponse = downloadTask.response;
+  if (![self admitResponse:urlResponse task:downloadTask]) {
+    return;
+  }
+  std::lock_guard lock(stagingMutex);
+  if (abortRequested.load()) {
+    return;
+  }
+  const char *sourcePath = location.fileSystemRepresentation;
+  const int source = sourcePath == nullptr
+                         ? -1
+                         : ::open(sourcePath, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (source < 0) {
+    failureMessage = @"Could not open the downloaded archive file.";
+    return;
+  }
+  auto closeSource = makeScopeExit([source] { ::close(source); });
+  struct stat sourceStatus {};
+  if (::fstat(source, &sourceStatus) != 0 || !S_ISREG(sourceStatus.st_mode) ||
+      sourceStatus.st_size < 0) {
+    failureMessage = @"Could not inspect the downloaded archive file.";
+    return;
+  }
+  if (static_cast<std::uint64_t>(sourceStatus.st_size) > maximumBytes) {
+    failureMessage = @"Archive download exceeds the byte limit.";
+    return;
+  }
+  if (::rename(sourcePath, stagedPath.c_str()) == 0) {
+    hasDownloadedFile = YES;
+    return;
+  }
+  if (errno != EXDEV) {
+    failureMessage = @"Could not stage the downloaded archive file.";
+    return;
+  }
+  const int destination = ::open(stagedPath.c_str(),
+      O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (destination < 0) {
+    failureMessage = @"Could not create the staged archive file.";
+    return;
+  }
+  auto closeDestination = makeScopeExit([destination] { ::close(destination); });
+  std::array<char, 64 * 1024> buffer;
+  std::uint64_t copiedBytes = 0;
+  while (!abortRequested.load()) {
+    const ssize_t count = ::read(source, buffer.data(), buffer.size());
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      failureMessage = @"Could not read the downloaded archive file.";
+      return;
+    }
+    if (count == 0) {
+      if (::close(destination) != 0) {
+        closeDestination.dismiss();
+        failureMessage = @"Could not close the staged archive file.";
+        return;
+      }
+      closeDestination.dismiss();
+      hasDownloadedFile = YES;
+      return;
+    }
+    const auto byteCount = static_cast<std::uint64_t>(count);
+    if (copiedBytes > maximumBytes || byteCount > maximumBytes - copiedBytes) {
+      failureMessage = @"Archive download exceeds the byte limit.";
+      return;
+    }
+    size_t offset = 0;
+    while (offset < static_cast<size_t>(count)) {
+      if (abortRequested.load()) {
+        return;
+      }
+      const ssize_t written = ::write(destination, buffer.data() + offset,
+                                      static_cast<size_t>(count) - offset);
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      if (written <= 0) {
+        failureMessage = @"Could not write the staged archive file.";
+        return;
+      }
+      offset += static_cast<size_t>(written);
+    }
+    copiedBytes += byteCount;
+  }
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    didCompleteWithError:(NSError *)error {
+  (void)session;
+  urlResponse = task.response;
+  requestError = error;
+  dispatch_semaphore_signal(semaphore);
+}
+@end
+
 @interface AsoIrHttpDelegate
     : NSObject <NSURLSessionDataDelegate, NSURLSessionTaskDelegate> {
  @public
@@ -4324,6 +4550,132 @@ bool DownloadURLBinaryIOS(const std::string &url,
     const auto *bytes =
         static_cast<const unsigned char *>(delegate->responseData.bytes);
     body.assign(bytes, bytes + delegate->responseData.length);
+    return true;
+  }
+}
+
+bool DownloadURLToFileIOS(const std::string &url,
+                          const std::filesystem::path &path,
+                          std::atomic_bool &cancelled,
+                          std::uint64_t maximumBytes,
+                          std::string &errorMessage,
+                          IOSDownloadProgressCallback progressCallback,
+                          void *progressContext) {
+  @autoreleasepool {
+    errorMessage.clear();
+    if (cancelled.load()) {
+      errorMessage = "Download cancelled.";
+      return false;
+    }
+    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL: " + url;
+      return false;
+    }
+    NSString *scheme = nsUrl.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] &&
+        ![scheme isEqualToString:@"https"]) {
+      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
+      return false;
+    }
+    if (path.empty() || path.filename().empty() || path.parent_path().empty()) {
+      errorMessage = "Invalid private archive destination.";
+      return false;
+    }
+
+    AsoFileDownloadDelegate *delegate = [[AsoFileDownloadDelegate alloc] init];
+    delegate->maximumBytes = maximumBytes;
+    delegate->requireHttps = [scheme isEqualToString:@"https"];
+    std::string stagingName =
+        (path.parent_path() / ".asobmshow-download-XXXXXX").string();
+    if (::mkdtemp(stagingName.data()) == nullptr) {
+      errorMessage = "Could not create private archive download staging.";
+      return false;
+    }
+    delegate->stagingDirectory = stagingName;
+    delegate->stagedPath = delegate->stagingDirectory / "archive";
+    delegate->progressCallback = progressCallback;
+    delegate->progressContext = progressContext;
+
+    NSMutableURLRequest *request = [NSMutableURLRequest
+         requestWithURL:nsUrl
+            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+        timeoutInterval:180.0];
+    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
+    NSURLSessionConfiguration *configuration =
+        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
+    delegateQueue.maxConcurrentOperationCount = 1;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                          delegate:delegate
+                                                     delegateQueue:delegateQueue];
+    auto cleanup = makeScopeExit([&] {
+      delegate->abortRequested.store(true);
+      [session invalidateAndCancel];
+      [delegate detachProgress];
+      [delegate cleanupStaging];
+    });
+    NSURLSessionDownloadTask *task = [session downloadTaskWithRequest:request];
+    [task resume];
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(190);
+    while (dispatch_semaphore_wait(
+               delegate->semaphore,
+               dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) != 0) {
+      if (cancelled.load()) {
+        errorMessage = "Download cancelled.";
+        return false;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        errorMessage = "Timed out while downloading " + url;
+        return false;
+      }
+    }
+    [delegate detachProgress];
+    if (cancelled.load()) {
+      errorMessage = "Download cancelled.";
+      return false;
+    }
+    if (delegate->rejectedInsecureRedirect) {
+      errorMessage = "HTTPS download redirected to insecure HTTP.";
+      return false;
+    }
+    if (delegate->rejectedInvalidRedirect) {
+      errorMessage = "Download redirected to a non-HTTP URL.";
+      return false;
+    }
+    if (delegate->failureMessage != nil) {
+      errorMessage = std::string(delegate->failureMessage.UTF8String);
+      return false;
+    }
+    if (delegate->requestError != nil) {
+      errorMessage =
+          std::string(delegate->requestError.localizedDescription.UTF8String);
+      return false;
+    }
+
+    std::lock_guard lock(delegate->stagingMutex);
+    struct stat stagedStatus {};
+    if (!delegate->hasDownloadedFile ||
+        ::lstat(delegate->stagedPath.c_str(), &stagedStatus) != 0 ||
+        !S_ISREG(stagedStatus.st_mode) || stagedStatus.st_size < 0) {
+      errorMessage = "No completed archive file while downloading " + url;
+      return false;
+    }
+    if (static_cast<std::uint64_t>(stagedStatus.st_size) > maximumBytes) {
+      errorMessage = "Archive download exceeds the byte limit.";
+      return false;
+    }
+    if (cancelled.load()) {
+      errorMessage = "Download cancelled.";
+      return false;
+    }
+    if (::rename(delegate->stagedPath.c_str(), path.c_str()) != 0) {
+      errorMessage = "Could not publish the downloaded archive file.";
+      return false;
+    }
     return true;
   }
 }
