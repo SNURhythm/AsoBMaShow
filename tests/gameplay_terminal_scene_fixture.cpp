@@ -902,8 +902,15 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
 }
 
 #include "course_preparation_scene_fixture.h"
+#include "chart_preparation_scene_fixture.h"
+
+PREPARATION_IMPLEMENTATIONS
 
 int main(int argc, char **argv) {
+  if (argc > 2 && std::string_view(argv[1]) == "chart-preparation") {
+    testActualChartPreparationOrdering(argv[2]);
+    return 0;
+  }
   if (argc > 1 && std::string_view(argv[1]) == "course-prepared-facts") {
     testEffectiveCourseFactsPersistThroughResultScene();
     return 0;
@@ -963,6 +970,9 @@ int main(int argc, char **argv) {
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();
   testEffectiveCourseFactsPersistThroughResultScene();
+  for (const auto path : {"constructors", "retry", "practice", "viewer", "in-game-retry"}) {
+    testActualChartPreparationOrdering(path);
+  }
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();

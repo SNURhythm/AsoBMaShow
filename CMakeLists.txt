@@ -6265,7 +6265,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         DEPENDS tests/gameplay_terminal_scene_extract.py
                 tests/gameplay_terminal_scene_fixture.cpp
                 tests/course_preparation_scene_fixture.h
+                tests/chart_preparation_scene_fixture.h
                 src/ResultPresentationUtils.h
+                src/scene/ChartViewerScene.cpp
                 src/scene/play/GamePlayScene.cpp
                 src/scene/ResultScene.cpp
                 src/ReplayVideoExporter.cpp

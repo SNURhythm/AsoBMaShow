@@ -84,6 +84,59 @@ def main():
         "int courseResultClearTypeForSession(",
     ])
     result_persist = extract(result_source, "bool ResultScene::persistModernCourseResult()")
+    preparation_methods = "\n\n".join(extract(source, signature) for signature in [
+        "Judge presentationJudgeForPolicy(",
+        "std::optional<NoteTimeRange>\npracticeAllowedNoteRange(",
+        "bool prepareRetryChart(",
+        "GamePlayScene::GamePlayScene(ApplicationContext &context,\n                             bms_parser::Chart *chart",
+        "GamePlayScene::GamePlayScene(ApplicationContext &context,\n                             std::unique_ptr<bms_parser::Chart> chart",
+        "bool GamePlayScene::preparePracticeAttemptFromMenu(",
+    ])
+    fallback_source = extract(source, "bool GamePlayScene::enterPracticeMenu()")
+    fallback_start = fallback_source.index('    if (!applyPracticePlayOptions(')
+    fallback_end = fallback_source.index('\n  practiceMenuActive = true;')
+    fallback_body = fallback_source[fallback_start:fallback_end].rsplit('\n  }', 1)[0]
+    state_start = fallback_source.index('  ownedState = std::make_unique<RhythmState>')
+    state_end = fallback_source.index('  capturePlayfieldVisualState(')
+    preparation_methods += '\nbool PreparedGamePlayScene::prepareBuiltInFallback() {\n'
+    preparation_methods += fallback_source[state_start:state_end] + fallback_body + '\n}\n'
+    reset_source = extract(source, 'bool GamePlayScene::reset()')
+    reset_start = reset_source.index('  for (const auto &measure : chart->Measures)')
+    reset_end = reset_source.index('  context.jukebox.stop();', reset_start)
+    preparation_methods += '\nvoid PreparedGamePlayScene::resetNotesForSameAttempt() {\n'
+    preparation_methods += reset_source[reset_start:reset_end] + '\n}\n'
+    preparation_methods = (preparation_methods
+        .replace('GamePlayScene::GamePlayScene', 'PreparedGamePlayScene::PreparedGamePlayScene')
+        .replace('GamePlayScene::preparePracticeAttemptFromMenu', 'PreparedGamePlayScene::preparePracticeAttemptFromMenu')
+        .replace('ApplicationContext', 'PreparationContext')
+        .replace(': Scene(context)', ': PreparationSceneBase(context)')
+        .replace('resolvePlayStartInputDevices', 'resolvePreparationInputDevices')
+        .replace('buildPlayfieldChartVisualModel', 'buildPreparationVisualModel')
+        .replace('RhythmLaneInputController', 'PreparationLaneController'))
+    viewer_source = (args.root / "src/scene/ChartViewerScene.cpp").read_text()
+    preparation_methods += '\n' + '\n\n'.join(extract(viewer_source, signature) for signature in [
+        'bool isLaneOrderSummaryOption(',
+        'std::optional<std::string>\nformatLaneOrderSummary(',
+        'bool ChartViewerScene::applyViewerPlayOptions(',
+    ]).replace('ChartViewerScene::', 'PreparedViewerFixture::')
+    viewer_start = viewer_source.index('        std::atomic_bool parseCancelled = false;',
+                                        viewer_source.index('Preparing auto play...'))
+    viewer_end = viewer_source.index('        context.jukebox.stop();', viewer_start)
+    viewer_prefix = viewer_source[viewer_start:viewer_end].replace(
+        '        std::unique_ptr<bms_parser::Chart> practiceChart;', '')
+    preparation_methods += '''
+std::unique_ptr<bms_parser::Chart> PreparedViewerFixture::freshLaunchChart(bool autoPlay) {
+  const auto chartRandomSeed = record.meta.RandomSeed;
+  const auto chartRandomPrng = record.meta.RandomPrng;
+  const auto chartRandomValues = play_options::randomValuesOrNull(record.meta.RandomValues);
+  std::unique_ptr<bms_parser::Chart> practiceChart;
+  const bool failed = [&]() {
+''' + viewer_prefix + '''
+    return false;
+  }();
+  return failed ? nullptr : std::move(practiceChart);
+}
+'''
     export_source = (args.root / "src/ReplayVideoExporter.cpp").read_text()
     export_method = extract(export_source, "ReplayVideoExportResult\nReplayVideoExporter::Export(")
     export_prefix = export_method[:export_method.index("  reportReplayExportProgress")]
@@ -95,6 +148,7 @@ def main():
                           .replace("RESULT_CONTINUE_PREFIX", result_prefix)
                           .replace("RESULT_PERSIST_HELPERS", result_helpers)
                           .replace("RESULT_PERSIST_METHOD", result_persist)
+                          .replace("PREPARATION_IMPLEMENTATIONS", preparation_methods)
                           .replace("EXPORT_PREFIXES", export_prefix + "\n" + course_export_prefix))
 
 

@@ -429,6 +429,7 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
   }
 
   modifier->Modify(chart);
+  applyEffectiveLongNoteModeToChart(chart);
   appliedOption = modifier->Name();
   appliedSeed = usesRandomizer(*appliedOption)
                     ? std::optional<long long>(modifier->GetSeed())
@@ -751,9 +752,8 @@ parseChartForRetry(const ReplayData &retrySource,
   }
   auto chart = parseChart(chartMeta.BmsPath, randomSeed, randomPrng,
                           randomValues, cancelled, "retry");
-  if (chart != nullptr && !cancelled && chart->Meta.LnMode == 0 &&
-      normalizeChartLongNoteModeValue(chartMeta.LnMode) > 0) {
-    chart->Meta.LnMode = chartMeta.LnMode;
+  if (chart != nullptr && !cancelled) {
+    applyEffectiveLongNoteModeToChart(*chart, chartMeta.LnMode);
   }
   return chart;
 }

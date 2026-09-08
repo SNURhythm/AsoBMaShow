@@ -464,6 +464,23 @@ buildGameplayRulesetPolicyAtPlayStart(
   return outcome;
 }
 
+[[nodiscard]] inline gameplay::GameplayPolicyBuildOutcome
+buildGameplayRulesetPolicyAtPlayStart(
+    const StartOptions &options, bms_parser::Chart &chart,
+    AppSettings::NotePriorityMode notePriorityMode) {
+  const int replayLongNoteMode =
+      options.replayData != nullptr
+          ? options.replayData->chartMeta.LnMode
+          : (options.gbattleRecordData != nullptr
+                 ? options.gbattleRecordData->chartMeta.LnMode
+                 : 0);
+  applyEffectiveLongNoteModeToChart(chart, replayLongNoteMode > 0
+                                             ? replayLongNoteMode
+                                             : options.longNoteMode);
+  return buildGameplayRulesetPolicyAtPlayStart(options, chart.Meta,
+                                               notePriorityMode);
+}
+
 [[nodiscard]] inline StartOptions
 enforceCoursePlaybackRules(StartOptions options) {
   if (options.courseSession != nullptr) {

@@ -1709,6 +1709,18 @@ bool GamePlayScene::enterPracticeMenu() {
           "Practice play option could not be applied");
       return false;
     }
+    rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+        options, *chart, context.settings.notePriorityMode);
+    if (!rulesetPolicyBuild.built()) {
+      showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
+      return false;
+    }
+    ownedState = std::make_unique<RhythmState>(chart, false,
+                                               rulesetPolicyBuild.policy->gauge);
+    state = ownedState.get();
+    state->configureGauge(options.gaugeType, options.gaugeAutoShift,
+                          options.gaugeProfile, options.gaugeAutoShiftLowerBound);
+    state->isPlaying = false;
     playfieldChartVisualModel =
         buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
     initializePlayfieldVisualNoteSources();
@@ -1750,7 +1762,7 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   }
 
   rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
-      options, chart->Meta, context.settings.notePriorityMode);
+      options, *chart, context.settings.notePriorityMode);
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(rulesetPolicyBuild.diagnostic);
     return false;
@@ -2778,7 +2790,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
       options(enforceCoursePlaybackRules(resolvePlayStartInputDevices(
           std::move(options), context.inputProfile, chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
-          this->options, this->chart->Meta, context.settings.notePriorityMode)),
+          this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   judge.setAllowedNoteRange(practiceAllowedNoteRange(this->options));
@@ -2800,7 +2812,7 @@ GamePlayScene::GamePlayScene(ApplicationContext &context,
           resolvePlayStartInputDevices(std::move(options), context.inputProfile,
                                        this->chart->Meta.KeyMode))),
       rulesetPolicyBuild(buildGameplayRulesetPolicyAtPlayStart(
-          this->options, this->chart->Meta, context.settings.notePriorityMode)),
+          this->options, *this->chart, context.settings.notePriorityMode)),
       judge(presentationJudgeForPolicy(rulesetPolicyBuild,
                                        this->chart->Meta.Rank)) {
   this->options.ownsChart = true;
@@ -2853,17 +2865,6 @@ void GamePlayScene::init() {
             ? "The selected gameplay ruleset could not be started."
             : rulesetPolicyBuild.diagnostic);
     return;
-  }
-  if (chart != nullptr) {
-    const int replayLongNoteMode =
-        options.replayData != nullptr
-            ? options.replayData->chartMeta.LnMode
-            : (options.gbattleRecordData != nullptr
-                   ? options.gbattleRecordData->chartMeta.LnMode
-                   : 0);
-    applyEffectiveLongNoteModeToChart(*chart, replayLongNoteMode > 0
-                                                  ? replayLongNoteMode
-                                                  : options.longNoteMode);
   }
   startSelectControl.emplace(
       gameplay::StartSelectControl::Configuration{.keyMode = chart->Meta.KeyMode});
