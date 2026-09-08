@@ -62,6 +62,19 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_launch_completion_uses_ui_owned_deferred_queue(self):
+        header = (ROOT / "src/scene/Scene.h").read_text()
+        header = "\n".join(line for line in header.splitlines()
+                           if not line.startswith(("#include", "#pragma")))
+        scene = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        launch = function_body(scene, "void MusicSelectScene::launchSelected(")
+        worker = launch[launch.index("launchThread_ = std::jthread("):]
+        submit = "postDeferred(callback)" if "postDeferred(" in worker else "defer(callback, 0, true)"
+        self.assertEqual(worker.count("defer("), 0 if "postDeferred(" in worker else 2)
+        fixture = (ROOT / "tests/scene_deferred_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("SCENE_HEADER", header)
+                             .replace("SUBMIT_CALLBACK", submit))
+
     def test_failed_audio_preload_is_not_published(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signature = "[this](const ChartMetaRecord &request, std::atomic_bool &cancelled)"

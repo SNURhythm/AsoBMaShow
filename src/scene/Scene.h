@@ -5,6 +5,7 @@
 #include <vector>
 #include <set>
 #include <memory>
+#include <mutex>
 struct EventHandleResult {
   bool quit = false;
 };
@@ -44,7 +45,17 @@ public:
         shouldWaitFrame ? context.currentFrame + 1 : context.currentFrame;
     deferred[time].second.push_back(func);
   }
+  void postDeferred(std::function<bool()> func) {
+    std::lock_guard lock(postedDeferredMutex_);
+    postedDeferred_.push_back(std::move(func));
+  }
   void handleDeferred() {
+    std::vector<std::function<bool()>> posted;
+    {
+      std::lock_guard lock(postedDeferredMutex_);
+      posted.swap(postedDeferred_);
+    }
+    for (const auto &func : posted) defer(func, 0, true);
     if (deferred.empty()) {
       return;
     }
@@ -107,6 +118,8 @@ public:
     isDead = false;
     isCleaned = false;
     deferred.clear();
+    std::lock_guard lock(postedDeferredMutex_);
+    postedDeferred_.clear();
   }
 
   inline void addView(View *view) {
@@ -137,8 +150,12 @@ private:
     }
     views.clear();
     deferred.clear();
+    std::lock_guard lock(postedDeferredMutex_);
+    postedDeferred_.clear();
   }
 
+  std::mutex postedDeferredMutex_;
+  std::vector<std::function<bool()>> postedDeferred_;
   bool isDead = false;
   bool isCleaned = false;
 };

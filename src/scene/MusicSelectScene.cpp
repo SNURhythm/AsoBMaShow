@@ -2086,14 +2086,14 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       [this, record, selections, autoKeySound, doublePlayFlip, playback,
        clubMode, practice, autoplay, tableContext]() mutable {
         auto resetLaunching = [this]() {
-          defer([this]() {
+          postDeferred([this]() {
             launching_ = false;
             hideDecideOverlay();
             // The launch aborted before gameplay began; lift the silence that
             // launchSelected set so the selector's preview/BGM can play again.
             if (previewAudio_) previewAudio_->resumeDefaultBgm();
             return true;
-          }, 0, true);
+          });
         };
         std::atomic_bool cancelled = false;
         auto chart = play_options::parseChart(record.meta, cancelled,
@@ -2137,7 +2137,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           resetLaunching();
           return;
         }
-        defer(
+        postDeferred(
             [this,
              preparedChart =
                  std::make_shared<std::unique_ptr<bms_parser::Chart>>(
@@ -2178,8 +2178,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
                   true);
               launching_ = false;
               return true;
-            },
-            0, true);
+            });
       });
 }
 
