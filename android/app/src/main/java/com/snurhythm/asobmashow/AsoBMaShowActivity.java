@@ -2618,7 +2618,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             if (input == null) {
                 throw new Exception("Could not open archive import.");
             }
-            control.copy(input, outputStream);
+            control.copyArchive(input, outputStream, directory::getUsableSpace);
         } catch (Exception error) {
             deleteRecursively(output);
             throw error;

@@ -3,6 +3,7 @@ package com.snurhythm.asobmashow;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InterruptedIOException;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -137,6 +138,50 @@ public final class ChartImportCopyControlTests {
         testPauseBeforeReadingAndResume();
         testPauseBetweenReadAndWrite();
         testActivityDestructionWakesPausedWorker();
-        System.out.println("3 chart import copy control tests passed");
+        testArchiveBudgets();
+        System.out.println("4 chart import copy control tests passed");
+    }
+
+    private static void testArchiveBudgets() throws Exception {
+        ChartImportCopyControl control = new ChartImportCopyControl(() -> 1, () -> false);
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] bytes = {1, 2, 3, 4};
+        try {
+            control.copyArchive(new ByteArrayInputStream(bytes), output, 3, 2, () -> 100);
+            throw new AssertionError("An oversized archive must fail before writing its excess chunk");
+        } catch (IOException expected) {
+            require(expected.getMessage().contains("byte limit") && output.size() <= 3,
+                    "Archive byte ceiling must hold before each write");
+        }
+        output.reset();
+        control.copyArchive(new ByteArrayInputStream(bytes), output, 4, 2, () -> 6);
+        require(Arrays.equals(bytes, output.toByteArray()), "Exact byte/storage budget must succeed");
+        output.reset();
+        try {
+            control.copyArchive(new ByteArrayInputStream(bytes), output, 4, 3, () -> 6);
+            throw new AssertionError("Archive must preserve the free-space reserve");
+        } catch (IOException expected) {
+            require(expected.getMessage().contains("free space") && output.size() == 0,
+                    "Reserve failure must be diagnosed before writing");
+        }
+        AtomicInteger freeChecks = new AtomicInteger();
+        try {
+            control.copyArchive(new ByteArrayInputStream(bytes), output,
+                    Long.MAX_VALUE, Long.MAX_VALUE, () -> 1);
+            throw new AssertionError("Free-space arithmetic must not wrap");
+        } catch (IOException expected) {
+            require(output.size() == 0, "Overflowing reserve must not admit writes");
+        }
+        try {
+            control.copyArchive(new ByteArrayInputStream(new byte[2 * 1024 * 1024]), output,
+                    4 * 1024 * 1024, 2, () -> freeChecks.incrementAndGet() == 1 ? 4 * 1024 * 1024 : 2);
+            throw new AssertionError("Concurrent storage exhaustion must stop the next chunk");
+        } catch (IOException expected) {
+            require(freeChecks.get() >= 2 && output.size() <= 1024 * 1024,
+                    "Available storage must be checked throughout the copy");
+        }
+        output.reset();
+        control.copy(new ByteArrayInputStream(bytes), output);
+        require(Arrays.equals(bytes, output.toByteArray()), "Folder copies retain their existing contract");
     }
 }
