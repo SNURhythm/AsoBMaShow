@@ -716,6 +716,7 @@ struct ActivationFixtureOptions {
   bool musicSelectDuplicateTimers = false;
   int musicSelectDistributionGraph = 0;
   bool musicSelectKerningFont = false;
+  bool musicSelectSharedFontCaption = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -1127,6 +1128,28 @@ if skin_config then
     type = 5, w = 1280, h = 720,
     destination = {
       {id = "-100", dst = {{x = 0, y = 0, w = 40, h = 20}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectSharedFontCaption) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "atlas", path = "resources/fixture.png"}},
+    font = {{id = "font", path = "resources/fixture.ttf", type = 0}},
+    image = {{id = "bar", src = "atlas", x = 0, y = 0, w = 40, h = 20}},
+    imageset = {{id = "bars", images = {"bar"}}},
+    text = {{id = "title", font = "font", size = 16},
+            {id = "caption", font = "font", size = 16, ref = 10}},
+    songlist = {
+      id = "list", center = 0, clickable = {0},
+      liston = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      listoff = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      text = {{id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
+    },
+    destination = {
+      {id = "list", dst = {{x = 0, y = 0}}},
+      {id = "caption", dst = {{x = 50, y = 50, w = 500, h = 30}}}
     }
   }
 )lua";
@@ -3440,6 +3463,103 @@ void testMusicSelectRuntimeGlyphPatchesPreserveKerning() {
   for (int index = 0; index < 100; ++index) render(index % 2 == 0 ? "AV" : "VA");
   expect(fixture.device()->createCalls == uploads + 1,
          "pair-only changes and repeated titles never rebuild the glyph texture");
+}
+
+void testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan() {
+  const auto captionGap = [](const SessionQuadBackend &backend) {
+    return backend.submittedVertices.size() == 16
+        ? backend.submittedVertices[12].x - backend.submittedVertices[8].x
+        : -999.0F;
+  };
+  float expectedReversedGap = -999.0F;
+  for (const int scenario : {0, 1, 2}) {
+    const bool freshReversed = scenario == 0;
+    const bool newOverscanGlyph = scenario == 1;
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectKerningFont = true,
+                               .musicSelectSharedFontCaption = true});
+    if (!fixture.ready()) return;
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend backend;
+    backend.captureVertices = true;
+    MusicSelectSkinFrame frame;
+    frame.songList.wallClockSeconds = 86'401;
+    frame.songList.bars.resize(40);
+    for (auto &bar : frame.songList.bars) {
+      bar.title = "A";
+      bar.exists = true;
+    }
+    if (newOverscanGlyph) frame.songList.bars[17].title = "AB";
+    frame.properties.strings[10] = freshReversed ? "VA" : "AV";
+    auto prepared = MusicSelectSkinSession::prepare(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = static_cast<std::uint64_t>(109 + scenario)},
+        {.storageRoots = context.storageRoots,
+         .resourcePreparation = context.resourcePreparation,
+         .initialFrame = frame});
+    expect(prepared.prepared.has_value(), "shared title/caption atlas prepares");
+    if (!prepared.prepared) return;
+    const auto &atlases = prepared.prepared->resourcePlan.atlases;
+    expect(atlases.size() == 1 && atlases.front().glyphs.contains(U'A') &&
+               atlases.front().glyphs.contains(U'V') &&
+               !atlases.front().glyphs.contains(U'B') &&
+               !atlases.front().glyphs.contains(U'Z') &&
+               atlases.front().kerning.contains(freshReversed
+                   ? std::pair{U'V', U'A'} : std::pair{U'A', U'V'}) &&
+               (freshReversed || !atlases.front().kerning.contains({U'V', U'A'})),
+           "two text objects share one atlas with AB outside initial overscan and no VA pair");
+    auto created = MusicSelectSkinSession::finalize(
+        std::move(*prepared.prepared),
+        {.resourcePreparation = context.resourcePreparation,
+         .textureDevice = context.textureDevice,
+         .movieDevice = context.movieDevice,
+         .liveResourceCounters = context.liveResourceCounters,
+         .quadBackend = &backend});
+    expect(created.session != nullptr, "shared title/caption session finalizes");
+    if (!created.session) return;
+    RenderContext renderContext;
+    const auto render = [&] {
+      ++frame.serial;
+      backend.submittedVertices.clear();
+      expect(created.session->render(renderContext, frame), "shared atlas frame renders");
+    };
+    render();
+    expect(backend.submittedVertices.size() == 16,
+           "shared atlas draws one bar, one title glyph, and two caption glyphs");
+    if (freshReversed) {
+      expectedReversedGap = captionGap(backend);
+      continue;
+    }
+    const auto uploads = fixture.device()->createCalls;
+    frame.songList.selectedIndex = 1;
+    frame.properties.strings[10] = "VA";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    do {
+      render();
+      if (captionGap(backend) == expectedReversedGap) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    expect(expectedReversedGap != -999.0F && captionGap(backend) == expectedReversedGap,
+           newOverscanGlyph
+               ? "VA metrics publish when non-target AB enters shared-atlas overscan"
+               : "shared-atlas pair-only VA metrics publish with resident prewarm glyphs");
+    for (int index = 0; index < 100; ++index) render();
+    expect(fixture.device()->createCalls == uploads + (newOverscanGlyph ? 1 : 0),
+           newOverscanGlyph
+               ? "new shared overscan glyph uploads exactly one replacement atlas"
+               : "genuinely shared pair-only updates do not upload a texture");
+    const auto uploadsBeforeUnseen = fixture.device()->createCalls;
+    frame.properties.strings[10] = "Z";
+    const auto unseenDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    do {
+      render();
+      if (fixture.device()->createCalls > uploadsBeforeUnseen) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < unseenDeadline);
+    expect(fixture.device()->createCalls == uploadsBeforeUnseen + 1 &&
+               backend.submittedVertices.size() == 12,
+           "caption remains refreshable and draws unseen Z after shared-atlas VA publication");
+  }
 }
 
 void testMusicSelectScrollingDoesNotStarveGlyphPatches() {
@@ -8291,6 +8411,7 @@ int main(int argc, char **argv) {
   testMusicSelectDuplicateSongListDestinationsRenderBothConditions();
   testMusicSelectScrollingDoesNotStarveGlyphPatches();
   testMusicSelectRuntimeGlyphPatchesPreserveKerning();
+  testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan();
   testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
   testMusicSelectPrewarmsBoundedNearbyGlyphs();
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();

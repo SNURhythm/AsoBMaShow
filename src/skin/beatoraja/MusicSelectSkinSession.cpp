@@ -161,7 +161,7 @@ RuntimeStringsByObject mergeRuntimeGlyphs(
 }
 
 bool atlasContainsText(const PreparedSkinTextAtlas &atlas,
-                       std::string_view value, bool glyphsOnly = false) {
+                       std::string_view value) {
   std::optional<char32_t> previous;
   for (std::size_t offset = 0; offset < value.size();) {
     utf8proc_int32_t codepoint = 0;
@@ -179,7 +179,7 @@ bool atlasContainsText(const PreparedSkinTextAtlas &atlas,
       continue;
     }
     if (!atlas.glyphs.contains(static_cast<char32_t>(codepoint)) ||
-        (!glyphsOnly && previous && !atlas.kerning.contains(
+        (previous && !atlas.kerning.contains(
             {*previous, static_cast<char32_t>(codepoint)}))) {
       return false;
     }
@@ -239,7 +239,7 @@ MusicSelectTextAtlasPatch prepareTextAtlasPatch(
     SkinProfileId profileId, SkinResourcePreparationService &preparation,
     SkinSafetyPolicy safetyPolicy, RuntimeStringsByObject runtimeStrings,
     std::set<SkinObjectId> targetObjects, SkinTextKerningPairsByObject pairs,
-    std::set<SkinObjectId> metricsOnlyObjects, std::stop_token stop) {
+    SkinTextResidentGlyphsByKey residentGlyphsByKey, std::stop_token stop) {
   MusicSelectTextAtlasPatch result{
       .runtimeStrings = std::move(runtimeStrings)};
   if (stop.stop_requested()) {
@@ -268,7 +268,7 @@ MusicSelectTextAtlasPatch prepareTextAtlasPatch(
        .requiredRuntimeStringsByObject = result.runtimeStrings,
        .targetObjects = std::move(targetObjects),
        .requiredKerningPairsByObject = std::move(pairs),
-       .metricsOnlyObjects = std::move(metricsOnlyObjects),
+       .residentGlyphsByKey = std::move(residentGlyphsByKey),
        .safetyPolicy = safetyPolicy,
        .stop = stop});
   result.cancelled = planned.cancelled;
@@ -1043,26 +1043,23 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
     return false;
   }
   SkinTextKerningPairsByObject pairs;
+  SkinTextResidentGlyphsByKey residentGlyphsByKey;
   for (const auto object : missing) {
     if (const auto *atlas = resources_
             ? resources_->findTextAtlasForObject(object) : nullptr) {
       for (const auto &[pair, amount] : atlas->kerning) pairs[object].insert(pair);
+      auto [resident, inserted] = residentGlyphsByKey.try_emplace(atlas->key);
+      if (inserted) {
+        for (const auto &[codepoint, glyph] : atlas->glyphs) {
+          resident->second.insert(codepoint);
+        }
+      }
     }
   }
   auto unionStrings = mergeRuntimeGlyphs(
       preparedRuntimeStringsByObject_,
       musicSelectRuntimeAtlasStrings(model_, frame, observedRuntimeStringsByObject_,
                                      kMusicSelectTitleOverscan), pairs, safetyPolicy_);
-  std::set<SkinObjectId> metricsOnlyObjects;
-  for (const auto object : missing) {
-    const auto *atlas = resources_
-        ? resources_->findTextAtlasForObject(object) : nullptr;
-    if (atlas && std::ranges::all_of(unionStrings[object], [&](const auto &value) {
-          return atlasContainsText(*atlas, value, true);
-        })) {
-      metricsOnlyObjects.insert(object);
-    }
-  }
   pendingTextAtlasObjects_ = missing;
   pendingTextAtlasPatch_ = std::async(
       std::launch::async,
@@ -1072,14 +1069,14 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
        safetyPolicy = safetyPolicy_,
        runtimeStrings = std::move(unionStrings),
        pairs = std::move(pairs),
-       metricsOnlyObjects = std::move(metricsOnlyObjects),
+       residentGlyphsByKey = std::move(residentGlyphsByKey),
        targetObjects = missing, stop = textAtlasPatchStop_.get_token()] mutable {
         return prepareTextAtlasPatch(
             std::move(revision), std::move(entry), std::move(model),
             std::move(configuration), std::move(storageRoots),
             std::move(profileId), *preparation, safetyPolicy,
             std::move(runtimeStrings), std::move(targetObjects), std::move(pairs),
-            std::move(metricsOnlyObjects), stop);
+            std::move(residentGlyphsByKey), stop);
       });
   return false;
 }

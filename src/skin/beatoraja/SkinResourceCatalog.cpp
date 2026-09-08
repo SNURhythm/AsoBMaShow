@@ -3737,10 +3737,13 @@ SkinResourcePreparationService::prepareTextAtlasUpdates(
     }
     SkinResourceSessionAccounting fontSession = session;
     BitmapFontAccountingIdentities requestAccounting;
-    const bool metricsOnly = std::ranges::all_of(
-        request.objects, [&](SkinObjectId object) {
-          return !input.targetObjects.contains(object) ||
-                 input.metricsOnlyObjects.contains(object);
+    const auto resident = input.residentGlyphsByKey.find(request.key);
+    const bool metricsOnly = resident != input.residentGlyphsByKey.end() &&
+        std::ranges::all_of(request.codepoints, [&](char32_t codepoint) {
+          return resident->second.contains(codepoint);
+        }) && std::ranges::all_of(request.pairs, [&](const auto &pair) {
+          return resident->second.contains(pair.first) &&
+                 resident->second.contains(pair.second);
         });
     const auto built = prepareFontAtlas(
         atlasId, request, input.fileSystem, fontSession, result.diagnostics,

@@ -342,6 +342,8 @@ struct SkinResourcePlanResult { std::optional<SkinResourceUploadPlan> plan; bool
 // but do not revisit images, movies, or unrelated text objects.
 using SkinTextKerningPairsByObject =
     std::map<SkinObjectId, std::set<std::pair<char32_t, char32_t>>>;
+using SkinTextResidentGlyphsByKey =
+    std::map<SkinTextAtlasKey, std::set<char32_t>>;
 
 struct SkinTextAtlasPreparationInputs {
   SkinRevisionLease revision;
@@ -353,7 +355,7 @@ struct SkinTextAtlasPreparationInputs {
       requiredRuntimeStringsByObject;
   std::set<SkinObjectId> targetObjects;
   SkinTextKerningPairsByObject requiredKerningPairsByObject;
-  std::set<SkinObjectId> metricsOnlyObjects;
+  SkinTextResidentGlyphsByKey residentGlyphsByKey;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
 };
