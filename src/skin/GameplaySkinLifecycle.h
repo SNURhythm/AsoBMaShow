@@ -84,6 +84,7 @@ struct GameplaySkinLifecycleDependencies {
       catalogSnapshot;
   std::function<void()> detachCommitClient;
   std::function<void(SkinDiagnosticHistoryRecord)> appendHistory;
+  std::function<void()> dropDecodeCache;
 };
 
 class GameplaySkinLifecycle {
@@ -117,6 +118,7 @@ public:
   [[nodiscard]] GameplaySkinAcquisition
   acquireForSkinType(int skinType, bool chartBoundary = true);
   void recordPresentationFailure(const PresentationFailure &);
+  void setDecodeCacheEvictor(std::function<void()>);
   void shutdown() noexcept;
 
 private:

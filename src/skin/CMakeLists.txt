@@ -52,6 +52,10 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/LuaSkinBindingDecoder.cpp
         beatoraja/LuaSkinRuntime.cpp
         beatoraja/LuaSkinTableDecoder.cpp
+        beatoraja/MusicSelectSkinModelResolver.cpp
+        beatoraja/MusicSelectBarRenderer.cpp
+        beatoraja/MusicSelectSkinStateBridge.cpp
+        beatoraja/MusicSelectSkinSession.cpp
         beatoraja/NumericGlyphAtlas.cpp
         beatoraja/PlaySkinViewport.cpp
         beatoraja/Skin2DRenderer.cpp
@@ -80,6 +84,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinMovieCatalog.cpp
         beatoraja/SkinMovieCatalogFrame.cpp
         beatoraja/SkinResourceCatalog.cpp
+        beatoraja/SkinDecodeCache.cpp
         beatoraja/SkinTextAtlas.cpp
     )
 else()

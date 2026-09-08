@@ -1,5 +1,6 @@
 #include "SettingsSceneShared.h"
 #include "SettingsScenePreviewAuthority.h"
+#include "../library/ChartLibraryPlatform.h"
 #include "../input/InputCaptureController.h"
 #include "../input/RhythmInputHandler.h"
 #include "../rendering/common.h"

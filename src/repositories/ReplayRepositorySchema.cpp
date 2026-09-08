@@ -707,6 +707,14 @@ constexpr const char *kModernPendingChartScoresTableSql =
     "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
     "ON DELETE CASCADE)";
 
+constexpr const char *kModernChartScoreMetricsTableSql =
+    "CREATE TABLE IF NOT EXISTS modern_chart_score_metrics("
+    "modern_chart_result_id INTEGER PRIMARY KEY NOT NULL,"
+    "average_judge_micros INTEGER NOT NULL,"
+    "CHECK(average_judge_micros>=0),"
+    "FOREIGN KEY(modern_chart_result_id) REFERENCES modern_chart_results(id) "
+    "ON DELETE CASCADE)";
+
 constexpr const char *kModernPendingCourseScoresTableSql =
     "CREATE TABLE modern_pending_course_score_writes("
     "attempt_id TEXT PRIMARY KEY NOT NULL,"
@@ -1822,7 +1830,8 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
               "outbox, receipt, or remote score schema");
       return false;
     }
-    return true;
+    return execSql(db, kModernChartScoreMetricsTableSql,
+                   "creating modern chart score metrics");
   }
 
   const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
@@ -2196,7 +2205,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
             "outbox, receipt, or remote score schema");
     return false;
   }
-  if (!setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
+  if (!execSql(db, kModernChartScoreMetricsTableSql,
+               "creating modern chart score metrics") ||
+      !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
     return false;
   }
   if (!transaction.commit(transactionError)) {

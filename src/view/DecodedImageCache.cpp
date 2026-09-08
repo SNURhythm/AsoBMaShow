@@ -1,6 +1,7 @@
 #include "DecodedImageCache.h"
 
 #include <limits>
+#include <mutex>
 
 namespace image_decode {
 
@@ -24,6 +25,7 @@ DecodedImageCache::DecodedImageCache(std::size_t byteBudget)
     : byteBudget_(byteBudget) {}
 
 std::optional<DecodedImageData> DecodedImageCache::get(std::string_view key) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto found = entries_.find(key);
   if (found == entries_.end()) {
     return std::nullopt;
@@ -33,6 +35,7 @@ std::optional<DecodedImageData> DecodedImageCache::get(std::string_view key) {
 }
 
 bool DecodedImageCache::put(std::string key, DecodedImageData image) {
+  std::lock_guard<std::mutex> lock(mutex_);
   if (key.empty() || !image.valid()) {
     return false;
   }
@@ -55,6 +58,7 @@ bool DecodedImageCache::put(std::string key, DecodedImageData image) {
 }
 
 bool DecodedImageCache::pin(std::string_view key) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto found = entries_.find(key);
   if (found == entries_.end()) {
     return false;
@@ -65,6 +69,7 @@ bool DecodedImageCache::pin(std::string_view key) {
 }
 
 bool DecodedImageCache::unpin(std::string_view key) {
+  std::lock_guard<std::mutex> lock(mutex_);
   const auto found = entries_.find(key);
   if (found == entries_.end() || found->second.pinCount == 0) {
     return false;
@@ -75,6 +80,11 @@ bool DecodedImageCache::unpin(std::string_view key) {
 }
 
 bool DecodedImageCache::erase(std::string_view key) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return eraseLocked(key);
+}
+
+bool DecodedImageCache::eraseLocked(std::string_view key) {
   const auto found = entries_.find(key);
   if (found == entries_.end()) {
     return false;
@@ -86,6 +96,7 @@ bool DecodedImageCache::erase(std::string_view key) {
 }
 
 std::size_t DecodedImageCache::erasePrefix(std::string_view prefix) {
+  std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::string> keys;
   for (const auto &[key, entry] : entries_) {
     (void)entry;
@@ -94,12 +105,13 @@ std::size_t DecodedImageCache::erasePrefix(std::string_view prefix) {
     }
   }
   for (const auto &key : keys) {
-    (void)erase(key);
+    (void)eraseLocked(key);
   }
   return keys.size();
 }
 
 void DecodedImageCache::clearEvictable() {
+  std::lock_guard<std::mutex> lock(mutex_);
   for (auto iterator = entries_.begin(); iterator != entries_.end();) {
     if (iterator->second.pinCount != 0) {
       ++iterator;
@@ -112,18 +124,29 @@ void DecodedImageCache::clearEvictable() {
 }
 
 void DecodedImageCache::clear() {
+  std::lock_guard<std::mutex> lock(mutex_);
   entries_.clear();
   recency_.clear();
   bytes_ = 0;
 }
 
 bool DecodedImageCache::contains(std::string_view key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return entries_.contains(key);
 }
 
-std::size_t DecodedImageCache::size() const noexcept { return entries_.size(); }
-std::size_t DecodedImageCache::bytes() const noexcept { return bytes_; }
-std::size_t DecodedImageCache::budget() const noexcept { return byteBudget_; }
+std::size_t DecodedImageCache::size() const noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return entries_.size();
+}
+std::size_t DecodedImageCache::bytes() const noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return bytes_;
+}
+std::size_t DecodedImageCache::budget() const noexcept {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return byteBudget_;
+}
 
 void DecodedImageCache::touch(
     std::map<std::string, Entry, std::less<>>::iterator entry) {
@@ -150,7 +173,7 @@ void DecodedImageCache::evictToBudget(std::string_view protectedKey) {
       break;
     }
     const std::string key = *candidate;
-    (void)erase(key);
+    (void)eraseLocked(key);
   }
 }
 

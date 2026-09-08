@@ -1,0 +1,511 @@
+#include "library/ChartLibraryTaskTypes.h"
+#include "library/ChartLibraryTaskService.h"
+
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <iostream>
+#include <mutex>
+#include <stdexcept>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+void expect(bool condition, std::string_view message) {
+  if (!condition) {
+    std::cerr << "FAILED: " << message << '\n';
+    ++failures;
+  }
+}
+
+const chart_library_tasks::TaskInfo *
+taskFor(const chart_library_tasks::Snapshot &snapshot, std::uint64_t id) {
+  for (const auto &task : snapshot.tasks) {
+    if (task.id == id) {
+      return &task;
+    }
+  }
+  return nullptr;
+}
+
+template <typename Predicate>
+bool waitUntil(Predicate predicate) {
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (predicate()) {
+      return true;
+    }
+    std::this_thread::yield();
+  }
+  return predicate();
+}
+
+void testSnapshotCarriesQueueAndProgressAsValues() {
+  chart_library_tasks::Snapshot snapshot{
+      .revision = 7,
+      .activeCount = 1,
+      .tasks = {{.id = 42,
+                 .title = "Refresh Library",
+                 .status = chart_library_tasks::TaskStatus::Running,
+                 .fraction = 0.25,
+                 .current = 3,
+                 .total = 12,
+                 .detail = "Scanning folders"}},
+      .progress = {.valid = true,
+                   .revision = 8,
+                   .taskId = 42,
+                   .current = 3,
+                   .total = 12,
+                   .basisPoints = 2500,
+                   .stage = ChartScanProgressStage::ScanningRoots}};
+
+  expect(snapshot.tasks.front().title == "Refresh Library",
+         "snapshot owns the task title");
+  expect(snapshot.progress.basisPoints == 2500,
+         "snapshot owns progress basis points");
+  snapshot.tasks.front().title = "Changed";
+  expect(snapshot.tasks.front().title == "Changed",
+         "snapshot task values are independently mutable");
+}
+
+void testWorkerRunsQueuedTasksOnceInOrder() {
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<std::string> titles;
+  chart_library_tasks::ChartLibraryTaskService service(
+      [&](const auto &request, const auto &, auto, auto) {
+        {
+          std::lock_guard lock(mutex);
+          titles.push_back(request.title);
+        }
+        changed.notify_all();
+        return chart_library_tasks::TaskRunResult{};
+      });
+
+  service.start();
+  service.start();
+  service.enqueue({.title = "first"});
+  service.enqueue({.title = "second"});
+
+  std::unique_lock lock(mutex);
+  const bool finished = changed.wait_for(
+      lock, std::chrono::seconds(2), [&] { return titles.size() == 2; });
+  expect(finished, "worker completes both queued tasks");
+  expect(titles == std::vector<std::string>{"first", "second"},
+         "one worker runs tasks once in FIFO order");
+  lock.unlock();
+  service.shutdown();
+}
+
+void testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask() {
+  using namespace chart_library_tasks;
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<std::uint64_t> ids;
+  std::vector<bool> rebuildRequests;
+  std::vector<bool> registeredFolders;
+  std::vector<std::filesystem::path> folderScopes;
+  ChartLibraryTaskService service(
+      [&](const TaskRequest &request, const auto &, auto, auto) {
+        std::lock_guard lock(mutex);
+        const auto attempt = ids.size() + 1;
+        if (attempt <= 3) service.setGameplayPaused(true);
+        ids.push_back(request.id);
+        rebuildRequests.push_back(request.rebuildLibraryMetadata);
+        registeredFolders.push_back(request.folderRegistrationCompleted);
+        folderScopes.push_back(request.folderToAdd);
+        changed.notify_all();
+        return TaskRunResult{
+            .disposition = attempt <= 3 ? TaskRunDisposition::Paused
+                                       : TaskRunDisposition::Complete,
+            .rebuildLibraryMetadataCleared = attempt == 3,
+            .folderRegistrationCompleted = attempt == 2};
+      });
+  const auto rebuildId = service.enqueue(
+      {.title = "rebuild", .folderToAdd = "added-root",
+       .rebuildLibraryMetadata = true});
+  const auto nextId = service.enqueue({.title = "next"});
+  const auto waitForAttempts = [&](std::size_t count) {
+    std::unique_lock lock(mutex);
+    return changed.wait_for(lock, std::chrono::seconds(2),
+                             [&] { return ids.size() >= count; });
+  };
+  expect(waitForAttempts(1), "rebuild pauses before initialization");
+  service.setGameplayPaused(false);
+  expect(waitForAttempts(2), "rebuild retries its pending initialization");
+  service.setGameplayPaused(false);
+  expect(waitForAttempts(3), "registered folder still retries pending rebuild");
+  service.setGameplayPaused(false);
+  expect(waitForAttempts(5), "rebuild resumes before the queued next task");
+  service.shutdown();
+  expect(ids == std::vector<std::uint64_t>({rebuildId, rebuildId, rebuildId,
+                                          rebuildId, nextId}),
+         "paused retries retain task identity and FIFO priority");
+  expect(rebuildRequests == std::vector<bool>({true, true, true, false, false}),
+         "retries clear the destructive request only after successful initialization");
+  expect(registeredFolders == std::vector<bool>({false, false, true, true, false}),
+         "registration completion survives later pauses without leaking to the next task");
+  expect(folderScopes == std::vector<std::filesystem::path>(
+                             {"added-root", "added-root", "added-root",
+                              "added-root", ""}),
+         "registration completion does not broaden the resumed folder scope");
+}
+
+void testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume() {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool firstEntered = false;
+  bool releaseFirstToCheckpoint = false;
+  std::vector<std::string> completed;
+
+  chart_library_tasks::ChartLibraryTaskService service(
+      [&](const auto &request, const auto &, auto publishProgress,
+          auto waitForResume) {
+        publishProgress({.current = 1,
+                         .total = 4,
+                         .stage = ChartScanProgressStage::ScanningRoots},
+                        "Scanning roots");
+        if (request.title == "first") {
+          std::unique_lock lock(mutex);
+          firstEntered = true;
+          changed.notify_all();
+          changed.wait(lock, [&] { return releaseFirstToCheckpoint; });
+        }
+        if (!waitForResume()) {
+          return chart_library_tasks::TaskRunResult{
+              .disposition =
+                  chart_library_tasks::TaskRunDisposition::Paused,
+              .detail = "Paused"};
+        }
+        {
+          std::lock_guard lock(mutex);
+          completed.push_back(request.title);
+        }
+        changed.notify_all();
+        return chart_library_tasks::TaskRunResult{};
+      });
+
+  service.start();
+  const auto firstId = service.enqueue({.title = "first"});
+  {
+    std::unique_lock lock(mutex);
+    expect(changed.wait_for(lock, std::chrono::seconds(2),
+                            [&] { return firstEntered; }),
+           "first task reaches its checkpoint");
+  }
+
+  service.setGameplayPaused(true);
+  const auto secondId = service.enqueue({.title = "second"});
+  auto paused = service.snapshot();
+  const auto statusFor = [&](std::uint64_t id) {
+    for (const auto &task : paused.tasks) {
+      if (task.id == id) {
+        return task.status;
+      }
+    }
+    return chart_library_tasks::TaskStatus::Failed;
+  };
+  expect(statusFor(firstId) == chart_library_tasks::TaskStatus::Paused,
+         "gameplay pause publishes current task as paused");
+  expect(statusFor(secondId) == chart_library_tasks::TaskStatus::Paused,
+         "gameplay pause publishes queued task as paused");
+  expect(paused.progress.valid && paused.progress.taskId == firstId &&
+             paused.progress.current == 1 &&
+             paused.progress.stage == ChartScanProgressStage::ScanningRoots,
+         "pause retains current task progress");
+
+  {
+    std::lock_guard lock(mutex);
+    releaseFirstToCheckpoint = true;
+  }
+  changed.notify_all();
+  {
+    std::unique_lock lock(mutex);
+    const bool ranWhilePaused = changed.wait_for(
+        lock, std::chrono::milliseconds(50), [&] { return !completed.empty(); });
+    expect(!ranWhilePaused, "current task stays blocked during gameplay");
+  }
+
+  service.setGameplayPaused(false);
+  {
+    std::unique_lock lock(mutex);
+    expect(changed.wait_for(lock, std::chrono::seconds(2),
+                            [&] { return completed.size() == 2; }),
+           "resume completes current and queued tasks");
+    expect(completed == std::vector<std::string>{"first", "second"},
+           "resume preserves current-before-queued ordering");
+  }
+
+  auto completedSnapshot = service.snapshot();
+  completedSnapshot.tasks.front().detail = "mutated copy";
+  expect(service.snapshot().tasks.front().detail == "Complete",
+         "snapshot mutation cannot change service state");
+  service.shutdown();
+}
+
+void testProgressUpdatesTaskRowAndProgressSnapshotTogether() {
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool progressPublished = false;
+  bool release = false;
+  chart_library_tasks::ChartLibraryTaskService service(
+      [&](const auto &, const auto &, auto publishProgress, auto) {
+        publishProgress({.current = 2,
+                         .total = 8,
+                         .stage = ChartScanProgressStage::ParsingCharts},
+                        "Parsing charts");
+        std::unique_lock lock(mutex);
+        progressPublished = true;
+        changed.notify_all();
+        changed.wait(lock, [&] { return release; });
+        return chart_library_tasks::TaskRunResult{};
+      });
+
+  const auto id = service.enqueue({.title = "refresh"});
+  {
+    std::unique_lock lock(mutex);
+    expect(changed.wait_for(lock, std::chrono::seconds(2),
+                            [&] { return progressPublished; }),
+           "runner publishes progress");
+  }
+  const auto snapshot = service.snapshot();
+  const auto *task = taskFor(snapshot, id);
+  expect(task != nullptr && task->current == 2 && task->total == 8 &&
+             task->fraction == 0.25 && task->detail == "Parsing charts",
+         "task row advances with published progress");
+  expect(snapshot.progress.valid && snapshot.progress.taskId == id &&
+             snapshot.progress.current == 2 &&
+             snapshot.progress.total == 8 &&
+             snapshot.progress.basisPoints == 2500 &&
+             snapshot.progress.stage == ChartScanProgressStage::ParsingCharts,
+         "progress snapshot advances with the same values");
+
+  {
+    std::lock_guard lock(mutex);
+    release = true;
+  }
+  changed.notify_all();
+  expect(waitUntil([&] {
+           const auto current = service.snapshot();
+           const auto *row = taskFor(current, id);
+           return row != nullptr &&
+                  row->status == chart_library_tasks::TaskStatus::Complete;
+         }),
+         "progress task reaches terminal state");
+  service.shutdown();
+}
+
+void testFailuresCompletionsAndHistoryRemainObservable() {
+  chart_library_tasks::ChartLibraryTaskService service(
+      [](const auto &request, const auto &, auto, auto) {
+        if (request.title == "throws") {
+          throw std::runtime_error("scanner exploded");
+        }
+        if (request.kind ==
+            chart_library_tasks::TaskKind::IndexDownloadedPath) {
+          return chart_library_tasks::TaskRunResult{
+              .downloadedIndex =
+                  chart_library_tasks::DownloadedIndexCompletion{
+                      .chartPath = "download/chart.bms",
+                      .targetIdentity = {.sha256 = "sha"},
+                      .selectionGeneration = 9}};
+        }
+        return chart_library_tasks::TaskRunResult{};
+      });
+
+  const auto failedId = service.enqueue({.title = "throws"});
+  expect(waitUntil([&] {
+           const auto current = service.snapshot();
+           const auto *row = taskFor(current, failedId);
+           return row != nullptr &&
+                  row->status == chart_library_tasks::TaskStatus::Failed;
+         }),
+         "runner exception reaches failed state");
+  const auto failed = service.snapshot();
+  expect(taskFor(failed, failedId) != nullptr &&
+             taskFor(failed, failedId)->detail == "scanner exploded",
+         "runner exception detail remains observable");
+
+  const auto downloadId = service.enqueue(
+      {.kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
+       .title = "index"});
+  expect(waitUntil([&] {
+           const auto current = service.snapshot();
+           const auto *row = taskFor(current, downloadId);
+           return row != nullptr &&
+                  row->status == chart_library_tasks::TaskStatus::Complete;
+         }),
+         "downloaded-index task completes");
+  auto completions = service.takeDownloadedIndexCompletions();
+  expect(completions.size() == 1 &&
+             completions.front().chartPath == "download/chart.bms" &&
+             completions.front().targetIdentity.sha256 == "sha" &&
+             completions.front().selectionGeneration == 9,
+         "downloaded-index completion is value-owned");
+  expect(service.takeDownloadedIndexCompletions().empty(),
+         "downloaded-index completions are drained once");
+
+  for (int index = 0; index < 25; ++index) {
+    service.enqueue({.title = "history " + std::to_string(index)});
+  }
+  expect(waitUntil([&] { return service.snapshot().activeCount == 0; }),
+         "history tasks all reach terminal states");
+  const auto history = service.snapshot();
+  expect(history.tasks.size() == 24,
+         "terminal task history retains exactly 24 rows");
+  expect(history.tasks.front().title == "history 1" &&
+             history.tasks.back().title == "history 24",
+         "history removes the oldest terminal rows first");
+  service.shutdown();
+}
+
+void testReservedPlatformCopyTaskCanBeQueuedOrFailed() {
+  chart_library_tasks::ChartLibraryTaskService service(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+
+  const auto queuedId = service.reserve("Import Archive", "Copying archive");
+  const auto reserved = service.snapshot();
+  expect(taskFor(reserved, queuedId) != nullptr &&
+             taskFor(reserved, queuedId)->status ==
+                 chart_library_tasks::TaskStatus::Running &&
+             taskFor(reserved, queuedId)->detail == "Copying archive",
+         "platform copy reservation is visible as active work");
+  expect(service.enqueueReserved(
+             queuedId,
+             {.kind = chart_library_tasks::TaskKind::AndroidImport,
+              .title = "Import Archive",
+              .androidImportPath = "copied.zip"}),
+         "reserved platform copy can enter the worker queue");
+  expect(waitUntil([&] {
+           const auto current = service.snapshot();
+           const auto *row = taskFor(current, queuedId);
+           return row != nullptr &&
+                  row->status == chart_library_tasks::TaskStatus::Complete;
+         }),
+         "queued reservation completes with its original task ID");
+
+  const auto failedId = service.reserve("Import Folder", "Copying folder");
+  expect(service.failReserved(failedId, "Folder import cancelled."),
+         "reserved platform copy can publish a failure");
+  const auto failed = service.snapshot();
+  expect(taskFor(failed, failedId) != nullptr &&
+             taskFor(failed, failedId)->status ==
+                 chart_library_tasks::TaskStatus::Failed &&
+             taskFor(failed, failedId)->detail == "Folder import cancelled.",
+         "failed reservation retains the platform error");
+  service.shutdown();
+}
+
+void testAndroidImportsKeepOriginAcrossInterleavedResults() {
+  std::mutex mutex;
+  std::vector<chart_library_tasks::TaskRequest> requests;
+  chart_library_tasks::ChartLibraryTaskService service(
+      [&](const auto &request, const auto &, auto, auto) {
+        std::lock_guard lock(mutex);
+        requests.push_back(request);
+        return chart_library_tasks::TaskRunResult{};
+      });
+  expect(service.beginAndroidImport("shared-zip", false),
+         "shared archive reserves its own task before copying");
+  expect(service.beginAndroidImport("manual-folder", true),
+         "manual folder reserves a separate task before copying");
+  const auto reserved = service.snapshot();
+  const auto archiveId = reserved.tasks.at(0).id;
+  const auto folderId = reserved.tasks.at(1).id;
+  expect(!service.finishAndroidImport("cancelled-picker", true, "", "Cancelled"),
+         "a cancelled picker without a copy cannot consume another reservation");
+  expect(!service.beginAndroidImport("shared-zip", false),
+         "duplicate request tokens cannot replace a reservation");
+  expect(service.beginAndroidImport("unsupported-external-file", false) &&
+             service.finishAndroidImport("unsupported-external-file", false, "",
+                                         "Unsupported archive"),
+         "an external validation error completes only its own reservation");
+  const auto withError = service.snapshot();
+  expect(withError.tasks.at(0).id == archiveId &&
+             withError.tasks.at(0).status == chart_library_tasks::TaskStatus::Running &&
+             withError.tasks.at(1).id == folderId &&
+             withError.tasks.at(1).status == chart_library_tasks::TaskStatus::Running &&
+             withError.tasks.at(2).status == chart_library_tasks::TaskStatus::Failed,
+         "non-task and external-error results leave valid copy origins untouched");
+  expect(!service.finishAndroidImport("shared-zip", true, "wrong", ""),
+         "a mismatched result type cannot consume an import reservation");
+  expect(service.finishAndroidImport("shared-zip", false, "shared.zip", ""),
+         "shared archive completion matches its originating token");
+  expect(service.finishAndroidImport("manual-folder", true, "BMS/folder", ""),
+         "manual folder completion matches its originating token");
+  expect(!service.finishAndroidImport("shared-zip", false, "duplicate.zip", ""),
+         "duplicate results cannot enqueue another task");
+  expect(waitUntil([&] {
+           std::lock_guard lock(mutex);
+           return requests.size() == 2;
+         }),
+         "both independently identified imports run");
+  service.shutdown();
+  std::lock_guard lock(mutex);
+  expect(requests.size() == 2 && requests[0].id == archiveId &&
+             !requests[0].androidImportFolder &&
+             requests[0].androidImportPath == "shared.zip" &&
+             requests[1].id == folderId && requests[1].androidImportFolder &&
+             requests[1].androidImportPath == "BMS/folder",
+         "archive and folder retain their own ID, path, and type");
+}
+
+void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
+  chart_library_tasks::ChartLibraryTaskService service(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  service.setGameplayPaused(true);
+  expect(service.beginAndroidImport("folder", true),
+         "an import can reserve while gameplay is paused");
+  expect(service.beginAndroidImport("archive", false),
+         "an archive can reserve while gameplay is paused");
+  expect(service.androidImportCopyState("folder") == 0 &&
+             service.androidImportCopyState("archive") == 0,
+         "both Java copy kinds must wait during gameplay");
+  service.setGameplayPaused(false);
+  const auto resumed = service.snapshot();
+  expect(service.androidImportCopyState("folder") == 1 &&
+             resumed.tasks.at(0).status == chart_library_tasks::TaskStatus::Running,
+         "reserved Java copy resumes without leaving a paused status row");
+  service.setGameplayPaused(true);
+  expect(service.finishAndroidImport("archive", false, "", "Activity destroyed"),
+         "activity cancellation can finish a paused copy");
+  expect(service.androidImportCopyState("archive") == -1 &&
+             service.androidImportCopyState("unknown") == -1,
+         "cancelled and unknown tokens cannot continue copying");
+  service.shutdown();
+  expect(service.androidImportCopyState("folder") == -1,
+         "shutdown cancels a reserved copy even without a native worker");
+  expect(!service.beginAndroidImport("after-shutdown", false),
+         "late Java workers cannot reserve after native shutdown");
+  expect(service.snapshot().activeCount == 0,
+         "cancelled Java copies do not leave permanent active rows");
+}
+
+} // namespace
+
+int main() {
+  testSnapshotCarriesQueueAndProgressAsValues();
+  testWorkerRunsQueuedTasksOnceInOrder();
+  testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask();
+  testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume();
+  testProgressUpdatesTaskRowAndProgressSnapshotTogether();
+  testFailuresCompletionsAndHistoryRemainObservable();
+  testReservedPlatformCopyTaskCanBeQueuedOrFailed();
+  testAndroidImportsKeepOriginAcrossInterleavedResults();
+  testAndroidCopyCheckpointsFollowPauseAndLifecycle();
+  if (failures != 0) {
+    std::cerr << failures << " chart library task test(s) failed\n";
+    return EXIT_FAILURE;
+  }
+  std::cout << "chart library task tests passed\n";
+  return EXIT_SUCCESS;
+}

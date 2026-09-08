@@ -457,7 +457,8 @@ inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
 }
 
 inline PlayOptionReplayInfo
-applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option) {
+applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option,
+                         const std::string &option2) {
   PlayOptionReplayInfo info;
   if (!applyPlayOptionModifier(chart, option, std::nullopt, 0, info.option,
                                info.seed)) {
@@ -465,11 +466,16 @@ applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option) {
   }
   if (chart.Meta.IsDP &&
       !laneAssignNotationFromOption(info.option.value_or("")).has_value() &&
-      !applyPlayOptionModifier(chart, option, std::nullopt, 1, info.option2,
+      !applyPlayOptionModifier(chart, option2, std::nullopt, 1, info.option2,
                                info.seed2)) {
     return {};
   }
   return info;
+}
+
+inline PlayOptionReplayInfo
+applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option) {
+  return applySelectedPlayOptions(chart, option, option);
 }
 
 inline std::optional<std::vector<int>>

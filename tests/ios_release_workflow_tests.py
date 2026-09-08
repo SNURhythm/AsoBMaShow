@@ -146,6 +146,18 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("github_pull_request_to_develop?", self.fastfile)
         self.assertIn("github_pull_request?", self.fastfile)
 
+    def test_distribution_archives_use_the_matching_installed_signing(self):
+        version = (FASTFILE.parent.parent / ".ruby-version").read_text().strip()
+        project_ruby = Path.home() / ".asdf/installs/ruby" / version / "bin/ruby"
+        ruby = str(project_ruby) if project_ruby.is_file() else shutil.which("ruby")
+        if not ruby:
+            self.skipTest("Ruby is required for the offline lane fixture")
+        result = subprocess.run(
+            [ruby, str(ROOT / "tests/ios_distribution_signing_fixture.rb"), str(FASTFILE)],
+            text=True, capture_output=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_testflight_build_number_is_allocated_inside_serialized_lane(self):
         lane = self.fastfile.split("lane :testflight_release do", 1)[1]
         self.assertIn(

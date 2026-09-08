@@ -11,14 +11,40 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
+#include <iostream>
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace bounded_allocation_probe {
+thread_local bool enabled = false;
+thread_local std::size_t largest = 0;
+thread_local std::stop_source *cancelOnChunk = nullptr;
+}
+
+void *operator new(std::size_t size) {
+  if (bounded_allocation_probe::enabled) {
+    bounded_allocation_probe::largest =
+        std::max(bounded_allocation_probe::largest, size);
+  }
+  if (bounded_allocation_probe::cancelOnChunk != nullptr && size >= 64 * 1024) {
+    bounded_allocation_probe::cancelOnChunk->request_stop();
+  }
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  throw std::bad_alloc();
+}
+
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
 
 namespace {
 
@@ -336,6 +362,340 @@ void testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce() {
   assert(bytes.empty());
 }
 
+void writeStoredZipContents(const std::filesystem::path &path,
+                            const std::string &entryPath,
+                            const std::string &contents) {
+  auto writer = makeArchiveWriteHandle();
+  assert(writer);
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
+         ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
+         ARCHIVE_OK);
+
+  ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+  assert(entry);
+  archive_entry_set_pathname(entry.get(), entryPath.c_str());
+  archive_entry_set_filetype(entry.get(), AE_IFREG);
+  archive_entry_set_perm(entry.get(), 0644);
+  archive_entry_set_size(entry.get(),
+                         static_cast<la_int64_t>(contents.size()));
+  assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+  assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+         static_cast<la_ssize_t>(contents.size()));
+  assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+std::uint32_t readLeU32(const unsigned char *bytes) {
+  return static_cast<std::uint32_t>(bytes[0]) |
+         (static_cast<std::uint32_t>(bytes[1]) << 8u) |
+         (static_cast<std::uint32_t>(bytes[2]) << 16u) |
+         (static_cast<std::uint32_t>(bytes[3]) << 24u);
+}
+
+void writeLeU32(unsigned char *bytes, std::uint32_t value) {
+  bytes[0] = static_cast<unsigned char>(value & 0xffu);
+  bytes[1] = static_cast<unsigned char>((value >> 8u) & 0xffu);
+  bytes[2] = static_cast<unsigned char>((value >> 16u) & 0xffu);
+  bytes[3] = static_cast<unsigned char>((value >> 24u) & 0xffu);
+}
+
+// Rewrites the declared uncompressed size in the central directory of a stored
+// ZIP entry to a value smaller than the actual content, simulating a lying
+// central directory that under-reports an entry's real uncompressed output.
+// Both the archive index and the bounded extraction stat are built from the
+// central directory, so this is the field that must lie to trip the
+// streaming-bound enforcement rather than the pre-gate size check.
+bool understateZipUncompressedSizes(const std::filesystem::path &path,
+                                    const std::string &entryPath,
+                                    std::uint32_t newUncompressedSize) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    return false;
+  }
+  std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)),
+                                   std::istreambuf_iterator<char>());
+  input.close();
+  const std::vector<unsigned char> name(entryPath.begin(), entryPath.end());
+
+  constexpr std::uint32_t kCentralDirectorySignature = 0x02014b50u;
+  std::size_t patchedEntries = 0;
+  for (std::size_t offset = 0;
+       (offset = static_cast<std::size_t>(std::search(
+                     bytes.begin() + offset, bytes.end(), name.begin(),
+                     name.end()) -
+                 bytes.begin())) < bytes.size();
+       ++offset) {
+    if (offset < 46 ||
+        readLeU32(&bytes[offset - 46]) != kCentralDirectorySignature ||
+        offset - 46 + 28 > bytes.size()) {
+      // The local header and other name occurrences are skipped; only the
+      // central directory entry carries the declared uncompressed size.
+      if (offset + 1 >= bytes.size()) {
+        break;
+      }
+      continue;
+    }
+    writeLeU32(&bytes[offset - 46 + 24], newUncompressedSize);
+    ++patchedEntries;
+  }
+  if (patchedEntries != 1) {
+    return false;
+  }
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output) {
+    return false;
+  }
+  output.write(reinterpret_cast<const char *>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  output.close();
+  return true;
+}
+
+void testZipBoundedReadStreamsFullInBoundsEntry() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "streamed-full.zip";
+  const std::string payload = "0123456789abcdef-golden-bounded-payload";
+  writeStoredZipContents(archivePath, "content.bin", payload);
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "content.bin"), bytes,
+      payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+
+  bytes.clear();
+  error.clear();
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "content.bin"), bytes, 4096,
+      &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+}
+
+void testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc() {
+  TempDirectory temporary;
+  const auto validPath = temporary.path() / "valid-pcm.zip";
+  const auto corruptPath = temporary.path() / "corrupt-pcm.zip";
+  std::string payload(44 + 128 * 1024, '\0');
+  payload.replace(0, 4, "RIFF");
+  payload.replace(8, 8, "WAVEfmt ");
+  payload.replace(36, 4, "data");
+  auto *header = reinterpret_cast<unsigned char *>(payload.data());
+  writeLeU32(header + 4, static_cast<std::uint32_t>(payload.size() - 8));
+  writeLeU32(header + 16, 16);
+  payload[20] = 1;
+  payload[22] = 1;
+  writeLeU32(header + 24, 44100);
+  writeLeU32(header + 28, 88200);
+  payload[32] = 2;
+  payload[34] = 16;
+  writeLeU32(header + 40, static_cast<std::uint32_t>(payload.size() - 44));
+  writeStoredZipContents(validPath, "preview.wav", payload);
+
+  std::ifstream input(validPath, std::ios::binary);
+  assert(input);
+  std::string archiveBytes((std::istreambuf_iterator<char>(input)),
+                           std::istreambuf_iterator<char>());
+  const auto payloadOffset = archiveBytes.find(payload);
+  assert(payloadOffset != std::string::npos);
+  archiveBytes[payloadOffset + 44 + 65536] ^= 1;
+  std::ofstream output(corruptPath, std::ios::binary);
+  assert(output);
+  output.write(archiveBytes.data(),
+               static_cast<std::streamsize>(archiveBytes.size()));
+  output.close();
+  assert(std::filesystem::file_size(validPath) ==
+         std::filesystem::file_size(corruptPath));
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  const auto validVirtualPath =
+      archive_file::makeVirtualPath(validPath, "preview.wav");
+  assert(archive_file::readFileBounded(validVirtualPath, bytes,
+                                      payload.size(), &error));
+  assert(std::string(bytes.begin(), bytes.end()) == payload);
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(corruptPath, entries, &error));
+  assert(entries.size() == 1 && entries.front().size == payload.size());
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(corruptPath, "preview.wav"), bytes,
+      payload.size(), &error));
+  assert(bytes.empty());
+  assert(error.find("CRC") != std::string::npos);
+
+  error.clear();
+  assert(!archive_file::readFileBounded(validVirtualPath, bytes,
+                                       payload.size() - 1, &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+  std::stop_source stopped;
+  stopped.request_stop();
+  bytes.assign(1, 0xff);
+  error.clear();
+  assert(!archive_file::readFileBounded(validVirtualPath, bytes,
+                                       payload.size(), &error,
+                                       stopped.get_token()));
+  assert(bytes.empty());
+  assert(error.empty());
+  assert(archive_file::readFileBounded(validVirtualPath, bytes,
+                                      payload.size(), &error));
+  assert(std::string(bytes.begin(), bytes.end()) == payload);
+}
+
+void testZipBoundedReadAcceptsEmptyStoredEntry() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "empty-entry.zip";
+  writeStoredZipContents(archivePath, "empty.bin", "");
+  std::vector<unsigned char> bytes{0xff};
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "empty.bin"), bytes, 0,
+      &error));
+  assert(bytes.empty());
+  assert(error.empty());
+}
+
+void testBoundedReadFallsBackToAlternativeAudioExtension() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "preview-extension.zip";
+  const std::string payload = "ogg-lives-here";
+  // The archive stores the audio as .ogg, but the chart references it as .wav
+  // (BMS #PREVIEW quirk: the extension in the chart need not match the file).
+  writeStoredZipContents(archivePath, "folder/music.ogg", payload);
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "folder/music.wav"), bytes,
+      payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+  assert(bytes == std::vector<unsigned char>(payload.begin(), payload.end()));
+}
+
+void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "lied-central-dir.zip";
+  const std::string content = "abcdefghijklmnopqrstuvwxyz012345";
+  writeStoredZipContents(archivePath, "lied.bin", content);
+  assert(content.size() > 7);
+  assert(understateZipUncompressedSizes(archivePath, "lied.bin", 7));
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  // The indexed size (7) is within the limit, so the pre-gate passes and the
+  // bound must be enforced during bounded extraction; a truncated or oversized
+  // buffer must not be handed back as a successful read.
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "lied.bin"), bytes, 7,
+      &error));
+  assert(bytes.empty());
+  assert(!error.empty());
+}
+
+void testBoundedReadRejectsOversizedSevenZipEntry() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "bounded.7z";
+  const std::string payload = "seven zip bounded read regression payload 12345";
+  writeSevenZip(archivePath, payload);
+
+  std::vector<unsigned char> bytes;
+  std::string error;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "readme.txt"), bytes,
+      payload.size(), &error));
+  assert(std::string_view(reinterpret_cast<const char *>(bytes.data()),
+                          bytes.size()) == payload);
+
+  bytes.clear();
+  error.clear();
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(archivePath, "readme.txt"), bytes,
+      payload.size() - 1U, &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") != std::string::npos);
+}
+
+void testBzipZipFallbackStopsBeforeOversizedAllocation() {
+  constexpr unsigned char fixture[] = {
+      0x50,0x4b,0x03,0x04,0x2e,0x00,0x00,0x00,0x0c,0x00,0x61,0xae,0x28,0x5d,0xc9,0xbe,
+      0xf6,0x81,0x30,0x00,0x00,0x00,0x00,0x00,0x10,0x00,0x0b,0x00,0x00,0x00,0x61,0x72,
+      0x74,0x77,0x6f,0x72,0x6b,0x2e,0x70,0x6e,0x67,0x42,0x5a,0x68,0x39,0x31,0x41,0x59,
+      0x26,0x53,0x59,0x6d,0xc2,0x25,0x57,0x00,0x08,0x0a,0x44,0x00,0x80,0x04,0x20,0x00,
+      0x00,0x08,0x20,0x00,0x30,0xcc,0x05,0x49,0xea,0x71,0x06,0x01,0x40,0x60,0x1e,0x2e,
+      0xe4,0x8a,0x70,0xa1,0x20,0xdb,0x84,0x4a,0xae,0x50,0x4b,0x01,0x02,0x2e,0x03,0x2e,
+      0x00,0x00,0x00,0x0c,0x00,0x61,0xae,0x28,0x5d,0xc9,0xbe,0xf6,0x81,0x30,0x00,0x00,
+      0x00,0x00,0x00,0x10,0x00,0x0b,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x80,0x01,0x00,0x00,0x00,0x00,0x61,0x72,0x74,0x77,0x6f,0x72,0x6b,0x2e,0x70,
+      0x6e,0x67,0x50,0x4b,0x05,0x06,0x00,0x00,0x00,0x00,0x01,0x00,0x01,0x00,0x39,0x00,
+      0x00,0x00,0x59,0x00,0x00,0x00,0x00,0x00};
+  TempDirectory temporary;
+  const auto valid = temporary.path() / "valid-bzip.zip";
+  const auto forged = temporary.path() / "forged-bzip.zip";
+  for (const auto &path : {valid, forged}) {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
+  }
+  assert(understateZipUncompressedSizes(forged, "artwork.png", 1));
+  {
+    std::fstream output(forged, std::ios::binary | std::ios::in | std::ios::out);
+    const unsigned char declaredSize[] = {1, 0, 0, 0};
+    output.seekp(22);
+    output.write(reinterpret_cast<const char *>(declaredSize), sizeof(declaredSize));
+  }
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(forged, entries, &error));
+  assert(entries.size() == 1 && entries.front().size == 1);
+  for (const std::size_t budget : {128u * 1024u, 350000u}) {
+    std::vector<unsigned char> bytes;
+    bounded_allocation_probe::largest = 0;
+    bounded_allocation_probe::enabled = true;
+    const bool succeeded = archive_file::readFileBounded(
+        archive_file::makeVirtualPath(forged, "artwork.png"), bytes, budget, &error);
+    bounded_allocation_probe::enabled = false;
+    std::cerr << "BZIP2 fallback largest allocation: "
+              << bounded_allocation_probe::largest << " budget: " << budget << '\n';
+    assert(!succeeded && bytes.empty());
+    assert(bounded_allocation_probe::largest <= budget);
+    assert(error.find("exceeds bounded read limit") != std::string::npos);
+  }
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFileBounded(
+      archive_file::makeVirtualPath(valid, "artwork.png"), bytes, 1048576, &error));
+  assert(bytes.size() == 1048576);
+  assert(std::ranges::all_of(bytes, [](unsigned char value) { return value == 'A'; }));
+  const auto corrupt = temporary.path() / "corrupt-bzip.zip";
+  {
+    auto corruptedFixture = std::to_array(fixture);
+    corruptedFixture[14] ^= 1;
+    corruptedFixture[105] ^= 1;
+    std::ofstream output(corrupt, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(corruptedFixture.data()),
+                 corruptedFixture.size());
+  }
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(corrupt, "artwork.png"), bytes, 1048576, &error));
+  assert(bytes.empty());
+  assert(!archive_file::readFileBounded(
+      archive_file::makeVirtualPath(forged, "artwork.png"), bytes, 1048576, &error));
+  assert(bytes.empty());
+  assert(error.find("exceeds bounded read limit") == std::string::npos);
+  std::vector<unsigned char> cancelledBytes;
+  std::stop_source stop;
+  bounded_allocation_probe::cancelOnChunk = &stop;
+  const bool cancelledRead = archive_file::readFileBounded(
+      archive_file::makeVirtualPath(forged, "artwork.png"), cancelledBytes,
+      1048576, &error, stop.get_token());
+  bounded_allocation_probe::cancelOnChunk = nullptr;
+  assert(stop.stop_requested());
+  assert(!cancelledRead && cancelledBytes.empty());
+}
+
 void testIndependentSevenZipCacheMissesOpenConcurrently() {
   TempDirectory temporary;
   const auto firstPath = temporary.path() / "first.7z";
@@ -503,6 +863,491 @@ void testDeltaFilteredSevenZipUsesSdk() {
   }));
 }
 
+void testFullUnzipHonorsPauseDuringExtraction() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "pause-during-unzip.zip";
+  writeStoredZip(archivePath,
+                 {"folder/first.bms", "folder/second.bms",
+                  "folder/third.bms"});
+
+  bool wroteFirstFile = false;
+  int pauseCalls = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      archivePath, temporary.path() / "output", &error, nullptr,
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0) wroteFirstFile = true;
+      },
+      [&] {
+        ++pauseCalls;
+        return !wroteFirstFile;
+      });
+
+  assert(!result.has_value());
+  assert(wroteFirstFile);
+  assert(pauseCalls > 0);
+  assert(error == "Unzip cancelled");
+}
+
+void testArchiveIndexPersistsAcrossColdCacheRestart() {
+  constexpr int kEntryCount = 20;
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "persist.zip";
+  std::vector<std::string> entryPaths;
+  entryPaths.reserve(kEntryCount);
+  for (int index = 0; index < kEntryCount; ++index) {
+    entryPaths.push_back("folder/entry-" + std::to_string(index) + ".bms");
+  }
+  writeStoredZip(archivePath, entryPaths);
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  std::vector<archive_file::Entry> firstEntries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, firstEntries, &error));
+  assert(firstEntries.size() == kEntryCount);
+
+  // Simulate a cold restart: drop the in-memory index and re-list. The
+  // persisted index file should be reloaded from disk (same size/mtime),
+  // reproducing the same entry count without rebuilding from the archive.
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> reloadedEntries;
+  assert(archive_file::listEntries(archivePath, reloadedEntries, &error));
+  assert(reloadedEntries.size() == kEntryCount);
+
+  // A changed archive (different mtime) must not trust the stale disk index;
+  // it rebuilds and still yields the correct count.
+  std::error_code touchError;
+  std::filesystem::last_write_time(
+      archivePath, std::filesystem::file_time_type(
+                       std::filesystem::last_write_time(archivePath) +
+                       std::chrono::seconds(2)),
+      touchError);
+  assert(!touchError);
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> rebuiltEntries;
+  assert(archive_file::listEntries(archivePath, rebuiltEntries, &error));
+  assert(rebuiltEntries.size() == kEntryCount);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testArchiveIndexPrunesOrphanedCacheFiles() {
+  TempDirectory temporary;
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  const auto keepArchive = temporary.path() / "keep.zip";
+  const auto removedArchive = temporary.path() / "removed.zip";
+  writeStoredZip(keepArchive, {"keep/a.bms"});
+  writeStoredZip(removedArchive, {"removed/a.bms"});
+
+  std::string error;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(keepArchive, entries, &error));
+  assert(archive_file::listEntries(removedArchive, entries, &error));
+
+  // Both archives have cache files.
+  std::size_t before = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    if (entry.is_regular_file()) {
+      ++before;
+    }
+  }
+  assert(before == 2);
+
+  // Prune with only the still-present archive listed: removed.zip's cache file
+  // is dropped, keep.zip's is retained.
+  const std::size_t pruned =
+      archive_file::pruneArchiveIndexCache({keepArchive});
+  assert(pruned == 1);
+
+  std::size_t after = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    if (entry.is_regular_file()) {
+      ++after;
+    }
+  }
+  assert(after == 1);
+
+  // The surviving archive still reloads from disk after clearing memory.
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> reloaded;
+  assert(archive_file::listEntries(keepArchive, reloaded, &error));
+  assert(reloaded.size() == 1);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testArchiveIndexPrunesOrphanedTmpCacheFiles() {
+  TempDirectory temporary;
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  const auto keepArchive = temporary.path() / "keep.zip";
+  const auto removedArchive = temporary.path() / "removed.zip";
+  writeStoredZip(keepArchive, {"keep/a.bms"});
+  writeStoredZip(removedArchive, {"removed/a.bms"});
+
+  std::string error;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(keepArchive, entries, &error));
+  assert(archive_file::listEntries(removedArchive, entries, &error));
+
+  // Simulate the orphans a crash between the temporary write and the rename in
+  // the index writer leaves behind: a .idx.tmp sibling for every persisted
+  // index, plus one whose hash no live archive produces.
+  std::size_t idxFiles = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    std::error_code typeError;
+    if (entry.is_regular_file(typeError) && !typeError &&
+        entry.path().extension() == ".idx") {
+      ++idxFiles;
+      std::error_code copyError;
+      std::filesystem::copy_file(entry.path(),
+                                 entry.path().string() + ".tmp", copyError);
+      assert(!copyError);
+    }
+  }
+  assert(idxFiles == 2);
+  std::ofstream(cacheDir / "archive-index-0000000000000000.idx.tmp",
+                std::ios::binary)
+      << "stale";
+
+  // Prune with only the still-present archive listed: the removed archive's
+  // .idx and both of its .idx.tmp orphans are dropped. The live archive's .idx
+  // is retained and its .idx.tmp sibling is left alone (the real .idx is
+  // authoritative).
+  const std::size_t pruned =
+      archive_file::pruneArchiveIndexCache({keepArchive});
+  assert(pruned == 3);
+  assert(std::filesystem::exists(
+      cacheDir / "archive-index-0000000000000000.idx.tmp") == false);
+
+  std::size_t remaining = 0;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    if (entry.is_regular_file()) {
+      ++remaining;
+    }
+  }
+  assert(remaining == 2);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testArchiveIndexPruningPreservesShortUnrelatedFiles() {
+  bool threw = false;
+  for (const std::string fileName : {"short", "sixsix", "seven77"}) {
+    TempDirectory temporary;
+    const auto cacheDir = temporary.path() / "idx";
+    std::filesystem::create_directories(cacheDir);
+    archive_file::setArchiveIndexCacheDirectory(cacheDir);
+    std::ofstream(cacheDir / fileName) << "unrelated";
+    try {
+      assert(archive_file::pruneArchiveIndexCache({}) == 0);
+    } catch (const std::out_of_range &error) {
+      std::cerr << "FAIL: pruning unrelated filename of length "
+                << fileName.size() << " threw: " << error.what() << '\n';
+      threw = true;
+    }
+    std::ifstream preserved(cacheDir / fileName);
+    std::string content;
+    preserved >> content;
+    assert(content == "unrelated");
+    archive_file::setArchiveIndexCacheDirectory({});
+    archive_file::clearArchiveIndexCacheForTesting();
+  }
+  assert(!threw);
+}
+
+void testCorruptIndexEntryCountIsRejected() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "corrupt-count.zip";
+  writeStoredZip(archivePath, {"folder/a.bms", "folder/b.bms"});
+  const auto cacheDir = temporary.path() / "idx";
+  std::filesystem::create_directories(cacheDir);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+
+  std::string error;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 2);
+
+  std::filesystem::path cacheFile;
+  for (const auto &entry : std::filesystem::directory_iterator(cacheDir)) {
+    std::error_code typeError;
+    if (entry.is_regular_file(typeError) && !typeError &&
+        entry.path().extension() == ".idx") {
+      cacheFile = entry.path();
+      break;
+    }
+  }
+  assert(!cacheFile.empty());
+
+  std::ifstream input(cacheFile, std::ios::binary);
+  assert(input);
+  std::string bytes((std::istreambuf_iterator<char>(input)),
+                    std::istreambuf_iterator<char>());
+  input.close();
+  // Layout: version(1) + keyLen(8) + key + size(8) + mtime(8) + backend(1) +
+  // sevenZipFormat(1) + entryCount(8). Overwrite the entry count with a value
+  // far larger than the file could ever hold; the loader must reject it
+  // instead of allocating an unbounded entry vector.
+  assert(bytes.size() >= 1 + 8 + 8 + 8 + 1 + 1 + 8);
+  const std::uint64_t keyLen =
+      static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[1])) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[2])) << 8) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[3])) << 16) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[4])) << 24) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[5])) << 32) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[6])) << 40) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[7])) << 48) |
+      (static_cast<std::uint64_t>(static_cast<unsigned char>(bytes[8])) << 56);
+  const std::size_t entryCountOffset = 1 + 8 + static_cast<std::size_t>(keyLen) +
+                                       8 + 8 + 1 + 1;
+  assert(entryCountOffset + 8 <= bytes.size());
+  bytes[entryCountOffset + 0] = '\xff';
+  bytes[entryCountOffset + 1] = '\xff';
+  bytes[entryCountOffset + 2] = '\xff';
+  bytes[entryCountOffset + 3] = '\xff';
+  bytes[entryCountOffset + 4] = '\xff';
+  bytes[entryCountOffset + 5] = '\xff';
+  bytes[entryCountOffset + 6] = '\xff';
+  bytes[entryCountOffset + 7] = '\xff';
+  {
+    std::ofstream output(cacheFile, std::ios::binary | std::ios::trunc);
+    assert(output);
+    output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    output.close();
+  }
+
+  // A corrupt index is discarded and the archive is re-listed instead of
+  // crashing on an unbounded reserve.
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  entries.clear();
+  error.clear();
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 2);
+
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testSingleFlightWaiterCancellation(bool completeBuilderDuringWaiterCallback) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() /
+      (completeBuilderDuringWaiterCallback ? "completed-builder.zip"
+                                          : "paused-builder.zip");
+  const auto callbackArchivePath = temporary.path() / "callback.zip";
+  writeStoredZip(archivePath, {"song.bms"});
+  writeStoredZip(callbackArchivePath, {"callback.bms"});
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::resetSingleFlightWaiterCountForTesting();
+
+  std::promise<void> builderPaused;
+  auto builderPausedFuture = builderPaused.get_future();
+  std::promise<void> resumeBuilder;
+  auto resumeBuilderFuture = resumeBuilder.get_future().share();
+  auto builder = std::async(std::launch::async, [&] {
+    bool paused = false;
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    const bool listed = archive_file::listEntries(
+        archivePath, entries, &error, [&] {
+          if (!paused) {
+            paused = true;
+            builderPaused.set_value();
+            assert(resumeBuilderFuture.wait_for(10s) ==
+                   std::future_status::ready);
+          }
+          return true;
+        });
+    assert(listed);
+    assert(error.empty());
+    assert(entries.size() == 1);
+    assert(entries.front().path == "song.bms");
+  });
+  assert(builderPausedFuture.wait_for(10s) == std::future_status::ready);
+
+  auto healthyWaiter = std::async(std::launch::async, [&] {
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    const bool listed = archive_file::listEntries(archivePath, entries, &error);
+    assert(listed);
+    assert(error.empty());
+    assert(entries.size() == 1);
+    assert(entries.front().path == "song.bms");
+  });
+  std::atomic_bool cancelWaiter{false};
+  std::promise<void> waiterPaused;
+  auto waiterPausedFuture = waiterPaused.get_future();
+  std::promise<void> resumeWaiter;
+  auto resumeWaiterFuture = resumeWaiter.get_future().share();
+  std::vector<archive_file::Entry> cancelledEntries;
+  std::string cancelledError;
+  auto cancelledWaiter = std::async(std::launch::async, [&] {
+    return archive_file::listEntries(
+        archivePath, cancelledEntries, &cancelledError, [&] {
+          if (!cancelWaiter.load(std::memory_order_acquire)) {
+            return true;
+          }
+          waiterPaused.set_value();
+          assert(resumeWaiterFuture.wait_for(10s) == std::future_status::ready);
+          std::vector<archive_file::Entry> callbackEntries;
+          std::string callbackError;
+          const bool listed = archive_file::listEntries(
+              callbackArchivePath, callbackEntries, &callbackError);
+          assert(listed);
+          assert(callbackError.empty());
+          assert(callbackEntries.size() == 1);
+          assert(callbackEntries.front().path == "callback.bms");
+          return false;
+        });
+  });
+
+  const auto registrationDeadline = std::chrono::steady_clock::now() + 10s;
+  while (archive_file::singleFlightWaiterCountForTesting() < 2 &&
+         std::chrono::steady_clock::now() < registrationDeadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  assert(archive_file::singleFlightWaiterCountForTesting() == 2);
+  cancelWaiter.store(true, std::memory_order_release);
+  bool cancelledWhileBuilderPaused = false;
+  if (completeBuilderDuringWaiterCallback) {
+    assert(waiterPausedFuture.wait_for(10s) == std::future_status::ready);
+    resumeBuilder.set_value();
+    assert(builder.wait_for(10s) == std::future_status::ready);
+    assert(healthyWaiter.wait_for(10s) == std::future_status::ready);
+    resumeWaiter.set_value();
+  } else {
+    resumeWaiter.set_value();
+    cancelledWhileBuilderPaused =
+        cancelledWaiter.wait_for(2s) == std::future_status::ready;
+    assert(builder.wait_for(0ms) == std::future_status::timeout);
+    assert(healthyWaiter.wait_for(0ms) == std::future_status::timeout);
+    resumeBuilder.set_value();
+  }
+  assert(builder.wait_for(10s) == std::future_status::ready);
+  assert(healthyWaiter.wait_for(10s) == std::future_status::ready);
+  assert(cancelledWaiter.wait_for(10s) == std::future_status::ready);
+  builder.get();
+  healthyWaiter.get();
+  const bool cancelledListed = cancelledWaiter.get();
+  assert(completeBuilderDuringWaiterCallback || cancelledWhileBuilderPaused);
+  assert(!cancelledListed);
+  assert(cancelledEntries.empty());
+  assert(cancelledError == "Operation cancelled");
+
+  std::vector<archive_file::Entry> cachedEntries;
+  std::string cachedError;
+  assert(archive_file::listEntries(archivePath, cachedEntries, &cachedError));
+  assert(cachedError.empty());
+  assert(cachedEntries.size() == 1);
+  assert(cachedEntries.front().path == "song.bms");
+  const auto logLines = archive_file::debugLogLines();
+  const auto indexAttempts = std::count_if(
+      logLines.begin(), logLines.end(), [&](const std::string &line) {
+        return line.find("Indexing archive:") != std::string::npos &&
+               line.find(archivePath.filename().string()) != std::string::npos;
+      });
+  assert(indexAttempts == 1);
+}
+
+void testSingleFlightWaitersDoNotEachReindexAfterFailedBuild() {
+  constexpr int kWorkerCount = 6;
+  TempDirectory temporary;
+  // A file that pretends to be a ZIP but cannot be indexed: every build
+  // attempt fails, which is what the single-flight waiters must observe
+  // instead of each queueing its own full index build.
+  const auto archivePath = temporary.path() / "broken.zip";
+  {
+    std::ofstream file(archivePath, std::ios::binary);
+    file << "not a real zip archive payload";
+  }
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::resetSingleFlightWaiterCountForTesting();
+
+  struct Gate {
+    std::mutex mutex;
+    std::condition_variable cv;
+    int arrived = 0;
+    bool builderInsideBuild = false;
+  };
+  Gate gate;
+
+  // Only the single-flight builder thread reaches a pause callback while
+  // inside the index build body. Hold it there until every non-builder worker
+  // is deterministically registered inside the single-flight wait (counted by
+  // the production test hook), then abort the build. No timing heuristic: the
+  // build cannot finish while the callback is blocked, so once the waiter
+  // count is complete no worker can still fall through to a second build.
+  auto pauseCallback = [&] {
+    std::unique_lock<std::mutex> lock(gate.mutex);
+    gate.builderInsideBuild = true;
+    gate.cv.notify_all();
+    const bool allWaitersRegistered = gate.cv.wait_for(
+        lock, 10s, [&] {
+          return archive_file::singleFlightWaiterCountForTesting() >=
+                 static_cast<std::uint32_t>(kWorkerCount - 1);
+        });
+    return allWaitersRegistered;
+  };
+
+  std::vector<std::atomic_bool> results(kWorkerCount);
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkerCount);
+  for (int index = 0; index < kWorkerCount; ++index) {
+    workers.emplace_back([&, index] {
+      {
+        std::unique_lock<std::mutex> lock(gate.mutex);
+        ++gate.arrived;
+        gate.cv.notify_all();
+      }
+      std::vector<archive_file::Entry> entries;
+      std::string error;
+      const bool listed = archive_file::listEntries(archivePath, entries,
+                                                    &error, pauseCallback);
+      results[index].store(listed, std::memory_order_release);
+    });
+  }
+
+  {
+    std::unique_lock<std::mutex> lock(gate.mutex);
+    const bool primaryReachedGate = gate.cv.wait_for(lock, 10s, [&] {
+      return gate.builderInsideBuild && gate.arrived == kWorkerCount;
+    });
+    assert(primaryReachedGate);
+  }
+  for (auto &worker : workers) {
+    worker.join();
+  }
+  for (int index = 0; index < kWorkerCount; ++index) {
+    assert(!results[index].load(std::memory_order_acquire));
+  }
+
+  // The one aborting builder logged the index attempt; no waiter re-indexed.
+  const auto logLines = archive_file::debugLogLines();
+  const std::string archiveName = archivePath.filename().string();
+  const std::size_t indexAttempts = std::count_if(
+      logLines.begin(), logLines.end(), [&](const std::string &line) {
+        return line.find("Indexing archive:") != std::string::npos &&
+               line.find(archiveName) != std::string::npos;
+      });
+  assert(indexAttempts == 1);
+}
+
 void testDebugLogRetainsNewestThousandLines() {
   for (int index = 0; index <= 1000; ++index) {
     archive_file::appendDebugLogLine("retention-marker-" +
@@ -528,9 +1373,28 @@ int main() {
   testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
   testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce();
   testIndependentSevenZipCacheMissesOpenConcurrently();
+  // Deliberately registered after the 7-Zip index-count assertion above:
+  // these bounded-read tests index real archives, which would otherwise pollute
+  // that assertion's retained debug-log window.
+  testZipBoundedReadStreamsFullInBoundsEntry();
+  testZipBoundedReadAcceptsEmptyStoredEntry();
+  testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc();
+  testBoundedReadFallsBackToAlternativeAudioExtension();
+  testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
+  testBoundedReadRejectsOversizedSevenZipEntry();
+  testBzipZipFallbackStopsBeforeOversizedAllocation();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
+  testFullUnzipHonorsPauseDuringExtraction();
+  testArchiveIndexPersistsAcrossColdCacheRestart();
+  testArchiveIndexPrunesOrphanedCacheFiles();
+  testArchiveIndexPrunesOrphanedTmpCacheFiles();
+  testArchiveIndexPruningPreservesShortUnrelatedFiles();
+  testCorruptIndexEntryCountIsRejected();
+  testSingleFlightWaiterCancellation(false);
+  testSingleFlightWaiterCancellation(true);
+  testSingleFlightWaitersDoNotEachReindexAfterFailedBuild();
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

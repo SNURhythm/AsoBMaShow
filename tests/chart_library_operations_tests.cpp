@@ -1,0 +1,968 @@
+#include "library/ChartLibraryOperations.h"
+#include "library/ChartLibraryPlatform.h"
+#include "ArchiveFile.h"
+#include "ArchiveRAII.h"
+#include "Utils.h"
+#include "bms_parser.hpp"
+#include "sqlite3.h"
+
+#include <archive_entry.h>
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <memory>
+#include <mutex>
+#include <set>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <vector>
+
+namespace {
+
+int failures = 0;
+
+void expect(bool condition, std::string_view message) {
+  if (!condition) {
+    std::cerr << "FAILED: " << message << '\n';
+    ++failures;
+  }
+}
+
+class TempDirectory {
+public:
+  TempDirectory() {
+    static std::atomic<unsigned long long> sequence{0};
+    const auto nonce =
+        std::chrono::steady_clock::now().time_since_epoch().count();
+    path_ = std::filesystem::temp_directory_path() /
+            ("asobmashow-library-operations-" + std::to_string(nonce) + "-" +
+             std::to_string(sequence.fetch_add(1)));
+    std::filesystem::create_directories(path_);
+  }
+
+  ~TempDirectory() {
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+  }
+
+  const std::filesystem::path &path() const { return path_; }
+
+private:
+  std::filesystem::path path_;
+};
+
+std::filesystem::path writeChart(
+    const std::filesystem::path &root,
+    const std::filesystem::path &filename = "operation.bms") {
+  std::filesystem::create_directories(root);
+  const auto chartPath = root / filename;
+  std::ofstream chart(chartPath);
+  chart << "#PLAYER 1\n"
+           "#GENRE Test\n"
+           "#TITLE Shared Operations\n"
+           "#ARTIST AsoBMaShow Test\n"
+           "#BPM 120\n"
+           "#PLAYLEVEL 1\n"
+           "#RANK 2\n"
+           "#TOTAL 100\n"
+           "#WAV01 sample.wav\n"
+           "#00111:01\n";
+  chart.close();
+  std::ofstream(root / "sample.wav", std::ios::binary).close();
+  return chartPath;
+}
+
+main_menu_library::FindBmsChartIdentity
+readChartIdentity(const std::filesystem::path &chartPath) {
+  bms_parser::Parser parser;
+  bms_parser::Chart *parsed = nullptr;
+  std::atomic_bool cancelled = false;
+  parser.Parse(chartPath, &parsed, false, true, cancelled);
+  std::unique_ptr<bms_parser::Chart> chart(parsed);
+  return chart ? main_menu_library::findBmsChartIdentity(chart->Meta)
+               : main_menu_library::FindBmsChartIdentity{};
+}
+
+std::filesystem::path writeArchiveCharts(const std::filesystem::path &root,
+                                         int count) {
+  const auto source = writeChart(root / "source");
+  std::ifstream input(source);
+  const std::string contents((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+  const auto path = root / "library" / "rebuild.zip";
+  std::filesystem::create_directories(path.parent_path());
+  auto writer = makeArchiveWriteHandle();
+  expect(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK,
+         "rebuild archive uses ZIP format");
+  expect(archive_write_open_filename(writer.get(), path.string().c_str()) ==
+             ARCHIVE_OK,
+         "rebuild archive fixture opens");
+  for (int index = 0; index < count; ++index) {
+    const auto name = "chart-" + std::to_string(index) + ".bms";
+    const auto chart = contents + "#TITLE Rebuild " + std::to_string(index) +
+                       "\n";
+    std::unique_ptr<archive_entry, decltype(&archive_entry_free)> entry(
+        archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name.c_str());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), static_cast<la_int64_t>(chart.size()));
+    expect(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK,
+           "rebuild archive writes chart header");
+    expect(archive_write_data(writer.get(), chart.data(), chart.size()) ==
+               static_cast<la_ssize_t>(chart.size()),
+           "rebuild archive writes chart contents");
+    expect(archive_write_finish_entry(writer.get()) == ARCHIVE_OK,
+           "rebuild archive finishes chart entry");
+  }
+  expect(archive_write_close(writer.get()) == ARCHIVE_OK,
+         "rebuild archive fixture closes");
+  return path;
+}
+
+chart_library_tasks::ChartLibraryOperationsDependencies
+dependencies(ChartRepository &repository, const std::filesystem::path &root,
+             bool &reloadRequested,
+             std::function<bool()> pauseProbe = {}) {
+  return {
+      .repository = repository,
+      .tablesDirectory = root / "tables",
+      .defaultDifficultyTablesSeeded = [] { return true; },
+      .setDefaultDifficultyTablesSeeded = [](bool) {},
+      .saveSettings = [] { return true; },
+      .pauseRequested = std::move(pauseProbe),
+      .requestReload = [&](bool includeFolders) {
+        reloadRequested = includeFolders;
+      },
+  };
+}
+
+void testRefreshStopsAtTheExistingPauseCheckpoint() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  writeChart(libraryRoot);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "temporary chart repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  std::stop_source stop;
+  int pauseCalls = 0;
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library",
+       .folderToAdd = libraryRoot},
+      stop.get_token(), [](const ChartScanProgress &, std::string_view) {},
+      [&] {
+        ++pauseCalls;
+        return false;
+      });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "false pause checkpoint returns a paused task");
+  expect(pauseCalls == 1, "refresh consults the first pause checkpoint once");
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->CountAllChartMeta() == 0,
+         "paused refresh does not mutate the chart library");
+  expect(!reloadRequested, "paused refresh does not publish a reload");
+}
+
+void testRefreshScansThroughTheRealRepository() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  writeChart(libraryRoot);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "scan repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  std::vector<ChartScanProgress> progress;
+  const auto before = repository.GetLibraryRevision();
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library",
+       .folderToAdd = libraryRoot},
+      std::stop_token{},
+      [&](const ChartScanProgress &value, std::string_view) {
+        progress.push_back(value);
+      },
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "refresh completes through the shared operation");
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->CountAllChartMeta() == 1,
+         "refresh indexes the real BMS fixture");
+  std::vector<ChartMetaRecord> records;
+  if (session.has_value()) session->QueryChartMeta({}, records);
+  expect(records.size() == 1 && records.front().addDateSeconds > 0,
+         "first scan persists Beatoraja SongData adddate seconds");
+  expect(repository.GetLibraryRevision() > before,
+         "refresh advances the repository library revision");
+  expect(!progress.empty(), "refresh publishes scanner progress");
+  expect(reloadRequested, "completed refresh requests selector reload");
+}
+
+void testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(
+    bool addFolder = false, bool rebuild = true,
+    bool pauseBeforeRegistration = false) {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto archive = writeArchiveCharts(temporary.path(), 105);
+  archive_file::setArchiveIndexCacheDirectory(temporary.path() / "index-cache");
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "rebuild repository is ready");
+  if (!addFolder) {
+    auto session = repository.OpenSession();
+    expect(session.has_value() && session->InsertEntry(archive.parent_path()),
+           "rebuild fixture registers its existing library root once");
+  } else {
+    const auto existingRoot = temporary.path() / "unrelated-library";
+    writeChart(existingRoot);
+    auto session = repository.OpenSession();
+    expect(session->InsertEntry(existingRoot), "unrelated root is registered");
+    auto batch = session->BeginScanBatch();
+    expect(batch && batch->CheckpointAndContinue(
+                        {.found = true, .phase = "archive", .subIndex = 7}),
+           "Add Folder starts with an existing checkpoint to invalidate");
+  }
+  bool reloadRequested = false;
+  std::atomic_bool gameplayPaused{false};
+  std::atomic_int attempt{0};
+  std::atomic_int parsingCurrent{-1};
+  std::atomic_int clearCount{0};
+  std::atomic_int registrationCount{0};
+  std::atomic_int resumedParsingCurrent{-1};
+  std::atomic_bool initialCheckpointInvalidated{false};
+  std::atomic_int rowsBeforeResumedScan{-1};
+  std::atomic_bool checkpointBeforeResumedScan{false};
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<TaskRunResult> results;
+  std::vector<bool> rebuildRequests;
+  ChartLibraryTaskService *servicePointer = nullptr;
+  const auto pause = [&] {
+    gameplayPaused.store(true);
+    servicePointer->setGameplayPaused(true);
+  };
+  auto options = dependencies(repository, temporary.path(), reloadRequested,
+                              [&] { return gameplayPaused.load(); });
+  options.importDifficultyTablesFromDirectory =
+      [&](ChartRepository::Session &session, const std::filesystem::path &,
+          const DifficultyTableImportCheckpoint &checkpoint) {
+        if (addFolder && attempt.load() == (pauseBeforeRegistration ? 2 : 1)) {
+          initialCheckpointInvalidated =
+              !session.LoadScanSnapshot().checkpoint.has_value();
+        }
+        if (attempt.load() == 1 && !pauseBeforeRegistration) pause();
+        checkpoint();
+        return 0;
+      };
+  options.pendingScanFlushRequest = [&]() -> std::uint64_t {
+    return attempt.load() == 2 && parsingCurrent.load() >= 49 ? 1 : 0;
+  };
+  options.completeScanFlush = [&](std::uint64_t request) {
+    expect(request == 1, "mid-archive pause follows a durable flush");
+    pause();
+  };
+  ChartLibraryOperations operations(std::move(options));
+  ChartLibraryTaskService service(
+      [&](const TaskRequest &request, const std::stop_token &stop,
+          TaskProgressCallback publish, TaskPauseCallback waitForResume) {
+        const int currentAttempt = attempt.fetch_add(1) + 1;
+        const auto result = operations.run(
+            request, stop,
+            [&](const ChartScanProgress &progress, std::string_view detail) {
+              if (detail == "Clearing library caches") ++clearCount;
+              if (detail == "Adding folder") ++registrationCount;
+              if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+                parsingCurrent.store(progress.current);
+                if (currentAttempt == 4 && resumedParsingCurrent == -1) {
+                  resumedParsingCurrent = progress.current;
+                }
+              }
+              if (currentAttempt == 3 &&
+                  progress.stage == ChartScanProgressStage::PreparingUpdates) {
+                auto session = repository.OpenSession();
+                if (session.has_value()) {
+                  rowsBeforeResumedScan = session->CountAllChartMeta();
+                  checkpointBeforeResumedScan =
+                      session->LoadScanSnapshot().checkpoint.has_value();
+                }
+                pause();
+              }
+              publish(progress, detail);
+            },
+            [&] {
+              if (currentAttempt == 1 && pauseBeforeRegistration) {
+                pause();
+                return false;
+              }
+              return waitForResume();
+            });
+        {
+          std::lock_guard lock(mutex);
+          results.push_back(result);
+          rebuildRequests.push_back(request.rebuildLibraryMetadata);
+        }
+        changed.notify_all();
+        return result;
+      });
+  servicePointer = &service;
+  service.enqueue({.kind = TaskKind::RefreshLibrary,
+                   .title = addFolder ? "Add Folder" : "Rebuild Library",
+                   .folderToAdd = addFolder ? archive.parent_path()
+                                           : std::filesystem::path{},
+                   .iosBookmark = addFolder ? "added-bookmark" : "",
+                   .rebuildLibraryMetadata = rebuild});
+  const auto waitForAttempt = [&](std::size_t count) {
+    std::unique_lock lock(mutex);
+    return changed.wait_for(lock, std::chrono::seconds(5),
+                             [&] { return results.size() >= count; });
+  };
+  const auto resume = [&] {
+    gameplayPaused.store(false);
+    service.setGameplayPaused(false);
+  };
+  expect(waitForAttempt(1), "rebuild pauses before destructive initialization");
+  expect(clearCount == 0, "pre-initialization pause does not clear metadata");
+  if (addFolder) {
+    auto session = repository.OpenSession();
+    const auto entries = session->SelectAllEntries();
+    expect(entries.size() == (pauseBeforeRegistration ? 1 : 2),
+           "pre-registration pause leaves registration pending");
+  }
+  resume();
+  expect(waitForAttempt(2), "rebuild pauses after a committed archive prefix");
+  {
+    auto session = repository.OpenSession();
+    expect(session.has_value(), "paused rebuild can be read");
+    if (session.has_value()) {
+      const auto snapshot = session->LoadScanSnapshot();
+      expect(snapshot.charts.size() == 50,
+             "paused rebuild has fifty durable archive charts");
+      expect(snapshot.checkpoint && snapshot.checkpoint->subIndex == 50,
+             "paused rebuild has its durable archive checkpoint");
+    }
+  }
+  resume();
+  expect(waitForAttempt(3), "rebuild can pause again before resumed parsing");
+  expect(rowsBeforeResumedScan == 50 && checkpointBeforeResumedScan,
+         "retry retains committed metadata and checkpoint before scanning");
+  expect(clearCount == (rebuild ? 1 : 0),
+         "rebuild clears metadata once across paused retries");
+  resume();
+  expect(waitForAttempt(4), "resumed rebuild finishes the remaining archive");
+  service.shutdown();
+  expect(rebuildRequests == std::vector<bool>({rebuild, rebuild, false, false}),
+         "retry keeps rebuild pending until initialization actually succeeds");
+  expect(results.size() == 4 &&
+             results[0].disposition == TaskRunDisposition::Paused &&
+             results[1].disposition == TaskRunDisposition::Paused &&
+             results[2].disposition == TaskRunDisposition::Paused &&
+             results[3].disposition == TaskRunDisposition::Complete,
+         "one task resumes after each gameplay pause and completes once");
+  expect(clearCount == (rebuild ? 1 : 0),
+         "completed rebuild never repeats cache clearing");
+  expect(registrationCount == (addFolder ? 1 : 0),
+         "Add Folder registers only once across paused retries");
+  expect(!addFolder || initialCheckpointInvalidated,
+         "first Add Folder registration still invalidates the old checkpoint");
+  expect(resumedParsingCurrent == 50,
+         "resumed archive parsing starts at the durable fifty-chart prefix");
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->CountAllChartMeta() == 105,
+         "resumed rebuild keeps every archive chart");
+  if (addFolder && session.has_value()) {
+    const auto entries = session->SelectAllEntries();
+    expect(entries.size() == 2 &&
+               std::ranges::any_of(entries, [](const ChartEntry &entry) {
+                 return entry.iosBookmark == "added-bookmark";
+               }),
+           "resumed Add Folder retains its registered bookmark");
+    expect(session->LoadScanSnapshot().charts.size() == 105,
+           "Add Folder retries stay scoped to the added root, not unrelated roots");
+  }
+  archive_file::setArchiveIndexCacheDirectory({});
+}
+
+void testFailedFolderRegistrationCanBeRetriedThroughTheService() {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  writeChart(root);
+  const auto databasePath = temporary.path() / "chart.db";
+  ChartRepository repository(databasePath);
+  expect(repository.EnsureReady(), "registration failure repository is ready");
+  sqlite3 *database = nullptr;
+  expect(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK,
+         "registration failure fixture opens database");
+  expect(sqlite3_exec(database,
+                     "CREATE TRIGGER fail_registration BEFORE INSERT ON entries "
+                     "BEGIN SELECT RAISE(FAIL, 'registration rejected'); END",
+                     nullptr, nullptr, nullptr) == SQLITE_OK,
+         "fixture rejects the first real InsertEntry");
+  bool reloadRequested = false;
+  ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  ChartLibraryTaskService service(
+      [&](const TaskRequest &request, const std::stop_token &stop,
+          TaskProgressCallback publish, TaskPauseCallback waitForResume) {
+        return operations.run(request, stop, publish, waitForResume);
+      });
+  const TaskRequest request{.title = "Add Folder", .folderToAdd = root,
+                            .iosBookmark = "retry-bookmark",
+                            .rebuildLibraryMetadata = true};
+  const auto id = service.enqueue(request);
+  const auto waitForStatus = [&](TaskStatus status) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto snapshot = service.snapshot();
+      if (std::ranges::any_of(snapshot.tasks, [&](const TaskInfo &task) {
+            return task.id == id && task.status == status;
+          })) return true;
+      std::this_thread::yield();
+    }
+    return false;
+  };
+  expect(waitForStatus(TaskStatus::Failed),
+         "a failed InsertEntry is reported as failure, not completed registration");
+  {
+    auto session = repository.OpenSession();
+    expect(session->SelectAllEntries().empty() &&
+               session->CountAllChartMeta() == 0,
+           "failed registration does not scan or register the folder");
+  }
+  expect(sqlite3_exec(database, "DROP TRIGGER fail_registration", nullptr,
+                     nullptr, nullptr) == SQLITE_OK,
+         "fixture removes the registration failure");
+  expect(service.enqueueReserved(id, request), "failed Add Folder can retry");
+  expect(waitForStatus(TaskStatus::Complete), "registration retry completes");
+  service.shutdown();
+  auto session = repository.OpenSession();
+  const auto entries = session->SelectAllEntries();
+  expect(entries.size() == 1 && entries.front().iosBookmark == "retry-bookmark" &&
+             session->CountAllChartMeta() == 1,
+         "retry performs the previously failed registration and scans its chart");
+  expect(sqlite3_close(database) == SQLITE_OK, "failure fixture closes database");
+}
+
+void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
+  using namespace chart_library_tasks;
+  if (parallel_worker_count(8) <= 2) return;
+  for (const auto kind : {TaskKind::RefreshLibrary, TaskKind::RefreshPath,
+                          TaskKind::IndexDownloadedPath}) {
+    TempDirectory temporary;
+    const auto root = temporary.path() / "library";
+    for (int index = 0; index < 8; ++index) {
+      writeChart(root, "chart-" + std::to_string(index) + ".bms");
+    }
+    ChartRepository repository(temporary.path() / "chart.db");
+    expect(repository.EnsureReady(), "concurrent pause repository is ready");
+    const auto caller = std::this_thread::get_id();
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::set<std::thread::id> workers;
+    bool timedOut = false;
+    bool reloadRequested = false;
+    auto options = dependencies(
+        repository, temporary.path(), reloadRequested, [&] {
+          const auto thread = std::this_thread::get_id();
+          if (thread == caller) return false;
+          std::unique_lock lock(mutex);
+          workers.insert(thread);
+          changed.notify_all();
+          if (!changed.wait_for(lock, std::chrono::seconds(2),
+                                 [&] { return workers.size() >= 2; })) {
+            timedOut = true;
+          }
+          return true;
+        });
+    ChartLibraryOperations operations(std::move(options));
+    TaskRequest request;
+    request.kind = kind;
+    request.folderToAdd = root;
+    request.refreshPath = root;
+    request.downloadedPath = root;
+    const auto result = operations.run(
+        request, {}, [](const ChartScanProgress &, std::string_view) {},
+        [] { return true; });
+    expect(!timedOut && workers.size() >= 2,
+           "scanner workers meet concurrently inside the operation checkpoint");
+    expect(result.disposition == TaskRunDisposition::Paused,
+           "concurrent checkpoint interruption remains a pause, not a failure");
+    auto session = repository.OpenSession();
+    expect(session.has_value() && session->CountAllChartMeta() == 0,
+           "concurrently interrupted discovery commits no partial charts");
+  }
+}
+
+void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
+  TempDirectory temporary;
+  const auto existingRoot = temporary.path() / "existing";
+  const auto addedRoot = temporary.path() / "added";
+  std::filesystem::create_directories(existingRoot);
+  writeChart(addedRoot);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "folder access repository is ready");
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->InsertEntry(existingRoot, "old-bookmark"),
+         "existing external folder is registered");
+  bool reloadRequested = false;
+  std::vector<ChartEntry> refreshedEntries;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.refreshFolderAccess = [&](const std::vector<ChartEntry> &entries) {
+    refreshedEntries = entries;
+  };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Add Folder",
+       .folderToAdd = addedRoot,
+       .iosBookmark = "new-bookmark"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "adding another folder completes");
+  expect(refreshedEntries.size() == 2,
+         "security access refresh receives every effective folder");
+  expect(std::ranges::any_of(refreshedEntries, [&](const ChartEntry &entry) {
+           return std::filesystem::path(entry.path).lexically_normal() ==
+                      existingRoot.lexically_normal() &&
+                  entry.iosBookmark == "old-bookmark";
+         }),
+         "security access refresh retains the existing folder bookmark");
+  expect(std::ranges::any_of(refreshedEntries, [&](const ChartEntry &entry) {
+           return std::filesystem::path(entry.path).lexically_normal() ==
+                      addedRoot.lexically_normal() &&
+                  entry.iosBookmark == "new-bookmark";
+         }),
+         "security access refresh includes the newly added folder bookmark");
+}
+
+void testPathRefreshReconcilesOnlyTheRequestedSubtree() {
+  TempDirectory temporary;
+  const auto libraryRoot = temporary.path() / "library";
+  const auto targetRoot = libraryRoot / "target";
+  const auto untouchedRoot = libraryRoot / "untouched";
+  const auto staleTargetChart = writeChart(targetRoot);
+  const auto untouchedChart = writeChart(untouchedRoot);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "targeted refresh repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+
+  const auto initial = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library",
+       .folderToAdd = libraryRoot},
+      std::stop_token{},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  expect(initial.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "initial full refresh completes");
+
+  std::filesystem::remove(staleTargetChart);
+  std::filesystem::remove(untouchedChart);
+  const auto replacementChart = writeChart(targetRoot, "replacement.bms");
+  reloadRequested = false;
+  const auto targeted = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshPath,
+       .title = "Update Folder",
+       .refreshPath = targetRoot},
+      std::stop_token{},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+
+  expect(targeted.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "targeted path refresh completes");
+  auto session = repository.OpenSession();
+  std::vector<bms_parser::ChartMeta> charts;
+  if (session.has_value()) {
+    session->SelectAllChartMeta(charts);
+  }
+  const auto hasPath = [&](const std::filesystem::path &path) {
+    return std::ranges::any_of(charts, [&](const auto &chart) {
+      return chart.BmsPath.lexically_normal() == path.lexically_normal();
+    });
+  };
+  expect(charts.size() == 2,
+         "targeted refresh keeps records outside the requested subtree");
+  expect(!hasPath(staleTargetChart),
+         "targeted refresh removes a stale chart inside its subtree");
+  expect(hasPath(replacementChart),
+         "targeted refresh indexes a replacement chart inside its subtree");
+  expect(hasPath(untouchedChart),
+         "targeted refresh does not reconcile an unvisited sibling subtree");
+  const auto entries =
+      session.has_value() ? session->SelectAllEntries()
+                          : std::vector<ChartEntry>{};
+  expect(entries.size() == 1 &&
+             std::filesystem::path(entries.front().path).lexically_normal() ==
+                 libraryRoot.lexically_normal(),
+         "targeted refresh does not register its subtree as a library root");
+  expect(reloadRequested, "targeted refresh requests selector reload");
+}
+
+void testPathRefreshReparsesSamePathAndFolderPreview() {
+  TempDirectory temporary;
+  const auto target = temporary.path() / "target";
+  const auto sibling = temporary.path() / "sibling";
+  const auto chartPath = writeChart(target);
+  const auto fallbackPath = writeChart(target, "fallback.bms");
+  const auto siblingPath = writeChart(sibling);
+  std::ofstream(target / "preview-old.ogg").close();
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "same-path repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  for (const auto &root : {target, sibling}) {
+    operations.run({.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+                    .folderToAdd = root}, {},
+                   [](const ChartScanProgress &, std::string_view) {},
+                   [] { return true; });
+  }
+  const auto oldIdentity = readChartIdentity(chartPath);
+  std::ofstream(chartPath, std::ios::app)
+      << "#TITLE Refreshed Same Path\n#PREVIEW authored-new.ogg\n#00211:0101\n";
+  std::ofstream(siblingPath, std::ios::app) << "#TITLE Do Not Refresh\n";
+  std::filesystem::remove(target / "preview-old.ogg");
+  std::ofstream(target / "preview-new.ogg").close();
+  const auto newIdentity = readChartIdentity(chartPath);
+  expect(newIdentity.sha256 != oldIdentity.sha256, "fixture content identity changes");
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshPath, .refreshPath = target}, {},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
+         "same-path refresh completes");
+  auto session = repository.OpenSession();
+  const std::array paths{chartPath, fallbackPath, siblingPath};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  expect(records.records.size() == 3, "refresh preserves all charts");
+  if (records.records.size() != 3) return;
+  expect(records.records[0].meta.Title == "Refreshed Same Path",
+         "scoped refresh updates same-path title");
+  expect(main_menu_library::findBmsChartIdentity(records.records[0].meta).sha256 ==
+             newIdentity.sha256, "scoped refresh replaces same-path SHA identity");
+  expect(records.records[0].meta.Preview == "authored-new.ogg",
+         "scoped refresh updates authored preview");
+  expect(records.records[0].meta.TotalNotes == 3,
+         "scoped refresh updates same-path note metadata");
+  expect(records.records[1].meta.Preview == "preview-new.ogg",
+         "scoped refresh updates unchanged chart's folder preview");
+  expect(records.records[2].meta.Title == "Shared Operations",
+         "scoped refresh leaves another root's metadata unchanged");
+  expect(session->SelectAllEntries().size() == 2, "scoped refresh preserves registered roots");
+}
+
+void testDownloadedPathIndexesAndReturnsTheSelectionHandoff() {
+  TempDirectory temporary;
+  const auto downloadedRoot = temporary.path() / "downloaded";
+  const auto chartPath = writeChart(downloadedRoot);
+  const auto identity = readChartIdentity(chartPath);
+  expect(identity.valid(), "download fixture has a stable chart identity");
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "download repository is ready");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+
+  chart_library_tasks::TaskRunResult result;
+  try {
+    result = operations.run(
+        {.kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
+         .title = "Index downloaded charts",
+         .downloadedPath = downloadedRoot,
+         .downloadedTargetIdentity = identity,
+         .downloadedSelectionGeneration = 9},
+        std::stop_token{},
+        [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  } catch (const std::exception &error) {
+    expect(false, std::string("download indexing threw: ") + error.what());
+    return;
+  }
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "download indexing completes through the shared operation");
+  expect(result.downloadedIndex.has_value(),
+         "download indexing returns a selection handoff");
+  if (result.downloadedIndex.has_value()) {
+    expect(result.downloadedIndex->chartPath.lexically_normal() ==
+               chartPath.lexically_normal(),
+           "selection handoff identifies the indexed chart path");
+    expect(result.downloadedIndex->targetIdentity.sha256 == identity.sha256,
+           "selection handoff retains the requested identity");
+    expect(result.downloadedIndex->selectionGeneration == 9,
+           "selection handoff retains the captured selection generation");
+  }
+  auto session = repository.OpenSession();
+  expect(session.has_value() && session->CountAllChartMeta() == 1,
+         "download indexing commits the BMS fixture");
+  expect(reloadRequested, "download indexing requests selector reload");
+}
+
+void testRefreshSeedsTheExactDefaultTablesOnce() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "table seed repository is ready");
+  bool reloadRequested = false;
+  bool seeded = false;
+  int saveCalls = 0;
+  std::vector<std::string> importedUrls;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.defaultDifficultyTablesSeeded = [&] { return seeded; };
+  deps.setDefaultDifficultyTablesSeeded = [&](bool value) { seeded = value; };
+  deps.saveSettings = [&] {
+    ++saveCalls;
+    return true;
+  };
+  deps.importDifficultyTableFromUrl =
+      [&](ChartRepository::Session &, const std::string &url,
+          std::string *, DifficultyTableImportProgressCallback,
+          const DifficultyTableImportCheckpoint &,
+          const DifficultyTableImportPauseProbe &) {
+        importedUrls.push_back(url);
+        return true;
+      };
+  deps.importDifficultyTablesFromDirectory =
+      [](ChartRepository::Session &, const std::filesystem::path &,
+         const DifficultyTableImportCheckpoint &) {
+        return 0;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  const std::vector<std::string> expectedUrls = {
+      "https://rattoto10.jounin.jp/table.html",
+      "https://rattoto10.jounin.jp/table_insane.html",
+      "https://stellabms.xyz/sl/table.html",
+      "https://stellabms.xyz/st/table.html",
+  };
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "refresh completes after default table seeding");
+  expect(importedUrls == expectedUrls,
+         "refresh imports the exact default table URLs in order");
+  expect(seeded, "all successful default imports persist the seeded flag");
+  expect(saveCalls == 1, "successful default imports save settings once");
+  expect(reloadRequested,
+         "successful default table imports request selector reload");
+}
+
+void testRefreshPausesInsideDefaultTableSeeding() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "pausable table seed repository is ready");
+  bool reloadRequested = false;
+  bool seeded = false;
+  bool gameplayPaused = false;
+  int importCalls = 0;
+  int saveCalls = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested,
+                           [&] { return gameplayPaused; });
+  deps.defaultDifficultyTablesSeeded = [&] { return seeded; };
+  deps.setDefaultDifficultyTablesSeeded = [&](bool value) { seeded = value; };
+  deps.saveSettings = [&] {
+    ++saveCalls;
+    return true;
+  };
+  deps.importDifficultyTableFromUrl =
+      [&](ChartRepository::Session &, const std::string &, std::string *,
+          DifficultyTableImportProgressCallback,
+          const DifficultyTableImportCheckpoint &checkpoint,
+          const DifficultyTableImportPauseProbe &) {
+        ++importCalls;
+        gameplayPaused = true;
+        return checkpoint();
+      };
+  deps.importDifficultyTablesFromDirectory =
+      [](ChartRepository::Session &, const std::filesystem::path &,
+         const DifficultyTableImportCheckpoint &) {
+        return 0;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "gameplay pause interrupts default table seeding");
+  expect(importCalls == 1,
+         "paused default seeding starts no additional table import");
+  expect(!seeded && saveCalls == 0,
+         "an interrupted default seed does not persist completion");
+  expect(!reloadRequested,
+         "an interrupted default seed does not publish a reload");
+}
+
+void testRefreshPausesInsideLocalTableImport() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "local table import repository is ready");
+  bool reloadRequested = false;
+  bool gameplayPaused = false;
+  int importerCheckpoints = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested,
+                           [&] { return gameplayPaused; });
+  deps.importDifficultyTablesFromDirectory =
+      [&](ChartRepository::Session &, const std::filesystem::path &,
+          const DifficultyTableImportCheckpoint &checkpoint) {
+        ++importerCheckpoints;
+        gameplayPaused = true;
+        checkpoint();
+        return 0;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
+       .title = "Refresh Library"},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [&] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "gameplay pause interrupts local difficulty table imports");
+  expect(importerCheckpoints == 1,
+         "local difficulty table import receives the shared checkpoint");
+  expect(!reloadRequested,
+         "an interrupted local table import does not publish a reload");
+}
+
+void testDifficultyTableUpdateUsesTheSharedTaskOperation() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "table update repository is ready");
+  bool reloadRequested = false;
+  int reloadCalls = 0;
+  int updatedTableId = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested);
+  deps.requestReload = [&](bool includeFolders) {
+    ++reloadCalls;
+    reloadRequested = includeFolders;
+  };
+  deps.updateDifficultyTableFromSourceUrl =
+      [&](ChartRepository::Session &, int tableId, std::string *,
+          const DifficultyTableImportCheckpoint &checkpoint,
+          const DifficultyTableImportPauseProbe &) {
+        updatedTableId = tableId;
+        return checkpoint() && checkpoint();
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
+       .title = "Update Difficulty Table",
+       .tableId = 47},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Complete,
+         "difficulty table update completes through the shared operation");
+  expect(updatedTableId == 47,
+         "difficulty table update retains the selected TableBar identity");
+  expect(reloadCalls == 1 && !reloadRequested,
+         "difficulty table update requests a list-only selector reload");
+}
+
+void testDifficultyTableUpdateStopsAtAnImporterCheckpoint() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "pausable table repository is ready");
+  bool reloadRequested = false;
+  bool paused = false;
+  int importerCheckpoints = 0;
+  auto deps = dependencies(repository, temporary.path(), reloadRequested,
+                           [&] { return paused; });
+  deps.updateDifficultyTableFromSourceUrl =
+      [&](ChartRepository::Session &, int, std::string *,
+          const DifficultyTableImportCheckpoint &checkpoint,
+          const DifficultyTableImportPauseProbe &) {
+        ++importerCheckpoints;
+        if (!checkpoint()) return false;
+        ++importerCheckpoints;
+        paused = true;
+        return checkpoint();
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
+       .title = "Update Difficulty Table",
+       .tableId = 47},
+      std::stop_token{}, [](const ChartScanProgress &, std::string_view) {},
+      [] { return true; });
+
+  expect(result.disposition ==
+             chart_library_tasks::TaskRunDisposition::Paused,
+         "an interrupted in-progress import returns a paused task");
+  expect(importerCheckpoints == 2,
+         "the running importer receives the shared task pause checkpoint");
+  expect(!reloadRequested,
+         "a paused difficulty-table update does not publish a reload");
+}
+
+void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
+  const ChartEntry entry{.path = fspath_to_path_t("/tmp/library-entry")};
+  expect(chart_library_platform::resolveFolderEntryPath(entry) ==
+             std::filesystem::path("/tmp/library-entry"),
+         "desktop scanning uses the stored library entry path");
+}
+
+} // namespace
+
+int main() {
+  testRefreshStopsAtTheExistingPauseCheckpoint();
+  testRefreshScansThroughTheRealRepository();
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress();
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, false);
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true);
+  testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true, true);
+  testFailedFolderRegistrationCanBeRetriedThroughTheService();
+  testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
+  testAddingFolderRefreshesAccessForEveryEffectiveEntry();
+  testPathRefreshReconcilesOnlyTheRequestedSubtree();
+  testPathRefreshReparsesSamePathAndFolderPreview();
+  testDownloadedPathIndexesAndReturnsTheSelectionHandoff();
+  testRefreshSeedsTheExactDefaultTablesOnce();
+  testRefreshPausesInsideDefaultTableSeeding();
+  testRefreshPausesInsideLocalTableImport();
+  testDifficultyTableUpdateUsesTheSharedTaskOperation();
+  testDifficultyTableUpdateStopsAtAnImporterCheckpoint();
+  testDesktopLibraryEntryResolutionPreservesTheStoredPath();
+  if (failures != 0) {
+    std::cerr << failures << " chart library operation test(s) failed\n";
+    return EXIT_FAILURE;
+  }
+  std::cout << "chart library operation tests passed\n";
+  return EXIT_SUCCESS;
+}

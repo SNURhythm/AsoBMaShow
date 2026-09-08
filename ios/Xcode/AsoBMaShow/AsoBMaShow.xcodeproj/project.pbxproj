@@ -711,6 +711,9 @@
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
 		B76AAF692DA4A1C400E8327C /* Exceptions for "../../../../src" folder in "AsoBMaShow" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			additionalCompilerFlagsByRelativePath = {
+				BuildIdentity.cpp = "-DASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\" -DASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\" -DASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)";
+			};
 			membershipExceptions = (
 				AndroidNatives.cpp,
 				CMakeLists.txt,
@@ -722,6 +725,7 @@
 				input/CMakeLists.txt,
 				ir/CMakeLists.txt,
 				math/CMakeLists.txt,
+				music_select/CMakeLists.txt,
 				practice/CMakeLists.txt,
 				rendering/CMakeLists.txt,
 				scene/CMakeLists.txt,
@@ -1938,9 +1942,6 @@
 					"BX_CONFIG_DEBUG=0",
 					"ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1",
 					"ASOBMASHOW_APPLICATION_VERSION=\\\"$(MARKETING_VERSION)\\\"",
-					"ASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\"",
-					"ASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\"",
-					"ASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (
@@ -2027,9 +2028,6 @@
 					"BX_CONFIG_DEBUG=0",
 					"ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1",
 					"ASOBMASHOW_APPLICATION_VERSION=\\\"$(MARKETING_VERSION)\\\"",
-					"ASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\"",
-					"ASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\"",
-					"ASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				HEADER_SEARCH_PATHS = (

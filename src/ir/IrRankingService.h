@@ -11,7 +11,7 @@
 
 namespace ir {
 
-inline constexpr auto kIrRankingCacheTtl = std::chrono::minutes(5);
+inline constexpr auto kIrRankingCacheTtl = std::chrono::minutes(10);
 
 struct IrRankingServiceOptions {
   using SteadyTimePoint = std::chrono::steady_clock::time_point;

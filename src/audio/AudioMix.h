@@ -50,6 +50,7 @@ struct SoundData {
   std::vector<short> outputData;
   size_t sourceFrameCount = 0;
   size_t outputFrameCount = 0;
+  std::atomic_bool retired{false};
   std::atomic<std::uint64_t> ownerControlAcknowledgedSequence{0};
 };
 
@@ -125,12 +126,24 @@ struct AudioCallbackState {
   std::atomic<std::uint32_t> ownerControlCommandCount{0};
   std::atomic<std::uint32_t> ownerRetirementCommandCount{0};
   std::atomic<std::uint64_t> nextCommandSubmissionSequence{1};
+  std::atomic<std::uint32_t> activeNonSystemVoices{0};
+  std::atomic<std::uint32_t> scheduledNonSystemSounds{0};
   std::unique_ptr<AudioCommand[]> realtimeCommandQueue;
   std::atomic<std::uint32_t> realtimeCommandReadCursor{0};
   std::atomic<std::uint32_t> realtimeCommandWriteCursor{0};
 };
 
 namespace audio::playback {
+
+enum class MixScope : std::uint8_t {
+  // Mix every active bus (Bgm, Keysound, System). Used while the gameplay
+  // clock is running.
+  AllBuses,
+  // Mix only Bus::System voices, skipping Bgm/Keysound. Used while the
+  // gameplay clock is stopped so select SEs / BGM / previews remain audible
+  // without resuming gameplay audio.
+  SystemOnly,
+};
 
 struct OutputRateCandidate {
   SoundData *soundData = nullptr;
@@ -168,6 +181,10 @@ public:
 BackendStateObservation InterpretStoppedQueryResult(int result,
                                                     std::string diagnostic);
 bool CanMutateCallbackStateDirectly(BackendRunState state) noexcept;
+BackendOperationResult
+ConfirmBackendStopped(IBackendLifecycle &backend,
+                      const BackendStateObservation &initialState,
+                      std::atomic<BackendRunState> &backendState);
 BackendOperationResult EnsureBackendStartedAtOutputRate(
     IBackendLifecycle &backend, std::span<SoundData *const> sounds,
     AudioCallbackState &callbackState, int targetSampleRate,
@@ -192,7 +209,8 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        float gain = 1.0F, bool loop = false);
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
-void ClearCallbackSounds(AudioCallbackState &state);
+void ClearCallbackSounds(AudioCallbackState &state,
+                          bool preserveSystemSounds = false);
 void RemoveSound(AudioCallbackState &state, SoundData *soundData);
 bool EnqueueCommand(AudioCallbackState &state, const AudioCommand &command,
                     std::uint64_t *submissionSequence = nullptr);
@@ -218,6 +236,7 @@ void ActivateScheduledSounds(AudioCallbackState &state,
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
-                     int playbackRatePercent);
+                     int playbackRatePercent,
+                     MixScope scope = MixScope::AllBuses);
 
 } // namespace audio::playback

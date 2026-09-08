@@ -888,6 +888,42 @@ void testSliderHitsProduceQueueOnlyWriterInvocations() {
          "a captured hit cannot queue a writer from outside its current region");
 }
 
+void testSliderDragIgnoresOverlaidNonSliderControls() {
+  TestContext context;
+  context.model.model.floatWriters.push_back(
+      {.id = SkinFloatWriterId{1},
+       .source = SkinBuiltinPropertySelector{.value = 1},
+       .authoredOrdinal = 1});
+  context.model.model.events.push_back(
+      {.id = SkinEventBindingId{1},
+       .source = SkinBuiltinPropertySelector{.value = 42},
+       .authoredOrdinal = 2});
+  addSlider(context.model, context.resources, 1, 1, 40.0, true,
+            SkinFloatWriterId{1}, 1);
+  addClickableImage(context.model, context.resources, 2,
+                    SkinEventBindingId{1}, 0, 2);
+  context.model.model.destinations = {
+      destination(1, 1, 10.0, 20.0),
+      destination(2, 2, 20.0, 15.0, 20.0, 20.0)};
+  const auto viewport = evaluatePlaySkinViewport(
+      {.width = 100.0, .height = 50.0},
+      {.x = 0.0, .y = 0.0, .width = 100.0, .height = 50.0}, {});
+  const auto result = context.evaluate(viewport);
+  const auto point = uiPointForAuthored(viewport, 25.0, 25.0);
+  const auto invocation = result.interactionLayout
+                              ? result.interactionLayout
+                                    ->sliderWriterInvocationAt(point, 4'328)
+                              : std::nullopt;
+  expect(result.interactionLayout &&
+             result.interactionLayout->hitTestUiControl(point).kind ==
+                 PresentationUiControlKind::Image &&
+             invocation && invocation->writer == SkinFloatWriterId{1} &&
+             near(invocation->normalizedValue, 0.375) &&
+             invocation->eventMicros == 4'328,
+         "Skin.mouseDragged walks topmost sliders independently of overlaid "
+         "image controls");
+}
+
 void testImplicitLaneCoverWithoutWriterStaysNonInteractive() {
   TestContext context;
   addSlider(context.model, context.resources, 9, 1, 25.0, true,
@@ -1109,6 +1145,7 @@ int main() {
   testRendererUsesLaneCoverRateIndexAndDirectPropertyFallback();
   testInvalidSliderGeometryCannotCaptureGameplayTouch();
   testSliderHitsProduceQueueOnlyWriterInvocations();
+  testSliderDragIgnoresOverlaidNonSliderControls();
   testImplicitLaneCoverWithoutWriterStaysNonInteractive();
   testDroppedNoncriticalSliderPublishesNoInteractionGeometry();
   testNoteModelPublishesLaneAndLaneGroupRegions();

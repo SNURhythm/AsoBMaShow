@@ -212,11 +212,14 @@ struct SkinSpriteFrames {
   std::optional<int> authoredNoteSlot;
 };
 
+enum class SkinImageDefinitionKind : std::uint8_t { Image, ImageSet };
+
 struct SkinImageObject {
   std::vector<SkinSpriteFrames> orderedStates;
   std::optional<SkinIntegerPropertyId> stateIndex;
   std::optional<SkinEventBindingId> clickEvent;
   int clickMode = 0;
+  SkinImageDefinitionKind definitionKind = SkinImageDefinitionKind::Image;
 };
 
 enum class SkinZeroPaddingMode : std::uint8_t {
@@ -308,6 +311,17 @@ struct SkinGraphObject {
   std::optional<int> builtinImageReference;
   std::variant<SkinFloatPropertyId, SkinSliderObject::IntegerRangeSource> value;
   int direction = 0;
+};
+
+enum class SkinSelectDistributionGraphType : std::uint8_t {
+  Normal,
+  Judge,
+};
+
+struct SkinSelectDistributionGraphObject {
+  SkinSelectDistributionGraphType type =
+      SkinSelectDistributionGraphType::Normal;
+  SkinSpriteFrames sprite;
 };
 
 enum class SkinNoteDistributionGraphType : std::uint8_t {
@@ -455,6 +469,53 @@ struct SkinDestinationBody {
   std::uint32_t authoredOrdinal = 0;
 };
 
+struct SkinSongListDestinationDefinition {
+  std::string objectName;
+  SkinDestinationBody destination;
+  SkinSourceLocation source;
+};
+
+struct SkinSongListDefinition {
+  std::string id;
+  int center = 0;
+  std::vector<int> clickable;
+  std::vector<SkinSongListDestinationDefinition> listOff;
+  std::vector<SkinSongListDestinationDefinition> listOn;
+  std::vector<SkinSongListDestinationDefinition> text;
+  std::vector<SkinSongListDestinationDefinition> level;
+  std::vector<SkinSongListDestinationDefinition> lamp;
+  std::vector<SkinSongListDestinationDefinition> playerLamp;
+  std::vector<SkinSongListDestinationDefinition> rivalLamp;
+  std::vector<SkinSongListDestinationDefinition> trophy;
+  std::vector<SkinSongListDestinationDefinition> label;
+  std::optional<SkinSongListDestinationDefinition> graph;
+};
+
+struct SkinSongListPresentation {
+  SkinObjectId object = 0;
+  SkinDestinationBody destination;
+  SkinSourceLocation source;
+};
+
+struct SkinSongListObject {
+  // Beatoraja's SkinBar constructor position. The type-5 Lua and JSON select
+  // loaders always construct position 0, so Aso's supported select skins
+  // anchor relative children at the bar's top-left origin.
+  int position = 0;
+  int center = 0;
+  std::vector<int> clickable;
+  std::vector<SkinSongListPresentation> listOff;
+  std::vector<SkinSongListPresentation> listOn;
+  std::vector<SkinSongListPresentation> text;
+  std::vector<SkinSongListPresentation> level;
+  std::vector<SkinSongListPresentation> lamp;
+  std::vector<SkinSongListPresentation> playerLamp;
+  std::vector<SkinSongListPresentation> rivalLamp;
+  std::vector<SkinSongListPresentation> trophy;
+  std::vector<SkinSongListPresentation> label;
+  std::optional<SkinSongListPresentation> graph;
+};
+
 enum class SkinNoteVisualKind : std::uint8_t {
   Normal,
   Mine,
@@ -580,6 +641,7 @@ struct SkinBlankObject {};
 using SkinObjectPayload =
     std::variant<SkinImageObject, SkinNumberObject, SkinFloatObject,
                  SkinTextObject, SkinSliderObject, SkinGraphObject,
+                 SkinSelectDistributionGraphObject, SkinSongListObject,
                  SkinNoteDistributionGraphObject, SkinGaugeGraphObject,
                  SkinBpmGraphObject,
                  SkinTimingVisualizerObject,
@@ -635,6 +697,7 @@ struct SkinGameplayTiming {
 struct BeatorajaSkinModel {
   BeatorajaSkinHeader header;
   SkinGameplayTiming timing;
+  std::optional<SkinSongListDefinition> songListDefinition;
   std::vector<SkinBooleanPropertyBinding> booleanProperties;
   std::vector<SkinIntegerPropertyBinding> integerProperties;
   std::vector<SkinFloatPropertyBinding> floatProperties;

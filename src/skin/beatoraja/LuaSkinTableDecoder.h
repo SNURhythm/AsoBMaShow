@@ -17,6 +17,12 @@ struct LuaSkinGameplayDecodeContext {
   SkinSafetyPolicy safetyPolicy{};
 };
 
+struct LuaSkinMusicSelectDecodeContext {
+  LuaSkinRuntime &runtime;
+  SkinBuiltinBindingCatalogView builtins;
+  SkinSafetyPolicy safetyPolicy{SkinSafetyLevel::Unrestricted};
+};
+
 struct LuaSkinTableDecoderPolicy {
   static constexpr std::size_t maxDepth = 64;
   static constexpr std::size_t maxEntries = 200'000;
@@ -38,6 +44,8 @@ public:
   HeaderDecodeResult decodeHeader(const LuaValueHandle &) const;
   BeatorajaSkinModelDecodeResult
   decodeGameplay(const LuaValueHandle &, LuaSkinGameplayDecodeContext) const;
+  BeatorajaSkinModelDecodeResult decodeMusicSelect(
+      const LuaValueHandle &, LuaSkinMusicSelectDecodeContext) const;
 
 private:
   SkinSafetyPolicy safetyPolicy_;

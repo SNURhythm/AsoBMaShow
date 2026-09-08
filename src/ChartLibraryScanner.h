@@ -77,11 +77,22 @@ public:
       ChartScanFlushRequestCallback flushRequestCallback = nullptr,
       ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
 
+  ChartScanResult ScanScopedWithResult(
+      ChartRepository::Session &session,
+      const std::vector<std::filesystem::path> &roots,
+      const std::stop_token *stopToken = nullptr,
+      ChartScanProgressCallback progressCallback = nullptr,
+      ChartScanPauseCallback pauseCallback = nullptr,
+      ChartScanFlushRequestCallback flushRequestCallback = nullptr,
+      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+
 private:
+  enum class ReconcileMode { None, Scoped, Full };
+
   ChartScanResult ScanImpl(
       ChartRepository::Session &session,
       const std::vector<std::filesystem::path> &roots,
-      bool reconcileExisting,
+      ReconcileMode reconcileMode,
       const std::stop_token *stopToken,
       ChartScanProgressCallback progressCallback,
       ChartScanPauseCallback pauseCallback,

@@ -206,6 +206,7 @@ void SettingsScene::resetViewState() {
   gameplaySkinControlsBuiltDisabled = false;
   gameplaySkinStatusText = nullptr;
   gameplaySkinUiMessageText = nullptr;
+  skinSelectSoundSetInput = nullptr;
   gameplaySkinConfigurationDigestText = nullptr;
   gameplaySkinSafetyOverlayRoot = nullptr;
   gameplaySkinBusyOverlayRoot = nullptr;
@@ -2728,7 +2729,7 @@ void SettingsScene::initView() {
         return;
       }
     }
-    context.sceneManager->changeScene("MainMenu", false);
+    (void)returnToScene(*context.sceneManager, returnTarget_);
   });
   header->addView(backButton);
   rootLayout->addView(header);

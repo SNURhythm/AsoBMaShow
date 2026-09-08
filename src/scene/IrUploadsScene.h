@@ -2,6 +2,7 @@
 
 #include "IrUploadsController.h"
 #include "Scene.h"
+#include "SceneReturnTarget.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,7 +25,11 @@ struct IrUploadsSceneMailbox {
 
 class IrUploadsScene final : public Scene {
 public:
-  explicit IrUploadsScene(ApplicationContext &context) : Scene(context) {}
+  explicit IrUploadsScene(
+      ApplicationContext &context,
+      SceneReturnTarget returnTarget =
+          SceneReturnTarget::Registered("MainMenu"))
+      : Scene(context), returnTarget_(std::move(returnTarget)) {}
 
   void init() override;
   void update(float dt) override;
@@ -33,6 +38,7 @@ public:
   void cleanupScene() override;
 
 private:
+  SceneReturnTarget returnTarget_;
   void buildView();
   void reloadCandidates();
   void refreshUi();

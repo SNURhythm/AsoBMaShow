@@ -40,6 +40,10 @@
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 constexpr int kArchivedThumbnailMaxDimension = 256;
+// Shared chart stage/back/banner images are display-and-skin backgrounds; a
+// bounded decode dimension keeps the load fast and the shared cache small
+// while still giving the gameplay skin a full-screen-quality texture.
+constexpr int kSharedChartImageMaxDimension = 2048;
 constexpr int kImageMaximumDimension =
     static_cast<int>(std::numeric_limits<std::uint16_t>::max());
 constexpr std::size_t kImageMaximumEncodedBytes = 32U * 1024U * 1024U;
@@ -424,9 +428,19 @@ image_decode::ImageDecodeCoordinator &imageDecodeCoordinator() {
           -> std::optional<DecodedImage> {
         const auto started = std::chrono::steady_clock::now();
         ImageDecodeTimings timings;
+        int targetWidth = request.targetWidth;
+        int targetHeight = request.targetHeight;
+        if (request.maximumDimension > 0 &&
+            request.maximumDimension < kImageMaximumDimension) {
+          targetWidth = targetWidth > 0
+              ? std::min(targetWidth, request.maximumDimension)
+              : request.maximumDimension;
+          targetHeight = targetHeight > 0
+              ? std::min(targetHeight, request.maximumDimension)
+              : request.maximumDimension;
+        }
         auto decoded = decodeImageFile(request.path, &timings,
-                                       request.targetWidth,
-                                       request.targetHeight, stop);
+                                       targetWidth, targetHeight, stop);
         const auto workerMillis = elapsedMillis(
             started, std::chrono::steady_clock::now());
         if (workerMillis >= 250) {
@@ -572,6 +586,11 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
   currentImageHeight = cache.height;
   if (storeCache) {
     (void)imageCache.put(key, cache);
+    if (sharedChartImagePath_ &&
+        fspath_to_path_t(*sharedChartImagePath_) ==
+            fspath_to_path_t(path)) {
+      (void)imageCache.put(chartImageCacheKey(path), cache);
+    }
   }
   return true;
 }
@@ -610,7 +629,11 @@ void ImageView::applyAsyncImageIfReady() {
   }
   if (resetDroppedAsyncRequest()) {
     const path_t path = currentImagePath;
-    setImageAsync(path, true);
+    if (sharedChartImagePath_) {
+      setImageAsyncShared(path, true);
+    } else {
+      setImageAsync(path, true);
+    }
   }
   if (applyCachedTexture(currentImagePath, currentImageKey)) {
     asyncImagePending = false;
@@ -624,6 +647,7 @@ void ImageView::applyAsyncImageIfReady() {
 }
 
 bool ImageView::loadTexture(const path_t &path) {
+  sharedChartImagePath_.reset();
   asyncImageBound = false;
   asyncTargetWidth = 0;
   asyncTargetHeight = 0;
@@ -680,6 +704,7 @@ bool ImageView::resetDroppedAsyncRequest() {
 
 bool ImageView::setImage(const path_t &path) { return loadTexture(path); }
 bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
+  sharedChartImagePath_.reset();
   resetDroppedAsyncRequest();
   if (asyncTicket != 0 &&
       imageDecodeCoordinator().hasFailed(asyncTicket)) {
@@ -740,6 +765,78 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
       asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
   return false;
 }
+image_decode::DecodedImageCache &ImageView::sharedDecodedImageCache() {
+  return imageCache;
+}
+
+std::string ImageView::chartImageCacheKey(const path_t &path) {
+  return "chartimage:" + imageCacheSourceKey(path);
+}
+
+std::optional<image_decode::DecodedImageData>
+ImageView::findChartImage(const path_t &path) {
+  return imageCache.get(chartImageCacheKey(path));
+}
+
+bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
+  resetDroppedAsyncRequest();
+  if (asyncTicket != 0 &&
+      imageDecodeCoordinator().hasFailed(asyncTicket)) {
+    cancelAsyncRequest();
+  }
+  // Decode once at a bounded full-quality dimension (no display-space resize)
+  // so the same pixels are usable as the gameplay skin's builtin image, and
+  // the load is fast for a multi-megabyte stage image.
+  const std::string key = imageAsyncCacheKey(path, 0, 0) + ":shared-max=" +
+                          std::to_string(kSharedChartImageMaxDimension);
+  sharedChartImagePath_ = path;
+  asyncImageBound = true;
+  asyncTargetWidth = 0;
+  asyncTargetHeight = 0;
+  if (currentImageKey == key) {
+    if (applyCachedTexture(path, key)) {
+      asyncImagePending = false;
+      return true;
+    }
+    if (!bgfx::isValid(texture)) {
+      applyCachedThumbnail(path, key);
+    }
+    if (asyncTicket == 0) {
+      asyncTicket = imageDecodeCoordinator().request(
+          {.key = key,
+           .path = std::filesystem::path(path),
+           .targetWidth = 0,
+           .targetHeight = 0,
+           .maximumDimension = kSharedChartImageMaxDimension,
+           .priority = prioritize});
+    }
+    asyncImagePending =
+        asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
+    return false;
+  }
+
+  cancelAsyncRequest();
+  if (currentImagePath != path) {
+    freeTexture();
+  }
+  currentImageKey = key;
+  currentImagePath = path;
+  if (applyCachedTexture(path, key)) {
+    asyncImagePending = false;
+    return true;
+  }
+  applyCachedThumbnail(path, key);
+  asyncTicket = imageDecodeCoordinator().request(
+      {.key = key,
+       .path = std::filesystem::path(path),
+       .targetWidth = 0,
+       .targetHeight = 0,
+       .maximumDimension = kSharedChartImageMaxDimension,
+       .priority = prioritize});
+  asyncImagePending =
+      asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
+  return false;
+}
 void ImageView::freeImage() {
   cancelAsyncRequest();
   currentImageKey.clear();
@@ -748,6 +845,7 @@ void ImageView::freeImage() {
   asyncTargetWidth = 0;
   asyncTargetHeight = 0;
   asyncImagePending = false;
+  sharedChartImagePath_.reset();
   freeTexture();
 }
 ImageView *ImageView::setFade(ImageFadeDirection direction, float strength) {
@@ -785,7 +883,7 @@ void ImageView::onThemeChanged() {
 }
 void ImageView::onLayout() {
   View::onLayout();
-  if (!asyncImageBound || currentImagePath.empty()) {
+  if (!asyncImageBound || currentImagePath.empty() || sharedChartImagePath_) {
     return;
   }
   const int targetWidth = std::max(1, getWidth());

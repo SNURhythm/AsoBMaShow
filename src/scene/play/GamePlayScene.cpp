@@ -3,6 +3,10 @@
 //
 
 #include "GamePlayScene.h"
+
+#include "../../StartupTiming.h"
+
+#include "../../BeatorajaScoreMetrics.h"
 #include "GameplayBmsResourceAvailability.h"
 #include "GamePlayStartup.h"
 #include "GamePlayTiming.h"
@@ -161,6 +165,99 @@ gameplaySkinSessionServices(ApplicationContext &context) {
               context.skinStorageRoots ? &*context.skinStorageRoots : nullptr,
           .resourcePreparation = context.skinResourcePreparationService.get(),
           .builtinImageReader = archive_file::readFileBounded,
+          .builtinImageCache = &ImageView::sharedDecodedImageCache(),
+          .builtinImageCacheKey =
+              [](const std::filesystem::path &path) {
+                return ImageView::chartImageCacheKey(path);
+              },
+          .builtinImageBatchReader =
+              [](const std::map<int, std::filesystem::path> &paths,
+                 std::vector<skin::SkinBuiltinImageBatch> &out,
+                 std::size_t maximumBytes, std::stop_token stop) {
+                if (stop.stop_requested()) return false;
+                if (maximumBytes != std::numeric_limits<std::size_t>::max()) {
+                  for (const auto &[reference, path] : paths) {
+                    if (stop.stop_requested()) return false;
+                    std::vector<unsigned char> bytes;
+                    std::string readError;
+                    if (archive_file::readFileBounded(
+                            path, bytes, maximumBytes, &readError, stop)) {
+                      out.push_back({.reference = reference,
+                                     .bytes = std::move(bytes)});
+                    }
+                  }
+                  return !stop.stop_requested();
+                }
+                // Group archive entries per archive and read them in one
+                // offset-based pass (fast random access) instead of a
+                // per-image stream, which for an audio-heavy archived chart
+                // decompressed the whole archive once per image.
+                std::map<std::string,
+                         std::vector<std::pair<int, std::filesystem::path>>>
+                    byArchive;
+                std::vector<std::pair<int, std::filesystem::path>> plain;
+                for (const auto &[reference, path] : paths) {
+                  std::filesystem::path archivePath, innerPath;
+                  if (archive_file::splitVirtualPath(path, archivePath,
+                                                     innerPath)) {
+                    byArchive[archivePath.generic_string()].emplace_back(
+                        reference, innerPath);
+                  } else {
+                    plain.emplace_back(reference, path);
+                  }
+                }
+                for (const auto &[reference, path] : plain) {
+                  std::vector<unsigned char> bytes;
+                  std::string readError;
+                  if (archive_file::readFileBounded(
+                          path, bytes, maximumBytes, &readError, stop)) {
+                    out.push_back({.reference = reference,
+                                   .bytes = std::move(bytes)});
+                  }
+                }
+                for (const auto &[archive, items] : byArchive) {
+                  std::vector<std::filesystem::path> innerPaths;
+                  for (const auto &[reference, inner] : items) {
+                    (void)reference;
+                    innerPaths.push_back(inner);
+                  }
+                  std::vector<archive_file::FileData> files;
+                  std::string batchError;
+                  if (archive_file::readArchiveEntries(
+                          std::filesystem::path(archive), innerPaths, files,
+                          &batchError,
+                          [&stop] { return !stop.stop_requested(); })) {
+                    for (auto &file : files) {
+                      for (const auto &[reference, inner] : items) {
+                        if (file.path == inner) {
+                          out.push_back(
+                              {.reference = reference,
+                               .bytes = std::move(file.bytes)});
+                          break;
+                        }
+                      }
+                    }
+                  }
+                  // A target missed by the batch falls back to per-file.
+                  for (const auto &[reference, inner] : items) {
+                    const auto already =
+                        std::ranges::any_of(out, [reference](const auto &item) {
+                          return item.reference == reference;
+                        });
+                    if (already) continue;
+                    std::vector<unsigned char> bytes;
+                    std::string readError;
+                    if (archive_file::readFileBounded(
+                            archive_file::makeVirtualPath(
+                                std::filesystem::path(archive), inner),
+                            bytes, maximumBytes, &readError, stop)) {
+                      out.push_back({.reference = reference,
+                                     .bytes = std::move(bytes)});
+                    }
+                  }
+                }
+                return !stop.stop_requested();
+              },
           .liveResourceCounters = context.skinLiveResourceCounters,
           .createHttpTransport = [](std::stop_token stop) {
             return skin::createLuaSkinProductionHttpTransport(stop);
@@ -1595,7 +1692,9 @@ bool GamePlayScene::enterPracticeMenu() {
                         options.gaugeProfile, options.gaugeAutoShiftLowerBound);
   state->isPlaying = false;
   capturePlayfieldVisualState(0, getVisualTimeMicros(0), false, false, true);
+  StartupTiming::instance().mark("prepare playback start, skin create begins");
   acquireGameplaySkinForAttempt();
+  StartupTiming::instance().mark("skin create done");
   if (presentation == nullptr) {
     return false;
   }
@@ -2743,6 +2842,7 @@ void GamePlayScene::cancelGameplaySkinPreparation() noexcept {
 }
 
 void GamePlayScene::init() {
+  StartupTiming::instance().mark("GamePlayScene init start");
   context.profileGameplayActive.store(true, std::memory_order_release);
   profileGameplayBlockerActive = true;
   context.jukebox.setEmbeddedBgaBrightnessPercent(
@@ -2803,6 +2903,7 @@ void GamePlayScene::init() {
   }
   playfieldChartVisualModel =
       buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+  StartupTiming::instance().mark("init build playfield chart visual model");
   activePersistedScore = context.scoreRepository.LoadChartScoreHistory(
       chart->Meta, options.longNoteMode);
   activeRivalScore.reset();
@@ -2820,6 +2921,7 @@ void GamePlayScene::init() {
     };
   }
   activePlayerScoreHistory = context.scoreRepository.LoadPlayerScoreHistory();
+  StartupTiming::instance().mark("init load score history");
   playfieldSongReviewFavorite = 0;
   playfieldChartHasDocument = false;
   if (auto chartSession = context.chartRepository.OpenSession()) {
@@ -2846,6 +2948,7 @@ void GamePlayScene::init() {
       .replayGhostsEnabled =
           options.replayGhostRenderingEnabled.value_or(true),
   });
+  StartupTiming::instance().mark("built-in presentation created");
   builtInPresentation = builtIn.get();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto coordinator = std::make_unique<PlayfieldPresentationCoordinator>(
@@ -2965,7 +3068,10 @@ void GamePlayScene::init() {
   presentationEventFanout = ownedPresentationEventFanout.get();
   std::string musicStopError;
   context.musicPlayer.Stop(musicStopError);
-  context.jukebox.stop();
+  // The chart's audio was already loaded and scheduled (preload worker or
+  // launch thread); keep the audio device open so play() short-circuits the
+  // multi-hundred-ms device start instead of stopping and re-opening it.
+  (void)context.jukebox.stopKeepDevice();
   if (shouldEnterPracticeMenu()) {
     if (!enterPracticeMenu()) {
       return;
@@ -3144,8 +3250,7 @@ void GamePlayScene::init() {
               context.jukebox.stop();
               defer(
                   [this]() {
-                    if (options.practiceMode &&
-                        options.returnScene != nullptr) {
+                    if (options.returnScene != nullptr) {
                       context.sceneManager->changeScene(options.returnScene,
                                                         false);
                     } else {
@@ -3432,13 +3537,16 @@ bool GamePlayScene::reset() {
       getVisualTimeMicros(initialGameplayTimeMicros),
       preparationIndicatorActive(initialRawSongTimeMicros),
       practiceCountInActive(initialRawSongTimeMicros), true);
+  StartupTiming::instance().mark("play start, skin create begins");
   acquireGameplaySkinForAttempt();
+  StartupTiming::instance().mark("play start skin create done");
   if (playbackInitializationFailed) {
     return false;
   }
   updateSkinResetLayoutVisibility();
 #endif
   context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  StartupTiming::instance().mark("jukebox play");
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
@@ -4289,7 +4397,8 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   } else {
     applyCourseConstraintsToChart(*nextChart, session->constraints);
     playInfo = play_options::applySelectedPlayOptions(
-        *nextChart, session->requestedPlayOption);
+        *nextChart, session->requestedPlayOption,
+        session->requestedPlayOption2);
     applyEffectiveLongNoteModeToChart(*nextChart, options.longNoteMode);
     session->playOption = playInfo.option;
     session->playOptionSeed = playInfo.seed;
@@ -4310,7 +4419,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
   if (retrySetup == nullptr) {
     nextOptions.startPosition = 0;
     nextOptions.autoKeySound = session->autoKeySound;
-    nextOptions.autoPlay = false;
+    nextOptions.autoPlay = session->autoPlay;
     nextOptions.gaugeType = session->gaugeType;
     nextOptions.gaugeProfile = session->gaugeProfile;
     nextOptions.gaugeAutoShift = session->gaugeAutoShift;
@@ -4320,6 +4429,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     nextOptions.playOptionSeed = playInfo.seed;
     nextOptions.playOption2 = playInfo.option2;
     nextOptions.playOption2Seed = playInfo.seed2;
+    nextOptions.doublePlayFlip = session->doublePlayFlip;
     nextOptions.longNoteMode = options.longNoteMode;
     nextOptions.assistOption = session->assistOption;
     nextOptions.playback = course_rules::kRequiredPlaybackRate;
@@ -4330,6 +4440,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
     nextOptions.ownsChart = true;
   }
+  nextOptions.returnScene = options.returnScene;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -5345,6 +5456,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           recordedReplay.laneCoverEvents.empty()
               ? effectiveNoteStartPositionPercent()
               : recordedReplay.laneCoverEvents.front().noteStartPositionPercent;
+      const auto timing = beatorajaResultTimingStatistics(
+          &recordedReplay, chart->Meta.TotalNotes, chart);
       const replay::ChartReplayCapture capture{
           .result = std::move(*result),
           .setupFacts = {.chart = resultIdentity,
@@ -5360,6 +5473,9 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           .touchSamples = modernCapture->touchSamples,
           .laneCoverEvents = modernCapture->laneCoverEvents,
           .timeBounds = modernCapture->timeBounds,
+          .averageJudgeMicros =
+              timing ? std::optional<std::int64_t>(timing->averageJudgeMicros)
+                     : std::nullopt,
       };
       auto attempt = replay::captureChartReplayPersistenceAttempt(
           capture, constructionDiagnostic);
@@ -5436,6 +5552,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 capturePolicy.captureAnalytics ? &analyticsReplay : nullptr,
                 presentationReplay, retrySource);
         ResultPracticeOptions practiceResultOptions;
+        practiceResultOptions.returnScene = options.returnScene;
         if (options.practiceMode || options.practiceSession != nullptr) {
           practiceResultOptions.enabled = true;
           practiceResultOptions.session = options.practiceSession;
@@ -5456,7 +5573,6 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           practiceResultOptions.longNoteMode = options.longNoteMode;
           practiceResultOptions.assistOption = options.assistOption;
           practiceResultOptions.leadInMicros = options.practiceLeadInMicros;
-          practiceResultOptions.returnScene = options.returnScene;
           practiceResultOptions.practiceGhostCallback =
               options.practiceGhostCallback;
         }
@@ -5754,6 +5870,7 @@ void GamePlayScene::renderScene() {
   if (playbackInitializationFailed) {
     return;
   }
+  StartupTiming::instance().finishFirstFrame();
   RenderContext renderContext(context.uiBatchRenderer);
   RenderContext::UiBatchScope uiBatchScope(renderContext);
   pauseLayout->setSize(rendering::window_width, rendering::window_height);

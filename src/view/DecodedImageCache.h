@@ -5,6 +5,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -48,7 +49,9 @@ private:
 
   void touch(std::map<std::string, Entry, std::less<>>::iterator entry);
   void evictToBudget(std::string_view protectedKey = {});
+  bool eraseLocked(std::string_view key);
 
+  mutable std::mutex mutex_;
   std::size_t byteBudget_ = 0;
   std::size_t bytes_ = 0;
   std::list<std::string> recency_;

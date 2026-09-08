@@ -59,9 +59,6 @@ normalizeSkinJudgeNumber(const SkinJudgeNumberNormalizationInput &input) {
   if (input.offsets.size() > SkinJudgeNumberNormalizationPolicy::maxDigitOffsets) {
     return failure(SkinJudgeNumberNormalizationError::OffsetLimitExceeded);
   }
-  if (!input.value) {
-    return failure(SkinJudgeNumberNormalizationError::MissingValueBinding);
-  }
   if (input.digitCount < 0 ||
       input.digitCount > SkinJudgeNumberNormalizationPolicy::maxDigitCount) {
     return failure(SkinJudgeNumberNormalizationError::InvalidDigitCount);

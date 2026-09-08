@@ -184,6 +184,18 @@ elseif(ANDROID)
     find_package(unarr CONFIG REQUIRED)
     list(APPEND COMMON_LIBS unarr::unarr)
 
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(LUAJIT REQUIRED luajit)
+    find_path(LUAJIT_ANDROID_INCLUDE_DIR
+        NAMES lauxlib.h
+        HINTS "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/include"
+        PATH_SUFFIXES luajit-2.1
+        NO_DEFAULT_PATH
+        REQUIRED)
+    include_directories(BEFORE ${LUAJIT_ANDROID_INCLUDE_DIR})
+    link_directories(${LUAJIT_LIBRARY_DIRS})
+    list(APPEND COMMON_LIBS ${LUAJIT_LIBRARIES})
+
     find_library(ANDROID_LIBRARY android REQUIRED)
     find_library(LOG_LIBRARY log REQUIRED)
     find_library(EGL_LIBRARY EGL REQUIRED)
@@ -627,6 +639,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
 
+    add_test(NAME android_folder_picker_lifecycle_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_folder_picker_lifecycle_tests.py -v)
+    set_tests_properties(android_folder_picker_lifecycle_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        LABELS platform_android
+        TIMEOUT 30
+    )
+
     if (NOT IOS)
         add_executable(curl_redirect_policy_tests
             tests/curl_redirect_policy_tests.cpp
@@ -704,6 +725,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_skin_source_format_tests PRIVATE cxx_std_23)
 
+    add_executable(file_checksum_tests
+        tests/file_checksum_tests.cpp
+        src/FileChecksum.cpp
+    )
+    target_include_directories(file_checksum_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(file_checksum_tests PRIVATE cxx_std_23)
+
     if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         add_executable(play_skin_viewport_tests
             tests/play_skin_viewport_tests.cpp
@@ -723,6 +753,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(skin_draw_command_tests
             tests/skin_draw_command_tests.cpp
+            src/StartupTiming.cpp
+            src/Utils.cpp
+            src/path.cpp
             src/FileChecksum.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
@@ -736,6 +769,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -775,6 +809,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_touch_geometry_tests
             tests/play_skin_touch_geometry_tests.cpp
+            src/StartupTiming.cpp
+            src/Utils.cpp
+            src/path.cpp
             src/FileChecksum.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
@@ -788,6 +825,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -1209,6 +1247,332 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 src/skin/package/SkinAliasDetectorApple.mm
             )
             target_link_libraries(lua_skin_table_decoder_tests PRIVATE
+                "-framework Foundation"
+            )
+        endif()
+
+        add_executable(lua_music_select_skin_decoder_tests
+            tests/lua_music_select_skin_decoder_tests.cpp
+            src/FileChecksum.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/beatoraja/LuaSkinBindingDecoder.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAudioHost.cpp
+            src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinRuntime.cpp
+            src/skin/beatoraja/LuaSkinTableDecoder.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
+            src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
+            src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+            src/skin/beatoraja/SkinCoverNormalization.cpp
+            src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+            src/skin/beatoraja/SkinJudgeNormalization.cpp
+            src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
+            src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp
+            src/skin/beatoraja/SkinNoteLineNormalization.cpp
+            src/skin/beatoraja/SkinNoteNormalization.cpp
+            src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+            src/skin/beatoraja/SkinTextGraphNormalization.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+        )
+        target_include_directories(lua_music_select_skin_decoder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_music_select_skin_decoder_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lua_music_select_skin_decoder_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_LUA_RUNTIME_TEST_HOOKS=1
+            ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        )
+        target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+            utf8proc::utf8proc
+        )
+        if(WIN32)
+            target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+                ${LUAJIT_LIB}
+                advapi32
+            )
+        else()
+            target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
+                ${LUAJIT_LIBRARIES}
+            )
+        endif()
+
+        add_executable(music_select_skin_model_tests
+            tests/music_select_skin_model_tests.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
+        )
+        target_include_directories(music_select_skin_model_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_skin_model_tests PRIVATE cxx_std_23)
+        target_compile_definitions(music_select_skin_model_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+        )
+
+        add_executable(music_select_bar_renderer_tests
+            tests/music_select_bar_renderer_tests.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
+        )
+        target_include_directories(music_select_bar_renderer_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_bar_renderer_tests PRIVATE cxx_std_23)
+        target_compile_definitions(music_select_bar_renderer_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+        )
+
+        add_executable(music_select_skin_state_bridge_tests
+            tests/music_select_skin_state_bridge_tests.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
+        )
+        target_include_directories(music_select_skin_state_bridge_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_skin_state_bridge_tests PRIVATE cxx_std_23)
+        target_compile_definitions(music_select_skin_state_bridge_tests PRIVATE
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+        )
+
+        add_executable(music_select_repository_projection_tests
+            tests/music_select_repository_projection_tests.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_repository_projection_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_repository_projection_tests PRIVATE cxx_std_23)
+        add_executable(music_select_folder_status_loader_tests
+            tests/music_select_folder_status_loader_tests.cpp
+            src/music_select/MusicSelectFolderStatusLoader.cpp
+        )
+        target_include_directories(music_select_folder_status_loader_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_folder_status_loader_tests PRIVATE cxx_std_23)
+
+        add_executable(course_gameplay_session_builder_tests
+            tests/course_gameplay_session_builder_tests.cpp
+            src/bms_parser.cpp
+            src/scene/CourseGameplaySessionBuilder.cpp
+        )
+        target_include_directories(course_gameplay_session_builder_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(course_gameplay_session_builder_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_preview_tests
+            tests/music_select_preview_tests.cpp
+            src/audio/SelectAudioDiagnostics.cpp
+            src/music_select/MusicSelectPreview.cpp
+            src/music_select/MusicSelectPreviewAudioService.cpp
+            src/Utils.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_preview_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_preview_tests PRIVATE cxx_std_23)
+        if(TARGET SDL2::SDL2)
+            target_link_libraries(music_select_preview_tests PRIVATE SDL2::SDL2)
+        elseif(TARGET SDL2::SDL2-static)
+            target_link_libraries(music_select_preview_tests PRIVATE SDL2::SDL2-static)
+        endif()
+        add_executable(music_select_system_sound_tests
+            tests/music_select_system_sound_tests.cpp
+            src/audio/SkinSystemSoundService.cpp
+        )
+        target_include_directories(music_select_system_sound_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_system_sound_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_search_history_tests
+            tests/music_select_search_history_tests.cpp
+            src/music_select/MusicSelectSearchHistory.cpp
+        )
+        target_include_directories(music_select_search_history_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_search_history_tests PRIVATE cxx_std_23)
+        target_link_libraries(music_select_search_history_tests PRIVATE utf8proc::utf8proc)
+
+        add_executable(music_select_replay_slot_tests
+            tests/music_select_replay_slot_tests.cpp
+            src/music_select/MusicSelectReplaySlots.cpp
+            src/replay/BeatorajaReplayPath.cpp
+        )
+        target_include_directories(music_select_replay_slot_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_replay_slot_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_favorite_tests
+            tests/music_select_favorite_tests.cpp
+            src/music_select/MusicSelectFavorites.cpp
+        )
+        target_include_directories(music_select_favorite_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_favorite_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_external_actions_tests
+            tests/music_select_external_actions_tests.cpp
+            src/music_select/MusicSelectExternalActions.cpp
+        )
+        target_include_directories(music_select_external_actions_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_external_actions_tests PRIVATE cxx_std_23)
+
+        add_executable(intro_scene_navigation_tests
+            tests/intro_scene_navigation_tests.cpp
+            src/music_select/MusicSelectInputProcessor.cpp
+        )
+        target_include_directories(intro_scene_navigation_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(intro_scene_navigation_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_bar_manager_tests
+            tests/music_select_bar_manager_tests.cpp
+            src/music_select/MusicSelectFolderStatusLoader.cpp
+            src/music_select/MusicSelectBarManager.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_bar_manager_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_bar_manager_tests PRIVATE cxx_std_23)
+        add_executable(chart_meta_page_cache_tests
+            tests/chart_meta_page_cache_tests.cpp
+        )
+        target_compile_features(chart_meta_page_cache_tests PRIVATE cxx_std_23)
+        add_executable(music_select_song_index_tests
+            tests/music_select_song_index_tests.cpp
+            src/music_select/MusicSelectSongIndex.cpp
+            src/music_select/MusicSelectBarManager.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_song_index_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_song_index_tests PRIVATE cxx_std_23)
+        add_executable(music_select_paged_songs_tests
+            tests/music_select_paged_songs_tests.cpp
+            src/music_select/MusicSelectPagedSongs.cpp
+            src/music_select/MusicSelectSongIndex.cpp
+            src/music_select/MusicSelectBarManager.cpp
+            src/music_select/MusicSelectReplaySlots.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/replay/BeatorajaReplayPath.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_paged_songs_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_paged_songs_tests PRIVATE cxx_std_23)
+        add_executable(music_select_sql_songs_tests
+            tests/music_select_sql_songs_tests.cpp
+            src/music_select/MusicSelectBarManager.cpp
+            src/music_select/MusicSelectSqlSongs.cpp
+            src/music_select/MusicSelectRepositoryProjection.cpp
+            src/path.cpp
+        )
+        target_include_directories(music_select_sql_songs_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_sql_songs_tests PRIVATE cxx_std_23)
+        add_executable(music_select_directory_loader_tests
+            tests/music_select_directory_loader_tests.cpp
+            src/music_select/MusicSelectDirectoryLoader.cpp
+        )
+        target_include_directories(music_select_directory_loader_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_directory_loader_tests PRIVATE cxx_std_23)
+        add_executable(music_select_directory_request_tests
+            tests/music_select_directory_request_tests.cpp
+        )
+        target_include_directories(music_select_directory_request_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_directory_request_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_launch_policy_tests
+            tests/music_select_launch_policy_tests.cpp
+            src/music_select/MusicSelectLaunchPolicy.cpp
+        )
+        target_include_directories(music_select_launch_policy_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_launch_policy_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_property_projection_tests
+            tests/music_select_property_projection_tests.cpp
+            src/music_select/MusicSelectPropertyProjection.cpp
+            src/settings/AudioVideoSettings.cpp
+        )
+        target_include_directories(music_select_property_projection_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_property_projection_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_ranking_tests
+            tests/music_select_ranking_tests.cpp
+            src/music_select/MusicSelectRanking.cpp
+        )
+        target_include_directories(music_select_ranking_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_ranking_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_input_processor_tests
+            tests/music_select_input_processor_tests.cpp
+            src/music_select/MusicSelectInputProcessor.cpp
+        )
+        target_include_directories(music_select_input_processor_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_input_processor_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_event_controller_tests
+            tests/music_select_event_controller_tests.cpp
+            src/music_select/MusicSelectEventController.cpp
+            src/settings/AudioVideoSettings.cpp
+        )
+        target_include_directories(music_select_event_controller_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_event_controller_tests PRIVATE cxx_std_23)
+
+        add_executable(music_select_input_binding_adapter_tests
+            tests/music_select_input_binding_adapter_tests.cpp
+            src/music_select/MusicSelectInputBindingAdapter.cpp
+            src/input/InputBindingResolver.cpp
+        )
+        target_include_directories(music_select_input_binding_adapter_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(music_select_input_binding_adapter_tests PRIVATE cxx_std_23)
+
+        if(APPLE)
+            target_sources(lua_music_select_skin_decoder_tests PRIVATE
+                src/skin/package/SkinAliasDetectorApple.mm
+            )
+            target_link_libraries(lua_music_select_skin_decoder_tests PRIVATE
                 "-framework Foundation"
             )
         endif()
@@ -1709,6 +2073,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(beatoraja_gameplay_cross_format_tests
             tests/beatoraja_gameplay_cross_format_tests.cpp
+            src/StartupTiming.cpp
+            src/Utils.cpp
+            src/path.cpp
             src/FileChecksum.cpp
             src/skin/SkinProfileSettings.cpp
             src/skin/SkinStoragePaths.cpp
@@ -1727,6 +2094,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
             src/skin/beatoraja/SkinCoverNormalization.cpp
@@ -1789,6 +2157,76 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest tests/beatoraja_skin_reference_tests.py -v)
     set_tests_properties(beatoraja_skin_reference_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME beatoraja_music_select_skin_ledger
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/beatoraja_music_select_skin_ledger_tests.py -v)
+    set_tests_properties(beatoraja_music_select_skin_ledger PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME music_select_error_flow_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/music_select_error_flow_contract_tests.py -v)
+    set_tests_properties(music_select_error_flow_contract PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+    )
+    add_test(NAME music_select_export_preload
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/music_select_scene_export_preload_tests.py -v)
+    set_tests_properties(music_select_export_preload PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+    )
+    if (TARGET lua_music_select_skin_decoder_tests)
+        set(SELECTOR_SETTINGS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/music_select_settings_runtime_fixture.cpp)
+        add_custom_command(OUTPUT ${SELECTOR_SETTINGS_FIXTURE}
+            COMMAND ${Python3_EXECUTABLE} -m tests.music_select_settings_runtime_fixture
+                    --output ${SELECTOR_SETTINGS_FIXTURE}
+            DEPENDS tests/music_select_settings_runtime_fixture.py
+                    tests/music_select_settings_runtime_fixture.cpp
+                    tests/music_select_error_flow_contract_tests.py
+                    src/scene/MusicSelectScene.cpp src/scene/MusicSelectScene.h
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            VERBATIM)
+        target_sources(lua_music_select_skin_decoder_tests PRIVATE
+            ${SELECTOR_SETTINGS_FIXTURE}
+            src/music_select/MusicSelectLaunchPolicy.cpp)
+        set_source_files_properties(tests/lua_music_select_skin_decoder_tests.cpp
+            PROPERTIES COMPILE_DEFINITIONS ASOBMASHOW_SETTINGS_RETENTION_TESTS=1)
+        add_test(NAME music_select_settings_runtime
+            COMMAND lua_music_select_skin_decoder_tests --settings-retention)
+        set_tests_properties(music_select_settings_runtime PROPERTIES
+            ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        )
+    endif()
+    add_test(NAME main_menu_preview_lifecycle
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/main_menu_preview_lifecycle_tests.py -v)
+    set_tests_properties(main_menu_preview_lifecycle PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+    )
+    add_test(NAME main_menu_records_lifecycle
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/main_menu_records_lifecycle_tests.py -v)
+    set_tests_properties(main_menu_records_lifecycle PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+    )
+    add_test(NAME settings_sound_set_lifecycle
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/settings_sound_set_lifecycle_tests.py -v)
+    set_tests_properties(settings_sound_set_lifecycle PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+    )
+    add_test(NAME gameplay_builtin_image_batch
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest tests/gameplay_builtin_image_batch_tests.py -v)
+    set_tests_properties(gameplay_builtin_image_batch PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
     )
     if (TARGET beatoraja_skin_model_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger
@@ -2486,6 +2924,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(ir_account_lookup_service_tests PRIVATE cxx_std_23)
+
+    add_executable(ir_external_url_service_tests
+        tests/ir_external_url_service_tests.cpp
+        src/ir/IrExternalUrlService.cpp
+    )
+    target_include_directories(ir_external_url_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(ir_external_url_service_tests PRIVATE cxx_std_23)
 
     add_executable(ir_receipt_models_tests
         tests/ir_receipt_models_tests.cpp
@@ -3341,6 +3788,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(chart_repository_tests
         tests/chart_repository_tests.cpp
+        src/music_select/MusicSelectPhysicalDirectory.cpp
+        src/music_select/MusicSelectSqlSongs.cpp
+        src/music_select/MusicSelectPagedSongs.cpp
+        src/music_select/MusicSelectSongIndex.cpp
+        src/music_select/MusicSelectReplaySlots.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/music_select/MusicSelectRepositoryMetadataLoader.cpp
+        src/music_select/MusicSelectRepositoryProjection.cpp
+        src/music_select/MusicSelectBarManager.cpp
+        src/music_select/MusicSelectPropertyProjection.cpp
+        src/settings/AudioVideoSettings.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
@@ -3371,6 +3829,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_repository_tests PRIVATE cxx_std_23)
+    add_test(NAME chart_repository_search_paging
+             COMMAND chart_repository_tests --search-paging-tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -3385,6 +3845,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(WIN32)
         target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
     endif()
+    get_target_property(CHART_SELECTOR_QUERY_TEST_SOURCES chart_repository_tests SOURCES)
+    list(REMOVE_ITEM CHART_SELECTOR_QUERY_TEST_SOURCES tests/chart_repository_tests.cpp)
+    add_executable(chart_selector_query_tests
+        tests/chart_selector_query_tests.cpp
+        ${CHART_SELECTOR_QUERY_TEST_SOURCES}
+    )
+    target_include_directories(chart_selector_query_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(chart_selector_query_tests PRIVATE cxx_std_23)
+    get_target_property(CHART_SELECTOR_QUERY_TEST_LIBRARIES chart_repository_tests LINK_LIBRARIES)
+    target_link_libraries(chart_selector_query_tests PRIVATE ${CHART_SELECTOR_QUERY_TEST_LIBRARIES})
 
     add_executable(chart_scan_work_scheduler_tests
         tests/chart_scan_work_scheduler_tests.cpp
@@ -3406,6 +3876,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(archive_file_concurrency_tests PRIVATE cxx_std_23)
+    target_compile_definitions(archive_file_concurrency_tests PRIVATE
+        ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
+    )
     target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
     if(NOT WIN32)
         set(SEVENZIP_TEST_SUPPORT_DIR
@@ -3721,6 +4194,65 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(main_menu_library_tests PRIVATE SDL2)
     endif()
 
+    add_executable(chart_library_task_service_tests
+        tests/chart_library_task_service_tests.cpp
+        src/library/ChartLibraryTaskService.cpp
+    )
+    target_include_directories(chart_library_task_service_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_library_task_service_tests PRIVATE cxx_std_23)
+
+    add_executable(chart_library_operations_tests
+        tests/chart_library_operations_tests.cpp
+        src/library/ChartLibraryOperations.cpp
+        src/library/ChartLibraryTaskService.cpp
+        src/library/ChartLibraryPlatform.cpp
+        src/scene/MainMenuLibrary.cpp
+        src/DifficultyTableImporter.cpp
+        src/ChartLibraryScanner.cpp
+        src/ChartScanWorkScheduler.cpp
+        src/CourseIdentity.cpp
+        src/FileChecksum.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/repositories/ChartRepository.cpp
+        src/repositories/ChartScanStore.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ChartRepositoryDifficulty.cpp
+        src/repositories/ChartRepositoryQueries.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositorySchema.cpp
+        src/ResultPersistenceModel.cpp
+        src/ModernResult.cpp
+        src/ScoreProvenance.cpp
+        src/Uuid.cpp
+        src/Utils.cpp
+        src/path.cpp
+        src/sqlite3.c
+    )
+    target_include_directories(chart_library_operations_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_library_operations_tests PRIVATE cxx_std_23)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL2::SDL2-static)
+    elseif(TARGET SDL2)
+        target_link_libraries(chart_library_operations_tests PRIVATE SDL2)
+    endif()
+    target_link_libraries(chart_library_operations_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(chart_library_operations_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(chart_library_operations_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(chart_meta_index_order_tests
         tests/chart_meta_index_order_tests.cpp
         src/sqlite3.c
@@ -3801,7 +4333,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioBackend.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp
+        src/Utils.cpp
         src/path.cpp
         src/utils/Stopwatch.cpp
     )
@@ -3810,6 +4344,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(audio_wrapper_lifecycle_tests PRIVATE cxx_std_23)
     target_link_libraries(audio_wrapper_lifecycle_tests PRIVATE ${COMMON_LIBS})
+    add_executable(skin_sound_bundle_decode_tests
+        tests/skin_sound_bundle_decode_tests.cpp
+        src/audio/decoder.cpp
+        src/audio/SelectAudioDiagnostics.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/Utils.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(skin_sound_bundle_decode_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(skin_sound_bundle_decode_tests PRIVATE cxx_std_23)
+    target_compile_definitions(skin_sound_bundle_decode_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(skin_sound_bundle_decode_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(skin_sound_bundle_decode_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(skin_sound_bundle_decode_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(jukebox_restore_tests
         tests/jukebox_restore_tests.cpp
@@ -3820,6 +4378,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
@@ -3953,6 +4512,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/package/SkinTreeSnapshotter.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
             src/skin/beatoraja/GameplaySkinSourceFormat.cpp
             src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
             src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
@@ -3979,6 +4539,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -4029,6 +4591,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -4040,6 +4604,51 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(skin_resource_catalog_tests PRIVATE cxx_std_23)
         target_compile_definitions(skin_resource_catalog_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
         target_link_libraries(skin_resource_catalog_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
+        add_executable(skin_movie_catalog_types_tests
+            tests/skin_movie_catalog_types_tests.cpp
+            src/MinizBridge.c
+            src/view/DecodedImageCache.cpp
+            src/view/ImageDecodeCoordinator.cpp
+            src/view/ImageFileDecoder.cpp
+            src/view/SdlTtfRuntime.cpp
+            src/FileChecksum.cpp
+            src/Utils.cpp
+            src/path.cpp
+            src/skin/SkinProfileSettings.cpp
+            src/skin/SkinStoragePaths.cpp
+            src/skin/package/SkinAliasDetector.cpp
+            src/skin/package/SkinPathPolicy.cpp
+            src/skin/package/SkinTreeSnapshotter.cpp
+            src/skin/beatoraja/LuaSkinFileSystem.cpp
+            src/skin/beatoraja/SkinMovieCatalog.cpp
+            src/skin/beatoraja/SkinMovieCatalogFrame.cpp
+            src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
+            src/skin/beatoraja/PomyuCharaResource.cpp
+            src/skin/beatoraja/SkinBitmapFontParser.cpp
+            src/skin/beatoraja/SkinTextAtlas.cpp
+        )
+        if(APPLE)
+            target_sources(skin_movie_catalog_types_tests PRIVATE src/skin/package/SkinAliasDetectorApple.mm)
+        endif()
+        target_include_directories(skin_movie_catalog_types_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(skin_movie_catalog_types_tests PRIVATE cxx_std_23)
+        target_compile_definitions(skin_movie_catalog_types_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
+        target_link_libraries(skin_movie_catalog_types_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
+
+        add_executable(skin_decode_cache_tests
+            tests/skin_decode_cache_tests.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
+            src/view/DecodedImageCache.cpp
+        )
+        target_include_directories(skin_decode_cache_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(skin_decode_cache_tests PRIVATE cxx_std_23)
+        target_link_libraries(skin_decode_cache_tests PRIVATE
+            ${COMMON_LIBS} bgfx yogacore
+        )
 
         add_executable(skin_live_resource_counters_tests
             tests/skin_live_resource_counters_tests.cpp
@@ -4125,6 +4734,53 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(APPLE)
         target_link_libraries(chart_list_item_view_tests PRIVATE iconv)
     endif()
+    add_executable(decide_loading_overlay_tests
+        tests/decide_loading_overlay_tests.cpp
+        src/scene/DecideLoadingOverlay.cpp
+        src/view/DecodedImageCache.cpp
+        src/view/ImageDecodeCoordinator.cpp
+        src/view/ImageFade.cpp
+        src/view/ImageFileDecoder.cpp
+        src/view/ImageView.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/ArchiveFile.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(decide_loading_overlay_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(decide_loading_overlay_tests PRIVATE cxx_std_23)
+    target_link_libraries(decide_loading_overlay_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(decide_loading_overlay_tests PRIVATE iconv)
+    endif()
+    add_executable(chart_preload_worker_tests
+        tests/chart_preload_worker_tests.cpp
+        src/scene/ChartPreloadWorker.cpp
+        src/bms_parser.cpp
+        src/path.cpp
+    )
+    target_include_directories(chart_preload_worker_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(chart_preload_worker_tests PRIVATE cxx_std_23)
+    target_link_libraries(chart_preload_worker_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+    if(APPLE)
+        target_link_libraries(chart_preload_worker_tests PRIVATE iconv)
+    endif()
 
     add_executable(dropdown_view_tests
         tests/dropdown_view_tests.cpp
@@ -4194,6 +4850,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(text_input_box_tests PRIVATE cxx_std_23)
     target_compile_definitions(text_input_box_tests PRIVATE
         SDL_ClearComposition=TextInputBoxTest_ClearComposition
+        SDL_SetTextInputRect=TextInputBoxTest_SetTextInputRect
     )
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
@@ -4294,6 +4951,37 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(result_record_list_view_tests PRIVATE cxx_std_23)
     target_link_libraries(result_record_list_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(replay_records_modal_tests
+        tests/replay_records_modal_tests.cpp
+        src/scene/ReplayRecordsModal.cpp
+        src/ResultRecordSummary.cpp
+        src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayFileActionSelection.cpp
+        src/scene/RemoteResultRecallController.cpp
+        src/ScoreProvenance.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/bms_parser.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/ScrollView.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+    )
+    target_include_directories(replay_records_modal_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(replay_records_modal_tests PRIVATE cxx_std_23)
+    target_link_libraries(replay_records_modal_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
 
@@ -4573,6 +5261,48 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     target_link_libraries(app_settings_store_tests PRIVATE utf8proc::utf8proc)
 
+    add_executable(application_ui_state_store_tests
+        tests/application_ui_state_store_tests.cpp
+        src/ApplicationUiState.cpp
+        src/ApplicationUiStateStore.cpp
+        src/AtomicFile.cpp
+        src/FileChecksum.cpp
+        src/VersionedJson.cpp
+    )
+    target_include_directories(application_ui_state_store_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(application_ui_state_store_tests PRIVATE cxx_std_23)
+
+    add_executable(music_select_toolbar_view_tests
+        tests/music_select_toolbar_view_tests.cpp
+        src/scene/MusicSelectToolbarView.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+    )
+    target_include_directories(music_select_toolbar_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(music_select_toolbar_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(music_select_toolbar_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
+    add_executable(scene_return_target_tests
+        tests/scene_return_target_tests.cpp
+    )
+    target_include_directories(scene_return_target_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
+
     add_executable(profile_settings_persistence_tests
         tests/profile_settings_persistence_tests.cpp
         src/CourseIdentity.cpp
@@ -4784,6 +5514,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
+        src/audio/SelectAudioDiagnostics.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
@@ -4864,6 +5595,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/BgfxSkinTextureDevice.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
             src/skin/beatoraja/GameplaySkinSourceFormat.cpp
             src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
             src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
@@ -4880,9 +5612,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -4906,6 +5640,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -5037,6 +5773,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
             src/skin/beatoraja/GameplaySkinSourceFormat.cpp
             src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
             src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
@@ -5052,7 +5789,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinRuntime.cpp
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
+            src/skin/beatoraja/MusicSelectSkinSession.cpp
+            src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/ResultSkinSession.cpp
@@ -5061,6 +5801,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinCoverNormalization.cpp
             src/skin/beatoraja/SkinDestinationEvaluator.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -5080,6 +5821,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -5219,6 +5962,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/BgfxSkinTextureDevice.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
             src/skin/beatoraja/GameplaySkinSourceFormat.cpp
             src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
             src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
@@ -5235,9 +5979,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
+            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
+            src/skin/beatoraja/MusicSelectBarRenderer.cpp
             src/skin/beatoraja/SkinBpmGraphRenderer.cpp
             src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
             src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
@@ -5261,6 +6007,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
+            src/StartupTiming.cpp
+            src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
             src/skin/beatoraja/SkinTextAtlas.cpp
@@ -6319,6 +7067,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_skin_settings_presentation_tests
         tests/gameplay_skin_settings_presentation_tests.cpp
         src/scene/GameplaySkinSettingsPresentation.cpp
+        src/skin/beatoraja/GameplaySkinSourceFormat.cpp
     )
     target_include_directories(gameplay_skin_settings_presentation_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
@@ -6672,6 +7421,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_upload_candidates_tests
         music_playlist_repository_tests
         chart_repository_tests
+        chart_selector_query_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
         difficulty_table_importer_tests
@@ -6679,6 +7429,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         jukebox_restore_tests
         image_view_fade_tests
         chart_list_item_view_tests
+        decide_loading_overlay_tests
         ir_upload_candidate_list_view_tests
         find_bms_download_tests
         gameplay_bga_target_tests
@@ -6695,6 +7446,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ir_ranking_modal_tests
         image_view_fade_tests
         chart_list_item_view_tests
+        decide_loading_overlay_tests
         context_menu_view_tests
         view_layout_tests
         button_enabled_tests
@@ -6780,11 +7532,22 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     asobmashow_register_test(skin_path_policy_tests)
     asobmashow_register_test(gameplay_skin_source_format_tests)
+    asobmashow_register_test(file_checksum_tests)
     asobmashow_register_test(skin_tree_snapshotter_tests)
     asobmashow_register_test(gameplay_skin_lifecycle_tests)
     asobmashow_register_test(gameplay_skin_settings_tests)
     asobmashow_register_test(gameplay_skin_settings_presentation_tests)
     asobmashow_register_test(gameplay_skin_traits_tests)
+    add_test(NAME beatoraja_music_select_skin_ledger_evidence_contract
+        COMMAND ${Python3_EXECUTABLE}
+                -m unittest
+                tests/beatoraja_music_select_skin_ledger_evidence_tests.py -v)
+    set_tests_properties(beatoraja_music_select_skin_ledger_evidence_contract
+        PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT
+            "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:gameplay_skin_traits_tests>"
+    )
     asobmashow_register_test(skin_archive_importer_tests)
     asobmashow_register_test(skin_diagnostic_history_tests)
     asobmashow_register_test(lua_skin_file_system_tests)
@@ -6796,6 +7559,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(audio_mix_tests foundation_av_audio_mix)
     asobmashow_register_test(audio_wrapper_lifecycle_tests foundation_av_audio_wrapper_lifecycle)
     set_tests_properties(foundation_av_audio_wrapper_lifecycle PROPERTIES TIMEOUT 15)
+    asobmashow_register_test(skin_sound_bundle_decode_tests foundation_av_skin_sound_bundle_decode)
+    set_tests_properties(foundation_av_skin_sound_bundle_decode PROPERTIES TIMEOUT 15)
     asobmashow_register_test(audio_device_manager_tests foundation_av_audio_device)
     asobmashow_register_test(jukebox_restore_tests foundation_av_jukebox_restore)
     set_tests_properties(foundation_av_jukebox_restore PROPERTIES TIMEOUT 30)
@@ -6838,6 +7603,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_identity_tests
         ir_driver_tests
         ir_account_lookup_service_tests
+        ir_external_url_service_tests
         ir_receipt_models_tests
         ir_upload_candidates_tests
         ir_remote_score_models_tests
@@ -6869,6 +7635,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         best_replay_resolver_tests
         music_playlist_repository_tests
         chart_repository_tests
+        chart_selector_query_tests
         chart_scan_work_scheduler_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
@@ -6876,6 +7643,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         result_persistence_model_tests
         chart_record_filters_tests
         main_menu_library_tests
+        chart_library_task_service_tests
+        chart_library_operations_tests
         chart_meta_index_order_tests
         score_cache_query_tests
         app_database_initializer_tests
@@ -6887,6 +7656,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         image_decode_coordinator_tests
         image_file_decoder_tests
         image_view_fade_tests
+        decide_loading_overlay_tests
+        chart_preload_worker_tests
         chart_list_item_view_tests
         dropdown_view_tests
         context_menu_view_tests
@@ -6899,6 +7670,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         result_record_list_view_tests
         ir_upload_candidate_list_view_tests
         ir_uploads_controller_tests
+        replay_records_modal_tests
     )
         asobmashow_register_test(${test_target})
     endforeach()
@@ -6911,6 +7683,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         # from whether the main target happened to copy assets into its output.
         set_tests_properties(skin_resource_catalog_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
+    if (TARGET skin_movie_catalog_types_tests)
+        asobmashow_register_test(skin_movie_catalog_types_tests)
+        set_tests_properties(skin_movie_catalog_types_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
+    if (TARGET skin_decode_cache_tests)
+        asobmashow_register_test(skin_decode_cache_tests)
     endif()
     if (TARGET skin_live_resource_counters_tests)
         asobmashow_register_test(skin_live_resource_counters_tests)
@@ -6932,6 +7712,93 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_table_decoder_tests)
         asobmashow_register_test(lua_skin_table_decoder_tests)
+    endif()
+    if (TARGET lua_music_select_skin_decoder_tests)
+        asobmashow_register_test(lua_music_select_skin_decoder_tests)
+    endif()
+    if (TARGET music_select_skin_model_tests)
+        asobmashow_register_test(music_select_skin_model_tests)
+    endif()
+    if (TARGET music_select_bar_renderer_tests)
+        asobmashow_register_test(music_select_bar_renderer_tests)
+    endif()
+    if (TARGET music_select_skin_state_bridge_tests)
+        asobmashow_register_test(music_select_skin_state_bridge_tests)
+    endif()
+    if (TARGET music_select_repository_projection_tests)
+        asobmashow_register_test(music_select_repository_projection_tests)
+    endif()
+    if (TARGET music_select_folder_status_loader_tests)
+        asobmashow_register_test(music_select_folder_status_loader_tests)
+    endif()
+    if (TARGET course_gameplay_session_builder_tests)
+        asobmashow_register_test(course_gameplay_session_builder_tests)
+    endif()
+    if (TARGET music_select_preview_tests)
+        asobmashow_register_test(music_select_preview_tests)
+    endif()
+    if (TARGET music_select_system_sound_tests)
+        asobmashow_register_test(music_select_system_sound_tests)
+    endif()
+    if (TARGET music_select_search_history_tests)
+        asobmashow_register_test(music_select_search_history_tests)
+    endif()
+    if (TARGET music_select_replay_slot_tests)
+        asobmashow_register_test(music_select_replay_slot_tests)
+    endif()
+    if (TARGET music_select_favorite_tests)
+        asobmashow_register_test(music_select_favorite_tests)
+    endif()
+    if (TARGET music_select_external_actions_tests)
+        asobmashow_register_test(music_select_external_actions_tests)
+    endif()
+    if (TARGET music_select_toolbar_view_tests)
+        asobmashow_register_test(music_select_toolbar_view_tests)
+    endif()
+    if (TARGET intro_scene_navigation_tests)
+        asobmashow_register_test(intro_scene_navigation_tests)
+    endif()
+    if (TARGET music_select_bar_manager_tests)
+        asobmashow_register_test(music_select_bar_manager_tests)
+    endif()
+    if (TARGET chart_meta_page_cache_tests)
+        asobmashow_register_test(chart_meta_page_cache_tests)
+    endif()
+    if (TARGET music_select_song_index_tests)
+        asobmashow_register_test(music_select_song_index_tests)
+    endif()
+    if (TARGET music_select_paged_songs_tests)
+        asobmashow_register_test(music_select_paged_songs_tests)
+    endif()
+    if (TARGET music_select_sql_songs_tests)
+        asobmashow_register_test(music_select_sql_songs_tests)
+    endif()
+    if (TARGET music_select_directory_loader_tests)
+        asobmashow_register_test(music_select_directory_loader_tests)
+    endif()
+    if (TARGET music_select_directory_request_tests)
+        asobmashow_register_test(music_select_directory_request_tests)
+    endif()
+    if (TARGET music_select_launch_policy_tests)
+        asobmashow_register_test(music_select_launch_policy_tests)
+    endif()
+    if (TARGET music_select_property_projection_tests)
+        asobmashow_register_test(music_select_property_projection_tests)
+    endif()
+    if (TARGET music_select_ranking_tests)
+        asobmashow_register_test(music_select_ranking_tests)
+    endif()
+    if (TARGET music_select_input_processor_tests)
+        asobmashow_register_test(music_select_input_processor_tests)
+    endif()
+    if (TARGET music_select_event_controller_tests)
+        asobmashow_register_test(music_select_event_controller_tests)
+    endif()
+    if (TARGET music_select_input_binding_adapter_tests)
+        asobmashow_register_test(music_select_input_binding_adapter_tests)
+    endif()
+    if (TARGET scene_return_target_tests)
+        asobmashow_register_test(scene_return_target_tests)
     endif()
     if (TARGET lua_skin_gauge_live_integration_tests)
         asobmashow_register_test(lua_skin_gauge_live_integration_tests)
@@ -7115,6 +7982,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)
     asobmashow_register_test(ir_credential_migration_tests ir_credential_migration_tests)

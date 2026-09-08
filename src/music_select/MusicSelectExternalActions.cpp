@@ -1,0 +1,164 @@
+#include "MusicSelectExternalActions.h"
+
+#include <algorithm>
+#include <cctype>
+
+namespace {
+
+bool endsWithTxt(std::filesystem::path path) {
+  std::string text = path.string();
+  std::ranges::transform(text, text.begin(), [](unsigned char character) {
+    return static_cast<char>(std::tolower(character));
+  });
+  return text.ends_with(".txt");
+}
+
+std::size_t firstCodePointLength(std::string_view text) {
+  if (text.empty()) return 0;
+  const unsigned char first = static_cast<unsigned char>(text.front());
+  if ((first & 0x80U) == 0) return 1;
+  if ((first & 0xe0U) == 0xc0U) return std::min<std::size_t>(2, text.size());
+  if ((first & 0xf0U) == 0xe0U) return std::min<std::size_t>(3, text.size());
+  if ((first & 0xf8U) == 0xf0U) return std::min<std::size_t>(4, text.size());
+  return 1;
+}
+
+std::optional<std::filesystem::path>
+explorerParent(const std::filesystem::path &path,
+               const MusicSelectArchivePathSplitter &splitArchive) {
+  if (path.empty()) return std::nullopt;
+  std::filesystem::path archive;
+  std::filesystem::path inner;
+  if (splitArchive && splitArchive(path, archive, inner)) {
+    return archive.parent_path();
+  }
+  return path.parent_path();
+}
+
+std::optional<std::filesystem::path>
+firstParent(const std::vector<std::filesystem::path> &paths,
+            const MusicSelectArchivePathSplitter &splitArchive) {
+  for (const auto &path : paths) {
+    if (const auto parent = explorerParent(path, splitArchive)) return parent;
+  }
+  return std::nullopt;
+}
+
+} // namespace
+
+std::vector<std::filesystem::path>
+musicSelectDocumentPaths(
+    const MusicSelectBar &bar,
+    const MusicSelectArchiveDocumentResolver &archiveDocuments) {
+  std::vector<std::filesystem::path> result;
+  if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart ||
+      !bar.presentation.exists) {
+    return result;
+  }
+  if (archiveDocuments) {
+    if (auto documents = archiveDocuments(bar.chart->meta.BmsPath)) {
+      return std::move(*documents);
+    }
+  }
+  try {
+    const auto parent = bar.chart->meta.BmsPath.parent_path();
+    for (const auto &entry : std::filesystem::directory_iterator(parent)) {
+      std::error_code error;
+      const bool directory = std::filesystem::is_directory(entry.path(), error);
+      if (!directory && endsWithTxt(entry.path())) result.push_back(entry.path());
+    }
+  } catch (...) {
+  }
+  return result;
+}
+
+std::string musicSelectExplorerTitleQuery(std::string_view title) {
+  if (title.empty()) return {};
+  const std::size_t firstLength = firstCodePointLength(title);
+  std::size_t end = title.size();
+  for (const std::string_view delimiter : {"(", "[", "~", "～"}) {
+    const auto found = title.find(delimiter, firstLength);
+    if (found != std::string_view::npos) end = std::min(end, found);
+  }
+  return std::string(title.substr(0, end));
+}
+
+std::optional<std::filesystem::path>
+musicSelectExplorerPath(const MusicSelectBar &bar,
+                        const MusicSelectExplorerLookups &lookups,
+                        const MusicSelectArchivePathSplitter &splitArchive,
+                        const MusicSelectArchiveFilePredicate &isArchiveFile) {
+  if (bar.kind == skin::MusicSelectBarKind::Folder) {
+    std::filesystem::path archive;
+    std::filesystem::path inner;
+    if (splitArchive &&
+        splitArchive(bar.directoryPath, archive, inner)) {
+      return archive.parent_path();
+    }
+    if (isArchiveFile && isArchiveFile(bar.directoryPath)) {
+      return bar.directoryPath.parent_path();
+    }
+    return bar.directoryPath;
+  }
+  if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart) {
+    return std::nullopt;
+  }
+  if (bar.presentation.exists) {
+    return explorerParent(bar.chart->meta.BmsPath, splitArchive);
+  }
+  if (bar.chart->originalMd5s) {
+    return lookups.originalMd5Paths
+               ? firstParent(lookups.originalMd5Paths(*bar.chart->originalMd5s),
+                             splitArchive)
+               : std::nullopt;
+  }
+  const std::string query = musicSelectExplorerTitleQuery(bar.title);
+  if (query.empty() || !lookups.textPaths) return std::nullopt;
+  return firstParent(lookups.textPaths(query), splitArchive);
+}
+
+std::optional<int>
+musicSelectDifficultyTableUpdateId(const MusicSelectBar &bar) {
+  if (bar.kind != skin::MusicSelectBarKind::Table || bar.tableId <= 0 ||
+      bar.tableUrl.empty()) {
+    return std::nullopt;
+  }
+  return bar.tableId;
+}
+
+std::optional<std::filesystem::path>
+musicSelectRefreshPath(const MusicSelectBar &bar,
+                       const MusicSelectArchivePathSplitter &splitArchive) {
+  if (bar.kind == skin::MusicSelectBarKind::Folder) {
+    if (bar.directoryPath.empty()) return std::nullopt;
+    std::filesystem::path archive;
+    std::filesystem::path inner;
+    if (splitArchive &&
+        splitArchive(bar.directoryPath, archive, inner)) {
+      return archive;
+    }
+    return bar.directoryPath;
+  }
+  if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart ||
+      bar.chart->meta.BmsPath.empty()) {
+    return std::nullopt;
+  }
+  std::filesystem::path archive;
+  std::filesystem::path inner;
+  if (splitArchive &&
+      splitArchive(bar.chart->meta.BmsPath, archive, inner)) {
+    return archive;
+  }
+  return bar.chart->meta.BmsPath.parent_path();
+}
+
+std::vector<std::string> musicSelectDownloadUrls(const MusicSelectBar &bar) {
+  std::vector<std::string> urls;
+  if (bar.kind != skin::MusicSelectBarKind::Song || !bar.chart) return urls;
+  if (!bar.chart->downloadUrl.empty()) urls.push_back(bar.chart->downloadUrl);
+  if (!bar.chart->appendDownloadUrl.empty() &&
+      bar.chart->appendDownloadUrl != bar.chart->downloadUrl) {
+    urls.push_back(bar.chart->appendDownloadUrl);
+  }
+  return urls;
+}

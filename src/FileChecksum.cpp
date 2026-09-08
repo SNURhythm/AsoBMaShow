@@ -4,8 +4,10 @@
 #include <array>
 #include <bit>
 #include <fstream>
+#include <limits>
 
 namespace file_checksum {
+#if !defined(__APPLE__)
 namespace {
 constexpr std::array<std::uint32_t, 64> kRoundConstants = {
     0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U, 0x3956c25bU,
@@ -29,11 +31,22 @@ std::uint32_t loadBigEndian(const std::byte *bytes) {
          std::to_integer<std::uint32_t>(bytes[3]);
 }
 } // namespace
+#endif
 
+#if defined(__APPLE__)
+Sha256::Sha256() { CC_SHA256_Init(&state_); }
+#else
 Sha256::Sha256()
     : state_{0x6a09e667U, 0xbb67ae85U, 0x3c6ef372U, 0xa54ff53aU,
              0x510e527fU, 0x9b05688cU, 0x1f83d9abU, 0x5be0cd19U} {}
 
+#if defined(__clang__) && !defined(NDEBUG)
+#pragma clang optimize on
+#elif defined(__GNUC__) && !defined(__clang__) && !defined(NDEBUG)
+__attribute__((optimize("O3")))
+#elif defined(_MSC_VER) && !defined(NDEBUG)
+#pragma optimize("gt", on)
+#endif
 void Sha256::transform(const std::byte *block) {
   std::array<std::uint32_t, 64> words{};
   for (std::size_t index = 0; index < 16; ++index) {
@@ -85,13 +98,27 @@ void Sha256::transform(const std::byte *block) {
   state_[6] += g;
   state_[7] += h;
 }
+#if defined(__clang__) && !defined(NDEBUG)
+#pragma clang optimize off
+#elif defined(_MSC_VER) && !defined(NDEBUG)
+#pragma optimize("", off)
+#endif
+#endif
 
 void Sha256::update(std::span<const std::byte> bytes) {
   if (finalized_ || bytes.empty()) {
     return;
   }
-  totalBytes_ += bytes.size();
+#if defined(__APPLE__)
   while (!bytes.empty()) {
+    const auto count = static_cast<CC_LONG>(std::min<std::size_t>(
+        bytes.size(), std::numeric_limits<CC_LONG>::max()));
+    CC_SHA256_Update(&state_, bytes.data(), count);
+    bytes = bytes.subspan(count);
+  }
+#else
+  totalBytes_ += bytes.size();
+  if (bufferedBytes_ != 0) {
     const std::size_t count =
         std::min(buffer_.size() - bufferedBytes_, bytes.size());
     std::copy_n(bytes.begin(), count, buffer_.begin() + bufferedBytes_);
@@ -102,12 +129,24 @@ void Sha256::update(std::span<const std::byte> bytes) {
       bufferedBytes_ = 0;
     }
   }
+  while (bytes.size() >= buffer_.size()) {
+    transform(bytes.data());
+    bytes = bytes.subspan(buffer_.size());
+  }
+  if (!bytes.empty()) {
+    std::copy(bytes.begin(), bytes.end(), buffer_.begin());
+    bufferedBytes_ = bytes.size();
+  }
+#endif
 }
 
 std::array<std::byte, 32> Sha256::final() {
   if (finalized_) {
     return digest_;
   }
+#if defined(__APPLE__)
+  CC_SHA256_Final(reinterpret_cast<unsigned char *>(digest_.data()), &state_);
+#else
   const std::uint64_t bitCount = totalBytes_ * 8U;
   buffer_[bufferedBytes_++] = std::byte{0x80};
   if (bufferedBytes_ > 56) {
@@ -128,6 +167,7 @@ std::array<std::byte, 32> Sha256::final() {
           static_cast<std::byte>((state_[word] >> ((3U - byte) * 8U)) & 0xffU);
     }
   }
+#endif
   finalized_ = true;
   return digest_;
 }

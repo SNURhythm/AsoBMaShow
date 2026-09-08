@@ -6,6 +6,22 @@
 #include <vector>
 
 int main() {
+  struct LifecycleScene {
+    std::vector<bool> changes;
+    void onApplicationBackgroundChanged(bool background) {
+      changes.push_back(background);
+    }
+  };
+  LifecycleScene selectScene;
+  LifecycleScene replacementScene;
+  scene_event_routing::dispatchApplicationBackgroundChange(&selectScene, true);
+  scene_event_routing::dispatchApplicationBackgroundChange(&replacementScene,
+                                                           false);
+  scene_event_routing::dispatchApplicationBackgroundChange<LifecycleScene>(
+      nullptr, false);
+  assert(selectScene.changes == std::vector<bool>{true});
+  assert(replacementScene.changes == std::vector<bool>{false});
+
   practice::RangeSelection selection{.startMicros = 1'000'000,
                                      .endMicros = 5'000'000,
                                      .active = practice::Marker::End};

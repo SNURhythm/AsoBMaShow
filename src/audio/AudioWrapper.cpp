@@ -1,5 +1,6 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "AudioWrapper.h"
+#include "SelectAudioDiagnostics.h"
 #include <stdexcept>
 #include <SDL2/SDL.h>
 #include "decoder.h"
@@ -415,7 +416,8 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
   audio::playback::DrainRealtimeCommands(state);
   audio::playback::DrainCommands(state);
 
-  if (!userData->stopwatch->isRunning()) {
+  const bool clockRunning = userData->stopwatch->isRunning();
+  if (!clockRunning && state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
     return;
   }
@@ -429,10 +431,17 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           ? userData->playbackRatePercent->load(std::memory_order_acquire)
           : 100;
 
-  const long long bufferStartMicros = beginAudioClockBuffer(
-      userData, frameCount, sampleRate, playbackRatePercent);
-  audio::playback::ActivateScheduledSounds(state, bufferStartMicros, sampleRate,
-                                           frameCount, playbackRatePercent);
+  long long bufferStartMicros = 0;
+  const audio::playback::MixScope mixScope =
+      clockRunning ? audio::playback::MixScope::AllBuses
+                   : audio::playback::MixScope::SystemOnly;
+  if (clockRunning) {
+    bufferStartMicros = beginAudioClockBuffer(
+        userData, frameCount, sampleRate, playbackRatePercent);
+    audio::playback::ActivateScheduledSounds(state, bufferStartMicros,
+                                             sampleRate, frameCount,
+                                             playbackRatePercent);
+  }
 
   if (state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -459,7 +468,7 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           : 1.0f;
   audio::playback::MixActiveSounds(
       state, std::span<float>(mixBuffer, requiredSamples), frameCount,
-      outputChannels, bgmGain, keysoundGain, playbackRatePercent);
+      outputChannels, bgmGain, keysoundGain, playbackRatePercent, mixScope);
 
   // Apply Effects
   if (userData->bassFilter) {
@@ -1000,15 +1009,22 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
     if (privateSound == nullptr) {
       std::vector<short> pcmData;
       SF_INFO sfInfo{};
-      if (!decodeAudioToPCMBounded(
+      if (!decodeSkinSoundBundleAware(
               path, pcmData, sfInfo, isCancelled,
               {.maximumEncodedBytes = maximumEncodedBytes,
                .maximumPcmSamples = remainingDecodedSamples},
               stop) ||
           isCancelled || sfInfo.channels <= 0 || sfInfo.samplerate <= 0 ||
           pcmData.size() % static_cast<std::size_t>(sfInfo.channels) != 0) {
+        audio::diag::SelectAudioLog("loadSkinSound DECODE FAILED: " +
+                                    path_t_to_utf8(path));
         return {};
       }
+      audio::diag::SelectAudioLog("loadSkinSound ok ch=" +
+                                  std::to_string(sfInfo.channels) +
+                                  " rate=" + std::to_string(sfInfo.samplerate) +
+                                  " frames=" +
+                                  std::to_string(pcmData.size() / static_cast<std::size_t>(sfInfo.channels)));
       privateSound = std::make_shared<SoundData>();
       privateSound->channels = sfInfo.channels;
       privateSound->sourceSampleRate = sfInfo.samplerate;
@@ -1089,6 +1105,7 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
     }
     const auto started = startDeviceWithLifecycleAndSoundLocked();
     if (!started.success) {
+      audio::diag::SelectAudioLog("playSkinSound device-start failed");
       return false;
     }
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
@@ -1103,6 +1120,8 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
         &submissionSequence);
     if (accepted) {
       found->second.lastPlaySequence = submissionSequence;
+    } else {
+      audio::diag::SelectAudioLog("playSkinSound command NOT accepted");
     }
     return accepted;
   } catch (...) {
@@ -1563,6 +1582,8 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
       runtimeState_.effectiveSampleRate =
           static_cast<std::uint32_t>(std::max(0, targetSampleRate));
     }
+  } else {
+    audio::diag::SelectAudioLog("device start failed: " + result.diagnostic);
   }
   return result;
 }
@@ -1616,10 +1637,45 @@ AudioWrapper::pruneSounds(const std::vector<path_t> &paths) {
     return {.success = true};
   }
 
-  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
-  const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
-  if (!stopped.success) {
-    return stopped;
+  bool resumeSystemSounds = false;
+  {
+    std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    closeRealtimeSoundGateAndWait();
+    const auto observed =
+        backend != nullptr
+            ? backend->observeState()
+            : audio::playback::BackendStateObservation{
+                  .state = audio::playback::BackendRunState::Stopped};
+    backendState.store(observed.state, std::memory_order_release);
+    if (backend != nullptr) {
+      const auto stopped = audio::playback::ConfirmBackendStopped(
+          *backend, observed, backendState);
+      if (!stopped.success) {
+        return stopped;
+      }
+    }
+    audio::playback::DrainRealtimeCommands(callbackState);
+    audio::playback::DrainCommands(callbackState);
+    audio::playback::ClearCallbackSounds(callbackState, true);
+    for (const size_t index : removedIndices) {
+      auto &soundData = soundDataList[index];
+      audio::playback::RemoveSound(callbackState, soundData.get());
+      soundData->retired.store(true, std::memory_order_release);
+    }
+    resumeSystemSounds =
+        observed.state == audio::playback::BackendRunState::Running &&
+        (callbackState.playingSoundCount != 0 ||
+         callbackState.scheduledSoundCount != 0);
+  }
+
+  if (resumeSystemSounds) {
+    const auto started = startDeviceWithLifecycleAndSoundLocked();
+    if (!started.success) {
+      for (const size_t index : removedIndices) {
+        soundDataList[index]->retired.store(false, std::memory_order_release);
+      }
+      return started;
+    }
   }
 
   for (auto indexIt = removedIndices.rbegin(); indexIt != removedIndices.rend();

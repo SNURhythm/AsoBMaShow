@@ -178,14 +178,18 @@ bool combinedOutputExceedsLimit(std::size_t animationFrames,
 NumericGlyphFormat normalizeFormat(const NumericGlyphFormatRequest &input,
                                    NumericGlyphAtlasKind kind,
                                    SkinZeroPaddingMode padding,
-                                   bool supportsSign) {
+                                   bool supportsSign,
+                                   bool pinnedLoaderCompatibility) {
   NumericGlyphFormat result;
   result.zeroPadding = padding;
   result.gain = input.gain;
   result.perDigitOffsets = input.perDigitOffsets;
   result.signVisible = supportsSign && input.signVisible;
 
-  int integerDigits = nonNegative(input.integerDigits);
+  int integerDigits =
+      pinnedLoaderCompatibility && kind == NumericGlyphAtlasKind::Number
+          ? input.integerDigits
+          : nonNegative(input.integerDigits);
   int fractionalDigits = nonNegative(input.fractionalDigits);
   if (kind == NumericGlyphAtlasKind::Float) {
     // FloatFormatter gives fractional digits priority when its eight-digit
@@ -201,8 +205,10 @@ NumericGlyphFormat normalizeFormat(const NumericGlyphFormatRequest &input,
                       fractionalDigits;
     }
   } else {
-    integerDigits =
-        std::min(integerDigits, NumericGlyphAtlasPolicy::maxNumberDigits);
+    if (!pinnedLoaderCompatibility) {
+      integerDigits =
+          std::min(integerDigits, NumericGlyphAtlasPolicy::maxNumberDigits);
+    }
     fractionalDigits = 0;
   }
   result.integerDigits = integerDigits;
@@ -214,7 +220,8 @@ NumericGlyphAtlasResult partitionNumber(const NumericGlyphAtlasRequest &request,
                                         SkinZeroPaddingMode zeroPadding) {
   const auto count = request.source.frames.size();
   const int glyphs = count % 24 == 0 ? 24 : count % 10 == 0 ? 10 : 11;
-  if (count % static_cast<std::size_t>(glyphs) != 0) {
+  if (!request.pinnedLoaderCompatibility &&
+      count % static_cast<std::size_t>(glyphs) != 0) {
     return failure(NumericGlyphAtlasError::UnsupportedGlyphLayout);
   }
 
@@ -224,13 +231,15 @@ NumericGlyphAtlasResult partitionNumber(const NumericGlyphAtlasRequest &request,
                                  : glyphs == 10
                                      ? normalizePadding(request.format.numberPadding)
                                      : zeroPadding,
-                                 false);
-  if (atlas.format.perDigitOffsets.size() > maxOffsetsFor(request.kind)) {
+                                 false, request.pinnedLoaderCompatibility);
+  if (!request.pinnedLoaderCompatibility &&
+      atlas.format.perDigitOffsets.size() > maxOffsetsFor(request.kind)) {
     return failure(NumericGlyphAtlasError::OutputLimitExceeded);
   }
   if (glyphs == 24) {
     const auto animationFrames = count / 24;
-    if (combinedOutputExceedsLimit(animationFrames, 24, request.budget)) {
+    if (!request.pinnedLoaderCompatibility &&
+        combinedOutputExceedsLimit(animationFrames, 24, request.budget)) {
       return failure(NumericGlyphAtlasError::OutputLimitExceeded);
     }
     std::vector<SkinSourceRect> positive;
@@ -249,13 +258,19 @@ NumericGlyphAtlasResult partitionNumber(const NumericGlyphAtlasRequest &request,
     atlas.digits.glyphsPerAnimationFrame = 12;
   } else {
     const auto animationFrames = count / static_cast<std::size_t>(glyphs);
-    if (combinedOutputExceedsLimit(animationFrames,
+    if (!request.pinnedLoaderCompatibility &&
+        combinedOutputExceedsLimit(animationFrames,
                                    positiveOnlyOutputGlyphs(glyphs),
                                    request.budget)) {
       return failure(NumericGlyphAtlasError::OutputLimitExceeded);
     }
     atlas.digits.positive = request.source;
+    atlas.digits.positive.frames.resize(
+        animationFrames * static_cast<std::size_t>(glyphs));
     atlas.digits.glyphsPerAnimationFrame = glyphs;
+  }
+  if (request.pinnedLoaderCompatibility) {
+    return {.atlas = std::move(atlas)};
   }
   const auto validation =
       validateNumericGlyphAtlas(atlas.digits, request.kind, request.budget);
@@ -277,7 +292,8 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
                      : count % 22 == 0 ? 22
                      : count % 12 == 0 ? 12
                      : count % 11 == 0 ? 11
-                                      : 0;
+                                      : request.pinnedLoaderCompatibility ? 12
+                                                                         : 0;
   if (glyphs == 0) {
     return failure(NumericGlyphAtlasError::UnsupportedGlyphLayout);
   }
@@ -285,7 +301,7 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
   const int outputGlyphs = glyphs == 26 ? 13 : 12;
   const auto outputSets = glyphs == 26 || glyphs == 24 || glyphs == 22 ? 2U
                                                                         : 1U;
-  if (combinedOutputExceedsLimit(
+  if (!request.pinnedLoaderCompatibility && combinedOutputExceedsLimit(
           animationFrames,
           static_cast<std::size_t>(outputGlyphs) * outputSets,
           request.budget)) {
@@ -294,8 +310,10 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
 
   NumericGlyphAtlas atlas;
   atlas.format = normalizeFormat(request.format, request.kind, padding,
-                                 glyphs == 26);
-  if (atlas.format.perDigitOffsets.size() > maxOffsetsFor(request.kind)) {
+                                 glyphs == 26,
+                                 request.pinnedLoaderCompatibility);
+  if (!request.pinnedLoaderCompatibility &&
+      atlas.format.perDigitOffsets.size() > maxOffsetsFor(request.kind)) {
     return failure(NumericGlyphAtlasError::OutputLimitExceeded);
   }
   std::vector<SkinSourceRect> positive;
@@ -342,6 +360,9 @@ NumericGlyphAtlasResult partitionFloat(const NumericGlyphAtlasRequest &request,
     atlas.digits.negative = makeSprite(request.source, std::move(negative));
   }
   atlas.digits.glyphsPerAnimationFrame = outputGlyphs;
+  if (request.pinnedLoaderCompatibility) {
+    return {.atlas = std::move(atlas)};
+  }
   const auto validation =
       validateNumericGlyphAtlas(atlas.digits, request.kind, request.budget);
   if (validation != NumericGlyphAtlasError::None) {
@@ -416,13 +437,22 @@ NumericGlyphAtlasResult partitionNumericGlyphAtlas(
   if (!validKind(request.kind)) {
     return failure(NumericGlyphAtlasError::InvalidKind);
   }
-  if (!finiteFormat(request.format)) {
+  if (!request.pinnedLoaderCompatibility && !finiteFormat(request.format)) {
     return failure(NumericGlyphAtlasError::NonFiniteFormat);
   }
-  if (request.source.frames.empty()) {
+  // SkinNumber allocates its current-image array directly from `keta`.
+  // Preserve that negative-size load failure rather than normalizing it to
+  // zero; positive type-5 values remain intentionally uncapped.
+  if (request.pinnedLoaderCompatibility &&
+      request.kind == NumericGlyphAtlasKind::Number &&
+      request.format.integerDigits < 0) {
+    return failure(NumericGlyphAtlasError::InvalidFormat);
+  }
+  if (!request.pinnedLoaderCompatibility && request.source.frames.empty()) {
     return failure(NumericGlyphAtlasError::EmptyFrames);
   }
-  if (request.source.frames.size() > request.budget.remainingMaterializedFrames) {
+  if (!request.pinnedLoaderCompatibility &&
+      request.source.frames.size() > request.budget.remainingMaterializedFrames) {
     return failure(NumericGlyphAtlasError::InputLimitExceeded);
   }
   const auto padding = normalizePadding(request.format.zeroPadding);

@@ -183,14 +183,17 @@ public:
   }
 };
 
-class BlockingAliases final : public SkinAliasDetector {
+class BlockingRecoveryObserver final : public SkinPackageStoreIoObserver {
 public:
-  SkinRejectedLinkKind inspectNoFollow(const fs::path &) const override {
+  void reached(SkinPackageStoreIoOperation operation,
+               const fs::path &) const noexcept override {
+    if (operation != SkinPackageStoreIoOperation::RecoveryPhysicalVerification) {
+      return;
+    }
     std::unique_lock lock(mutex_);
     entered_ = true;
     condition_.notify_all();
     condition_.wait(lock, [this] { return released_; });
-    return SkinRejectedLinkKind::None;
   }
 
   bool waitUntilEntered(std::chrono::milliseconds timeout) const {
@@ -975,13 +978,14 @@ void testRecoveryRejectsOverlappingBootstrapOwnership() {
 
   SkinPackageCatalog catalog(roots.privateCatalog);
   FakeProfileSnapshots profiles;
-  BlockingAliases aliases;
-  SkinPackageStore store(roots, catalog, aliases, profiles);
+  NoAliases aliases;
+  const auto observer = std::make_shared<BlockingRecoveryObserver>();
+  SkinPackageStore store(roots, catalog, aliases, profiles, observer);
   auto owner = std::async(std::launch::async, [&store] {
     return store.recoverBeforeServiceStart();
   });
   const bool ownerReachedPhysicalInspection =
-      aliases.waitUntilEntered(std::chrono::seconds(1));
+      observer->waitUntilEntered(std::chrono::seconds(1));
   auto overlapping = std::async(std::launch::async, [&store] {
     return store.recoverBeforeServiceStart();
   });
@@ -990,7 +994,7 @@ void testRecoveryRejectsOverlappingBootstrapOwnership() {
       std::future_status::ready;
   const bool journalUnchangedWhileOwnerBlocked =
       readText(journalFile) == journal;
-  aliases.release();
+  observer->release();
   const auto ownerResult = owner.get();
   const auto overlappingResult = overlapping.get();
 
@@ -1559,6 +1563,33 @@ void testRescanIgnoresLegacyRuntimeDirectory() {
              catalog.snapshot()->packages.front().directoryName ==
                  "FixtureSkin",
          "the legacy runtime directory is not scanned as a visible skin");
+}
+
+void testRescanFollowsVisiblePackageDirectorySymlink() {
+  TempDirectory temp;
+  const SkinStorageRoots roots = rootsBelow(temp.root());
+  const fs::path source = temp.root() / "linked-source";
+  writeOldTree(source);
+  std::error_code linkError;
+  fs::create_directory_symlink(source, roots.visiblePackages / "FixtureSkin",
+                               linkError);
+  if (linkError) {
+    return;
+  }
+  SkinPackageCatalog catalog(roots.privateCatalog);
+  FakeProfileSnapshots profiles;
+  NoAliases aliases;
+  SelectableValidator validator;
+  SkinPackageStore store(roots, catalog, aliases, profiles);
+  expect(store.recoverBeforeServiceStart().disposition ==
+             SkinRecoveryDisposition::Recovered,
+         "linked-package scan fixture bootstraps store");
+  const auto scan = store.rescanVisibleSources(
+      {}, {}, ProfileInventorySnapshot{.inventoryGeneration = 1}, validator);
+  expect(!scan.cancelled && catalog.snapshot()->packages.size() == 1 &&
+             catalog.snapshot()->packages.front().directoryName ==
+                 "FixtureSkin",
+         "rescan follows a direct visible package-directory symlink");
 }
 
 void testRescanAcceptsVisibleEditDuringValidation() {
@@ -2797,6 +2828,7 @@ int main(int argc, char **argv) {
   testNormalizedPhysicalCollisionsRejectOrReplaceAsOnePackage();
   testAmbiguousPhysicalCollisionCannotPersistDuplicateCatalogIdentity();
   testRescanIgnoresLegacyRuntimeDirectory();
+  testRescanFollowsVisiblePackageDirectorySymlink();
   testRescanAcceptsVisibleEditDuringValidation();
   testLiveSourceRecoveryUsesCatalogMetadataWithoutRevisionCopies();
   testLiveSourceImportPublishesOnlyIntoDocumentsSkins();

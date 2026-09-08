@@ -1,0 +1,219 @@
+#include "rendering/UniformCache.h"
+#include "rendering/common.h"
+#include "scene/ReplayRecordsModal.h"
+#include "view/View.h"
+#include "ReplayVideoExporter.h"
+#include "scene/MusicSelectRecords.h"
+#include "scene/MusicSelectGhostBattle.h"
+
+#include <SDL2/SDL.h>
+#include <bgfx/bgfx.h>
+
+#include <cstdlib>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace rendering {
+bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
+bgfx::VertexLayout PosColorVertex::ms_decl;
+bgfx::VertexLayout PosTexVertex::ms_decl;
+int window_width = design_width;
+int window_height = design_height;
+int render_width = design_width;
+int render_height = design_height;
+float widthScale = 1.0F;
+float heightScale = 1.0F;
+float ui_scale_x = 1.0F;
+float ui_scale_y = 1.0F;
+int ui_offset_x = 0;
+int ui_offset_y = 0;
+int ui_view_width = design_width;
+int ui_view_height = design_height;
+} // namespace rendering
+
+namespace {
+int failures = 0;
+
+void expect(bool condition, const char *message) {
+  if (!condition) {
+    std::cerr << "FAIL: " << message << '\n';
+    ++failures;
+  }
+}
+
+ResultRecordSummary modernChartRecord() {
+  ModernChartResultRecord modern{
+      .result = {.resultId = 19, .attemptId = "selector-modal-attempt"}};
+  return {
+      .identity = ModernChartRecordId{.attemptId = modern.result.attemptId},
+      .capabilities = {.watch = true, .videoExport = true},
+      .modern = std::move(modern),
+  };
+}
+
+void testSelectedModernRecordDispatchesWatchAndExport() {
+  ChartMetaRecord chart;
+  chart.meta.Title = "Selected chart";
+  const auto summary = modernChartRecord();
+  std::string watched;
+  std::string exported;
+  const ReplayRecordsModalCallbacks callbacks{
+      .watchModernChart = [&](const ChartMetaRecord &record,
+                              const ModernChartResultRecord &modern) {
+        watched = record.meta.Title + ":" + modern.result.attemptId;
+      },
+      .exportModernChart = [&](const ChartMetaRecord &record,
+                               const ModernChartResultRecord &modern,
+                               ReplayVideoExportOptions) {
+        exported = record.meta.Title + ":" + modern.result.attemptId;
+      },
+  };
+
+  expect(ReplayRecordsModal::dispatchAction(ReplayRecordsModalAction::Watch,
+                                             chart, summary, callbacks) &&
+             watched == "Selected chart:selector-modal-attempt",
+         "selected modern record requests replay watch through its owner");
+  expect(ReplayRecordsModal::dispatchAction(
+             ReplayRecordsModalAction::VideoExport, chart, summary,
+             callbacks) &&
+             exported == "Selected chart:selector-modal-attempt",
+         "selected modern record requests video export through its owner");
+}
+
+void testNonModernRecordCannotCrossTheActionBoundary() {
+  auto summary = modernChartRecord();
+  summary.identity = LegacyChartRecordId{.legacyReplayId = 19};
+  ChartMetaRecord chart;
+  bool called = false;
+  const ReplayRecordsModalCallbacks callbacks{
+      .watchModernChart = [&](const ChartMetaRecord &,
+                              const ModernChartResultRecord &) {
+        called = true;
+      },
+  };
+  expect(!ReplayRecordsModal::dispatchAction(ReplayRecordsModalAction::Watch,
+                                              chart, summary, callbacks) &&
+             !called,
+         "forged legacy identity cannot dispatch a modern selector replay");
+}
+
+void testRetainedModalActivatesSelectedRecordThroughOwner() {
+  View parent;
+  ChartMetaRecord chart;
+  chart.meta.Title = "Retained chart";
+  const auto summary = modernChartRecord();
+  std::string watched;
+  std::string exported;
+  const ReplayRecordsModalCallbacks callbacks{
+      .loadRecords =
+          [&](const ChartMetaRecord &) {
+            return std::vector<ResultRecordSummary>{summary};
+          },
+      .watchModernChart = [&](const ChartMetaRecord &record,
+                              const ModernChartResultRecord &modern) {
+        watched = record.meta.Title + ":" + modern.result.attemptId;
+      },
+      .exportModernChart = [&](const ChartMetaRecord &record,
+                               const ModernChartResultRecord &modern,
+                               ReplayVideoExportOptions) {
+        exported = record.meta.Title + ":" + modern.result.attemptId;
+      },
+  };
+
+  auto modal = ReplayRecordsModal::Create(&parent, callbacks);
+  expect(modal != nullptr, "shared records modal is created in the parent view");
+  modal->showChart(chart);
+  expect(modal->isVisible(), "showChart presents the retained records modal");
+  modal->selectRecord(summary);
+  expect(modal->activate(ReplayRecordsModalAction::Watch) &&
+             watched == "Retained chart:selector-modal-attempt",
+         "selected modern record requests replay watch through its owner");
+  expect(modal->activate(ReplayRecordsModalAction::VideoExport) &&
+             exported == "Retained chart:selector-modal-attempt",
+         "selected modern record requests video export through its owner");
+  modal->hide();
+  expect(!modal->isVisible(), "hide dismisses the retained records modal");
+}
+} // namespace
+
+int main() {
+  bgfx::Init init;
+  init.type = bgfx::RendererType::Noop;
+  init.resolution.width = 64;
+  init.resolution.height = 64;
+  if (!bgfx::init(init)) {
+    std::cerr << "FAIL: headless bgfx did not initialize\n";
+    return 1;
+  }
+  testSelectedModernRecordDispatchesWatchAndExport();
+  testNonModernRecordCannotCrossTheActionBoundary();
+  testRetainedModalActivatesSelectedRecordThroughOwner();
+  {
+    auto replay = std::make_shared<ReplayData>();
+    replay->playOption = "RANDOM";
+    replay->playOptionSeed = 123;
+    replay->playOption2 = "MIRROR";
+    replay->playOption2Seed = 456;
+    replay->chartMeta.LnMode = 2;
+    replay->assistOption = "LEGACY";
+    replay->initialGaugeType = GaugeType::Normal;
+    main_menu_profile::Selections selections;
+    selections.gaugeType = GaugeType::Hard;
+    result_persistence::ChartScoreWrite score;
+    score.score = 1234;
+    auto *returnScene = reinterpret_cast<Scene *>(std::uintptr_t{0x1234});
+    const auto options = musicSelectGhostBattleOptions(
+        replay, score, selections, true, {.percent = 80}, returnScene);
+    expect(options.gbattleRecordData == replay && !options.replayData &&
+               !options.autoPlay && options.targetScore &&
+               options.targetScore->score == 1234,
+           "G-BATTLE plays live against the saved score, not as replay autoplay");
+    expect(options.gaugeType == GaugeType::Hard && options.autoKeySound &&
+               options.playback.percent == 80 &&
+               options.playOption == replay->playOption &&
+               options.playOptionSeed == replay->playOptionSeed &&
+               options.playOption2 == replay->playOption2 &&
+               options.playOption2Seed == replay->playOption2Seed &&
+               options.longNoteMode == 2 &&
+               options.assistOption == replay->assistOption &&
+               options.pacemakerTarget == pacemaker::kTargetOff &&
+               options.replayGhostRenderingEnabled == false &&
+               options.returnScene == returnScene,
+           "selector G-BATTLE retains its owner and Main Menu play-option parity");
+  }
+  {
+    ChartMetaRecord chart;
+    chart.meta.Title = "Unplayed selector chart";
+    chart.meta.TotalNotes = 100;
+    main_menu_profile::Selections selections;
+    selections.longNoteMode = "CN";
+    const auto records = musicSelectChartRecords(chart, selections, {}, {});
+    expect(records.size() == 1 &&
+               std::holds_alternative<AutoPlayRecordId>(records.front().identity) &&
+               records.front().capabilities.watch &&
+               records.front().capabilities.videoExport,
+           "selector loader exposes watchable and exportable autoplay without history");
+    View root(0, 0, 640, 480);
+    bool watched = false;
+    bool exported = false;
+    std::vector<ResultRecordSummary> loaded;
+    auto modal = std::unique_ptr<ReplayRecordsModal>(ReplayRecordsModal::Create(
+        &root, {.loadRecords = [&](const ChartMetaRecord &selected) {
+                  loaded = musicSelectChartRecords(selected, selections, {}, {});
+                  return loaded;
+                },
+                .watchAutoPlay = [&](const ChartMetaRecord &) { watched = true; },
+                .exportAutoPlay = [&](const ChartMetaRecord &,
+                                      ReplayVideoExportOptions) { exported = true; }}));
+    modal->showChart(chart);
+    if (!loaded.empty()) modal->selectRecord(loaded.front());
+    expect(modal->activate(ReplayRecordsModalAction::Watch) && watched,
+           "unplayed selector chart watches autoplay through the actual modal loader");
+    expect(modal->activate(ReplayRecordsModalAction::VideoExport) && exported,
+           "unplayed selector chart exports autoplay through the actual modal loader");
+  }
+  bgfx::shutdown();
+  return failures == 0 ? 0 : 1;
+}

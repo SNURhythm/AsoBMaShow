@@ -10,6 +10,8 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <ranges>
 #include <set>
@@ -51,29 +53,63 @@ SkinDiagnostic movieDiagnostic(std::string code, std::string message) {
           .severity = DiagnosticSeverity::Error};
 }
 
-std::optional<std::string> configuredMoviePath(
+struct ConfiguredMoviePath {
+  std::optional<std::string> path;
+  bool resolved = false;
+};
+
+ConfiguredMoviePath configuredMoviePath(
     std::string_view authored,
     const BeatorajaSkinConfiguration &configuration,
+    const LuaSkinFileSystem &files,
     const SkinSafetyPolicy &safetyPolicy) {
   const ConfiguredFile *match = nullptr;
   for (const auto &file : configuration.orderedFiles) {
     if (!authored.starts_with(file.pattern)) {
       continue;
     }
-    if (match != nullptr) {
-      return std::nullopt;
-    }
     match = &file;
+    break;
   }
   if (match == nullptr) {
-    return authored.find('*') == std::string_view::npos
-               ? std::optional<std::string>(authored)
-               : std::nullopt;
+    const std::size_t wildcard = authored.rfind('*');
+    if (wildcard == std::string_view::npos) {
+      return {.path = std::string(authored)};
+    }
+    const std::size_t slash = authored.rfind('/', wildcard);
+    std::string suffix(authored.substr(wildcard + 1));
+    if (const std::size_t pipe = authored.find('|'); pipe != std::string_view::npos) {
+      suffix = std::string(authored.substr(wildcard + 1, pipe - wildcard - 1));
+      if (pipe + 1 < authored.size()) {
+        suffix.append(authored.substr(pipe + 1));
+      }
+    }
+    const auto listed = files.listResourceDirectory(
+        slash == std::string_view::npos ? "." : authored.substr(0, slash));
+    if (listed.failure) {
+      return {.path = std::string(authored)};
+    }
+    std::vector<std::string> candidates;
+    for (const auto &candidate : listed.entries) {
+      std::string lowercase = candidate;
+      std::ranges::transform(lowercase, lowercase.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+      });
+      if (lowercase.ends_with(suffix)) {
+        candidates.push_back(candidate);
+      }
+    }
+    if (candidates.empty()) {
+      return {.path = std::string(authored)};
+    }
+    return {.path = candidates[static_cast<std::size_t>(std::rand()) %
+                               candidates.size()],
+            .resolved = true};
   }
   const std::size_t wildcard = authored.rfind('*');
   if (wildcard == std::string_view::npos ||
       authored.size() < match->pattern.size()) {
-    return std::nullopt;
+    return {};
   }
   const std::size_t suffixSize = authored.size() - match->pattern.size();
   const std::size_t maximumPathBytes = skinResourceLimit(
@@ -82,14 +118,14 @@ std::optional<std::string> configuredMoviePath(
       match->selectedValue.size() > maximumPathBytes - wildcard ||
       suffixSize >
           maximumPathBytes - wildcard - match->selectedValue.size()) {
-    return std::nullopt;
+    return {};
   }
   std::string selected;
   selected.reserve(wildcard + match->selectedValue.size() + suffixSize);
   selected.append(authored, 0, wildcard);
   selected.append(match->selectedValue);
   selected.append(authored, match->pattern.size(), suffixSize);
-  return selected;
+  return {.path = std::move(selected)};
 }
 
 struct ResolvedMovieDefinition {
@@ -130,8 +166,9 @@ std::vector<ResolvedMovieDefinition> resolveMovies(
       continue;
     }
     const auto configured = configuredMoviePath(
-        resource.virtualPath, input.configuration, input.safetyPolicy);
-    if (!configured) {
+        resource.virtualPath, input.configuration, input.fileSystem,
+        input.safetyPolicy);
+    if (!configured.path) {
       if (std::holds_alternative<SkinMovieResource>(definition)) {
         diagnostics.push_back(movieDiagnostic(
             "skin.movie.configuration_ambiguous",
@@ -139,11 +176,13 @@ std::vector<ResolvedMovieDefinition> resolveMovies(
       }
       continue;
     }
-    const auto candidate = input.fileSystem.resolveResourceCandidates(
-        *configured, *configured);
+    const auto candidate = configured.resolved
+        ? SkinFileResolveResult{.normalizedVirtualPath = configured.path}
+        : input.fileSystem.resolveResourceCandidates(*configured.path,
+                                                     *configured.path);
     if (!candidate.normalizedVirtualPath) {
       if (std::holds_alternative<SkinMovieResource>(definition) ||
-          skinResourcePathIsMovie(*configured)) {
+          skinResourcePathIsMovie(*configured.path)) {
         diagnostics.push_back(movieDiagnostic(
             "skin.movie.path_invalid", "movie resource is unavailable"));
       }
@@ -206,13 +245,27 @@ SkinMovieCatalog::preparedResourceIdsForTesting() const {
 SkinMovieCatalogPreparationResult
 SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
   SkinMovieCatalogPreparationResult result;
+  const bool omitUnavailableMovies = !input.safetyPolicy.enforces(
+      SkinSafetyGuard::ResourceAllocationLimit);
+  const auto appendMovieFailure = [&](std::string code, std::string message) {
+    auto value = movieDiagnostic(std::move(code), std::move(message));
+    if (omitUnavailableMovies) {
+      value.severity = DiagnosticSeverity::Warning;
+    }
+    result.diagnostics.push_back(std::move(value));
+  };
   if (input.stop.stop_requested()) {
     result.cancelled = true;
     return result;
   }
   auto definitions = resolveMovies(input, result.diagnostics);
   if (!result.diagnostics.empty()) {
-    return result;
+    if (!omitUnavailableMovies) {
+      return result;
+    }
+    for (auto &diagnostic : result.diagnostics) {
+      diagnostic.severity = DiagnosticSeverity::Warning;
+    }
   }
   if (definitions.size() > skinResourceLimit(
                                input.safetyPolicy,
@@ -242,9 +295,11 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
     return result;
   }
   if (!catalog->device_ || !catalog->device_->ownsCurrentThread()) {
-    result.diagnostics.push_back(movieDiagnostic(
-        "skin.movie.device_unavailable",
-        "movie preparation requires an owner-thread movie device"));
+    appendMovieFailure("skin.movie.device_unavailable",
+                       "movie preparation requires an owner-thread movie device");
+    if (omitUnavailableMovies) {
+      result.catalog = std::move(catalog);
+    }
     return result;
   }
   const std::size_t maximumSessionDecodedBytes = skinResourceLimit(
@@ -264,9 +319,11 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
   std::error_code directoryError;
   if (!std::filesystem::create_directory(catalog->materializedRoot_,
                                          directoryError) || directoryError) {
-    result.diagnostics.push_back(movieDiagnostic(
-        "skin.movie.materialize_failed",
-        "movie materialization directory could not be created"));
+    appendMovieFailure("skin.movie.materialize_failed",
+                       "movie materialization directory could not be created");
+    if (omitUnavailableMovies) {
+      result.catalog = std::move(catalog);
+    }
     return result;
   }
 
@@ -280,9 +337,11 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
     }
     if (definition.resource.id == 0 ||
         !ids.insert(definition.resource.id).second) {
-      result.diagnostics.push_back(movieDiagnostic(
-          "skin.movie.identity_invalid",
-          "movie resource IDs must be nonzero and unique"));
+      appendMovieFailure("skin.movie.identity_invalid",
+                         "movie resource IDs must be nonzero and unique");
+      if (omitUnavailableMovies) {
+        continue;
+      }
       return result;
     }
     if (const auto found = unique.find(definition.path);
@@ -301,8 +360,11 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
       return result;
     }
     if (read.failure) {
-      result.diagnostics.push_back(movieDiagnostic(
-          "skin.movie.read_failed", "movie source bytes could not be read"));
+      appendMovieFailure("skin.movie.read_failed",
+                         "movie source bytes could not be read");
+      if (omitUnavailableMovies) {
+        continue;
+      }
       return result;
     }
     const auto maximumSessionBytes = skinResourceLimit(
@@ -327,9 +389,11 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
           (!read.bytes.empty() &&
            !output.write(reinterpret_cast<const char *>(read.bytes.data()),
                          static_cast<std::streamsize>(read.bytes.size())))) {
-        result.diagnostics.push_back(movieDiagnostic(
-            "skin.movie.materialize_failed",
-            "movie source bytes could not be materialized"));
+        appendMovieFailure("skin.movie.materialize_failed",
+                           "movie source bytes could not be materialized");
+        if (omitUnavailableMovies) {
+          continue;
+        }
         return result;
       }
     }
@@ -341,9 +405,6 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
                                input.sessionDecodedBytes -
                                catalog->decodedBytes_};
     auto loaded = catalog->device_->load(materialized, loadLimits, input.stop);
-    if (loaded && loaded->handle) {
-      catalog->ownedPlayers_.push_back(loaded->handle);
-    }
     const auto decodedLayout =
         loaded ? skinMovieDecodedLayout(loaded->width, loaded->height,
                                         loadLimits)
@@ -351,10 +412,17 @@ SkinMovieCatalog::prepare(SkinMoviePreparationInputs input) {
     if (!loaded || !loaded->handle || !decodedLayout ||
         loaded->decodedBytes != decodedLayout->residentBytes ||
         loaded->durationMillis < 0) {
-      result.diagnostics.push_back(movieDiagnostic(
-          "skin.movie.load_failed", "movie source could not be opened"));
+      if (loaded && loaded->handle) {
+        catalog->device_->destroy(loaded->handle);
+      }
+      appendMovieFailure("skin.movie.load_failed",
+                         "movie source could not be opened");
+      if (omitUnavailableMovies) {
+        continue;
+      }
       return result;
     }
+    catalog->ownedPlayers_.push_back(loaded->handle);
     catalog->decodedBytes_ += loaded->decodedBytes;
     if (catalog->liveCounters_) {
       catalog->liveCounters_->movieCreated(loaded->decodedBytes);

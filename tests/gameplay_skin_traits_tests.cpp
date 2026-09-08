@@ -1,5 +1,6 @@
 #include "skin/GameplaySkinTraits.h"
 #include "skin/SkinTargetTraits.h"
+#include "music_select_skin_ledger_evidence.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -41,10 +42,22 @@ void testResultTargetsAreFirstClassTraits() {
           "Beatoraja course-result type maps to Course Result target");
 }
 
+void testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn() {
+  const auto target = skin::skinTargetTraitForType(5);
+  require(target.has_value() &&
+              target->kind == skin::SkinTargetKind::MusicSelect &&
+              target->keyMode == 0 && target->label == "Music Select",
+          "Beatoraja type 5 maps to the Music Select target");
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
   testPinnedBeatorajaGameplayTraitMapping();
   testResultTargetsAreFirstClassTraits();
-  return 0;
+  testMusicSelectTargetIsFirstClassAndDefaultsToBuiltIn();
+  return music_select_skin_ledger_evidence::finish(
+      argc, argv, "gameplay_skin_traits_tests", 0,
+      {"select.target.music-select"}, "gameplay skin trait test failures",
+      "gameplay skin trait tests passed");
 }

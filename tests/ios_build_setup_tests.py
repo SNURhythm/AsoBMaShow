@@ -228,18 +228,26 @@ int main() { return 0; }
         for configuration in target_configurations:
             self.assertIn("ASOBMASHOW_BUILD_COMMIT =", configuration)
             self.assertIn("ASOBMASHOW_SOURCE_CLEAN = 0;", configuration)
-            self.assertIn(
-                r'ASOBMASHOW_BUILD_COMMIT=\\\"$(ASOBMASHOW_BUILD_COMMIT)\\\"',
-                configuration,
-            )
-            self.assertIn(
-                r'ASOBMASHOW_BUILD_CONFIGURATION=\\\"$(CONFIGURATION)\\\"',
-                configuration,
-            )
-            self.assertIn(
-                "ASOBMASHOW_SOURCE_CLEAN=$(ASOBMASHOW_SOURCE_CLEAN)",
-                configuration,
-            )
+            definitions_start = configuration.index("GCC_PREPROCESSOR_DEFINITIONS = (")
+            definitions_end = configuration.index(");", definitions_start)
+            app_wide_defines = configuration[definitions_start:definitions_end]
+            self.assertNotIn("ASOBMASHOW_BUILD_COMMIT", app_wide_defines)
+            self.assertNotIn("ASOBMASHOW_BUILD_CONFIGURATION", app_wide_defines)
+            self.assertNotIn("ASOBMASHOW_SOURCE_CLEAN", app_wide_defines)
+
+        exceptions = object_block(
+            self.project,
+            EXCEPTION_SET_ID,
+            "/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */",
+        )
+        self.assertIn("additionalCompilerFlagsByRelativePath", exceptions)
+        flags_block = exceptions[
+            exceptions.index("additionalCompilerFlagsByRelativePath") :
+        ]
+        self.assertIn("BuildIdentity.cpp =", flags_block)
+        self.assertIn("ASOBMASHOW_BUILD_COMMIT", flags_block)
+        self.assertIn("ASOBMASHOW_BUILD_CONFIGURATION", flags_block)
+        self.assertIn("ASOBMASHOW_SOURCE_CLEAN", flags_block)
 
     def compile_build_identity(self, root: Path, commit: str, configuration: str, clean: int):
         compiler = shutil.which("clang++") or shutil.which("c++")

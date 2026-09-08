@@ -1,7 +1,9 @@
+#include "skin/beatoraja/MusicSelectSkinSession.h"
 #include "skin/beatoraja/PlaySkinSession.h"
 #include "skin/beatoraja/ResultSkinSession.h"
 
 #include "ArchiveFile.h"
+#include "music_select_runtime_ledger_assertions.h"
 
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
@@ -16,6 +18,7 @@
 #include "skin/beatoraja/SkinModelValidator.h"
 #include "skin/beatoraja/SyntheticReplayGhostOverlay.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
+#include "skin/beatoraja/SkinTextAtlas.h"
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinArchiveImporter.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -28,7 +31,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -36,6 +41,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <span>
@@ -47,6 +53,7 @@
 
 namespace session_test_allocation_fault {
 thread_local bool failNext = false;
+thread_local std::size_t allocatedBytes = 0;
 }
 
 void *operator new(std::size_t size) {
@@ -55,6 +62,7 @@ void *operator new(std::size_t size) {
     throw std::bad_alloc();
   }
   if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+    session_test_allocation_fault::allocatedBytes += size;
     return memory;
   }
   throw std::bad_alloc();
@@ -264,8 +272,12 @@ public:
     return preflightReady;
   }
 
-  void submit(const rendering::SkinQuadBackendBatch &) override {
+  void submit(const rendering::SkinQuadBackendBatch &batch) override {
     ++submitCalls;
+    if (captureVertices) {
+      submittedVertices.insert(submittedVertices.end(), batch.vertices.begin(),
+                               batch.vertices.end());
+    }
     if (failNextAllocationAfterSubmit) {
       session_test_allocation_fault::failNext = true;
     }
@@ -273,6 +285,7 @@ public:
 
   bool preflightReady = true;
   bool failNextAllocationAfterSubmit = false;
+  bool captureVertices = false;
   std::size_t layoutPreflightCalls = 0;
   std::size_t samplerPreflightCalls = 0;
   std::size_t reserveCalls = 0;
@@ -281,6 +294,7 @@ public:
   std::size_t samplerCount = 0;
   std::size_t reservedVertices = 0;
   std::size_t reservedIndices = 0;
+  std::vector<rendering::SkinQuadGpuVertex> submittedVertices;
 };
 
 bool sameBgaFrame(const PreparedGameplayBgaFrame &left,
@@ -691,6 +705,18 @@ struct ActivationFixtureOptions {
   bool resultDuplicateTimerExec = false;
   bool staticResultCustomEvent = false;
   bool legacyInputBearing = false;
+  bool musicSelectInteractionBearing = false;
+  bool musicSelectMainStateBearing = false;
+  bool musicSelectBuiltinImageBearing = false;
+  bool musicSelectCallbackTextBearing = false;
+  bool musicSelectMissingCallbackFontBearing = false;
+  bool musicSelectSongListBearing = false;
+  bool musicSelectDuplicateSongListDestinations = false;
+  std::string musicSelectCallbackDispatch;
+  bool musicSelectDuplicateTimers = false;
+  int musicSelectDistributionGraph = 0;
+  bool musicSelectKerningFont = false;
+  bool musicSelectSharedFontCaption = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -733,7 +759,9 @@ public:
                         "tests/fixtures/beatoraja_skin/resources/fixture.png",
                     source / "skin/resources/fixture.png");
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
-                        "tests/fixtures/beatoraja_skin/resources/fixture.ttf",
+                        (options.musicSelectKerningFont
+                             ? "bgfx/bgfx/examples/runtime/font/signika-regular.ttf"
+                             : "tests/fixtures/beatoraja_skin/resources/fixture.ttf"),
                     source / "skin/resources/fixture.ttf");
     }
     if (options.movieBearing) {
@@ -741,6 +769,10 @@ public:
       fs::copy_file(fs::path(ASOBMASHOW_SOURCE_DIR) /
                         "tests/fixtures/beatoraja_skin/resources/fixture.png",
                     source / "skin/resources/source.MP4");
+    }
+    if (options.musicSelectDistributionGraph != 0) {
+      fs::copy_file(source / "skin/resources/fixture.png",
+                    source / "skin/resources/graph.png");
     }
     const bool hasPomyu = options.repeatedPomyu ||
                           options.oversizedPomyuWithSibling ||
@@ -911,7 +943,147 @@ if skin_config then
   assert(main_state.audio_loop("session-audio.ogg", 0.5) == true)
 )lua";
     }
-    if (options.movieBearing && options.resourceBearing) {
+    if (options.musicSelectMainStateBearing) {
+      script += R"lua(
+  assert(main_state.key_pressed(29))
+  assert(main_state.key_pressed("A"))
+  assert(main_state.set_volume_sys(0.45))
+  assert(main_state.set_volume_key(0.35))
+  assert(main_state.set_volume_bg(0.25))
+  assert(math.abs(main_state.volume_sys() - 0.45) < 0.000001)
+  assert(math.abs(main_state.volume_key() - 0.35) < 0.000001)
+  assert(math.abs(main_state.volume_bg() - 0.25) < 0.000001)
+)lua";
+    }
+    if (options.musicSelectDistributionGraph != 0) {
+      script += "\n  local shared = " + std::string(
+          options.musicSelectDistributionGraph % 2 == 0 ? "true" : "false");
+      script += "\n  local nested = " + std::string(
+          options.musicSelectDistributionGraph > 2 ? "true" : "false");
+      script += R"lua(
+  local result = {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "graph-source", path = shared and "resources/fixture.png" or "resources/graph.png"},
+              {id = "bar-source", path = "resources/fixture.png"}},
+    graph = {{id = "graph", src = "graph-source", type = -1, w = 22, h = 10, divx = 11}},
+    destination = {{id = "graph", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
+  }
+  if nested or shared then
+    result.image = {{id = "bar", src = "bar-source", w = 40, h = 20}}
+    result.imageset = {{id = "bars", images = {"bar"}}}
+  end
+  if nested then
+    result.songlist = {
+      id = "list", center = 0,
+      liston = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      graph = {id = "graph", dst = {{x = 0, y = 0, w = 100, h = 20}}}
+    }
+    result.destination = {{id = "list", dst = {{x = 0, y = 0}}}}
+  elseif shared then
+    table.insert(result.destination, 1, {id = "bar", dst = {{x = 0, y = 0, w = 100, h = 20}}})
+  end
+  return result
+)lua";
+    } else if (options.musicSelectDuplicateTimers) {
+      script += R"lua(
+  local checked = false
+  return {
+    type = 5, w = 1280, h = 720, destination = {},
+    customTimers = {
+      {id = 10000, timer = function() return 1 end}, {id = 10000},
+      {id = 10001}, {id = 10001, timer = function() return 7 end}
+    },
+    customEvents = {{id = 1000, condition = function() return true end,
+      action = function()
+        if checked then
+          assert(main_state.timer(10000) == 99)
+          assert(main_state.timer(10001) == 7)
+          assert(main_state.event_exec(210))
+        else
+          assert(main_state.set_timer(10000, 99))
+          assert(main_state.set_timer(10001, 99))
+          assert(main_state.timer(10000) == 99)
+          assert(main_state.timer(10001) == 7)
+          checked = true
+        end
+      end}}
+  }
+)lua";
+    } else if (!options.musicSelectCallbackDispatch.empty()) {
+      script += "\n  local mode = '" + options.musicSelectCallbackDispatch +
+                R"lua('
+  local started = false
+  local function dispatch(remaining)
+    if mode == 'finite' and remaining == 0 then
+      assert(main_state.event_exec(210, 17, 23))
+      return
+    end
+    assert(main_state.set_volume_sys(0.5))
+    assert(main_state.event_exec(mode == 'mutual' and 1001 or 1000,
+                                 remaining - 1))
+  end
+  return {
+    type = 5, w = 1280, h = 720, destination = {},
+    customEvents = {
+      {id = 1000, action = dispatch},
+      {id = 1001, action = function(remaining)
+        assert(main_state.event_exec(1000, remaining))
+      end}
+    },
+    customTimers = {{id = 10000, timer = function()
+      if not started then
+        started = true
+        assert(main_state.event_exec(1000, 8))
+      end
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.musicSelectMissingCallbackFontBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    font = {{id = "missing-font", path = "resources/missing.ttf", type = 0}},
+    text = {{id = "missing-callback-text", font = "missing-font", size = 16,
+             value = function() return "unavailable" end}},
+    destination = {
+      {id = "missing-callback-text", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectCallbackTextBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "fixture-image", path = "resources/fixture.png"}},
+    image = {{id = "fixture-object", src = "fixture-image", x = 0, y = 0,
+              w = 40, h = 20}},
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    text = {{id = "callback-text", font = "fixture-font", size = 16,
+             value = function() return "callback \u{03a9}" end}},
+    destination = {
+      {id = "fixture-object", dst = {{x = 0, y = 0, w = 40, h = 20}}},
+      {id = "callback-text", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectInteractionBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "fixture-image", path = "resources/fixture.png"}},
+    font = {{id = "fixture-font", path = "resources/fixture.ttf", type = 0}},
+    slider = {{id = "position", src = "fixture-image", x = 0, y = 0,
+               w = 10, h = 10, angle = 1, range = 100, type = 1,
+               changeable = true}},
+    text = {{id = "searchword", font = "fixture-font", size = 16, ref = 30}},
+    destination = {
+      {id = "position", dst = {{x = 100, y = 100, w = 20, h = 20}}},
+      {id = "searchword", dst = {{x = 300, y = 200, w = 200, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.movieBearing && options.resourceBearing) {
       script += R"lua(
   return {
     type = 0, w = 1280, h = 720,
@@ -947,6 +1119,65 @@ if skin_config then
     destination = {
       {id = "movie-object-one", dst = {{x = 0, y = 0, w = 80, h = 40}}},
       {id = "movie-object-two", dst = {{x = 80, y = 0, w = 80, h = 40}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectBuiltinImageBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    destination = {
+      {id = "-100", dst = {{x = 0, y = 0, w = 40, h = 20}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectSharedFontCaption) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "atlas", path = "resources/fixture.png"}},
+    font = {{id = "font", path = "resources/fixture.ttf", type = 0}},
+    image = {{id = "bar", src = "atlas", x = 0, y = 0, w = 40, h = 20}},
+    imageset = {{id = "bars", images = {"bar"}}},
+    text = {{id = "title", font = "font", size = 16},
+            {id = "caption", font = "font", size = 16, ref = 10}},
+    songlist = {
+      id = "list", center = 0, clickable = {0},
+      liston = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      listoff = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      text = {{id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
+    },
+    destination = {
+      {id = "list", dst = {{x = 0, y = 0}}},
+      {id = "caption", dst = {{x = 50, y = 50, w = 500, h = 30}}}
+    }
+  }
+)lua";
+    } else if (options.musicSelectSongListBearing) {
+      script += R"lua(
+  return {
+    type = 5, w = 1280, h = 720,
+    source = {{id = "atlas", path = "resources/fixture.png"}},
+    font = {{id = "font", path = "resources/fixture.ttf", type = 0}},
+    image = {{id = "bar", src = "atlas", x = 0, y = 0, w = 40, h = 20}},
+    imageset = {{id = "bars", images = {"bar"}}},
+    text = {{id = "title", font = "font", size = 16}},
+    songlist = {
+      id = "list", center = 0, clickable = {0},
+      liston = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      listoff = {{id = "bars", dst = {{x = 0, y = 0, w = 100, h = 20}}}},
+      text = {{id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}},
+              {id = "title", dst = {{x = 0, y = 0, w = 100, h = 20}}}}
+    },
+    destination = {
+)lua";
+      script += options.musicSelectDuplicateSongListDestinations
+          ? R"lua(
+      {id = "list", op = {1}, dst = {{x = 0, y = 0}}},
+      {id = "list", op = {-1}, dst = {{x = 0, y = 0}}}
+)lua"
+          : R"lua({id = "list", dst = {{x = 0, y = 0}}})lua";
+      script += R"lua(
     }
   }
 )lua";
@@ -1037,7 +1268,10 @@ if skin_config then
     customTimers = {{id = 10000, timer = function()
       assert(main_state.event_exec(1000))
       return 0
-    end}}
+    end}})lua" +
+                (options.skinType == 5 ? R"lua(,
+    destination = {})lua"
+                                       : "") + R"lua(
   }
 )lua";
     } else if (options.resultDuplicateEventExec) {
@@ -1080,7 +1314,9 @@ if skin_config then
                                          ? options.configuredSkinType
                                          : options.skinType;
       script += "\n  return { type = " + std::to_string(configuredSkinType) +
-                ", w = 1280, h = 720 }\n";
+                ", w = 1280, h = 720" +
+                (configuredSkinType == 5 ? ", destination = {}" : "") +
+                " }\n";
     }
     script += "\nend\nif phase_count ~= 1 then\n"
               "  error(\"header phase did not begin in a fresh state\")\n"
@@ -1171,6 +1407,18 @@ if skin_config then
             .resourcePreparation = resources_,
             .initialData = std::move(initialData),
             .textureDevice = device_,
+            .audioBackend = audioBackend_,
+            .liveResourceCounters = liveResourceCounters_};
+  }
+
+  MusicSelectSkinSessionContext musicSelectContext() {
+    MusicSelectSkinFrame initialFrame;
+    initialFrame.serial = 1;
+    return {.storageRoots = roots_,
+            .resourcePreparation = resources_,
+            .initialFrame = std::move(initialFrame),
+            .textureDevice = device_,
+            .movieDevice = movieDevice_,
             .audioBackend = audioBackend_,
             .liveResourceCounters = liveResourceCounters_};
   }
@@ -1661,7 +1909,7 @@ return skin
                                         "skin/skipped.lr2skin",
                                         "skin/unavailable-builtin-graphs.lr2skin",
                                         "skin/unsafe.lr2skin"} &&
-               selectable == 10 && unavailable == 2,
+               selectable == 11 && unavailable == 1,
            "header admission keeps gameplay and recoverable LR2 entries "
            "selectable while fatal documents remain invalid");
 
@@ -2456,6 +2704,276 @@ void testRequestedExternalGameplaySkinCreatesARealSession() {
          "unsupported optional visuals may remain visible as warnings");
 }
 
+void testMusicSelectSourceResolutionMatchesPinnedEnumLookup() {
+  const auto known = musicSelectSkinSourceResolution(
+      {.type = 5, .width = 1920, .height = 1200});
+  const auto unknown = musicSelectSkinSourceResolution(
+      {.type = 5, .width = 1536, .height = 864});
+  const auto invalid = musicSelectSkinSourceResolution(
+      {.type = 5, .width = 0, .height = -1});
+  expect(known.width == 1920.0 && known.height == 1200.0 &&
+             unknown.width == 1280.0 && unknown.height == 720.0 &&
+             invalid.width == 1280.0 && invalid.height == 720.0,
+         "music-select source resolution uses Beatoraja's exact enum lookup "
+         "and HD fallback");
+}
+
+void testRequestedModernChicSessionPublishesChartListRows() {
+  const char *acceptanceRoot =
+      std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
+  if (acceptanceRoot == nullptr || *acceptanceRoot == '\0') {
+    return;
+  }
+  const fs::path source = fs::path(acceptanceRoot) / "ModernChic";
+  expect(fs::is_directory(source),
+         "ModernChic acceptance root is a readable directory");
+  if (!fs::is_directory(source)) {
+    return;
+  }
+
+  TempDirectory temp;
+  SkinStorageRoots roots{
+      .visiblePackages = temp.root() / "visible",
+      .privateRevisions = temp.root() / "revisions",
+      .privateCatalog = temp.root() / "catalog",
+      .profileOverlays = temp.root() / "overlays",
+      .liveSources = true,
+  };
+  const auto package = normalizePackageId("ModernChicAcceptance").package;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "musicselect.luaskin").entry
+              : std::nullopt;
+  const auto profile =
+      makeSkinProfileId("77777777-7777-4777-8777-777777777777");
+  expect(package && entry && profile,
+         "ModernChic acceptance activation IDs normalize");
+  if (!package || !entry || !profile) {
+    return;
+  }
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(source, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "ModernChic acceptance package snapshots");
+  if (!snapshot.prepared) {
+    return;
+  }
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease.has_value() && publishError.empty(),
+         "ModernChic acceptance revision publishes");
+  if (!lease) {
+    return;
+  }
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  const auto validation = validator.validate(
+      lease->readView(), *entry, nullptr, {});
+  expect(validation.disposition ==
+                 SkinValidationDisposition::SelectableGameplay &&
+             validation.metadata && validation.metadata->skinType == 5 &&
+             validation.reconciledSettings &&
+             !validation.configurationDigest.empty(),
+         "ModernChic music-select entry validates");
+  if (validation.disposition !=
+          SkinValidationDisposition::SelectableGameplay ||
+      !validation.metadata || validation.metadata->skinType != 5 ||
+      !validation.reconciledSettings ||
+      validation.configurationDigest.empty()) {
+    return;
+  }
+
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  frame.elapsedMillis = 2'000;
+  frame.songList.elapsedMillis = 2'000;
+  frame.songList.selectedIndex = 8;
+  for (int index = 0; index < 17; ++index) {
+    frame.songList.bars.push_back(
+        {.kind = MusicSelectBarKind::Song,
+         .title = "Chart " + std::to_string(index),
+         .exists = true,
+         .difficulty = 2,
+         .level = 10});
+  }
+
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto movieDevice = std::make_shared<SessionMovieDevice>();
+  auto counters = std::make_shared<SkinLiveResourceCounters>();
+  auto audioState = std::make_shared<SessionAudioState>();
+  auto audio = std::make_shared<SessionAudioBackend>(audioState, counters);
+  SessionQuadBackend quadBackend;
+  quadBackend.captureVertices = true;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = {.revision = std::move(*lease),
+                      .entry = *entry,
+                      .reconciledSettings = *validation.reconciledSettings,
+                      .configurationDigest = validation.configurationDigest},
+       .profileId = *profile,
+       .sessionSerial = 97},
+      {.storageRoots = roots,
+       .resourcePreparation = resources,
+       .initialFrame = frame,
+       .textureDevice = std::move(device),
+       .movieDevice = std::move(movieDevice),
+       .audioBackend = std::move(audio),
+       .liveResourceCounters = std::move(counters),
+       .quadBackend = &quadBackend});
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << "ModernChic session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+    expect(false, "ModernChic music-select session creates");
+    return;
+  }
+
+  RenderContext renderContext;
+  const bool rendered = created.session->render(renderContext, frame);
+  const auto centerTarget = created.session->pointerTargetAt(
+      {.x = 1200.0F, .y = 540.0F});
+  const bool hasCenterBarVertex = std::ranges::any_of(
+      quadBackend.submittedVertices, [](const auto &vertex) {
+        return std::abs(vertex.x - 1125.0F) < 0.1F &&
+               vertex.y >= 505.0F && vertex.y <= 575.0F;
+      });
+  const bool centerLevelUsesBarRelativePosition = std::ranges::any_of(
+      quadBackend.submittedVertices, [](const auto &vertex) {
+        return std::abs(vertex.x - 1155.0F) < 0.1F &&
+               vertex.y >= 505.0F && vertex.y <= 575.0F;
+      });
+  if (!rendered || !hasCenterBarVertex ||
+      !centerLevelUsesBarRelativePosition ||
+      centerTarget.kind != MusicSelectSkinPointerTargetKind::Bar ||
+      centerTarget.selectIndex != std::optional<std::size_t>{8}) {
+    std::cerr << "ModernChic chart-list probe: rendered=" << rendered
+              << " vertices=" << quadBackend.reservedVertices
+              << " center-bar-vertex=" << hasCenterBarVertex
+              << " center-level-position="
+              << centerLevelUsesBarRelativePosition
+              << " center-target=" << static_cast<int>(centerTarget.kind)
+              << '\n';
+    for (const auto &diagnostic : created.session->takeLastDiagnostics()) {
+      std::cerr << "ModernChic render diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+  }
+  expect(rendered && hasCenterBarVertex && centerLevelUsesBarRelativePosition &&
+             centerTarget.kind == MusicSelectSkinPointerTargetKind::Bar &&
+             centerTarget.selectIndex == std::optional<std::size_t>{8},
+         "ModernChic renders its level at the authored bar-relative position "
+         "and publishes the center chart-list row");
+}
+
+void testRequestedLitoneMusicSelectSessionCreatesWithoutHostPolicyFailures() {
+  const char *acceptanceRoot =
+      std::getenv("ASOBMASHOW_SKIN_ACCEPTANCE_ROOT");
+  if (acceptanceRoot == nullptr || *acceptanceRoot == '\0') return;
+  const fs::path source = fs::path(acceptanceRoot) / "LITONE12";
+  expect(fs::is_directory(source),
+         "LITONE12 acceptance root is a readable directory");
+  if (!fs::is_directory(source)) return;
+
+  TempDirectory temp;
+  SkinStorageRoots roots{
+      .visiblePackages = temp.root() / "visible",
+      .privateRevisions = temp.root() / "revisions",
+      .privateCatalog = temp.root() / "catalog",
+      .profileOverlays = temp.root() / "overlays",
+      .liveSources = true,
+  };
+  const auto package = normalizePackageId("LITONE12Acceptance").package;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "Select/select.luaskin").entry
+              : std::nullopt;
+  const auto profile =
+      makeSkinProfileId("88888888-8888-4888-8888-888888888888");
+  expect(package && entry && profile,
+         "LITONE12 music-select activation IDs normalize");
+  if (!package || !entry || !profile) return;
+
+  AcceptFiles aliases;
+  SkinTreeSnapshotter snapshotter(roots, aliases);
+  auto snapshot = snapshotter.snapshot(source, *package, {}, {});
+  expect(snapshot.prepared.has_value(),
+         "LITONE12 acceptance package snapshots");
+  if (!snapshot.prepared) return;
+  std::string publishError;
+  auto lease = std::move(*snapshot.prepared).publish(publishError);
+  expect(lease.has_value() && publishError.empty(),
+         "LITONE12 acceptance revision publishes");
+  if (!lease) return;
+
+  SkinResourcePreparationService resources;
+  GameplaySkinValidator validator(resources);
+  const auto validation =
+      validator.validate(lease->readView(), *entry, nullptr, {});
+  expect(validation.disposition ==
+                 SkinValidationDisposition::SelectableGameplay &&
+             validation.metadata && validation.metadata->skinType == 5 &&
+             validation.reconciledSettings &&
+             !validation.configurationDigest.empty(),
+         "LITONE12 music-select entry validates");
+  if (validation.disposition !=
+          SkinValidationDisposition::SelectableGameplay ||
+      !validation.metadata || validation.metadata->skinType != 5 ||
+      !validation.reconciledSettings || validation.configurationDigest.empty()) {
+    return;
+  }
+
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  frame.elapsedMillis = 2'000;
+  frame.songList.elapsedMillis = 2'000;
+  frame.songList.selectedIndex = 8;
+  for (int index = 0; index < 17; ++index) {
+    frame.songList.bars.push_back(
+        {.kind = MusicSelectBarKind::Song,
+         .title = "Chart " + std::to_string(index),
+         .exists = true,
+         .difficulty = 2,
+         .level = 10});
+  }
+
+  auto device = std::make_shared<SessionTextureDevice>();
+  auto movieDevice = std::make_shared<SessionMovieDevice>();
+  auto counters = std::make_shared<SkinLiveResourceCounters>();
+  auto audioState = std::make_shared<SessionAudioState>();
+  auto audio = std::make_shared<SessionAudioBackend>(audioState, counters);
+  auto created = MusicSelectSkinSession::create(
+      {.activation = {.revision = std::move(*lease),
+                      .entry = *entry,
+                      .reconciledSettings = *validation.reconciledSettings,
+                      .configurationDigest = validation.configurationDigest},
+       .profileId = *profile,
+       .sessionSerial = 98},
+      {.storageRoots = roots,
+       .resourcePreparation = resources,
+       .initialFrame = frame,
+       .textureDevice = device,
+       .movieDevice = movieDevice,
+       .audioBackend = std::move(audio),
+       .liveResourceCounters = counters});
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << "LITONE12 session diagnostic: " << diagnostic.code
+                << ": " << diagnostic.message << '\n';
+    }
+  }
+  const bool hostPolicyFailure = std::ranges::any_of(
+      created.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.code.contains("limit") ||
+               diagnostic.message.contains("policy") ||
+               diagnostic.message.contains("quota");
+      });
+  expect(created.session != nullptr && !hostPolicyFailure &&
+             movieDevice->loadCalls != 0,
+         "LITONE12 music-select creates with its bitmap fonts and movie "
+         "without host-defined budgets or validation failures");
+}
+
 void testActivationRejectsAReconciledDigestMismatch() {
   ActivationFixture fixture;
   if (!fixture.ready()) {
@@ -2473,6 +2991,1223 @@ void testActivationRejectsAReconciledDigestMismatch() {
                            "skin.session.configuration_digest_mismatch") &&
              !fs::exists(fixture.configuredMarkerPath()),
          "digest mismatch rejects before configured-phase sandbox writes");
+}
+
+void testMusicSelectActivationCreatesAConfiguredOwningSession() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 93,
+  };
+  auto created = MusicSelectSkinSession::create(
+      std::move(request), fixture.musicSelectContext());
+  const bool hasError = std::ranges::any_of(
+      created.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error;
+      });
+  expect(created.session != nullptr && !hasError &&
+             fixture.device()->createCalls == 2,
+         "type-5 activation runs the configured document loader, resource "
+         "plan, and owning music-select session");
+}
+
+void testMusicSelectDuplicateTimersUseWinningDefinition() {
+  ActivationFixture fixture({.skinType = 5, .musicSelectDuplicateTimers = true});
+  if (!fixture.ready()) return;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 105}, fixture.musicSelectContext());
+  expect(created.session != nullptr, "duplicate timer session creates");
+  if (!created.session) return;
+  RenderContext context;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  expect(created.session->render(context, frame), "duplicate timer writes render");
+  frame.serial = 2;
+  expect(created.session->render(context, frame), "duplicate timer persistence renders");
+  const auto actions = created.session->takePublishedActions();
+  expect(actions.size() == 1 &&
+             std::get<int>(actions.front().selector.value) == 210,
+         "winning passive timer accepts writes and active timer ignores them across frames");
+}
+
+void testMusicSelectDistributionGraphsUseProductionResources() {
+  for (const int mode : {1, 2, 3, 4}) {
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectDistributionGraph = mode});
+    if (!fixture.ready()) continue;
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend backend;
+    backend.captureVertices = true;
+    context.quadBackend = &backend;
+    MusicSelectSkinFrame frame;
+    frame.serial = 1;
+    frame.songList.bars = {{.kind = MusicSelectBarKind::Folder, .title = "folder"}};
+    frame.songList.bars[0].folderLampCounts[10] = 1;
+    frame.songList.bars[0].folderLampCounts[5] = 3;
+    context.initialFrame = frame;
+    auto created = MusicSelectSkinSession::create(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = 106}, std::move(context));
+    expect(created.session != nullptr, "production graph resource session creates");
+    if (!created.session) continue;
+    RenderContext renderContext;
+    const bool rendered = created.session->render(renderContext, frame);
+    const std::size_t graphStart = mode == 1 ? 0 : 4;
+    expect(rendered && backend.submittedVertices.size() == graphStart + 8,
+           "Lua graphs survive production planning upload and standalone or nested lowering");
+    if (backend.submittedVertices.size() != graphStart + 8) continue;
+    expect(std::abs(backend.submittedVertices[graphStart].u - 0.5F) < 0.00001F &&
+               std::abs(backend.submittedVertices[graphStart + 4].u - 0.25F) < 0.00001F,
+           "graph-only and shared textures retain the graph's distinct grid regions");
+    expect(fixture.device()->createCalls == (mode == 3 ? 2 : 1),
+           "graph textures upload once per physical source");
+  }
+}
+
+void testMusicSelectPreparationDefersRenderOwnedResources() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 95,
+  };
+  auto context = fixture.musicSelectContext();
+  auto prepared = MusicSelectSkinSession::prepare(
+      std::move(request),
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = context.initialFrame,
+       .builtinImageReader = context.builtinImageReader,
+       .audioBackend = context.audioBackend,
+       .stop = context.stop});
+  expect(prepared.prepared.has_value() && !prepared.cancelled &&
+             fixture.device()->createCalls == 0,
+         "music-select preparation leaves render-owned texture creation "
+         "until its loading result is finalized");
+  if (!prepared.prepared) return;
+
+  auto finalized = MusicSelectSkinSession::finalize(
+      std::move(*prepared.prepared),
+      {.resourcePreparation = context.resourcePreparation,
+       .textureDevice = context.textureDevice,
+       .movieDevice = context.movieDevice,
+       .liveResourceCounters = context.liveResourceCounters});
+  const bool hasError = std::ranges::any_of(
+      finalized.diagnostics, [](const SkinDiagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error;
+      });
+  expect(finalized.session != nullptr && !hasError &&
+             fixture.device()->createCalls == 2,
+         "music-select finalization owns the deferred render-thread uploads");
+}
+
+void testMusicSelectCompatibilityDoesNotAddHostResourcePolicies() {
+  const auto policy = musicSelectSkinCompatibilityPolicy();
+  expect(policy.level() == SkinSafetyLevel::BeatorajaCompatibility &&
+             !policy.enforces(SkinSafetyGuard::LuaResourceBudget) &&
+             !policy.enforces(SkinSafetyGuard::ResourceAllocationLimit) &&
+             !policy.enforces(SkinSafetyGuard::LuaDecoderLimit) &&
+             !policy.preservesPinnedLuaSandbox() &&
+             policy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+             policy.enforces(SkinSafetyGuard::ProcessGlobalMutation),
+         "type-5 skin loading uses the pinned standard Lua loader rather "
+         "than adding host budgets or removing its skin-root and SafeOs "
+         "boundaries");
+}
+
+void testMusicSelectMainStateWritesVolumesAndReadsCurrentInput() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectMainStateBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 99,
+  };
+  auto context = fixture.musicSelectContext();
+  context.captureLegacyInputGeneration = [] {
+    LuaSkinLegacyInputGeneration input;
+    input.pressedGdxKeys.set(29);
+    return input;
+  };
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  const bool rendered = created.session &&
+                        created.session->render(renderContext, frame);
+  const auto actions = created.session
+                           ? created.session->takePublishedActions()
+                           : std::vector<MusicSelectSkinAction>{};
+  const auto actionValue = [&](int id) -> std::optional<double> {
+    const auto found = std::ranges::find_if(
+        actions, [id](const MusicSelectSkinAction &action) {
+          const auto *selector = std::get_if<int>(&action.selector.value);
+          return action.kind == MusicSelectSkinActionKind::FloatWriter &&
+                 selector != nullptr && *selector == id;
+        });
+    return found == actions.end() ? std::nullopt
+                                  : std::optional<double>(found->floatValue);
+  };
+  const auto system = actionValue(17);
+  const auto key = actionValue(18);
+  const auto background = actionValue(19);
+  expect(rendered && system && std::abs(*system - 0.45) < 0.000001 &&
+             key && std::abs(*key - 0.35) < 0.000001 && background &&
+             std::abs(*background - 0.25) < 0.000001,
+         "type-5 main_state reads current input and publishes each pinned "
+         "audio-volume setter without a host gate");
+}
+
+void testMusicSelectPublishesPointerCapturesAndTextFocus() {
+  ActivationFixture fixture({.skinType = 5,
+                             .resourceBearing = true,
+                             .musicSelectInteractionBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 96,
+  };
+  auto sessionContext = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  sessionContext.quadBackend = &quadBackend;
+  sessionContext.initialFrame.properties.strings[30] = "needle";
+  auto created = MusicSelectSkinSession::create(
+      std::move(request), std::move(sessionContext));
+  if (!created.session) {
+    expect(false, "music-select interaction fixture creates a session");
+    return;
+  }
+
+  RenderContext renderContext;
+  MusicSelectSkinFrame firstFrame;
+  firstFrame.serial = 1;
+  firstFrame.properties.strings[30] = "needle";
+  if (!created.session->render(renderContext, firstFrame)) {
+    expect(false, "music-select interaction fixture publishes a frame");
+    return;
+  }
+  const auto sliderTarget =
+      created.session->pointerTargetAt({.x = 225.0F, .y = 915.0F});
+  const auto slider = created.session->queuePointerDown(
+      {.x = 225.0F, .y = 915.0F}, 0, 1);
+  const bool moved = created.session->queuePointerDrag(
+      {.x = 270.0F, .y = 915.0F}, 2);
+  const auto text = created.session->queuePointerDown(
+      {.x = 525.0F, .y = 757.5F}, 0, 3);
+  const bool wrote = text.focusedStringWriter &&
+                     created.session->queueStringWrite(
+                         text.focusedStringWriter->writer, "replacement");
+
+  MusicSelectSkinFrame secondFrame = firstFrame;
+  secondFrame.serial = 2;
+  const bool rendered = created.session->render(renderContext, secondFrame);
+  const auto actions = created.session->takePublishedActions();
+  const auto numericSelector = [](const MusicSelectSkinAction &action) {
+    const auto *value = std::get_if<int>(&action.selector.value);
+    return value != nullptr ? *value : -1;
+  };
+  expect(sliderTarget.kind == MusicSelectSkinPointerTargetKind::Slider &&
+             slider.consumed && moved && text.consumed &&
+             text.focusedStringWriter &&
+             text.focusedStringWriter->currentValue == "needle" &&
+             std::abs(text.focusedStringWriter->bounds.x - 450.0) < 0.001 &&
+             std::abs(text.focusedStringWriter->bounds.y - 735.0) < 0.001 &&
+             std::abs(text.focusedStringWriter->bounds.width - 300.0) < 0.001 &&
+             std::abs(text.focusedStringWriter->bounds.height - 45.0) < 0.001 &&
+             wrote &&
+             rendered && actions.size() == 3 &&
+             actions[0].kind == MusicSelectSkinActionKind::FloatWriter &&
+             numericSelector(actions[0]) == 1 &&
+             std::abs(actions[0].floatValue - 0.5) < 0.001 &&
+             actions[1].kind == MusicSelectSkinActionKind::FloatWriter &&
+             numericSelector(actions[1]) == 1 &&
+             std::abs(actions[1].floatValue - 0.8) < 0.001 &&
+             actions[2].kind == MusicSelectSkinActionKind::StringWriter &&
+             numericSelector(actions[2]) == 30 &&
+             actions[2].stringValue == "replacement",
+         "music-select pointer Down and drag publish the topmost slider "
+         "writer, and editable text exposes its exact overlay state");
+}
+
+void testMusicSelectDuplicateSongListDestinationsRenderBothConditions() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true,
+                             .musicSelectDuplicateSongListDestinations = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  context.initialFrame.songList.bars = {{.title = "0123456789", .exists = true}};
+  MusicSelectSkinFrame frame = context.initialFrame;
+  auto prepared = MusicSelectSkinSession::prepare(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 101},
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = frame});
+  expect(prepared.prepared.has_value(), "duplicate songlist destinations prepare");
+  if (!prepared.prepared) return;
+  std::size_t songLists = 0;
+  for (const auto &object : prepared.prepared->document.model.model.objects) {
+    if (const auto *songList = std::get_if<SkinSongListObject>(&object.payload)) {
+      ++songLists;
+      expect(songList->listOn.size() == 1 && songList->listOff.size() == 1 &&
+                 songList->text.size() == 2,
+             "every songlist destination receives resolved image and text children");
+    }
+  }
+  expect(songLists == 2, "complementary destinations retain separate songlist objects");
+  SessionQuadBackend backend;
+  auto created = MusicSelectSkinSession::finalize(
+      std::move(*prepared.prepared),
+      {.resourcePreparation = context.resourcePreparation,
+       .textureDevice = context.textureDevice,
+       .movieDevice = context.movieDevice,
+       .liveResourceCounters = context.liveResourceCounters,
+       .quadBackend = &backend});
+  expect(created.session != nullptr, "duplicate songlist session finalizes");
+  if (!created.session) {
+    for (const auto &diagnostic : created.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  if (!created.session) return;
+  RenderContext renderContext;
+  for (const bool folderSelected : {true, false}) {
+    ++frame.serial;
+    frame.properties.booleans[1] = folderSelected;
+    backend.reservedVertices = 0;
+    expect(created.session->render(renderContext, frame) &&
+               backend.reservedVertices > 4,
+           "both complementary songlist conditions draw the bar and title");
+  }
+}
+
+void testMusicSelectTitlePreparationIsBoundedForLargeLists() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  for (int index = 0; index < 10'000; ++index) {
+    context.initialFrame.songList.bars.push_back(
+        {.title = "Directory title " + std::to_string(index), .exists = true});
+  }
+  auto prepared = MusicSelectSkinSession::prepare(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 98},
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = context.initialFrame});
+  expect(prepared.prepared.has_value(), "large songlist prepares");
+  if (!prepared.prepared) return;
+  std::size_t titleBytes = 0;
+  for (const auto &[object, strings] : prepared.prepared->runtimeAtlasStrings) {
+    for (const auto &value : strings) titleBytes += value.size();
+  }
+  expect(titleBytes > 0 && titleBytes < 4096,
+         "10,000-row Lua list prepares only authored titles, not directory corpus");
+}
+
+void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 95,
+  };
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  for (int index = 0; index < 80; ++index) {
+    context.initialFrame.songList.bars.push_back(
+        {.title = "Directory title " + std::to_string(index)});
+  }
+  context.initialFrame.properties.strings[10] = "Directory title 0";
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  if (!created.session) {
+    expect(false, "music-select title prewarm fixture creates a session");
+    return;
+  }
+  MusicSelectSkinFrame reused;
+  reused.serial = 2;
+  for (int index = 0; index < 80; ++index) {
+    reused.songList.bars.push_back(
+        {.title = "Directory title " + std::to_string(index)});
+  }
+  reused.songList.selectedIndex = 70;
+  reused.properties.strings[10] = "title Directory 0";
+  MusicSelectSkinFrame unseen = reused;
+  unseen.serial = 3;
+  unseen.properties.strings[10] = "Directory \u03a9";
+  const std::size_t createdBefore = fixture.device()->createCalls;
+  RenderContext renderContext;
+  bool rendered = false;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(1);
+  do {
+    rendered = created.session->render(renderContext, unseen);
+    ++unseen.serial;
+    if (fixture.device()->createCalls > createdBefore) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  expect(!created.session->requiresResourceRefresh(reused) &&
+             !created.session->requiresResourceRefresh(unseen) && rendered &&
+             fixture.device()->createCalls == createdBefore + 1,
+         "music-select text updates only its affected atlas instead of "
+         "rebuilding the complete resource catalog for a new glyph");
+}
+
+void testMusicSelectRuntimeGlyphPatchesPreserveKerning() {
+  std::ifstream fontFile(fs::path(ASOBMASHOW_SOURCE_DIR) /
+      "bgfx/bgfx/examples/runtime/font/signika-regular.ttf", std::ios::binary);
+  const std::vector<char> fontBytes{std::istreambuf_iterator<char>(fontFile),
+                                   std::istreambuf_iterator<char>()};
+  const auto encoded = std::as_bytes(std::span(fontBytes));
+  const auto metrics = buildSkinTextAtlas(1, {.font = 1, .pointSize = 16,
+                                             .fallbackChainDigest = "signika"},
+      {{.encoded = {encoded.begin(), encoded.end()}}}, {U'A', U'V'},
+      {{U'A', U'V'}, {U'V', U'A'}});
+  expect(metrics.atlas && metrics.atlas->kerning.at({U'A', U'V'}) != 0 &&
+             metrics.atlas->kerning.at({U'V', U'A'}) != 0,
+         "runtime kerning fixture has real nonzero AV and VA pairs");
+  const auto metricsOnly = buildSkinTextAtlas(1,
+      {.font = 1, .pointSize = 16, .fallbackChainDigest = "signika"},
+      {{.encoded = {encoded.begin(), encoded.end()}}}, {U'A', U'V'},
+      {{U'A', U'V'}, {U'V', U'A'}}, SkinSafetyPolicy{}, 0, {}, {}, nullptr, true);
+  expect(metrics.atlas && metricsOnly.atlas &&
+             metricsOnly.atlas->kerning == metrics.atlas->kerning &&
+             metricsOnly.atlas->glyphs.empty() && metricsOnly.atlas->pages.empty() &&
+             metricsOnly.atlas->pixels.byteSize() == 0 &&
+             metricsOnly.atlas->paintBlendOperations == 0,
+         "kerning-only preparation preserves real metrics without rasterizing or retaining pixels");
+  const auto gap = [](const SessionQuadBackend &backend) {
+    return backend.submittedVertices.size() == 12
+        ? backend.submittedVertices[8].x - backend.submittedVertices[4].x : -999.0F;
+  };
+  float expectedReversedGap = 0;
+  {
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectKerningFont = true});
+    if (!fixture.ready()) return;
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend backend;
+    backend.captureVertices = true;
+    context.quadBackend = &backend;
+    MusicSelectSkinFrame frame;
+    frame.serial = 1;
+    frame.properties.strings[10] = "VA";
+    context.initialFrame = frame;
+    auto created = MusicSelectSkinSession::create(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = 107}, std::move(context));
+    expect(created.session != nullptr, "fresh VA session creates");
+    if (!created.session) return;
+    RenderContext renderContext;
+    expect(created.session->render(renderContext, frame), "fresh VA renders");
+    expectedReversedGap = gap(backend);
+    expect(expectedReversedGap != -999.0F, "fresh VA draws both glyphs");
+  }
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectKerningFont = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  backend.captureVertices = true;
+  context.quadBackend = &backend;
+  MusicSelectSkinFrame frame;
+  frame.properties.strings[10] = "AV";
+  context.initialFrame = frame;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 108}, std::move(context));
+  expect(created.session != nullptr, "dynamic kerning session creates");
+  if (!created.session) return;
+  RenderContext renderContext;
+  const auto render = [&](std::string_view title) {
+    frame.properties.strings[10] = title;
+    ++frame.serial;
+    backend.submittedVertices.clear();
+    expect(created.session->render(renderContext, frame), "dynamic kerning frame renders");
+  };
+  render("AV");
+  const auto originalGap = gap(backend);
+  expect(originalGap != -999.0F, "initial AV draws both glyphs");
+  const auto uploads = fixture.device()->createCalls;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  do {
+    render("B");
+    if (fixture.device()->createCalls > uploads) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  expect(fixture.device()->createCalls == uploads + 1, "new B adds one glyph atlas upload");
+  render("AV");
+  expect(gap(backend) == originalGap,
+         "adding B preserves resident AV kerning and layout instead of replacing pairs with ABV");
+  const auto pairDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  do {
+    render("VA");
+    if (gap(backend) == expectedReversedGap) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < pairDeadline);
+  expect(gap(backend) == expectedReversedGap,
+         "new ordering of resident glyphs learns VA metrics without missing kerning");
+  for (int index = 0; index < 100; ++index) render(index % 2 == 0 ? "AV" : "VA");
+  expect(fixture.device()->createCalls == uploads + 1,
+         "pair-only changes and repeated titles never rebuild the glyph texture");
+}
+
+void testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan() {
+  const auto captionGap = [](const SessionQuadBackend &backend) {
+    return backend.submittedVertices.size() == 16
+        ? backend.submittedVertices[12].x - backend.submittedVertices[8].x
+        : -999.0F;
+  };
+  float expectedReversedGap = -999.0F;
+  for (const int scenario : {0, 1, 2}) {
+    const bool freshReversed = scenario == 0;
+    const bool newOverscanGlyph = scenario == 1;
+    ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                               .musicSelectKerningFont = true,
+                               .musicSelectSharedFontCaption = true});
+    if (!fixture.ready()) return;
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend backend;
+    backend.captureVertices = true;
+    MusicSelectSkinFrame frame;
+    frame.songList.wallClockSeconds = 86'401;
+    frame.songList.bars.resize(40);
+    for (auto &bar : frame.songList.bars) {
+      bar.title = "A";
+      bar.exists = true;
+    }
+    if (newOverscanGlyph) frame.songList.bars[17].title = "AB";
+    frame.properties.strings[10] = freshReversed ? "VA" : "AV";
+    auto prepared = MusicSelectSkinSession::prepare(
+        {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+         .sessionSerial = static_cast<std::uint64_t>(109 + scenario)},
+        {.storageRoots = context.storageRoots,
+         .resourcePreparation = context.resourcePreparation,
+         .initialFrame = frame});
+    expect(prepared.prepared.has_value(), "shared title/caption atlas prepares");
+    if (!prepared.prepared) return;
+    const auto &atlases = prepared.prepared->resourcePlan.atlases;
+    expect(atlases.size() == 1 && atlases.front().glyphs.contains(U'A') &&
+               atlases.front().glyphs.contains(U'V') &&
+               !atlases.front().glyphs.contains(U'B') &&
+               !atlases.front().glyphs.contains(U'Z') &&
+               atlases.front().kerning.contains(freshReversed
+                   ? std::pair{U'V', U'A'} : std::pair{U'A', U'V'}) &&
+               (freshReversed || !atlases.front().kerning.contains({U'V', U'A'})),
+           "two text objects share one atlas with AB outside initial overscan and no VA pair");
+    auto created = MusicSelectSkinSession::finalize(
+        std::move(*prepared.prepared),
+        {.resourcePreparation = context.resourcePreparation,
+         .textureDevice = context.textureDevice,
+         .movieDevice = context.movieDevice,
+         .liveResourceCounters = context.liveResourceCounters,
+         .quadBackend = &backend});
+    expect(created.session != nullptr, "shared title/caption session finalizes");
+    if (!created.session) return;
+    RenderContext renderContext;
+    const auto render = [&] {
+      ++frame.serial;
+      backend.submittedVertices.clear();
+      expect(created.session->render(renderContext, frame), "shared atlas frame renders");
+    };
+    render();
+    expect(backend.submittedVertices.size() == 16,
+           "shared atlas draws one bar, one title glyph, and two caption glyphs");
+    if (freshReversed) {
+      expectedReversedGap = captionGap(backend);
+      continue;
+    }
+    const auto uploads = fixture.device()->createCalls;
+    frame.songList.selectedIndex = 1;
+    frame.properties.strings[10] = "VA";
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    do {
+      render();
+      if (captionGap(backend) == expectedReversedGap) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    expect(expectedReversedGap != -999.0F && captionGap(backend) == expectedReversedGap,
+           newOverscanGlyph
+               ? "VA metrics publish when non-target AB enters shared-atlas overscan"
+               : "shared-atlas pair-only VA metrics publish with resident prewarm glyphs");
+    for (int index = 0; index < 100; ++index) render();
+    expect(fixture.device()->createCalls == uploads + (newOverscanGlyph ? 1 : 0),
+           newOverscanGlyph
+               ? "new shared overscan glyph uploads exactly one replacement atlas"
+               : "genuinely shared pair-only updates do not upload a texture");
+    const auto uploadsBeforeUnseen = fixture.device()->createCalls;
+    frame.properties.strings[10] = "Z";
+    const auto unseenDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    do {
+      render();
+      if (fixture.device()->createCalls > uploadsBeforeUnseen) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < unseenDeadline);
+    expect(fixture.device()->createCalls == uploadsBeforeUnseen + 1 &&
+               backend.submittedVertices.size() == 12,
+           "caption remains refreshable and draws unseen Z after shared-atlas VA publication");
+  }
+}
+
+void testMusicSelectScrollingDoesNotStarveGlyphPatches() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  context.quadBackend = &backend;
+  MusicSelectSkinFrame frame;
+  frame.songList.bars.resize(10'000);
+  for (auto &bar : frame.songList.bars) {
+    bar.title = "0123456789";
+    bar.exists = true;
+  }
+  context.initialFrame = frame;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 99}, std::move(context));
+  expect(created.session != nullptr, "scrolling title fixture creates");
+  if (!created.session) return;
+  const auto uploads = fixture.device()->createCalls;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(2);
+  RenderContext renderContext;
+  bool rendered = true;
+  do {
+    ++frame.serial;
+    frame.songList.selectedIndex = frame.serial % 10'000;
+    frame.songList.bars[frame.songList.selectedIndex].title =
+        "0123456789\u03a9" + std::to_string(frame.serial);
+    rendered = created.session->render(renderContext, frame) && rendered;
+    if (fixture.device()->createCalls > uploads) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline);
+  expect(rendered && fixture.device()->createCalls == uploads + 1 &&
+             backend.reservedVertices > 4,
+         "scrolling applies the in-flight glyph atlas and draws titles without starvation");
+  for (int index = 0; index < 100; ++index) {
+    ++frame.serial;
+    frame.songList.selectedIndex = frame.serial % 10'000;
+    frame.songList.bars[frame.songList.selectedIndex].title =
+        std::to_string(frame.serial) + "\u03a99876543210";
+    rendered = created.session->render(renderContext, frame) && rendered;
+  }
+  expect(rendered && fixture.device()->createCalls == uploads + 1 &&
+             backend.reservedVertices > 4,
+         "new titles using resident glyphs do not rebuild an atlas per scroll");
+}
+
+void testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  context.quadBackend = &backend;
+  context.initialFrame.songList.bars = {{.title = "01234567890123456789",
+                                        .exists = true}};
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 100}, std::move(context));
+  expect(created.session != nullptr, "bounded render allocation fixture creates");
+  if (!created.session) return;
+  MusicSelectSkinFrame small;
+  small.songList.bars = {{.title = "01234567890123456789", .exists = true}};
+  MusicSelectSkinFrame large = small;
+  for (int index = 1; index < 10'000; ++index) {
+    large.songList.bars.push_back(
+        {.title = "01234567890123456789" + std::to_string(index), .exists = true});
+  }
+  RenderContext renderContext;
+  std::uint64_t serial = 1;
+  const auto renderBytes = [&](MusicSelectSkinFrame &frame) {
+    frame.serial = serial++;
+    const auto before = session_test_allocation_fault::allocatedBytes;
+    const bool rendered = created.session->render(renderContext, frame);
+    const auto bytes = session_test_allocation_fault::allocatedBytes - before;
+    expect(rendered, "steady virtualized frame renders");
+    return bytes;
+  };
+  (void)renderBytes(small);
+  (void)renderBytes(large);
+  const auto smallBytes = renderBytes(small);
+  const auto largeBytes = renderBytes(large);
+  expect(largeBytes <= smallBytes + 4096,
+         "steady rendering allocates by authored slots, not 10,000 title strings");
+  std::cout << "steady render allocation: one row " << smallBytes
+            << " bytes; 10,000 rows " << largeBytes << " bytes\n";
+}
+
+void testMusicSelectPrewarmsBoundedNearbyGlyphs() {
+  ActivationFixture fixture({.skinType = 5, .resourceBearing = true,
+                             .musicSelectSongListBearing = true});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend backend;
+  context.quadBackend = &backend;
+  MusicSelectSkinFrame frame;
+  frame.songList.bars.resize(10'000);
+  for (auto &bar : frame.songList.bars) {
+    bar.title = "0123456789";
+    bar.exists = true;
+  }
+  frame.songList.bars[1].title = "\u03a9";
+  frame.songList.bars[9999].title = "\u00c9";
+  context.initialFrame = frame;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 101}, std::move(context));
+  expect(created.session != nullptr, "nearby glyph fixture creates");
+  if (!created.session) return;
+  const auto uploads = fixture.device()->createCalls;
+  RenderContext renderContext;
+  for (const std::size_t selected : {1u, 9999u, 0u}) {
+    frame.songList.selectedIndex = selected;
+    ++frame.serial;
+    const bool rendered = created.session->render(renderContext, frame);
+    expect(rendered && backend.reservedVertices > 4,
+           "adjacent and wrapped overscan titles have glyphs on their first visible frame");
+  }
+  expect(fixture.device()->createCalls == uploads,
+         "nearby scrolling uses bounded glyph prewarm rather than rebuilding per row");
+}
+
+void testMusicSelectPreparesCallbackTextGlyphsIncrementally() {
+  ActivationFixture fixture(
+      {.skinType = 5,
+       .resourceBearing = true,
+       .musicSelectCallbackTextBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 96,
+  };
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  if (!created.session) {
+    expect(false, "music-select callback text fixture creates a session");
+    return;
+  }
+
+  const std::size_t createdBefore = fixture.device()->createCalls;
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  const bool firstRendered = created.session->render(renderContext, frame);
+  const bool residentSelectorSubmitted =
+      quadBackend.submitCalls != 0 &&
+      fixture.device()->createCalls == createdBefore;
+  bool rendered = firstRendered;
+  ++frame.serial;
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(1);
+  do {
+    rendered = created.session->render(renderContext, frame);
+    ++frame.serial;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  } while (std::chrono::steady_clock::now() < deadline &&
+           fixture.device()->createCalls == createdBefore);
+
+  expect(rendered && residentSelectorSubmitted &&
+             fixture.device()->createCalls == createdBefore + 1 &&
+             !hasDiagnostic(created.session->takeLastDiagnostics(),
+                            "skin.renderer.text.glyph"),
+         "a missing callback glyph leaves the resident selector submitted "
+         "while its affected atlas prepares incrementally");
+}
+
+void testMusicSelectStopsRetryingAnUnavailableCallbackFont() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectMissingCallbackFontBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 97,
+  };
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  auto created =
+      MusicSelectSkinSession::create(std::move(request), std::move(context));
+  if (!created.session) {
+    expect(false, "music-select unavailable callback font fixture creates");
+    return;
+  }
+
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  for (int index = 0; index < 8; ++index, ++frame.serial) {
+    (void)created.session->render(renderContext, frame);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  const auto diagnostics = created.session->takeLastDiagnostics();
+  expect(!hasDiagnostic(diagnostics, "skin.renderer.text.atlas") &&
+             std::ranges::any_of(diagnostics, [](const SkinDiagnostic &value) {
+               return value.code == "skin.resource.font_missing";
+             }),
+         "an unavailable optional callback font is reported once and omitted "
+         "without retrying the whole selector frame");
+}
+
+void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 99,
+  };
+  std::ifstream imageFile(
+      fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/resources/fixture.png",
+      std::ios::binary);
+  const std::vector<unsigned char> imageBytes{
+      std::istreambuf_iterator<char>(imageFile),
+      std::istreambuf_iterator<char>()};
+  std::promise<void> readerStarted;
+  auto started = readerStarted.get_future();
+  std::promise<void> releaseReader;
+  auto released = releaseReader.get_future().share();
+  std::atomic_int reads = 0;
+  std::atomic_bool cancellationObserved = false;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  context.builtinImageReader =
+      [&](const fs::path &path, std::vector<unsigned char> &bytes,
+          std::size_t, std::string *, std::stop_token stop) {
+        if (reads.fetch_add(1) == 0) {
+          readerStarted.set_value();
+          released.wait();
+          cancellationObserved = stop.stop_requested();
+          return false;
+        }
+        if (path != "chart-a.png") return false;
+        bytes = imageBytes;
+        return true;
+      };
+  auto created = MusicSelectSkinSession::create(std::move(request),
+                                               std::move(context));
+  if (!created.session) {
+    expect(false, "cancelled selector artwork fixture creates");
+    return;
+  }
+  const auto uploads = fixture.device()->createCalls;
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 2;
+  frame.stageFile = "chart-a.png";
+  bool rendered = created.session->render(renderContext, frame);
+  const bool startedRead = started.wait_for(std::chrono::seconds(1)) ==
+                           std::future_status::ready;
+  ++frame.serial;
+  frame.stageFile = "chart-b.png";
+  rendered = created.session->render(renderContext, frame) && rendered;
+  ++frame.serial;
+  frame.stageFile = "chart-a.png";
+  rendered = created.session->render(renderContext, frame) && rendered;
+  releaseReader.set_value();
+  const auto deadline = std::chrono::steady_clock::now() +
+                        std::chrono::seconds(1);
+  while (fixture.device()->createCalls == uploads &&
+         std::chrono::steady_clock::now() < deadline) {
+    ++frame.serial;
+    rendered = created.session->render(renderContext, frame) && rendered;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  expect(startedRead && cancellationObserved && rendered && reads == 2 &&
+             fixture.device()->createCalls == uploads + 1 &&
+             quadBackend.submitCalls > 0,
+         "returning to chart A before its cancelled artwork read finishes "
+         "retries and publishes the image instead of marking nulls prepared");
+}
+
+void testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation() {
+  for (const bool changeBanner : {false, true}) {
+    ActivationFixture fixture(
+        {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+    if (!fixture.ready()) return;
+    GameplaySkinActivationRequest request{
+        .activation = fixture.takeActivation(),
+        .profileId = fixture.profile(),
+        .sessionSerial = 100,
+    };
+    std::ifstream imageFile(
+        fs::path(ASOBMASHOW_SOURCE_DIR) /
+            "tests/fixtures/beatoraja_skin/resources/fixture.png",
+        std::ios::binary);
+    const std::vector<unsigned char> imageBytes{
+        std::istreambuf_iterator<char>(imageFile),
+        std::istreambuf_iterator<char>()};
+    std::promise<void> readerStarted;
+    auto started = readerStarted.get_future();
+    std::promise<void> releaseReader;
+    auto released = releaseReader.get_future().share();
+    std::promise<void> retryStarted;
+    auto retry = retryStarted.get_future();
+    std::promise<void> releaseRetry;
+    auto retryReleased = releaseRetry.get_future().share();
+    std::atomic_bool restoring = false;
+    std::atomic_bool cancellationObserved = false;
+    std::atomic_int restoredImageReads = 0;
+    const fs::path restoredPath = changeBanner ? "banner-a.png" : "stage-a.png";
+    auto context = fixture.musicSelectContext();
+    SessionQuadBackend quadBackend;
+    context.quadBackend = &quadBackend;
+    context.builtinImageReader =
+        [&](const fs::path &path, std::vector<unsigned char> &bytes,
+            std::size_t, std::string *, std::stop_token stop) {
+          if (path == "chart-b.png") {
+            readerStarted.set_value();
+            released.wait();
+            cancellationObserved = stop.stop_requested();
+            return false;
+          }
+          if (path == restoredPath) {
+            ++restoredImageReads;
+            if (restoring) {
+              retryStarted.set_value();
+              retryReleased.wait();
+            }
+          }
+          bytes = imageBytes;
+          return true;
+        };
+    auto created = MusicSelectSkinSession::create(std::move(request),
+                                                 std::move(context));
+    if (!created.session) {
+      expect(false, "prepared selector artwork fixture creates");
+      return;
+    }
+    const auto uploads = fixture.device()->createCalls;
+    const auto destroys = fixture.device()->destroyCalls;
+    RenderContext renderContext;
+    MusicSelectSkinFrame frame;
+    frame.serial = 2;
+    frame.stageFile = "stage-a.png";
+    frame.banner = "banner-a.png";
+    bool rendered = true;
+    const auto renderUntil = [&](const auto &finished) {
+      const auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::seconds(2);
+      while (!finished() && std::chrono::steady_clock::now() < deadline) {
+        ++frame.serial;
+        rendered = created.session->render(renderContext, frame) && rendered;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      }
+    };
+    renderUntil([&] { return fixture.device()->createCalls == uploads + 2; });
+    expect(fixture.device()->createCalls == uploads + 2,
+           "chart A stage and banner are fully prepared before navigation");
+    ++frame.serial;
+    (changeBanner ? frame.banner : frame.stageFile) = "chart-b.png";
+    rendered = created.session->render(renderContext, frame) && rendered;
+    const bool startedRead = started.wait_for(std::chrono::seconds(2)) ==
+                             std::future_status::ready;
+    expect(fixture.device()->destroyCalls == destroys + 1,
+           "navigation clears only the changed stage or banner texture");
+    restoring = true;
+    ++frame.serial;
+    (changeBanner ? frame.banner : frame.stageFile) = restoredPath;
+    rendered = created.session->render(renderContext, frame) && rendered;
+    releaseReader.set_value();
+    renderUntil([&] {
+      return retry.wait_for(std::chrono::milliseconds(0)) ==
+             std::future_status::ready;
+    });
+    expect(fixture.device()->destroyCalls == destroys + 1,
+           "retrying cleared artwork preserves the other image's prepared state");
+    releaseRetry.set_value();
+    renderUntil([&] { return fixture.device()->createCalls == uploads + 3; });
+    expect(startedRead && cancellationObserved && rendered &&
+               restoredImageReads == 2 &&
+               fixture.device()->createCalls == uploads + 3,
+           "returning to prepared A after cancelling B restores cleared artwork");
+  }
+}
+
+void testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 101,
+  };
+  std::atomic_int reads = 0;
+  auto context = fixture.musicSelectContext();
+  SessionQuadBackend quadBackend;
+  context.quadBackend = &quadBackend;
+  context.builtinImageReader =
+      [&](const fs::path &, std::vector<unsigned char> &, std::size_t,
+          std::string *, std::stop_token) {
+        ++reads;
+        return false;
+      };
+  auto created = MusicSelectSkinSession::create(std::move(request),
+                                               std::move(context));
+  if (!created.session) {
+    expect(false, "missing selector artwork fixture creates");
+    return;
+  }
+  const auto uploads = fixture.device()->createCalls;
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame;
+  frame.serial = 2;
+  frame.stageFile = "missing-stage.png";
+  frame.banner = "missing-banner.png";
+  bool rendered = true;
+  for (const bool emptySelection : {false, true}) {
+    if (emptySelection) {
+      frame.stageFile.clear();
+      frame.banner.clear();
+    }
+    for (int frameIndex = 0; frameIndex < 100; ++frameIndex) {
+      ++frame.serial;
+      rendered = created.session->render(renderContext, frame) && rendered;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(rendered && reads == 2 && fixture.device()->createCalls == uploads,
+           "missing artwork is attempted once and empty selections do not retry it");
+  }
+}
+
+void testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed() {
+  ActivationFixture fixture(
+      {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 98,
+  };
+  auto context = fixture.musicSelectContext();
+  auto readerStarted = std::make_shared<std::promise<void>>();
+  const std::future<void> started = readerStarted->get_future();
+  auto announced = std::make_shared<std::atomic_bool>(false);
+  auto cancellationObserved = std::make_shared<std::atomic_bool>(false);
+  context.builtinImageReader =
+      [readerStarted, announced, cancellationObserved](
+          const fs::path &, std::vector<unsigned char> &, std::size_t,
+          std::string *, std::stop_token stop) {
+        if (!announced->exchange(true)) {
+          readerStarted->set_value();
+        }
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(300);
+        while (!stop.stop_requested() &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        cancellationObserved->store(stop.stop_requested());
+        return false;
+      };
+  auto created = MusicSelectSkinSession::create(std::move(request),
+                                                std::move(context));
+  MusicSelectSkinFrame frame;
+  frame.serial = 2;
+  frame.stageFile = "slow-stage.png";
+  RenderContext renderContext;
+  const bool startedRead = created.session &&
+                           created.session->render(renderContext, frame) &&
+                           started.wait_for(std::chrono::seconds(1)) ==
+                               std::future_status::ready;
+  created.session.reset();
+  expect(startedRead && cancellationObserved->load(),
+         "destroying a music-select session cancels its selected-artwork "
+         "read before the async future is joined");
+}
+
+void testMusicSelectLuaSessionContainsRecursiveCustomEventFailure() {
+  ActivationFixture fixture(
+      {.skinType = 5, .resultRecursiveEventExec = true});
+  if (!fixture.ready()) return;
+  GameplaySkinActivationRequest request{
+      .activation = fixture.takeActivation(),
+      .profileId = fixture.profile(),
+      .sessionSerial = 94,
+  };
+  auto created = MusicSelectSkinSession::create(
+      std::move(request), fixture.musicSelectContext());
+  RenderContext context;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  expect(created.session != nullptr &&
+             created.session->render(context, frame) &&
+             hasDiagnostic(created.session->takeLastDiagnostics(),
+                           "skin.music_select_session.custom_event_cycle"),
+         "a recursive music-select custom event is contained without "
+         "failing the selector frame");
+}
+
+void testMusicSelectLuaCallbackDispatch(std::string_view mode,
+                                      SkinSafetyLevel safetyLevel) {
+  const bool writerBatch = mode == "floats" || mode == "strings" ||
+                           mode == "mixed" || mode == "writers";
+  ActivationFixture fixture(
+      {.skinType = 5,
+       .resourceBearing = writerBatch,
+       .musicSelectInteractionBearing = writerBatch,
+       .musicSelectCallbackDispatch = writerBatch ? "" : std::string(mode)});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  auto preparation = MusicSelectSkinSession::prepare(
+      {.activation = fixture.takeActivation(),
+       .profileId = fixture.profile(),
+       .sessionSerial = 99},
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = context.initialFrame});
+  expect(preparation.prepared.has_value(), "callback dispatch fixture prepares");
+  if (!preparation.prepared) return;
+  auto &prepared = *preparation.prepared;
+  prepared.safetyPolicy = SkinSafetyPolicy(safetyLevel);
+  if (safetyLevel == SkinSafetyLevel::Standard) {
+    const auto &activation = prepared.request.activation;
+    auto documentFiles = LuaSkinFileSystem::create(
+        {.revision = activation.revision.readView(),
+         .entry = activation.entry,
+         .storageRoots = context.storageRoots,
+         .safetyPolicy = prepared.safetyPolicy});
+    auto luaFiles = LuaSkinFileSystem::create(
+        {.revision = activation.revision.readView(),
+         .entry = activation.entry,
+         .storageRoots = context.storageRoots,
+         .profileId = fixture.profile(),
+         .safetyPolicy = prepared.safetyPolicy});
+    expect(documentFiles.fileSystem && luaFiles.fileSystem,
+           "strict callback dispatch filesystems create");
+    if (!documentFiles.fileSystem || !luaFiles.fileSystem) return;
+    GameplaySkinDocumentLoader loader;
+    auto loaded = loader.load(
+        {.sourceFormat = GameplaySkinSourceFormat::Lua,
+         .entry = activation.entry,
+         .documentFileSystem = *documentFiles.fileSystem,
+         .luaFileSystem = std::move(luaFiles.fileSystem),
+         .desiredSettings = &activation.reconciledSettings,
+         .expectedConfigurationDigest = activation.configurationDigest,
+         .luaPurpose = LuaRuntimePurpose::MusicSelect,
+         .loadConfiguredLua = [](LuaSkinRuntime &runtime,
+                                 const BeatorajaSkinConfiguration &configuration,
+                                 std::vector<SkinDiagnostic> &) {
+           return runtime.loadConfigured(configuration);
+         },
+         .safetyPolicy = prepared.safetyPolicy});
+    expect(loaded.document.has_value(), "strict callback dispatch runtime loads");
+    if (!loaded.document) return;
+    prepared.document = std::move(*loaded.document);
+  }
+  if (writerBatch) {
+    auto &runtime = *prepared.document.luaRuntime;
+    const auto floatWriter = runtime.compileCallbackScript(
+        "require('main_state').event_exec(211)", LuaCallbackScriptKind::Statement);
+    const auto stringWriter = runtime.compileCallbackScript(
+        mode == "mixed" || mode == "writers"
+            ? "require('main_state').event_exec(1000)"
+            : "require('main_state').event_exec(212)",
+        LuaCallbackScriptKind::Statement);
+    const auto event = runtime.compileCallbackScript(
+        "require('main_state').event_exec(212)", LuaCallbackScriptKind::Statement);
+    auto &model = prepared.document.model.model;
+    expect(floatWriter.callback && stringWriter.callback && event.callback &&
+               model.floatWriters.size() == 1 && model.stringWriters.size() == 1,
+           "writer dispatch uses retained real Lua callbacks");
+    if (!floatWriter.callback || !stringWriter.callback || !event.callback ||
+        model.floatWriters.size() != 1 || model.stringWriters.size() != 1) return;
+    model.floatWriters.front().source = *floatWriter.callback;
+    model.stringWriters.front().source = *stringWriter.callback;
+    model.events.push_back({.id = SkinEventBindingId{1}, .source = *event.callback});
+    model.customEvents.push_back({.id = 1000, .action = SkinEventBindingId{1}});
+  }
+  SessionQuadBackend quadBackend;
+  auto created = MusicSelectSkinSession::finalize(
+      std::move(prepared),
+      {.resourcePreparation = context.resourcePreparation,
+       .textureDevice = context.textureDevice,
+       .movieDevice = context.movieDevice,
+       .liveResourceCounters = context.liveResourceCounters,
+       .quadBackend = &quadBackend});
+  expect(created.session != nullptr, "callback dispatch session finalizes");
+  if (!created.session) return;
+
+  std::jthread watchdog([](std::stop_token stop) {
+    std::mutex mutex;
+    std::unique_lock lock(mutex);
+    std::condition_variable_any wake;
+    wake.wait_for(lock, stop, std::chrono::seconds(2), [] { return false; });
+    if (!stop.stop_requested()) {
+      std::cerr << "FAIL: Lua callback dispatch did not terminate within 2s\n";
+      std::_Exit(124);
+    }
+  });
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame{.serial = 1};
+  if (writerBatch) {
+    expect(created.session->render(renderContext, frame),
+           "writer dispatch publishes its real pointer layout");
+    const int count = mode == "writers" ? 1 : mode == "mixed" ? 400 : 1100;
+    for (int index = 0; index < count; ++index) {
+      if (mode != "strings") {
+        expect(created.session->queuePointerDown(
+                   {.x = 225.0F, .y = 915.0F}, 0, index).consumed,
+               "float callback queues through the slider pointer path");
+      }
+      if (mode != "floats") {
+        expect(created.session->queueStringWrite(SkinStringWriterId{1}, "value"),
+               "string callback queues through the text writer path");
+      }
+    }
+    frame.serial = 2;
+  }
+  const bool rendered = created.session->render(renderContext, frame);
+  const auto actions = created.session->takePublishedActions();
+  const auto diagnostics = created.session->takeLastDiagnostics();
+  if (mode == "writers") {
+    expect(rendered && diagnostics.empty() && actions.size() == 2 &&
+               std::get<int>(actions[0].selector.value) == 211 &&
+               std::get<int>(actions[1].selector.value) == 212,
+           "finite float/string callbacks and a nested event keep dispatch order");
+  } else if (mode == "finite") {
+    expect(rendered && diagnostics.empty() && actions.size() == 9 &&
+               actions.back().kind == MusicSelectSkinActionKind::Event &&
+               std::get<int>(actions.back().selector.value) == 210 &&
+               actions.back().arguments == std::vector<int>({17, 23}),
+           "finite nested Lua callbacks may revisit an event and publish once");
+  } else {
+    expect(!rendered && actions.empty() && !diagnostics.empty(),
+           "excessive Lua dispatch fails without publishing partial actions");
+    if (safetyLevel == SkinSafetyLevel::BeatorajaCompatibility) {
+      expect(hasDiagnostic(diagnostics,
+                           "skin.music_select_session.callback_dispatch_limit"),
+             "compatibility callbacks report the shared host dispatch bound");
+    }
+  }
+  ++frame.serial;
+  expect(created.session->render(renderContext, frame) &&
+             created.session->takePublishedActions().empty() &&
+             created.session->takeLastDiagnostics().empty(),
+         "the next frame does not replay completed or abandoned callbacks");
 }
 
 void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
@@ -6629,7 +8364,16 @@ void testRequestedExternalResultSkinCreatesSession() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 4 && std::string_view(argv[1]) == "--music-select-callback-dispatch") {
+    testMusicSelectLuaCallbackDispatch(
+        argv[2], std::string_view(argv[3]) == "strict"
+                     ? SkinSafetyLevel::Standard
+                     : SkinSafetyLevel::BeatorajaCompatibility);
+    std::cout << "callback dispatch " << argv[2] << ' ' << argv[3] << ": "
+              << failures << " failure(s)\n";
+    return failures == 0 ? 0 : 1;
+  }
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
@@ -6651,7 +8395,39 @@ int main() {
   testPomyuLeadingBackslashPathRemainsCharacterRelative();
   testPomyuPreparationSelectsSecondPlayerTexturesAndStaticFallbacks();
   testRequestedExternalGameplaySkinCreatesARealSession();
+  testMusicSelectSourceResolutionMatchesPinnedEnumLookup();
+  testRequestedModernChicSessionPublishesChartListRows();
+  testRequestedLitoneMusicSelectSessionCreatesWithoutHostPolicyFailures();
   testActivationRejectsAReconciledDigestMismatch();
+  testMusicSelectActivationCreatesAConfiguredOwningSession();
+  testMusicSelectDuplicateTimersUseWinningDefinition();
+  testMusicSelectDistributionGraphsUseProductionResources();
+  testMusicSelectPreparationDefersRenderOwnedResources();
+  testMusicSelectMainStateWritesVolumesAndReadsCurrentInput();
+  testMusicSelectCompatibilityDoesNotAddHostResourcePolicies();
+  testMusicSelectPublishesPointerCapturesAndTextFocus();
+  testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh();
+  testMusicSelectTitlePreparationIsBoundedForLargeLists();
+  testMusicSelectDuplicateSongListDestinationsRenderBothConditions();
+  testMusicSelectScrollingDoesNotStarveGlyphPatches();
+  testMusicSelectRuntimeGlyphPatchesPreserveKerning();
+  testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan();
+  testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
+  testMusicSelectPrewarmsBoundedNearbyGlyphs();
+  testMusicSelectPreparesCallbackTextGlyphsIncrementally();
+  testMusicSelectStopsRetryingAnUnavailableCallbackFont();
+  testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
+  testMusicSelectRetriesCancelledArtworkAfterReturningToChart();
+  testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
+  testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();
+  testMusicSelectLuaSessionContainsRecursiveCustomEventFailure();
+  for (const auto safetyLevel : {SkinSafetyLevel::Standard,
+                                 SkinSafetyLevel::BeatorajaCompatibility}) {
+    for (const std::string_view mode : {"self", "mutual", "finite", "floats",
+                                       "strings", "mixed", "writers"}) {
+      testMusicSelectLuaCallbackDispatch(mode, safetyLevel);
+    }
+  }
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
   testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();
@@ -6749,10 +8525,7 @@ int main() {
   testResultBridgePreservesCompletedGameplayGraph();
   testResultBridgeUsesRawChartBpmForResultProperties();
   testRequestedExternalResultSkinCreatesSession();
-  if (failures != 0) {
-    std::cerr << failures << " play skin session test(s) failed\n";
-    return 1;
-  }
-  std::cout << "play skin session tests passed\n";
-  return 0;
+  return music_select_runtime_ledger_assertions::finish(
+      argc, argv, "play_skin_session_tests", failures,
+      "play skin session test(s) failed", "play skin session tests passed");
 }

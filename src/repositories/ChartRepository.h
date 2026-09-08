@@ -11,10 +11,13 @@
 #include "ScoreRepositoryModels.h"
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <stop_token>
+#include <stdexcept>
 #include <vector>
 
 class ScoreRepository;
@@ -61,6 +64,9 @@ struct ChartMetaQuery {
   std::optional<std::string> difficultyMinLevel;
   std::optional<std::string> difficultyMaxLevel;
   std::optional<std::filesystem::path> exactFolder;
+  std::optional<std::filesystem::path> parentFolder;
+  std::optional<std::filesystem::path> recursiveFolder;
+  bool rawSongData = false;
   ChartRecordSortCriterion sortCriterion = ChartRecordSortCriterion::Default;
   ChartRecordSortDirection sortDirection =
       ChartRecordSortDirection::Descending;
@@ -74,9 +80,20 @@ struct ChartMetaQuery {
 
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
+  // SongData.adddate is the library-update time in Unix seconds.
+  std::int64_t addDateSeconds = 0;
   // SongData.CONTENT_TEXT as established by Beatoraja's library scan. This
   // is a folder-level fact, separate from BMS header metadata.
   bool hasDocument = false;
+  // SongData.CONTENT_BGA, computed from BMSModel#getBgaList while scanning.
+  bool hasBga = false;
+  // SongData's FEATURE_STOPSEQUENCE and FEATURE_SCROLL bits are derived from
+  // every timeline while Beatoraja scans a chart.
+  bool hasBpmStop = false;
+  bool hasScrollChange = false;
+  // SongData.FEATURE_RANDOM is a normalized chart feature. Parser random
+  // choices must not be retained merely to reconstruct this selector fact.
+  bool hasRandomSequence = false;
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unavailable = false;
@@ -89,6 +106,61 @@ struct ChartMetaRecord {
   // under this chart's SHA-256 identity.  Its bit assignments are consumed by
   // gameplay skin image indexes 89 and 90.
   int songReviewFavorite = 0;
+  // Difficulty-table SongData fields used by Beatoraja's download-site
+  // selector event. Physical library rows leave both values empty.
+  std::string downloadUrl;
+  std::string appendDownloadUrl;
+  std::optional<std::vector<std::string>> originalMd5s;
+};
+
+struct ChartSelectorQueryResolution;
+
+struct ChartFolderStatisticsRow {
+  std::string_view sha256;
+  int keyMode = 0;
+  int longNoteMode = 0;
+  int totalLongNotes = 0;
+  int totalBackSpinNotes = 0;
+  bool hasPath = false;
+};
+
+struct ChartSelectorQuery {
+  std::filesystem::path recursiveFolder;
+  std::string keyword;
+  std::string modeFilter = "ALL";
+  std::string difficultyFilter = "ALL";
+  std::string sortId = "TITLE";
+  int selectedLongNoteMode = 0;
+  std::shared_ptr<const ScoreBestCache> best;
+  std::shared_ptr<const ScoreClearRankCache> clears;
+  bool includeHidden = false;
+  std::shared_ptr<const ChartSelectorQueryResolution> resolution;
+};
+
+class ChartSelectorDurationCompatibilityRequired : public std::runtime_error {
+public:
+  ChartSelectorDurationCompatibilityRequired()
+      : std::runtime_error("selector DURATION ordering requires legacy overflow compatibility") {}
+};
+
+struct ChartSequenceFeatures {
+  bool hasBpmStop = false;
+  bool hasScrollChange = false;
+  bool hasBga = false;
+};
+
+// FolderData's persisted date and adddate fields. The library scanner owns
+// the tree-walk rules which decide which physical folders reach this store.
+struct ChartFolderRecord {
+  path_t path;
+  std::int64_t dateSeconds = 0;
+  std::int64_t addDateSeconds = 0;
+};
+
+struct ChartFolderScanNode {
+  path_t path;
+  std::int64_t dateSeconds = 0;
+  bool containsBms = false;
 };
 
 enum class ChartMetaPathBatchReadStatus { Loaded, Invalid, StorageFailure };
@@ -159,6 +231,7 @@ struct DifficultyCourseInfo {
   std::string level;
   std::string name;
   std::string constraintJson;
+  std::vector<difficulty_table::Trophy> trophies;
 };
 
 /**
@@ -179,7 +252,8 @@ public:
       bool UpsertChart(
           const bms_parser::ChartMeta &meta,
           std::optional<ChartSourcePreference> sourcePreference,
-          bool hasDocument = false);
+          bool hasDocument = false,
+          ChartSequenceFeatures sequenceFeatures = {});
       bool UpdateChartHasDocument(const std::filesystem::path &path,
                                   bool hasDocument);
       bool DeleteChart(const std::filesystem::path &path);
@@ -191,9 +265,40 @@ public:
       bool UpsertArchiveCache(const ArchiveScanCacheUpdate &update);
       bool UpdateSourcePreference(
           const ChartSourcePreferenceUpdate &update);
+      // Sets source_priority/source_archive_size for every chart under the
+      // given archive in one UPDATE. The path column is a PRIMARY KEY, so a
+      // bounded range scan (path >= prefix AND path < upper) seeks into the
+      // index instead of a LIKE scan over the whole table. All charts in an
+      // archive share the same preference, so this replaces per-chart UPDATEs
+      // on a large library.
+      bool UpdateSourcePreferenceInArchive(
+          const std::filesystem::path &archivePath, int priority,
+          std::uint64_t archiveSize);
+      bool SynchronizeFolders(std::span<const ChartFolderScanNode> nodes,
+                              std::span<const std::filesystem::path> roots,
+                              const std::function<bool()> &checkpoint = {},
+                              ChartFolderSyncStats *stats = nullptr);
       std::optional<int>
       CountChartsInArchive(const std::filesystem::path &path);
+      // Records that the given archive's charts were fully parsed and
+      // committed. Written in the same scan transaction as the archive-phase
+      // checkpoint so that a mid-scan crash can resume by identity (path +
+      // size + mtime) even if other archives were added or removed.
+      bool RecordCompletedArchive(const std::filesystem::path &archivePath,
+                                  std::int64_t size, std::int64_t mtimeNs);
       bool CheckpointAndContinue(const ChartScanCheckpoint &checkpoint);
+      // Upserts the checkpoint row into the current open scan transaction
+      // without committing it, so a state reset and the delete it accompanies
+      // are committed atomically at the next commit point. CheckpointAndContinue
+      // commits first, so a kill between a delete and the subsequent reset
+      // checkpoint could leave a stale checkpoint overstating durable rows;
+      // this path removes that window.
+      bool SaveCheckpointInPlace(const ChartScanCheckpoint &checkpoint);
+      // Commits the current scan transaction and starts a fresh one, so
+      // progress (e.g. regular-file parses) becomes durable without recording a
+      // resume checkpoint. Safe to call repeatedly; used for periodic commits
+      // that do not need a saved position.
+      bool CommitForProgress();
       bool Commit();
       int ChangedCount() const;
 
@@ -215,16 +320,43 @@ public:
     int CountAllChartMeta();
     int CountSolidArchives();
     void SelectAllChartMeta(std::vector<bms_parser::ChartMeta> &chartMetas);
+    std::vector<ChartFolderRecord> SelectFolderRecords();
+    std::vector<std::filesystem::path> SelectChartMetaFolders();
+    std::vector<std::filesystem::path> SelectRawChartMetaFolders();
     void SelectFavoriteMusicTracks(std::vector<MusicTrackRecord> &tracks);
     int CountFavoriteCharts();
     bool SetFavorite(const bms_parser::ChartMeta &chartMeta, bool favorite);
+    bool SetSongReviewFavorite(std::string_view sha256, int favorite);
     void QueryChartMeta(const ChartMetaQuery &query,
-                        std::vector<ChartMetaRecord> &chartMetas);
+                        std::vector<ChartMetaRecord> &chartMetas,
+                        std::stop_token stop = {});
+    bool HasChartMetaMatchingKeyword(const std::string &keyword,
+                                     std::stop_token stop = {});
+    void VisitChartMetaSelection(
+        const std::filesystem::path &recursiveFolder,
+        const std::function<void(const ChartMetaRecord &)> &visitor,
+        std::stop_token stop = {}, const std::string &keyword = {});
+    void VisitRawPhysicalFolderStatistics(
+        const std::filesystem::path &recursiveFolder,
+        const std::function<void(const ChartFolderStatisticsRow &)> &visitor,
+        std::stop_token stop = {}, const std::string &keyword = {});
+    std::size_t ResolveChartSelectorQuery(ChartSelectorQuery &query,
+                                           std::stop_token stop = {});
+    std::vector<ChartMetaRecord> SelectChartSelectorPage(
+        const ChartSelectorQuery &query, std::size_t offset, std::size_t limit,
+        std::stop_token stop = {});
+    std::optional<std::size_t> FindChartSelectorIndex(
+        const ChartSelectorQuery &query, std::string_view identity,
+        std::stop_token stop = {});
+    bool HasChartMetaForFolderOrParentFolder(
+        const std::filesystem::path &folder, std::stop_token stop = {});
+    bool HasChartMetaForParentFolder(const std::filesystem::path &folder,
+                                     std::stop_token stop = {});
     ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(
-        std::span<const std::filesystem::path> paths);
+        std::span<const std::filesystem::path> paths, std::stop_token stop = {});
     std::vector<bms_parser::ChartMeta>
     SelectChartMetaByHash(const std::string &sha256,
-                          const std::string &md5);
+                          const std::string &md5, std::stop_token stop = {});
     int CountChartMeta(const ChartMetaQuery &query);
     int FindChartMetaIndex(const ChartMetaQuery &query,
                            const std::filesystem::path &path);
@@ -244,6 +376,10 @@ public:
     bool ClearEntries();
     ChartScanSnapshot LoadScanSnapshot(
         ChartScanSnapshotLoad load = ChartScanSnapshotLoad::Full);
+    // Loads only the identity columns (path + md5 + sha256) for every stored
+    // chart, for the scanner's reconcile pass. Cheaper than LoadScanSnapshot
+    // on a large library because the full metadata row is not materialized.
+    std::vector<ChartScanReconcileIdentity> LoadScanReconcileIdentities();
     std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();

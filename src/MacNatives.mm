@@ -35,6 +35,26 @@ bool RevealPathInFinder(const std::string &path, std::string &errorMessage) {
   }
 }
 
+bool OpenPathWithDefaultApplication(const std::string &path,
+                                    std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    NSString *pathString = [[NSString alloc] initWithBytes:path.data()
+                                                    length:path.size()
+                                                  encoding:NSUTF8StringEncoding];
+    if (pathString == nil) {
+      errorMessage = "Invalid file path";
+      return false;
+    }
+    NSURL *url = [NSURL fileURLWithPath:pathString];
+    if (url == nil || ![[NSWorkspace sharedWorkspace] openURL:url]) {
+      errorMessage = "Could not open path";
+      return false;
+    }
+    return true;
+  }
+}
+
 bool OpenURLInDefaultBrowser(const std::string &url, std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {

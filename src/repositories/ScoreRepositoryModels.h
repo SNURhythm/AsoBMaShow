@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct TransparentStringHash {
@@ -51,9 +52,16 @@ struct ImportedIrScoreProjectionOutcome {
 struct ScoreBestSnapshot {
   int score = 0;
   int maxScore = 0;
+  std::array<int, 5> judgementCounts{};
+  int fast = 0;
+  int slow = 0;
+  int playCount = 0;
+  int clearCount = 0;
+  std::optional<std::int64_t> lastPlayedUnixSeconds;
   std::optional<int> maxCombo;
   std::optional<int> comboBreak;
   std::optional<int> badPoints;
+  std::optional<std::int64_t> averageJudgeMicros;
   std::optional<float> finalGauge;
   int clearType = kClearTypeFailedRank;
   std::optional<std::string> createdAt;
@@ -61,6 +69,11 @@ struct ScoreBestSnapshot {
   std::optional<std::string> bestOrderTime;
   ScoreBestSource source = ScoreBestSource::Local;
 };
+
+// Beatoraja GradeBar reads three independent ScoreData records: normal,
+// mirror, and every other randomized option.
+using CourseSelectorOptionScores =
+    std::array<std::optional<ScoreBestSnapshot>, 3>;
 
 // The local equivalent of Beatoraja's one-row ScoreData record.  Aso stores
 // each authenticated play independently, so this projection retains the
@@ -82,6 +95,11 @@ struct PlayerScoreHistorySnapshot {
   int clearCount = 0;
   std::array<int, 5> judgementCounts{};
   std::int64_t playDurationSeconds = 0;
+};
+
+struct RecentScoreImprovements {
+  std::array<std::unordered_set<std::string>, 30> lamp;
+  std::array<std::unordered_set<std::string>, 30> score;
 };
 
 [[nodiscard]] inline bool scoreBestSnapshotIsBetter(

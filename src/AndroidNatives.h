@@ -16,6 +16,15 @@
 using AndroidDownloadProgressCallback =
     std::function<void(std::uint64_t downloadedBytes,
                        std::uint64_t totalBytes)>;
+using AndroidDownloadCheckpoint = std::function<bool()>;
+using AndroidDownloadPauseProbe = std::function<bool()>;
+
+namespace chart_library_tasks {
+class ChartLibraryTaskService;
+}
+
+void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks);
+void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks);
 
 struct AndroidNativeMusicMetadata {
   std::string title;
@@ -50,13 +59,12 @@ std::optional<std::string> ConvertAndroidMs932ToUtf8(std::string_view value);
 bool AndroidBuildHasManageExternalStorage();
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
-                            std::string &errorMessage);
+                            std::string &errorMessage,
+                            std::stop_token stopToken = {});
 bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
                                  std::string &errorMessage);
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
                                 std::string &errorMessage);
-std::optional<std::filesystem::path>
-ConsumePendingAndroidArchiveImport(std::string &errorMessage);
 bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
                                     std::string &errorMessage);
 void RetireAndroidDocumentHandoff(std::uint64_t operationToken);
@@ -100,7 +108,9 @@ std::optional<int> OpenAndroidTreeFileDescriptor(const std::filesystem::path &pa
 bool OpenURLInAndroidBrowser(const std::string &url,
                              std::string &errorMessage);
 bool DownloadURLTextAndroid(const std::string &url, std::string &body,
-                            std::string &errorMessage);
+                            std::string &errorMessage,
+                            AndroidDownloadCheckpoint checkpoint = nullptr,
+                            AndroidDownloadPauseProbe pauseRequested = nullptr);
 bool PostURLTextAndroid(const std::string &url, std::string &body,
                         std::string &errorMessage);
 bool DownloadURLToFileAndroid(const std::string &url,

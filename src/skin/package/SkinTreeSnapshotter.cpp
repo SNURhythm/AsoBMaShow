@@ -187,7 +187,8 @@ bool appendWindowsPathComponent(WindowsHandleWalk &walk,
                                 const fs::path &component, DWORD desiredAccess,
                                 std::optional<bool> expectedDirectory,
                                 DWORD disposition, std::error_code &error,
-                                bool shareDelete = false) {
+                                bool shareDelete = false,
+                                bool followLinks = false) {
   if (component.empty() || component == fs::path(L".") ||
       component == fs::path(L"..")) {
     error = std::make_error_code(std::errc::invalid_argument);
@@ -197,7 +198,7 @@ bool appendWindowsPathComponent(WindowsHandleWalk &walk,
   // already-opened component alive without delete sharing so its name
   // cannot be replaced by a reparse point before the child handle is opened.
   walk.currentPath /= component;
-  DWORD flags = FILE_FLAG_OPEN_REPARSE_POINT;
+  DWORD flags = followLinks ? 0 : FILE_FLAG_OPEN_REPARSE_POINT;
   if (!expectedDirectory || *expectedDirectory) {
     flags |= FILE_FLAG_BACKUP_SEMANTICS;
   }
@@ -235,7 +236,8 @@ std::optional<WindowsHandleWalk>
 openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
                         std::optional<bool> expectedDirectory,
                         DWORD disposition, std::error_code &error,
-                        const fs::path *deleteSharedRoot = nullptr) {
+                        const fs::path *deleteSharedRoot = nullptr,
+                        bool followLinks = false) {
   fs::path absolute = fs::absolute(path, error);
   if (error) {
     return std::nullopt;
@@ -251,7 +253,9 @@ openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
   UniqueHandle rootHandle(CreateFileW(
       root.c_str(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
+      FILE_FLAG_BACKUP_SEMANTICS |
+          (followLinks ? 0 : FILE_FLAG_OPEN_REPARSE_POINT),
+      nullptr));
   if (!rootHandle) {
     error = std::error_code(static_cast<int>(GetLastError()),
                             std::system_category());
@@ -285,7 +289,7 @@ openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
             final ? desiredAccess : FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
             final ? expectedDirectory : std::optional<bool>(true),
             final ? disposition : OPEN_EXISTING, error,
-            shareDeleteForPinnedRoot)) {
+            shareDeleteForPinnedRoot, followLinks)) {
       return std::nullopt;
     }
   }
@@ -306,16 +310,20 @@ openWindowsPathNoFollow(const fs::path &path, DWORD desiredAccess,
 
 bool readMetadata(const fs::path &path, FileMetadata &metadata,
                   std::error_code &error,
-                  const fs::path *deleteSharedRoot = nullptr) {
+                  const fs::path *deleteSharedRoot = nullptr,
+                  bool followLinks = false) {
   auto walk = openWindowsPathNoFollow(path, FILE_READ_ATTRIBUTES, std::nullopt,
-                                      OPEN_EXISTING, error, deleteSharedRoot);
+                                      OPEN_EXISTING, error, deleteSharedRoot,
+                                      followLinks);
   return walk && metadataFromHandle(walk->leaf(), metadata, error);
 }
 #else
 bool readMetadata(const fs::path &path, FileMetadata &metadata,
-                  std::error_code &error, const fs::path * = nullptr) {
+                  std::error_code &error, const fs::path * = nullptr,
+                  bool followLinks = false) {
   struct stat status{};
-  if (::lstat(path.c_str(), &status) != 0) {
+  if ((followLinks ? ::stat(path.c_str(), &status)
+                   : ::lstat(path.c_str(), &status)) != 0) {
     error = std::error_code(errno, std::generic_category());
     return false;
   }
@@ -344,6 +352,8 @@ bool readMetadata(const fs::path &path, FileMetadata &metadata,
 bool inspectTree(const fs::path &directory, const fs::path &root,
                  const SkinPackageId &package, const SkinAliasDetector &aliases,
                  Inventory &inventory, std::map<std::string, bool> &identities,
+                 std::set<std::pair<std::uint64_t, std::uint64_t>>
+                     &activeDirectories,
                  std::stop_token stop,
                  std::vector<SkinDiagnostic> &diagnostics,
                  bool externallyPinnedRoot,
@@ -353,7 +363,7 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
   auto directoryHandle = openWindowsPathNoFollow(
       directory, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
       OPEN_EXISTING, directoryHandleError,
-      externallyPinnedRoot ? &root : nullptr);
+      externallyPinnedRoot ? &root : nullptr, true);
   if (!directoryHandle) {
     diagnostics.push_back(diagnostic(
         "skin_snapshot_directory_read_failed",
@@ -383,29 +393,13 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
       return false;
     }
 
-    const SkinRejectedLinkKind rejected = aliases.inspectNoFollow(path);
-    if (rejected != SkinRejectedLinkKind::None) {
-      diagnostics.push_back(diagnostic(
-          "skin_snapshot_link_rejected",
-          "skin source contains a link, alias, reparse point, or special node",
-          normalized.entry->packageRelativePath));
-      return false;
-    }
-
     std::error_code metadataError;
     FileMetadata metadata;
     if (!readMetadata(path, metadata, metadataError,
-                      externallyPinnedRoot ? &root : nullptr)) {
+                      externallyPinnedRoot ? &root : nullptr, true)) {
       diagnostics.push_back(
           diagnostic("skin_snapshot_nonregular_rejected",
                      "skin source contains an unreadable or non-regular node",
-                     normalized.entry->packageRelativePath));
-      return false;
-    }
-    if (!metadata.directory && metadata.links != 1) {
-      diagnostics.push_back(
-          diagnostic("skin_snapshot_hard_link_rejected",
-                     "skin source contains a multiply-linked regular file",
                      normalized.entry->packageRelativePath));
       return false;
     }
@@ -426,10 +420,19 @@ bool inspectTree(const fs::path &directory, const fs::path &root,
          .sourcePath = path,
          .metadata = metadata});
     if (metadata.directory) {
+      const auto directoryIdentity = std::pair{metadata.device, metadata.inode};
+      if (!activeDirectories.insert(directoryIdentity).second) {
+        // Beatoraja follows directory links through normal path operations.
+        // A self-reference has no finite snapshot tree, so retain the linked
+        // directory entry without recurring through its ancestor again.
+        continue;
+      }
       if (!inspectTree(path, root, package, aliases, inventory, identities,
-                       stop, diagnostics, externallyPinnedRoot, safetyPolicy)) {
+                       activeDirectories, stop, diagnostics,
+                       externallyPinnedRoot, safetyPolicy)) {
         return false;
       }
+      activeDirectories.erase(directoryIdentity);
       continue;
     }
     const std::uint64_t maximumRegularFileBytes = safetyPolicy.limit(
@@ -466,16 +469,10 @@ inventoryTree(const fs::path &root, const SkinPackageId &package,
               std::vector<SkinDiagnostic> &diagnostics,
               bool externallyPinnedRoot,
               const SkinSafetyPolicy &safetyPolicy = SkinSafetyPolicy{}) {
-  if (aliases.inspectNoFollow(root) != SkinRejectedLinkKind::None) {
-    diagnostics.push_back(diagnostic(
-        "skin_snapshot_root_rejected",
-        "skin source root is a link, alias, reparse point, or special node"));
-    return std::nullopt;
-  }
   FileMetadata rootMetadata;
   std::error_code rootError;
   if (!readMetadata(root, rootMetadata, rootError,
-                    externallyPinnedRoot ? &root : nullptr) ||
+                    externallyPinnedRoot ? &root : nullptr, true) ||
       !rootMetadata.directory) {
     diagnostics.push_back(diagnostic("skin_snapshot_root_invalid",
                                      "skin source root is not a directory"));
@@ -486,8 +483,11 @@ inventoryTree(const fs::path &root, const SkinPackageId &package,
   inventory.rootMetadata = rootMetadata;
   inventory.externallyPinnedRoot = externallyPinnedRoot;
   std::map<std::string, bool> identities;
-  if (!inspectTree(root, root, package, aliases, inventory, identities, stop,
-                   diagnostics, externallyPinnedRoot, safetyPolicy)) {
+  std::set<std::pair<std::uint64_t, std::uint64_t>> activeDirectories;
+  activeDirectories.emplace(rootMetadata.device, rootMetadata.inode);
+  if (!inspectTree(root, root, package, aliases, inventory, identities,
+                   activeDirectories, stop, diagnostics, externallyPinnedRoot,
+                   safetyPolicy)) {
     return std::nullopt;
   }
   std::sort(inventory.entries.begin(), inventory.entries.end(),
@@ -589,7 +589,7 @@ openInventoryFileNoFollow(const Inventory &inventory,
   auto walk = openWindowsPathNoFollow(
       inventory.rootPath, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES, true,
       OPEN_EXISTING, error,
-      inventory.externallyPinnedRoot ? &inventory.rootPath : nullptr);
+      inventory.externallyPinnedRoot ? &inventory.rootPath : nullptr, true);
   if (!walk || !metadataMatchesOpenFile(walk->leaf(), inventory.rootMetadata)) {
     return std::nullopt;
   }
@@ -608,7 +608,8 @@ openInventoryFileNoFollow(const Inventory &inventory,
                                     final ? GENERIC_READ | FILE_READ_ATTRIBUTES
                                           : FILE_LIST_DIRECTORY |
                                                 FILE_READ_ATTRIBUTES,
-                                    !final, OPEN_EXISTING, error)) {
+                                    !final, OPEN_EXISTING, error, false,
+                                    true)) {
       return std::nullopt;
     }
   }
@@ -800,7 +801,7 @@ bool fsyncDirectoryTree(const fs::path &root) {
 int openInventoryFileNoFollow(const Inventory &inventory,
                               std::string_view relativePath) {
   int parent =
-      ::open(inventory.rootPath.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+      ::open(inventory.rootPath.c_str(), O_RDONLY | O_DIRECTORY);
   if (parent < 0 || !metadataMatchesOpenFile(parent, inventory.rootMetadata)) {
     if (parent >= 0) {
       ::close(parent);
@@ -817,12 +818,12 @@ int openInventoryFileNoFollow(const Inventory &inventory,
                                                 : separator - componentStart));
     if (separator == std::string_view::npos) {
       const int file = ::openat(parent, component.c_str(),
-                                O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+                                O_RDONLY | O_NONBLOCK);
       ::close(parent);
       return file;
     }
     const int next = ::openat(parent, component.c_str(),
-                              O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
+                              O_RDONLY | O_DIRECTORY);
     ::close(parent);
     if (next < 0) {
       return -1;

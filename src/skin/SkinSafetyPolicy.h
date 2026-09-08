@@ -45,20 +45,43 @@ public:
   constexpr explicit SkinSafetyPolicy(
       SkinSafetyLevel level = SkinSafetyLevel::Standard,
       std::uint64_t maximumDocumentBytes =
-          std::numeric_limits<std::uint64_t>::max()) noexcept
-      : level_(level), maximumDocumentBytes_(maximumDocumentBytes) {}
+          std::numeric_limits<std::uint64_t>::max(),
+      bool preservePinnedLuaSandbox = false) noexcept
+      : level_(level), maximumDocumentBytes_(maximumDocumentBytes),
+        preservePinnedLuaSandbox_(preservePinnedLuaSandbox) {}
 
   [[nodiscard]] constexpr SkinSafetyLevel level() const noexcept {
     return level_;
   }
 
+  [[nodiscard]] constexpr bool preservesPinnedLuaSandbox() const noexcept {
+    return preservePinnedLuaSandbox_;
+  }
+
+  [[nodiscard]] constexpr bool
+  usesPinnedLuaPathSemantics() const noexcept {
+    return level_ == SkinSafetyLevel::BeatorajaCompatibility ||
+           preservePinnedLuaSandbox_;
+  }
+
   [[nodiscard]] constexpr bool enforces(SkinSafetyGuard guard) const noexcept {
+    // Beatoraja's Lua loader always keeps its path resolver and process
+    // globals sandboxed.  Selector compatibility lifts only Aso-added quotas,
+    // never those upstream execution boundaries.
+    if (preservePinnedLuaSandbox_ &&
+        (guard == SkinSafetyGuard::VirtualFileContainment ||
+         guard == SkinSafetyGuard::ProcessGlobalMutation)) {
+      return true;
+    }
     switch (level_) {
     case SkinSafetyLevel::Standard:
       return true;
     case SkinSafetyLevel::BeatorajaCompatibility:
-      return skinSafetyGuardSeverity(guard) ==
-             SkinSafetyGuardSeverity::Catastrophic;
+      // SkinLuaAccessor(false) keeps only the upstream lexical skin-root
+      // boundary and SafeOsLib process restrictions.  Its loader has none of
+      // AsoBMaShow's document, resource, allocation, or decoder quotas.
+      return guard == SkinSafetyGuard::VirtualFileContainment ||
+             guard == SkinSafetyGuard::ProcessGlobalMutation;
     case SkinSafetyLevel::Unrestricted:
       return false;
     }
@@ -83,6 +106,7 @@ private:
   SkinSafetyLevel level_ = SkinSafetyLevel::Standard;
   std::uint64_t maximumDocumentBytes_ =
       std::numeric_limits<std::uint64_t>::max();
+  bool preservePinnedLuaSandbox_ = false;
 };
 
 } // namespace skin

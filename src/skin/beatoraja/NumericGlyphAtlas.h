@@ -78,6 +78,10 @@ struct NumericGlyphAtlasRequest {
   SkinSpriteFrames source;
   NumericGlyphFormatRequest format;
   NumericGlyphAtlasBudget budget;
+  // JSONSkinLoader floors incomplete rows and ignores their trailing source
+  // cells. Gameplay admission may opt into stricter source-neutral limits,
+  // but type-5 Lua compatibility must retain the pinned loader behavior.
+  bool pinnedLoaderCompatibility = false;
 };
 
 struct NumericGlyphAtlas {

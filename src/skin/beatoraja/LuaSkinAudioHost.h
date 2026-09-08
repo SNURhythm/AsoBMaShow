@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <string>
 #include <string_view>
 
 namespace skin {
@@ -50,6 +51,7 @@ struct LuaSkinAudioOperationResult {
 
 struct LuaSkinAudioPolicy {
   std::size_t maximumIdentities = 256;
+  bool allowRenderPhaseLoads = false;
 };
 
 class LuaSkinAudioHost final {
@@ -70,10 +72,16 @@ public:
   stop(std::string_view path) noexcept;
   [[nodiscard]] LuaSkinAudioOperationResult
   dispose(std::string_view path) noexcept;
+  void suspend() noexcept;
+  void resume() noexcept;
   void enterRenderPhase() noexcept { renderPhase_ = true; }
 
 private:
   using LoadedIdentity = std::optional<LuaSkinAudioIdentity>;
+  struct ActivePlayback {
+    float volume = 0.0F;
+    bool loop = false;
+  };
 
   [[nodiscard]] LuaSkinAudioOperationResult
   resolve(std::string_view, std::filesystem::path &) noexcept;
@@ -85,7 +93,9 @@ private:
   std::stop_token stop_;
   LuaSkinAudioPolicy policy_;
   bool renderPhase_ = false;
+  bool suspended_ = false;
   std::map<std::filesystem::path, LoadedIdentity> loaded_;
+  std::map<std::filesystem::path, ActivePlayback> active_;
 };
 
 } // namespace skin

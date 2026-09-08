@@ -320,6 +320,56 @@ void rejectsMalformedOrUnboundedAtlases() {
   }
 }
 
+void pinnedLoaderCompatibilityIgnoresIncompleteTrailingRows() {
+  {
+    auto input = request(NumericGlyphAtlasKind::Number, 13);
+    input.pinnedLoaderCompatibility = true;
+    input.format.perDigitOffsets.resize(
+        NumericGlyphAtlasPolicy::maxNumberDigitOffsets + 1);
+    const auto atlas = mustSucceed(
+        partitionNumericGlyphAtlas(input),
+        "pinned Number fallback accepts an incomplete 11-cell row");
+    expect(atlas.digits.glyphsPerAnimationFrame == 11 &&
+               atlas.digits.positive.frames.size() == 11 &&
+               atlas.digits.positive.frames.back().x == 10,
+           "pinned Number fallback floors its row count and ignores trailing cells");
+    expect(atlas.format.perDigitOffsets.size() ==
+               NumericGlyphAtlasPolicy::maxNumberDigitOffsets + 1,
+           "pinned Number loading adds no host offset-count policy");
+  }
+  {
+    auto input = request(NumericGlyphAtlasKind::Number, 10);
+    input.pinnedLoaderCompatibility = true;
+    input.format.integerDigits =
+        NumericGlyphAtlasPolicy::maxNumberDigits + 1;
+    const auto atlas = mustSucceed(
+        partitionNumericGlyphAtlas(input),
+        "pinned Number loading retains an authored digit count above the host policy");
+    expect(atlas.format.integerDigits == input.format.integerDigits,
+           "pinned Number loading does not clamp positive digit counts");
+
+    input.format.integerDigits = -1;
+    const auto negative = partitionNumericGlyphAtlas(input);
+    expect(!negative.atlas &&
+               negative.error == NumericGlyphAtlasError::InvalidFormat,
+           "pinned Number loading preserves SkinNumber's negative-array failure");
+  }
+  {
+    auto input = request(NumericGlyphAtlasKind::Float, 13);
+    input.pinnedLoaderCompatibility = true;
+    input.format.gain = std::numeric_limits<double>::quiet_NaN();
+    const auto atlas = mustSucceed(
+        partitionNumericGlyphAtlas(input),
+        "pinned Float fallback accepts an incomplete 12-cell row");
+    expect(atlas.digits.glyphsPerAnimationFrame == 12 &&
+               atlas.digits.positive.frames.size() == 12 &&
+               atlas.digits.positive.frames.back().x == 11,
+           "pinned Float fallback floors its row count and ignores trailing cells");
+    expect(std::isnan(atlas.format.gain),
+           "pinned Float loading leaves non-finite presentation values to runtime");
+  }
+}
+
 void rejectsInvalidKindsAndNonFiniteFormats() {
   {
     auto input = request(static_cast<NumericGlyphAtlasKind>(0xff), 12);
@@ -499,6 +549,7 @@ int main() {
   floatLayoutsMatchPinnedGlyphConventions();
   floatFormatNormalizesDigitsAndPadding();
   rejectsMalformedOrUnboundedAtlases();
+  pinnedLoaderCompatibilityIgnoresIncompleteTrailingRows();
   rejectsInvalidKindsAndNonFiniteFormats();
   validatesKindSpecificNormalizedGlyphSets();
   validatesNormalizedObjectFormats();

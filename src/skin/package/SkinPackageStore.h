@@ -22,6 +22,7 @@ namespace skin {
 class SkinPackageOperationService;
 
 enum class SkinPackageStoreIoOperation : std::uint8_t {
+  RecoveryPhysicalVerification,
   RemovalVisibleRetained,
 };
 

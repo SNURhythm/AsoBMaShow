@@ -1,0 +1,134 @@
+#include "music_select/MusicSelectReplaySlots.h"
+
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string_view>
+
+namespace {
+
+int failures = 0;
+
+void require(bool condition, std::string_view message) {
+  if (!condition) {
+    std::cerr << "FAIL: " << message << '\n';
+    ++failures;
+  }
+}
+
+void touch(const std::filesystem::path &path) {
+  std::filesystem::create_directories(path.parent_path());
+  std::ofstream(path) << "replay";
+}
+
+void testUsesExactSourceChartPathsAndFilesExistsSemantics() {
+  const auto root = std::filesystem::temp_directory_path() /
+                    "asobmashow-music-select-replay-slots";
+  std::filesystem::remove_all(root);
+
+  ChartMetaRecord undefined;
+  undefined.meta.SHA256 = std::string(64, 'a');
+  undefined.meta.LnMode = 0;
+  undefined.meta.TotalLongNotes = 1;
+  const auto undefinedPaths = musicSelectChartReplaySlotPaths(undefined, 2);
+  require(undefinedPaths.has_value() &&
+              (*undefinedPaths)[0].relativePath ==
+                  std::filesystem::path("replay") /
+                      ("C" + std::string(64, 'a') + ".brd") &&
+              (*undefinedPaths)[2].relativePath ==
+                  std::filesystem::path("replay") /
+                      ("C" + std::string(64, 'a') + "_2.brd"),
+          "undefined LN charts use the selected source LN prefix and slot suffix");
+  touch(root / (*undefinedPaths)[0].relativePath);
+  touch(root / (*undefinedPaths)[2].relativePath);
+  require(musicSelectExistingChartReplaySlots(undefined, 2, root) ==
+              std::array<bool, 4>{true, false, true, false},
+          "slot availability is exactly filesystem existence for slots zero through three");
+
+  ChartMetaRecord authored = undefined;
+  authored.meta.LnMode = 2;
+  const auto authoredPaths = musicSelectChartReplaySlotPaths(authored, 2);
+  require(authoredPaths.has_value() &&
+              (*authoredPaths)[0].relativePath ==
+                  std::filesystem::path("replay") /
+                      (std::string(64, 'a') + ".brd"),
+          "authored LN charts do not use a selected-mode prefix");
+
+  std::filesystem::remove_all(root);
+}
+
+void testFindsOnlyTheExactModernChartReference() {
+  ChartMetaRecord record;
+  record.meta.SHA256 = std::string(64, 'b');
+  const auto paths = musicSelectChartReplaySlotPaths(record, 0);
+  require(paths.has_value(), "canonical chart paths are available");
+  if (!paths) return;
+
+  ModernReplayFileInventoryEntry course{
+      .owner = ModernReplayOwnerKind::CourseResult,
+      .reference = {.resultId = 11, .identity = (*paths)[1]}};
+  ModernReplayFileInventoryEntry chart{
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .reference = {.resultId = 22, .identity = (*paths)[1]}};
+  const std::array entries{course, chart};
+  require(musicSelectChartReplayResultId(entries, (*paths)[1]) == 22,
+          "slot lookup matches owner kind and the complete canonical path identity");
+  require(!musicSelectChartReplayResultId(entries, (*paths)[3]).has_value(),
+          "slot lookup never substitutes another replay history entry");
+}
+
+void testUsesExactSourceCoursePathsAndCourseOwnership() {
+  MusicSelectBar course;
+  course.courseConstraintJson = R"(["grade_mirror","no_speed"])";
+  ChartMetaRecord first;
+  first.meta.SHA256 = std::string(64, 'a');
+  first.meta.LnMode = 0;
+  first.meta.TotalLongNotes = 1;
+  ChartMetaRecord second;
+  second.meta.SHA256 = std::string(64, 'b');
+  second.meta.LnMode = 2;
+  course.courseCharts = {first, second};
+
+  const auto paths = musicSelectCourseReplaySlotPaths(course, 2);
+  require(paths.has_value() &&
+              (*paths)[0].relativePath ==
+                  std::filesystem::path("replay") /
+                      "Caaaaaaaaaabbbbbbbbbb_04.brd" &&
+              (*paths)[3].relativePath ==
+                  std::filesystem::path("replay") /
+                      "Caaaaaaaaaabbbbbbbbbb_04_3.brd",
+          "course slots use source hashes, undefined-LN mode, constraints, and suffixes");
+  if (!paths) return;
+
+  const auto root = std::filesystem::temp_directory_path() /
+                    "asobmashow-music-select-course-replay-slots";
+  std::filesystem::remove_all(root);
+  touch(root / (*paths)[1].relativePath);
+  require(musicSelectExistingCourseReplaySlots(course, 2, root) ==
+              std::array<bool, 4>{false, true, false, false},
+          "course slot availability is exactly filesystem existence");
+
+  ModernReplayFileInventoryEntry chart{
+      .owner = ModernReplayOwnerKind::ChartResult,
+      .reference = {.resultId = 31, .identity = (*paths)[1]}};
+  ModernReplayFileInventoryEntry savedCourse{
+      .owner = ModernReplayOwnerKind::CourseResult,
+      .reference = {.resultId = 47, .identity = (*paths)[1]}};
+  const std::array entries{chart, savedCourse};
+  require(musicSelectCourseReplayResultId(entries, (*paths)[1]) == 47,
+          "course slot lookup matches course ownership and exact path identity");
+  require(!musicSelectCourseReplayResultId(entries, (*paths)[2]).has_value(),
+          "course slot lookup never substitutes another history entry");
+  std::filesystem::remove_all(root);
+}
+
+} // namespace
+
+int main() {
+  testUsesExactSourceChartPathsAndFilesExistsSemantics();
+  testFindsOnlyTheExactModernChartReference();
+  testUsesExactSourceCoursePathsAndCourseOwnership();
+  if (failures != 0) return 1;
+  std::cout << "music-select replay slot tests passed\n";
+  return 0;
+}

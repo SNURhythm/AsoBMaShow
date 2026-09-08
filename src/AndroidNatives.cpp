@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 
 #include "audio/NativeMusicPlayer.h"
+#include "library/ChartLibraryTaskService.h"
 
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_log.h>
@@ -42,6 +43,8 @@ constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
 std::mutex gAndroidDocumentCommitMutex;
 std::unordered_map<std::string, std::function<bool()>>
     gAndroidDocumentCommitHandlers;
+std::mutex gAndroidImportTasksMutex;
+chart_library_tasks::ChartLibraryTaskService *gAndroidImportTasks = nullptr;
 
 std::string pathToUtf8(const std::filesystem::path &path) {
   const auto value = path.u8string();
@@ -51,12 +54,36 @@ std::string pathToUtf8(const std::filesystem::path &path) {
 struct AndroidDownloadProgressBridge {
   std::atomic_bool *cancelled = nullptr;
   AndroidDownloadProgressCallback *progressCallback = nullptr;
+  AndroidDownloadCheckpoint *checkpoint = nullptr;
+  AndroidDownloadPauseProbe *pauseRequested = nullptr;
 };
 
 std::mutex gAndroidDownloadProgressMutex;
 std::unordered_map<jlong, AndroidDownloadProgressBridge *>
     gAndroidDownloadProgressBridges;
 jlong gNextAndroidDownloadProgressToken = 1;
+
+std::mutex gAndroidFolderPickerMutex;
+std::unordered_map<std::string, std::stop_token> gAndroidFolderPickerStops;
+std::uint64_t gNextAndroidFolderPickerToken = 1;
+
+struct AndroidFolderPickerCancellation {
+  explicit AndroidFolderPickerCancellation(std::stop_token stopToken) {
+    std::lock_guard lock(gAndroidFolderPickerMutex);
+    token = std::to_string(gNextAndroidFolderPickerToken++);
+    gAndroidFolderPickerStops.emplace(token, stopToken);
+  }
+
+  ~AndroidFolderPickerCancellation() {
+    std::lock_guard lock(gAndroidFolderPickerMutex);
+    gAndroidFolderPickerStops.erase(token);
+  }
+
+  AndroidFolderPickerCancellation(const AndroidFolderPickerCancellation &) = delete;
+  AndroidFolderPickerCancellation &operator=(const AndroidFolderPickerCancellation &) = delete;
+
+  std::string token;
+};
 
 struct UniqueFd {
   explicit UniqueFd(int fd) : value(fd) {}
@@ -666,6 +693,53 @@ long long parseLongLongOrZero(const std::string &value) {
 
 } // namespace
 
+void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  gAndroidImportTasks = &tasks;
+}
+
+void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == &tasks) {
+    tasks.cancelAndroidImports();
+    gAndroidImportTasks = nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeBeginChartImport(
+    JNIEnv *env, jclass, jstring token, jboolean folder) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) {
+    return 0;
+  }
+  return gAndroidImportTasks->beginAndroidImport(jstringToUtf8(env, token),
+                                                folder == JNI_TRUE) ? 1 : -1;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportCopyState(
+    JNIEnv *env, jclass, jstring token) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  return gAndroidImportTasks == nullptr
+             ? -1
+             : gAndroidImportTasks->androidImportCopyState(jstringToUtf8(env, token));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeFinishChartImport(
+    JNIEnv *env, jclass, jstring token, jboolean folder, jstring path,
+    jstring error) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  return gAndroidImportTasks != nullptr &&
+                 gAndroidImportTasks->finishAndroidImport(
+                     jstringToUtf8(env, token), folder == JNI_TRUE,
+                     std::filesystem::path(jstringToUtf8(env, path)),
+                     jstringToUtf8(env, error))
+             ? JNI_TRUE
+             : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileProgress(
     JNIEnv *, jclass, jlong progressToken, jlong downloadedBytes,
@@ -696,6 +770,43 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileCancelle
     return JNI_TRUE;
   }
   return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartFolderPickerCancelled(
+    JNIEnv *env, jclass, jstring cancellationToken) {
+  const std::string token = jstringToUtf8(env, cancellationToken);
+  std::lock_guard lock(gAndroidFolderPickerMutex);
+  const auto found = gAndroidFolderPickerStops.find(token);
+  return found == gAndroidFolderPickerStops.end() || found->second.stop_requested()
+             ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextCheckpoint(
+    JNIEnv *, jclass, jlong checkpointToken) {
+  AndroidDownloadCheckpoint *checkpoint = nullptr;
+  if (AndroidDownloadProgressBridge *bridge =
+          androidDownloadProgressBridge(checkpointToken);
+      bridge != nullptr) {
+    checkpoint = bridge->checkpoint;
+  }
+  return checkpoint == nullptr || !*checkpoint || (*checkpoint)() ? JNI_TRUE
+                                                                  : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextPauseRequested(
+    JNIEnv *, jclass, jlong checkpointToken) {
+  AndroidDownloadPauseProbe *pauseRequested = nullptr;
+  if (AndroidDownloadProgressBridge *bridge =
+          androidDownloadProgressBridge(checkpointToken);
+      bridge != nullptr) {
+    pauseRequested = bridge->pauseRequested;
+  }
+  return pauseRequested != nullptr && *pauseRequested && (*pauseRequested)()
+             ? JNI_TRUE
+             : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -820,9 +931,12 @@ bool AndroidBuildHasManageExternalStorage() {
 
 bool PickAndroidChartFolder(std::filesystem::path &rootPath,
                             std::string &treeUri,
-                            std::string &errorMessage) {
+                            std::string &errorMessage,
+                            std::stop_token stopToken) {
   rootPath.clear();
   treeUri.clear();
+  if (stopToken.stop_requested()) return false;
+  AndroidFolderPickerCancellation cancellation(stopToken);
   RequestAndroidExternalActivityRenderPause();
   struct ExternalActivityPauseReset {
     ~ExternalActivityPauseReset() { FinishAndroidExternalActivityRenderPause(); }
@@ -831,8 +945,12 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
   {
     std::string permissionError;
     const std::string permissionResult = callActivityStringMethod(
-        "ensureManageExternalStorageAccess", "()Ljava/lang/String;", nullptr,
+        "ensureManageExternalStorageAccess", "(Ljava/lang/String;)Ljava/lang/String;",
+        cancellation.token.c_str(),
         permissionError);
+    if (stopToken.stop_requested() || permissionResult == "__CANCELLED__") {
+      return false;
+    }
     if (!permissionError.empty()) {
       SDL_Log("Android all-files permission request failed: %s",
               permissionError.c_str());
@@ -846,8 +964,9 @@ bool PickAndroidChartFolder(std::filesystem::path &rootPath,
 
   std::string callError;
   const std::string result =
-      callActivityStringMethod("pickChartFolder", "()Ljava/lang/String;",
-                               nullptr, callError);
+      callActivityStringMethod("pickChartFolder", "(Ljava/lang/String;)Ljava/lang/String;",
+                               cancellation.token.c_str(), callError);
+  if (stopToken.stop_requested() || result == "__CANCELLED__") return false;
   if (!callError.empty()) {
     errorMessage = callError;
     return false;
@@ -932,27 +1051,6 @@ bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
   }
   folderPath = std::filesystem::path(value).lexically_normal();
   return true;
-}
-
-std::optional<std::filesystem::path>
-ConsumePendingAndroidArchiveImport(std::string &errorMessage) {
-  errorMessage.clear();
-  std::string callError;
-  const std::string result = callActivityStringMethod(
-      "consumePendingArchiveImport", "()Ljava/lang/String;", nullptr,
-      callError);
-  if (!callError.empty()) {
-    errorMessage = callError;
-    return std::nullopt;
-  }
-  if (result.empty()) {
-    return std::nullopt;
-  }
-  if (result.rfind(kErrorPrefix, 0) == 0) {
-    errorMessage = result.substr(std::char_traits<char>::length(kErrorPrefix));
-    return std::nullopt;
-  }
-  return std::filesystem::path(result).lexically_normal();
 }
 
 bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
@@ -1313,13 +1411,28 @@ bool OpenURLInAndroidBrowser(const std::string &url,
 }
 
 bool DownloadURLTextAndroid(const std::string &url, std::string &body,
-                            std::string &errorMessage) {
+                            std::string &errorMessage,
+                            AndroidDownloadCheckpoint checkpoint,
+                            AndroidDownloadPauseProbe pauseRequested) {
   body.clear();
+  AndroidDownloadProgressBridge bridge;
+  jlong checkpointToken = 0;
+  if (checkpoint || pauseRequested) {
+    bridge.checkpoint = &checkpoint;
+    bridge.pauseRequested = &pauseRequested;
+    checkpointToken = registerAndroidDownloadProgressBridge(bridge);
+  }
+  struct CheckpointBridgeCleanup {
+    jlong token;
+    ~CheckpointBridgeCleanup() {
+      if (token != 0) unregisterAndroidDownloadProgressBridge(token);
+    }
+  } cleanup{checkpointToken};
+
   std::string callError;
-  const std::string result =
-      callActivityStringMethod("downloadUrlText", "(Ljava/lang/String;)"
-                                                  "Ljava/lang/String;",
-                               url.c_str(), callError);
+  const std::string result = callActivityStringMethodLong(
+      "downloadUrlText", "(Ljava/lang/String;J)Ljava/lang/String;",
+      url.c_str(), checkpointToken, callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

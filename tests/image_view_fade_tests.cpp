@@ -107,6 +107,57 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image fade state");
 
   {
+    const auto fixtureRoot = std::filesystem::temp_directory_path() /
+        ("asobmashow-shared-artwork-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(fixtureRoot);
+    const auto source = fixtureRoot / "artwork.pgm";
+    {
+      std::ofstream output(source, std::ios::binary);
+      output << "P5\n4096 4096\n255\n";
+      const std::string row(4096, char(0x66));
+      for (int index = 0; index < 4096; ++index) output.write(row.data(), row.size());
+    }
+    const path_t imagePath = fspath_to_path_t(source);
+    ImageView::dropAllCache();
+    struct LayoutImageView : ImageView {
+      using ImageView::ImageView;
+      using ImageView::onLayout;
+    };
+    LayoutImageView artwork(0, 0, 1, 1);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    bool ready = false;
+    while (!ready && std::chrono::steady_clock::now() < deadline) {
+      ready = artwork.setImageAsyncShared(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ready, "large shared artwork is downsampled, not rejected");
+    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,
+            "shared artwork request bounds the actual decoded dimensions");
+    const auto shared = ImageView::findChartImage(imagePath);
+    require(shared && shared->width == 2048 && shared->height == 2048 &&
+                shared->byteSize() == 16U * 1024U * 1024U,
+            "shared chart cache retains 16 MiB rather than 64 MiB");
+    ImageView thumbnail(0, 0, 1, 1);
+    ready = false;
+    const auto thumbnailDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!ready && std::chrono::steady_clock::now() < thumbnailDeadline) {
+      ready = thumbnail.setImageAsync(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ready && thumbnail.imageWidth() == 1 && thumbnail.imageHeight() == 1,
+            "shared artwork does not collide with a one-pixel thumbnail cache key");
+    artwork.onLayout();
+    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,
+            "layout does not replace shared artwork with a display-sized thumbnail");
+    ImageView reused(0, 0, 1, 1);
+    require(reused.setImageAsyncShared(imagePath, true) && reused.imageWidth() == 2048,
+            "shared artwork reuses its bounded cache entry");
+    ImageView::dropAllCache();
+    std::filesystem::remove_all(fixtureRoot);
+  }
+
+  {
     ImageView image(0, 0, 100, 50);
     require(!image.fade().has_value(), "image starts without a fade");
     require(!image.scrimColor().has_value(),

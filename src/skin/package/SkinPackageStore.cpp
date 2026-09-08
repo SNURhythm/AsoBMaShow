@@ -50,6 +50,14 @@ namespace fs = std::filesystem;
 using Json = nlohmann::json;
 using OrderedJson = nlohmann::ordered_json;
 
+// SkinConfiguration walks the authored tree and loads its headers without a
+// package-size, file-count, or Lua/resource preflight policy.  Discovery and
+// import must therefore use the same source-compatible policy; a type cannot
+// be known until after that work has completed.
+constexpr SkinSafetyPolicy beatorajaSourceCompatibilityPolicy() noexcept {
+  return SkinSafetyPolicy(SkinSafetyLevel::Unrestricted);
+}
+
 struct PublicationJournal {
   std::string operationId;
   std::string phase;
@@ -2711,6 +2719,11 @@ SkinRecoveryResult SkinPackageStore::recoverBeforeServiceStart() {
     }
     RetainedTreeCapability &oldVisibleCapability =
         sameVisibleEntry ? *visibleCapability : *distinctOldVisibleCapability;
+    if (ioObserver_) {
+      ioObserver_->reached(
+          SkinPackageStoreIoOperation::RecoveryPhysicalVerification,
+          oldVisible);
+    }
     const bool oldVisibleIsOld =
         journal->oldPresent && oldVisibleCapability.existed() &&
         treeDigestMatches(oldVisible, journal->package, journal->oldTreeDigest,
@@ -3042,16 +3055,18 @@ bool SkinPackageStore::operationServiceReady() const noexcept {
 PreparePackageResult SkinPackageStore::prepareArchive(
     const std::filesystem::path &zip, const SkinPackageId &package,
     std::stop_token stop, SkinProgressCallback progress,
-    SkinSafetyPolicy safetyPolicy) {
-  return SkinArchiveImporter(roots_, aliases_, {}, safetyPolicy)
+    SkinSafetyPolicy) {
+  return SkinArchiveImporter(roots_, aliases_, {},
+                             beatorajaSourceCompatibilityPolicy())
       .prepareArchive(zip, package, stop, std::move(progress));
 }
 
 PreparePackageResult SkinPackageStore::prepareFolder(
     const std::filesystem::path &folder, const SkinPackageId &package,
     std::stop_token stop, SkinProgressCallback progress,
-    SkinSafetyPolicy safetyPolicy) {
-  return SkinArchiveImporter(roots_, aliases_, {}, safetyPolicy)
+    SkinSafetyPolicy) {
+  return SkinArchiveImporter(roots_, aliases_, {},
+                             beatorajaSourceCompatibilityPolicy())
       .prepareFolder(folder, package, stop, std::move(progress));
 }
 
@@ -3084,8 +3099,9 @@ PublishPackageResult SkinPackageStore::publish(
         return result;
       }
     }
-    auto validation =
-        validator.validate(prepared.readView(), entry, nullptr, stop);
+    auto validation = validator.validate(
+        prepared.readView(), entry, nullptr, stop,
+        beatorajaSourceCompatibilityPolicy());
     (void)failClosedMismatchedConfigurationDigest(entry, validation);
     result.diagnostics.insert(
         result.diagnostics.end(),
@@ -3125,8 +3141,9 @@ PublishPackageResult SkinPackageStore::publish(
       const EntryProfileSettings *desired =
           settings == profile.settings.entries.end() ? nullptr
                                                      : &settings->second;
-      auto validation =
-          validator.validate(prepared.readView(), selected, desired, stop);
+      auto validation = validator.validate(
+          prepared.readView(), selected, desired, stop,
+          beatorajaSourceCompatibilityPolicy());
       (void)failClosedMismatchedConfigurationDigest(selected, validation);
       result.diagnostics.insert(
           result.diagnostics.end(),
@@ -3246,7 +3263,8 @@ PublishPackageResult SkinPackageStore::publish(
   std::optional<PreparedSkinRevision> oldRevisionPrepared;
   if (destinationExists) {
     oldTreeManifest = treeMetadataManifest(oldVisible, aliases_, true);
-    SkinTreeSnapshotter snapshotter(roots_, aliases_);
+    SkinTreeSnapshotter snapshotter(roots_, aliases_, {},
+                                    beatorajaSourceCompatibilityPolicy());
     auto oldSnapshot = snapshotter.snapshot(
         oldVisible, prepared.packageId(), stop, progress,
         SkinSnapshotSourceRootPin::RetainedByCaller);
@@ -3661,12 +3679,13 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
     }
     const auto packageResult = normalizePackageId(directoryName);
     std::error_code typeError;
-    if (!iterator->is_directory(typeError) || typeError ||
-        aliases_.inspectNoFollow(iterator->path()) !=
-            SkinRejectedLinkKind::None) {
+    // Files.isDirectory and Files.list in SkinConfiguration scan an authored
+    // skin root through a directory symlink.  The snapshotter owns cycle
+    // detection and materializes the target into the private revision.
+    if (!iterator->is_directory(typeError) || typeError) {
       result.diagnostics.push_back(storeDiagnostic(
           "skin_package_loose_root_entry",
-          "the Skins root contains a loose, linked, or unsupported entry"));
+          "the Skins root contains a loose or unsupported entry"));
       continue;
     }
     if (!packageResult.package) {
@@ -3728,8 +3747,9 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
       continue;
     }
     for (const SkinEntryId &entry : *entries) {
-      auto validation = validator.validate(snapshot.prepared->readView(), entry,
-                                           nullptr, stop);
+      auto validation = validator.validate(
+          snapshot.prepared->readView(), entry, nullptr, stop,
+          beatorajaSourceCompatibilityPolicy());
       (void)failClosedMismatchedConfigurationDigest(entry, validation);
       if (validation.cancelled || stop.stop_requested()) {
         result.cancelled = true;
@@ -3794,7 +3814,7 @@ ScanPackagesResult SkinPackageStore::rescanVisibleSources(
             snapshot.prepared->readView(), selected,
             desired == profile.settings.entries.end() ? nullptr
                                                       : &desired->second,
-            stop);
+            stop, beatorajaSourceCompatibilityPolicy());
         (void)failClosedMismatchedConfigurationDigest(selected, validation);
         if (validation.cancelled || stop.stop_requested()) {
           result.cancelled = true;
@@ -4043,11 +4063,15 @@ PrepareActivationResult SkinPackageStore::prepareActivation(
   }
   candidateProfileSettings.sanitize();
   const auto desired = candidateProfileSettings.entries.find(entry);
+  const SkinSafetyPolicy validationPolicy =
+      catalogEntry->metadata && catalogEntry->metadata->skinType == 5
+          ? beatorajaSourceCompatibilityPolicy()
+          : SkinSafetyPolicy(candidateProfileSettings.safetyLevel);
   auto validation = validator.validate(
       lease->readView(), entry,
       desired == candidateProfileSettings.entries.end() ? nullptr
                                                         : &desired->second,
-      stop, SkinSafetyPolicy(candidateProfileSettings.safetyLevel));
+      stop, validationPolicy);
   (void)failClosedMismatchedConfigurationDigest(entry, validation);
   result.diagnostics.insert(
       result.diagnostics.end(),

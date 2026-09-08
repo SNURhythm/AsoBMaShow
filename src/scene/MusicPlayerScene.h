@@ -4,6 +4,7 @@
 #include "../bms_parser.hpp"
 #include "../view/RecyclerView.h"
 #include "Scene.h"
+#include "SceneReturnTarget.h"
 
 #include <atomic>
 #include <cstdint>
@@ -27,7 +28,11 @@ class View;
 
 class MusicPlayerScene : public Scene {
 public:
-  explicit MusicPlayerScene(ApplicationContext &context) : Scene(context) {}
+  explicit MusicPlayerScene(
+      ApplicationContext &context,
+      SceneReturnTarget returnTarget =
+          SceneReturnTarget::Registered("MainMenu"))
+      : Scene(context), returnTarget_(std::move(returnTarget)) {}
 
   void init() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
@@ -36,6 +41,7 @@ public:
   void cleanupScene() override;
 
 private:
+  SceneReturnTarget returnTarget_;
   using MusicTrack = music_playlist::MusicTrack;
   using PlaylistInfo = MusicPlaylistInfo;
   enum class MusicPlayerTab { Library, Favorites, Playlists, Player };

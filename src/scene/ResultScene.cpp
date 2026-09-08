@@ -3183,7 +3183,8 @@ void ResultScene::continueCourse() {
   } else {
     applyCourseConstraintsToChart(*nextChart, session->constraints);
     playInfo = play_options::applySelectedPlayOptions(
-        *nextChart, session->requestedPlayOption);
+        *nextChart, session->requestedPlayOption,
+        session->requestedPlayOption2);
     applyEffectiveLongNoteModeToChart(*nextChart, session->longNoteMode);
     session->playOption = playInfo.option;
     session->playOptionSeed = playInfo.seed;
@@ -3205,7 +3206,7 @@ void ResultScene::continueCourse() {
   if (retrySetup == nullptr) {
     nextOptions.startPosition = 0;
     nextOptions.autoKeySound = session->autoKeySound;
-    nextOptions.autoPlay = false;
+    nextOptions.autoPlay = session->autoPlay;
     nextOptions.gaugeType = session->gaugeType;
     nextOptions.gaugeProfile = session->gaugeProfile;
     nextOptions.gaugeAutoShift = session->gaugeAutoShift;
@@ -3215,6 +3216,7 @@ void ResultScene::continueCourse() {
     nextOptions.playOptionSeed = playInfo.seed;
     nextOptions.playOption2 = playInfo.option2;
     nextOptions.playOption2Seed = playInfo.seed2;
+    nextOptions.doublePlayFlip = session->doublePlayFlip;
     nextOptions.longNoteMode = session->longNoteMode;
     nextOptions.assistOption = session->assistOption;
     nextOptions.playback = course_rules::kRequiredPlaybackRate;
@@ -3224,6 +3226,7 @@ void ResultScene::continueCourse() {
     nextOptions.requiredRulesetDescriptor = session->rulesetDescriptor;
     nextOptions.ownsChart = true;
   }
+  nextOptions.returnScene = local->practiceOptions.returnScene;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -3273,7 +3276,10 @@ void ResultScene::showSavedCourseStage() {
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
           context, result.meta, result.state, provenance, stageReplay,
-          ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{}, false,
+          ResultPersistenceOptions{}, nullptr,
+          ResultPracticeOptions{
+              .returnScene = local->practiceOptions.returnScene},
+          false,
           ResultCourseOptions{.mode = ResultCourseMode::Stage,
                               .session = session,
                               .savedResultBrowsing = true},
@@ -3299,7 +3305,9 @@ void ResultScene::showCourseResult() {
   context.sceneManager->changeScene(
       std::make_unique<ResultScene>(
           context, courseMeta, courseState, session->aggregateProvenance(),
-          nullptr, ResultPersistenceOptions{}, nullptr, ResultPracticeOptions{},
+          nullptr, ResultPersistenceOptions{}, nullptr,
+          ResultPracticeOptions{
+              .returnScene = local->practiceOptions.returnScene},
           false,
           ResultCourseOptions{.mode = ResultCourseMode::CourseResult,
                               .session = session,
@@ -3421,6 +3429,7 @@ void ResultScene::startRetry(bool samePattern) {
         applyResultTableContext(options, local->tableContext);
         options.playback = retryPlayback;
         options.ownsChart = true;
+        options.returnScene = local->practiceOptions.returnScene;
         options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
         if (const auto completedRuleset =
                 gameplayRulesetFromId(local->attemptProvenance.ruleset.id)) {
@@ -3441,7 +3450,6 @@ void ResultScene::startRetry(bool samePattern) {
                 practiceConfiguration->startingGaugePercent;
           }
           options.longNoteMode = local->practiceOptions.longNoteMode;
-          options.returnScene = local->practiceOptions.returnScene;
           if (!options.autoPlay) {
             options.practiceGhostCallback =
                 local->practiceOptions.practiceGhostCallback;
@@ -3536,8 +3544,7 @@ void ResultScene::exitResult() {
     return;
   }
   const auto *local = localSource();
-  if (local != nullptr && local->practiceOptions.enabled &&
-      local->practiceOptions.returnScene != nullptr) {
+  if (local != nullptr && local->practiceOptions.returnScene != nullptr) {
     context.sceneManager->changeScene(local->practiceOptions.returnScene,
                                       false);
     return;
@@ -3591,6 +3598,7 @@ void ResultScene::startReplay() {
         };
         applyResultTableContext(replayOptions, local->tableContext);
         applyReplayProvenanceToStartOptions(replayOptions, *replayData);
+        replayOptions.returnScene = local->practiceOptions.returnScene;
         context.sceneManager->changeScene(
             std::make_unique<GamePlayScene>(context, std::move(replayChart),
                                             std::move(replayOptions)),
@@ -3819,6 +3827,9 @@ void ResultScene::startCourseReplayStage(
 
   StartOptions options =
       makeCourseReplayStageStartOptions(session, stageReplay);
+  if (const auto *local = localSource(); local != nullptr) {
+    options.returnScene = local->practiceOptions.returnScene;
+  }
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(replayChart),
@@ -3882,6 +3893,9 @@ void ResultScene::startModernCourseRetrySameStage(
   }
   StartOptions options =
       makeCourseRetrySameStageStartOptions(session, *setup);
+  if (const auto *local = localSource(); local != nullptr) {
+    options.returnScene = local->practiceOptions.returnScene;
+  }
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(chart),
                                       std::move(options)),

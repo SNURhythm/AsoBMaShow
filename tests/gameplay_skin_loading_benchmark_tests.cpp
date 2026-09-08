@@ -449,6 +449,11 @@ public:
         {"diagnosticCodes", nlohmann::json::array()},
         {"loading",
          {{"complete", isCompleteSkinLoadingTelemetry(created.loadingTelemetry)},
+          {"documentMicros", created.loadingTelemetry.documentMicros},
+          {"resourcePreparationMicros",
+           created.loadingTelemetry.resourcePreparationMicros},
+          {"movieMicros", created.loadingTelemetry.movieMicros},
+          {"uploadMicros", created.loadingTelemetry.uploadMicros},
           {"totalMicros", created.loadingTelemetry.totalMicros},
           {"measuredMicros",
            measuredLoadMicros.count() <= 0 ? 0 : measuredLoadMicros.count()}}}};

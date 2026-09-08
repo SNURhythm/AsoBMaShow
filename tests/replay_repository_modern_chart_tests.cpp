@@ -153,6 +153,27 @@ attachment(const ModernReplayPathReservation &reservation, char hash = 'c') {
                            replay::BeatorajaReplayCodec::kCodecVersion}};
 }
 
+void testCurrentSchemaAddsSelectorMetricsTable() {
+  TemporaryDirectory temporary;
+  const auto databasePath = temporary.path / "replay.db";
+  {
+    ReplayRepository repository(databasePath);
+    assert(repository.EnsureSchema());
+  }
+  {
+    auto database = openDatabase(databasePath);
+    exec(database.get(), "DROP TABLE modern_chart_score_metrics");
+    assert(queryInt(database.get(), "PRAGMA user_version") ==
+           ReplayRepository::kCurrentSchemaVersion);
+  }
+  {
+    ReplayRepository repository(databasePath);
+    assert(repository.EnsureSchema());
+  }
+  auto database = openDatabase(databasePath);
+  assert(tableExists(database.get(), "modern_chart_score_metrics"));
+}
+
 void testSchemaReservationAtomicStageAndExactRetry() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replay.db";
@@ -167,7 +188,7 @@ void testSchemaReservationAtomicStageAndExactRetry() {
        {"modern_chart_results", "modern_replay_files",
         "modern_replay_file_reservations", "modern_replay_stem_sequences",
         "ir_submission_snapshots", "modern_pending_chart_score_writes",
-        "ir_submission_receipts"}) {
+        "modern_chart_score_metrics", "ir_submission_receipts"}) {
     assert(tableExists(database.get(), table));
   }
   assert(columnExists(database.get(), "ir_submission_receipts",
@@ -557,7 +578,7 @@ void testReservationReleaseAndModernPendingLifecycle() {
          advanced.reservation->identity.historyIndex == 1);
 
   const auto staged = repository.StageModernChartResult(
-      completed, std::nullopt, attachment(*advanced.reservation), {});
+      completed, std::nullopt, attachment(*advanced.reservation), {}, 12'345);
   assert(staged.status == ModernChartStageStatus::Staged && staged.receipt);
   const auto pending =
       repository.LoadPendingModernChartScore(completed.attemptId);
@@ -565,7 +586,8 @@ void testReservationReleaseAndModernPendingLifecycle() {
          pending.value && pending.value->replayId == 0 &&
          pending.value->modernResultId == staged.receipt->resultId &&
          pending.value->hasExactlyOneOwner() &&
-         pending.value->score == completed.score);
+         pending.value->score == completed.score &&
+         pending.value->averageJudgeMicros == 12'345);
   const auto batch = repository.ListPendingModernChartScores();
   assert(batch.storageAvailable && batch.entries.size() == 1 &&
          batch.entries.front().status ==
@@ -574,7 +596,18 @@ void testReservationReleaseAndModernPendingLifecycle() {
          batch.entries.front().value->attemptId == pending.value->attemptId &&
          batch.entries.front().value->modernResultId ==
              pending.value->modernResultId &&
-         batch.entries.front().value->score == pending.value->score);
+         batch.entries.front().value->score == pending.value->score &&
+         batch.entries.front().value->averageJudgeMicros == 12'345);
+  assert(repository
+             .StageModernChartResult(completed, std::nullopt,
+                                     attachment(*advanced.reservation), {},
+                                     12'345)
+             .status == ModernChartStageStatus::AlreadyStaged);
+  assert(repository
+             .StageModernChartResult(completed, std::nullopt,
+                                     attachment(*advanced.reservation), {},
+                                     12'346)
+             .status == ModernChartStageStatus::IntegrityConflict);
   assert(repository
              .RecordPendingModernChartScoreRecoveryAttempt(
                  completed.attemptId,
@@ -863,6 +896,7 @@ void testExactRetryAttachesOnlyMissingReplayAtomically() {
 } // namespace
 
 int main() {
+  testCurrentSchemaAddsSelectorMetricsTable();
   testSchemaReservationAtomicStageAndExactRetry();
   testRollbackAndReplayOptionality();
   testIrSourceHistoryOverGlobalBoundReturnsKeysetPages();

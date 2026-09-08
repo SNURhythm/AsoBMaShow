@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
+import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +21,9 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.gradle = read("android/app/build.gradle")
+        cls.cmake = read("CMakeLists.txt")
+        cls.vcpkg_manifest = json.loads(read("vcpkg.json"))
+        cls.luajit_overlay = read("vcpkg-overlays/luajit/portfile.cmake")
         cls.root_gradle = read("android/build.gradle")
         cls.lint_config = read("android/app/lint.xml")
         cls.workflow = read(".github/workflows/mobile-beta-deploy.yml")
@@ -64,6 +69,91 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
             wrapper_properties,
         )
 
+    def test_android_import_results_keep_the_originating_token_and_type(self):
+        worker = self.activity.split("private void startNextPendingImportCopyLocked()", 1)[1]
+        worker = worker.split("private Uri archiveUriFromIntent", 1)[0]
+        self.assertIn("nativeBeginChartImport(request.token, request.isTree)", worker)
+        self.assertIn("nativeFinishChartImport(request.token, request.isTree", worker)
+        self.assertNotIn("pendingArchiveImportResults", self.activity)
+        platform = read("src/library/ChartLibraryPlatform.cpp")
+        self.assertNotIn("pendingImports.front()", platform)
+
+    def test_android_copy_checkpoints_cover_storage_and_destroy(self):
+        copying = self.activity.split("private String copyArchiveUriToInternalStorage", 1)[1]
+        copying = copying.split("private File uniqueFile", 1)[0]
+        self.assertIn("control.copy(input, outputStream)", copying)
+        self.assertIn("control.checkpoint()", copying)
+        self.assertIn("ChartImportCopyControl control", copying)
+        destruction = self.activity.split("protected void onDestroy()", 1)[1]
+        destruction = destruction.split("public void setOrientationBis", 1)[0]
+        self.assertIn("cancelPendingChartImports()", destruction)
+
+    def test_android_copy_control_behavior(self):
+        source = ROOT / "android/app/src/main/java/com/snurhythm/asobmashow/ChartImportCopyControl.java"
+        self.assertTrue(source.is_file(), "Android copies need a pause/cancel-aware storage boundary")
+        java_home = os.environ.get("JAVA_HOME")
+        configured_java_home = bool(java_home)
+        if not java_home and Path("/usr/libexec/java_home").is_file():
+            try:
+                java_home = subprocess.check_output(
+                    ["/usr/libexec/java_home", "-v", "17"], text=True,
+                    stderr=subprocess.DEVNULL, timeout=5,
+                ).strip()
+            except (OSError, subprocess.SubprocessError):
+                java_home = None
+        suffix = ".exe" if os.name == "nt" else ""
+        candidates = []
+        if java_home:
+            candidates.append(tuple(str(Path(java_home) / "bin" / (name + suffix))
+                                    for name in ("javac", "java")))
+        if not configured_java_home:
+            candidates.append((shutil.which("javac"), shutil.which("java")))
+        for javac, java in candidates:
+            versions = []
+            try:
+                for executable in (javac, java):
+                    if not executable or not Path(executable).is_file():
+                        break
+                    output = subprocess.check_output(
+                        [executable, "-version"], text=True,
+                        stderr=subprocess.STDOUT, timeout=5,
+                    )
+                    version = re.search(r'(?:version "|javac\s+)(?:1\.)?(\d+)', output)
+                    if not version:
+                        break
+                    versions.append(int(version.group(1)))
+            except (OSError, subprocess.SubprocessError):
+                continue
+            if len(versions) == 2 and versions[0] >= 8 and versions[1] >= versions[0]:
+                break
+        else:
+            if configured_java_home:
+                self.fail("JAVA_HOME must provide a working Java 8+ compiler and compatible runtime")
+            self.skipTest("No working Java 8+ compiler and compatible runtime found")
+        with tempfile.TemporaryDirectory() as output:
+            subprocess.run(
+                [javac, "-d", output, str(source),
+                 str(ROOT / "tests/java/ChartImportCopyControlTests.java")],
+                check=True,
+            )
+            subprocess.run(
+                [java, "-cp", output, "com.snurhythm.asobmashow.ChartImportCopyControlTests"],
+                check=True,
+                timeout=15,
+            )
+
+    def test_destroyed_import_picker_cannot_wait_or_enqueue(self):
+        for method, next_method in (
+            ("pickArchiveForImport", "pickFolderForImport"),
+            ("pickFolderForImport", "importDocument"),
+        ):
+            picker = self.activity.split(f"public String {method}()", 1)[1]
+            picker = picker.split(f"public String {next_method}", 1)[0]
+            self.assertIn("pendingArchiveImportsDestroyed", picker)
+            cancelled = picker.split("if (uri == null)", 1)[1]
+            self.assertLess(cancelled.index("return ERROR_PREFIX"),
+                            cancelled.index("startPendingImportCopy"))
+
     def test_android_release_entrypoints_use_repository_wrapper(self):
         expected_wrapper = "android/gradlew"
         self.assertIn(expected_wrapper, self.deploy_script)
@@ -72,6 +162,28 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
         self.assertNotIn("SDL/android-project/gradlew", self.workflow)
         self.assertIn(expected_wrapper, self.android_readme)
         self.assertTrue((ROOT / expected_wrapper).is_file())
+
+    def test_android_build_enables_lua_skin_runtime(self):
+        self.assertIn(
+            "'-DASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=ON'",
+            self.gradle,
+        )
+        self.assertIn("luajit", self.vcpkg_manifest["dependencies"])
+        self.assertIn(
+            "find_path(LUAJIT_ANDROID_INCLUDE_DIR",
+            self.cmake,
+        )
+        self.assertIn("PATH_SUFFIXES luajit-2.1", self.cmake)
+        self.assertIn("if(VCPKG_TARGET_IS_ANDROID)", self.luajit_overlay)
+        self.assertIn(
+            "elseif(VCPKG_TARGET_IS_LINUX OR VCPKG_TARGET_IS_ANDROID)",
+            self.luajit_overlay,
+        )
+        self.assertIn(
+            'file(REMOVE_RECURSE "${CURRENT_PACKAGES_DIR}/tools")',
+            self.luajit_overlay,
+        )
+        self.assertIn("set(VCPKG_FIXUP_ELF_RPATH OFF)", self.luajit_overlay)
 
     def test_android_sqlite_snapshots_use_private_cache(self):
         self.assertIn("GetAndroidCacheDir()", self.sqlite_raii)

@@ -1304,6 +1304,7 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
   auto result =
       driver.fetchChartRanking(rankingQuery(), runtimeConfig(), http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->totalPlayers == 3 &&
              result.ranking->entries.size() == 2 &&
              result.ranking->nextPageToken.has_value(),
          "native ranking returns the first page and a continuation cursor");
@@ -1325,6 +1326,7 @@ void testNativeRankingPagesWithoutRepeatingPreflight() {
   result = driver.fetchChartRankingPage(rankingQuery(), cursor, runtimeConfig(),
                                         http, {});
   expect(result.status == ir::ChartRankingStatus::Succeeded && result.ranking &&
+             result.ranking->totalPlayers == 3 &&
              result.ranking->entries.size() == 1 &&
              !result.ranking->nextPageToken.has_value(),
          "the final native page clears the continuation cursor");
@@ -1618,6 +1620,65 @@ void testRankingPreflightNeverLeaksCredentials() {
   expect(http.requests.empty(), "unsupported key mode never sends");
 }
 
+void testBeatorajaSongUrlContract() {
+  const ir::tachi::TachiDriver driver;
+  FakeHttpClient http;
+  http.responses.push_back({
+      .statusCode = 200,
+      .body = R"({"success":true,"body":{"song":{"id":"song-id"},"chart":{"difficulty":"ANOTHER"}}})"});
+
+  const auto url = driver.chartExternalUrl(
+      {.keyMode = 7,
+       .isDoublePlay = false,
+       .chartSha256 =
+           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+      runtimeConfig(), http, {});
+  expect(url ==
+             "https://boku.tachi.ac/games/bms-7k/songs/song-id/ANOTHER",
+         "Tachi exposes the same song page selected by its Beatoraja IR");
+  expect(http.requests.size() == 1,
+         "Tachi song URL performs one chart resolution request");
+  if (!http.requests.empty()) {
+    const auto &request = http.requests.front();
+    expect(request.method == ir::IrHttpMethod::Post &&
+               request.url ==
+                   "https://boku.tachi.ac/api/v1/games/bms-7k/charts/resolve" &&
+               hasHeader(request, "Authorization", "Bearer fresh-api-key") &&
+               hasHeader(request, "Content-Type", "application/json") &&
+               request.body ==
+                   R"({"matchType":"bmsChartHash","identifier":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})" &&
+               !request.followRedirects,
+           "Tachi song URL uses the provider's Beatoraja resolve contract");
+  }
+
+  FakeHttpClient pmsHttp;
+  pmsHttp.responses.push_back(
+      {.statusCode = 200, .body = R"({"success":false})"});
+  pmsHttp.responses.push_back({
+      .statusCode = 200,
+      .body = R"({"success":true,"body":{"song":{"id":27},"chart":{"difficulty":4}}})"});
+  const auto pmsUrl = driver.chartExternalUrl(
+      {.keyMode = 9, .chartSha256 = "literal-provider-hash"},
+      runtimeConfig(), pmsHttp, {});
+  expect(pmsUrl ==
+             "https://boku.tachi.ac/games/pms-keyboard/songs/27/4" &&
+             pmsHttp.requests.size() == 2 &&
+             pmsHttp.requests[0].url.find("/games/pms-controller/") !=
+                 std::string::npos &&
+             pmsHttp.requests[1].url.find("/games/pms-keyboard/") !=
+                 std::string::npos,
+         "Tachi preserves Beatoraja's ordered PMS controller fallback");
+
+  FakeHttpClient unsupportedHttp;
+  expect(!driver.chartExternalUrl(
+              {.keyMode = 5, .chartSha256 = "literal-provider-hash"},
+              runtimeConfig(), unsupportedHttp, {}) &&
+             unsupportedHttp.requests.empty(),
+         "Tachi returns no song URL for Beatoraja modes it does not map");
+  expect(!driver.courseExternalUrl({}, runtimeConfig(), unsupportedHttp, {}),
+         "Tachi preserves its Beatoraja course URL no-op");
+}
+
 } // namespace
 
 int main() {
@@ -1653,6 +1714,7 @@ int main() {
   testAnonymousRankingAndPagination();
   testAnonymousRankingStillAllowsHttpOrigin();
   testRankingPreflightNeverLeaksCredentials();
+  testBeatorajaSongUrlContract();
   testUserScoreSnapshotRequestContractAndMerge();
   testUserScoreSnapshotRejectsCrossGameIdentityAndScoreIdConflicts();
   testUserScoreSnapshotExpectedUnplayedResponsesMerge();

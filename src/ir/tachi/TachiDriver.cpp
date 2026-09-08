@@ -187,6 +187,19 @@ bool validCredential(std::string_view apiKey) {
   return true;
 }
 
+std::string javaJsonText(const nlohmann::json &value) {
+  if (value.is_string()) {
+    return value.get<std::string>();
+  }
+  if (value.is_null()) {
+    return "null";
+  }
+  if (value.is_boolean() || value.is_number()) {
+    return value.dump();
+  }
+  return {};
+}
+
 IrHttpRequest submitRequest(std::string_view origin, std::string body,
                             bool userIntent,
                             const IrProviderRuntimeConfig &config) {
@@ -529,7 +542,8 @@ fetchNativeRankingPage(const IrChartQuery &query, std::string_view origin,
     }
     return {.status = ChartRankingStatus::Succeeded,
             .ranking = IrChartRanking{.providerId = std::string(kProviderId),
-                                      .chart = query}};
+                                      .chart = query,
+                                      .totalPlayers = 0}};
   }
   if (page.page->entries.front().rank < startRanking ||
       (expectedOutOf && page.page->outOf != *expectedOutOf)) {
@@ -545,6 +559,7 @@ fetchNativeRankingPage(const IrChartQuery &query, std::string_view origin,
 
   IrChartRanking ranking{.providerId = std::string(kProviderId),
                          .chart = query,
+                         .totalPlayers = page.page->outOf,
                          .entries = std::move(page.page->entries)};
   if (newLoadedEntries < page.page->outOf) {
     const int nextStart = ranking.entries.back().rank + 1;
@@ -1013,6 +1028,80 @@ IrAuthenticatedAccountOutcome TachiDriver::fetchAuthenticatedAccount(
                           "Tachi authenticated account response is malformed",
                           config.apiKey);
   }
+}
+
+std::optional<std::string> TachiDriver::chartExternalUrl(
+    const IrChartExternalUrlRequest &request,
+    const IrProviderRuntimeConfig &config, IrHttpClient &http,
+    std::stop_token stopToken) const {
+  std::array<std::string_view, 2> games{};
+  std::size_t gameCount = 0;
+  if (request.keyMode == 7 && !request.isDoublePlay) {
+    games[gameCount++] = "bms-7k";
+  } else if (request.keyMode == 14 ||
+             (request.keyMode == 7 && request.isDoublePlay)) {
+    games[gameCount++] = "bms-14k";
+  } else if (request.keyMode == 9 && !request.isDoublePlay) {
+    games[gameCount++] = "pms-controller";
+    games[gameCount++] = "pms-keyboard";
+  } else {
+    return std::nullopt;
+  }
+
+  const auto origin = normalizeServerOrigin(config.serverOrigin);
+  if (!origin) {
+    return std::nullopt;
+  }
+  for (std::size_t index = 0; index < gameCount; ++index) {
+    if (stopToken.stop_requested()) {
+      return std::nullopt;
+    }
+    try {
+      const std::string game(games[index]);
+      const IrHttpRequest resolveRequest{
+          .method = IrHttpMethod::Post,
+          .url = *origin + "/api/v1/games/" + game + "/charts/resolve",
+          .headers = {{"Authorization", "Bearer " + config.apiKey},
+                      {"Content-Type", "application/json"}},
+          .body = "{\"matchType\":\"bmsChartHash\",\"identifier\":" +
+                  nlohmann::json(request.chartSha256).dump() + "}",
+          .maximumResponseBytes = kMaximumTachiResponseBytes,
+          .followRedirects = false,
+      };
+      const IrHttpResponse response = http.perform(resolveRequest, stopToken);
+      if (response.transportError != IrTransportError::None) {
+        continue;
+      }
+      const auto document = nlohmann::json::parse(response.body);
+      const auto success = document.find("success");
+      const bool succeeded =
+          success != document.end() &&
+          ((success->is_boolean() && success->get<bool>()) ||
+           (success->is_string() && success->get_ref<const std::string &>() ==
+                                        "true"));
+      if (!succeeded) {
+        continue;
+      }
+      const auto body = document.find("body");
+      if (body == document.end()) {
+        continue;
+      }
+      const auto song = body->find("song");
+      const auto chart = body->find("chart");
+      if (song == body->end() || chart == body->end()) {
+        continue;
+      }
+      const auto songId = song->find("id");
+      const auto difficulty = chart->find("difficulty");
+      if (songId == song->end() || difficulty == chart->end()) {
+        continue;
+      }
+      return *origin + "/games/" + game + "/songs/" +
+             javaJsonText(*songId) + "/" + javaJsonText(*difficulty);
+    } catch (...) {
+    }
+  }
+  return std::nullopt;
 }
 
 IrUserScoreSnapshotOutcome TachiDriver::fetchUserScoreSnapshot(

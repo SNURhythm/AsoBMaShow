@@ -187,6 +187,14 @@ public:
   audio::playback::BackendOperationResult
   loadChart(bms_parser::Chart &chart, bool scheduleNotes,
             std::atomic_bool &isCancelled);
+  // Like loadChart but keeps the shared audio device running when the jukebox
+  // owns no active playback and the playback rate is neutral, so Bus::System
+  // voices (the music-select BGM / preview / SE) are not torn down while the
+  // chart is staged. Falls back to a normal full-stop load otherwise. Used by
+  // the music-select preload.
+  audio::playback::BackendOperationResult
+  loadChartPreservingDevice(bms_parser::Chart &chart, bool scheduleNotes,
+                            std::atomic_bool &isCancelled);
   audio::playback::BackendOperationResult
   reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
                        std::atomic_bool &isCancelled);
@@ -209,6 +217,9 @@ public:
   resolveRealtimeKeySound(int wav) const;
   audio::playback::BackendOperationResult play(long long startMicros = 0);
   audio::playback::BackendOperationResult stop();
+  // Stops the playback session but keeps the audio device open, so a later
+  // play() for the same loaded chart short-circuits the device start.
+  audio::playback::BackendOperationResult stopKeepDevice();
   void render();
   bool hasActiveVisuals() const;
   long long getScheduledAudioEndMicros();
@@ -354,6 +365,9 @@ private:
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);
   bool preloadVisual(int visualId, std::atomic_bool &isCancelled);
+  audio::playback::BackendOperationResult
+  loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
+                std::atomic_bool &isCancelled, bool preserveDevice);
   bool scheduleAudioFromCursor(size_t cursor);
   void playOverlappingAudioAt(long long micro);
   audio::playback::BackendOperationResult

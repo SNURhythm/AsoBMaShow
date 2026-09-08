@@ -24,6 +24,8 @@ public:
   static void releaseCachedCursors();
 
   void setEditingText(const std::string &newText);
+  void beginEditing();
+  void endEditing();
 
   void onSelected() override;
   void onUnselected() override;

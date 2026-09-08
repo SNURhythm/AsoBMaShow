@@ -120,6 +120,10 @@ public:
     irStatusFeedbackHandler = std::move(handler);
   }
 
+  void setIrUploadAvailable(bool available) noexcept {
+    irUploadAvailable = available;
+  }
+
   [[nodiscard]] std::string irBadgeIconFontPath() const {
     return ui_icons::kFontAwesomeSolidPath;
   }
@@ -161,7 +165,7 @@ public:
       irBadgeCallbackStableKey_ = boundStableKey_;
       const ResultRecordSummary boundSummary = summary;
       if (summary.isLocal() && summary.capabilities.irUpload &&
-          badge.actionable) {
+          badge.actionable && irUploadAvailable) {
         const auto boundHandler = irUploadHandler;
         irBadge->setOnClickListener([boundSummary, boundHandler]() {
           if (boundHandler) {
@@ -255,6 +259,7 @@ private:
   Color currentIrBadgeAccent_;
   std::function<void(const ResultRecordSummary &)> irUploadHandler;
   std::function<void(const ResultRecordSummary &)> irStatusFeedbackHandler;
+  bool irUploadAvailable = true;
 };
 
 class ResultRecordListView : public RecyclerView<ResultRecordSummary> {
@@ -267,6 +272,7 @@ public:
     itemHeight = 74;
     onCreateView = [this](const ResultRecordSummary &) {
       auto *itemView = new ResultRecordListItemView();
+      itemView->setIrUploadAvailable(irUploadAvailable_);
       itemView->setIrUploadHandler([this](const ResultRecordSummary &summary) {
         if (onIrUploadRequested) {
           onIrUploadRequested(summary);
@@ -338,6 +344,11 @@ public:
   std::function<void(const ResultRecordSummary &)> onIrUploadRequested;
   std::function<void(const ResultRecordSummary &)> onIrStatusFeedbackRequested;
 
+  void setIrUploadAvailable(bool available) noexcept {
+    irUploadAvailable_ = available;
+  }
+
 private:
   int lastSelectedIndex = -1;
+  bool irUploadAvailable_ = true;
 };

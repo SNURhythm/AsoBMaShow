@@ -133,14 +133,13 @@ NormalizedReference normalizeAtSkinDirectory(const fs::path &skinDirectory,
   return {.path = utf8Path(resolved)};
 }
 
-// SkinLoader and JsonSkinObjectLoader resolve skin resources with ordinary
-// File/Path operations relative to the entry's parent.  They do not impose
-// the Lua io root on resource declarations.
+// JsonSkinObjectLoader forms `entryParent + "/" + authored` before it asks
+// SkinLoader for wildcard replacement. Deliberately concatenate rather than
+// joining paths: a leading slash remains a child-name separator in the
+// resulting string, and `skin/...` has no shared-root meaning here.
 fs::path resolveResourcePath(const fs::path &skinDirectory,
                              std::string_view authored) {
-  const fs::path authoredPath = pathFromUtf8(authored);
-  return (authoredPath.is_absolute() ? authoredPath
-                                     : skinDirectory / authoredPath)
+  return pathFromUtf8(utf8Path(skinDirectory) + "/" + std::string(authored))
       .lexically_normal();
 }
 
@@ -554,6 +553,12 @@ struct LuaSkinFileSystem::Impl {
       return failure(SkinFileError::EscapesPackage, authored,
                      "skin file access is outside the skin directory");
     }
+    // SkinLuaPathResolver applies lexical root containment only.  Its
+    // normalized path may legitimately traverse an in-tree symlink, so do
+    // not add no-follow admission checks to pinned type-5 loading.
+    if (safetyPolicy.usesPinnedLuaPathSemantics()) {
+      return std::nullopt;
+    }
 
     fs::path candidate = root.lexically_normal();
     const fs::path relative = resolved.lexically_relative(candidate);
@@ -611,21 +616,14 @@ struct LuaSkinFileSystem::Impl {
 
   NormalizedReference normalizeSelected(std::string_view authored,
                                         bool allowPackageRoot = false) const {
-    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
-      if (authored.empty() || authored.find('\0') != std::string_view::npos) {
-        return {.failure = failure(SkinFileError::InvalidPath, authored,
-                                   "skin file path is invalid")};
-      }
-      const fs::path authoredPath = pathFromUtf8(authored);
-      const fs::path resolved =
-          (authoredPath.is_absolute() ? authoredPath : skinDirectory / authoredPath)
-              .lexically_normal();
-      return {.path = utf8Path(resolved)};
+    if (authored.find('\0') != std::string_view::npos) {
+      return {.failure = failure(SkinFileError::InvalidPath, authored,
+                                 "skin file path is invalid")};
     }
     // skin_config.get_path exposes the selected package as a virtual
-    // `skin/<package>/...` path. Treat that exact current-package spelling as
-    // the corresponding selected-directory path, but never promote another
-    // package name to the shared Skins root.
+    // `skin/<package>/...` path. Resolve that spelling before applying the
+    // selected safety policy: lifting containment must not change the path's
+    // Beatoraja meaning.
     constexpr std::string_view beatorajaRootPrefix = "skin/";
     const std::string packagePrefix =
         std::string(beatorajaRootPrefix) + entry.package.directoryName;
@@ -639,9 +637,19 @@ struct LuaSkinFileSystem::Impl {
       }
       const fs::path resolved =
           (packageRoot / pathFromUtf8(suffix)).lexically_normal();
+      if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+        return {.path = utf8Path(resolved)};
+      }
       if (isWithinDirectory(resolved, skinDirectory)) {
         return checkedReference(packageRoot, resolved, authored);
       }
+    }
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+      const fs::path authoredPath = pathFromUtf8(authored);
+      const fs::path resolved =
+          (authoredPath.is_absolute() ? authoredPath : skinDirectory / authoredPath)
+              .lexically_normal();
+      return {.path = utf8Path(resolved)};
     }
     const auto normalized =
         normalizeAtSkinDirectory(skinDirectory, authored, allowPackageRoot);
@@ -654,9 +662,6 @@ struct LuaSkinFileSystem::Impl {
 
   NormalizedReference normalize(std::string_view authored,
                                 bool allowPackageRoot = false) const {
-    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
-      return normalizeSelected(authored, allowPackageRoot);
-    }
     // Existing Lua module-loader compatibility accepts virtual shared paths.
     // Modern file/io/File/audio calls use
     // normalizeSelected instead and retain SkinLuaPathResolver isolation.
@@ -679,6 +684,9 @@ struct LuaSkinFileSystem::Impl {
           ((currentPackage ? packageRoot : beatorajaSkinRoot) /
            pathFromUtf8(suffix))
               .lexically_normal();
+      if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+        return {.path = utf8Path(resolved)};
+      }
       if (!isWithinDirectory(resolved, beatorajaSkinRoot)) {
         return {.failure = failure(
                     SkinFileError::EscapesPackage, authored,
@@ -709,7 +717,8 @@ struct LuaSkinFileSystem::Impl {
                             LuaSkinFileOpenMode mode) const {
     const fs::path target = pathFromUtf8(normalized);
     const LuaFileOpenSpec spec = luaFileOpenSpec(mode);
-    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+    if (!safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) ||
+        safetyPolicy.usesPinnedLuaPathSemantics()) {
       return openDirectRegularFile(target, spec);
     }
 #if defined(_WIN32)
@@ -872,13 +881,15 @@ LuaSkinFileSystem::create(LuaSkinFileSystemOptions options) {
       .entryPath = entryPath,
       .beatorajaSkinRoot = beatorajaSkinRoot,
       .aliases = options.safetyPolicy.enforces(
-                     SkinSafetyGuard::VirtualFileContainment)
+                     SkinSafetyGuard::VirtualFileContainment) &&
+                         !options.safetyPolicy.usesPinnedLuaPathSemantics()
                      ? createPlatformSkinAliasDetector()
                      : nullptr,
       .allowDataWrites = options.allowDataWrites,
       .safetyPolicy = options.safetyPolicy,
   });
   if (impl->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) &&
+      !impl->safetyPolicy.usesPinnedLuaPathSemantics() &&
       !impl->aliases) {
     return {.failure = failure(SkinFileError::IoError,
                                impl->entry.packageRelativePath,
@@ -950,12 +961,8 @@ SkinFileResolveResult LuaSkinFileSystem::resolveResourceCandidates(
     std::string_view packageNormalized) const {
   const std::scoped_lock lock(impl_->operationMutex);
   (void)packageNormalized;
-  const fs::path resolved = entryRelative.starts_with("skin/")
-                                ? (impl_->beatorajaSkinRoot /
-                                   pathFromUtf8(entryRelative.substr(5)))
-                                      .lexically_normal()
-                                : resolveResourcePath(impl_->skinDirectory,
-                                                      entryRelative);
+  const fs::path resolved =
+      resolveResourcePath(impl_->skinDirectory, entryRelative);
   // SkinLoader#getPath returns the ordinary File even when it has not yet
   // been created.  Do not turn resolution into an availability check.
   return {.normalizedVirtualPath = utf8Path(resolved)};
@@ -1131,7 +1138,9 @@ LuaSkinFileSystem::openLuaFile(std::string_view virtualPath,
   if (writable) {
 #else
   if (writable &&
-      !impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+      (!impl_->safetyPolicy.enforces(
+           SkinSafetyGuard::VirtualFileContainment) ||
+       impl_->safetyPolicy.usesPinnedLuaPathSemantics())) {
 #endif
     std::error_code error;
     if (!target.parent_path().empty()) {
@@ -1225,7 +1234,8 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
 #if defined(_WIN32)
   {
 #else
-  if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+  if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) ||
+      impl_->safetyPolicy.usesPinnedLuaPathSemantics()) {
 #endif
     std::error_code error;
     if (!target.parent_path().empty()) {
@@ -1281,7 +1291,8 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory,
 #if defined(_WIN32)
   {
 #else
-  if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment)) {
+  if (!impl_->safetyPolicy.enforces(SkinSafetyGuard::VirtualFileContainment) ||
+      impl_->safetyPolicy.usesPinnedLuaPathSemantics()) {
 #endif
     std::error_code error;
     const bool created = recursive ? fs::create_directories(target, error)

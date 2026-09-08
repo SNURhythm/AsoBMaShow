@@ -124,71 +124,87 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
 
   SkinParsedBitmapFont font{.resource = std::move(resource)};
   int declaredPages = 0;
-  int declaredGlyphs = -1;
-  int declaredKernings = -1;
   std::size_t parsedGlyphs = 0;
   std::size_t parsedKernings = 0;
   bool sawCommon = false;
-  bool auxiliaryMetricsComplete = font.resource.originalSize > 0;
+  bool readAuxiliarySize = false;
+  bool readAuxiliaryPageDimensions = false;
+  std::size_t nextPage = 0;
   for (const auto line : lines(text)) {
     if (line.empty()) continue;
     const auto values = attributes(line);
     if (line.starts_with("info ")) {
       int size = 0;
       if (getInteger(values, "size", size) && size != 0 &&
-          size != std::numeric_limits<int>::min() &&
-          font.resource.originalSize == 0) {
+          size != std::numeric_limits<int>::min()) {
         font.resource.originalSize = std::abs(size);
-        auxiliaryMetricsComplete = true;
+        readAuxiliarySize = true;
       }
     } else if (line.starts_with("common ")) {
       if (!getInteger(values, "lineHeight", font.lineHeight) ||
-          !getInteger(values, "base", font.base) ||
-          !getInteger(values, "scaleW", font.pageWidth) ||
-          !getInteger(values, "scaleH", font.pageHeight)) {
+          !getInteger(values, "base", font.base)) {
         return fail("BMFont common metrics are incomplete");
       }
+      readAuxiliaryPageDimensions =
+          getInteger(values, "scaleW", font.pageWidth) &&
+          getInteger(values, "scaleH", font.pageHeight);
+      if (!readAuxiliaryPageDimensions) {
+        font.pageWidth = 0;
+        font.pageHeight = 0;
+      }
       if (!getInteger(values, "pages", declaredPages)) declaredPages = 1;
-      if (font.lineHeight <= 0 || font.pageWidth <= 0 ||
-          font.pageHeight <= 0 || declaredPages <= 0 ||
-          font.lineHeight > maximumDimension ||
-          std::llabs(static_cast<long long>(font.base)) > maximumDimension ||
-          font.pageWidth > maximumDimension ||
-          font.pageHeight > maximumDimension ||
+      declaredPages = std::max(1, declaredPages);
+      const int dimensionLimit =
+          policy.enforces(SkinSafetyGuard::ResourceAllocationLimit)
+              ? maximumDimension
+              : std::numeric_limits<int>::max();
+      if (font.lineHeight > dimensionLimit ||
+          std::llabs(static_cast<long long>(font.base)) > dimensionLimit ||
+          (readAuxiliaryPageDimensions &&
+           (font.pageWidth > dimensionLimit || font.pageHeight > dimensionLimit)) ||
           static_cast<std::size_t>(declaredPages) > limit(policy, maximumPages)) {
         return fail("BMFont common metrics exceed preparation limits");
       }
       font.pagePaths.resize(static_cast<std::size_t>(declaredPages));
       sawCommon = true;
     } else if (line.starts_with("page ")) {
-      int id = -1;
       const auto file = values.find("file");
-      if (!sawCommon || !getInteger(values, "id", id) || id < 0 ||
-          id >= declaredPages || file == values.end() || file->second.empty() ||
+      if (!sawCommon || nextPage >= font.pagePaths.size()) {
+        continue;
+      }
+      int id = 0;
+      // BitmapFontData's page-id pattern is unsigned; a signed or malformed
+      // id is treated as omitted and the declaration remains sequential.
+      const bool hasId = getInteger(values, "id", id) && id >= 0;
+      if ((hasId && id != static_cast<int>(nextPage)) ||
+          file == values.end() || file->second.empty() ||
           file->second.size() > limit(policy, maximumDescriptorBytes)) {
         return fail("BMFont page declaration is invalid");
       }
-      font.pagePaths[static_cast<std::size_t>(id)] = file->second;
+      font.pagePaths[nextPage++] = file->second;
     } else if (line.starts_with("chars ")) {
-      if (!getInteger(values, "count", declaredGlyphs) || declaredGlyphs < 0 ||
-          static_cast<std::size_t>(declaredGlyphs) > limit(policy, maximumGlyphs)) {
-        return fail("BMFont glyph count exceeds preparation limits");
-      }
+      // SkinTextBitmap rewrites this advisory count from the actual char rows
+      // before libGDX parses the descriptor.
     } else if (line.starts_with("char ")) {
       int codepoint = 0;
       SkinBitmapGlyph glyph;
-      if (!getInteger(values, "id", codepoint) || !validCodepoint(codepoint) ||
+      if (!getInteger(values, "id", codepoint) ||
           !getInteger(values, "x", glyph.region.x) ||
           !getInteger(values, "y", glyph.region.y) ||
           !getInteger(values, "width", glyph.region.w) ||
           !getInteger(values, "height", glyph.region.h) ||
           !getInteger(values, "xoffset", glyph.xOffset) ||
           !getInteger(values, "yoffset", glyph.yOffset) ||
-          !getInteger(values, "xadvance", glyph.xAdvance) ||
-          !getInteger(values, "page", glyph.page) || glyph.page < 0 ||
-          glyph.page >= declaredPages || glyph.region.w < 0 ||
-          glyph.region.h < 0) {
+          !getInteger(values, "xadvance", glyph.xAdvance)) {
         return fail("BMFont glyph declaration is invalid");
+      }
+      if (!getInteger(values, "page", glyph.page)) glyph.page = 0;
+      // The pinned BitmapFontData keeps id <= 0 as its missing glyph and its
+      // remapping pass preserves only Unicode scalar supplementary glyphs.
+      // Neither case invalidates the descriptor.
+      if (codepoint <= 0 || codepoint > 0x10ffff ||
+          (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
+        continue;
       }
       glyph.codepoint = static_cast<char32_t>(codepoint);
       font.glyphs.insert_or_assign(glyph.codepoint, glyph);
@@ -196,20 +212,14 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
         return fail("BMFont glyph count exceeds preparation limits");
       }
     } else if (line.starts_with("kernings ")) {
-      if (!getInteger(values, "count", declaredKernings) ||
-          declaredKernings < 0 ||
-          static_cast<std::size_t>(declaredKernings) >
-              limit(policy, maximumKerningPairs)) {
-        return fail("BMFont kerning count exceeds preparation limits");
-      }
+      // SkinTextBitmap likewise recomputes this from the retained pairs.
     } else if (line.starts_with("kerning ")) {
       int first = 0;
       int second = 0;
       int amount = 0;
       if (!getInteger(values, "first", first) ||
           !getInteger(values, "second", second) ||
-          !getInteger(values, "amount", amount) || !validCodepoint(first) ||
-          !validCodepoint(second)) {
+          !getInteger(values, "amount", amount)) {
         return fail("BMFont kerning declaration is invalid");
       }
       font.kerning.insert_or_assign(
@@ -222,13 +232,11 @@ SkinBitmapFontParseResult parseBmFont(SkinBitmapFontResource resource,
   }
   if (!sawCommon ||
       std::ranges::any_of(font.pagePaths,
-                          [](const std::string &path) { return path.empty(); }) ||
-      (declaredGlyphs >= 0 &&
-       parsedGlyphs != static_cast<std::size_t>(declaredGlyphs)) ||
-      (declaredKernings >= 0 &&
-       parsedKernings != static_cast<std::size_t>(declaredKernings))) {
+                          [](const std::string &path) { return path.empty(); })) {
     return fail("BMFont descriptor is incomplete");
   }
+  const bool auxiliaryMetricsComplete =
+      readAuxiliarySize && readAuxiliaryPageDimensions;
   if (!auxiliaryMetricsComplete) {
     // SkinTextBitmap keeps a libGDX-valid face when its independent first-line
     // size/common scan fails. BitmapFontData uses lineHeight for the source

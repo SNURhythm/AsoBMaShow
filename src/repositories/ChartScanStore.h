@@ -2,8 +2,10 @@
 
 #include "../bms_parser.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -60,11 +62,42 @@ struct ChartScanCheckpoint {
   std::string lastInnerPath;
 };
 
+struct CompletedArchiveRecord {
+  std::filesystem::path path;
+  std::int64_t size = 0;
+  std::int64_t mtimeNs = 0;
+};
+
 struct ChartScanSnapshot {
   std::vector<bms_parser::ChartMeta> charts;
   std::vector<SolidArchiveRecord> solidArchives;
   std::vector<ArchiveScanCacheRecord> archiveCache;
+  std::vector<CompletedArchiveRecord> completedArchives;
   std::optional<ChartScanCheckpoint> checkpoint;
 };
 
-enum class ChartScanSnapshotLoad { Full, CheckpointOnly };
+struct ChartFolderSyncStats {
+  std::size_t storedFolders = 0;
+  std::size_t visitedFolders = 0;
+  std::size_t childChecks = 0;
+  std::size_t subtreeChecks = 0;
+};
+
+enum class ChartScanSnapshotLoad {
+  Full,
+  CheckpointOnly,
+  // Everything Full loads except the full chart metadata rows: solid archives,
+  // archive scan cache, completed archives, and the checkpoint. Used by the
+  // scanner, which reconciles stored charts from the lightweight identity
+  // records instead of materializing every column for the whole library.
+  Reconcile,
+};
+
+// Minimal stored-chart identity used by the scanner's reconcile pass. Only the
+// identity columns (path + md5 + sha256) are loaded, avoiding the cost of
+// materializing the full metadata row for every chart in the library.
+struct ChartScanReconcileIdentity {
+  std::filesystem::path path;
+  std::string md5;
+  std::string sha256;
+};

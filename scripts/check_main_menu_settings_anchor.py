@@ -97,7 +97,7 @@ require(
     "context.irAccountEvidenceRevision.load(" in source
     and "observedIrAccountEvidenceRevision" in source
     and "refreshIrRecordListIfNeeded()" in source
-    and "reloadReplayRecordModels(true)" in source,
+    and "recordsModal_->reloadRecords(true)" in source,
     "the retained Main Menu must observe provider account-evidence revisions "
     "and rebuild the Records view",
 )

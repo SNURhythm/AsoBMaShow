@@ -34,6 +34,9 @@ void SceneManager::updateBackgroundTaskPauseState() {
   const bool changed =
       context.backgroundTasksPausedForForegroundScene.exchange(shouldPause) !=
       shouldPause;
+  if (context.chartLibraryTasks) {
+    context.chartLibraryTasks->setGameplayPaused(shouldPause);
+  }
   if (changed && context.notifyBackgroundTaskPauseStateChanged) {
     context.notifyBackgroundTaskPauseStateChanged();
   }
@@ -41,6 +44,14 @@ void SceneManager::updateBackgroundTaskPauseState() {
 
 void SceneManager::registerScene(const std::string& name, std::unique_ptr<Scene> scene) {
   registeredScenes[name] = std::move(scene);
+}
+
+bool SceneManager::hasRegisteredScene(const std::string &name) const {
+  return registeredScenes.contains(name);
+}
+
+bool SceneManager::hasBackgroundScene(const Scene *scene) const {
+  return scene != nullptr && backgroundScenes.contains(const_cast<Scene *>(scene));
 }
 
 void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
@@ -94,7 +105,20 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     currentScene = newScene;
     backgroundScenes.erase(it);
     updateBackgroundTaskPauseState();
-    currentScene->onResume();
+    pendingRegisteredSceneChange_.reset();
+    resumingScene_ = true;
+    try {
+      currentScene->onResume();
+    } catch (...) {
+      resumingScene_ = false;
+      pendingRegisteredSceneChange_.reset();
+      throw;
+    }
+    resumingScene_ = false;
+    if (pendingRegisteredSceneChange_) {
+      auto pending = std::exchange(pendingRegisteredSceneChange_, std::nullopt);
+      changeScene(pending->first, pending->second);
+    }
     // Don't call init() again since the scene is already initialized
   } else {
     // Normal scene change for new or registered scenes
@@ -106,6 +130,10 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
 }
 
 void SceneManager::changeScene(const std::string& sceneName, bool keepBackground) {
+  if (resumingScene_) {
+    pendingRegisteredSceneChange_ = {sceneName, keepBackground};
+    return;
+  }
   auto it = registeredScenes.find(sceneName);
   if (it != registeredScenes.end()) {
     // Use the existing changeScene method with the scene pointer

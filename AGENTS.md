@@ -93,6 +93,37 @@
 - For full CTest runs, execute tests in parallel:
   `ctest --test-dir cmake-build-debug --output-on-failure -j 6`
 
+## Git Worktrees
+
+- Do NOT create worktrees on your own. Only use one when the user has already
+  set it up or explicitly requests it. The user owns worktree provisioning
+  (they create them deliberately, e.g. to keep a parallel review branch
+  conflict-free, and disk space is limited on this machine).
+- When the user has provided a worktree, do your work inside that checkout,
+  not in the main repo, and keep changes out of files the concurrent branch is
+  touching to avoid merge conflicts.
+- Worktrees live under `.worktrees/` at the repo root (already gitignored).
+  For reference, creating one per feature branch looks like:
+  `git worktree add .worktrees/<name> -b <branch> <base-branch>`
+- Submodules are empty in a fresh worktree. Always populate them:
+  `git submodule update --init --recursive --depth 1`
+- `bgfx`, `SDL`, `SDL_ttf`, `yoga`, and `third_party/pcre2` are submodules.
+  `bgfx/bgfx/.build` (shaderc, libs) is a build artifact and does not come with
+  the submodule. The committed `shaders/*.bin` are used directly at build time,
+  so no shaderc rebuild is needed unless `shader_src/` is edited (then run
+  `shader_src/make.py`, which builds `shaderc` on demand).
+- The macOS desktop build does not need `android/` or `ios/`. When disk is
+  tight, prune them with sparse-checkout. The cone `set` rejects submodule
+  paths, so pass `--skip-checks`:
+  `git sparse-checkout init --cone`
+  `git sparse-checkout set --skip-checks src tests docs cmake include assets shaders shader_src bgfx SDL SDL_ttf yoga third_party scripts replay vcpkg-overlays vcpkg-triplets`
+  Re-include `android/` (and `ios/` for iOS work) before any platform build.
+- Building in a worktree is expensive on disk: a fresh `vcpkg_installed` is
+  ~300 MiB and a debug build is several GiB (main repo's `cmake-build-debug`
+  is ~7 GiB). Configure with `VCPKG_ROOT` exported (this machine:
+  `/Users/xf/vcpkg`), then `cmake --preset=debug`; the worktree gets its own
+  `cmake-build-debug`.
+
 ## Formatting
 
 - Do not run a whole-file formatter (including `clang-format -i`) on this

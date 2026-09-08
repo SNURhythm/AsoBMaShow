@@ -1,4 +1,5 @@
 #include "GameplaySkinSettingsPresentation.h"
+#include "../skin/beatoraja/GameplaySkinSourceFormat.h"
 
 #include <bit>
 #include <algorithm>
@@ -210,6 +211,20 @@ std::string formatProgressBytes(std::uint64_t bytes) {
 }
 
 } // namespace
+
+bool gameplaySkinEntrySelectableForTarget(
+    const GameplaySkinEntryRow &entry,
+    const SkinTargetTrait &target) noexcept {
+  if (entry.validation != SkinValidationDisposition::SelectableGameplay ||
+      entry.metadata.skinType != target.skinType) {
+    return false;
+  }
+  if (target.kind != SkinTargetKind::MusicSelect) {
+    return true;
+  }
+  return gameplaySkinSourceFormatForPath(entry.entry.packageRelativePath) ==
+         GameplaySkinSourceFormat::Lua;
+}
 
 std::vector<GameplaySkinCatalogItem>
 gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata) {

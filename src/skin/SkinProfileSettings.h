@@ -73,8 +73,7 @@ normalizeSkinConfigurationKey(std::string_view value);
 
 struct SkinProfileSettings {
   SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard;
-  // This is the authoritative gameplay-skin selection. The key is the
-  // Beatoraja gameplay SkinType value, constrained by GameplaySkinTraits.
+  // Legacy gameplay-only view retained for older settings readers.
   std::map<int, SkinEntryId> selectedGameplayEntries;
   // Screen-target selection, keyed by the Beatoraja SkinType value. New
   // settings writes use this map; selectedGameplayEntries remains readable

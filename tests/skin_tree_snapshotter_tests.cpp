@@ -305,7 +305,7 @@ void testFramingSeparatesDifferentFileBoundaries() {
   }
 }
 
-void testInjectedFinderAliasAndWindowsReparsePointAreRejected() {
+void testAliasClassificationDoesNotRejectOrdinarySourcePaths() {
   for (const auto kind : {SkinRejectedLinkKind::AppleFinderAlias,
                           SkinRejectedLinkKind::WindowsReparsePoint}) {
     TempDirectory temp;
@@ -315,11 +315,9 @@ void testInjectedFinderAliasAndWindowsReparsePointAreRejected() {
     FakeAliasDetector aliases(kind, "alias.dat");
     SkinTreeSnapshotter snapshotter(roots, aliases);
     auto result = snapshotter.snapshot(source, packageId(), {}, {});
-    expect(!result.prepared.has_value(),
-           "injected alias/reparse classification rejects the tree");
-    expect(!result.diagnostics.empty(), "rejection has a diagnostic");
-    expect(stagingEntryCount(roots) == 0,
-           "alias rejection leaves no incomplete staging tree");
+    expect(result.prepared.has_value(),
+           "source package discovery does not add an alias/reparse rejection "
+           "that Beatoraja's ordinary filesystem reads do not have");
   }
 }
 
@@ -349,7 +347,7 @@ void testPlatformDetectorClassifiesNoFollowNodes() {
 #endif
 }
 
-void testSymbolicHardAndNonRegularNodesAreRejected() {
+void testSymbolicHardAndNonRegularNodesFollowSourceFilesystemSemantics() {
 #if !defined(_WIN32)
   {
     TempDirectory temp;
@@ -359,10 +357,10 @@ void testSymbolicHardAndNonRegularNodesAreRejected() {
     fs::create_symlink("real", source / "link");
     FakeAliasDetector aliases;
     SkinTreeSnapshotter snapshotter(roots, aliases);
-    expect(!snapshotter.snapshot(source, packageId(), {}, {}).prepared,
-           "symbolic links are rejected without following");
-    expect(stagingEntryCount(roots) == 0,
-           "symlink rejection leaves no staging tree");
+    const auto snapshot = snapshotter.snapshot(source, packageId(), {}, {});
+    expect(snapshot.prepared.has_value(),
+           "a symbolic link snapshots the target bytes like a Beatoraja "
+           "filesystem read");
   }
   {
     TempDirectory temp;
@@ -372,8 +370,8 @@ void testSymbolicHardAndNonRegularNodesAreRejected() {
     fs::create_hard_link(source / "one", source / "two");
     FakeAliasDetector aliases;
     SkinTreeSnapshotter snapshotter(roots, aliases);
-    expect(!snapshotter.snapshot(source, packageId(), {}, {}).prepared,
-           "multi-link regular files are rejected");
+    expect(snapshotter.snapshot(source, packageId(), {}, {}).prepared.has_value(),
+           "a hard-linked regular file snapshots as ordinary source data");
   }
   {
     TempDirectory temp;
@@ -528,7 +526,7 @@ void testPublishingCallbackMutationCannotEscapeFinalValidation() {
          "publishing callback mutation leaves no staging orphan");
 }
 
-void testTransientParentSymlinkCannotBeFollowedDuringCopy() {
+void testTransientParentSymlinkStillRequiresOneStableSnapshot() {
 #if !defined(_WIN32)
   TempDirectory temp;
   const auto roots = rootsBelow(temp.root());
@@ -564,7 +562,8 @@ void testTransientParentSymlinkCannotBeFollowedDuringCopy() {
   expect(installedSymlink,
          "transient parent-symlink fixture ran during the copy");
   expect(!result.prepared,
-         "copy never follows a transient symlink in a parent component");
+         "a source tree that changes path identity during copying does not "
+         "publish a mixed snapshot");
   if (!restoredDirectory) {
     fs::remove(nested);
     fs::rename(displaced, nested);
@@ -1094,14 +1093,14 @@ int main() {
   testEmptyTreeIsRejectedForDigestParity();
   testRevisionStoresTheNormalizedCanonicalPackageIdentity();
   testFramingSeparatesDifferentFileBoundaries();
-  testInjectedFinderAliasAndWindowsReparsePointAreRejected();
+  testAliasClassificationDoesNotRejectOrdinarySourcePaths();
   testPlatformDetectorClassifiesNoFollowNodes();
-  testSymbolicHardAndNonRegularNodesAreRejected();
+  testSymbolicHardAndNonRegularNodesFollowSourceFilesystemSemantics();
   testUnicodeAndCaseFoldCollisionsAreRejected();
   testMutationAtEveryStableCopyBoundaryIsRejected();
   testSourceRootReplacementWithTheSameFilesIsRejected();
   testPublishingCallbackMutationCannotEscapeFinalValidation();
-  testTransientParentSymlinkCannotBeFollowedDuringCopy();
+  testTransientParentSymlinkStillRequiresOneStableSnapshot();
   testTransientFifoReplacementCannotBlockOpen();
   testCancellationAndPreparedDestructionCleanStaging();
   testPublishedRevisionIsImmutableAndLeaseClonesShareThePin();

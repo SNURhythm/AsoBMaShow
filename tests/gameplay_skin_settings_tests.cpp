@@ -3,6 +3,7 @@
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPackageCatalog.h"
 #include "skin/package/SkinPackageStore.h"
+#include "skin/package/SkinPathPolicy.h"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -1597,6 +1598,31 @@ void testLifecycleCallbacksCustomViewportAndRemoval() {
          "snapshot");
 }
 
+void testMusicSelectSelectionDefaultsToBuiltInAndSurvivesSanitize() {
+  SkinProfileSettings builtIn;
+  builtIn.sanitize();
+  expect(!builtIn.selectedSkinEntries.contains(5),
+         "missing type-5 selection means Built-in");
+
+  const auto package = normalizePackageId("MusicSelectSkin").package;
+  const auto entry =
+      package ? normalizeEntryPath(*package, "select/main.luaskin").entry
+              : std::nullopt;
+  expect(entry.has_value(), "music-select settings fixture normalizes");
+  if (!entry) {
+    return;
+  }
+  SkinProfileSettings selected;
+  selected.entries.emplace(*entry, EntryProfileSettings{});
+  selected.selectedSkinEntries.emplace(5, *entry);
+  selected.sanitize();
+  expect(selected.selectedSkinEntries.contains(5) &&
+             selected.selectedSkinEntries.at(5) == *entry,
+         "type-5 selection survives profile sanitization");
+  expect(!selected.selectedGameplayEntries.contains(5),
+         "music-select selection does not enter the gameplay-only view");
+}
+
 } // namespace
 
 int main() {
@@ -1622,6 +1648,7 @@ int main() {
   testInvalidAndStaleActivationRetainPreviousProfileSettings();
   testSafetyLevelRequiresExplicitUnrestrictedAcknowledgement();
   testLifecycleCallbacksCustomViewportAndRemoval();
+  testMusicSelectSelectionDefaultsToBuiltInAndSurvivesSanitize();
   if (failures == 0) {
     std::cout << "gameplay skin settings tests passed\n";
   }

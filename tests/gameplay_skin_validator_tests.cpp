@@ -288,28 +288,19 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
            "catalog admits each reported IntegerPropertyFactory ValueType "
            "selector");
   }
-  for (const int selector : {0, 65'535}) {
-    expect(catalog.contains(
-               {.kind = SkinBindingKind::IntegerProperty,
-                .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-               SkinBuiltinPropertySelector{selector}) &&
-               catalog.contains(
-                   {.kind = SkinBindingKind::IntegerProperty,
-                    .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-                   SkinBuiltinPropertySelector{selector}),
-           "integer factory cache domain is admitted at both inclusive bounds");
-  }
   for (const int selector : {314, 315, 316}) {
     expect(catalog.contains(
                {.kind = SkinBindingKind::IntegerProperty,
                 .integerDomain = SkinIntegerPropertyDomain::IntegerValue},
-               SkinBuiltinPropertySelector{selector}) &&
-               catalog.contains(
-                   {.kind = SkinBindingKind::IntegerProperty,
-                    .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
-                   SkinBuiltinPropertySelector{selector}),
-           "compatibility catalog accepts each integer selector in both "
-           "IntegerPropertyFactory input domains");
+               SkinBuiltinPropertySelector{selector}),
+           "catalog admits each IntegerPropertyFactory ValueType selector");
+  }
+  for (const int selector : {0, 65'535, 314, 315, 316}) {
+    expect(!catalog.contains(
+               {.kind = SkinBindingKind::IntegerProperty,
+                .integerDomain = SkinIntegerPropertyDomain::ImageIndex},
+               SkinBuiltinPropertySelector{selector}),
+           "an integer factory cache slot without a source property is absent");
   }
   for (const int selector : {4, 5}) {
     expect(catalog.contains({.kind = SkinBindingKind::FloatProperty,
@@ -346,6 +337,11 @@ void testAuthoritativeCatalogAdmitsCompatibilityIntegerFactoryDomain() {
   expect(!catalog.contains({.kind = SkinBindingKind::FloatWriter},
                            SkinBuiltinPropertySelector{4}),
          "catalog rejects the lane-cover writer until it is executable");
+  for (const int selector : {1, 7, 8}) {
+    expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
+                            SkinBuiltinPropertySelector{selector}),
+           "catalog admits each pinned selector-position writer");
+  }
   for (const int selector : {17, 18, 19}) {
     expect(catalog.contains({.kind = SkinBindingKind::FloatWriter},
                             SkinBuiltinPropertySelector{selector}),
@@ -539,20 +535,21 @@ return {
          "catalog activation without a digest mismatch");
 }
 
-void testCatalogRejectsNonGameplayBeatorajaSkinTypes() {
+void testCatalogAcceptsMusicSelectBeatorajaSkinType() {
   const SkinValidationResult result = validateScript(R"lua(
 return {
-  type = 5, w = 1280, h = 720, name = "music select is not gameplay"
+  type = 5, w = 1280, h = 720, name = "music select"
 }
 )lua");
 
-  expect(result.disposition == SkinValidationDisposition::UnavailableType &&
+  expect(result.disposition == SkinValidationDisposition::SelectableGameplay &&
              result.metadata && result.metadata->skinType == 5 &&
-             hasDiagnostic(result, "skin_lua_type_unavailable"),
-         "non-gameplay Beatoraja skin types cannot appear in gameplay tabs");
+             result.reconciledSettings &&
+             !hasDiagnostic(result, "skin_lua_type_unavailable"),
+         "Beatoraja music-select skins are catalog-valid skin targets");
 }
 
-void testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats() {
+void testCatalogAdmitsSupportedTargetHeadersAcrossStaticFormats() {
   const auto json = validateDocument(
       "play/parity.json",
       R"json({"type":0,"name":"JSON gameplay","author":"fixture","w":640,"h":480})json");
@@ -585,12 +582,13 @@ void testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats() {
       "select/select.lr2skin",
       "#INFORMATION,5,Music select,fixture\n#RESOLUTION,0\n");
   expect(nonGameplayLr2.disposition ==
-                 SkinValidationDisposition::UnavailableType &&
+                 SkinValidationDisposition::SelectableGameplay &&
              nonGameplayLr2.metadata &&
              nonGameplayLr2.metadata->skinType == 5 &&
-             !nonGameplayLr2.reconciledSettings &&
-             nonGameplayLr2.configurationDigest.empty(),
-         "a decoded non-gameplay LR2 header remains unavailable");
+             nonGameplayLr2.reconciledSettings &&
+             !nonGameplayLr2.configurationDigest.empty(),
+         "a decoded music-select LR2 header remains catalog-valid before the "
+         "Lua-only target projection");
 }
 
 void testCatalogDefersGameplayBindingFailureToGameplayLoading() {
@@ -742,8 +740,8 @@ int main() {
   testCatalogAppendsBeatorajaRandomToCustomOptions();
   testCatalogDoesNotExecuteConfiguredLuaOrFabricateMainState();
   testCatalogKeepsBeatorajaEmptyOptionDeclarationsSelectable();
-  testCatalogRejectsNonGameplayBeatorajaSkinTypes();
-  testCatalogAdmitsOnlyGameplayHeadersAcrossStaticFormats();
+  testCatalogAcceptsMusicSelectBeatorajaSkinType();
+  testCatalogAdmitsSupportedTargetHeadersAcrossStaticFormats();
   testLr2CallerBytePolicyIsSharedAcrossRootAndIncludes();
   testCatalogDefersGameplayBindingFailureToGameplayLoading();
   testCatalogDefersGameplayResourceFailureToGameplayLoading();
