@@ -357,7 +357,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                 () -> nativeChartFolderPickerCancelled(cancellationToken))) {
             return CANCELLED_RESULT;
         }
-        if (!BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE) {
+        if (!BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE
+                || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return "0";
         }
         if (hasManageExternalStorageAccess()) {
@@ -2259,8 +2260,8 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     private boolean hasManageExternalStorageAccess() {
         return BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE
-                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.R
-                || Environment.isExternalStorageManager());
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && Environment.isExternalStorageManager();
     }
 
     private String directPathForTree(Uri treeUri) {
