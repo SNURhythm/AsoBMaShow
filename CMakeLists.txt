@@ -1771,6 +1771,49 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
         endif()
 
+        get_target_property(_lua_coroutine_sources
+            lua_skin_binding_live_integration_tests SOURCES)
+        list(REMOVE_ITEM _lua_coroutine_sources
+            tests/lua_skin_binding_live_integration_tests.cpp)
+        add_executable(lua_skin_coroutine_tests
+            tests/lua_skin_coroutine_tests.cpp
+            ${_lua_coroutine_sources}
+            src/Utils.cpp
+            src/path.cpp
+            src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
+            src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
+            src/skin/beatoraja/GameplaySkinSourceFormat.cpp
+            src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+            src/skin/beatoraja/Lr2SkinCsvParser.cpp
+            src/skin/beatoraja/Lr2SkinHeaderDecoder.cpp
+            src/skin/beatoraja/MusicSelectSkinModelResolver.cpp
+        )
+        target_include_directories(lua_skin_coroutine_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src
+        )
+        target_compile_features(lua_skin_coroutine_tests PRIVATE cxx_std_23)
+        get_target_property(_lua_coroutine_definitions
+            lua_skin_binding_live_integration_tests COMPILE_DEFINITIONS)
+        target_compile_definitions(lua_skin_coroutine_tests PRIVATE
+            ${_lua_coroutine_definitions}
+        )
+        get_target_property(_lua_coroutine_links
+            lua_skin_binding_live_integration_tests LINK_LIBRARIES)
+        target_link_libraries(lua_skin_coroutine_tests PRIVATE
+            ${_lua_coroutine_links}
+        )
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        foreach(_lua_coroutine_phase header callback)
+            add_test(NAME lua_skin_coroutine_${_lua_coroutine_phase}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/lua_skin_coroutine_tests.py
+                    $<TARGET_FILE:lua_skin_coroutine_tests>
+                    --phase ${_lua_coroutine_phase})
+            set_tests_properties(lua_skin_coroutine_${_lua_coroutine_phase}
+                PROPERTIES TIMEOUT 120)
+        endforeach()
+
         add_executable(lua_skin_note_live_integration_tests
             tests/lua_skin_note_live_integration_tests.cpp
             src/FileChecksum.cpp
