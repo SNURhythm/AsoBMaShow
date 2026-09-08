@@ -341,6 +341,10 @@ std::atomic_size_t maximumSessionEncodedBytesForTesting{
     std::numeric_limits<std::size_t>::max()};
 std::atomic_size_t maximumAtlasSessionBytesForTesting{
     std::numeric_limits<std::size_t>::max()};
+std::atomic_size_t maximumSessionDecodedBytesForTesting{
+    std::numeric_limits<std::size_t>::max()};
+std::atomic_size_t maximumImageDecodedBytesForTesting{
+    std::numeric_limits<std::size_t>::max()};
 std::atomic_size_t committedEncodedBytesForTesting{0};
 std::atomic_size_t skinImageAppCacheHitCountForTesting{0};
 
@@ -1338,7 +1342,13 @@ std::size_t skinResourcePlatformAssetReadsForTesting() noexcept {
 
 void setSkinResourceAccountingLimitsForTesting(
     std::size_t maximumSessionEncodedBytes,
-    std::size_t maximumAtlasSessionBytes) noexcept {
+    std::size_t maximumAtlasSessionBytes,
+    std::size_t maximumSessionDecodedBytes,
+    std::size_t maximumImageDecodedBytes) noexcept {
+  maximumSessionDecodedBytesForTesting.store(maximumSessionDecodedBytes,
+                                              std::memory_order_relaxed);
+  maximumImageDecodedBytesForTesting.store(maximumImageDecodedBytes,
+                                            std::memory_order_relaxed);
   maximumSessionEncodedBytesForTesting.store(maximumSessionEncodedBytes,
                                               std::memory_order_relaxed);
   maximumAtlasSessionBytesForTesting.store(maximumAtlasSessionBytes,
@@ -1347,6 +1357,10 @@ void setSkinResourceAccountingLimitsForTesting(
 }
 
 void resetSkinResourceAccountingLimitsForTesting() noexcept {
+  maximumSessionDecodedBytesForTesting.store(
+      std::numeric_limits<std::size_t>::max(), std::memory_order_relaxed);
+  maximumImageDecodedBytesForTesting.store(
+      std::numeric_limits<std::size_t>::max(), std::memory_order_relaxed);
   maximumSessionEncodedBytesForTesting.store(
       std::numeric_limits<std::size_t>::max(), std::memory_order_relaxed);
   maximumAtlasSessionBytesForTesting.store(
@@ -1413,6 +1427,28 @@ std::size_t maximumAtlasSessionBytes(
 #endif
   return maximum;
 }
+
+std::size_t maximumSessionDecodedBytes(const SkinSafetyPolicy &safetyPolicy) noexcept {
+  std::size_t maximum = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumSessionDecodedBytes);
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+  if (safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
+    maximum = std::min(maximum, maximumSessionDecodedBytesForTesting.load());
+  }
+#endif
+  return maximum;
+}
+
+std::size_t maximumImageDecodeBytes(const SkinSafetyPolicy &safetyPolicy) noexcept {
+  std::size_t maximum = skinResourceLimit(
+      safetyPolicy, SkinResourcePolicy::maximumImageBytes);
+#if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
+  if (safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit)) {
+    maximum = std::min(maximum, maximumImageDecodedBytesForTesting.load());
+  }
+#endif
+  return maximum;
+}
 }
 
 bool SkinResourceSessionAccounting::addImage(
@@ -1429,8 +1465,7 @@ bool SkinResourceSessionAccounting::addImage(
       !addWithin(next.encodedBytes_, encodedBytes,
                  maximumSessionEncodedBytes(safetyPolicy_)) ||
       !addWithin(next.decodedBytes_, decodedBytes,
-                 skinResourceLimit(safetyPolicy_,
-                                   SkinResourcePolicy::maximumSessionDecodedBytes)) ||
+                 maximumSessionDecodedBytes(safetyPolicy_)) ||
       !addWithin(next.regions_, regions,
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumRegions))) {
@@ -1454,8 +1489,7 @@ bool SkinResourceSessionAccounting::addAtlas(
       !addWithin(next.atlasBytes_, decodedBytes,
                  maximumAtlasSessionBytes(safetyPolicy_)) ||
       !addWithin(next.decodedBytes_, decodedBytes,
-                 skinResourceLimit(safetyPolicy_,
-                                   SkinResourcePolicy::maximumSessionDecodedBytes)) ||
+                 maximumSessionDecodedBytes(safetyPolicy_)) ||
       !addWithin(next.glyphs_, glyphs,
                  skinResourceLimit(safetyPolicy_,
                                    SkinResourcePolicy::maximumGlyphs)) ||
@@ -3215,6 +3249,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
 
   struct PendingImageDecode {
     image_decode::ImageDecodeCoordinator::Ticket ticket = 0;
+    std::size_t reservedBytes = 0;
     std::string key;
     std::string revisionKey;
     std::string imageKey;
@@ -3231,6 +3266,103 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     }
   });
   std::map<std::string, std::size_t, std::less<>> pendingImageIndexByPath;
+  std::size_t reservedDecodeBytes = 0;
+  const auto drainPendingImages = [&]() -> bool {
+    for (const auto &pending : pendingImages) {
+      if (cancellationRequested(input.stop)) { result.cancelled = true; return false; }
+      const auto waited = coordinator_.waitTake(pending.ticket, input.stop);
+      if (waited.state == image_decode::ImageDecodeWaitState::Cancelled ||
+          waited.state == image_decode::ImageDecodeWaitState::Stopped ||
+          cancellationRequested(input.stop)) {
+        result.cancelled = true;
+        return false;
+      }
+      if (waited.state != image_decode::ImageDecodeWaitState::Ready ||
+          !waited.image) {
+        result.diagnostics.push_back(useDiagnostic(
+            "skin.resource.image_decode_failed",
+            "skin.resource.image_decode_failed",
+            "image decode failed during planning", pending.use.critical));
+        continue;
+      }
+      auto decoded = *waited.image;
+      if (decoded.byteSize() > pending.reservedBytes) {
+        result.diagnostics.push_back(useDiagnostic(
+            "skin.resource.session_limit", "skin.resource.session_limit",
+            "decoded resource exceeds its admission reservation", pending.use.critical));
+        continue;
+      }
+      {
+        std::lock_guard lock(serviceMutex_);
+        if (state_ != State::Running || stop_.stop_requested()) {
+          result.cancelled = true;
+          return false;
+        }
+      }
+      if (!skinResourceDimensionsAllowed(decoded.width, decoded.height,
+                                         decoded.byteSize(),
+                                         input.safetyPolicy)) {
+        result.diagnostics.push_back(useDiagnostic(
+            "skin.resource.session_limit", "skin.resource.session_limit",
+            "decoded resource bytes exceed the session policy",
+            pending.use.critical));
+        continue;
+      }
+      SkinResourceSessionAccounting candidateSession = session;
+      std::vector<SkinSourceRect> regions;
+      std::vector<SkinResolvedRegion> mappings;
+      if (!resolveRegions(pending.use, decoded.width, decoded.height, regions,
+                          &mappings, result.diagnostics, input.safetyPolicy)) {
+        continue;
+      }
+      if (!candidateSession.addImage(/*physicalResources=*/0,
+                                     /*logicalResources=*/0,
+                                     /*encodedBytes=*/0, decoded.byteSize(),
+                                     regions.size())) {
+        result.diagnostics.push_back(useDiagnostic(
+            "skin.resource.session_limit", "skin.resource.session_limit",
+            "resource session aggregate exceeds policy", pending.use.critical));
+        continue;
+      }
+      session = candidateSession;
+      plan.decodedBytes = session.decodedBytes();
+      unique.emplace(pending.candidatePath, plan.images.size());
+      plan.images.push_back({.id = pending.resourceId,
+                             .pixels = decoded,
+                             .regions = std::move(regions),
+                             .regionMappings = std::move(mappings)});
+      {
+        std::lock_guard lock(serviceMutex_);
+        cache_.put(pending.key, decoded);
+      }
+      decodeCache_.storeSkinImage(pending.revisionKey, pending.imageKey,
+                                  plan.images.back().pixels);
+      for (std::size_t aliasIndex = 0; aliasIndex < pending.aliasIds.size();
+           ++aliasIndex) {
+        auto &image = plan.images.back();
+        std::vector<SkinSourceRect> aliasRegions;
+        std::vector<SkinResolvedRegion> aliasMappings;
+        if (resolveRegions(pending.aliasUses[aliasIndex], image.pixels.width,
+                           image.pixels.height, aliasRegions, &aliasMappings,
+                           result.diagnostics, input.safetyPolicy)) {
+          if (session.addImage(/*physicalResources=*/0,
+                               /*logicalResources=*/0,
+                               /*encodedBytes=*/0, /*decodedBytes=*/0,
+                               aliasRegions.size())) {
+            image.aliases.push_back(pending.aliasIds[aliasIndex]);
+            image.aliasRegions.emplace(pending.aliasIds[aliasIndex],
+                                       std::move(aliasRegions));
+            image.aliasRegionMappings.emplace(pending.aliasIds[aliasIndex],
+                                              std::move(aliasMappings));
+          }
+        }
+      }
+    }
+    pendingImages.clear();
+    pendingImageIndexByPath.clear();
+    reservedDecodeBytes = 0;
+    return true;
+  };
 
   for (const SkinResourceDefinition &definition : input.model.model.resources) {
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -3238,6 +3370,16 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     if (!resource) continue;
     const auto use = uses.images.find(resource->id);
     if (use == uses.images.end()) continue;
+    const bool bounded = input.safetyPolicy.enforces(SkinSafetyGuard::ResourceAllocationLimit);
+    const auto sessionLimit = maximumSessionDecodedBytes(input.safetyPolicy);
+    const auto imageLimit = maximumImageDecodeBytes(input.safetyPolicy);
+    const auto remainingDecodeBytes = [&] {
+      return sessionLimit - std::min(sessionLimit, session.decodedBytes()) - reservedDecodeBytes;
+    };
+    if (pendingImages.size() >= coordinator_.workerCount() ||
+        (bounded && imageLimit > remainingDecodeBytes())) {
+      if (!drainPendingImages()) return result;
+    }
     const auto configured = applyConfiguredFileSelection(
         resource->virtualPath, input.configuration, input.fileSystem,
         input.safetyPolicy);
@@ -3295,6 +3437,13 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       pending.aliasUses.push_back(use->second);
       continue;
     }
+    const auto reservation = bounded ? std::min(imageLimit, remainingDecodeBytes()) : imageLimit;
+    if (reservation == 0) {
+      result.diagnostics.push_back(useDiagnostic(
+          "skin.resource.session_limit", "skin.resource.session_limit",
+          "resource session aggregate exceeds policy", use->second.critical));
+      continue;
+    }
     const auto read = input.fileSystem.readResolvedResource(
         *candidate.normalizedVirtualPath,
         skinResourceLimit(input.safetyPolicy,
@@ -3349,23 +3498,21 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
         auto owned = std::make_shared<const std::vector<std::byte>>(
             std::move(read.bytes));
         const auto ticket = coordinator_.request(
-            {.key = key,
+            {.key = key + ":decode:" + std::to_string(reservation) + ":" +
+                    std::to_string(skinResourceDimensionLimit(input.safetyPolicy)),
              .path = {},
              .maximumDimension =
                  skinResourceDimensionLimit(input.safetyPolicy),
              .maximumEncodedBytes = skinResourceLimit(
                  input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes),
-             .maximumDecodedBytes = skinResourceLimit(
-                 input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
+             .maximumDecodedBytes = reservation,
              .encoded = std::move(owned)});
         auto cancelUnqueuedTicket = makeScopeExit([&] {
           coordinator_.cancel(ticket);
         });
-        // Queue the ticket without waiting so all image decodes run in
-        // parallel on the coordinator's workers; finalize happens in the
-        // wait pass after the loop.
         pendingImages.push_back({
             .ticket = ticket,
+            .reservedBytes = reservation,
             .key = key,
             .revisionKey = revisionKey,
             .imageKey = imageKey,
@@ -3376,6 +3523,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
         cancelUnqueuedTicket.dismiss();
         pendingImageIndexByPath.emplace(candidatePath,
                                         pendingImages.size() - 1);
+        if (bounded) reservedDecodeBytes += reservation;
         continue;
       }
     }
@@ -3416,90 +3564,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       decodeCache_.storeSkinImage(revisionKey, imageKey, *decoded);
     }
   }
-  // Wait for every queued image decode and finalize it. The coordinator
-  // decoded the images in parallel while this thread queued them, so each
-  // wait resolves promptly.
-  for (const auto &pending : pendingImages) {
-    if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
-    const auto waited = coordinator_.waitTake(pending.ticket, input.stop);
-    if (waited.state == image_decode::ImageDecodeWaitState::Cancelled ||
-        waited.state == image_decode::ImageDecodeWaitState::Stopped ||
-        cancellationRequested(input.stop)) {
-      result.cancelled = true;
-      return result;
-    }
-    if (waited.state != image_decode::ImageDecodeWaitState::Ready ||
-        !waited.image) {
-      result.diagnostics.push_back(useDiagnostic(
-          "skin.resource.image_decode_failed",
-          "skin.resource.image_decode_failed",
-          "image decode failed during planning", pending.use.critical));
-      continue;
-    }
-    auto decoded = *waited.image;
-    {
-      std::lock_guard lock(serviceMutex_);
-      if (state_ != State::Running || stop_.stop_requested()) {
-        result.cancelled = true;
-        return result;
-      }
-      cache_.put(pending.key, decoded);
-    }
-    if (!skinResourceDimensionsAllowed(decoded.width, decoded.height,
-                                       decoded.byteSize(),
-                                       input.safetyPolicy)) {
-      result.diagnostics.push_back(useDiagnostic(
-          "skin.resource.session_limit", "skin.resource.session_limit",
-          "decoded resource bytes exceed the session policy",
-          pending.use.critical));
-      continue;
-    }
-    SkinResourceSessionAccounting candidateSession = session;
-    std::vector<SkinSourceRect> regions;
-    std::vector<SkinResolvedRegion> mappings;
-    if (!resolveRegions(pending.use, decoded.width, decoded.height, regions,
-                        &mappings, result.diagnostics, input.safetyPolicy)) {
-      continue;
-    }
-    if (!candidateSession.addImage(/*physicalResources=*/0,
-                                   /*logicalResources=*/0,
-                                   /*encodedBytes=*/0, decoded.byteSize(),
-                                   regions.size())) {
-      result.diagnostics.push_back(useDiagnostic(
-          "skin.resource.session_limit", "skin.resource.session_limit",
-          "resource session aggregate exceeds policy", pending.use.critical));
-      continue;
-    }
-    session = candidateSession;
-    plan.decodedBytes = session.decodedBytes();
-    unique.emplace(pending.candidatePath, plan.images.size());
-    plan.images.push_back({.id = pending.resourceId,
-                           .pixels = decoded,
-                           .regions = std::move(regions),
-                           .regionMappings = std::move(mappings)});
-    decodeCache_.storeSkinImage(pending.revisionKey, pending.imageKey,
-                                plan.images.back().pixels);
-    for (std::size_t aliasIndex = 0; aliasIndex < pending.aliasIds.size();
-         ++aliasIndex) {
-      auto &image = plan.images.back();
-      std::vector<SkinSourceRect> aliasRegions;
-      std::vector<SkinResolvedRegion> aliasMappings;
-      if (resolveRegions(pending.aliasUses[aliasIndex], image.pixels.width,
-                         image.pixels.height, aliasRegions, &aliasMappings,
-                         result.diagnostics, input.safetyPolicy)) {
-        if (session.addImage(/*physicalResources=*/0,
-                             /*logicalResources=*/0,
-                             /*encodedBytes=*/0, /*decodedBytes=*/0,
-                             aliasRegions.size())) {
-          image.aliases.push_back(pending.aliasIds[aliasIndex]);
-          image.aliasRegions.emplace(pending.aliasIds[aliasIndex],
-                                     std::move(aliasRegions));
-          image.aliasRegionMappings.emplace(pending.aliasIds[aliasIndex],
-                                            std::move(aliasMappings));
-        }
-      }
-    }
-  }
+  if (!drainPendingImages()) return result;
   StartupTiming::instance().mark("decodeAndPlan: image decodes finished");
   const auto fontRequests = collectFontAtlasRequests(
       input.model, uses, input.fileSystem, input.configuration,

@@ -3125,6 +3125,108 @@ void testBitmapFontCachedPagesChargeEncodedBudgetConsistently() {
          "the warm rejection also leaves the decode cache empty");
 }
 
+void testImagePlanningBoundsAdmittedAndReadyOwnership() {
+  namespace fs = std::filesystem;
+  TemporaryDirectory temporary;
+  const auto source = temporary.root / "visible/BoundedImages";
+  fs::create_directories(source / "entry/resources");
+  std::ofstream(source / "entry/play.luaskin") << "return {}\n";
+  constexpr std::size_t imageCount = 16;
+  for (std::size_t index = 0; index < imageCount; ++index) {
+    std::ofstream(source / "entry/resources" / (std::to_string(index) + ".png"),
+                  std::ios::binary).put(static_cast<char>(index));
+  }
+  const auto package = *skin::normalizePackageId("BoundedImages").package;
+  const auto entry = *skin::normalizeEntryPath(package, "entry/play.luaskin").entry;
+  skin::SkinStorageRoots roots{
+      .visiblePackages = temporary.root / "visible",
+      .privateRevisions = temporary.root / "revisions",
+      .privateCatalog = temporary.root / "catalog",
+      .profileOverlays = temporary.root / "overlays", .liveSources = true};
+  auto aliases = skin::createPlatformSkinAliasDetector();
+  skin::SkinTreeSnapshotter snapshotter(roots, *aliases);
+  auto snapshot = snapshotter.snapshot(source, package, {}, {});
+  expect(snapshot.prepared.has_value(), "bounded image package snapshots");
+  if (!snapshot.prepared) return;
+  std::string error;
+  auto lease = std::move(*snapshot.prepared).publish(error);
+  expect(lease.has_value(), "bounded image revision publishes");
+  if (!lease) return;
+  auto files = skin::LuaSkinFileSystem::create(
+      {.revision = lease->readView(), .entry = entry, .storageRoots = roots});
+  expect(files.fileSystem != nullptr, "bounded image filesystem opens");
+  if (!files.fileSystem) return;
+  auto model = singleImageModel("resources/0.png");
+  model.model.resources.clear();
+  model.model.objects.clear();
+  for (std::size_t index = 0; index < imageCount; ++index) {
+    const auto id = static_cast<skin::SkinResourceId>(index + 1);
+    model.model.resources.emplace_back(skin::SkinImageResource{
+        .id = id, .virtualPath = "resources/" + std::to_string(index) + ".png"});
+    model.model.objects.push_back({.id = id,
+        .payload = skin::SkinImageObject{.orderedStates = {{
+            .resource = id, .frames = {{.w = 2, .h = 2}}}}}, .critical = true});
+  }
+  skin::setSkinResourceAccountingLimitsForTesting(
+      std::numeric_limits<std::size_t>::max(),
+      std::numeric_limits<std::size_t>::max(), 128, 32);
+  struct ResetLimits {
+    ~ResetLimits() { skin::resetSkinResourceAccountingLimitsForTesting(); }
+  } resetLimits;
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool releaseFirst = false;
+  std::size_t entered = 0;
+  std::size_t returned = 0;
+  std::size_t peakOwnedBytes = 0;
+  std::vector<std::weak_ptr<std::vector<unsigned char>>> buffers;
+  skin::SkinResourcePreparationService service(
+      [&](std::span<const std::byte> encoded, std::stop_token)
+          -> std::optional<image_decode::DecodedImageData> {
+        std::unique_lock lock(mutex);
+        image_decode::DecodedImageData image{.width = 2, .height = 2,
+            .rgba = std::make_shared<std::vector<unsigned char>>(16)};
+        buffers.push_back(image.rgba);
+        peakOwnedBytes = std::max(peakOwnedBytes, 16U * static_cast<std::size_t>(
+            std::ranges::count_if(buffers, [](const auto &buffer) { return !buffer.expired(); })));
+        ++entered;
+        changed.notify_all();
+        if (encoded.front() == std::byte{0}) {
+          changed.wait(lock, [&] { return releaseFirst; });
+        }
+        ++returned;
+        changed.notify_all();
+        return image;
+      }, 6);
+  skin::BeatorajaSkinConfiguration configuration;
+  std::optional<skin::SkinResourcePlanResult> planned;
+  std::thread planner([&] {
+    planned.emplace(service.decodeAndPlan(
+        {.revision = lease->clone(), .entry = entry, .fileSystem = *files.fileSystem,
+         .model = model, .configuration = configuration}));
+  });
+  {
+    std::unique_lock lock(mutex);
+    expect(changed.wait_for(lock, std::chrono::seconds(5), [&] { return returned >= 3; }),
+           "later decodes complete while the first ticket remains blocked");
+    const bool queuedBeyondReservations = changed.wait_for(
+        lock, std::chrono::milliseconds(100), [&] { return entered > 4; });
+    expect(!queuedBeyondReservations && entered == 4 && returned == 3,
+           "128-byte budget reserves four 32-byte decodes rather than queuing the corpus");
+    releaseFirst = true;
+  }
+  changed.notify_all();
+  planner.join();
+  expect(peakOwnedBytes <= 128 && entered == 8,
+         "admitted plan pixels plus ready and in-flight pixels never exceed the session budget");
+  expect(planned && !planned->plan && std::ranges::any_of(
+             planned->diagnostics, [](const auto &entry) {
+               return entry.code == "skin.resource.session_limit";
+             }), "aggregate exhaustion diagnoses a session limit before further decoding");
+  std::cout << "decode ownership: peak=" << peakOwnedBytes << " budget=128 admitted="
+            << entered << " corpus=16\n";
+}
+
 void testCancelledImagePlansReleaseEveryDecodeTicket() {
   namespace fs = std::filesystem;
   TemporaryDirectory temporary;
@@ -3350,6 +3452,7 @@ int main() {
   testBitmapFontCachedPagesChargeEncodedBudgetConsistently();
   testSkinImagesAreCachedAcrossDecodeRuns();
   testCancelledImagePlansReleaseEveryDecodeTicket();
+  testImagePlanningBoundsAdmittedAndReadyOwnership();
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
   return 0;

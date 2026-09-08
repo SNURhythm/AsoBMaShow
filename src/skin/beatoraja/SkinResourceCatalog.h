@@ -160,7 +160,9 @@ void resetSkinResourcePlatformAssetReadsForTesting() noexcept;
 skinResourcePlatformAssetReadsForTesting() noexcept;
 void setSkinResourceAccountingLimitsForTesting(
     std::size_t maximumSessionEncodedBytes,
-    std::size_t maximumAtlasSessionBytes) noexcept;
+    std::size_t maximumAtlasSessionBytes,
+    std::size_t maximumSessionDecodedBytes = std::numeric_limits<std::size_t>::max(),
+    std::size_t maximumImageDecodedBytes = std::numeric_limits<std::size_t>::max()) noexcept;
 void resetSkinResourceAccountingLimitsForTesting() noexcept;
 [[nodiscard]] std::size_t
 skinResourceCommittedEncodedBytesForTesting() noexcept;
