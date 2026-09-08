@@ -237,7 +237,11 @@ bool processDownloadedArchive(
   std::string extractError;
   if (!dependencies.extractArchive(request.attempt.archivePath,
                                    request.attempt.extractedPath, extractError,
-                                   progressCallback)) {
+                                   progressCallback,
+                                   [&cancelled] { return cancelled.load(); })) {
+    if (reportCancelled(cancelled, result)) {
+      return false;
+    }
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = extractError.empty() ? "Archive extraction failed."
                                           : extractError;

@@ -764,7 +764,8 @@ void testWorkflowKeepsDirectArchiveWithoutExtraction() {
       .extractArchive =
           [&extracted](const std::filesystem::path &,
                        const std::filesystem::path &, std::string &,
-                       BmsSearchDownloadProgressCallback) {
+                       BmsSearchDownloadProgressCallback,
+                       asobmshow::bms_search::ArchiveExtractionCancelled) {
             extracted = true;
             return false;
           },
@@ -867,7 +868,8 @@ void testWorkflowCommitsFallbackExtractionMatch() {
       .extractArchive =
           [](const std::filesystem::path &,
              const std::filesystem::path &destination, std::string &,
-             BmsSearchDownloadProgressCallback) {
+             BmsSearchDownloadProgressCallback,
+             asobmshow::bms_search::ArchiveExtractionCancelled) {
             writeText(destination / "chart.bms", "chart");
             return true;
           },
@@ -922,7 +924,8 @@ void testWorkflowStagesFallbackExtractionMismatch() {
       .extractArchive =
           [](const std::filesystem::path &,
              const std::filesystem::path &destination, std::string &,
-             BmsSearchDownloadProgressCallback) {
+             BmsSearchDownloadProgressCallback,
+             asobmshow::bms_search::ArchiveExtractionCancelled) {
             writeText(destination / "wrong.bms", "wrong");
             return true;
           },
@@ -974,7 +977,8 @@ void testWorkflowKeepsMismatchDecisionWhenArchiveCleanupFails() {
       .extractArchive =
           [](const std::filesystem::path &,
              const std::filesystem::path &destination, std::string &,
-             BmsSearchDownloadProgressCallback) {
+             BmsSearchDownloadProgressCallback,
+             asobmshow::bms_search::ArchiveExtractionCancelled) {
             writeText(destination / "wrong.bms", "wrong");
             return true;
           },
@@ -1020,7 +1024,8 @@ void testWorkflowRejectsInconclusiveExtractedValidation() {
       .extractArchive =
           [](const std::filesystem::path &,
              const std::filesystem::path &destination, std::string &,
-             BmsSearchDownloadProgressCallback) {
+             BmsSearchDownloadProgressCallback,
+             asobmshow::bms_search::ArchiveExtractionCancelled) {
             writeText(destination / "chart.bms", "chart");
             return true;
           },
@@ -1157,7 +1162,14 @@ void testFindBmsDownloadProgressDisplaysSizes() {
 
 } // namespace
 
+#include "find_bms_extraction_fixture.h"
+
 int main() {
+  testExtractionLimitsAndCancellation();
+#if ASOBMSHOW_HAS_LIBARCHIVE
+  testUnknownSizeStreamIsBounded();
+#endif
+  testDownloadAttemptExtractionCleanup();
   testStorageNamesDistinguishSameNamedPackages();
   testStorageNamesPreserveLongAndCompoundExtensions();
   testPackageCandidateRespectsBuildArchiveSupport();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ArchiveDecision.h"
+#include "ArchiveExtraction.h"
 #include "DownloadStaging.h"
 
 #include <atomic>
@@ -38,7 +39,8 @@ struct DownloadedArchiveWorkflowDependencies {
       decideArchive;
   std::function<bool(const std::filesystem::path &,
                      const std::filesystem::path &, std::string &,
-                     BmsSearchDownloadProgressCallback)>
+                     BmsSearchDownloadProgressCallback,
+                     ArchiveExtractionCancelled)>
       extractArchive;
   std::function<ExtractedArchiveDecision(const std::filesystem::path &,
                                          const std::string &)>

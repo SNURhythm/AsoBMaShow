@@ -543,9 +543,11 @@ bool downloadAndExtractArchive(
           [](const std::filesystem::path &path,
              const std::filesystem::path &destination,
              std::string &errorMessage,
-             BmsSearchDownloadProgressCallback callback) {
+             BmsSearchDownloadProgressCallback callback,
+             ArchiveExtractionCancelled extractionCancelled) {
             return extractDownloadedArchive(path, destination, errorMessage,
-                                            std::move(callback));
+                                            std::move(callback),
+                                            std::move(extractionCancelled));
           },
       .decideExtracted = decideExtractedArchive,
       .commitArtifact =

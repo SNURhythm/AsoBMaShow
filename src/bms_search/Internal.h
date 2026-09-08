@@ -5,6 +5,7 @@
 #include "../bms_parser.hpp"
 #include "../path.h"
 #include "../targets.h"
+#include "ArchiveExtraction.h"
 
 #include <SDL2/SDL.h>
 #include <algorithm>
@@ -191,10 +192,6 @@ std::vector<ExtractedLink> extractLinkRefs(const std::string &baseUrl,
                                            const std::string &html);
 
 bool safeArchivePath(const std::string &name, std::filesystem::path &outPath);
-bool extractDownloadedArchive(
-    const std::filesystem::path &archivePath,
-    const std::filesystem::path &extractDirectory, std::string &errorMessage,
-    BmsSearchDownloadProgressCallback progressCallback);
 void writeArchiveEntryDiagnostics(const std::filesystem::path &archivePath,
                                   const std::filesystem::path &outputPath);
 bool containsBmsFile(const std::filesystem::path &root);

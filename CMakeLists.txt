@@ -5364,8 +5364,20 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(profile_settings_persistence_tests PRIVATE cxx_std_23)
     target_link_libraries(profile_settings_persistence_tests PRIVATE ${COMMON_LIBS})
 
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/find_bms_download_attempt_extract.py
+                --root ${CMAKE_SOURCE_DIR}
+                --output ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
+        DEPENDS tests/find_bms_download_attempt_extract.py src/bms_search/DownloadSupport.cpp
+        VERBATIM
+    )
     add_executable(find_bms_download_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/find_bms_download_attempt_methods.inc
         tests/find_bms_download_tests.cpp
+        src/bms_search/ArchiveSupport.cpp
+        src/bms_search/Common.cpp
         src/bms_search/ArchiveDecision.cpp
         src/bms_search/DownloadedArchiveWorkflow.cpp
         src/bms_search/DownloadStaging.cpp
@@ -5383,6 +5395,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(find_bms_download_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
     )
     target_compile_features(find_bms_download_tests PRIVATE cxx_std_23)
     if(TARGET SDL2::SDL2)
