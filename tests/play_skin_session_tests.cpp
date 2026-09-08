@@ -32,6 +32,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <span>
@@ -709,6 +711,7 @@ struct ActivationFixtureOptions {
   bool musicSelectMissingCallbackFontBearing = false;
   bool musicSelectSongListBearing = false;
   bool musicSelectDuplicateSongListDestinations = false;
+  std::string musicSelectCallbackDispatch;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -941,7 +944,37 @@ if skin_config then
   assert(math.abs(main_state.volume_bg() - 0.25) < 0.000001)
 )lua";
     }
-    if (options.musicSelectMissingCallbackFontBearing) {
+    if (!options.musicSelectCallbackDispatch.empty()) {
+      script += "\n  local mode = '" + options.musicSelectCallbackDispatch +
+                R"lua('
+  local started = false
+  local function dispatch(remaining)
+    if mode == 'finite' and remaining == 0 then
+      assert(main_state.event_exec(210, 17, 23))
+      return
+    end
+    assert(main_state.set_volume_sys(0.5))
+    assert(main_state.event_exec(mode == 'mutual' and 1001 or 1000,
+                                 remaining - 1))
+  end
+  return {
+    type = 5, w = 1280, h = 720, destination = {},
+    customEvents = {
+      {id = 1000, action = dispatch},
+      {id = 1001, action = function(remaining)
+        assert(main_state.event_exec(1000, remaining))
+      end}
+    },
+    customTimers = {{id = 10000, timer = function()
+      if not started then
+        started = true
+        assert(main_state.event_exec(1000, 8))
+      end
+      return 0
+    end}}
+  }
+)lua";
+    } else if (options.musicSelectMissingCallbackFontBearing) {
       script += R"lua(
   return {
     type = 5, w = 1280, h = 720,
@@ -3689,6 +3722,155 @@ void testMusicSelectLuaSessionContainsRecursiveCustomEventFailure() {
                            "skin.music_select_session.custom_event_cycle"),
          "a recursive music-select custom event is contained without "
          "failing the selector frame");
+}
+
+void testMusicSelectLuaCallbackDispatch(std::string_view mode,
+                                      SkinSafetyLevel safetyLevel) {
+  const bool writerBatch = mode == "floats" || mode == "strings" ||
+                           mode == "mixed" || mode == "writers";
+  ActivationFixture fixture(
+      {.skinType = 5,
+       .resourceBearing = writerBatch,
+       .musicSelectInteractionBearing = writerBatch,
+       .musicSelectCallbackDispatch = writerBatch ? "" : std::string(mode)});
+  if (!fixture.ready()) return;
+  auto context = fixture.musicSelectContext();
+  auto preparation = MusicSelectSkinSession::prepare(
+      {.activation = fixture.takeActivation(),
+       .profileId = fixture.profile(),
+       .sessionSerial = 99},
+      {.storageRoots = context.storageRoots,
+       .resourcePreparation = context.resourcePreparation,
+       .initialFrame = context.initialFrame});
+  expect(preparation.prepared.has_value(), "callback dispatch fixture prepares");
+  if (!preparation.prepared) return;
+  auto &prepared = *preparation.prepared;
+  prepared.safetyPolicy = SkinSafetyPolicy(safetyLevel);
+  if (safetyLevel == SkinSafetyLevel::Standard) {
+    const auto &activation = prepared.request.activation;
+    auto documentFiles = LuaSkinFileSystem::create(
+        {.revision = activation.revision.readView(),
+         .entry = activation.entry,
+         .storageRoots = context.storageRoots,
+         .safetyPolicy = prepared.safetyPolicy});
+    auto luaFiles = LuaSkinFileSystem::create(
+        {.revision = activation.revision.readView(),
+         .entry = activation.entry,
+         .storageRoots = context.storageRoots,
+         .profileId = fixture.profile(),
+         .safetyPolicy = prepared.safetyPolicy});
+    expect(documentFiles.fileSystem && luaFiles.fileSystem,
+           "strict callback dispatch filesystems create");
+    if (!documentFiles.fileSystem || !luaFiles.fileSystem) return;
+    GameplaySkinDocumentLoader loader;
+    auto loaded = loader.load(
+        {.sourceFormat = GameplaySkinSourceFormat::Lua,
+         .entry = activation.entry,
+         .documentFileSystem = *documentFiles.fileSystem,
+         .luaFileSystem = std::move(luaFiles.fileSystem),
+         .desiredSettings = &activation.reconciledSettings,
+         .expectedConfigurationDigest = activation.configurationDigest,
+         .luaPurpose = LuaRuntimePurpose::MusicSelect,
+         .loadConfiguredLua = [](LuaSkinRuntime &runtime,
+                                 const BeatorajaSkinConfiguration &configuration,
+                                 std::vector<SkinDiagnostic> &) {
+           return runtime.loadConfigured(configuration);
+         },
+         .safetyPolicy = prepared.safetyPolicy});
+    expect(loaded.document.has_value(), "strict callback dispatch runtime loads");
+    if (!loaded.document) return;
+    prepared.document = std::move(*loaded.document);
+  }
+  if (writerBatch) {
+    auto &runtime = *prepared.document.luaRuntime;
+    const auto floatWriter = runtime.compileCallbackScript(
+        "require('main_state').event_exec(211)", LuaCallbackScriptKind::Statement);
+    const auto stringWriter = runtime.compileCallbackScript(
+        mode == "mixed" || mode == "writers"
+            ? "require('main_state').event_exec(1000)"
+            : "require('main_state').event_exec(212)",
+        LuaCallbackScriptKind::Statement);
+    const auto event = runtime.compileCallbackScript(
+        "require('main_state').event_exec(212)", LuaCallbackScriptKind::Statement);
+    auto &model = prepared.document.model.model;
+    expect(floatWriter.callback && stringWriter.callback && event.callback &&
+               model.floatWriters.size() == 1 && model.stringWriters.size() == 1,
+           "writer dispatch uses retained real Lua callbacks");
+    if (!floatWriter.callback || !stringWriter.callback || !event.callback ||
+        model.floatWriters.size() != 1 || model.stringWriters.size() != 1) return;
+    model.floatWriters.front().source = *floatWriter.callback;
+    model.stringWriters.front().source = *stringWriter.callback;
+    model.events.push_back({.id = SkinEventBindingId{1}, .source = *event.callback});
+    model.customEvents.push_back({.id = 1000, .action = SkinEventBindingId{1}});
+  }
+  SessionQuadBackend quadBackend;
+  auto created = MusicSelectSkinSession::finalize(
+      std::move(prepared),
+      {.resourcePreparation = context.resourcePreparation,
+       .textureDevice = context.textureDevice,
+       .movieDevice = context.movieDevice,
+       .liveResourceCounters = context.liveResourceCounters,
+       .quadBackend = &quadBackend});
+  expect(created.session != nullptr, "callback dispatch session finalizes");
+  if (!created.session) return;
+
+  std::jthread watchdog([](std::stop_token stop) {
+    std::mutex mutex;
+    std::unique_lock lock(mutex);
+    std::condition_variable_any wake;
+    wake.wait_for(lock, stop, std::chrono::seconds(2), [] { return false; });
+    if (!stop.stop_requested()) {
+      std::cerr << "FAIL: Lua callback dispatch did not terminate within 2s\n";
+      std::_Exit(124);
+    }
+  });
+  RenderContext renderContext;
+  MusicSelectSkinFrame frame{.serial = 1};
+  if (writerBatch) {
+    expect(created.session->render(renderContext, frame),
+           "writer dispatch publishes its real pointer layout");
+    const int count = mode == "writers" ? 1 : mode == "mixed" ? 400 : 1100;
+    for (int index = 0; index < count; ++index) {
+      if (mode != "strings") {
+        expect(created.session->queuePointerDown(
+                   {.x = 225.0F, .y = 915.0F}, 0, index).consumed,
+               "float callback queues through the slider pointer path");
+      }
+      if (mode != "floats") {
+        expect(created.session->queueStringWrite(SkinStringWriterId{1}, "value"),
+               "string callback queues through the text writer path");
+      }
+    }
+    frame.serial = 2;
+  }
+  const bool rendered = created.session->render(renderContext, frame);
+  const auto actions = created.session->takePublishedActions();
+  const auto diagnostics = created.session->takeLastDiagnostics();
+  if (mode == "writers") {
+    expect(rendered && diagnostics.empty() && actions.size() == 2 &&
+               std::get<int>(actions[0].selector.value) == 211 &&
+               std::get<int>(actions[1].selector.value) == 212,
+           "finite float/string callbacks and a nested event keep dispatch order");
+  } else if (mode == "finite") {
+    expect(rendered && diagnostics.empty() && actions.size() == 9 &&
+               actions.back().kind == MusicSelectSkinActionKind::Event &&
+               std::get<int>(actions.back().selector.value) == 210 &&
+               actions.back().arguments == std::vector<int>({17, 23}),
+           "finite nested Lua callbacks may revisit an event and publish once");
+  } else {
+    expect(!rendered && actions.empty() && !diagnostics.empty(),
+           "excessive Lua dispatch fails without publishing partial actions");
+    if (safetyLevel == SkinSafetyLevel::BeatorajaCompatibility) {
+      expect(hasDiagnostic(diagnostics,
+                           "skin.music_select_session.callback_dispatch_limit"),
+             "compatibility callbacks report the shared host dispatch bound");
+    }
+  }
+  ++frame.serial;
+  expect(created.session->render(renderContext, frame) &&
+             created.session->takePublishedActions().empty() &&
+             created.session->takeLastDiagnostics().empty(),
+         "the next frame does not replay completed or abandoned callbacks");
 }
 
 void testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas() {
@@ -7846,6 +8028,15 @@ void testRequestedExternalResultSkinCreatesSession() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 4 && std::string_view(argv[1]) == "--music-select-callback-dispatch") {
+    testMusicSelectLuaCallbackDispatch(
+        argv[2], std::string_view(argv[3]) == "strict"
+                     ? SkinSafetyLevel::Standard
+                     : SkinSafetyLevel::BeatorajaCompatibility);
+    std::cout << "callback dispatch " << argv[2] << ' ' << argv[3] << ": "
+              << failures << " failure(s)\n";
+    return failures == 0 ? 0 : 1;
+  }
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();
@@ -7889,6 +8080,13 @@ int main(int argc, char **argv) {
   testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
   testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();
   testMusicSelectLuaSessionContainsRecursiveCustomEventFailure();
+  for (const auto safetyLevel : {SkinSafetyLevel::Standard,
+                                 SkinSafetyLevel::BeatorajaCompatibility}) {
+    for (const std::string_view mode : {"self", "mutual", "finite", "floats",
+                                       "strings", "mixed", "writers"}) {
+      testMusicSelectLuaCallbackDispatch(mode, safetyLevel);
+    }
+  }
   testResourceSessionOwnsUploadsAndExactRuntimeStringAtlas();
   testPostUploadCancellationRollsBackResourcesOnOwnerThread();
   testPreparedSessionRunsFiveHundredFramesWithoutLoadingAgain();

@@ -697,6 +697,9 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
       publishedActions_ = std::exchange(frameActions_, {});
     } else {
       frameActions_.clear();
+      queuedFloatWriters_.clear();
+      queuedStringWriters_.clear();
+      queuedEvents_.clear();
     }
     return success;
   };
@@ -740,7 +743,8 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
         "Music-select Lua runtime rejected the render frame.")));
     return finishFrame(false);
   }
-  if (!executeQueuedCallbacks(bridge)) return finishFrame(false);
+  std::size_t remainingDispatches = 1024;
+  if (!executeQueuedCallbacks(remainingDispatches)) return finishFrame(false);
 
   for (const auto &[id, index] : customTimerLastDefinitionIndexes_) {
     const auto &timer = model_.model.customTimers[index];
@@ -828,14 +832,14 @@ bool MusicSelectSkinSession::render(RenderContext &renderContext,
       continue;
     }
     if (!queueEventBinding(event.action, {}) ||
-        !executeQueuedCallbacks(bridge)) {
+        !executeQueuedCallbacks(remainingDispatches)) {
       return finishFrame(false);
     }
     customEventLastExecutionMicros_.insert_or_assign(id,
                                                      currentEventMicros_);
   }
 
-  if (!executeQueuedCallbacks(bridge)) return finishFrame(false);
+  if (!executeQueuedCallbacks(remainingDispatches)) return finishFrame(false);
 
   RuntimeStringsByObject observedText;
   SkinExternalFrameOwnership ownership(frame.serial, sessionSerial_);
@@ -1314,11 +1318,22 @@ bool MusicSelectSkinSession::queueFloatWriter(
 }
 
 bool MusicSelectSkinSession::executeQueuedCallbacks(
-    MusicSelectSkinStateBridge &) {
+    std::size_t &remainingDispatches) {
+  const auto consumeDispatch = [&]() {
+    if (remainingDispatches == 0) {
+      diagnostics_.push_back(failure(
+          "skin.music_select_session.callback_dispatch_limit",
+          "Music-select skin callback dispatch reached its frame limit."));
+      return false;
+    }
+    --remainingDispatches;
+    return true;
+  };
   while (!queuedFloatWriters_.empty() || !queuedStringWriters_.empty() ||
          !queuedEvents_.empty()) {
     auto floats = std::exchange(queuedFloatWriters_, {});
     for (const auto &queued : floats) {
+      if (!consumeDispatch()) return false;
       const auto binding = std::ranges::find_if(
           model_.model.floatWriters,
           [&](const SkinFloatWriterBinding &candidate) {
@@ -1345,6 +1360,7 @@ bool MusicSelectSkinSession::executeQueuedCallbacks(
 
     auto strings = std::exchange(queuedStringWriters_, {});
     for (const auto &queued : strings) {
+      if (!consumeDispatch()) return false;
       const auto binding = std::ranges::find_if(
           model_.model.stringWriters,
           [&](const SkinStringWriterBinding &candidate) {
@@ -1371,6 +1387,7 @@ bool MusicSelectSkinSession::executeQueuedCallbacks(
 
     auto events = std::exchange(queuedEvents_, {});
     for (const auto &queued : events) {
+      if (!consumeDispatch()) return false;
       const auto binding = std::ranges::find_if(
           model_.model.events, [&](const SkinEventBinding &candidate) {
             return candidate.id == queued.binding;

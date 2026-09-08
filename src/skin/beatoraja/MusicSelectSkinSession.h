@@ -230,7 +230,7 @@ private:
                                        std::span<const int>,
                                        std::span<const int> resolutionPath = {});
   [[nodiscard]] bool queueFloatWriter(const SkinWriterInvocation &);
-  [[nodiscard]] bool executeQueuedCallbacks(MusicSelectSkinStateBridge &);
+  [[nodiscard]] bool executeQueuedCallbacks(std::size_t &remainingDispatches);
   void updateBuiltinImages(const MusicSelectSkinFrame &);
   [[nodiscard]] bool
   updateRuntimeTextAtlases(const MusicSelectSkinFrame &);
