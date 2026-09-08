@@ -64,6 +64,9 @@ std::optional<std::string> beatorajaReplayOptionName(int value) {
 namespace long_note_mode { int valueFromId(int value) { return value; } }
 int normalizeChartLongNoteModeValue(int value) { return value; }
 void applyEffectiveLongNoteModeToChart(bms_parser::Chart &, int) {}
+void applyDoublePlayFlipToChart(bms_parser::Chart &) {
+  assert(false && "launch cancellation fixture does not enable double-play flip");
+}
 struct StartupTiming {
   static StartupTiming &instance() { static StartupTiming timing; return timing; }
   void mark(const char *) {}

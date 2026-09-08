@@ -88,6 +88,9 @@ int valueFromId(const std::string &) { return 0; }
 }
 int normalizeChartLongNoteModeValue(int value) { return value; }
 void applyEffectiveLongNoteModeToChart(bms_parser::Chart &, int) {}
+void applyDoublePlayFlipToChart(bms_parser::Chart &) {
+  assert(false && "export preload fixture does not enable double-play flip");
+}
 struct ModernChartResultRecord {};
 struct ReplayData {};
 namespace replay {
