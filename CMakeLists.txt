@@ -4718,6 +4718,32 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(skin_movie_catalog_types_tests PRIVATE cxx_std_23)
         target_compile_definitions(skin_movie_catalog_types_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}" ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1 ASOBMASHOW_SKIN_RESOURCE_TESTING=1)
         target_link_libraries(skin_movie_catalog_types_tests PRIVATE ${COMMON_LIBS} bgfx utf8proc::utf8proc)
+        get_target_property(SKIN_MOVIE_CLOCK_SOURCES skin_movie_catalog_types_tests SOURCES)
+        list(REMOVE_ITEM SKIN_MOVIE_CLOCK_SOURCES tests/skin_movie_catalog_types_tests.cpp)
+        add_executable(skin_movie_clock_tests
+            tests/skin_movie_clock_tests.cpp
+            tests/skin_movie_clock_video_fixture.cpp
+            ${SKIN_MOVIE_CLOCK_SOURCES}
+            src/rendering/common.cpp
+            src/rendering/SkinQuadBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+            src/skin/beatoraja/PlaySkinViewport.cpp
+            src/skin/beatoraja/SkinDestinationEvaluator.cpp
+            src/utils/Stopwatch.cpp
+            src/video/VideoDecodeState.cpp
+            src/video/VideoFrameLayout.cpp
+        )
+        target_include_directories(skin_movie_clock_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(skin_movie_clock_tests PRIVATE cxx_std_23)
+        target_compile_definitions(skin_movie_clock_tests PRIVATE
+            ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+            ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
+            ASOBMASHOW_SKIN_RESOURCE_TESTING=1
+            ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE=1)
+        target_link_libraries(skin_movie_clock_tests PRIVATE ${COMMON_LIBS} bgfx yogacore utf8proc::utf8proc)
+        if(APPLE)
+            target_link_libraries(skin_movie_clock_tests PRIVATE iconv)
+        endif()
 
         add_executable(skin_decode_cache_tests
             tests/skin_decode_cache_tests.cpp
@@ -7893,6 +7919,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     endif()
     if (TARGET skin_movie_catalog_types_tests)
+        foreach(movie_clock_scenario immediate delayed seek cleanup)
+            add_test(NAME skin_movie_clock_${movie_clock_scenario}
+                COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/skin_movie_clock_tests.py
+                    --binary $<TARGET_FILE:skin_movie_clock_tests>
+                    --scenario ${movie_clock_scenario}
+                    --workspace ${CMAKE_BINARY_DIR}/skin-movie-clock-fixtures)
+            set_tests_properties(skin_movie_clock_${movie_clock_scenario} PROPERTIES
+                WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+                TIMEOUT 55
+                LABELS "skin;movie;video;integration")
+        endforeach()
         asobmashow_register_test(skin_movie_catalog_types_tests)
         set_tests_properties(skin_movie_catalog_types_tests PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
