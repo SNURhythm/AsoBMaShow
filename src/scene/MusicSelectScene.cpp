@@ -1,4 +1,5 @@
 #include "MusicSelectScene.h"
+#include "MusicSelectDirectoryRestore.h"
 
 #include "../audio/SelectAudioDiagnostics.h"
 #include "../StartupTiming.h"
@@ -667,12 +668,9 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   if (!chartSession_) return;
   const MusicSelectBarManagerReadView previous =
       preserveDirectory ? bars_.readView() : MusicSelectBarManagerReadView{};
-  std::optional<MusicSelectBarId> previousSelection;
-  if (preserveDirectory && previous.selectedIndex < previous.rows.size()) {
-    previousSelection = previous.rows[previous.selectedIndex].id;
-  }
   const std::uint64_t loadedRevision =
       context.chartRepository.GetLibraryRevision();
+  const std::uint64_t loadedScoreRevision = context.scoreRepository.GetRevision();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
   folderStatusRowsRevision_.reset();
   folderStatusRetryAt_.reset();
@@ -684,6 +682,7 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   recentScoreImprovements_ = {};
   recentScoreImprovementsLoaded_ = false;
   libraryRevision_ = loadedRevision;
+  scoreRevision_ = loadedScoreRevision;
   repositoryMetadata_ = MusicSelectRepositoryProjection::loadMetadata(
       *chartSession_,
       long_note_mode::valueFromId(context.settings.selectedLnMode));
@@ -694,15 +693,12 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   bars_.refresh(MusicSelectRepositoryProjection{}.projectRoot(
       repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
   if (preserveDirectory) {
-    for (const auto &directoryId : previous.directory) {
-      const auto current = bars_.readView();
-      const auto found = std::ranges::find(current.rows, directoryId,
-                                           &MusicSelectBar::id);
-      if (found == current.rows.end()) break;
-      if (!found->childrenLoaded && !loadDirectoryChildren(*found)) break;
-      if (!bars_.select(directoryId) || !bars_.open(directoryId)) break;
-    }
-    if (previousSelection) (void)bars_.select(*previousSelection);
+    restoreMusicSelectDirectory(
+        bars_, previous,
+        [this](const MusicSelectBar &bar) { return loadDirectoryChildren(bar); },
+        [this](const MusicSelectBarId &source) {
+          return bars_.select(source) && openSameFolder(false);
+        });
   }
   syncResolvedFilters();
 }
@@ -1587,14 +1583,14 @@ bool MusicSelectScene::loadDirectoryChildren(
   return bars_.installChildren(directory.id, std::move(children));
 }
 
-void MusicSelectScene::openSameFolder() {
-  if (!chartSession_) return;
+bool MusicSelectScene::openSameFolder(bool notifySelection) {
+  if (!chartSession_) return false;
   const auto snapshot = bars_.readView();
-  if (snapshot.selectedIndex >= snapshot.rows.size()) return;
+  if (snapshot.selectedIndex >= snapshot.rows.size()) return false;
   const auto &selected = snapshot.rows[snapshot.selectedIndex];
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
       selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) {
-    return;
+    return false;
   }
 
   const auto folder = selected.chart->meta.Folder.empty()
@@ -1640,9 +1636,13 @@ void MusicSelectScene::openSameFolder() {
                        .exists = true},
   };
   if (bars_.openTransient(std::move(directory), std::move(children))) {
-    syncResolvedFilters();
-    selectedBarMoved();
+    if (notifySelection) {
+      syncResolvedFilters();
+      selectedBarMoved();
+    }
+    return true;
   }
+  return false;
 }
 
 void MusicSelectScene::copySelectedHash(bool sha256) {
@@ -2919,6 +2919,14 @@ void MusicSelectScene::executeEvent(
   }
 }
 
+void MusicSelectScene::refreshRepositoryRevisions() {
+  if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
+      context.scoreRepository.GetRevision() != scoreRevision_) {
+    reloadLibrary();
+    selectedBarMoved();
+  }
+}
+
 void MusicSelectScene::update(float) {
   if (failed_) return;
   tryCompletePendingPreloadLaunch();
@@ -2970,10 +2978,7 @@ void MusicSelectScene::update(float) {
     tasksModal_->setSize(rendering::window_width, rendering::window_height);
     if (tasksModal_->getVisible()) refreshTasksModal();
   }
-  if (context.chartRepository.GetLibraryRevision() != libraryRevision_) {
-    reloadLibrary();
-    selectedBarMoved();
-  }
+  refreshRepositoryRevisions();
   const auto irEvidenceRevision =
       context.irAccountEvidenceRevision.load(std::memory_order_acquire);
   if (irEvidenceRevision != irAccountEvidenceRevision_) {

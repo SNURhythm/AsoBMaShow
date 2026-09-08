@@ -74,6 +74,7 @@ private:
   skin::MusicSelectSkinFrame makeFrame() const;
   void consumeActions();
   void consumeLogicalInput();
+  void refreshRepositoryRevisions();
   [[nodiscard]] bool selectorInputBlocked() const;
   void resetLogicalInput();
   void applyInputAction(const MusicSelectInputAction &);
@@ -99,7 +100,7 @@ private:
   [[nodiscard]] bool openDirectory(const MusicSelectBar &);
   [[nodiscard]] bool loadDirectoryChildren(const MusicSelectBar &);
   void requestFolderStatus(const MusicSelectBarManagerReadView &);
-  void openSameFolder();
+  bool openSameFolder(bool notifySelection = true);
   void copySelectedHash(bool sha256);
   void closeDirectory();
   void buildSearchPrompt();
@@ -218,6 +219,7 @@ private:
   std::uint64_t inputSubscription_ = 0;
   std::uint64_t inputDeviceSubscription_ = 0;
   std::uint64_t libraryRevision_ = 0;
+  std::uint64_t scoreRevision_ = 0;
   std::uint64_t frameSerial_ = 0;
   int sortIndex_ = 0;
   int panelState_ = 0;

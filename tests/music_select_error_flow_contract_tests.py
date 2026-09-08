@@ -86,6 +86,11 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             "void MusicSelectScene::onPause()",
         ])
 
+    def test_score_revisions_refresh_once_without_a_library_change(self):
+        self.run_scene_fixture("music_select_scene_revision_fixture.cpp", [
+            "void MusicSelectScene::refreshRepositoryRevisions()",
+        ])
+
     def test_modal_reset_preserves_nondefault_timing_and_analog_configuration(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signature = "void MusicSelectScene::resetLogicalInput()"

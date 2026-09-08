@@ -1,5 +1,6 @@
 #include "music_select/MusicSelectBarManager.h"
 #include "music_select/MusicSelectFolderStatusLoader.h"
+#include "scene/MusicSelectDirectoryRestore.h"
 
 #include <future>
 #include <chrono>
@@ -631,6 +632,41 @@ void testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent() {
 }
 
 int main(int argc, char **argv) {
+  {
+    MusicSelectBarManager manager(fixture());
+    require(manager.open({"folder:a"}) && manager.select({"song:2"}),
+            "score refresh fixture selects the Same Folder source");
+    MusicSelectBar sibling{.id = {"song:sibling"},
+                           .kind = skin::MusicSelectBarKind::Song,
+                           .title = "Sibling"};
+    MusicSelectBar sameFolder{.id = {"same-folder:song:2"},
+                              .kind = skin::MusicSelectBarKind::SameFolder,
+                              .title = "Same Folder",
+                              .children = {{"song:2"}, sibling.id}};
+    require(manager.openTransient(sameFolder, {sibling}) &&
+                manager.select(sibling.id),
+            "score refresh fixture opens and selects a physical-folder sibling");
+    const auto previous = manager.readView();
+    manager.refresh({});
+    manager.refresh(fixture(2));
+    int reloaded = 0;
+    restoreMusicSelectDirectory(
+        manager, previous, [](const MusicSelectBar &) { return false; },
+        [&](const MusicSelectBarId &source) {
+          ++reloaded;
+          sibling.score = ScoreBestSnapshot{.score = 1900};
+          return manager.select(source) && manager.openTransient(sameFolder, {sibling});
+        });
+    const auto refreshed = manager.readView();
+    require(reloaded == 1 && refreshed.directory == previous.directory &&
+                refreshed.rows[refreshed.selectedIndex].id == sibling.id &&
+                refreshed.rows[refreshed.selectedIndex].score->score == 1900 &&
+                refreshed.rowsRevision > previous.rowsRevision,
+            "score refresh rebuilds Same Folder rows while retaining directory and selection");
+    require(manager.close() &&
+                manager.readView().rows[manager.readView().selectedIndex].id.value == "song:2",
+            "closing a score-refreshed Same Folder restores its original source chart");
+  }
   testLargeIndexedListsAndRetainedFrames();
   testReadViewsKeepFolderStatusAndOwningSnapshotsIndependent();
   testBackgroundStatusReachesUnopenedBarsAndRejectsSupersededLoads();
