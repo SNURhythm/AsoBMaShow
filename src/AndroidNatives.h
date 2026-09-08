@@ -19,6 +19,13 @@ using AndroidDownloadProgressCallback =
 using AndroidDownloadCheckpoint = std::function<bool()>;
 using AndroidDownloadPauseProbe = std::function<bool()>;
 
+namespace chart_library_tasks {
+class ChartLibraryTaskService;
+}
+
+void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks);
+void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks);
+
 struct AndroidNativeMusicMetadata {
   std::string title;
   std::string artist;
@@ -57,8 +64,6 @@ bool PickAndroidArchiveForImport(std::filesystem::path &archivePath,
                                  std::string &errorMessage);
 bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
                                 std::string &errorMessage);
-std::optional<std::filesystem::path>
-ConsumePendingAndroidArchiveImport(std::string &errorMessage);
 bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,
                                     std::string &errorMessage);
 void RetireAndroidDocumentHandoff(std::uint64_t operationToken);

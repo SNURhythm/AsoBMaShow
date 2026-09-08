@@ -7,7 +7,6 @@
 #include <SDL2/SDL.h>
 
 #include <atomic>
-#include <deque>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -99,11 +98,6 @@ struct FolderActionService::Impl {
   chart_library_tasks::ChartLibraryTaskService *tasks = nullptr;
   std::jthread pickerThread;
   std::atomic_bool pickerActive = false;
-#if TARGET_OS_ANDROID
-  std::mutex pendingMutex;
-  std::deque<std::pair<std::uint64_t, bool>> pendingImports;
-  std::uint64_t nextPollMillis = 0;
-#endif
 
   void enqueueFolder(const std::filesystem::path &folder,
                      const std::string &bookmark) {
@@ -128,25 +122,11 @@ struct FolderActionService::Impl {
   }
 
 #if TARGET_OS_ANDROID
-  void enqueueImport(std::uint64_t id, const std::filesystem::path &path,
-                     bool folder) {
-    if (tasks == nullptr) return;
-    if (path.empty()) {
-      tasks->failReserved(id, "Import failed: selected path is empty.");
-      return;
-    }
-    tasks->enqueueReserved(
-        id, {.kind = chart_library_tasks::TaskKind::AndroidImport,
-             .title = folder ? "Import Folder" : "Import Archive",
-             .androidImportPath = path,
-             .androidImportFolder = folder});
-  }
-
   void requestImport(bool folder) {
     if (pickerActive.exchange(true)) return;
     if (pickerThread.joinable()) pickerThread.join();
     pickerThread = std::jthread(
-        [this, folder](const std::stop_token &stopToken) {
+        [this, folder](const std::stop_token &) {
           struct Reset {
             std::atomic_bool &active;
             ~Reset() { active.store(false); }
@@ -163,17 +143,6 @@ struct FolderActionService::Impl {
             }
             return;
           }
-          if (stopToken.stop_requested() || tasks == nullptr) return;
-          const std::uint64_t id = tasks->reserve(
-              folder ? "Import Folder" : "Import Archive",
-              folder ? "Copying selected folder"
-                     : "Copying selected archive");
-          if (path.empty()) {
-            std::lock_guard lock(pendingMutex);
-            pendingImports.emplace_back(id, folder);
-          } else {
-            enqueueImport(id, path, folder);
-          }
         });
   }
 #endif
@@ -185,9 +154,17 @@ FolderActionService::FolderActionService(
     : impl_(std::make_unique<Impl>()) {
   impl_->repository = &repository;
   impl_->tasks = &tasks;
+#if TARGET_OS_ANDROID
+  RegisterAndroidImportTasks(tasks);
+#endif
 }
 
 FolderActionService::~FolderActionService() {
+#if TARGET_OS_ANDROID
+  if (impl_ && impl_->tasks) {
+    UnregisterAndroidImportTasks(*impl_->tasks);
+  }
+#endif
   if (impl_ && impl_->pickerThread.joinable()) {
     impl_->pickerThread.request_stop();
     impl_->pickerThread.join();
@@ -254,46 +231,12 @@ void FolderActionService::requestImportArchive() {
 #endif
 }
 
-void FolderActionService::poll() {
-#if TARGET_OS_ANDROID
-  if (!impl_) return;
-  const std::uint64_t now = SDL_GetTicks64();
-  if (now < impl_->nextPollMillis) return;
-  impl_->nextPollMillis = now + 1000;
-  std::string error;
-  const auto path = ConsumePendingAndroidArchiveImport(error);
-  if (!path && error.empty()) return;
-  std::uint64_t id = 0;
-  bool folder = false;
-  {
-    std::lock_guard lock(impl_->pendingMutex);
-    if (!impl_->pendingImports.empty()) {
-      id = impl_->pendingImports.front().first;
-      folder = impl_->pendingImports.front().second;
-      impl_->pendingImports.pop_front();
-    }
-  }
-  if (id == 0 && impl_->tasks != nullptr) {
-    id = impl_->tasks->reserve("Import Archive", "Copying shared archive");
-  }
-  if (path) {
-    impl_->enqueueImport(id, *path, folder);
-  } else if (impl_->tasks != nullptr) {
-    impl_->tasks->failReserved(
-        id, error.empty() ? "Import failed" : std::move(error));
-  }
-#endif
-}
+void FolderActionService::poll() {}
 
 bool FolderActionService::active() const noexcept {
   if (!impl_) return false;
   if (impl_->pickerActive.load(std::memory_order_acquire)) return true;
-#if TARGET_OS_ANDROID
-  std::lock_guard lock(impl_->pendingMutex);
-  return !impl_->pendingImports.empty();
-#else
   return false;
-#endif
 }
 
 struct SoundSetFolderPicker::Impl {

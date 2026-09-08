@@ -10,6 +10,8 @@
 #include <stop_token>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 
 namespace chart_library_tasks {
 
@@ -35,6 +37,12 @@ public:
   std::uint64_t reserve(std::string title, std::string detail);
   bool enqueueReserved(std::uint64_t id, TaskRequest request);
   bool failReserved(std::uint64_t id, std::string detail);
+  bool beginAndroidImport(const std::string &token, bool folder);
+  int androidImportCopyState(const std::string &token) const;
+  bool finishAndroidImport(const std::string &token, bool folder,
+                           const std::filesystem::path &path,
+                           const std::string &error);
+  void cancelAndroidImports();
   [[nodiscard]] Snapshot snapshot() const;
   std::vector<DownloadedIndexCompletion> takeDownloadedIndexCompletions();
   [[nodiscard]] bool active() const noexcept;
@@ -49,6 +57,7 @@ private:
   void setTaskStateLocked(std::uint64_t id, TaskStatus status, double fraction,
                           int current, int total, std::string detail);
   TaskInfo *findTaskLocked(std::uint64_t id);
+  bool enqueueReservedLocked(std::uint64_t id, TaskRequest request);
   void bumpRevisionLocked();
   void trimHistoryLocked();
 
@@ -59,6 +68,8 @@ private:
   std::condition_variable_any pauseChanged_;
   std::deque<TaskRequest> queue_;
   std::vector<TaskInfo> tasks_;
+  std::unordered_map<std::string, std::pair<std::uint64_t, bool>> androidImports_;
+  bool acceptingAndroidImports_ = true;
   std::vector<DownloadedIndexCompletion> downloadedIndexCompletions_;
   std::optional<std::uint64_t> activeTaskId_;
   ProgressSnapshot progress_;

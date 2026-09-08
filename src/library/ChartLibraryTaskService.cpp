@@ -35,6 +35,7 @@ void ChartLibraryTaskService::start() {
 void ChartLibraryTaskService::shutdown() noexcept {
   try {
     std::lock_guard lifecycleLock(lifecycleMutex_);
+    cancelAndroidImports();
     if (!worker_.joinable()) {
       return;
     }
@@ -75,11 +76,16 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
             queue_.begin(), queue_.end(), [&task](const TaskRequest &request) {
               return request.id == task.id;
             });
-        if (queued == queue_.end()) {
+        if (queued == queue_.end() &&
+            std::none_of(androidImports_.begin(), androidImports_.end(),
+                         [&task](const auto &entry) {
+                           return entry.second.first == task.id;
+                         })) {
           continue;
         }
-        task.status = TaskStatus::Queued;
-        task.detail = "Waiting";
+        task.status = queued == queue_.end() ? TaskStatus::Running
+                                            : TaskStatus::Queued;
+        task.detail = queued == queue_.end() ? "Resuming" : "Waiting";
       }
       changed = true;
     }
@@ -132,23 +138,101 @@ bool ChartLibraryTaskService::enqueueReserved(std::uint64_t id,
                                               TaskRequest request) {
   {
     std::lock_guard lock(stateMutex_);
-    TaskInfo *task = findTaskLocked(id);
-    if (task == nullptr) {
+    if (!enqueueReservedLocked(id, std::move(request))) {
       return false;
     }
-    request.id = id;
-    task->title = request.title;
-    task->status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued;
-    task->fraction = 0.0;
-    task->current = 0;
-    task->total = 0;
-    task->detail = gameplayPaused_ ? "Paused" : "Waiting";
-    queue_.push_back(std::move(request));
-    bumpRevisionLocked();
   }
   start();
   workAvailable_.notify_one();
   return true;
+}
+
+bool ChartLibraryTaskService::enqueueReservedLocked(std::uint64_t id,
+                                                    TaskRequest request) {
+  TaskInfo *task = findTaskLocked(id);
+  if (task == nullptr) {
+    return false;
+  }
+  request.id = id;
+  task->title = request.title;
+  task->status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued;
+  task->fraction = 0.0;
+  task->current = 0;
+  task->total = 0;
+  task->detail = gameplayPaused_ ? "Paused" : "Waiting";
+  queue_.push_back(std::move(request));
+  bumpRevisionLocked();
+  return true;
+}
+
+bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
+                                                bool folder) {
+  std::lock_guard lock(stateMutex_);
+  if (!acceptingAndroidImports_ || token.empty() || androidImports_.contains(token)) {
+    return false;
+  }
+  const std::uint64_t id = nextTaskId_++;
+  androidImports_.emplace(token, std::pair{id, folder});
+  tasks_.push_back(TaskInfo{
+      .id = id,
+      .title = folder ? "Import Folder" : "Import Archive",
+      .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
+      .detail = gameplayPaused_ ? "Paused" : "Copying selected charts",
+  });
+  trimHistoryLocked();
+  bumpRevisionLocked();
+  return true;
+}
+
+int ChartLibraryTaskService::androidImportCopyState(const std::string &token) const {
+  std::lock_guard lock(stateMutex_);
+  if (!acceptingAndroidImports_ || !androidImports_.contains(token)) {
+    return -1;
+  }
+  return gameplayPaused_ ? 0 : 1;
+}
+
+bool ChartLibraryTaskService::finishAndroidImport(
+    const std::string &token, bool folder, const std::filesystem::path &path,
+    const std::string &error) {
+  bool queued = false;
+  {
+    std::lock_guard lock(stateMutex_);
+    const auto found = androidImports_.find(token);
+    if (found == androidImports_.end() || found->second.second != folder) {
+      return false;
+    }
+    const auto id = found->second.first;
+    androidImports_.erase(found);
+    if (!error.empty() || path.empty()) {
+      setTaskStateLocked(id, TaskStatus::Failed, 0.0, 0, 0,
+                         error.empty() ? "Import failed: selected path is empty."
+                                       : error);
+      trimHistoryLocked();
+    } else {
+      queued = enqueueReservedLocked(
+          id, {.kind = TaskKind::AndroidImport,
+               .title = folder ? "Import Folder" : "Import Archive",
+               .androidImportPath = path,
+               .androidImportFolder = folder});
+    }
+  }
+  if (queued) {
+    start();
+    workAvailable_.notify_one();
+  }
+  return true;
+}
+
+void ChartLibraryTaskService::cancelAndroidImports() {
+  std::lock_guard lock(stateMutex_);
+  acceptingAndroidImports_ = false;
+  for (const auto &[token, reservation] : androidImports_) {
+    setTaskStateLocked(reservation.first, TaskStatus::Failed, 0.0, 0, 0,
+                       "Chart import cancelled.");
+  }
+  androidImports_.clear();
+  trimHistoryLocked();
 }
 
 bool ChartLibraryTaskService::failReserved(std::uint64_t id,

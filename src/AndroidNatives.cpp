@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 
 #include "audio/NativeMusicPlayer.h"
+#include "library/ChartLibraryTaskService.h"
 
 #include <SDL2/SDL_events.h>
 #include <SDL2/SDL_log.h>
@@ -42,6 +43,8 @@ constexpr Sint32 kExternalActivityPauseWakeCode = 0x41535050;
 std::mutex gAndroidDocumentCommitMutex;
 std::unordered_map<std::string, std::function<bool()>>
     gAndroidDocumentCommitHandlers;
+std::mutex gAndroidImportTasksMutex;
+chart_library_tasks::ChartLibraryTaskService *gAndroidImportTasks = nullptr;
 
 std::string pathToUtf8(const std::filesystem::path &path) {
   const auto value = path.u8string();
@@ -668,6 +671,53 @@ long long parseLongLongOrZero(const std::string &value) {
 
 } // namespace
 
+void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  gAndroidImportTasks = &tasks;
+}
+
+void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == &tasks) {
+    tasks.cancelAndroidImports();
+    gAndroidImportTasks = nullptr;
+  }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeBeginChartImport(
+    JNIEnv *env, jclass, jstring token, jboolean folder) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  if (gAndroidImportTasks == nullptr) {
+    return 0;
+  }
+  return gAndroidImportTasks->beginAndroidImport(jstringToUtf8(env, token),
+                                                folder == JNI_TRUE) ? 1 : -1;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeChartImportCopyState(
+    JNIEnv *env, jclass, jstring token) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  return gAndroidImportTasks == nullptr
+             ? -1
+             : gAndroidImportTasks->androidImportCopyState(jstringToUtf8(env, token));
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeFinishChartImport(
+    JNIEnv *env, jclass, jstring token, jboolean folder, jstring path,
+    jstring error) {
+  std::lock_guard lock(gAndroidImportTasksMutex);
+  return gAndroidImportTasks != nullptr &&
+                 gAndroidImportTasks->finishAndroidImport(
+                     jstringToUtf8(env, token), folder == JNI_TRUE,
+                     std::filesystem::path(jstringToUtf8(env, path)),
+                     jstringToUtf8(env, error))
+             ? JNI_TRUE
+             : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFileProgress(
     JNIEnv *, jclass, jlong progressToken, jlong downloadedBytes,
@@ -961,27 +1011,6 @@ bool PickAndroidFolderForImport(std::filesystem::path &folderPath,
   }
   folderPath = std::filesystem::path(value).lexically_normal();
   return true;
-}
-
-std::optional<std::filesystem::path>
-ConsumePendingAndroidArchiveImport(std::string &errorMessage) {
-  errorMessage.clear();
-  std::string callError;
-  const std::string result = callActivityStringMethod(
-      "consumePendingArchiveImport", "()Ljava/lang/String;", nullptr,
-      callError);
-  if (!callError.empty()) {
-    errorMessage = callError;
-    return std::nullopt;
-  }
-  if (result.empty()) {
-    return std::nullopt;
-  }
-  if (result.rfind(kErrorPrefix, 0) == 0) {
-    errorMessage = result.substr(std::char_traits<char>::length(kErrorPrefix));
-    return std::nullopt;
-  }
-  return std::filesystem::path(result).lexically_normal();
 }
 
 bool RegisterAndroidDocumentHandoff(std::uint64_t operationToken,

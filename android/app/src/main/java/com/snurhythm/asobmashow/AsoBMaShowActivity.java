@@ -101,8 +101,10 @@ public class AsoBMaShowActivity extends SDLActivity {
     private final Object pendingArchiveImportLock = new Object();
     private final ArrayDeque<PendingImportRequest> pendingArchiveImportRequests =
             new ArrayDeque<>();
-    private final ArrayDeque<String> pendingArchiveImportResults = new ArrayDeque<>();
     private boolean pendingArchiveImportCopyRunning = false;
+    private volatile boolean pendingArchiveImportsDestroyed = false;
+    private Thread pendingArchiveImportWorker;
+    private PendingImportRequest activePendingImportRequest;
     private final ConcurrentHashMap<String, String> documentIdCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
     private final Object nativeMusicLock = new Object();
@@ -126,14 +128,17 @@ public class AsoBMaShowActivity extends SDLActivity {
     private long nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;
 
     private static class PendingImportRequest {
+        final String token = UUID.randomUUID().toString();
         final Uri uri;
         final String displayName;
         final boolean isTree;
+        final String error;
 
-        PendingImportRequest(Uri uri, String displayName, boolean isTree) {
+        PendingImportRequest(Uri uri, String displayName, boolean isTree, String error) {
             this.uri = uri;
             this.displayName = displayName;
             this.isTree = isTree;
+            this.error = error;
         }
     }
 
@@ -223,6 +228,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        cancelPendingChartImports();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = false;
             if (gyroscopeTurntableManager != null) {
@@ -269,6 +275,10 @@ public class AsoBMaShowActivity extends SDLActivity {
     private static native boolean nativeDownloadUrlToFileCancelled(long progressToken);
     private static native boolean nativeDownloadUrlTextCheckpoint(long checkpointToken);
     private static native boolean nativeDownloadUrlTextPauseRequested(long checkpointToken);
+    private static native int nativeBeginChartImport(String token, boolean isTree);
+    private static native int nativeChartImportCopyState(String token);
+    private static native boolean nativeFinishChartImport(
+            String token, boolean isTree, String path, String error);
     private static native boolean nativeCommitDocumentHandoff(String operationToken);
     static native void nativeMusicControlEvent(String eventName);
     private static native void nativeGyroscopeActivityPaused();
@@ -600,6 +610,9 @@ public class AsoBMaShowActivity extends SDLActivity {
 
         CountDownLatch latch;
         synchronized (archivePickerLock) {
+            if (pendingArchiveImportsDestroyed) {
+                return ERROR_PREFIX + "Chart import cancelled.";
+            }
             if (archivePickerLatch != null) {
                 return ERROR_PREFIX + "Archive picker is already open.";
             }
@@ -612,6 +625,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
 
         runOnUiThread(() -> {
+            if (pendingArchiveImportsDestroyed) {
+                finishArchivePicker();
+                return;
+            }
             Intent archiveIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
             archiveIntent.addCategory(Intent.CATEGORY_OPENABLE);
             archiveIntent.setType("*/*");
@@ -648,7 +665,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             return ERROR_PREFIX + "Archive selection was cancelled.";
         }
-        return startPendingImportCopy(uri, archivePickerName.get(), archivePickerTree.get());
+        return startPendingImportCopy(uri, archivePickerName.get(), archivePickerTree.get(), "");
     }
 
     public String pickFolderForImport() {
@@ -658,6 +675,9 @@ public class AsoBMaShowActivity extends SDLActivity {
 
         CountDownLatch latch;
         synchronized (archivePickerLock) {
+            if (pendingArchiveImportsDestroyed) {
+                return ERROR_PREFIX + "Chart import cancelled.";
+            }
             if (archivePickerLatch != null) {
                 return ERROR_PREFIX + "Import picker is already open.";
             }
@@ -670,6 +690,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
 
         runOnUiThread(() -> {
+            if (pendingArchiveImportsDestroyed) {
+                finishArchivePicker();
+                return;
+            }
             Intent folderIntent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
             folderIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
                     | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
@@ -704,16 +728,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
             return ERROR_PREFIX + "Folder selection was cancelled.";
         }
-        return startPendingImportCopy(uri, archivePickerName.get(), true);
-    }
-
-    public String consumePendingArchiveImport() {
-        synchronized (pendingArchiveImportLock) {
-            if (!pendingArchiveImportResults.isEmpty()) {
-                return pendingArchiveImportResults.removeFirst();
-            }
-            return "";
-        }
+        return startPendingImportCopy(uri, archivePickerName.get(), true, "");
     }
 
     public String importDocument(String operationToken, String mimeType,
@@ -2496,49 +2511,103 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
         String displayName = displayNameForUri(archiveUri);
         if (!isSupportedArchiveUri(archiveUri, displayName)) {
-            synchronized (pendingArchiveImportLock) {
-                pendingArchiveImportResults.addLast(
-                        ERROR_PREFIX + "Selected file is not a supported archive.");
-            }
+            startPendingImportCopy(archiveUri, displayName, false,
+                    "Selected file is not a supported archive.");
             return;
         }
-        startPendingImportCopy(archiveUri, displayName, false);
+        startPendingImportCopy(archiveUri, displayName, false, "");
     }
 
     private String startPendingImportCopy(Uri importUri, String displayName,
-                                          boolean isTree) {
+                                          boolean isTree, String error) {
         synchronized (pendingArchiveImportLock) {
+            if (pendingArchiveImportsDestroyed) {
+                return ERROR_PREFIX + "Chart import cancelled.";
+            }
             pendingArchiveImportRequests.addLast(
-                    new PendingImportRequest(importUri, displayName, isTree));
+                    new PendingImportRequest(importUri, displayName, isTree, error));
             startNextPendingImportCopyLocked();
         }
         return PENDING_IMPORT_RESULT;
     }
 
     private void startNextPendingImportCopyLocked() {
-        if (pendingArchiveImportCopyRunning ||
+        if (pendingArchiveImportsDestroyed || pendingArchiveImportCopyRunning ||
                 pendingArchiveImportRequests.isEmpty()) {
             return;
         }
         PendingImportRequest request = pendingArchiveImportRequests.removeFirst();
         pendingArchiveImportCopyRunning = true;
-        new Thread(() -> {
+        activePendingImportRequest = request;
+        pendingArchiveImportWorker = new Thread(() -> {
             String path = "";
             String error = "";
             try {
+                while (true) {
+                    int started;
+                    synchronized (pendingArchiveImportLock) {
+                        if (pendingArchiveImportsDestroyed) {
+                            throw new IOException("Chart import cancelled.");
+                        }
+                        started = nativeBeginChartImport(request.token, request.isTree);
+                    }
+                    if (started < 0) {
+                        throw new IOException("Chart import cancelled.");
+                    }
+                    if (started > 0) {
+                        break;
+                    }
+                    Thread.sleep(20);
+                }
+                if (!request.error.isEmpty()) {
+                    throw new IOException(request.error);
+                }
+                ChartImportCopyControl control = new ChartImportCopyControl(
+                        () -> nativeChartImportCopyState(request.token),
+                        () -> pendingArchiveImportsDestroyed);
+                control.checkpoint();
                 path = copyImportUriToInternalStorage(
-                        request.uri, request.displayName, request.isTree);
+                        request.uri, request.displayName, request.isTree, control);
+                control.checkpoint();
             } catch (Exception e) {
                 error = e.getMessage() == null ? "Could not import charts." : e.getMessage();
             }
+            boolean accepted;
             synchronized (pendingArchiveImportLock) {
-                pendingArchiveImportResults.addLast(
-                        error.isEmpty() ? path : ERROR_PREFIX + error);
+                if (pendingArchiveImportsDestroyed) {
+                    error = "Chart import cancelled.";
+                }
+                accepted = nativeFinishChartImport(request.token, request.isTree, path, error);
+            }
+            if ((!accepted || !error.isEmpty()) && !path.isEmpty()) {
+                deleteRecursively(new File(path));
+            }
+            synchronized (pendingArchiveImportLock) {
                 pendingArchiveImportCopyRunning = false;
+                pendingArchiveImportWorker = null;
+                activePendingImportRequest = null;
                 startNextPendingImportCopyLocked();
             }
         }, request.isTree ? "AsoBMaShowFolderImport"
-                : "AsoBMaShowArchiveImport").start();
+                : "AsoBMaShowArchiveImport");
+        pendingArchiveImportWorker.start();
+    }
+
+    private void cancelPendingChartImports() {
+        synchronized (pendingArchiveImportLock) {
+            pendingArchiveImportsDestroyed = true;
+            pendingArchiveImportRequests.clear();
+            if (activePendingImportRequest != null) {
+                nativeFinishChartImport(activePendingImportRequest.token,
+                        activePendingImportRequest.isTree, "", "Chart import cancelled.");
+            }
+            if (pendingArchiveImportWorker != null) {
+                pendingArchiveImportWorker.interrupt();
+            }
+        }
+        archivePickerUri.set(null);
+        archivePickerError.set("Chart import cancelled.");
+        finishArchivePicker();
     }
 
     private Uri archiveUriFromIntent(Intent intent) {
@@ -2580,7 +2649,9 @@ public class AsoBMaShowActivity extends SDLActivity {
         return last == null || last.isEmpty() ? "imported-archive" : last;
     }
 
-    private String copyArchiveUriToInternalStorage(Uri uri, String displayName) throws Exception {
+    private String copyArchiveUriToInternalStorage(Uri uri, String displayName,
+                                                   ChartImportCopyControl control) throws Exception {
+        control.checkpoint();
         File directory = new File(getFilesDir(), "archive_imports/inbox");
         if (!directory.isDirectory() && !directory.mkdirs()) {
             throw new Exception("Could not create archive import folder.");
@@ -2592,24 +2663,21 @@ public class AsoBMaShowActivity extends SDLActivity {
             if (input == null) {
                 throw new Exception("Could not open archive import.");
             }
-            byte[] buffer = new byte[1024 * 1024];
-            while (true) {
-                int read = input.read(buffer);
-                if (read < 0) {
-                    break;
-                }
-                outputStream.write(buffer, 0, read);
-            }
+            control.copy(input, outputStream);
+        } catch (Exception error) {
+            deleteRecursively(output);
+            throw error;
         }
         return output.getAbsolutePath();
     }
 
     private String copyImportUriToInternalStorage(Uri uri, String displayName,
-                                                  boolean isTree) throws Exception {
+                                                  boolean isTree,
+                                                  ChartImportCopyControl control) throws Exception {
         if (isTree) {
-            return copyTreeUriToBmsFolder(uri, displayName);
+            return copyTreeUriToBmsFolder(uri, displayName, control);
         }
-        return copyArchiveUriToInternalStorage(uri, displayName);
+        return copyArchiveUriToInternalStorage(uri, displayName, control);
     }
 
     private File documentsBmsDirectory() {
@@ -2620,7 +2688,9 @@ public class AsoBMaShowActivity extends SDLActivity {
         return new File(base, "BMS");
     }
 
-    private String copyTreeUriToBmsFolder(Uri treeUri, String displayName) throws Exception {
+    private String copyTreeUriToBmsFolder(Uri treeUri, String displayName,
+                                         ChartImportCopyControl control) throws Exception {
+        control.checkpoint();
         File directory = documentsBmsDirectory();
         if (!directory.isDirectory() && !directory.mkdirs()) {
             throw new Exception("Could not create BMS import folder.");
@@ -2632,7 +2702,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
         try {
             String rootDocumentId = DocumentsContract.getTreeDocumentId(treeUri);
-            copyDocumentTreeChildren(treeUri, rootDocumentId, output);
+            copyDocumentTreeChildren(treeUri, rootDocumentId, output, control);
         } catch (Exception e) {
             deleteRecursively(output);
             throw e;
@@ -2641,7 +2711,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private void copyDocumentTreeChildren(Uri treeUri, String parentDocumentId,
-                                          File destination) throws Exception {
+                                          File destination,
+                                          ChartImportCopyControl control) throws Exception {
+        control.checkpoint();
         Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
                 treeUri, parentDocumentId);
         String[] columns = new String[] {
@@ -2657,7 +2729,12 @@ public class AsoBMaShowActivity extends SDLActivity {
             int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
             int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
             int mimeColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_MIME_TYPE);
-            while (cursor.moveToNext()) {
+            while (true) {
+                control.checkpoint();
+                if (!cursor.moveToNext()) {
+                    break;
+                }
+                control.checkpoint();
                 String documentId = cursor.getString(idColumn);
                 String name = sanitizeFileName(cursor.getString(nameColumn));
                 String mimeType = cursor.getString(mimeColumn);
@@ -2669,31 +2746,26 @@ public class AsoBMaShowActivity extends SDLActivity {
                     if (!childDirectory.mkdirs()) {
                         throw new Exception("Could not create folder: " + name);
                     }
-                    copyDocumentTreeChildren(treeUri, documentId, childDirectory);
+                    copyDocumentTreeChildren(treeUri, documentId, childDirectory, control);
                 } else {
                     Uri documentUri =
                             DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId);
                     File output = uniqueFile(destination, name);
-                    copyDocumentUriToFile(documentUri, output);
+                    copyDocumentUriToFile(documentUri, output, control);
                 }
             }
         }
     }
 
-    private void copyDocumentUriToFile(Uri uri, File output) throws Exception {
+    private void copyDocumentUriToFile(Uri uri, File output,
+                                       ChartImportCopyControl control) throws Exception {
+        control.checkpoint();
         try (InputStream input = getContentResolver().openInputStream(uri);
              FileOutputStream outputStream = new FileOutputStream(output)) {
             if (input == null) {
                 throw new Exception("Could not open imported file.");
             }
-            byte[] buffer = new byte[1024 * 1024];
-            while (true) {
-                int read = input.read(buffer);
-                if (read < 0) {
-                    break;
-                }
-                outputStream.write(buffer, 0, read);
-            }
+            control.copy(input, outputStream);
         }
     }
 

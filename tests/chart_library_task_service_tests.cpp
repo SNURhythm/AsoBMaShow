@@ -403,6 +403,93 @@ void testReservedPlatformCopyTaskCanBeQueuedOrFailed() {
   service.shutdown();
 }
 
+void testAndroidImportsKeepOriginAcrossInterleavedResults() {
+  std::mutex mutex;
+  std::vector<chart_library_tasks::TaskRequest> requests;
+  chart_library_tasks::ChartLibraryTaskService service(
+      [&](const auto &request, const auto &, auto, auto) {
+        std::lock_guard lock(mutex);
+        requests.push_back(request);
+        return chart_library_tasks::TaskRunResult{};
+      });
+  expect(service.beginAndroidImport("shared-zip", false),
+         "shared archive reserves its own task before copying");
+  expect(service.beginAndroidImport("manual-folder", true),
+         "manual folder reserves a separate task before copying");
+  const auto reserved = service.snapshot();
+  const auto archiveId = reserved.tasks.at(0).id;
+  const auto folderId = reserved.tasks.at(1).id;
+  expect(!service.finishAndroidImport("cancelled-picker", true, "", "Cancelled"),
+         "a cancelled picker without a copy cannot consume another reservation");
+  expect(!service.beginAndroidImport("shared-zip", false),
+         "duplicate request tokens cannot replace a reservation");
+  expect(service.beginAndroidImport("unsupported-external-file", false) &&
+             service.finishAndroidImport("unsupported-external-file", false, "",
+                                         "Unsupported archive"),
+         "an external validation error completes only its own reservation");
+  const auto withError = service.snapshot();
+  expect(withError.tasks.at(0).id == archiveId &&
+             withError.tasks.at(0).status == chart_library_tasks::TaskStatus::Running &&
+             withError.tasks.at(1).id == folderId &&
+             withError.tasks.at(1).status == chart_library_tasks::TaskStatus::Running &&
+             withError.tasks.at(2).status == chart_library_tasks::TaskStatus::Failed,
+         "non-task and external-error results leave valid copy origins untouched");
+  expect(!service.finishAndroidImport("shared-zip", true, "wrong", ""),
+         "a mismatched result type cannot consume an import reservation");
+  expect(service.finishAndroidImport("shared-zip", false, "shared.zip", ""),
+         "shared archive completion matches its originating token");
+  expect(service.finishAndroidImport("manual-folder", true, "BMS/folder", ""),
+         "manual folder completion matches its originating token");
+  expect(!service.finishAndroidImport("shared-zip", false, "duplicate.zip", ""),
+         "duplicate results cannot enqueue another task");
+  expect(waitUntil([&] {
+           std::lock_guard lock(mutex);
+           return requests.size() == 2;
+         }),
+         "both independently identified imports run");
+  service.shutdown();
+  std::lock_guard lock(mutex);
+  expect(requests.size() == 2 && requests[0].id == archiveId &&
+             !requests[0].androidImportFolder &&
+             requests[0].androidImportPath == "shared.zip" &&
+             requests[1].id == folderId && requests[1].androidImportFolder &&
+             requests[1].androidImportPath == "BMS/folder",
+         "archive and folder retain their own ID, path, and type");
+}
+
+void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
+  chart_library_tasks::ChartLibraryTaskService service(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  service.setGameplayPaused(true);
+  expect(service.beginAndroidImport("folder", true),
+         "an import can reserve while gameplay is paused");
+  expect(service.beginAndroidImport("archive", false),
+         "an archive can reserve while gameplay is paused");
+  expect(service.androidImportCopyState("folder") == 0 &&
+             service.androidImportCopyState("archive") == 0,
+         "both Java copy kinds must wait during gameplay");
+  service.setGameplayPaused(false);
+  const auto resumed = service.snapshot();
+  expect(service.androidImportCopyState("folder") == 1 &&
+             resumed.tasks.at(0).status == chart_library_tasks::TaskStatus::Running,
+         "reserved Java copy resumes without leaving a paused status row");
+  service.setGameplayPaused(true);
+  expect(service.finishAndroidImport("archive", false, "", "Activity destroyed"),
+         "activity cancellation can finish a paused copy");
+  expect(service.androidImportCopyState("archive") == -1 &&
+             service.androidImportCopyState("unknown") == -1,
+         "cancelled and unknown tokens cannot continue copying");
+  service.shutdown();
+  expect(service.androidImportCopyState("folder") == -1,
+         "shutdown cancels a reserved copy even without a native worker");
+  expect(!service.beginAndroidImport("after-shutdown", false),
+         "late Java workers cannot reserve after native shutdown");
+  expect(service.snapshot().activeCount == 0,
+         "cancelled Java copies do not leave permanent active rows");
+}
+
 } // namespace
 
 int main() {
@@ -413,6 +500,8 @@ int main() {
   testProgressUpdatesTaskRowAndProgressSnapshotTogether();
   testFailuresCompletionsAndHistoryRemainObservable();
   testReservedPlatformCopyTaskCanBeQueuedOrFailed();
+  testAndroidImportsKeepOriginAcrossInterleavedResults();
+  testAndroidCopyCheckpointsFollowPauseAndLifecycle();
   if (failures != 0) {
     std::cerr << failures << " chart library task test(s) failed\n";
     return EXIT_FAILURE;
