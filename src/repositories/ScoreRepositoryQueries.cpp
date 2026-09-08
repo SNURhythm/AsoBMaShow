@@ -1435,7 +1435,7 @@ ScoreRepository::LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
       score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
   const std::string query =
       "WITH attempts AS (SELECT s.id, lower(trim(s.chart_sha256)) AS hash, "
-      "s.ln_mode, s.score, " +
+      "s.score, " +
       clearRank +
       " AS clear_rank, CAST(strftime('%s', s.created_at) AS INTEGER) AS "
       "played_at FROM scores s WHERE s.score_source=" +
@@ -1443,10 +1443,10 @@ ScoreRepository::LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
       " AND (s.ln_mode=0 OR s.ln_mode=-1 OR s.ln_mode=?) AND " +
       score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
       "), improvements AS (SELECT hash, played_at, score, clear_rank, "
-      "COALESCE(MAX(score) OVER (PARTITION BY hash, ln_mode ORDER BY "
+      "COALESCE(MAX(score) OVER (PARTITION BY hash ORDER BY "
       "played_at, id ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) "
-      "AS old_score, COALESCE(MAX(clear_rank) OVER (PARTITION BY hash, "
-      "ln_mode ORDER BY played_at, id ROWS BETWEEN UNBOUNDED PRECEDING AND "
+      "AS old_score, COALESCE(MAX(clear_rank) OVER (PARTITION BY hash "
+      "ORDER BY played_at, id ROWS BETWEEN UNBOUNDED PRECEDING AND "
       "1 PRECEDING), 0) AS old_clear FROM attempts) SELECT hash, played_at, "
       "score > old_score, clear_rank > old_clear FROM improvements WHERE "
       "played_at >= ? AND played_at < ? AND (score > old_score OR "

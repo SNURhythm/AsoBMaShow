@@ -1202,6 +1202,97 @@ void testRecentScoreImprovementsMatchScoreLogDayFolders(
          updates.lamp[0].contains(std::string(64, 'f')));
 }
 
+void testRecentScoreImprovementsCompareApplicableLongNoteModes(
+    const std::filesystem::path &root) {
+  ScopedTimezone timezone("UTC0");
+  struct ModeFixture {
+    const char *name;
+    int previousMode;
+    int currentMode;
+    int currentScore;
+    int currentClear;
+    bool scoreImproved;
+    bool lampImproved;
+  };
+  bool allMatched = true;
+  for (const int selectedMode : long_note_mode::kPlayableValues) {
+    const int otherMode = selectedMode == long_note_mode::kLnValue
+                              ? long_note_mode::kCnValue
+                              : long_note_mode::kLnValue;
+    const std::array fixtures{
+        ModeFixture{"legacy-worse-exact", 0, selectedMode, 100,
+                    kClearTypeEasyClearRank, false, false},
+        ModeFixture{"legacy-equal-exact", 0, selectedMode, 150,
+                    kClearTypeNormalClearRank, false, false},
+        ModeFixture{"legacy-better-exact", 0, selectedMode, 160,
+                    kClearTypeHardClearRank, true, true},
+        ModeFixture{"legacy-score-only", 0, selectedMode, 160,
+                    kClearTypeEasyClearRank, true, false},
+        ModeFixture{"legacy-lamp-only", 0, selectedMode, 100,
+                    kClearTypeHardClearRank, false, true},
+        ModeFixture{"other-mode-baseline-excluded", otherMode, selectedMode,
+                    100, kClearTypeEasyClearRank, true, true},
+        ModeFixture{"other-mode-attempt-excluded", 0, otherMode, 160,
+                    kClearTypeHardClearRank, false, false},
+        ModeFixture{"shared-worse-exact", -1, selectedMode, 100,
+                    kClearTypeEasyClearRank, false, false},
+        ModeFixture{"shared-better-exact", -1, selectedMode, 160,
+                    kClearTypeHardClearRank, true, true},
+        ModeFixture{"exact-worse-shared", selectedMode, -1, 100,
+                    kClearTypeEasyClearRank, false, false},
+        ModeFixture{"exact-better-shared", selectedMode, -1, 160,
+                    kClearTypeHardClearRank, true, true},
+        ModeFixture{"legacy-worse-shared", 0, -1, 100,
+                    kClearTypeEasyClearRank, false, false},
+        ModeFixture{"shared-worse-legacy", -1, 0, 100,
+                    kClearTypeEasyClearRank, false, false},
+        ModeFixture{"exact-worse-legacy", selectedMode, 0, 100,
+                    kClearTypeEasyClearRank, false, false},
+        ModeFixture{"shared-score-only", -1, -1, 160,
+                    kClearTypeEasyClearRank, true, false},
+        ModeFixture{"shared-lamp-only", -1, -1, 100,
+                    kClearTypeHardClearRank, false, true}};
+    for (const auto &fixture : fixtures) {
+      const auto path = root / "recent-score-mode-comparison" /
+                        std::to_string(selectedMode) / fixture.name / "score.db";
+      ScoreRepository helper(path);
+      assert(helper.EnsureSchema());
+      auto database = openDatabase(path);
+      const auto insert = [&](int mode, int score, int clearType,
+                              const char *timestamp) {
+        execOrAbort(database.get(),
+            "INSERT INTO scores (chart_sha256, ln_mode, score, max_score, "
+            "max_combo, combo_break, pgreat, great, good, bad, poor, kpoor, "
+            "fast, slow, final_gauge, clear_type, eligibility, provenance_json, "
+            "score_source, created_at) VALUES ('" + std::string(kShaA) +
+            "', " + std::to_string(mode) + ", " + std::to_string(score) +
+            ", 200, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 75.0, " +
+            std::to_string(clearType) + ", 2, '" +
+            kLegacyProvenanceJson + "', 0, '" + timestamp + "')");
+      };
+      insert(fixture.previousMode, 150, kClearTypeNormalClearRank,
+             "2026-06-01 12:00:00");
+      insert(fixture.currentMode, fixture.currentScore, fixture.currentClear,
+             "2026-07-15 01:00:00");
+      const auto now = queryInt(database.get(),
+          "SELECT unixepoch('2026-07-15 12:00:00')");
+      database.reset();
+      const auto updates = helper.LoadRecentScoreImprovements(now, selectedMode);
+      for (std::size_t day = 0; day < updates.score.size(); ++day) {
+        const bool expectedScore = day == 0 && fixture.scoreImproved;
+        const bool expectedLamp = day == 0 && fixture.lampImproved;
+        if (updates.score[day].contains(std::string(kShaA)) != expectedScore ||
+            updates.lamp[day].contains(std::string(kShaA)) != expectedLamp) {
+          std::cerr << "Mode fixture " << fixture.name << ", selected mode "
+                    << selectedMode << ", day " << day << std::endl;
+          allMatched = false;
+        }
+      }
+    }
+  }
+  assert(allMatched);
+}
+
 void testRecentScoreImprovementsUseLocalCalendarDays(
     const std::filesystem::path &root) {
   struct CalendarFixture {
@@ -3413,6 +3504,7 @@ int main() {
   testProjectedScoreConflictDoesNotMutateExistingRow(root);
   testProjectedScoreUsesReplayTimestamp(root);
   testRecentScoreImprovementsMatchScoreLogDayFolders(root);
+  testRecentScoreImprovementsCompareApplicableLongNoteModes(root);
   testRecentScoreImprovementsUseLocalCalendarDays(root);
   testChartScoreHistoryMatchesPinnedScoreDataUpdateRules(root);
   testPlayerHistoryUsesPinnedLastPlayableNoteDuration(root);
