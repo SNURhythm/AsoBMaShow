@@ -136,6 +136,53 @@ void testFactoryFloatNamesResolveNumericFrameProperties() {
           "explicit Float values retain precedence over Rate fallback");
 }
 
+void testVolumeWritesClampFiniteValuesAndRejectNonFiniteValues() {
+  for (const int id : {17, 18, 19}) {
+    for (const auto [input, expected] : {
+             std::pair{-0.5, 0.0}, std::pair{1.5, 1.0},
+             std::pair{0.0, 0.0}, std::pair{1.0, 1.0},
+             std::pair{0.375, 0.375}}) {
+      MusicSelectSkinFrame frame;
+      frame.properties.rates[id] = 0.25;
+      int writes = 0;
+      MusicSelectSkinStateBridge bridge(
+          frame, {.floatWriter = [&](int writtenId, double value) {
+            ++writes;
+            require(writtenId == id && value == expected,
+                    "volume actions publish the clamped finite value");
+          }});
+      require(bridge.setFloatProperty(id, input) && writes == 1,
+              "finite volume writes publish exactly one action");
+      for (const auto domain : {SkinFloatPropertyDomain::Rate,
+                                SkinFloatPropertyDomain::FloatValue}) {
+        require(bridge.floatProperty({.value = id}, domain).value == expected,
+                "volume overrides contain the same clamped value as actions");
+      }
+    }
+    for (const double input : {std::numeric_limits<double>::quiet_NaN(),
+                               std::numeric_limits<double>::infinity(),
+                               -std::numeric_limits<double>::infinity()}) {
+      MusicSelectSkinFrame frame;
+      frame.properties.rates[id] = 0.25;
+      int writes = 0;
+      MusicSelectSkinStateBridge bridge(
+          frame, {.floatWriter = [&](int, double) { ++writes; }});
+      require(!bridge.setFloatProperty(id, input) && writes == 0,
+              "non-finite volume writes are rejected without an action");
+      require(bridge.floatProperty({.value = id}, SkinFloatPropertyDomain::Rate)
+                      .value == 0.25,
+              "rejected volume writes do not create an override");
+      require(bridge.setFloatProperty(id, 0.625) && writes == 1,
+              "a valid volume write still succeeds after rejection");
+      require(!bridge.setFloatProperty(id, input) && writes == 1 &&
+                  bridge.floatProperty({.value = id},
+                                       SkinFloatPropertyDomain::Rate).value ==
+                      0.625,
+              "rejected volume writes preserve an existing valid override");
+    }
+  }
+}
+
 void testUnknownPropertiesRemainUnsupported() {
   MusicSelectSkinFrame frame;
   MusicSelectSkinStateBridge bridge(frame);
@@ -238,6 +285,7 @@ void testSkinTimerWritesUseBeatorajaCustomTimerRules() {
 int main(int argc, char **argv) {
   testExactPropertyNamespacesAndAbsentValues();
   testFactoryFloatNamesResolveNumericFrameProperties();
+  testVolumeWritesClampFiniteValuesAndRejectNonFiniteValues();
   testUnknownPropertiesRemainUnsupported();
   testCustomTimerValuesOverrideTheFrameSnapshot();
   testPublishedSongResourcesOverrideChartPathFlags();

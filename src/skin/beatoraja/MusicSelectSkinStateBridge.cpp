@@ -5,6 +5,7 @@
 #include "BeatorajaStringPropertyNames.h"
 #include "GameplaySkinBuiltinCatalog.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -330,7 +331,9 @@ bool MusicSelectSkinStateBridge::setTimerProperty(int id,
 }
 
 bool MusicSelectSkinStateBridge::setFloatProperty(int id, double value) {
-  if ((id < 17 || id > 19) || !actionSink_.floatWriter) return false;
+  if ((id < 17 || id > 19) || !actionSink_.floatWriter ||
+      !std::isfinite(value)) return false;
+  value = std::clamp(value, 0.0, 1.0);
   try {
     floatOverrides_.insert_or_assign(id, value);
     actionSink_.floatWriter(id, value);
