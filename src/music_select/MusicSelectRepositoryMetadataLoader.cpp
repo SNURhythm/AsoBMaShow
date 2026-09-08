@@ -86,10 +86,14 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
 skin::MusicSelectBarFrame MusicSelectRepositoryProjection::loadFolderStatus(
     ChartRepository::Session &session, MusicSelectBar directory,
     MusicSelectRepositoryProjectionInput input, std::stop_token stop) {
-  if (directory.kind == skin::MusicSelectBarKind::Folder) {
+  if (directory.kind == skin::MusicSelectBarKind::Folder ||
+      directory.kind == skin::MusicSelectBarKind::SearchWord) {
+    const bool search = directory.kind == skin::MusicSelectBarKind::SearchWord;
+    if (search && (!directory.id.value.starts_with("search:") ||
+                   directory.id.value.size() == 7)) return directory.presentation;
     MusicSelectFolderStatusAccumulator accumulator(directory.presentation, input, stop);
     bms_parser::ChartMeta meta;
-    session.VisitRawPhysicalFolderStatistics(directory.directoryPath,
+    session.VisitRawPhysicalFolderStatistics(search ? std::filesystem::path{} : directory.directoryPath,
         [&](const ChartFolderStatisticsRow &row) {
           meta.SHA256 = row.sha256;
           meta.KeyMode = row.keyMode;
@@ -97,7 +101,7 @@ skin::MusicSelectBarFrame MusicSelectRepositoryProjection::loadFolderStatus(
           meta.TotalLongNotes = row.totalLongNotes;
           meta.TotalBackSpinNotes = row.totalBackSpinNotes;
           accumulator.add(meta, row.hasPath);
-        }, stop);
+        }, stop, search ? directory.id.value.substr(7) : std::string{});
     return accumulator.finish();
   }
   auto records = loadDirectoryRecords(session, directory,

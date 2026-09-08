@@ -1025,12 +1025,18 @@ std::string matchedDifficultyEntryIdSubquery(
          ".sort_order, " + matchAlias + ".title COLLATE NOCASE LIMIT 1)";
 }
 
+void appendKeywordFilter(std::string &query, const std::string &alias,
+                         const std::string &keyword) {
+  if (!keyword.empty()) {
+    query += " AND rtrim(" + alias + ".title || ' ' || " + alias +
+             ".subtitle || ' ' || " + alias + ".artist || ' ' || " + alias +
+             ".sub_artist || ' ' || " + alias + ".genre) LIKE @text";
+  }
+}
+
 void appendChartMetaFilters(std::string &query,
                             const ChartMetaQuery &chartQuery) {
-  if (!chartQuery.keyword.empty()) {
-    query += " AND rtrim(cm.title || ' ' || cm.subtitle || ' ' || cm.artist || "
-             "' ' || cm.sub_artist || ' ' || cm.genre) LIKE @text";
-  }
+  appendKeywordFilter(query, "cm", chartQuery.keyword);
 
   appendExactFolderFilter(query, "cm", chartQuery);
 
@@ -1528,6 +1534,7 @@ struct ChartSelectorQuerySnapshot {
 
 struct ChartSelectorQueryResolution {
   std::filesystem::path folder;
+  std::string keyword;
   std::string mode;
   std::string difficulty;
   std::size_t count;
@@ -1582,10 +1589,18 @@ bool selectorTitleSort(std::string_view sort) {
          sort != "RIVALCOMPARE_CLEAR" && sort != "RIVALCOMPARE_SCORE";
 }
 
+ChartMetaQuery selectorFilter(const ChartSelectorQuery &query) {
+  ChartMetaQuery folder;
+  if (!query.recursiveFolder.empty() || query.keyword.empty()) {
+    folder.recursiveFolder = query.recursiveFolder;
+  }
+  folder.keyword = query.keyword;
+  return folder;
+}
+
 std::string selectorFrom(const ChartSelectorQuery &query, bool filter = true,
                           bool ordered = false) {
-  ChartMetaQuery folder;
-  folder.recursiveFolder = query.recursiveFolder;
+  const auto folder = selectorFilter(query);
   std::string sql = " FROM chart_meta cm";
   if (ordered && selectorTitleSort(query.sortId) &&
       (!query.resolution || query.resolution->folder != query.recursiveFolder ||
@@ -1594,9 +1609,11 @@ std::string selectorFrom(const ChartSelectorQuery &query, bool filter = true,
   }
   sql += " WHERE 1 = 1";
   appendExactFolderFilter(sql, "cm", folder);
+  appendKeywordFilter(sql, "cm", query.keyword);
   sql += " AND cm.path = (SELECT representative.path FROM chart_meta "
          "representative WHERE representative.sha256 = cm.sha256";
   appendExactFolderFilter(sql, "representative", folder);
+  appendKeywordFilter(sql, "representative", query.keyword);
   sql += " ORDER BY representative.title COLLATE NOCASE ASC, "
          "representative.path ASC LIMIT 1)";
   if (filter && !query.includeHidden) {
@@ -1615,12 +1632,12 @@ std::string selectorCount(const ChartSelectorQuery &query, bool broadFolder) {
        selectorFilterIndex(kSelectorDifficulties, query.difficultyFilter) != 0)) {
     return "SELECT COUNT(*)" + selectorFrom(query);
   }
-  ChartMetaQuery folder;
-  folder.recursiveFolder = query.recursiveFolder;
+  const auto folder = selectorFilter(query);
   std::string sql = "SELECT COUNT(*) FROM (SELECT cm.sha256 FROM chart_meta cm";
   if (broadFolder) sql += " INDEXED BY idx_chart_meta_selector_representative";
   sql += " WHERE 1 = 1";
   appendExactFolderFilter(sql, "cm", folder);
+  appendKeywordFilter(sql, "cm", query.keyword);
   sql += " GROUP BY cm.sha256) cm";
   if (!query.includeHidden) {
     const auto filtered = sql + " WHERE (" + songReviewFavoriteColumnExpr("cm") +
@@ -1640,11 +1657,14 @@ public:
       : database_(database), stop_(stop) {
     checkReadCancelled(stop_);
     if (prepareSqliteStatement(database_, sql, statement_) != SQLITE_OK) fail();
-    if (bindFolder) {
+    if (bindFolder && sqlite3_bind_parameter_index(statement_, "@recursive_folder")) {
       auto root = chart_storage_identity::StoredFolderPathText(query.recursiveFolder);
       std::ranges::replace(root, '\\', '/');
       while (!root.empty() && root.back() == '/') root.pop_back();
       bind("@recursive_folder", root);
+    }
+    if (sqlite3_bind_parameter_index(statement_, "@text")) {
+      bind("@text", "%" + query.keyword + "%");
     }
   }
 
@@ -1705,6 +1725,7 @@ void validateSelectorSnapshot(const ChartSelectorQuerySnapshot &expected,
 
 bool selectorFolderIsBroad(sqlite3 *database, const ChartSelectorQuery &query,
                             std::stop_token stop) {
+  if (query.recursiveFolder.empty() && !query.keyword.empty()) return true;
   std::size_t threshold = 128;
   {
     SelectorReadQuery total(database, query, "SELECT COUNT(*) FROM chart_meta",
@@ -1850,7 +1871,7 @@ std::size_t ChartRepository::Session::ResolveChartSelectorQuery(
     validateSelectorSnapshot(snapshot,
         readSelectorSnapshot(database, impl_->storage, resolved, stop));
     resolved.resolution = std::make_shared<ChartSelectorQueryResolution>(
-        ChartSelectorQueryResolution{resolved.recursiveFolder, resolved.modeFilter,
+        ChartSelectorQueryResolution{resolved.recursiveFolder, resolved.keyword, resolved.modeFilter,
             resolved.difficultyFilter, count, resolved.includeHidden, broadFolder, snapshot});
     query = std::move(resolved);
     return count;
@@ -1930,6 +1951,7 @@ std::vector<ChartMetaRecord> ChartRepository::Session::SelectChartSelectorPage(
   bool reverse = false;
   if (const auto &resolved = query.resolution;
       resolved && resolved->folder == query.recursiveFolder &&
+      resolved->keyword == query.keyword &&
       resolved->mode == query.modeFilter && resolved->difficulty == query.difficultyFilter &&
       resolved->includeHidden == query.includeHidden) {
     if (offset >= resolved->count) { offset = 0; limit = 0; }
@@ -2012,20 +2034,22 @@ std::optional<std::size_t> ChartRepository::Session::FindChartSelectorIndex(
 void ChartRepository::Session::VisitRawPhysicalFolderStatistics(
     const std::filesystem::path &recursiveFolder,
     const std::function<void(const ChartFolderStatisticsRow &)> &visitor,
-    std::stop_token stop) {
+    std::stop_token stop, const std::string &keyword) {
   auto *database = impl_->database();
   ScopedReadCancellation cancellation(database, stop);
   ChartMetaQuery filter;
-  filter.recursiveFolder = recursiveFolder;
+  if (!recursiveFolder.empty() || keyword.empty()) filter.recursiveFolder = recursiveFolder;
   std::string query =
       "SELECT cm.sha256, cm.keys, cm.ln_mode, cm.total_long_notes, "
       "cm.total_backspin_notes, cm.path FROM chart_meta cm WHERE 1 = 1";
+  appendKeywordFilter(query, "cm", keyword);
   appendExactFolderFilter(query, "cm", filter);
   SqliteStatementHandle statement;
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     throw std::runtime_error(sqlite3_errmsg(database));
   }
   int bindIndex = 1;
+  if (!keyword.empty()) bindSqliteText(statement, bindIndex++, "%" + keyword + "%");
   bindExactFolderFilter(statement, bindIndex, filter);
   while (true) {
     checkReadCancelled(stop);
@@ -2055,14 +2079,25 @@ void ChartRepository::Session::VisitRawPhysicalFolderStatistics(
   }
 }
 
+bool ChartRepository::Session::HasChartMetaMatchingKeyword(
+    const std::string &keyword, std::stop_token stop) {
+  auto *database = impl_->database();
+  ScopedReadCancellation cancellation(database, stop);
+  std::string sql = "SELECT 1 FROM chart_meta cm WHERE 1 = 1";
+  appendKeywordFilter(sql, "cm", keyword);
+  sql += " LIMIT 1";
+  SelectorReadQuery probe(database, {.keyword = keyword}, sql, stop, false);
+  return probe.next();
+}
+
 void ChartRepository::Session::VisitChartMetaSelection(
     const std::filesystem::path &recursiveFolder,
     const std::function<void(const ChartMetaRecord &)> &visitor,
-    std::stop_token stop) {
+    std::stop_token stop, const std::string &keyword) {
   auto *database = impl_->database();
   ScopedReadCancellation cancellation(database, stop);
   ChartMetaQuery filter;
-  filter.recursiveFolder = recursiveFolder;
+  if (!recursiveFolder.empty() || keyword.empty()) filter.recursiveFolder = recursiveFolder;
   std::string query =
       "SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist, "
       "cm.difficulty, cm.level, cm.keys, cm.total_notes, "
@@ -2071,6 +2106,7 @@ void ChartRepository::Session::VisitChartMetaSelection(
       "cm.has_scroll_change, cm.has_bpm_stop, ";
   query += songReviewFavoriteColumnExpr("cm");
   query += " FROM chart_meta cm WHERE 1 = 1";
+  appendKeywordFilter(query, "cm", keyword);
   appendExactFolderFilter(query, "cm", filter);
   appendChartMetaOrderBy(query, filter, "cm");
   SqliteStatementHandle statement;
@@ -2078,6 +2114,7 @@ void ChartRepository::Session::VisitChartMetaSelection(
     throw std::runtime_error(sqlite3_errmsg(database));
   }
   int bindIndex = 1;
+  if (!keyword.empty()) bindSqliteText(statement, bindIndex++, "%" + keyword + "%");
   bindExactFolderFilter(statement, bindIndex, filter);
   while (true) {
     checkReadCancelled(stop);

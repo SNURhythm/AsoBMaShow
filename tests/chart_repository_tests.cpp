@@ -3550,9 +3550,158 @@ void testSelectorPathIdentityUsesNormalizedStoredAliases() {
   assert(found && *found == 0);
 }
 
+void testSearchProviderBoundsAndSnapshotRecovery() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root, 4096);
+  const MusicSelectBar search{.id = {"search:Song"},
+      .kind = skin::MusicSelectBarKind::SearchWord, .title = "Search : 'Song'",
+      .sortable = true, .childrenLoaded = false};
+  FolderStatisticsSqlObservation observation;
+  folderStatisticsSqlObservation = &observation;
+  clearPhysicalDirectoryTrace();
+  auto loaded = loadMusicSelectPhysicalDirectory(repository, {}, search, {}, {},
+                                                  temporary.path(), {}, 0);
+  folderStatisticsSqlObservation = nullptr;
+  assert(loaded.provider && loaded.provider->size() == 4096);
+  assert(observation.richRows <= 256 && observation.statements <= 6);
+  assert(physicalDirectoryPages.size() == 2);
+  for (const auto &page : physicalDirectoryPages) {
+    assert(page.limit <= 128 && page.rows <= 128);
+  }
+  auto session = repository.OpenSession();
+  std::vector<ChartMetaRecord> raw;
+  session->QueryChartMeta({.keyword = "Song"}, raw);
+  const std::array<MusicSelectSearchSource, 1> searches{{{"Song", raw}}};
+  MusicSelectBarManager eager(MusicSelectRepositoryProjection{}.project({.searches = searches}));
+  assert(eager.open(search.id));
+  const auto expected = eager.readView();
+  clearPhysicalDirectoryTrace();
+  for (const auto position : {std::size_t{0}, std::size_t{2048}, std::size_t{4095}}) {
+    assert(loaded.provider->at(position).id == expected.rowAt(position).id);
+    assert(loaded.provider->indexOf(expected.rowAt(position).id) == position);
+  }
+  assert(physicalDirectoryPages.size() == 1 && physicalDirectoryPages.front().rows == 128);
+  auto other = openDatabase(repository.DatabasePath());
+  assert(execute(other.get(), "UPDATE chart_meta SET title='Elsewhere' WHERE sha256='" +
+      physicalChartHash(160) + "'"));
+  assert(!loaded.provider->at(1024).chart && !loaded.provider->diagnostic().empty());
+  const auto failedPages = physicalDirectoryPages.size();
+  for (int frame = 0; frame < 100; ++frame) (void)loaded.provider->at(1024);
+  assert(physicalDirectoryPages.size() == failedPages);
+  const auto retained = loaded.provider;
+  loaded = loadMusicSelectPhysicalDirectory(repository, {}, search, {}, {},
+                                             temporary.path(), {}, 0);
+  assert(loaded.provider->size() == 4095 && loaded.provider->at(1024).chart);
+  assert(!retained->at(1024).chart);
+}
+
+void testSearchDurationFallbackAndCancellationKeepKeywordRestriction() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  seedPhysicalDirectoryPages(repository, temporary.path() / "songs", 320);
+  auto database = openDatabase(repository.DatabasePath());
+  assert(execute(database.get(), "UPDATE chart_meta SET genre='outside',"
+      "total_long_notes=0,total_backspin_notes=0;"
+      "UPDATE chart_meta SET genre='needle' WHERE rowid<=3"));
+  const MusicSelectBar search{.id = {"search:needle"},
+      .kind = skin::MusicSelectBarKind::SearchWord, .childrenLoaded = false};
+  auto scores = std::make_shared<ScoreBestCache>();
+  const std::array<std::int64_t, 3> durations{
+      0, 1, static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max()) + 1};
+  for (std::size_t position = 0; position < durations.size(); ++position) {
+    scores->scoreBySha256[physicalChartHash(position + 1)].snapshots[0] = {
+        .averageJudgeMicros = durations[position]};
+  }
+  auto session = repository.OpenSession();
+  std::vector<ChartMetaRecord> raw;
+  session->QueryChartMeta({.keyword = "needle"}, raw);
+  assert(raw.size() == 3);
+  MusicSelectSongIndex expected(search.id.value);
+  for (const auto &record : raw) {
+    expected.add(record, scores->bestFor(record.meta, 0), kNoClearTypeRank);
+  }
+  expected.finish();
+  expected.configure("ALL", "ALL", "DURATION");
+  clearPhysicalDirectoryTrace();
+  const auto loaded = loadMusicSelectPhysicalDirectory(repository, {}, search, scores, {},
+      temporary.path(), {.sortId = "DURATION"}, 0);
+  assert(loaded.provider && loaded.provider->size() == 3);
+  assert(traced("SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist"));
+  for (std::size_t position = 0; position < 3; ++position) {
+    const auto &bar = loaded.provider->at(position);
+    assert(bar.id == expected.idAt(position) && bar.chart->meta.Genre == "needle");
+    assert(loaded.provider->indexOf(bar.id) == position);
+  }
+  assert(!loaded.provider->indexOf({"search:needle:sha256:" + physicalChartHash(4)}));
+  for (const auto target : {"SELECT COUNT(*)", "SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist",
+                            "WHERE cm.path IN (", "LIMIT @selector_limit OFFSET @selector_offset"}) {
+    std::stop_source cancellation;
+    readCancellation = &cancellation;
+    cancelReadSql = target;
+    cancelReadAfterRows = 0;
+    observedReadRows = 0;
+    bool threw = false;
+    try {
+      const bool regular = std::string_view(target).starts_with("LIMIT");
+      (void)loadMusicSelectPhysicalDirectory(repository, {}, search, scores, {},
+          temporary.path(), {.sortId = regular ? "TITLE" : "DURATION"}, 0,
+          cancellation.get_token());
+    } catch (const std::runtime_error &) { threw = true; }
+    readCancellation = nullptr;
+    cancelReadSql.clear();
+    assert(threw && cancellation.stop_requested());
+  }
+  const auto retried = loadMusicSelectPhysicalDirectory(repository, {}, search, scores, {},
+      temporary.path(), {.sortId = "DURATION"}, 0);
+  assert(retried.provider && retried.provider->size() == 3 && retried.provider->at(1).chart);
+}
+
+void testSearchStatisticsAvoidRichRowsAndAutoplayKeepsRawMatches() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  seedPhysicalDirectoryPages(repository, temporary.path() / "songs", 4096);
+  auto session = repository.OpenSession();
+  auto database = openDatabase(repository.DatabasePath());
+  assert(execute(database.get(), "UPDATE chart_meta SET genre='needle';"
+      "UPDATE chart_meta SET genre=NULL WHERE rowid=1;"
+      "UPDATE chart_meta SET genre='outside' WHERE rowid=2;"
+      "INSERT INTO review(sha256,favorite) SELECT sha256,8 FROM chart_meta"));
+  const MusicSelectBar search{.id = {"search:needle"},
+      .kind = skin::MusicSelectBarKind::SearchWord, .childrenLoaded = false};
+  FolderStatisticsSqlObservation observation;
+  folderStatisticsSqlObservation = &observation;
+  const auto status = MusicSelectRepositoryProjection::loadFolderStatus(*session, search, {});
+  folderStatisticsSqlObservation = nullptr;
+  assert(status.folderRankCounts[0] == 4094);
+  assert(observation.statements == 1 && observation.richRows == 0 &&
+         observation.maximumColumns <= 6 && observation.sorts == 0);
+  const auto autoplay = loadMusicSelectPhysicalDirectoryAutoplay(repository, search, 0);
+  assert(autoplay.children.size() == 4094 && autoplay.children.front().chart);
+  for (const auto &bar : autoplay.children) {
+    assert(bar.chart->meta.Genre == "needle" && bar.chart->songReviewFavorite == 8);
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc > 1) {
     try {
+      if (argc == 2 && std::string_view(argv[1]) == "--search-paging-tests") {
+        testSearchProviderBoundsAndSnapshotRecovery();
+        testSearchDurationFallbackAndCancellationKeepKeywordRestriction();
+        testSearchStatisticsAvoidRichRowsAndAutoplayKeepsRawMatches();
+        return 0;
+      }
       if (argc == 2 && std::string_view(argv[1]) == "--duration-compat-test") {
         testPhysicalDirectoryDurationOverflowMatchesLegacyIndex();
         return 0;
@@ -3588,6 +3737,9 @@ int main(int argc, char **argv) {
     }
   }
   testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder();
+  testSearchProviderBoundsAndSnapshotRecovery();
+  testSearchDurationFallbackAndCancellationKeepKeywordRestriction();
+  testSearchStatisticsAvoidRichRowsAndAutoplayKeepsRawMatches();
   testPhysicalFolderStatisticsStreamWithoutRichRowsOrSorting();
   testPhysicalFolderStatisticsMatchRawAggregationContracts();
   testSelectorAllCountSkipsPerHashReviewsOnlyWhenNoneAreHidden();

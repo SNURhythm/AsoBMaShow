@@ -3829,6 +3829,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_repository_tests PRIVATE cxx_std_23)
+    add_test(NAME chart_repository_search_paging
+             COMMAND chart_repository_tests --search-paging-tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)

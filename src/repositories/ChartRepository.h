@@ -126,6 +126,7 @@ struct ChartFolderStatisticsRow {
 
 struct ChartSelectorQuery {
   std::filesystem::path recursiveFolder;
+  std::string keyword;
   std::string modeFilter = "ALL";
   std::string difficultyFilter = "ALL";
   std::string sortId = "TITLE";
@@ -329,14 +330,16 @@ public:
     void QueryChartMeta(const ChartMetaQuery &query,
                         std::vector<ChartMetaRecord> &chartMetas,
                         std::stop_token stop = {});
+    bool HasChartMetaMatchingKeyword(const std::string &keyword,
+                                     std::stop_token stop = {});
     void VisitChartMetaSelection(
         const std::filesystem::path &recursiveFolder,
         const std::function<void(const ChartMetaRecord &)> &visitor,
-        std::stop_token stop = {});
+        std::stop_token stop = {}, const std::string &keyword = {});
     void VisitRawPhysicalFolderStatistics(
         const std::filesystem::path &recursiveFolder,
         const std::function<void(const ChartFolderStatisticsRow &)> &visitor,
-        std::stop_token stop = {});
+        std::stop_token stop = {}, const std::string &keyword = {});
     std::size_t ResolveChartSelectorQuery(ChartSelectorQuery &query,
                                            std::stop_token stop = {});
     std::vector<ChartMetaRecord> SelectChartSelectorPage(

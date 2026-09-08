@@ -22,6 +22,8 @@ int captureConnection(sqlite3 *database, char **, const sqlite3_api_routines *) 
 struct QueryTrace {
   std::vector<std::string> statements;
   std::size_t richRows = 0;
+  std::size_t rows = 0;
+  int maximumColumns = 0;
   int sorts = 0;
   int vmSteps = 0;
   std::stop_source *cancel = nullptr;
@@ -36,8 +38,11 @@ struct QueryTrace {
       sqlite3_free(expanded);
       if (trace.cancel) trace.cancel->request_stop();
     }
-    if (mask == SQLITE_TRACE_ROW && sql.find("cm.subtitle") != std::string::npos) {
-      ++trace.richRows;
+    if (mask == SQLITE_TRACE_ROW) {
+      ++trace.rows;
+      const int columns = sqlite3_column_count(prepared);
+      trace.maximumColumns = std::max(trace.maximumColumns, columns);
+      if (columns >= 29) ++trace.richRows;
     }
     if (mask == SQLITE_TRACE_PROFILE) {
       trace.sorts += sqlite3_stmt_status(prepared, SQLITE_STMTSTATUS_SORT, 0);
@@ -142,7 +147,10 @@ template <typename Callable> void expectFailure(Callable callable) {
 void compareWithIndex(Fixture &fixture, ChartSelectorQuery query) {
   MusicSelectSongIndex reference("test");
   ChartMetaQuery raw;
-  raw.recursiveFolder = query.recursiveFolder;
+  if (!query.recursiveFolder.empty() || query.keyword.empty()) {
+    raw.recursiveFolder = query.recursiveFolder;
+  }
+  raw.keyword = query.keyword;
   raw.rawSongData = true;
   std::vector<ChartMetaRecord> records;
   fixture.session->QueryChartMeta(raw, records);
@@ -457,6 +465,100 @@ void benchmark() {
             << std::chrono::duration<double, std::milli>(paged - counted).count() << '\n';
 }
 
+void keywordQueriesAndRawExistence() {
+  Fixture fixture;
+  fixture.seed(180);
+  fixture.execute("UPDATE chart_meta SET subtitle='',sub_artist='',genre='';"
+      "UPDATE chart_meta SET genre='needle' WHERE rowid%2=0;"
+      "UPDATE chart_meta SET genre=NULL WHERE rowid%7=0;"
+      "UPDATE chart_meta SET folder=NULL WHERE rowid%3=0;"
+      "INSERT INTO review(sha256,favorite) SELECT DISTINCT sha256,4 "
+      "FROM chart_meta WHERE rowid%5=0");
+  auto best = std::make_shared<ScoreBestCache>();
+  auto clears = std::make_shared<ScoreClearRankCache>();
+  std::vector<ChartMetaRecord> raw;
+  fixture.session->QueryChartMeta({.keyword = "needle"}, raw);
+  for (std::size_t position = 0; position < raw.size(); ++position) {
+    best->scoreBySha256[raw[position].meta.SHA256].snapshots[0] = {
+        .score = static_cast<int>(position), .maxScore = 200,
+        .averageJudgeMicros = static_cast<int>(position * 3)};
+    clears->rankBySha256[raw[position].meta.SHA256].ranks[0] = position % 9;
+  }
+  for (const auto keyword : {"needle", "a", "%", "_", "NEEDLE", "'", "a%0", " ", "absent"}) {
+    raw.clear();
+    fixture.session->QueryChartMeta({.keyword = keyword}, raw);
+    QueryTrace probe;
+    fixture.trace(&probe);
+    assert(fixture.session->HasChartMetaMatchingKeyword(keyword) == !raw.empty());
+    fixture.trace(nullptr);
+    assert(probe.statements.size() == 1 && probe.rows <= 1 && probe.richRows == 0);
+    assert(probe.maximumColumns <= 1);
+    for (const auto sort : {"TITLE", "ARTIST", "BPM", "LENGTH", "LEVEL", "CLEAR",
+                            "SCORE", "MISSCOUNT", "DURATION", "LASTUPDATE",
+                            "RIVALCOMPARE_CLEAR", "RIVALCOMPARE_SCORE", "unknown"}) {
+      ChartSelectorQuery query{.keyword = keyword, .sortId = sort,
+                               .best = best, .clears = clears};
+      compareWithIndex(fixture, query);
+    }
+  }
+  for (const auto mode : {"ALL", "7KEY", "14KEY", "9KEY", "5KEY", "10KEY",
+                          "24KEY", "48KEY", "SINGLE", "DOUBLE", "invalid"}) {
+    for (const auto difficulty : {"ALL", "BEGINNER", "NORMAL", "HYPER", "ANOTHER",
+                                  "INSANE", "SCRATCH CHART", "LONG NOTE CHART",
+                                  "SPEED CHANGE CHART", "invalid"}) {
+      compareWithIndex(fixture, {.keyword = "needle", .modeFilter = mode,
+                                 .difficultyFilter = difficulty});
+    }
+  }
+  fixture.execute("INSERT OR REPLACE INTO review(sha256,favorite) "
+                  "SELECT DISTINCT sha256,8 FROM chart_meta");
+  assert(fixture.session->HasChartMetaMatchingKeyword("needle"));
+  compareWithIndex(fixture, {.keyword = "needle", .modeFilter = "48KEY",
+                             .difficultyFilter = "INSANE"});
+  fixture.execute("UPDATE chart_meta SET genre=NULL");
+  assert(!fixture.session->HasChartMetaMatchingKeyword("%"));
+  compareWithIndex(fixture, {.keyword = "%"});
+}
+
+void keywordSnapshotCancellationAndChangedRestriction() {
+  Fixture fixture;
+  fixture.seed(1000);
+  fixture.execute("UPDATE chart_meta SET subtitle='',sub_artist='',genre='needle'");
+  ChartSelectorQuery query{.keyword = "needle"};
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 500);
+  auto changed = query;
+  changed.keyword = "absent";
+  assert(fixture.session->SelectChartSelectorPage(changed, 490, 128).empty());
+  assert(!fixture.session->FindChartSelectorIndex(changed, "sha256:" + std::string(64, '0')));
+  fixture.execute("UPDATE chart_meta SET genre='absent' WHERE rowid<=2");
+  expectFailure([&] { fixture.session->SelectChartSelectorPage(query, 128, 128); });
+  expectFailure([&] { fixture.session->FindChartSelectorIndex(query, "sha256:missing"); });
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 499);
+  fixture.reopen();
+  expectFailure([&] { fixture.session->SelectChartSelectorPage(query, 128, 128); });
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 499);
+  for (int operation = 0; operation < 4; ++operation) {
+    std::stop_source cancellation;
+    QueryTrace trace;
+    trace.cancel = &cancellation;
+    fixture.trace(&trace);
+    expectFailure([&] {
+      if (operation == 0) fixture.session->HasChartMetaMatchingKeyword("needle", cancellation.get_token());
+      if (operation == 1) fixture.session->ResolveChartSelectorQuery(query, cancellation.get_token());
+      if (operation == 2) fixture.session->SelectChartSelectorPage(query, 128, 128, cancellation.get_token());
+      if (operation == 3) fixture.session->FindChartSelectorIndex(query, "sha256:missing", cancellation.get_token());
+    });
+    fixture.trace(nullptr);
+    assert(fixture.session->HasChartMetaMatchingKeyword("needle"));
+    assert(fixture.session->SelectChartSelectorPage(query, 128, 128).size() == 128);
+  }
+  assert(fixture.session->SetSongReviewFavorite(std::string(63, '0') + "1", 4));
+  expectFailure([&] { fixture.session->SelectChartSelectorPage(query, 128, 128); });
+  expectFailure([&] { fixture.session->FindChartSelectorIndex(query, "sha256:missing"); });
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 498);
+  assert(fixture.session->SelectChartSelectorPage(query, 128, 128).size() == 128);
+}
+
 }
 
 int main(int argc, char **) {
@@ -465,6 +567,8 @@ int main(int argc, char **) {
   errorsAndCancellation();
   nullableMetadataAndPathIdentity();
   boundedPagesAndQueryLifetime();
+  keywordQueriesAndRawExistence();
+  keywordSnapshotCancellationAndChangedRestriction();
   if (argc > 1) benchmark();
   std::cout << "chart_selector_query_tests passed\n";
 }

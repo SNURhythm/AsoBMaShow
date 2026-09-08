@@ -1617,7 +1617,8 @@ void MusicSelectScene::continueDirectoryRestore() {
     const auto view = bars_.readView();
     const auto directory = view.rowAt(view.selectedIndex);
     if (!directory.childrenLoaded) {
-      if (directory.kind == skin::MusicSelectBarKind::Folder) {
+      if (directory.kind == skin::MusicSelectBarKind::Folder ||
+          directory.kind == skin::MusicSelectBarKind::SearchWord) {
         requestDirectoryLoad(directory);
         return;
       }
@@ -1701,7 +1702,8 @@ void MusicSelectScene::applyDirectoryLoads() {
 
 bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
   if (!skin::musicSelectIsDirectoryBarKind(directory.kind)) return false;
-  if (directory.kind == skin::MusicSelectBarKind::Folder &&
+  if ((directory.kind == skin::MusicSelectBarKind::Folder ||
+       directory.kind == skin::MusicSelectBarKind::SearchWord) &&
       !directory.childrenLoaded) {
     requestDirectoryLoad(directory);
     return false;
@@ -1841,19 +1843,8 @@ bool MusicSelectScene::loadDirectoryChildren(
     break;
   }
   case skin::MusicSelectBarKind::SearchWord: {
-    constexpr std::string_view prefix = "search:";
-    if (!directory.id.value.starts_with(prefix)) return false;
-    MusicSelectSearchSource source{
-        .text = directory.id.value.substr(prefix.size())};
-    ChartMetaQuery query;
-    query.keyword = source.text;
-    query.selectedLongNoteMode = selectedLongNoteMode;
-    chartSession_->QueryChartMeta(query, source.records);
-    const std::array<MusicSelectSearchSource, 1> searches{std::move(source)};
-    const auto projection = MusicSelectRepositoryProjection{}.project(
-        inputFor({}, nullptr, searches));
-    children = musicSelectProjectionChildren(projection, directory.id);
-    break;
+    requestDirectoryLoad(directory);
+    return false;
   }
   case skin::MusicSelectBarKind::SameFolder:
   case skin::MusicSelectBarKind::Song:
@@ -2027,14 +2018,16 @@ void MusicSelectScene::hideSearchPrompt() {
 
 void MusicSelectScene::search(std::string text) {
   if (!chartSession_ || !MusicSelectSearchHistory::acceptsText(text)) return;
-  ChartMetaQuery query;
-  query.keyword = text;
-  query.selectedLongNoteMode =
-      long_note_mode::valueFromId(context.settings.selectedLnMode);
-  std::vector<ChartMetaRecord> records;
-  chartSession_->QueryChartMeta(query, records);
+  bool hasResults;
+  try {
+    hasResults = chartSession_->HasChartMetaMatchingKeyword(text);
+  } catch (const std::exception &error) {
+    SDL_Log("Music-select search: %s", error.what());
+    showDirectoryStatus("Unable to search the library. Submit the search again to retry.");
+    return;
+  }
   if (!searchHistory_.remember(
-          std::move(text), !records.empty(),
+          std::move(text), hasResults,
           static_cast<std::size_t>(
               context.settings.skinMusicSelectMaxSearchBarCount))) {
     return;
@@ -2577,7 +2570,8 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
   auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto directory = snapshot.rowAt(snapshot.selectedIndex);
-  if (directory.kind == skin::MusicSelectBarKind::Folder &&
+  if ((directory.kind == skin::MusicSelectBarKind::Folder ||
+       directory.kind == skin::MusicSelectBarKind::SearchWord) &&
       !directory.childrenLoaded) {
     requestDirectoryLoad(directory, true);
     return;

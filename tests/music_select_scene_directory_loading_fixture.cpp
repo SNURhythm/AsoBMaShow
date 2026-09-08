@@ -299,7 +299,33 @@ void testFailedPageRecovery() {
   expect(scene.directoryRequest_.has_value(), "reopening requests a fresh snapshot");
 }
 
-
+void testSearchOpensAsynchronouslyAndRestores() {
+  MusicSelectScene scene;
+  auto search = folder("search:S", "Search : 'S'");
+  search.kind = skin::MusicSelectBarKind::SearchWord;
+  MusicSelectProjection projection{.bars = {search}, .root = {search.id}};
+  scene.bars_.refresh(projection);
+  expect(!scene.openDirectory(search) && scene.directoryRequest_ &&
+             scene.context.chartRepository.normalLoads == 0,
+         "opening a search must enqueue bounded worker loading, not project on UI");
+  scene.directoryLoader_->completePending();
+  scene.applyDirectoryLoads();
+  expect(scene.bars_.readView().directory == std::vector<MusicSelectBarId>{search.id},
+         "search worker completion opens the original stable search identity");
+  scene.cancelDirectoryLoad();
+  scene.bars_.refresh(projection);
+  scene.restoreDirectories_ = {search.id};
+  scene.continueDirectoryRestore();
+  expect(scene.directoryRequest_ && !scene.bars_.readView().directory.size(),
+         "restoring SearchWord must use the asynchronous loader too");
+  scene.context.appInBackground = true;
+  scene.onApplicationBackgroundChanged(true);
+  expect(!scene.directoryRequest_, "background cancels pending search load");
+  scene.context.appInBackground = false;
+  scene.launchSelectedDirectoryAutoplay();
+  expect(scene.directoryRequest_ && scene.directoryRequest_->autoplay,
+         "explicit search autoplay must retain its worker intent");
+}
 
 void testAutoplayCompletion() {
   MusicSelectScene scene;

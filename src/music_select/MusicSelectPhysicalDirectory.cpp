@@ -31,7 +31,7 @@ MusicSelectSqlSongs::ResolvedQuery resolveLegacyDurationQuery(
             ? query.clears->bestRankFor(record.meta, query.selectedLongNoteMode)
             : score ? score->clearType : kNoClearTypeRank;
         index->add(record, score, clearRank);
-      }, *stop);
+      }, *stop, query.keyword);
   index->finish(*stop);
   const auto filters = index->configure(query.modeFilter, query.difficultyFilter,
                                          query.sortId, *stop);
@@ -81,7 +81,13 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
   if (!opened) throw std::runtime_error("Unable to open chart repository session");
   auto session = std::make_shared<ChartRepository::Session>(std::move(*opened));
   checkCancelled(stop);
-  if (!session->HasChartMetaForFolderOrParentFolder(directory.directoryPath, stop)) {
+  const bool search = directory.kind == skin::MusicSelectBarKind::SearchWord;
+  constexpr std::string_view searchPrefix = "search:";
+  if (search && (!directory.id.value.starts_with(searchPrefix) ||
+                 directory.id.value.size() == searchPrefix.size())) {
+    throw std::runtime_error("Invalid search directory");
+  }
+  if (!search && !session->HasChartMetaForFolderOrParentFolder(directory.directoryPath, stop)) {
     checkCancelled(stop);
     auto children = MusicSelectRepositoryProjection::projectDirectoryFolders(
         metadata, directory.directoryPath);
@@ -90,7 +96,8 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
   }
 
   ChartSelectorQuery selectorQuery{
-      .recursiveFolder = directory.directoryPath,
+      .recursiveFolder = search ? std::filesystem::path{} : directory.directoryPath,
+      .keyword = search ? directory.id.value.substr(searchPrefix.size()) : std::string{},
       .selectedLongNoteMode = selectedLongNoteMode,
       .best = best,
       .clears = clears};
@@ -170,7 +177,8 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectoryAutoplay(
   auto session = repository.OpenSession();
   if (!session) throw std::runtime_error("Unable to open chart repository session");
   checkCancelled(stop);
-  if (!session->HasChartMetaForFolderOrParentFolder(directory.directoryPath, stop)) {
+  if (directory.kind != skin::MusicSelectBarKind::SearchWord &&
+      !session->HasChartMetaForFolderOrParentFolder(directory.directoryPath, stop)) {
     checkCancelled(stop);
     return {};
   }

@@ -276,7 +276,79 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_failed_page_is_visible_and_explicitly_reloads(self):
         self.run_directory_loading_fixture("testFailedPageRecovery")
 
+    def test_search_open_and_restore_use_async_loader(self):
+        self.run_directory_loading_fixture("testSearchOpensAsynchronouslyAndRestores")
 
+    def test_search_submission_probes_raw_existence_without_rich_projection(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        fixture = r'''
+#include <cassert>
+#include <stdexcept>
+#include <vector>
+#include <string>
+struct MusicSelectSearchHistory {
+  std::vector<std::string> values;
+  static bool acceptsText(const std::string &text) { return !text.empty(); }
+  bool remember(std::string text, bool exists, std::size_t) {
+    if (exists) values.push_back(text);
+    return exists;
+  }
+  const auto &entries() const { return values; }
+};
+struct ChartMetaQuery { std::string keyword; int selectedLongNoteMode = 0; };
+struct ChartMetaRecord {};
+struct Session {
+  int richRows = 0, probes = 0;
+  bool exists = true, fail = false;
+  void QueryChartMeta(const ChartMetaQuery &, std::vector<ChartMetaRecord> &rows) {
+    rows.resize(exists ? 4096 : 0); richRows += rows.size();
+  }
+  bool HasChartMetaMatchingKeyword(const std::string &text) {
+    assert(text == "S" || text == "%" || text == "hidden");
+    ++probes;
+    if (fail) throw std::runtime_error("unavailable");
+    return exists;
+  }
+};
+namespace long_note_mode { int valueFromId(int) { return 0; } }
+void SDL_Log(const char *, ...) {}
+struct MusicSelectScene {
+  struct { struct { int selectedLnMode = 0; int skinMusicSelectMaxSearchBarCount = 10; } settings; } context;
+  Session session;
+  Session *chartSession_ = &session;
+  MusicSelectSearchHistory searchHistory_;
+  struct Id { std::string value; };
+  struct Bars { std::string selected; bool select(Id id) { selected = id.value; return true; } } bars_;
+  int reloads = 0;
+  std::string status;
+  void reloadLibrary(bool) { ++reloads; }
+  void selectedBarMoved() {}
+  void showDirectoryStatus(std::string message) { status = message; }
+  void search(std::string);
+};
+SCENE_METHODS
+int main() {
+  MusicSelectScene scene;
+  scene.search("S");
+  assert(scene.session.richRows == 0 && scene.session.probes == 1);
+  assert(scene.bars_.selected == "search:S" && scene.reloads == 1);
+  scene.search("hidden");
+  assert(scene.bars_.selected == "search:hidden");
+  scene.session.exists = false;
+  scene.search("%");
+  assert(scene.reloads == 2 && scene.searchHistory_.entries().size() == 2);
+  scene.session.fail = true;
+  scene.search("%");
+  assert(!scene.status.empty() && scene.reloads == 2);
+}
+'''
+        fixture = fixture.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace(
+            "SCENE_METHODS", "void MusicSelectScene::search(std::string text)" +
+            function_body(source, "void MusicSelectScene::search("))
+        try:
+            self.compile_and_run(fixture)
+        except subprocess.CalledProcessError as error:
+            self.fail(error.stderr)
 
     def test_sound_services_follow_changed_paths_and_bookmarks(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
