@@ -54,7 +54,95 @@ class MusicSelectExportPreloadTests(unittest.TestCase):
                 method = "#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1\n" + method + "\n#undef ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS\n"
             methods.append(method)
         fixture = fixture[:fixture.index("int main() {")] + "\n".join(methods) + r'''
+void runVolumeCases() {
+  for (int channel : {17, 18, 19}) {
+    for (int mode : {0, 1, 2, 3, 4, 5}) {
+      caseName = "volume/" + std::to_string(channel) + "/" + std::to_string(mode);
+      MusicSelectScene scene;
+      SceneManager manager;
+      PublishedActions published;
+      scene.context.sceneManager = &manager;
+      scene.skinSession_ = &published;
+      auto volume = [&](double value) {
+        return skin::Action{skin::MusicSelectSkinActionKind::FloatWriter, channel, value};
+      };
+      auto channelValue = [&](const Context::AudioSettings &settings) {
+        return channel == 17 ? settings.masterVolume :
+               channel == 18 ? settings.keysoundVolume : settings.bgmVolume;
+      };
+      const double accepted = mode == 2 ? 1.0 : 0.25;
+      const int commits = mode == 2 ? 0 : 1;
+      manager.pause = [&] {
+        expect(scene.sceneActive_, "audio commit must precede actual pause");
+        expect(scene.context.audioDeviceManager.applied.size() == commits &&
+                   scene.context.savedAudio.size() == commits,
+               "accepted volume must apply and save before pause");
+        if (commits && !scene.context.audioDeviceManager.applied.empty() &&
+            !scene.context.savedAudio.empty()) {
+          const auto &applied = scene.context.audioDeviceManager.applied.back();
+          const auto &saved = scene.context.savedAudio.back();
+          expect(channelValue(applied) == accepted && channelValue(saved) == accepted,
+                 "runtime and persistence must receive final coalesced channel value");
+          expect(applied.masterVolume == saved.masterVolume &&
+                     applied.keysoundVolume == saved.keysoundVolume &&
+                     applied.bgmVolume == saved.bgmVolume,
+                 "all applied channels must match saved channels");
+          expect(applied.masterVolume == (channel == 17 || mode == 5 ? accepted : 1.0) &&
+                     applied.keysoundVolume == (channel == 18 || mode == 5 ? accepted : 1.0) &&
+                     applied.bgmVolume == (channel == 19 || mode == 5 ? accepted : 1.0),
+                 "commit must preserve untouched channels and coalesce mixed writers");
+        }
+        scene.context.audioEvents.push_back("pause");
+        scene.onPause();
+      };
+      scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
+      scene.preloadedPath_ = scene.preloadedChart_->Meta.BmsPath;
+      if (mode == 3) published.actions.push_back(volume(0.5));
+      if (mode == 5) {
+        for (int mixedChannel : {17, 18, 19}) {
+          published.actions.push_back(
+              {skin::MusicSelectSkinActionKind::FloatWriter, mixedChannel, accepted});
+        }
+      }
+      published.actions.push_back(volume(accepted));
+      if (mode == 3) published.actions.push_back(volume(accepted));
+      if (mode != 4) published.actions.push_back(skin::Action{});
+      if (mode == 1) {
+        published.actions.push_back(volume(0.75));
+        published.actions.push_back(skin::Action{});
+      }
+      scene.consumeActions();
+      const bool workerStarted = scene.launchThread_.joinable();
+      if (workerStarted) scene.launchThread_.join();
+      expect(!workerStarted && scene.context.jukebox.stops == 0 &&
+                 scene.context.jukebox.loads == 0,
+             "batch must not start audio staging or launch worker after pause");
+      expect(channelValue(scene.context.settings.audioVideo.audio) == accepted,
+             "trailing write must not mutate settings");
+      std::vector<std::string> expected;
+      if (commits) expected = {"apply", "save"};
+      if (mode != 4) expected.push_back("pause");
+      expect(scene.context.audioEvents == expected,
+             "commit must coalesce before pause with no post-pause apply/save");
+      expect(manager.launches == (mode == 4 ? 0 : 1) &&
+                 scene.eventsDispatched == (mode == 4 ? 0 : 1),
+             "batch must perform exactly one requested handoff");
+      if (mode != 4) scene.onResume();
+      scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
+      scene.preloadedPath_ = scene.preloadedChart_->Meta.BmsPath;
+      published.actions = {volume(accepted), skin::Action{}};
+      scene.consumeActions();
+      expected.push_back("pause");
+      expect(scene.context.audioEvents == expected && !scene.sceneActive_ &&
+                 manager.launches == (mode == 4 ? 1 : 2) &&
+                 !scene.launchThread_.joinable(),
+             "resume must permit fresh launch without replay or redundant audio commit");
+    }
+  }
+}
+
 int main() {
+  runVolumeCases();
   MusicSelectScene scene;
   SceneManager manager;
   scene.context.sceneManager = &manager;

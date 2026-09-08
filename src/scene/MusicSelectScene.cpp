@@ -2810,11 +2810,20 @@ void MusicSelectScene::consumeActions() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (!skinSession_) return;
   bool audioSettingsChanged = false;
+  const auto commitAudioSettings = [&] {
+    if (!audioSettingsChanged) return;
+    (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
+    if (!context.saveSettings()) {
+      SDL_Log("Failed to save music-select skin audio settings");
+    }
+    audioSettingsChanged = false;
+  };
   for (const auto &action : skinSession_->takePublishedActions()) {
     if (!sceneActive_ || failed_ ||
         context.appInBackground.load(std::memory_order_acquire)) return;
     switch (action.kind) {
     case skin::MusicSelectSkinActionKind::Event:
+      commitAudioSettings();
       executeEvent(action);
       break;
     case skin::MusicSelectSkinActionKind::FloatWriter: {
@@ -2859,12 +2868,7 @@ void MusicSelectScene::consumeActions() {
   }
   if (!sceneActive_ || failed_ ||
       context.appInBackground.load(std::memory_order_acquire)) return;
-  if (audioSettingsChanged) {
-    (void)context.audioDeviceManager.apply(context.settings.audioVideo.audio);
-    if (!context.saveSettings()) {
-      SDL_Log("Failed to save music-select skin audio settings");
-    }
-  }
+  commitAudioSettings();
 #endif
 }
 

@@ -144,8 +144,22 @@ struct Context {
     struct Result { bool success = true; };
     Result loadChart(bms_parser::Chart &, bool, std::atomic_bool &) { ++loads; return {}; }
   } jukebox;
-  struct { void apply(const auto &) {} } audioDeviceManager;
-  bool saveSettings() { return true; }
+  using AudioSettings = decltype(Settings{}.audioVideo.audio);
+  std::vector<std::string> audioEvents;
+  struct {
+    std::vector<AudioSettings> applied;
+    std::vector<std::string> *events;
+    void apply(const AudioSettings &settings) {
+      applied.push_back(settings);
+      events->push_back("apply");
+    }
+  } audioDeviceManager{{}, &audioEvents};
+  std::vector<AudioSettings> savedAudio;
+  bool saveSettings() {
+    savedAudio.push_back(settings.audioVideo.audio);
+    audioEvents.push_back("save");
+    return true;
+  }
   Settings settings;
   int replayRepository = 0;
   Repository chartRepository;
