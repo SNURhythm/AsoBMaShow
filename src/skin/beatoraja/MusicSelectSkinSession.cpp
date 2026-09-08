@@ -345,6 +345,8 @@ MusicSelectSkinSession::MusicSelectSkinSession(
         model_.model.customTimers[index].id, index);
     if (model_.model.customTimers[index].timer) {
       activeCustomTimerIds_.insert(model_.model.customTimers[index].id);
+    } else {
+      activeCustomTimerIds_.erase(model_.model.customTimers[index].id);
     }
   }
 }

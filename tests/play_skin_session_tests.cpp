@@ -712,6 +712,7 @@ struct ActivationFixtureOptions {
   bool musicSelectSongListBearing = false;
   bool musicSelectDuplicateSongListDestinations = false;
   std::string musicSelectCallbackDispatch;
+  bool musicSelectDuplicateTimers = false;
   bool repeatedPomyu = false;
   bool oversizedPomyuWithSibling = false;
   bool pomyuMissingCharBmp = false;
@@ -944,7 +945,32 @@ if skin_config then
   assert(math.abs(main_state.volume_bg() - 0.25) < 0.000001)
 )lua";
     }
-    if (!options.musicSelectCallbackDispatch.empty()) {
+    if (options.musicSelectDuplicateTimers) {
+      script += R"lua(
+  local checked = false
+  return {
+    type = 5, w = 1280, h = 720, destination = {},
+    customTimers = {
+      {id = 10000, timer = function() return 1 end}, {id = 10000},
+      {id = 10001}, {id = 10001, timer = function() return 7 end}
+    },
+    customEvents = {{id = 1000, condition = function() return true end,
+      action = function()
+        if checked then
+          assert(main_state.timer(10000) == 99)
+          assert(main_state.timer(10001) == 7)
+          assert(main_state.event_exec(210))
+        else
+          assert(main_state.set_timer(10000, 99))
+          assert(main_state.set_timer(10001, 99))
+          assert(main_state.timer(10000) == 99)
+          assert(main_state.timer(10001) == 7)
+          checked = true
+        end
+      end}}
+  }
+)lua";
+    } else if (!options.musicSelectCallbackDispatch.empty()) {
       script += "\n  local mode = '" + options.musicSelectCallbackDispatch +
                 R"lua('
   local started = false
@@ -2924,6 +2950,26 @@ void testMusicSelectActivationCreatesAConfiguredOwningSession() {
              fixture.device()->createCalls == 2,
          "type-5 activation runs the configured document loader, resource "
          "plan, and owning music-select session");
+}
+
+void testMusicSelectDuplicateTimersUseWinningDefinition() {
+  ActivationFixture fixture({.skinType = 5, .musicSelectDuplicateTimers = true});
+  if (!fixture.ready()) return;
+  auto created = MusicSelectSkinSession::create(
+      {.activation = fixture.takeActivation(), .profileId = fixture.profile(),
+       .sessionSerial = 105}, fixture.musicSelectContext());
+  expect(created.session != nullptr, "duplicate timer session creates");
+  if (!created.session) return;
+  RenderContext context;
+  MusicSelectSkinFrame frame;
+  frame.serial = 1;
+  expect(created.session->render(context, frame), "duplicate timer writes render");
+  frame.serial = 2;
+  expect(created.session->render(context, frame), "duplicate timer persistence renders");
+  const auto actions = created.session->takePublishedActions();
+  expect(actions.size() == 1 &&
+             std::get<int>(actions.front().selector.value) == 210,
+         "winning passive timer accepts writes and active timer ignores them across frames");
 }
 
 void testMusicSelectPreparationDefersRenderOwnedResources() {
@@ -8063,6 +8109,7 @@ int main(int argc, char **argv) {
   testRequestedLitoneMusicSelectSessionCreatesWithoutHostPolicyFailures();
   testActivationRejectsAReconciledDigestMismatch();
   testMusicSelectActivationCreatesAConfiguredOwningSession();
+  testMusicSelectDuplicateTimersUseWinningDefinition();
   testMusicSelectPreparationDefersRenderOwnedResources();
   testMusicSelectMainStateWritesVolumesAndReadsCurrentInput();
   testMusicSelectCompatibilityDoesNotAddHostResourcePolicies();
