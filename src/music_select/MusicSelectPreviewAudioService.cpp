@@ -120,7 +120,7 @@ private:
       audio::diag::SelectAudioLog("[bgm] worker woke serial=" +
                                   std::to_string(serial));
 
-      const std::filesystem::path target = requested.value_or(defaultPath_);
+      std::filesystem::path target = requested.value_or(defaultPath_);
       if (suppressed || target.empty()) {
         port_.stop();
         playingPath.reset();
@@ -135,21 +135,34 @@ private:
       audio::diag::SelectAudioLog("[bgm] worker target=" + target.string());
       SDL_Log("[select-audio] worker play target=%s",
               target.string().c_str());
-      const bool ok = port_.play(target, true, cancellation, stop);
+      bool ok = port_.play(target, true, cancellation, stop);
       SDL_Log("[select-audio] worker play result=%d", ok ? 1 : 0);
       audio::diag::SelectAudioLog(std::string("[bgm] worker play result=") +
                                   (ok ? "ok" : "FAILED"));
-      bool stale = cancellation->load(std::memory_order_acquire);
+      bool stale = false;
       {
         std::lock_guard lock(mutex_);
-        stale = stale || requestSerial_ != serial;
+        stale = cancellation->load(std::memory_order_acquire) ||
+                requestSerial_ != serial || suppressed_ || stop.stop_requested();
+      }
+      if (!ok && !stale && requested.has_value() &&
+          !defaultPath_.empty() && target != defaultPath_) {
+        target = defaultPath_;
+        audio::diag::SelectAudioLog("[bgm] worker fallback=" + target.string());
+        ok = port_.play(target, true, cancellation, stop);
+      }
+      {
+        std::lock_guard lock(mutex_);
+        stale = cancellation->load(std::memory_order_acquire) ||
+                requestSerial_ != serial || suppressed_ || stop.stop_requested();
         if (loadCancellation_ == cancellation) loadCancellation_.reset();
+        if (ok && !stale) {
+          playingPath = target;
+        } else {
+          playingPath.reset();
+        }
       }
-      if (ok && !stale && !stop.stop_requested()) {
-        playingPath = target;
-      } else {
-        playingPath.reset();
-      }
+      if (ok && stale) port_.stop();
       observedSerial = serial;
     }
 

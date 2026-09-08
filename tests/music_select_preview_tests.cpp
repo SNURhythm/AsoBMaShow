@@ -27,16 +27,24 @@ public:
   struct PlayCall {
     std::filesystem::path path;
     bool loop = false;
+    std::shared_ptr<std::atomic_bool> cancellation;
   };
+
+  explicit RecordingPreviewPort(
+      MusicSelectPreviewAudioService::PlayRequest play = {})
+      : play_(std::move(play)) {}
 
   [[nodiscard]] MusicSelectPreviewAudioService::AudioPort port() {
     return {
         [this](const std::filesystem::path &path, bool loop,
-               const std::shared_ptr<std::atomic_bool> &, std::stop_token) {
-          std::lock_guard lock(mutex_);
-          calls_.push_back({path, loop});
-          condition_.notify_all();
-          return true;
+               const std::shared_ptr<std::atomic_bool> &cancellation,
+               std::stop_token stop) {
+          {
+            std::lock_guard lock(mutex_);
+            calls_.push_back({path, loop, cancellation});
+            condition_.notify_all();
+          }
+          return play_ ? play_(path, loop, cancellation, stop) : true;
         },
         [this]() {
           std::lock_guard lock(mutex_);
@@ -69,10 +77,39 @@ public:
   }
 
 private:
+  MusicSelectPreviewAudioService::PlayRequest play_;
   std::mutex mutex_;
   std::condition_variable condition_;
   std::vector<PlayCall> calls_;
   int stopped_ = 0;
+};
+
+class PreviewLoadGate {
+public:
+  void wait() {
+    std::unique_lock lock(mutex_);
+    entered_ = true;
+    condition_.notify_all();
+    condition_.wait(lock, [&] { return released_; });
+  }
+
+  bool waitUntilEntered() {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, std::chrono::seconds(2),
+                               [&] { return entered_; });
+  }
+
+  void release() {
+    std::lock_guard lock(mutex_);
+    released_ = true;
+    condition_.notify_all();
+  }
+
+private:
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  bool entered_ = false;
+  bool released_ = false;
 };
 
 MusicSelectPreviewSelection song(std::string id, std::string folder,
@@ -272,6 +309,206 @@ void testSilenceSuppressesReCueFromLaterDefaultSwitch() {
          "only the initial default and the explicit resume play; the racing "
          "switchTo stayed suppressed");
 }
+
+void testFailedPreviewRestoresDefaultBgm() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  const std::filesystem::path preview = "/songs/a/missing.ogg";
+  RecordingPreviewPort port(
+      [&](const auto &path, bool, const auto &, std::stop_token) {
+        return path != preview;
+      });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "failure fixture starts the default BGM");
+  service.switchTo(preview);
+  expect(port.waitForPlayCount(3),
+         "a failed preview explicitly restores the stopped default BGM");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 3 && calls[1].path == preview &&
+             calls[2].path == defaultBgm && calls[2].loop,
+         "a genuine preview failure falls back once to the looping default");
+  expect(calls.size() == 3 &&
+             calls[1].cancellation == calls[2].cancellation,
+         "fallback retains the failed preview's cancellation token");
+  service.switchTo(preview);
+  expect(!port.waitForPlayCount(4, 50),
+         "the same failed selection does not repeatedly retry its preview");
+  service.switchTo(std::nullopt);
+  expect(!port.waitForPlayCount(4, 50),
+         "a successful fallback is tracked as playing and is not restarted");
+}
+
+void testFailedPreviewDoesNotRetryFailedDefault() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  RecordingPreviewPort port(
+      [](const auto &, bool, const auto &, std::stop_token) { return false; });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "the missing default is attempted initially");
+  expect(!port.waitForPlayCount(2, 50), "a failed default does not retry itself");
+  service.switchTo("/songs/a/corrupt.ogg");
+  expect(port.waitForPlayCount(3),
+         "a failed preview attempts its default fallback even after initial failure");
+  expect(!port.waitForPlayCount(4, 50),
+         "a failed fallback does not start a default retry loop");
+  service.switchTo(std::nullopt);
+  expect(port.waitForPlayCount(4),
+         "an explicit default request retries because failed fallback is not playing");
+  expect(!port.waitForPlayCount(5, 50),
+         "the explicit failed default is attempted only once");
+}
+
+void testFailedPreviewWithoutDefaultStaysSilent() {
+  RecordingPreviewPort port(
+      [](const auto &, bool, const auto &, std::stop_token) { return false; });
+  MusicSelectPreviewAudioService service(port.port());
+  expect(port.waitForStopCount(1), "no-default fixture starts silent");
+  service.switchTo("/songs/a/unsupported.audio");
+  expect(port.waitForPlayCount(1), "the unsupported preview is attempted");
+  expect(!port.waitForPlayCount(2, 50),
+         "preview failure never attempts an empty fallback path");
+}
+
+void testPreviewMatchingFailedDefaultIsNotRetried() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  RecordingPreviewPort port(
+      [](const auto &, bool, const auto &, std::stop_token) { return false; });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "same-path fixture tries the default BGM");
+  service.switchTo(defaultBgm);
+  expect(port.waitForPlayCount(2), "the explicit same-path preview is attempted");
+  expect(!port.waitForPlayCount(3, 50),
+         "a preview equal to the failed default does not retry the same file");
+}
+
+void testCancelledPreviewDoesNotRestoreDefault() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  const std::filesystem::path preview = "/songs/a/preview.ogg";
+  const std::filesystem::path latest = "/songs/c/preview.ogg";
+  PreviewLoadGate gate;
+  RecordingPreviewPort port(
+      [&](const auto &path, bool, const auto &, std::stop_token) {
+        if (path == preview) {
+          gate.wait();
+          return false;
+        }
+        return true;
+      });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "navigation fixture starts the default BGM");
+  service.switchTo(preview);
+  expect(gate.waitUntilEntered(), "preview load blocks before cancellation");
+  service.switchTo("/songs/b/preview.ogg");
+  service.switchTo(latest);
+  gate.release();
+  expect(port.waitForPlayCount(3), "rapid navigation plays the latest preview");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 3 && calls[2].path == latest &&
+             calls[1].cancellation->load(),
+         "cancelled preview skips default fallback and intermediate selections");
+}
+
+void testSilencedFailedPreviewDoesNotRestoreDefault() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  const std::filesystem::path preview = "/songs/a/preview.ogg";
+  PreviewLoadGate gate;
+  RecordingPreviewPort port(
+      [&](const auto &path, bool, const auto &, std::stop_token) {
+        if (path == preview) {
+          gate.wait();
+          return false;
+        }
+        return true;
+      });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "silence fixture starts the default BGM");
+  service.switchTo(preview);
+  expect(gate.waitUntilEntered(), "preview load blocks before backgrounding");
+  service.silence();
+  service.switchTo(std::nullopt);
+  gate.release();
+  expect(port.waitForStopCount(1), "backgrounded request stops audio");
+  expect(port.takeCalls().size() == 2,
+         "a failed load during silence never restores the default BGM");
+}
+
+void testSilenceCancelsInFlightFallback() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  PreviewLoadGate gate;
+  int defaults = 0;
+  RecordingPreviewPort port(
+      [&](const auto &path, bool, const auto &, std::stop_token) {
+        if (path != defaultBgm) return false;
+        if (++defaults == 2) gate.wait();
+        return true;
+      });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "fallback cancellation starts the default");
+  service.switchTo("/songs/a/missing.ogg");
+  expect(gate.waitUntilEntered(), "failed preview enters its default fallback");
+  service.silence();
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 3 && calls[2].cancellation->load(),
+         "silence cancels the in-flight fallback through its retained token");
+  gate.release();
+  expect(port.waitForStopCount(1), "cancelled fallback playback is stopped");
+  service.resumeDefaultBgm();
+  expect(port.waitForPlayCount(4),
+         "explicit resume replays default instead of deduplicating stale fallback");
+}
+
+void testNavigationCleansUpStaleFallback() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  PreviewLoadGate gate;
+  int defaults = 0;
+  RecordingPreviewPort port(
+      [&](const auto &path, bool, const auto &, std::stop_token) {
+        if (path != defaultBgm) return false;
+        if (++defaults == 2) gate.wait();
+        return true;
+      });
+  MusicSelectPreviewAudioService service(port.port(), defaultBgm);
+  expect(port.waitForPlayCount(1), "stale fallback fixture starts the default");
+  service.switchTo("/songs/a/missing.ogg");
+  expect(gate.waitUntilEntered(), "navigation waits for the fallback load");
+  const int stopsBeforeNavigation = port.stopped();
+  service.switchTo(std::nullopt);
+  gate.release();
+  expect(port.waitForPlayCount(4),
+         "new default request is not deduplicated against a cancelled fallback");
+  const auto calls = port.takeCalls();
+  expect(calls.size() == 4 && calls[2].cancellation->load() &&
+             calls[2].cancellation != calls[3].cancellation,
+         "navigation cancels fallback and gives the new default its own token");
+  expect(port.stopped() > stopsBeforeNavigation,
+         "a successful but stale fallback is stopped before processing navigation");
+}
+
+void testShutdownCancelsPreviewAndFallback() {
+  const std::filesystem::path defaultBgm = "/assets/select.wav";
+  for (const bool blockFallback : {false, true}) {
+    PreviewLoadGate gate;
+    int defaults = 0;
+    RecordingPreviewPort port(
+        [&](const auto &path, bool, const auto &, std::stop_token stop) {
+          if (path == defaultBgm && ++defaults == 1) return true;
+          if ((path == defaultBgm) == blockFallback) {
+            std::stop_callback releaseOnStop(stop, [&] { gate.release(); });
+            gate.wait();
+          }
+          return false;
+        });
+    auto service = std::make_unique<MusicSelectPreviewAudioService>(
+        port.port(), defaultBgm);
+    expect(port.waitForPlayCount(1), "shutdown fixture starts the default BGM");
+    service->switchTo("/songs/a/missing.ogg");
+    expect(gate.waitUntilEntered(), "shutdown interrupts an in-flight load");
+    service.reset();
+    const auto calls = port.takeCalls();
+    expect(calls.size() == (blockFallback ? 3 : 2) &&
+               calls.back().cancellation->load(),
+           "shutdown cancels the active request without further fallback attempts");
+    expect(port.stopped() >= 1, "shutdown stops preview worker audio");
+  }
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -285,6 +522,15 @@ int main(int argc, char **argv) {
   testResumeAfterSilenceRestartsDefaultBgm();
   testIdleWithoutDefaultStaysSilent();
   testSilenceSuppressesReCueFromLaterDefaultSwitch();
+  testFailedPreviewRestoresDefaultBgm();
+  testFailedPreviewDoesNotRetryFailedDefault();
+  testFailedPreviewWithoutDefaultStaysSilent();
+  testPreviewMatchingFailedDefaultIsNotRetried();
+  testCancelledPreviewDoesNotRestoreDefault();
+  testSilencedFailedPreviewDoesNotRestoreDefault();
+  testSilenceCancelsInFlightFallback();
+  testNavigationCleansUpStaleFallback();
+  testShutdownCancelsPreviewAndFallback();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_preview_tests", failures,
       "music-select preview assertion(s) failed",
