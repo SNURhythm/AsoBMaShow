@@ -95,7 +95,64 @@ public final class NativeFolderPickerRequestsTests {
         requests.await(next);
     }
 
+    private static void testResumeIsBoundToDepartingPermission() {
+        NativeFolderPickerRequests requests = new NativeFolderPickerRequests();
+        NativeFolderPickerRequests.Request queued = requests.begin(true, () -> false);
+        requests.onPause();
+        requests.onResume(() -> true);
+        require(requests.pending(queued.code), "Unlaunched permission survives resume");
+        requests.dispatch(queued, () -> {});
+        requests.onResume(() -> true);
+        require(requests.pending(queued.code), "Launch alone is not a return");
+        requests.onPause();
+        requests.complete(queued.code, "0");
+        require(requests.await(queued).equals("0"), "Activity result wins before resume");
+        NativeFolderPickerRequests.Request later = requests.begin(true, () -> false);
+        requests.dispatch(later, () -> {});
+        requests.onResume(() -> true);
+        require(requests.pending(later.code), "Old resume cannot wake later permission");
+        requests.onPause();
+        requests.onResume(() -> false);
+        require(requests.await(later).equals("0"), "Denied permission completes on return");
+        requests.complete(queued.code, "1");
+        NativeFolderPickerRequests.Request folder = requests.begin(false, () -> false);
+        requests.dispatch(folder, () -> {});
+        requests.onPause();
+        requests.onResume(() -> true);
+        require(requests.pending(folder.code), "Folder selection is not permission completion");
+        requests.destroy();
+        requests.await(folder);
+    }
+
+    private static void testResumeRejectsCancelledAndDestroyedPermission() {
+        for (boolean destroy : new boolean[] {false, true}) {
+            NativeFolderPickerRequests requests = new NativeFolderPickerRequests();
+            AtomicBoolean cancelled = new AtomicBoolean();
+            NativeFolderPickerRequests.Request request = requests.begin(true, cancelled::get);
+            requests.dispatch(request, () -> {});
+            requests.onPause();
+            if (destroy) requests.destroy();
+            else cancelled.set(true);
+            requests.onResume(() -> {
+                throw new AssertionError("Inactive permission must not query access");
+            });
+            require(requests.await(request).equals("__CANCELLED__"),
+                    "Resume cannot overwrite cancellation or destruction");
+            if (!destroy) {
+                NativeFolderPickerRequests.Request next = requests.begin(true, () -> false);
+                requests.dispatch(next, () -> {});
+                requests.onResume(() -> true);
+                require(requests.pending(next.code), "Cancelled return cannot wake next owner");
+                requests.onPause();
+                requests.onResume(() -> true);
+                require(requests.await(next).equals("1"), "Next owner's own return grants access");
+            }
+        }
+    }
+
     public static void main(String[] arguments) throws Exception {
+        testResumeIsBoundToDepartingPermission();
+        testResumeRejectsCancelledAndDestroyedPermission();
         testResultsArePerRequest();
         for (boolean permission : new boolean[] {false, true}) {
             for (boolean dispatchFirst : new boolean[] {false, true}) {

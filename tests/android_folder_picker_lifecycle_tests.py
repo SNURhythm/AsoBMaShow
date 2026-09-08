@@ -31,7 +31,9 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
         javac = str(Path(java_home) / "bin/javac") if java_home else "javac"
         cls.output = tempfile.TemporaryDirectory()
         activity = (JAVA_ROOT / "AsoBMaShowActivity.java").read_text()
-        signatures = ["protected void onDestroy()", "public String pickChartFolder(",
+        signatures = ["protected void onResume()", "protected void onPause()",
+                      "protected void onActivityResult(",
+                      "protected void onDestroy()", "public String pickChartFolder(",
                       "public String ensureManageExternalStorageAccess("]
         for optional in ["private void finishPicker()",
                          "private void finishManageStorageRequest()"]:
@@ -81,6 +83,14 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
         subprocess.run([self.java, "-cp", self.output.name,
                         "com.snurhythm.asobmashow.NativeFolderPickerRequestsTests"],
                        check=True, timeout=15)
+
+    def test_permission_return_without_activity_result(self):
+        self.run_scenario("resume-grant")
+        self.run_scenario("resume-deny")
+
+    def test_permission_result_before_resume(self):
+        self.run_scenario("result-grant")
+        self.run_scenario("result-deny")
 
 
 if __name__ == "__main__":

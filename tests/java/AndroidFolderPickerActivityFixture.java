@@ -11,6 +11,10 @@ public final class AndroidFolderPickerActivityFixture {
     public static void main(String[] arguments) throws Exception {
         String scenario = arguments[0];
         PickerActivity activity = new PickerActivity();
+        if (scenario.startsWith("resume-") || scenario.startsWith("result-")) {
+            testPermissionReturn(activity, scenario);
+            return;
+        }
         AtomicReference<Throwable> failure = new AtomicReference<>();
         String name = scenario.startsWith("folder") ? "pickChartFolder"
                 : "ensureManageExternalStorageAccess";
@@ -53,10 +57,56 @@ public final class AndroidFolderPickerActivityFixture {
             worker.join(2000);
         }
     }
+
+    private static void testPermissionReturn(PickerActivity activity, String scenario)
+            throws Exception {
+        AtomicReference<String> result = new AtomicReference<>();
+        Thread worker = new Thread(() -> result.set(
+                activity.ensureManageExternalStorageAccess("1")));
+        worker.start();
+        try {
+            Runnable dispatch = activity.ui.poll(2, TimeUnit.SECONDS);
+            if (dispatch == null) throw new AssertionError("Permission was not queued");
+            activity.onPause();
+            activity.onResume();
+            if (!activity.folderPickerRequests.pending(queuedCode(activity))) {
+                throw new AssertionError("Unlaunched permission completed on resume");
+            }
+            dispatch.run();
+            activity.onResume();
+            if (!activity.folderPickerRequests.pending(activity.lastCode)) {
+                throw new AssertionError("Permission completed without leaving Activity");
+            }
+            activity.onPause();
+            activity.permissionGranted = scenario.endsWith("grant");
+            if (scenario.startsWith("result-")) {
+                activity.onActivityResult(activity.lastCode, 0, null);
+            }
+            activity.onResume();
+            worker.join(2000);
+            if (worker.isAlive()) throw new AssertionError("Permission return did not release waiter");
+            String expected = scenario.endsWith("grant") ? "1" : "0";
+            if (!expected.equals(result.get())) throw new AssertionError("Wrong permission result");
+            activity.onResume();
+            System.out.println("PASS " + scenario);
+        } finally {
+            worker.interrupt();
+            worker.join(2000);
+        }
+    }
+
+    private static int queuedCode(PickerActivity activity) throws Exception {
+        java.lang.reflect.Field active = NativeFolderPickerRequests.class.getDeclaredField("active");
+        active.setAccessible(true);
+        return ((NativeFolderPickerRequests.Request) active.get(activity.folderPickerRequests)).code;
+    }
 }
 
 class FakeSdlActivity {
     Thread nativeWorker;
+    protected void onResume() {}
+    protected void onPause() {}
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {}
     protected void onDestroy() {
         if (nativeWorker == null) return;
         try {
@@ -73,6 +123,8 @@ class FakeSdlActivity {
 class PickerActivity extends FakeSdlActivity {
     final BlockingQueue<Runnable> ui = new LinkedBlockingQueue<>();
     int launches;
+    int lastCode;
+    boolean permissionGranted;
     static final String ERROR_PREFIX = "__ERROR__:", CANCELLED_RESULT = "__CANCELLED__";
     static final int REQUEST_OPEN_TREE = 1, REQUEST_MANAGE_EXTERNAL_STORAGE = 2;
     final Object pickerLock = new Object(), manageStorageLock = new Object();
@@ -85,9 +137,26 @@ class PickerActivity extends FakeSdlActivity {
     DocumentHandoffOperation documentHandoffOperation;
     final Dummy DOCUMENT_HANDOFF_TOKENS = new Dummy();
     void runOnUiThread(Runnable action) { ui.add(action); }
-    void startActivityForResult(Intent intent, int code) { launches++; }
+    void startActivityForResult(Intent intent, int code) { launches++; lastCode = code; }
     String getPackageName() { return "fixture"; }
-    boolean hasManageExternalStorageAccess() { return false; }
+    boolean hasManageExternalStorageAccess() { return permissionGranted; }
+    void setRequestedOrientation(int orientation) {}
+    void nativeGyroscopeActivityResumed() {}
+    void nativeGyroscopeActivityPaused() {}
+    final DocumentHandoffRequestCodeAllocator DOCUMENT_HANDOFF_REQUEST_CODES =
+            new DocumentHandoffRequestCodeAllocator(0x5300, 0xffff);
+    static final int REQUEST_OPEN_ARCHIVE = 3, REQUEST_OPEN_IMPORT_FOLDER = 4;
+    final AtomicReference<Uri> archivePickerUri = new AtomicReference<>();
+    final AtomicReference<String> archivePickerName = new AtomicReference<>("");
+    final AtomicReference<String> archivePickerError = new AtomicReference<>("");
+    final AtomicReference<Boolean> archivePickerTree = new AtomicReference<>(false);
+    void completeDocumentSelectionLocked(DocumentHandoffOperation operation, Uri uri, String result) {}
+    Dummy getContentResolver() { return new Dummy(); }
+    String displayNameForTree(Uri uri) { return "folder"; }
+    String directPathForTree(Uri uri) { return "/folder"; }
+    String displayNameForUri(Uri uri) { return "archive"; }
+    boolean isSupportedArchiveUri(Uri uri, String name) { return true; }
+    void finishArchivePicker() {}
     void cancelPendingChartImports() {}
     void nativeGyroscopeActivityDestroyed() {}
     void cancelDocumentHandoffLocked(DocumentHandoffOperation operation) {}
@@ -101,10 +170,15 @@ class PickerActivity extends FakeSdlActivity {
 }
 
 class Dummy {
+    void setActivityResumed(boolean resumed) {}
+    void takePersistableUriPermission(Uri uri, int flags) {}
     void destroy() {}
     void cancel(Object value) {}
 }
-class DocumentHandoffOperation { Object operationToken; }
+class DocumentHandoffOperation { Object operationToken; int requestCode; }
+class ActivityInfo { static final int SCREEN_ORIENTATION_LANDSCAPE = 0; }
+class Activity { static final int RESULT_OK = -1; }
+class DocumentsContract { static boolean isTreeUri(Uri uri) { return true; } }
 class BuildConfig { static final boolean ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = true; }
 class Looper {
     static final Object MAIN = new Object();
@@ -117,6 +191,8 @@ class Settings {
 }
 class Uri { static Uri parse(String text) { return new Uri(); } }
 class Intent {
+    Uri getData() { return null; }
+    int getFlags() { return 0; }
     static final String ACTION_OPEN_DOCUMENT_TREE = "tree";
     static final int FLAG_GRANT_READ_URI_PERMISSION = 1;
     static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 2;

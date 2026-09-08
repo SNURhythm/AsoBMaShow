@@ -15,6 +15,7 @@ final class NativeFolderPickerRequests {
         final BooleanSupplier cancelled;
         final CountDownLatch done = new CountDownLatch(1);
         String result = CANCELLED;
+        boolean launched;
 
         Request(int code, boolean permission, BooleanSupplier cancelled) {
             this.code = code;
@@ -24,6 +25,7 @@ final class NativeFolderPickerRequests {
     }
 
     private Request active;
+    private Request pausedPermission;
     private boolean destroyed;
 
     synchronized boolean cancelled(BooleanSupplier ownerCancelled) {
@@ -45,6 +47,20 @@ final class NativeFolderPickerRequests {
             return;
         }
         launch.run();
+        request.launched = true;
+    }
+
+    synchronized void onPause() {
+        pausedPermission = active != null && active.permission && active.launched
+                && pending(active.code) ? active : null;
+    }
+
+    synchronized void onResume(BooleanSupplier hasAccess) {
+        Request request = pausedPermission;
+        pausedPermission = null;
+        if (request != null && active == request && pending(request.code)) {
+            complete(request.code, hasAccess.getAsBoolean() ? "1" : "0");
+        }
     }
 
     String await(Request request) {
@@ -89,6 +105,7 @@ final class NativeFolderPickerRequests {
 
     synchronized void destroy() {
         destroyed = true;
+        pausedPermission = null;
         if (active != null) {
             active.result = CANCELLED;
             active.done.countDown();

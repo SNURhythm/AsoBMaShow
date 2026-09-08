@@ -199,11 +199,12 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
         }
         nativeGyroscopeActivityResumed();
-        finishManageStorageRequest();
+        folderPickerRequests.onResume(this::hasManageExternalStorageAccess);
     }
 
     @Override
     protected void onPause() {
+        folderPickerRequests.onPause();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = false;
             if (gyroscopeTurntableManager != null) {
