@@ -2906,6 +2906,11 @@ void installSafeOsLibrary(lua_State *state, bool allowOsLibrary,
     return;
   }
   lua_getglobal(state, LUA_OSLIBNAME);
+  lua_pushcfunction(state, [](lua_State *lua) {
+    lua_pushliteral(lua, "C");
+    return 1;
+  });
+  lua_setfield(state, -2, "setlocale");
   for (const char *name : {"execute", "exit", "getenv", "remove", "rename",
                            "tmpname"}) {
     lua_pushnil(state);

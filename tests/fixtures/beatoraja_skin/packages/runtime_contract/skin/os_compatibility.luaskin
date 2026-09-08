@@ -14,6 +14,9 @@ assert(os.getenv == nil)
 assert(os.remove == nil)
 assert(os.rename == nil)
 assert(type(os.setlocale) == "function")
+assert(os.setlocale("de_DE.UTF-8", "numeric") == "C")
+assert(os.setlocale("not-a-locale", "all") == "C")
+assert(os.setlocale() == "C")
 assert(os.tmpname == nil)
 
 return { phase = skin_config and "configured" or "header" }

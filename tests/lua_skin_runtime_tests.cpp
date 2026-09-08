@@ -12,6 +12,7 @@
 
 #include <atomic>
 #include <array>
+#include <clocale>
 #include <cstdlib>
 #include <cstdint>
 #include <filesystem>
@@ -642,15 +643,27 @@ void testMusicSelectPurposeHasTheConfiguredLiveHost() {
 }
 
 void testRuntimeProvidesBeatorajaSafeOsLibrary() {
+  const std::string originalLocale = std::setlocale(LC_ALL, nullptr);
+  struct RestoreLocale {
+    std::string value;
+    ~RestoreLocale() { std::setlocale(LC_ALL, value.c_str()); }
+  } restoreLocale{originalLocale};
+  std::setlocale(LC_ALL, "C");
   for (const auto purpose : {LuaRuntimePurpose::Catalog,
                              LuaRuntimePurpose::Validation,
-                             LuaRuntimePurpose::Gameplay}) {
+                             LuaRuntimePurpose::Gameplay,
+                             LuaRuntimePurpose::MusicSelect}) {
     auto harness = makeHarness(purpose, "os_compatibility.luaskin");
     if (!harness) {
       continue;
     }
     expect(harness->runtime->loadHeader().value.has_value(),
            "Beatoraja-compatible os.time succeeds in every runtime purpose");
+    harness.reset();
+    expect(std::string(std::setlocale(LC_NUMERIC, nullptr)) == "C" &&
+               std::strtod("0.5", nullptr) == 0.5,
+           "safe setlocale leaves native parsing unchanged after state destruction");
+    std::setlocale(LC_ALL, "C");
   }
 }
 
