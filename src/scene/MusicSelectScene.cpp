@@ -2055,7 +2055,8 @@ void MusicSelectScene::closeDirectory() {
 }
 
 void MusicSelectScene::startPreloadForSelection() {
-  if (launching_ || recordsExportInProgress_.load()) {
+  if (!sceneActive_ || context.appInBackground.load(std::memory_order_acquire) ||
+      launching_ || recordsExportInProgress_.load()) {
     return;
   }
   const auto snapshot = bars_.readView();
@@ -3260,8 +3261,9 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
-  if (failed_) return;
+  if (failed_ || !sceneActive_) return;
   tryCompletePendingPreloadLaunch();
+  if (!sceneActive_) return;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateSelectedChartAnalysis();
 #endif
@@ -3331,7 +3333,9 @@ void MusicSelectScene::update(float) {
   // MainController still calls MusicSelector.input() before that timer turns
   // on. Keep controller and keyboard input live across the same interval.
   consumeLogicalInput();
+  if (!sceneActive_) return;
   consumeActions();
+  if (!sceneActive_) return;
   applyDirectoryLoads();
   if (folderStatusLoader_) {
     for (const auto &result : folderStatusLoader_->takeResults()) {

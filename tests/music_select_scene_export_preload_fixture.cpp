@@ -1,8 +1,11 @@
 #include <atomic>
+#include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -16,6 +19,8 @@
 
 using path_t = std::string;
 std::string fspath_to_path_t(std::string_view path) { return std::string(path); }
+std::string fspath_to_utf8(std::string_view path) { return std::string(path); }
+void SDL_Log(const char *, ...) {}
 
 struct Metadata {
   std::string BmsPath = "selected-bga.bms";
@@ -39,6 +44,9 @@ struct Settings {
   int selectedPlaybackRatePercent = 100;
   int selectedPlaybackMode = 0;
   bool gameplayClubModeEnabled = false;
+  bool inputKeysoundEnabled = true;
+  int skinDoublePlayOption = 0;
+  bool archiveChartPreviewEnabled = false;
 };
 namespace main_menu_profile {
 struct Selections {
@@ -49,6 +57,7 @@ struct Selections {
   int gaugeAutoShiftLowerBound = 0;
   int assistOption = 0;
   int ruleset = 0;
+  int pacemakerTarget = 0;
   static Selections fromSettings(const Settings &) { return {}; }
 };
 }
@@ -113,6 +122,8 @@ struct Modal {
   bool exporting = false;
   bool progressVisible = false;
   std::string status;
+  void resize(int, int) {}
+  void update() {}
   void setExportInProgress(bool value) { exporting = value; }
   void showExportProgress(const char *, const char *) { progressVisible = true; }
   void returnToList(const std::string &message) {
@@ -130,6 +141,9 @@ struct Context {
   int replayRepository = 0;
   Repository chartRepository;
   Repository scoreRepository;
+  std::atomic_bool appInBackground = false;
+  std::atomic_uint64_t irAccountEvidenceRevision = 0;
+  struct SceneManager *sceneManager = nullptr;
   std::atomic_bool visualsLoaded = false;
   std::atomic_bool exportEntered = false;
   std::atomic_bool releaseExport = false;
@@ -147,23 +161,158 @@ struct ReplayVideoExporter {
   }
 };
 namespace skin {
-enum class MusicSelectBarKind { Song };
+enum class MusicSelectBarKind { Song, Hash, Folder, SameFolder };
 }
+struct MusicSelectBarId {
+  std::string value;
+  bool operator==(const MusicSelectBarId &) const = default;
+};
 struct Bar {
   skin::MusicSelectBarKind kind = skin::MusicSelectBarKind::Song;
   std::optional<ChartMetaRecord> chart = ChartMetaRecord{};
+  MusicSelectBarId id{"song"};
+  bool childrenLoaded = false;
 };
+using MusicSelectBar = Bar;
 struct Bars {
   std::vector<Bar> rows{Bar{}};
   std::size_t selectedIndex = 0;
   const Bars &readView() const { return *this; }
   std::size_t rowCount() const { return rows.size(); }
   const Bar &rowAt(std::size_t index) const { return rows.at(index); }
+  bool select(const MusicSelectBarId &id) {
+    rows.front().kind = id.value == "hash" ? skin::MusicSelectBarKind::Hash
+                                         : skin::MusicSelectBarKind::Song;
+    rows.front().id = id;
+    return true;
+  }
+  bool open(const MusicSelectBarId &) {
+    rows.front().kind = skin::MusicSelectBarKind::Song;
+    rows.front().id = {"song"};
+    return true;
+  }
+  void installFolderStatus(const MusicSelectBarId &, int) {}
 };
+namespace audio {
+struct PlaybackRate { int percent; int mode; };
+namespace diag { void SelectAudioLog(const std::string &) {} }
+}
+struct StartOptions {
+  int startPosition;
+  bool autoKeySound, autoPlay;
+  int gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound;
+  std::string playOption;
+  int playOptionSeed;
+  std::string playOption2;
+  int playOption2Seed;
+  bool doublePlayFlip;
+  int longNoteMode, assistOption, pacemakerTarget;
+  std::string tableName, tableLevel;
+  bool practiceMode;
+  audio::PlaybackRate playback;
+  bool clubMode;
+  void *returnScene;
+  int ruleset;
+};
+struct GamePlayScene {
+  std::unique_ptr<bms_parser::Chart> chart;
+  GamePlayScene(Context &, std::unique_ptr<bms_parser::Chart> value, StartOptions)
+      : chart(std::move(value)) {}
+};
+struct SceneManager {
+  std::function<void()> pause;
+  std::unique_ptr<GamePlayScene> gameplay;
+  void changeScene(std::unique_ptr<GamePlayScene> value, bool retained) {
+    assert(retained);
+    pause();
+    gameplay = std::move(value);
+  }
+};
+auto musicSelectTableContextForLaunch(const Bars &) {
+  struct Table { std::string name = "table", level = "12"; };
+  return Table{};
+}
+struct StartupTiming {
+  static StartupTiming &instance() { static StartupTiming timing; return timing; }
+  void mark(const char *) {}
+};
+namespace rendering { int window_width = 1280, window_height = 720; }
+namespace platform_open { bool openExternalUrl(const std::string &, std::string &) { return true; } }
+struct View {
+  void setViewportSize(int, int) {}
+  void setSize(int, int) {}
+  void resize(int, int) {}
+  bool getVisible() { return false; }
+};
+struct ExternalUrl {
+  struct Snapshot { int generation; bool finished; std::optional<std::string> url; };
+  Snapshot snapshot() { return {}; }
+  void close(int) {}
+};
+struct FolderStatus {
+  struct Result { std::string error; MusicSelectBarId id; int frame; };
+  std::vector<Result> takeResults() { return {}; }
+  void cancel() {}
+};
+struct Preview {
+  struct Request { std::optional<std::filesystem::path> path; };
+  void observeSelection(int, int) {}
+  std::optional<Request> update(int, bool) { return std::nullopt; }
+  void switchTo(std::optional<std::filesystem::path>) {}
+  void reset() {}
+  void silence() {}
+};
+int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
   Context context;
   Bars bars_;
   bool launching_ = false;
+  bool sceneActive_ = true, failed_ = false;
+  std::uint64_t launchGeneration_ = 0;
+  std::atomic_bool launchCancelled_ = false;
+  std::jthread launchThread_;
+  std::optional<int> folderStatusRowsRevision_;
+  struct PendingPreloadLaunch { ChartMetaRecord record; bool autoplay, practice; };
+  std::optional<PendingPreloadLaunch> pendingLaunch_;
+  std::vector<MusicSelectBarId> restoreDirectories_;
+  std::vector<MusicSelectBar> restoreDirectoryBars_;
+  std::optional<MusicSelectBarId> restoreSelection_;
+  int directoryPublications = 0, inputConsumptions = 0;
+  bool hashDirectoryOpen = false;
+  std::function<void()> logicalHandoff, actionHandoff;
+  int irExternalUrlGeneration_ = 0;
+  ExternalUrl *irExternalUrlService_ = nullptr;
+  View *toolbar_ = nullptr, *searchOverlay_ = nullptr, *modalLayer_ = nullptr;
+  View *modalOverlayPortal_ = nullptr, *playOptionsModal_ = nullptr, *tasksModal_ = nullptr;
+  std::uint64_t irAccountEvidenceRevision_ = 0;
+  std::optional<std::int64_t> startInputMicros_;
+  FolderStatus *folderStatusLoader_ = nullptr;
+  std::optional<std::chrono::steady_clock::time_point> folderStatusRetryAt_;
+  Preview previewController_;
+  Preview *previewAudio_ = nullptr;
+  int songBarChangeMicros_ = 0;
+  int elapsedMicros() { return 1000; }
+  void refreshTasksModal() {}
+  void applyRecordsExportProgress() {}
+  void consumeLogicalInput() { ++inputConsumptions; if (logicalHandoff) logicalHandoff(); }
+  void consumeActions() { ++inputConsumptions; if (actionHandoff) actionHandoff(); }
+  void stopInputListening() {}
+  void applyDirectoryLoads() { ++directoryPublications; }
+  void requestFolderStatus(const Bars &) {}
+  void updateRanking() {}
+  void launchSelected(bool, bool) {}
+  void cancelDirectoryLoad() { restoreDirectories_.clear(); }
+  bool openSameFolder(bool) { return false; }
+  void requestDirectoryLoad(const Bar &) { assert(false); }
+  bool loadDirectoryChildren(const Bar &bar) {
+    assert(bar.kind == skin::MusicSelectBarKind::Hash);
+    ++directoryPublications;
+    return true;
+  }
+  void continueDirectoryRestore();
+  void tryCompletePendingPreloadLaunch();
+  void update(float);
+  void onPause();
   ChartPreloadWorker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
@@ -181,6 +330,11 @@ struct MusicSelectScene {
   void reloadLibrary() {
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();
+    if (hashDirectoryOpen) {
+      restoreDirectories_ = {MusicSelectBarId{"hash"}};
+      restoreSelection_ = MusicSelectBarId{"song"};
+    }
+    if (!restoreDirectories_.empty()) continueDirectoryRestore();
   }
   void selectedBarMoved() { startPreloadForSelection(); }
   void refreshRepositoryRevisions();
