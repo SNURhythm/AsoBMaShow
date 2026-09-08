@@ -48,6 +48,8 @@ struct MusicSelectScene {
   ExternalUrlService *irExternalUrlService_ = nullptr;
   int preloadStops = 0;
   int selectionChanges = 0;
+  int soundConfigurations = 0;
+  void configureSoundServices() { ++soundConfigurations; }
   void stopPreloadWorker() { ++preloadStops; }
   void stopInputListening() {}
   void startInputListening() {}
@@ -79,6 +81,7 @@ int main() {
   scene.context.appInBackground = false;
   scene.onApplicationBackgroundChanged(false);
   assert(scene.preview.playing && !scene.preview.suppressed);
+  assert(scene.soundConfigurations == 1);
   assert(scene.selectionChanges == 1);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   assert(scene.skin.playing);
@@ -95,6 +98,7 @@ int main() {
   scene.context.appInBackground = true;
   scene.onResume();
   assert(!scene.preview.playing && scene.preview.suppressed);
+  assert(scene.soundConfigurations == 1);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   assert(!scene.skin.playing);
 #endif
@@ -113,4 +117,5 @@ int main() {
   scene.onPause();
   scene.onResume();
   assert(scene.preview.playing && scene.preview.resumes == 3);
+  assert(scene.soundConfigurations == 3);
 }

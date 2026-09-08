@@ -466,9 +466,21 @@ MusicSelectScene::MusicSelectScene(
       selectedSkinPath_(
           musicSelectSkinEntryPath(activationRequest_.activation.entry)) {}
 
-void MusicSelectScene::init() {
-  sceneActive_ = true;
-  started_ = std::chrono::steady_clock::now();
+void MusicSelectScene::configureSoundServices() {
+  if (previewAudio_ && systemSound_ &&
+      soundSetPath_ == context.settings.skinSelectSoundSetPath &&
+      soundSetBookmark_ == context.settings.skinSelectSoundSetBookmark) {
+    return;
+  }
+  previewController_.reset();
+  previewAudio_.reset();
+  systemSound_.reset();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (soundSetFolderAccessHandle_ != nullptr) {
+    StopIOSSecurityScopedResource(soundSetFolderAccessHandle_);
+    soundSetFolderAccessHandle_ = nullptr;
+  }
+#endif
   // Search the user-configured sound-set folder (when set) before the bundled
   // `assets/` root, resolving each sound across Beatoraja's extension order.
   std::vector<std::filesystem::path> selectSoundRoots;
@@ -524,6 +536,14 @@ void MusicSelectScene::init() {
   systemSound_ = std::make_unique<skin::SkinSystemSoundService>(
       selectSoundRoots,
       musicSelectSkinSoundPlayback(context.jukebox.audioRuntime()));
+  soundSetPath_ = context.settings.skinSelectSoundSetPath;
+  soundSetBookmark_ = context.settings.skinSelectSoundSetBookmark;
+}
+
+void MusicSelectScene::init() {
+  sceneActive_ = true;
+  started_ = std::chrono::steady_clock::now();
+  configureSoundServices();
   sortIndex_ = sourceSortIndex(context.settings.skinSortId);
   inputProcessor_ = MusicSelectInputProcessor(
       {.layout = musicSelectKeyLayoutForConfig(
@@ -673,6 +693,7 @@ void MusicSelectScene::onResume() {
   reloadLibrary();
   if (!failed_) {
     // Resume the looping select BGM after pause silenced it.
+    if (!background) configureSoundServices();
     if (!background && previewAudio_) previewAudio_->resumeDefaultBgm();
     selectedBarMoved();
     startInputListening();
@@ -692,6 +713,7 @@ void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
       context.appInBackground.load(std::memory_order_acquire)) {
     return;
   }
+  configureSoundServices();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinSession_) skinSession_->resumeAudio();
 #endif
@@ -4213,12 +4235,6 @@ void MusicSelectScene::cleanupScene() {
   sceneActive_ = false;
   folderStatusLoader_.reset();
   launchCancelled_.store(true, std::memory_order_release);
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (soundSetFolderAccessHandle_ != nullptr) {
-    StopIOSSecurityScopedResource(soundSetFolderAccessHandle_);
-    soundSetFolderAccessHandle_ = nullptr;
-  }
-#endif
   if (launchThread_.joinable()) {
     launchThread_.request_stop();
     launchThread_.join();
@@ -4257,6 +4273,13 @@ void MusicSelectScene::cleanupScene() {
   irExternalUrlGeneration_ = 0;
   previewController_.reset();
   previewAudio_.reset();
+  systemSound_.reset();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (soundSetFolderAccessHandle_ != nullptr) {
+    StopIOSSecurityScopedResource(soundSetFolderAccessHandle_);
+    soundSetFolderAccessHandle_ = nullptr;
+  }
+#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   skinSession_.reset();
   skinLoadingView_ = nullptr;

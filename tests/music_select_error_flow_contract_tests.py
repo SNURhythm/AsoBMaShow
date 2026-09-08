@@ -62,6 +62,19 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_sound_services_follow_changed_paths_and_bookmarks(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        signatures = [
+            "std::filesystem::path musicSelectSoundSetRoot(const std::string &configured)",
+            "void MusicSelectScene::configureSoundServices()",
+        ]
+        methods = "\n".join(signature + function_body(source, signature)
+                            for signature in signatures)
+        fixture = (ROOT / "tests/music_select_scene_sound_settings_fixture.cpp").read_text()
+        for ios in (0, 1):
+            self.compile_and_run(f"#define TARGET_OS_IOS {ios}\n" +
+                                 fixture.replace("SCENE_METHODS", methods))
+
     def test_scene_ranking_cache_evicts_oldest_updates_at_capacity(self):
         self.run_scene_fixture("music_select_scene_ranking_cache_fixture.cpp", [
             "void MusicSelectScene::updateRanking()",

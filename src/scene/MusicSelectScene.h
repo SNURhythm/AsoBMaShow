@@ -65,6 +65,7 @@ protected:
   bool renderViewBeforeScene(const View *) const override { return false; }
 
 private:
+  void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
@@ -195,6 +196,8 @@ private:
   MusicSelectPreviewController previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
   std::unique_ptr<skin::SkinSystemSoundService> systemSound_;
+  std::string soundSetPath_;
+  std::string soundSetBookmark_;
   void *soundSetFolderAccessHandle_ = nullptr;
   // The launch parse runs off the UI thread so a large archive chart does not
   // freeze the selector between Start and the gameplay scene. Completion is
