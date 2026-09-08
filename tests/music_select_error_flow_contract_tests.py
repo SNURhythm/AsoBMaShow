@@ -62,6 +62,39 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_runtime_error_keyboard_and_controller_settings_recovery(self):
+        self.run_error_recovery_fixture("testSettingsRecovery")
+
+    def test_runtime_error_escape_and_controller_cancel_return_to_intro(self):
+        self.run_error_recovery_fixture("testBackRecovery")
+
+    def test_runtime_error_modal_blocks_selector_but_preserves_pointer_recovery(self):
+        self.run_error_recovery_fixture("testErrorModalIsolation")
+
+    def test_healthy_settings_still_retains_selector(self):
+        self.run_error_recovery_fixture("testHealthySettingsRetainsSelector")
+
+    def run_error_recovery_fixture(self, test_name):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        events = function_body(source, "EventHandleResult MusicSelectScene::handleEvents(")
+        prefix = events[1:events.index("if (selectorInputBlocked())")]
+        signatures = [
+            "void MusicSelectScene::enterError(std::vector<skin::SkinDiagnostic> diagnostics)",
+            "void MusicSelectScene::openSettings()",
+        ]
+        methods = "\n".join(
+            signature + function_body(source, signature.split("(")[0] + "(")
+            for signature in signatures)
+        fixture = (ROOT / "tests/music_select_scene_error_recovery_fixture.cpp").read_text()
+        fixture = (fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                   .replace("SCENE_METHODS", methods)
+                   .replace("ERROR_EVENT_PREFIX", prefix)
+                   .replace("SCENE_TEST", test_name))
+        for enabled in (0, 1):
+            with self.subTest(lua_enabled=enabled):
+                self.compile_and_run(
+                    f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture)
+
     def test_uncached_launch_cleanup_cancels_parser_and_audio_without_handoff(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         launch = function_body(source, "void MusicSelectScene::launchSelected(")

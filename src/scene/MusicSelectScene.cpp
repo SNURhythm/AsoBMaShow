@@ -1377,7 +1377,38 @@ bool MusicSelectScene::queueSkinPointerEvent(SDL_Event &event) {
 #endif
 
 EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
-  if (failed_) return Scene::handleEvents(event);
+  if (failed_) {
+    if (event.type == SDL_KEYDOWN && event.key.repeat == 0) {
+      switch (event.key.keysym.sym) {
+      case SDLK_RETURN:
+      case SDLK_KP_ENTER:
+      case SDLK_6:
+        openSettings();
+        return {};
+      case SDLK_ESCAPE:
+        context.sceneManager->changeScene("Intro");
+        return {};
+      default:
+        break;
+      }
+    }
+    if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+      switch (event.cbutton.button) {
+      case SDL_CONTROLLER_BUTTON_A:
+      case SDL_CONTROLLER_BUTTON_START:
+        openSettings();
+        return {};
+      case SDL_CONTROLLER_BUTTON_B:
+      case SDL_CONTROLLER_BUTTON_BACK:
+        context.sceneManager->changeScene("Intro");
+        return {};
+      default:
+        break;
+      }
+    }
+    if (errorView_ != nullptr) (void)errorView_->handleEvents(event);
+    return {};
+  }
   if (selectorInputBlocked()) resetLogicalInput();
   // While a chart is launching, the decide overlay blocks all input so the
   // user cannot scroll or change selection mid-launch.
@@ -4216,6 +4247,12 @@ void MusicSelectScene::openIrUploads() {
 }
 
 void MusicSelectScene::openSettings() {
+  if (failed_) {
+    context.sceneManager->changeScene(std::make_unique<SettingsScene>(
+        context, SettingsDestination::Profile,
+        SceneReturnTarget::Registered("Intro")));
+    return;
+  }
   reactivateSkinOnResume_ = true;
   context.sceneManager->changeScene(std::make_unique<SettingsScene>(
       context, SettingsDestination::Profile,
