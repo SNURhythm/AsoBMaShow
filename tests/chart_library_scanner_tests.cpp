@@ -375,6 +375,72 @@ void testBasicNoOpAndDeleteScan() {
   assert(repository.GetLibraryRevision() > stableRevision);
 }
 
+void testUpgradedSolidSevenZipReplacesPlayableCachedChart() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "solid.7z";
+  const auto databasePath = temporary.path() / "chart.db";
+  {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), archivePath.string().c_str()) ==
+           ARCHIVE_OK);
+    const auto contents = chartText("Solid Chart");
+    for (const auto *name : {"song/chart.bms", "song/other.bms"}) {
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      archive_entry_set_pathname(entry.get(), name);
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_perm(entry.get(), 0644);
+      archive_entry_set_size(entry.get(), static_cast<la_int64_t>(contents.size()));
+      assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+      assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+             static_cast<la_ssize_t>(contents.size()));
+      assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session);
+    auto batch = session->BeginScanBatch();
+    assert(batch);
+    bms_parser::ChartMeta meta;
+    meta.BmsPath = archive_file::makeVirtualPath(archivePath, "song/chart.bms");
+    meta.Folder = archive_file::makeVirtualPath(archivePath, "song");
+    meta.Title = "Previously misclassified";
+    meta.MD5 = "11111111111111111111111111111111";
+    meta.SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    assert(batch->UpsertChart(meta, std::nullopt, false, {}));
+    assert(batch->UpsertArchiveCache({.path = archivePath,
+                                      .solid = false,
+                                      .fileCount = 2,
+                                      .chartCount = 1}));
+    assert(batch->Commit());
+    assert(session->CountAllChartMeta() == 1 && session->CountSolidArchives() == 0);
+  }
+  {
+    sqlite3 *database = nullptr;
+    assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+    assert(sqlite3_exec(database, "PRAGMA user_version=10", nullptr, nullptr, nullptr) ==
+           SQLITE_OK);
+    assert(sqlite3_close(database) == SQLITE_OK);
+  }
+  TestChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartLibraryScanner scanner;
+  for (int scan = 0; scan < 2; ++scan) {
+    const auto result = scanner.ScanWithResult(*session, {archivePath});
+    assert(result.completed && result.committed);
+    assert(session->CountAllChartMeta() == 0);
+    assert(session->CountSolidArchives() == 1);
+    const auto snapshot = session->LoadScanSnapshot();
+    assert(snapshot.archiveCache.size() == 1 && snapshot.archiveCache.front().solid);
+  }
+}
+
 void testSequenceFeaturesMatchBeatorajaSongData() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2689,6 +2755,7 @@ void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
 
 int main() {
   testBasicNoOpAndDeleteScan();
+  testUpgradedSolidSevenZipReplacesPlayableCachedChart();
   testSequenceFeaturesMatchBeatorajaSongData();
   testFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan();

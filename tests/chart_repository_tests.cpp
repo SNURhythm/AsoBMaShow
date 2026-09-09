@@ -532,7 +532,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 10);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 11);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -743,7 +743,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=11"));
+                   "PRAGMA user_version=12"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -1890,7 +1890,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 10);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 11);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -1930,6 +1930,43 @@ void testChartMigrationCompatibilityMatrix() {
   }
 }
 
+void testSolidArchiveClassificationMigration() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "solid-migration.db";
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    auto meta = chartMeta(temporary.path());
+    assert(session && session->InsertChartMeta(meta));
+  }
+  {
+    auto database = openDatabase(path);
+    assert(execute(database.get(),
+        "INSERT INTO archive_scan_cache(path, solid, chart_count) VALUES "
+        "('old.7z',0,2),('upper.7Z',0,2),('comic.CB7',0,2),"
+        "('known.7z',1,0),('keep.zip',0,1);"
+        "INSERT INTO chart_scan_completed_archive(archive_path) VALUES "
+        "('old.7z'),('keep.zip');"
+        "PRAGMA user_version=10"));
+  }
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 1);
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(),
+        "SELECT COUNT(*) FROM archive_scan_cache WHERE solid=0 "
+        "AND lower(path) LIKE '%.7z'") == 0);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 2);
+    assert(queryInt(database.get(),
+        "SELECT COUNT(*) FROM chart_scan_completed_archive WHERE archive_path='old.7z'") == 0);
+    assert(queryInt(database.get(),
+        "SELECT COUNT(*) FROM chart_scan_completed_archive WHERE archive_path='keep.zip'") == 1);
+  }
+}
+
 void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   TempDirectory temporary;
   const auto path = temporary.path() / "release-failure.db";
@@ -1965,7 +2002,7 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 10);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 11);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
@@ -3778,6 +3815,7 @@ int main(int argc, char **argv) {
   testExactFolderQuery();
   testFolderProbeAndCancelledReadsDoNotPoisonSession();
   testChartMigrationCompatibilityMatrix();
+  testSolidArchiveClassificationMigration();
   testChartMigrationReleaseFailureDoesNotReportSuccess();
   testLegacyIosContainerPathRebasesToCurrentDocuments();
   testFindBmsDownloadEntrySelectionLifecycle();

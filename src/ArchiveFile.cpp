@@ -584,6 +584,7 @@ private:
 };
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
+constexpr std::uint8_t kArchiveIndexCacheVersion = 3;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
@@ -2595,6 +2596,7 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
   std::size_t skippedSystem = 0;
   std::size_t skippedEncrypted = 0;
   std::size_t solidEntries = 0;
+  const bool archiveSolid = sevenZipArchiveBoolProperty(archive, kpidSolid, false);
   for (UInt32 index = 0; index < itemCount; ++index) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       entries.clear();
@@ -2622,7 +2624,7 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
     const bool directory =
         sevenZipBoolProperty(archive, index, kpidIsDir, false);
     const bool solid = !directory &&
-                       sevenZipBoolProperty(archive, index, kpidSolid, false);
+                       sevenZipBoolProperty(archive, index, kpidSolid, archiveSolid);
     if (!directory &&
         sevenZipBoolProperty(archive, index, kpidEncrypted, false)) {
       ++skippedEncrypted;
@@ -3638,7 +3640,7 @@ std::size_t pruneArchiveIndexCacheImpl(
     std::uint64_t keyLen = 0;
     file.read(reinterpret_cast<char *>(&keyLen), sizeof(keyLen));
     bool shouldRemove = true;
-    if (file.good() && version == 2 &&
+    if (file.good() && version == kArchiveIndexCacheVersion &&
         (!sizeError && keyLen <= fileBytes) &&
         keyLen <= (1024ull * 1024ull * 1024ull)) {
       std::string storedKey(static_cast<std::size_t>(keyLen), '\0');
@@ -3677,7 +3679,7 @@ bool writeCachedIndexToDisk(const std::string &key,
     auto writeU8 = [&](std::uint8_t value) {
       stream.write(reinterpret_cast<const char *>(&value), sizeof(value));
     };
-    writeU8(2);  // format version
+    writeU8(kArchiveIndexCacheVersion);
     writeU64(key.size());
     stream.write(key.data(), static_cast<std::streamsize>(key.size()));
     writeU64(static_cast<std::uint64_t>(index.size));
@@ -3767,7 +3769,7 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
   auto index = std::make_shared<CachedIndex>();
   const std::uint8_t version = readU8();
   const std::uint64_t storedKeyLen = readU64();
-  if (!file.good() || version != 2 ||
+  if (!file.good() || version != kArchiveIndexCacheVersion ||
       storedKeyLen > fileBytes ||
       storedKeyLen > (1024ull * 1024ull * 1024ull)) {
     return nullptr;
@@ -6790,6 +6792,7 @@ bool readSevenZipEntriesByIndex(
   outputTargets.reserve(readTargets.size());
   files.reserve(readTargets.size());
   std::size_t solidTargets = 0;
+  const bool archiveSolid = sevenZipArchiveBoolProperty(archive, kpidSolid, false);
 
   for (const SevenZipReadTarget &target : readTargets) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -6829,7 +6832,7 @@ bool readSevenZipEntriesByIndex(
       return false;
     }
     const bool actualSolid =
-        sevenZipBoolProperty(archive, itemIndex, kpidSolid, false);
+        sevenZipBoolProperty(archive, itemIndex, kpidSolid, archiveSolid);
     if (actualSolid != target.solid) {
       if (errorMessage != nullptr) {
         *errorMessage = "7-Zip archive solid flag did not match cached index.";
@@ -7017,6 +7020,7 @@ bool readSevenZipEntriesByIndexStreaming(
   std::unordered_map<UInt32, std::filesystem::path> outputTargets;
   outputTargets.reserve(readTargets.size());
   std::size_t solidTargets = 0;
+  const bool archiveSolid = sevenZipArchiveBoolProperty(archive, kpidSolid, false);
 
   for (const SevenZipReadTarget &target : readTargets) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -7052,7 +7056,7 @@ bool readSevenZipEntriesByIndexStreaming(
       return false;
     }
     const bool actualSolid =
-        sevenZipBoolProperty(archive, itemIndex, kpidSolid, false);
+        sevenZipBoolProperty(archive, itemIndex, kpidSolid, archiveSolid);
     if (actualSolid != target.solid) {
       if (errorMessage != nullptr) {
         *errorMessage = "7-Zip archive solid flag did not match cached index.";
@@ -7129,6 +7133,7 @@ bool readSevenZipEntriesByIndexStreaming(
 
 bool sevenZipEntryMatchesTarget(IInArchive *archive, UInt32 itemIndex,
                                 const SevenZipReadTarget &target,
+                                bool archiveSolid,
                                 std::string *errorMessage) {
   if (archive == nullptr) {
     if (errorMessage != nullptr) {
@@ -7159,7 +7164,7 @@ bool sevenZipEntryMatchesTarget(IInArchive *archive, UInt32 itemIndex,
     return false;
   }
   const bool actualSolid =
-      sevenZipBoolProperty(archive, itemIndex, kpidSolid, false);
+      sevenZipBoolProperty(archive, itemIndex, kpidSolid, archiveSolid);
   if (actualSolid != target.solid) {
     if (errorMessage != nullptr) {
       *errorMessage = "7-Zip archive solid flag did not match cached index.";
@@ -7205,7 +7210,9 @@ bool readSevenZipTargetByIndex(IInArchive *archive,
     }
     return false;
   }
-  if (!sevenZipEntryMatchesTarget(archive, itemIndex, target, errorMessage)) {
+  if (!sevenZipEntryMatchesTarget(
+          archive, itemIndex, target,
+          sevenZipArchiveBoolProperty(archive, kpidSolid, false), errorMessage)) {
     return false;
   }
 
@@ -7275,6 +7282,7 @@ bool readSevenZipTargetsByIndexStreaming(
   itemIndices.reserve(end - begin);
   std::unordered_map<UInt32, SevenZipStreamingTarget> outputTargets;
   outputTargets.reserve(end - begin);
+  const bool archiveSolid = sevenZipArchiveBoolProperty(archive, kpidSolid, false);
   for (std::size_t i = begin; i < end; ++i) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       return false;
@@ -7293,7 +7301,7 @@ bool readSevenZipTargetsByIndexStreaming(
       }
       return false;
     }
-    if (!sevenZipEntryMatchesTarget(archive, itemIndex, target,
+    if (!sevenZipEntryMatchesTarget(archive, itemIndex, target, archiveSolid,
                                     errorMessage)) {
       return false;
     }

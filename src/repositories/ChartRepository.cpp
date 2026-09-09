@@ -30,7 +30,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 10;
+constexpr int kChartDatabaseSchemaVersion = 11;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -677,6 +677,29 @@ bool migrateChartDatabaseToVersion10(sqlite3 *db, bool &completed) {
   return true;
 }
 
+bool migrateChartDatabaseToVersion11(sqlite3 *db, bool &completed) {
+  for (const auto *table : {"archive_scan_cache", "chart_scan_completed_archive"}) {
+    bool exists = false;
+    if (!sqliteTableExists(db, table, exists,
+                           "checking legacy solid archive classification cache")) {
+      return false;
+    }
+    if (!exists) {
+      continue;
+    }
+    const bool scanCache = std::string_view(table) == "archive_scan_cache";
+    const std::string column = scanCache ? "path" : "archive_path";
+    const std::string query = std::string("DELETE FROM ") + table +
+        " WHERE (lower(" + column + ") LIKE '%.7z' OR lower(" + column +
+        ") LIKE '%.cb7')" + (scanCache ? " AND solid = 0" : "");
+    if (!execSql(db, query.c_str(), "invalidating legacy solid archive classification")) {
+      return false;
+    }
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -729,6 +752,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {9, "persist chart BGA content metadata",
        migrateChartDatabaseToVersion9},
       {10, "persist selector folder add dates", migrateChartDatabaseToVersion10},
+      {11, "refresh 7-Zip solid classification", migrateChartDatabaseToVersion11},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

@@ -116,7 +116,7 @@ private:
 };
 
 void writeSevenZip(const std::filesystem::path &path,
-                   const std::string &contents) {
+                   const std::string &contents, bool multipleEntries = false) {
   auto writer = makeArchiveWriteHandle();
   assert(writer);
   assert(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK);
@@ -134,7 +134,96 @@ void writeSevenZip(const std::filesystem::path &path,
   assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
          static_cast<la_ssize_t>(contents.size()));
   assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  if (multipleEntries) {
+    archive_entry_set_pathname(entry.get(), "song/chart.bms");
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+           static_cast<la_ssize_t>(contents.size()));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testSevenZipArchiveLevelSolidDetection() {
+  TempDirectory temporary;
+  const auto solidPath = temporary.path() / "solid.7z";
+  const auto plainPath = temporary.path() / "plain.7z";
+  const std::string contents = "#TITLE Solid archive\n#BPM 120\n";
+  writeSevenZip(solidPath, contents, true);
+  writeSevenZip(plainPath, contents);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(solidPath, entries, &error));
+  assert(entries.size() == 2);
+  assert(std::all_of(entries.begin(), entries.end(),
+                     [](const auto &entry) { return entry.solid; }));
+  const auto chartPath = archive_file::makeVirtualPath(solidPath, "song/chart.bms");
+  assert(archive_file::isInSolidArchiveFolder(chartPath));
+  assert(archive_file::sourcePreferenceForPath(chartPath).priority == 2);
+  const std::vector<std::filesystem::path> paths{"readme.txt", "song/chart.bms"};
+  std::vector<archive_file::FileData> files;
+  assert(archive_file::readArchiveEntries(solidPath, paths, files, &error));
+  assert(files.size() == 2);
+  std::size_t streamed = 0;
+  assert(archive_file::readArchiveEntriesStreaming(
+      solidPath, paths, [&](archive_file::FileData &&file) {
+        assert(std::string(file.bytes.begin(), file.bytes.end()) == contents);
+        ++streamed;
+        return true;
+      }, &error));
+  assert(streamed == 2);
+  assert(archive_file::listEntriesBounded(solidPath, entries, 10, &error));
+  assert(std::all_of(entries.begin(), entries.end(),
+                     [](const auto &entry) { return entry.solid; }));
+  assert(archive_file::listEntries(plainPath, entries, &error));
+  assert(entries.size() == 1 && !entries.front().solid);
+}
+
+void testLegacySolidIndexIsRebuilt() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "legacy.7z";
+  writeSevenZip(archivePath, "#TITLE Legacy\n", true);
+  const auto cacheDir = temporary.path() / "idx";
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  const auto cacheFile = std::filesystem::directory_iterator(cacheDir)->path();
+  {
+    std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+    auto readSize = [&] {
+      std::uint64_t value = 0;
+      cache.read(reinterpret_cast<char *>(&value), sizeof(value));
+      assert(cache.good());
+      return value;
+    };
+    cache.put(2);
+    cache.seekg(1);
+    const auto keySize = readSize();
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1,
+                 std::ios::cur);
+    const auto count = readSize();
+    for (std::uint64_t index = 0; index < count; ++index) {
+      const auto pathSize = readSize();
+      cache.seekg(static_cast<std::streamoff>(pathSize) + 1 + 8 + 8 + 8,
+                   std::ios::cur);
+      const auto solidOffset = cache.tellg();
+      cache.seekp(solidOffset);
+      cache.put(0);
+      cache.seekg(solidOffset + std::streamoff(1));
+    }
+    assert(cache.good());
+  }
+  for (int restart = 0; restart < 2; ++restart) {
+    archive_file::clearArchiveIndexCacheForTesting();
+    archive_file::setArchiveIndexCacheDirectory(cacheDir);
+    assert(archive_file::listEntries(archivePath, entries, &error));
+    assert(entries.size() == 2);
+    assert(std::all_of(entries.begin(), entries.end(),
+                       [](const auto &entry) { return entry.solid; }));
+  }
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
 }
 
 void writeStoredZip(const std::filesystem::path &path,
@@ -1784,6 +1873,8 @@ int main() {
   testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
   testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce();
   testIndependentSevenZipCacheMissesOpenConcurrently();
+  testSevenZipArchiveLevelSolidDetection();
+  testLegacySolidIndexIsRebuilt();
   // Deliberately registered after the 7-Zip index-count assertion above:
   // these bounded-read tests index real archives, which would otherwise pollute
   // that assertion's retained debug-log window.

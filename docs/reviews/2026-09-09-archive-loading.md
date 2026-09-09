@@ -34,6 +34,14 @@ The first ZIP load measured 211.777 ms before and 93.266 ms after; first loose-f
 
 No parser, shader, deployment, or distribution behavior is changed.
 
+## Solid 7z classification follow-up
+
+The reported slow iOS chart launch exposed a separate classification bug: the supplied archive has one solid 7z block, but its SDK item-level `kpidSolid` values are empty. The archive-level property is true. Listing and extraction validation now use that property as the fallback, preserving explicit item-level values and querying the archive-level property once per batch rather than once per entry.
+
+Persisted entry indexes advance to version 3. Chart database migration 11 invalidates previously non-solid `.7z`/`.cb7` scan classifications and 7z completed-scan markers, without clearing chart metadata or user records. The next library scan replaces misclassified playable charts with the existing solid-archive entry requiring unarchiving. Regression tests cover real solid and non-solid 7z files, vector/streaming extraction, old disk indexes, database upgrades, and that library transition.
+
+Follow-up verification: the supplied archive reports 1,159 solid files and one directory; the desktop build and all 355 tests pass (88.81 seconds), as does the unsigned iOS Release build. The scoped review has no outstanding findings. No build was distributed.
+
 ## Verification
 
 - Desktop `main` and all affected targets build successfully.
