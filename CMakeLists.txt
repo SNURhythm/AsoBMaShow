@@ -4491,6 +4491,26 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(jukebox_restore_tests PRIVATE shell32 ole32)
     endif()
 
+    get_target_property(VISUAL_CATCH_UP_SOURCES jukebox_restore_tests SOURCES)
+    list(REMOVE_ITEM VISUAL_CATCH_UP_SOURCES
+        tests/jukebox_restore_tests.cpp src/video/VideoPlayer.cpp)
+    add_executable(visual_catch_up_tests
+        tests/visual_catch_up_tests.cpp
+        tests/visual_catch_up_video_fixture.cpp
+        ${VISUAL_CATCH_UP_SOURCES}
+    )
+    target_include_directories(visual_catch_up_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(visual_catch_up_tests PRIVATE cxx_std_23)
+    target_compile_definitions(visual_catch_up_tests PRIVATE
+        ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(visual_catch_up_tests PRIVATE ${COMMON_LIBS} bgfx)
+    if(APPLE)
+        target_link_libraries(visual_catch_up_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(visual_catch_up_tests PRIVATE shell32 ole32)
+    endif()
+
     add_executable(video_frame_layout_tests
         tests/video_frame_layout_tests.cpp
         src/video/VideoFrameLayout.cpp
@@ -7777,6 +7797,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         difficulty_table_importer_tests
         modern_result_recall_tests
         jukebox_restore_tests
+        visual_catch_up_tests
         image_view_fade_tests
         chart_list_item_view_tests
         decide_loading_overlay_tests
@@ -7914,6 +7935,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(audio_device_manager_tests foundation_av_audio_device)
     asobmashow_register_test(jukebox_restore_tests foundation_av_jukebox_restore)
     set_tests_properties(foundation_av_jukebox_restore PROPERTIES TIMEOUT 30)
+    add_test(NAME visual_catch_up
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/visual_catch_up_tests.py
+            --binary $<TARGET_FILE:visual_catch_up_tests>
+            --workspace ${CMAKE_BINARY_DIR}/visual-catch-up-fixtures)
+    set_tests_properties(visual_catch_up PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        TIMEOUT 55
+        LABELS "video;integration")
 
     foreach(test_target IN ITEMS
         prep_metronome_tests

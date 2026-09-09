@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstring>
 #include <inttypes.h>
+#include <utility>
 
 #include <thread>
 
@@ -76,6 +77,30 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
 }
 
 VideoPlayer::~VideoPlayer() { unloadVideo(); }
+
+VideoPlayer::DecodeBatch::DecodeBatch(VideoPlayer &player) : player(&player) {
+  std::lock_guard<std::mutex> lock(player.videoMutex);
+  player.decodeBatchDepth.fetch_add(1, std::memory_order_acq_rel);
+}
+
+VideoPlayer::DecodeBatch::DecodeBatch(DecodeBatch &&other) noexcept
+    : player(std::exchange(other.player, nullptr)) {}
+
+VideoPlayer::DecodeBatch::~DecodeBatch() {
+  if (player == nullptr) {
+    return;
+  }
+  bool finalRelease;
+  {
+    std::lock_guard<std::mutex> lock(player->bufferMutex);
+    finalRelease =
+        player->decodeBatchDepth.fetch_sub(1, std::memory_order_acq_rel) == 1;
+  }
+  if (finalRelease) {
+    player->freeSpace.notify_all();
+    player->eofCV.notify_all();
+  }
+}
 
 void VideoPlayer::destroyVideoTextures() {
   std::lock_guard<std::mutex> lock(videoFrameMutex);
@@ -802,9 +827,10 @@ void VideoPlayer::predecodeFrames() {
     {
       std::unique_lock<std::mutex> lock(bufferMutex);
       freeSpace.wait(lock, [this] {
+        const bool canDecode = !decodeSuspended.load(std::memory_order_acquire) &&
+                               decodeBatchDepth.load(std::memory_order_acquire) == 0;
         return !predecodingActive.load(std::memory_order_acquire) ||
-               (!decodeSuspended.load(std::memory_order_acquire) &&
-                bufferSize < maxBufferSize);
+               (canDecode && bufferSize < maxBufferSize);
       });
     }
 
@@ -834,6 +860,11 @@ void VideoPlayer::predecodeFrames() {
 
     {
       std::lock_guard<std::mutex> videoLock(videoMutex);
+      const bool canDecode = !decodeSuspended.load(std::memory_order_acquire) &&
+                             decodeBatchDepth.load(std::memory_order_acquire) == 0;
+      if (!canDecode) {
+        continue;
+      }
       if (!formatContext || !codecContext) {
         decodeState.onReceive(video::VideoReceiveResult::Error);
         continue;

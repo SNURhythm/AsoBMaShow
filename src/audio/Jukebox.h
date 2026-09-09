@@ -383,6 +383,8 @@ private:
   bool activateVisual(int visualId, bgfx::ViewId viewId);
   bool activateVisualAt(int visualId, bgfx::ViewId viewId,
                         long long elapsedMicros);
+  bool activateVisualAtLocked(int visualId, long long elapsedMicros);
+  void catchUpVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void restoreVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
   void renderImage(ImageData &image, int viewId);
