@@ -29,6 +29,8 @@ namespace bounded_allocation_probe {
 thread_local bool enabled = false;
 thread_local std::size_t largest = 0;
 thread_local std::stop_source *cancelOnChunk = nullptr;
+std::atomic_size_t observedEntrySize{0};
+thread_local unsigned char *observedEntry = nullptr;
 }
 
 void *operator new(std::size_t size) {
@@ -39,7 +41,13 @@ void *operator new(std::size_t size) {
   if (bounded_allocation_probe::cancelOnChunk != nullptr && size >= 64 * 1024) {
     bounded_allocation_probe::cancelOnChunk->request_stop();
   }
-  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+    if (size == bounded_allocation_probe::observedEntrySize.load()) {
+      bounded_allocation_probe::observedEntry =
+          static_cast<unsigned char *>(memory);
+    }
+    return memory;
+  }
   throw std::bad_alloc();
 }
 
@@ -364,11 +372,14 @@ void testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce() {
 
 void writeStoredZipContents(const std::filesystem::path &path,
                             const std::string &entryPath,
-                            const std::string &contents) {
+                            const std::string &contents,
+                            bool deflated = false) {
   auto writer = makeArchiveWriteHandle();
   assert(writer);
   assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
-  assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
+  assert(archive_write_set_options(writer.get(), deflated
+                                                   ? "zip:compression=deflate"
+                                                   : "zip:compression=store") ==
          ARCHIVE_OK);
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
          ARCHIVE_OK);
@@ -387,6 +398,172 @@ void writeStoredZipContents(const std::filesystem::path &path,
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
 }
 
+void testLargeZipCancellation(bool deflated, bool concurrent,
+                              bool afterOutputProduced) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "large-cancellable.zip";
+  const std::string payload(8 * 1024 * 1024, 'x');
+  writeStoredZipContents(archivePath, "large.bin", payload, deflated);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+
+  std::atomic_int checkpoints{0};
+  std::atomic_int emitted{0};
+  bounded_allocation_probe::observedEntry = nullptr;
+  bounded_allocation_probe::observedEntrySize = payload.size();
+  auto checkpoint = [&] {
+    const auto *entry = bounded_allocation_probe::observedEntry;
+    if (entry == nullptr ||
+        (afterOutputProduced && entry[payload.size() - 1] != 'x')) {
+      return true;
+    }
+    return ++checkpoints < 4;
+  };
+  auto consume = [&](archive_file::FileData &&) {
+    ++emitted;
+    return true;
+  };
+  const bool read = concurrent
+      ? archive_file::readArchiveEntriesConcurrently(
+            archivePath, {"large.bin"}, consume, 2, payload.size() * 2,
+            &error, checkpoint)
+      : archive_file::readArchiveEntriesStreaming(
+            archivePath, {"large.bin"}, consume, &error, checkpoint);
+  bounded_allocation_probe::observedEntrySize = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  assert(!read);
+  assert(checkpoints >= 4);
+  assert(emitted == 0);
+  assert(error == "Operation cancelled");
+
+  error.clear();
+  auto verify = [&](archive_file::FileData &&file) {
+    assert(file.path == "large.bin");
+    assert(std::string_view(reinterpret_cast<const char *>(file.bytes.data()),
+                            file.bytes.size()) == payload);
+    ++emitted;
+    return true;
+  };
+  assert(archive_file::readArchiveEntriesConcurrently(
+      archivePath, {"large.bin"}, verify, 2, payload.size() * 2, &error));
+  assert(emitted == 1);
+}
+
+void testBatchCancellationDoesNotRestartFallback(bool sevenZip, bool ranged) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() /
+      (sevenZip ? "terminal-cancellation.7z" : "terminal-cancellation.zip");
+  if (sevenZip) {
+    writeSevenZip(archivePath, "entry");
+  } else {
+    writeStoredZip(archivePath, {"readme.txt"});
+  }
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  for (bool reportError : {false, true}) {
+    int checkpoints = 0;
+    std::vector<archive_file::FileData> files;
+    error.clear();
+    auto checkpoint = [&] { return ++checkpoints != 1; };
+    const bool read = ranged
+        ? archive_file::readArchiveEntriesInRange(
+              archivePath, {"readme.txt"}, {0, 0}, files,
+              reportError ? &error : nullptr, checkpoint)
+        : archive_file::readArchiveEntries(
+              archivePath, {"readme.txt"}, files,
+              reportError ? &error : nullptr, checkpoint);
+    assert(!read);
+    assert(files.empty());
+    assert(checkpoints == 1);
+    if (reportError) {
+      assert(error == "Operation cancelled");
+    }
+  }
+}
+
+void testCachedSevenZipHandleWaitCancellation(int operation) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "held-handle.7z";
+  writeSevenZip(archivePath, "entry");
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+
+  std::promise<void> holderEntered;
+  auto holderEnteredFuture = holderEntered.get_future();
+  std::promise<void> releaseHolder;
+  auto releaseHolderFuture = releaseHolder.get_future().share();
+  auto holder = std::async(std::launch::async, [&] {
+    std::string holderError;
+    return archive_file::readArchiveEntriesStreaming(
+        archivePath, {"readme.txt"}, [&](archive_file::FileData &&file) {
+          assert(file.bytes.size() == 5);
+          holderEntered.set_value();
+          assert(releaseHolderFuture.wait_for(30s) ==
+                 std::future_status::ready);
+          assert(file.bytes.front() == 'e');
+          return true;
+        }, &holderError);
+  });
+  assert(holderEnteredFuture.wait_for(10s) == std::future_status::ready);
+  if (operation == 4) {
+    archive_file::clearArchiveIndexCacheForTesting();
+  }
+  std::atomic_int checkpoints{0};
+  std::vector<archive_file::FileData> files;
+  std::vector<unsigned char> bytes;
+  auto waiter = std::async(std::launch::async, [&] {
+    auto checkpoint = [&] { return ++checkpoints != 32; };
+    switch (operation) {
+    case 0:
+      return archive_file::readArchiveEntries(
+          archivePath, {"readme.txt"}, files, &error, checkpoint);
+    case 1:
+      return archive_file::readArchiveEntriesStreaming(
+          archivePath, {"readme.txt"}, [&](archive_file::FileData &&file) {
+            files.push_back(std::move(file));
+            return true;
+          }, &error, checkpoint);
+    case 2:
+      return archive_file::readArchiveEntriesInRange(
+          archivePath, {"readme.txt"}, {0, 0}, files, &error, checkpoint);
+    case 3:
+      return archive_file::readFileBoundedWithCheckpoint(
+          archive_file::makeVirtualPath(archivePath, "readme.txt"), bytes,
+          1024, &error, {}, checkpoint);
+    case 4:
+      return archive_file::listEntries(archivePath, entries, &error, checkpoint);
+    default:
+      return archive_file::unzipArchiveFully(
+          archivePath, temporary.path() / "output", &error, nullptr,
+          nullptr, checkpoint).has_value();
+    }
+  });
+  const bool cancelledWhileHeld =
+      waiter.wait_for(10s) == std::future_status::ready;
+  assert(holder.wait_for(0s) == std::future_status::timeout);
+  releaseHolder.set_value();
+  assert(holder.wait_for(10s) == std::future_status::ready);
+  assert(holder.get());
+  assert(waiter.wait_for(10s) == std::future_status::ready);
+  const bool read = waiter.get();
+  assert(cancelledWhileHeld);
+  assert(!read);
+  assert(checkpoints == 32);
+  assert(files.empty());
+  assert(bytes.empty());
+  assert(error == (operation == 5 ? "Unzip cancelled" : "Operation cancelled"));
+
+  error.clear();
+  assert(archive_file::readArchiveEntries(
+      archivePath, {"readme.txt"}, files, &error));
+  assert(files.size() == 1);
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) ==
+         "entry");
+}
+
 std::uint32_t readLeU32(const unsigned char *bytes) {
   return static_cast<std::uint32_t>(bytes[0]) |
          (static_cast<std::uint32_t>(bytes[1]) << 8u) |
@@ -399,6 +576,240 @@ void writeLeU32(unsigned char *bytes, std::uint32_t value) {
   bytes[1] = static_cast<unsigned char>((value >> 8u) & 0xffu);
   bytes[2] = static_cast<unsigned char>((value >> 16u) & 0xffu);
   bytes[3] = static_cast<unsigned char>((value >> 24u) & 0xffu);
+}
+
+bool readZipFixture(const std::filesystem::path &archivePath, int operation,
+                    std::vector<archive_file::FileData> &files,
+                    std::string &error,
+                    archive_file::PauseCallback checkpoint) {
+  auto consume = [&](archive_file::FileData &&file) {
+    files.push_back(std::move(file));
+    return true;
+  };
+  switch (operation) {
+  case 0:
+    return archive_file::readArchiveEntriesConcurrently(
+        archivePath, {"payload.bin", "missing.bin", "payload.bin"},
+        consume, 2, 65536, &error, checkpoint);
+  case 1:
+    return archive_file::readArchiveEntriesStreaming(
+        archivePath, {"payload.bin"}, consume, &error, checkpoint);
+  case 2:
+    return archive_file::readArchiveEntries(
+        archivePath, {"payload.bin"}, files, &error, checkpoint);
+  default:
+    return archive_file::readArchiveEntriesInRange(
+        archivePath, {"payload.bin"}, {0, 0}, files, &error, checkpoint);
+  }
+}
+
+void writeZipWithEmptyDeflateBlocks(const std::filesystem::path &archivePath,
+                                    const std::string &payload,
+                                    bool emptyPrefix) {
+  constexpr std::string_view name = "payload.bin";
+  const std::string emptyBlock("\0\0\0\xff\xff", 5);
+  std::string emptyBlocks;
+  for (std::size_t block = 0; block < 1024 * 1024; ++block) {
+    emptyBlocks += emptyBlock;
+  }
+  std::string compressed;
+  if (emptyPrefix) {
+    compressed += emptyBlocks;
+  }
+  for (std::size_t offset = 0; offset < payload.size();) {
+    const auto count = std::min<std::size_t>(65535, payload.size() - offset);
+    compressed.push_back('\0');
+    compressed.push_back(static_cast<char>(count & 0xffu));
+    compressed.push_back(static_cast<char>(count >> 8u));
+    compressed.push_back(static_cast<char>(~count & 0xffu));
+    compressed.push_back(static_cast<char>((~count >> 8u) & 0xffu));
+    compressed.append(payload, offset, count);
+    offset += count;
+  }
+  if (!emptyPrefix) {
+    compressed += emptyBlocks;
+  }
+  compressed.append("\1\0\0\xff\xff", 5);
+
+  std::uint32_t crc = 0xffffffffu;
+  for (unsigned char byte : payload) {
+    crc ^= byte;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+  }
+  crc ^= 0xffffffffu;
+
+  std::string localHeader(30, '\0');
+  auto *local = reinterpret_cast<unsigned char *>(localHeader.data());
+  writeLeU32(local, 0x04034b50u);
+  local[4] = 20;
+  local[8] = 8;
+  writeLeU32(local + 14, crc);
+  writeLeU32(local + 18, static_cast<std::uint32_t>(compressed.size()));
+  writeLeU32(local + 22, static_cast<std::uint32_t>(payload.size()));
+  local[26] = static_cast<unsigned char>(name.size());
+
+  std::string centralHeader(46, '\0');
+  auto *central = reinterpret_cast<unsigned char *>(centralHeader.data());
+  writeLeU32(central, 0x02014b50u);
+  central[4] = 20;
+  central[6] = 20;
+  central[10] = 8;
+  writeLeU32(central + 16, crc);
+  writeLeU32(central + 20, static_cast<std::uint32_t>(compressed.size()));
+  writeLeU32(central + 24, static_cast<std::uint32_t>(payload.size()));
+  central[28] = static_cast<unsigned char>(name.size());
+
+  std::string endRecord(22, '\0');
+  auto *end = reinterpret_cast<unsigned char *>(endRecord.data());
+  writeLeU32(end, 0x06054b50u);
+  end[8] = 1;
+  end[10] = 1;
+  writeLeU32(end + 12,
+              static_cast<std::uint32_t>(centralHeader.size() + name.size()));
+  writeLeU32(end + 16, static_cast<std::uint32_t>(
+                           localHeader.size() + name.size() + compressed.size()));
+  std::ofstream output(archivePath, std::ios::binary);
+  assert(output);
+  output << localHeader << name << compressed << centralHeader << name
+         << endRecord;
+  output.close();
+  assert(output);
+}
+
+void testZipCancellationDuringEmptyDeflateBlocks(bool emptyPrefix,
+                                                int operation) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "empty-blocks.zip";
+  const std::string payload(65537, 'x');
+  writeZipWithEmptyDeflateBlocks(archivePath, payload, emptyPrefix);
+  std::vector<archive_file::FileData> files;
+  std::string error;
+  assert(readZipFixture(archivePath, operation, files, error,
+                         [] { return true; }));
+  assert(files.size() == 1);
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) ==
+         payload);
+  files.clear();
+
+  int checkpoints = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  bounded_allocation_probe::observedEntrySize = payload.size();
+  const bool read = readZipFixture(archivePath, operation, files, error, [&] {
+    const auto *entry = bounded_allocation_probe::observedEntry;
+    if (entry == nullptr) {
+      return true;
+    }
+    if (++checkpoints != 16) {
+      return true;
+    }
+    assert(entry[0] == (emptyPrefix ? '\0' : 'x'));
+    return false;
+  });
+  bounded_allocation_probe::observedEntrySize = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  assert(!read);
+  assert(files.empty());
+  assert(checkpoints == 16);
+  assert(error == "Operation cancelled");
+
+  error.clear();
+  assert(readZipFixture(archivePath, operation, files, error,
+                         [] { return true; }));
+  assert(files.size() == 1);
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) ==
+         payload);
+}
+
+void testZipInputCallbackRestoresAcrossEntries() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "restore-read-callback.zip";
+  writeStoredZip(archivePath, {"first.bin", "second.bin"});
+  std::vector<archive_file::FileData> files;
+  std::string error;
+  assert(archive_file::readArchiveEntriesStreaming(
+      archivePath, {"first.bin", "second.bin"}, [&](archive_file::FileData &&file) {
+        files.push_back(std::move(file));
+        return true;
+      }, &error, [] { return true; }));
+  assert(files.size() == 2);
+  assert(files[0].path == "first.bin");
+  assert(files[1].path == "second.bin");
+  for (const auto &file : files) {
+    assert(std::string(file.bytes.begin(), file.bytes.end()) == "entry");
+  }
+}
+
+void testZipChunkedReadBoundaryIntegrity(bool deflated) {
+  TempDirectory temporary;
+  for (std::size_t size : {0U, 1U, 65535U, 65536U, 65537U, 1048576U}) {
+    std::string payload(size, '\0');
+    std::uint32_t randomState = 0x12345678u;
+    for (char &byte : payload) {
+      randomState ^= randomState << 13;
+      randomState ^= randomState >> 17;
+      randomState ^= randomState << 5;
+      byte = static_cast<char>(randomState & 0xffu);
+    }
+    const auto archivePath =
+        temporary.path() / (std::to_string(size) + ".zip");
+    writeStoredZipContents(archivePath, "payload.bin", payload, deflated);
+
+    for (int operation = 0; operation < 4; ++operation) {
+      std::string error;
+      std::vector<archive_file::FileData> files;
+      assert(readZipFixture(archivePath, operation, files, error,
+                             [] { return true; }));
+      assert(error.empty());
+      assert(files.size() == 1);
+      assert(files.front().path == "payload.bin");
+      assert(std::string(files.front().bytes.begin(),
+                         files.front().bytes.end()) == payload);
+    }
+
+    std::ifstream input(archivePath, std::ios::binary);
+    assert(input);
+    std::string archiveBytes((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+    const auto centralOffset = archiveBytes.rfind(std::string("PK\1\2", 4));
+    assert(centralOffset != std::string::npos);
+    assert(centralOffset + 46 <= archiveBytes.size());
+    archiveBytes[centralOffset + 16] ^= 1;
+    archiveBytes[14] ^= 1;
+    const auto *header =
+        reinterpret_cast<const unsigned char *>(archiveBytes.data());
+    const auto dataOffset = 30 + (readLeU32(header + 26) & 0xffffu) +
+                            (readLeU32(header + 28) & 0xffffu);
+    const auto descriptorOffset =
+        dataOffset + readLeU32(header + centralOffset + 20);
+    if ((header[6] & 8u) != 0) {
+      assert(readLeU32(header + descriptorOffset) == 0x08074b50u);
+      archiveBytes[descriptorOffset + 4] ^= 1;
+    }
+    const auto corruptPath =
+        temporary.path() / (std::to_string(size) + "-corrupt.zip");
+    std::ofstream output(corruptPath, std::ios::binary);
+    assert(output);
+    output.write(archiveBytes.data(),
+                 static_cast<std::streamsize>(archiveBytes.size()));
+    output.close();
+    assert(output);
+
+    for (bool checkpointEnabled : {false, true}) {
+      archive_file::PauseCallback checkpoint;
+      if (checkpointEnabled) {
+        checkpoint = [] { return true; };
+      }
+      for (int operation = 0; operation < 4; ++operation) {
+        std::vector<archive_file::FileData> files;
+        std::string error;
+        assert(!readZipFixture(corruptPath, operation, files, error, checkpoint));
+        assert(files.empty());
+        assert(error.find("CRC") != std::string::npos);
+      }
+    }
+  }
 }
 
 // Rewrites the declared uncompressed size in the central directory of a stored
@@ -1395,6 +1806,26 @@ int main() {
   testSingleFlightWaiterCancellation(false);
   testSingleFlightWaiterCancellation(true);
   testSingleFlightWaitersDoNotEachReindexAfterFailedBuild();
+  for (bool deflated : {false, true}) {
+    testZipChunkedReadBoundaryIntegrity(deflated);
+    testLargeZipCancellation(deflated, true, false);
+    testLargeZipCancellation(deflated, true, true);
+    testLargeZipCancellation(deflated, false, false);
+  }
+  for (bool emptyPrefix : {false, true}) {
+    for (int operation = 1; operation < 4; ++operation) {
+      testZipCancellationDuringEmptyDeflateBlocks(emptyPrefix, operation);
+    }
+  }
+  testZipInputCallbackRestoresAcrossEntries();
+  for (bool sevenZip : {false, true}) {
+    for (bool ranged : {false, true}) {
+      testBatchCancellationDoesNotRestartFallback(sevenZip, ranged);
+    }
+  }
+  for (int operation = 0; operation < 6; ++operation) {
+    testCachedSevenZipHandleWaitCancellation(operation);
+  }
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

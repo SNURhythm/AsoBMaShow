@@ -305,11 +305,6 @@ private:
   bool loadArchivedSounds(bms_parser::Chart &chart,
                           const ChartResourceTable &wavTable,
                           std::atomic_bool &isCancelled);
-  bool loadArchivedChartAssets(
-      bms_parser::Chart &chart, const ChartResourceTable &wavTable,
-      const ChartResourceTable &bmpTable, bool loadVisualAssets,
-      std::atomic_bool &isCancelled,
-      audio::playback::BackendOperationResult &lifecycleResult);
   void loadBMPs(bms_parser::Chart &chart,
                 const ChartResourceTable &bmpTable,
                 std::atomic_bool &isCancelled);
@@ -358,8 +353,9 @@ private:
       const ChartResourceTable &bmpTable, bool loadVisualAssets,
       std::atomic_bool &isCancelled);
   audio::playback::BackendOperationResult
-  reconcileSoundResources(bms_parser::Chart &chart,
-                          const std::vector<ResolvedSoundAsset> &assets,
+  reconcileChartResources(bms_parser::Chart &chart,
+                          const std::vector<ResolvedSoundAsset> *sounds,
+                          const std::vector<ResolvedVisualAsset> &visuals,
                           std::atomic_bool &isCancelled);
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
@@ -427,6 +423,7 @@ private:
   size_t bmpLayerCursor = 0;
   long long lastVisualTimelineMicros = -1;
   std::unordered_map<int, path_t> wavTableAbs;
+  std::unordered_map<path_t, std::string> soundArchiveIdentities;
   std::unordered_map<int, std::shared_ptr<VideoPlayer>> videoPlayerTable;
   std::unordered_map<int, std::filesystem::path> videoMaterializedPathTable;
   mutable std::mutex videoPlayerTableMutex;

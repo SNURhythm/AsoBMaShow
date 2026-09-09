@@ -178,16 +178,46 @@ std::string singleFrameY4m() {
   return bytes;
 }
 
-void writeZip(
+std::string shortWave(unsigned frames = 64) {
+  std::string bytes;
+  auto append = [&](unsigned value, unsigned count) {
+    for (unsigned offset = 0; offset < count; ++offset) {
+      bytes.push_back(static_cast<char>(value >> (offset * 8)));
+    }
+  };
+  bytes = "RIFF";
+  append(36 + frames * 2, 4);
+  bytes += "WAVEfmt ";
+  append(16, 4);
+  append(1, 2);
+  append(1, 2);
+  append(44100, 4);
+  append(88200, 4);
+  append(2, 2);
+  append(16, 2);
+  bytes += "data";
+  append(frames * 2, 4);
+  for (unsigned frame = 0; frame < frames; ++frame) {
+    append(1000, 2);
+  }
+  return bytes;
+}
+
+void writeChartArchive(
     const std::filesystem::path &path,
     const std::vector<std::pair<std::string, std::string>> &files) {
   archive *writer = archive_write_new();
   require(writer != nullptr, "archive visual fixture creates a writer");
-  require(archive_write_set_format_zip(writer) == ARCHIVE_OK,
-          "archive visual fixture selects ZIP");
-  require(archive_write_set_options(writer, "zip:compression=store") ==
-              ARCHIVE_OK,
-          "archive visual fixture selects deterministic storage");
+  if (path.extension() == ".7z") {
+    require(archive_write_set_format_7zip(writer) == ARCHIVE_OK,
+            "archive visual fixture selects 7-Zip");
+  } else {
+    require(archive_write_set_format_zip(writer) == ARCHIVE_OK,
+            "archive visual fixture selects ZIP");
+    require(archive_write_set_options(writer, "zip:compression=store") ==
+                ARCHIVE_OK,
+            "archive visual fixture selects deterministic storage");
+  }
   require(archive_write_open_filename(writer, path.string().c_str()) ==
               ARCHIVE_OK,
           "archive visual fixture opens its destination");
@@ -223,7 +253,7 @@ public:
              std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(directory);
     archivePath = directory / "visuals.zip";
-    writeZip(archivePath,
+    writeChartArchive(archivePath,
              {{"song/chart.bms", "#TITLE archive visual fixture\n"},
               {"song/first.bmp", singlePixelPpm(0x22, 0x44, 0x66)},
               {"song/second.mp4", singleFrameY4m()}});
@@ -390,6 +420,142 @@ void testArchivedVisualsPreloadInOneArchiveBatch() {
           "second archive visual is ready without event-time extraction");
   require(jukebox.activeMaterializedVideoPaths().size() == 1,
           "timed activation reuses the preloaded archived video");
+}
+
+void testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(bool sevenZip) {
+  TemporaryArchivedVisualFixture fixture;
+  if (sevenZip) {
+    fixture.archivePath.replace_extension(".7z");
+  }
+  writeChartArchive(fixture.archivePath,
+           {{"song/shared.wav", shortWave()},
+            {"song/removed.wav", shortWave()},
+            {"song/added.wav", shortWave()}});
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<TestFactory>(std::make_shared<BackendControl>()));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = archive_file::makeVirtualPath(fixture.archivePath, "song");
+  chart.Meta.BmsPath = chart.Meta.Folder / "easy.bms";
+  chart.ReferencedWavTable = {{1, "shared.wav"}, {2, "removed.wav"}};
+  std::atomic_bool cancelled = false;
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "first archived chart loads");
+  const auto shared = jukebox.resolveRealtimeKeySound(1);
+  const auto removed = jukebox.resolveRealtimeKeySound(2);
+  require(shared && shared->valid() && removed && removed->valid(),
+          "initial archive sounds have live handles");
+  chart.Meta.BmsPath = chart.Meta.Folder / "hard.bms";
+  chart.ReferencedWavTable = {{7, "shared.wav"}, {8, "shared.wav"},
+                            {9, "added.wav"}};
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "sibling archived chart loads");
+  require(shared->valid(), "sibling chart retains the original decoded sound");
+  require(!removed->valid(), "sibling chart retires unreferenced sounds");
+  const auto remapped = jukebox.resolveRealtimeKeySound(7);
+  const auto alias = jukebox.resolveRealtimeKeySound(8);
+  const auto added = jukebox.resolveRealtimeKeySound(9);
+  require(remapped && remapped->valid() && alias && alias->valid() &&
+              added && added->valid(),
+          "remapped aliases and added sounds are available");
+  require(jukebox.reloadChartResources(chart, true, cancelled).success &&
+              shared->valid(),
+          "resource reload retains the same unchanged archived sound");
+  const auto originalTime = std::filesystem::last_write_time(fixture.archivePath);
+  std::filesystem::last_write_time(fixture.archivePath,
+                                   originalTime + std::chrono::seconds(1));
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "same-size archive timestamp change reloads");
+  require(!shared->valid(), "timestamp change invalidates decoded sounds");
+  const auto timestampReplacement = jukebox.resolveRealtimeKeySound(7);
+  require(timestampReplacement && timestampReplacement->valid(),
+          "timestamp change publishes a replacement sound");
+  const auto previousSize = std::filesystem::file_size(fixture.archivePath);
+  const auto previousTime = std::filesystem::last_write_time(fixture.archivePath);
+  writeChartArchive(fixture.archivePath,
+           {{"song/shared.wav", shortWave(128)},
+            {"song/added.wav", shortWave(128)}});
+  std::filesystem::last_write_time(fixture.archivePath, previousTime);
+  require(std::filesystem::file_size(fixture.archivePath) != previousSize &&
+              std::filesystem::last_write_time(fixture.archivePath) == previousTime,
+          "size replacement preserves timestamp and changes only size");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "replaced archive reloads");
+  require(!timestampReplacement->valid(),
+          "changed archive size invalidates the old decoded sound");
+  const auto sizeReplacement = jukebox.resolveRealtimeKeySound(7);
+  require(sizeReplacement && sizeReplacement->valid(),
+          "changed archive publishes a replacement sound");
+  cancelled = true;
+  chart.ReferencedWavTable.clear();
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
+              sizeReplacement->valid(),
+          "already cancelled load leaves retained resources unchanged");
+  cancelled = false;
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
+              !sizeReplacement->valid() && !jukebox.hasLoadedResources(),
+          "empty chart retires all old assets");
+}
+
+void testArchivedChartCombinesSoundAndVisualExtraction(bool sevenZip) {
+  TemporaryArchivedVisualFixture fixture;
+  if (sevenZip) {
+    fixture.archivePath.replace_extension(".7z");
+  }
+  writeChartArchive(fixture.archivePath,
+           {{"song/shared.wav", shortWave()},
+            {"song/first.bmp", singlePixelPpm(0, 0, 0)},
+            {"song/second.mp4", singleFrameY4m()},
+            {"song/poor.bmp", singlePixelPpm(80, 40, 20)}});
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<TestFactory>(std::make_shared<BackendControl>()));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = archive_file::makeVirtualPath(fixture.archivePath, "song");
+  chart.Meta.BmsPath = chart.Meta.Folder / "chart.bms";
+  chart.ReferencedWavTable = {{1, "shared.wav"}};
+  chart.ReferencedBmpTable = {{1, "first.bmp"}, {2, "second.bmp"}, {3, "poor.bmp"}};
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = new bms_parser::TimeLine(1, false);
+  timeline->BgaBase = 2;
+  timeline->BgaLayer = 1;
+  timeline->BgaPoor = bms_parser::BgaPoorSequence{.Frames = {3}};
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  const auto logStart = archive_file::debugLogLines().size();
+  std::atomic_bool cancelled = false;
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "mixed archived chart loads");
+  const auto lines = archive_file::debugLogLines();
+  std::size_t extractionPasses = 0;
+  for (std::size_t index = logStart; index < lines.size(); ++index) {
+    if (lines[index].find("Read archive batch via ") != std::string::npos ||
+        lines[index].find("Read archive range via ") != std::string::npos ||
+        lines[index].find("Streamed archive batch via ") != std::string::npos) {
+      ++extractionPasses;
+    }
+  }
+  require(extractionPasses == 1,
+          "missing sounds and all visuals use one archive extraction pass");
+  const auto sound = jukebox.resolveRealtimeKeySound(1);
+  require(sound && sound->valid(),
+          "combined extraction publishes sound");
+  require(jukebox.activeMaterializedVideoPaths().size() == 1,
+          "combined extraction materializes the video before playback");
+  require(jukebox.play(0).success, "combined fixture starts playback");
+  jukebox.seekVisualsToSongTime(0);
+  require(jukebox.hasActiveVisuals(), "combined visuals are ready at activation");
+  jukebox.pause();
+  const auto prepared = jukebox.prepareVisualFrameAt(9001, 0, {});
+  require(prepared.layer &&
+              prepared.layer->mediaKind == GameplayBgaMediaKind::Image,
+          "combined image preload retains the prepared layer representation");
+  jukebox.finalizePrepared(prepared);
+  const auto miss = jukebox.prepareVisualFrameAt(
+      9002, 1, {.active = true, .startedBgaMicros = 1});
+  require(miss.miss && miss.miss->mediaKind == GameplayBgaMediaKind::Image,
+          "poor-only image is materialized in the same mixed extraction plan");
+  jukebox.finalizePrepared(miss);
 }
 
 void testManagerRestartAndRollbackRestoreProductionJukeboxVisuals() {
@@ -598,6 +764,10 @@ int main() {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
     testVideoMaterializationCompletesBeforePlayback();
     testArchivedVisualsPreloadInOneArchiveBatch();
+    for (const bool sevenZip : {false, true}) {
+      testArchivedChartCombinesSoundAndVisualExtraction(sevenZip);
+      testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(sevenZip);
+    }
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
     testPoorBgaSchedulePreservesRawSequencesAndResources();

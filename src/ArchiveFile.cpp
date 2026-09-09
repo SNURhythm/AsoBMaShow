@@ -1351,6 +1351,9 @@ HRESULT createSevenZipObject(const GUID *clsID, const GUID *interfaceID,
 #endif
 
 std::string sevenZipResultMessage(HRESULT result) {
+  if (result == E_ABORT) {
+    return "Operation cancelled";
+  }
   return "7-Zip SDK error: " + std::to_string(static_cast<long long>(result));
 }
 
@@ -2265,7 +2268,7 @@ private:
 
 struct SevenZipArchiveState {
   ~SevenZipArchiveState() {
-    std::lock_guard<std::mutex> lock(mutex);
+    std::lock_guard<std::timed_mutex> lock(mutex);
     if (archive.Interface() != nullptr) {
       archive->Close();
     }
@@ -2277,9 +2280,30 @@ struct SevenZipArchiveState {
   CMyComPtr<IInArchive> archive;
   CMyComPtr<IInStream> stream;
   SevenZipInFileStream *inputStream = nullptr;
-  std::mutex mutex;
+  std::timed_mutex mutex;
   std::uint64_t lastUse = 0;
 };
+
+std::unique_lock<std::timed_mutex> acquireSevenZipArchive(
+    SevenZipArchiveState &state, const PauseCallback &pauseCallback,
+    std::string *errorMessage) {
+  std::unique_lock lock(state.mutex, std::defer_lock);
+  if (!pauseCallback) {
+    lock.lock();
+    return lock;
+  }
+  for (;;) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return {};
+    }
+    if (lock.try_lock_for(std::chrono::milliseconds(20))) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        return {};
+      }
+      return lock;
+    }
+  }
+}
 
 constexpr std::size_t kMaxOpenSevenZipArchives = 4;
 std::mutex gSevenZipArchiveMutex;
@@ -2502,6 +2526,9 @@ bool openSevenZipArchive(const std::filesystem::path &archivePath,
       return true;
     }
     lastError = std::move(currentError);
+    if (archiveReadCancelled(lastError)) {
+      break;
+    }
   }
 
   if (errorMessage != nullptr) {
@@ -2541,7 +2568,11 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
   }
   formatUsed = archiveState->formatId;
 
-  std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  auto archiveLock =
+      acquireSevenZipArchive(*archiveState, pauseCallback, errorMessage);
+  if (!archiveLock.owns_lock()) {
+    return false;
+  }
   SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
                                         pauseCallback);
   IInArchive *archive = archiveState->archive.Interface();
@@ -3944,6 +3975,12 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   } else if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
     appendDebugLogLineImpl("miniz ZIP index failed: " +
                            pathForLog(archivePath) + ": " + zipError);
+    if (archiveReadCancelled(zipError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = zipError;
+      }
+      return nullptr;
+    }
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
@@ -3967,6 +4004,12 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
       } else if (!unarrError.empty()) {
         appendDebugLogLineImpl("unarr RAR4 index failed: " +
                                pathForLog(archivePath) + ": " + unarrError);
+        if (archiveReadCancelled(unarrError)) {
+          if (errorMessage != nullptr) {
+            *errorMessage = unarrError;
+          }
+          return nullptr;
+        }
       }
     } else if (signature == RarSignature::Rar5) {
       appendDebugLogLineImpl("RAR5 archive detected; using 7-Zip backend: " +
@@ -3992,6 +4035,9 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                            ": " + sevenZipError);
     if (errorMessage != nullptr) {
       *errorMessage = sevenZipError;
+    }
+    if (archiveReadCancelled(sevenZipError)) {
+      return nullptr;
     }
   }
 #endif
@@ -4680,6 +4726,9 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
 
   file.path = target.entryPath;
   file.bytes.resize(static_cast<std::size_t>(target.size));
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+    return false;
+  }
   if (target.size == 0 && target.compressedSize == 0) {
     if (target.crc32 != MZ_CRC32_INIT) {
       if (errorMessage != nullptr) {
@@ -4690,6 +4739,28 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     return true;
   }
 
+  constexpr std::size_t kChunkSize = 64 * 1024;
+  const auto readChunks = [&](std::vector<unsigned char> &bytes) {
+    for (std::size_t offset = 0; offset < bytes.size();) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        return false;
+      }
+      const auto count = std::min(kChunkSize, bytes.size() - offset);
+      const auto readStart = std::chrono::steady_clock::now();
+      const bool read = archiveFile.readAt(target.dataOffset + offset,
+                                            bytes.data() + offset, count,
+                                            errorMessage);
+      if (timing != nullptr) {
+        timing->readMicros += elapsedMicrosSince(readStart);
+      }
+      if (!read) {
+        return false;
+      }
+      offset += count;
+    }
+    return true;
+  };
+
   if (target.method == 0) {
     if (target.compressedSize != target.size) {
       if (errorMessage != nullptr) {
@@ -4697,33 +4768,49 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
       }
       return false;
     }
-    const auto readStart = std::chrono::steady_clock::now();
-    if (!archiveFile.readAt(target.dataOffset, file.bytes.data(),
-                            file.bytes.size(), errorMessage)) {
+    if (!readChunks(file.bytes)) {
       return false;
-    }
-    if (timing != nullptr) {
-      timing->readMicros += elapsedMicrosSince(readStart);
     }
   } else if (target.method == MZ_DEFLATED) {
     compressedScratch.resize(static_cast<std::size_t>(target.compressedSize));
-    const auto readStart = std::chrono::steady_clock::now();
-    if (!archiveFile.readAt(target.dataOffset, compressedScratch.data(),
-                            compressedScratch.size(), errorMessage)) {
+    if (!readChunks(compressedScratch)) {
       return false;
     }
-    if (timing != nullptr) {
-      timing->readMicros += elapsedMicrosSince(readStart);
+    tinfl_decompressor decompressor;
+    tinfl_init(&decompressor);
+    std::size_t inputOffset = 0;
+    std::size_t outputOffset = 0;
+    unsigned char emptyBuffer = 0;
+    auto *output = file.bytes.empty() ? &emptyBuffer : file.bytes.data();
+    const auto *input = compressedScratch.empty() ? &emptyBuffer
+                                                 : compressedScratch.data();
+    tinfl_status status;
+    for (;;) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        return false;
+      }
+      std::size_t inputSize =
+          std::min(kChunkSize, compressedScratch.size() - inputOffset);
+      std::size_t outputSize =
+          std::min(kChunkSize, file.bytes.size() - outputOffset);
+      const mz_uint32 flags = TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
+          (inputOffset + inputSize < compressedScratch.size()
+               ? TINFL_FLAG_HAS_MORE_INPUT : 0);
+      const auto inflateStart = std::chrono::steady_clock::now();
+      status = tinfl_decompress(&decompressor, input + inputOffset, &inputSize,
+                                output, output + outputOffset, &outputSize,
+                                flags);
+      if (timing != nullptr) {
+        timing->inflateMicros += elapsedMicrosSince(inflateStart);
+      }
+      inputOffset += inputSize;
+      outputOffset += outputSize;
+      if (status <= TINFL_STATUS_DONE ||
+          (inputSize == 0 && outputSize == 0)) {
+        break;
+      }
     }
-    const auto inflateStart = std::chrono::steady_clock::now();
-    const size_t decompressed = tinfl_decompress_mem_to_mem(
-        file.bytes.data(), file.bytes.size(), compressedScratch.data(),
-        compressedScratch.size(), 0);
-    if (timing != nullptr) {
-      timing->inflateMicros += elapsedMicrosSince(inflateStart);
-    }
-    if (decompressed == TINFL_DECOMPRESS_MEM_TO_MEM_FAILED ||
-        decompressed != file.bytes.size()) {
+    if (status != TINFL_STATUS_DONE || outputOffset != file.bytes.size()) {
       if (errorMessage != nullptr) {
         *errorMessage = "Could not inflate ZIP entry by direct reader.";
       }
@@ -4736,11 +4823,18 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     return false;
   }
 
-  const auto crcStart = std::chrono::steady_clock::now();
-  const mz_ulong crc =
-      mz_crc32(MZ_CRC32_INIT, file.bytes.data(), file.bytes.size());
-  if (timing != nullptr) {
-    timing->crcMicros += elapsedMicrosSince(crcStart);
+  mz_ulong crc = MZ_CRC32_INIT;
+  for (std::size_t offset = 0; offset < file.bytes.size();) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+      return false;
+    }
+    const auto count = std::min(kChunkSize, file.bytes.size() - offset);
+    const auto crcStart = std::chrono::steady_clock::now();
+    crc = mz_crc32(crc, file.bytes.data() + offset, count);
+    if (timing != nullptr) {
+      timing->crcMicros += elapsedMicrosSince(crcStart);
+    }
+    offset += count;
   }
   if (crc != target.crc32) {
     if (errorMessage != nullptr) {
@@ -4748,7 +4842,7 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
     }
     return false;
   }
-  return true;
+  return pauseIfNeeded(pauseCallback, errorMessage);
 }
 
 bool listZipEntries(const std::filesystem::path &archivePath,
@@ -4821,6 +4915,67 @@ bool listZipEntries(const std::filesystem::path &archivePath,
   return true;
 }
 
+constexpr std::string_view kZipIntegrityFailure =
+    "ZIP entry extraction failed integrity/CRC validation.";
+
+std::string_view zipExtractionFailureMessage(mz_zip_archive *archive,
+                                             bool sizeMismatch = false) {
+  const auto error = mz_zip_peek_last_error(archive);
+  if (sizeMismatch || error == MZ_ZIP_DECOMPRESSION_FAILED ||
+      error == MZ_ZIP_UNEXPECTED_DECOMPRESSED_SIZE ||
+      error == MZ_ZIP_CRC_CHECK_FAILED) {
+    return kZipIntegrityFailure;
+  }
+  return "Could not extract ZIP entry by index.";
+}
+
+class ZipInputCheckpointScope {
+public:
+  ZipInputCheckpointScope(mz_zip_archive &archive,
+                           const PauseCallback &pauseCallback)
+      : archive_(archive), originalRead_(archive.m_pRead),
+        originalOpaque_(archive.m_pIO_opaque), pauseCallback_(pauseCallback) {
+    archive_.m_pRead = [](void *opaque, mz_uint64 offset, void *buffer,
+                          size_t size) -> size_t {
+      auto &scope = *static_cast<ZipInputCheckpointScope *>(opaque);
+      std::size_t completed = 0;
+      while (completed < size) {
+        if (scope.cancelled_ || !pauseIfNeeded(scope.pauseCallback_)) {
+          scope.cancelled_ = true;
+          break;
+        }
+        const auto count = std::min<std::size_t>(64 * 1024, size - completed);
+        const auto read = scope.originalRead_(
+            scope.originalOpaque_, offset + completed,
+            static_cast<unsigned char *>(buffer) + completed, count);
+        completed += read;
+        if (read != count) {
+          break;
+        }
+      }
+      return completed;
+    };
+    archive_.m_pIO_opaque = this;
+  }
+
+  ~ZipInputCheckpointScope() {
+    archive_.m_pRead = originalRead_;
+    archive_.m_pIO_opaque = originalOpaque_;
+  }
+
+  ZipInputCheckpointScope(const ZipInputCheckpointScope &) = delete;
+  ZipInputCheckpointScope &operator=(const ZipInputCheckpointScope &) = delete;
+
+  bool cancelled() const { return cancelled_; }
+
+private:
+  mz_zip_archive &archive_;
+  mz_file_read_func originalRead_;
+  void *originalOpaque_;
+  const PauseCallback &pauseCallback_;
+  bool cancelled_ = false;
+};
+
 bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
                              const std::filesystem::path &entryPath,
                              FileData &file, std::string *errorMessage,
@@ -4849,11 +5004,68 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
     }
     return false;
   }
+  if (stat.m_comp_size == 0 &&
+      (stat.m_uncomp_size != 0 || stat.m_crc32 != MZ_CRC32_INIT)) {
+    if (errorMessage != nullptr) {
+      *errorMessage = kZipIntegrityFailure;
+    }
+    return false;
+  }
 
   file.path = entryPath;
   file.bytes.resize(static_cast<std::size_t>(stat.m_uncomp_size));
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
+  }
+  if (pauseCallback) {
+    ZipInputCheckpointScope inputCheckpoint(*archive, pauseCallback);
+    auto iterator = makeUniqueResource<mz_zip_reader_extract_iter_state,
+                                       mz_zip_reader_extract_iter_free>(
+        mz_zip_reader_extract_iter_new(archive, fileIndex, 0));
+    if (iterator == nullptr) {
+      if (errorMessage != nullptr) {
+        *errorMessage = inputCheckpoint.cancelled()
+                            ? "Operation cancelled"
+                            : "Could not start streaming ZIP extraction.";
+      }
+      return false;
+    }
+    std::size_t offset = 0;
+    unsigned char extraByte = 0;
+    bool sizeMatches = true;
+    for (;;) {
+      if (!pauseIfNeeded(pauseCallback, errorMessage)) {
+        return false;
+      }
+      const auto remaining = file.bytes.size() - offset;
+      const auto count = std::min<std::size_t>(64 * 1024, remaining);
+      const auto produced = mz_zip_reader_extract_iter_read(
+          iterator.get(), remaining == 0 ? &extraByte : file.bytes.data() + offset,
+          remaining == 0 ? 1 : count);
+      if (inputCheckpoint.cancelled()) {
+        if (errorMessage != nullptr) {
+          *errorMessage = "Operation cancelled";
+        }
+        return false;
+      }
+      if (produced > remaining) {
+        sizeMatches = false;
+        break;
+      }
+      offset += produced;
+      if (produced == 0) {
+        break;
+      }
+    }
+    const bool extracted = mz_zip_reader_extract_iter_free(iterator.release());
+    if (!extracted || !sizeMatches || offset != file.bytes.size()) {
+      if (errorMessage != nullptr) {
+        *errorMessage = zipExtractionFailureMessage(
+            archive, !sizeMatches || (extracted && offset != file.bytes.size()));
+      }
+      return false;
+    }
+    return pauseIfNeeded(pauseCallback, errorMessage);
   }
   bool extracted = false;
   if (readScratch != nullptr) {
@@ -4869,7 +5081,7 @@ bool readZipEntryByFileIndex(mz_zip_archive *archive, mz_uint fileIndex,
   }
   if (!extracted) {
     if (errorMessage != nullptr) {
-      *errorMessage = "Could not extract ZIP entry by index.";
+      *errorMessage = zipExtractionFailureMessage(archive);
     }
     return false;
   }
@@ -5270,11 +5482,11 @@ bool readZipEntriesByIndex(
     }
 
     FileData file;
-    file.path = target.entryPath;
-    file.bytes.resize(static_cast<std::size_t>(stat.m_uncomp_size));
-    if (!mz_zip_reader_extract_to_mem(&archive, fileIndex, file.bytes.data(),
-                                      file.bytes.size(), 0)) {
-      return fail("Could not extract ZIP entry by index.");
+    if (!readZipEntryByFileIndex(&archive, fileIndex, target.entryPath, file,
+                                  errorMessage, pauseCallback)) {
+      files.clear();
+      mz_zip_reader_end(&archive);
+      return false;
     }
     files.push_back(std::move(file));
   }
@@ -5392,11 +5604,10 @@ bool readZipEntriesByIndexStreaming(
     }
 
     FileData file;
-    file.path = target.entryPath;
-    file.bytes.resize(static_cast<std::size_t>(stat.m_uncomp_size));
-    if (!mz_zip_reader_extract_to_mem(&archive, fileIndex, file.bytes.data(),
-                                      file.bytes.size(), 0)) {
-      return fail("Could not extract ZIP entry by index.");
+    if (!readZipEntryByFileIndex(&archive, fileIndex, target.entryPath, file,
+                                  errorMessage, pauseCallback)) {
+      mz_zip_reader_end(&archive);
+      return false;
     }
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     notifyStreamingEntryObserverForTesting(archivePath, target.entryPath);
@@ -6550,7 +6761,11 @@ bool readSevenZipEntriesByIndex(
     return false;
   }
 
-  std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  auto archiveLock =
+      acquireSevenZipArchive(*archiveState, pauseCallback, errorMessage);
+  if (!archiveLock.owns_lock()) {
+    return false;
+  }
   SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
                                         pauseCallback);
   IInArchive *archive = archiveState->archive.Interface();
@@ -6774,7 +6989,11 @@ bool readSevenZipEntriesByIndexStreaming(
     return false;
   }
 
-  std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  auto archiveLock =
+      acquireSevenZipArchive(*archiveState, pauseCallback, errorMessage);
+  if (!archiveLock.owns_lock()) {
+    return false;
+  }
   SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
                                         pauseCallback);
   IInArchive *archive = archiveState->archive.Interface();
@@ -7448,17 +7667,24 @@ bool extractSevenZipArchiveFully(
   }
   bool archiveCacheHit = false;
   long long openMs = 0;
+  const PauseCallback inputPauseCallback = [stopToken, pauseCallback] {
+    return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
+  };
   const auto archiveState = openCachedSevenZipArchive(
       archivePath, index->sevenZipFormat, &archiveCacheHit, &openMs,
-      errorMessage);
+      errorMessage, inputPauseCallback);
   if (archiveState == nullptr) {
     return false;
   }
 
-  const PauseCallback inputPauseCallback = [stopToken, pauseCallback] {
-    return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
-  };
-  std::lock_guard<std::mutex> archiveLock(archiveState->mutex);
+  auto archiveLock =
+      acquireSevenZipArchive(*archiveState, inputPauseCallback, errorMessage);
+  if (!archiveLock.owns_lock()) {
+    if (errorMessage != nullptr) {
+      *errorMessage = "Unzip cancelled";
+    }
+    return false;
+  }
   SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
                                         std::move(inputPauseCallback));
   IInArchive *archive = archiveState->archive.Interface();
@@ -7529,7 +7755,7 @@ bool extractSevenZipArchiveFully(
           .count();
   if (result != S_OK || callback->failed() || callback->cancelled()) {
     if (errorMessage != nullptr) {
-      if (callback->cancelled() || stopRequested(stopToken)) {
+      if (callback->cancelled() || result == E_ABORT || stopRequested(stopToken)) {
         *errorMessage = "Unzip cancelled";
       } else if (result != S_OK) {
         *errorMessage = sevenZipResultMessage(result);
@@ -7629,6 +7855,7 @@ bool emitFileData(FileData &&file, const FileDataCallback &onFile,
 
 bool archiveReadCancelled(const std::string &errorMessage) {
   return errorMessage == "Operation cancelled" ||
+         errorMessage == "Unzip cancelled" ||
          errorMessage == "Archive file consumer cancelled.";
 }
 
@@ -7928,6 +8155,13 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
     appendDebugLogLineImpl("miniz ZIP batch read failed: " +
                            pathForLog(archivePath) + ": " + zipError);
+    if (archiveReadCancelled(zipError) || zipError == kZipIntegrityFailure) {
+      if (errorMessage != nullptr) {
+        *errorMessage = zipError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
 #endif
@@ -7945,6 +8179,13 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   if (hasRarArchiveExtension(archivePath) && !unarrError.empty()) {
     appendDebugLogLineImpl("unarr RAR batch read failed: " +
                            pathForLog(archivePath) + ": " + unarrError);
+    if (archiveReadCancelled(unarrError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = unarrError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
 #endif
@@ -7962,6 +8203,13 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   if (hasSevenZipArchiveExtension(archivePath) && !sevenZipError.empty()) {
     appendDebugLogLineImpl("7-Zip batch read failed: " +
                            pathForLog(archivePath) + ": " + sevenZipError);
+    if (archiveReadCancelled(sevenZipError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = sevenZipError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
 #endif
@@ -7979,6 +8227,13 @@ bool readArchiveEntries(const std::filesystem::path &archivePath,
   if (!cachedOrderError.empty()) {
     appendDebugLogLineImpl("Cached-order archive batch read failed: " +
                            pathForLog(archivePath) + ": " + cachedOrderError);
+    if (archiveReadCancelled(cachedOrderError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = cachedOrderError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
   const bool read =
@@ -8049,7 +8304,7 @@ bool readArchiveEntriesStreaming(
   if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
     appendDebugLogLineImpl("miniz ZIP streaming read failed: " +
                            pathForLog(archivePath) + ": " + zipError);
-    if (archiveReadCancelled(zipError)) {
+    if (archiveReadCancelled(zipError) || zipError == kZipIntegrityFailure) {
       if (errorMessage != nullptr) {
         *errorMessage = zipError;
       }
@@ -8283,6 +8538,12 @@ bool readArchiveEntriesConcurrently(
     if (!statsError.empty()) {
       appendDebugLogLineImpl("7-Zip RAR5 batch stats failed: " +
                              pathForLog(archivePath) + ": " + statsError);
+      if (archiveReadCancelled(statsError)) {
+        if (errorMessage != nullptr) {
+          *errorMessage = statsError;
+        }
+        return false;
+      }
     }
   }
   if (isRar5Archive &&
@@ -8362,6 +8623,13 @@ bool readArchiveEntriesInRange(
   if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
     appendDebugLogLineImpl("miniz ZIP ranged read failed: " +
                            pathForLog(archivePath) + ": " + zipError);
+    if (archiveReadCancelled(zipError) || zipError == kZipIntegrityFailure) {
+      if (errorMessage != nullptr) {
+        *errorMessage = zipError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
 #endif
@@ -8381,6 +8649,13 @@ bool readArchiveEntriesInRange(
   if (hasRarArchiveExtension(archivePath) && !unarrError.empty()) {
     appendDebugLogLineImpl("unarr RAR ranged read failed: " +
                            pathForLog(archivePath) + ": " + unarrError);
+    if (archiveReadCancelled(unarrError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = unarrError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
 #endif
@@ -8400,6 +8675,13 @@ bool readArchiveEntriesInRange(
   if (hasSevenZipArchiveExtension(archivePath) && !sevenZipError.empty()) {
     appendDebugLogLineImpl("7-Zip ranged read failed: " +
                            pathForLog(archivePath) + ": " + sevenZipError);
+    if (archiveReadCancelled(sevenZipError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = sevenZipError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
 #endif
@@ -8418,6 +8700,13 @@ bool readArchiveEntriesInRange(
   if (!cachedOrderError.empty()) {
     appendDebugLogLineImpl("Cached-order archive ranged read failed: " +
                            pathForLog(archivePath) + ": " + cachedOrderError);
+    if (archiveReadCancelled(cachedOrderError)) {
+      if (errorMessage != nullptr) {
+        *errorMessage = cachedOrderError;
+      }
+      files.clear();
+      return false;
+    }
   }
   files.clear();
   const bool read =
@@ -9272,6 +9561,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::stop_token *stopToken,
                   UnzipProgressCallback progressCallback,
                   PauseCallback pauseCallback) {
+  std::string localError;
+  if (errorMessage == nullptr) {
+    errorMessage = &localError;
+  }
   reportUnzipProgress(progressCallback, 0.02, 0, 0, "Preparing unzip");
   if (archivePath.empty() || !hasSupportedArchiveExtension(archivePath)) {
     if (errorMessage != nullptr) {
@@ -9293,9 +9586,15 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
 
   reportUnzipProgress(progressCallback, 0.04, 0, 0,
                       "Reading archive index");
+  const PauseCallback indexPauseCallback = [stopToken, pauseCallback] {
+    return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
+  };
   const auto index =
-      cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+      cachedIndexForArchive(archivePath, errorMessage, indexPauseCallback);
   if (index == nullptr) {
+    if (archiveReadCancelled(*errorMessage)) {
+      *errorMessage = "Unzip cancelled";
+    }
     return std::nullopt;
   }
 
@@ -9390,6 +9689,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     extracted = extractSevenZipArchiveFully(archivePath, outputFolder, index,
                                             stopToken, progressCallback,
                                             pauseCallback, errorMessage);
+    if (!extracted && archiveReadCancelled(*errorMessage)) {
+      *errorMessage = "Unzip cancelled";
+      return std::nullopt;
+    }
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
@@ -9398,6 +9701,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     extracted = extractArchiveFullyWithLibarchive(
         archivePath, outputFolder, index, stopToken, progressCallback,
         pauseCallback, errorMessage);
+    if (!extracted && archiveReadCancelled(*errorMessage)) {
+      *errorMessage = "Unzip cancelled";
+      return std::nullopt;
+    }
   }
 #endif
   if (!extracted && !stopRequested(stopToken)) {

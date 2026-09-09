@@ -849,27 +849,45 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
   soundData->sourceFrameCount =
       soundData->sourceData.size() / static_cast<size_t>(channels);
 
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  std::unique_lock<std::mutex> lock(soundDataListMutex);
+  if (isCancelled) {
+    return false;
+  }
   if (soundDataIndexMap.contains(path)) {
     return true;
   }
-  const int targetSampleRate =
-      currentSampleRate.load(std::memory_order_acquire);
-  SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
-                 "Target sample rate: %d, File sample rate: %d",
-                 targetSampleRate, sampleRate);
+  const std::uint64_t loadGeneration = soundLoadGeneration;
+  for (;;) {
+    const int targetSampleRate =
+        currentSampleRate.load(std::memory_order_acquire);
+    lock.unlock();
+    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
+                   "Target sample rate: %d, File sample rate: %d",
+                   targetSampleRate, sampleRate);
 
-  soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
-                                             sampleRate, targetSampleRate);
-  if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
-      isCancelled) {
-    return false;
+    soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
+                                               sampleRate, targetSampleRate);
+    if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
+        isCancelled) {
+      return false;
+    }
+    soundData->outputFrameCount =
+        soundData->outputData.size() / static_cast<size_t>(channels);
+
+    lock.lock();
+    if (isCancelled || soundLoadGeneration != loadGeneration) {
+      return false;
+    }
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
+    if (currentSampleRate.load(std::memory_order_acquire) != targetSampleRate) {
+      continue;
+    }
+    soundDataIndexMap[path] = soundDataList.size();
+    soundDataList.push_back(soundData);
+    return true;
   }
-  soundData->outputFrameCount =
-      soundData->outputData.size() / static_cast<size_t>(channels);
-  soundDataIndexMap[path] = soundDataList.size();
-  soundDataList.push_back(soundData);
-  return true;
 }
 
 void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
@@ -1707,6 +1725,7 @@ audio::playback::BackendOperationResult AudioWrapper::unloadSounds() {
   if (!stopped.success) {
     return stopped;
   }
+  ++soundLoadGeneration;
   soundDataList.clear();
   soundDataIndexMap.clear();
   skinSounds.clear();
