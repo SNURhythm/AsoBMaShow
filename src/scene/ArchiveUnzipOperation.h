@@ -4,6 +4,7 @@
 #include "../ThreadCompat.h"
 #include "../repositories/ChartRepository.h"
 
+#include <cstddef>
 #include <mutex>
 #include <optional>
 
@@ -12,6 +13,13 @@ struct ArchiveUnzipResult {
   bool cancelled = false;
   bool libraryChanged = false;
   bool scanCommitted = false;
+  bool batch = false;
+  std::size_t archiveCount = 0;
+  std::size_t completedCount = 0;
+  std::size_t succeededCount = 0;
+  std::size_t failedCount = 0;
+  std::size_t deletedCount = 0;
+  std::size_t deletionFailedCount = 0;
   std::filesystem::path rootPath, archivePath, outputFolder, chartPath;
   std::string message;
 };
@@ -24,6 +32,7 @@ public:
   ArchiveUnzipOperation &operator=(const ArchiveUnzipOperation &) = delete;
 
   bool start(const ChartMetaRecord &record);
+  bool startAll(bool deleteAfterUnzip);
   bool inProgress() const;
   void requestCancel();
   void cancelAndWait();
@@ -37,7 +46,12 @@ public:
   static ArchiveUnzipResult
   Run(const ChartMetaRecord &record, ChartRepository &repository,
       const std::stop_token &stopToken,
-      archive_file::UnzipProgressCallback progress = nullptr);
+      archive_file::UnzipProgressCallback progress = nullptr,
+      bool reuseCompletedFolder = true);
+  static ArchiveUnzipResult
+  RunAll(ChartRepository &repository, bool deleteAfterUnzip,
+         const std::stop_token &stopToken,
+         archive_file::UnzipProgressCallback progress = nullptr);
 
 private:
   ChartRepository &repository_;

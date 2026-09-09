@@ -4045,6 +4045,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     get_target_property(ARCHIVE_UNZIP_TEST_LIBRARIES chart_library_scanner_tests LINK_LIBRARIES)
     target_link_libraries(archive_unzip_operation_tests PRIVATE ${ARCHIVE_UNZIP_TEST_LIBRARIES})
 
+    add_executable(archive_unzip_modal_tests
+        tests/archive_unzip_modal_tests.cpp
+        src/scene/ArchiveUnzipModal.cpp
+        src/scene/ArchiveUnzipOperation.cpp
+        src/scene/FindBmsProgressPresentation.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        ${ARCHIVE_UNZIP_TEST_SOURCES}
+    )
+    target_include_directories(archive_unzip_modal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(archive_unzip_modal_tests PRIVATE cxx_std_23)
+    target_link_libraries(archive_unzip_modal_tests PRIVATE
+        ${ARCHIVE_UNZIP_TEST_LIBRARIES} bgfx yogacore)
+
     add_executable(difficulty_table_importer_tests
         tests/difficulty_table_importer_tests.cpp
         src/DifficultyTableImporter.cpp
@@ -7830,6 +7851,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         archive_file_concurrency_tests
         chart_library_scanner_tests
         archive_unzip_operation_tests
+        archive_unzip_modal_tests
         difficulty_table_importer_tests
         modern_result_recall_tests
         jukebox_restore_tests
@@ -8058,6 +8080,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         archive_file_concurrency_tests
         chart_library_scanner_tests
         archive_unzip_operation_tests
+        archive_unzip_modal_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
         chart_record_filters_tests

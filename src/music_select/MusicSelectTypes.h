@@ -195,6 +195,12 @@ musicSelectIsSolidArchiveDirectory(const MusicSelectBar &bar) {
 }
 
 [[nodiscard]] inline bool
+musicSelectIsUnzipAllAction(const MusicSelectBar &bar) {
+  return bar.kind == skin::MusicSelectBarKind::Executable &&
+         bar.id.value == "action:unzip-all-archives";
+}
+
+[[nodiscard]] inline bool
 musicSelectIsSolidArchiveAction(const MusicSelectBar &bar) {
   return bar.kind == skin::MusicSelectBarKind::Executable && bar.chart &&
          bar.chart->solidArchive && !bar.chart->unavailable &&

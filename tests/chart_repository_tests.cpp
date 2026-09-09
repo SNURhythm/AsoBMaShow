@@ -1999,8 +1999,10 @@ void testSolidArchiveDirectoryLoadsOnlyArchiveRecords() {
   }));
   const auto loaded = loadMusicSelectPhysicalDirectory(repository, metadata, directory,
       {}, {}, {}, {.modeFilter = "14KEY", .difficultyFilter = "ANOTHER"}, 0);
-  assert(!loaded.provider && loaded.children.size() == 2);
-  for (const auto &child : loaded.children) {
+  assert(!loaded.provider && loaded.children.size() == 3);
+  assert(loaded.children.front().id.value == "action:unzip-all-archives");
+  assert(!loaded.children.front().chart && !loaded.children.front().sortable);
+  for (const auto &child : std::span(loaded.children).subspan(1)) {
     assert(child.kind == skin::MusicSelectBarKind::Executable && child.chart &&
            child.chart->solidArchive && child.selectable);
   }
@@ -2011,11 +2013,12 @@ void testSolidArchiveDirectoryLoadsOnlyArchiveRecords() {
   assert(manager.installChildren(directory.id, loaded.children));
   assert(manager.open(directory.id));
   const auto view = manager.readView();
-  assert(view.rowCount() == 2 && view.resolvedModeFilter == "14KEY" &&
+  assert(view.rowCount() == 3 && view.resolvedModeFilter == "14KEY" &&
          view.resolvedDifficultyFilter == "ANOTHER");
-  assert(musicSelectIsSolidArchiveAction(view.rowAt(0)));
+  assert(view.rowAt(0).id.value == "action:unzip-all-archives");
+  assert(musicSelectIsSolidArchiveAction(view.rowAt(1)));
   assert(!musicSelectIsSolidArchiveAction(directory));
-  auto unavailable = view.rowAt(0);
+  auto unavailable = view.rowAt(1);
   unavailable.chart->unavailable = true;
   assert(!musicSelectIsSolidArchiveAction(unavailable));
   const auto autoplay = loadMusicSelectPhysicalDirectoryAutoplay(repository, directory, 0);

@@ -1244,6 +1244,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                a.meta.BmsPath == b.meta.BmsPath &&
                a.difficultyTableLabels == b.difficultyTableLabels &&
                a.courseStart == b.courseStart &&
+               a.unzipAll == b.unzipAll &&
                a.unavailable == b.unavailable &&
                a.solidArchive == b.solidArchive &&
                a.archiveSize == b.archiveSize &&
@@ -2965,7 +2966,14 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     leadingRecord = std::move(courseRecord);
   }
 
+  if (!temporaryChartFolder.has_value() &&
+      activeFolder.type == LibraryFolderItem::Type::SolidArchives) {
+    leadingRecord = main_menu_library::unzipAllRecord(
+        folderMetadataCache.solidArchiveCount);
+  }
   const int databaseCount = chartSession->CountChartMeta(query);
+  selectedChartRecord = main_menu_library::chartSelectionRecordForReload(
+      selectedChartRecord, leadingRecord, preserveViewState);
   const int count = databaseCount + (leadingRecord.has_value() ? 1 : 0);
   const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
@@ -3026,7 +3034,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   recyclerView->scrollOffset = restoredScrollOffset;
 
   const int restoredSelectedIndex =
-      findPathNear(previousSelectedPath, previousSelectedIndex);
+      selectedChartRecord && selectedChartRecord->unzipAll && leadingOffset > 0
+          ? 0 : findPathNear(previousSelectedPath, previousSelectedIndex);
 
   recyclerView->selectedIndex = restoredSelectedIndex;
   refreshPlayOptionButtons();
@@ -3282,9 +3291,7 @@ void MainMenuScene::selectChartByPathAfterReload(
   const path_t target = fspath_to_path_t(path);
   const ChartMetaQuery query = chartQueryForActiveFolder();
   int index = chartSession->FindChartMetaIndex(query, path);
-  if (index >= 0 && !temporaryChartFolder.has_value() &&
-      activeFolder.type == LibraryFolderItem::Type::Course &&
-      activeFolder.courseId > 0) {
+  if (index >= 0 && chartListCache.leadingRecord.has_value()) {
     index += 1;
   }
   if (index >= 0 && index < recyclerView->size()) {
@@ -4664,11 +4671,12 @@ void MainMenuScene::refreshUnzipButtonForSelection(
     const ChartMetaRecord *record) {
   bool visible = false;
   if (record != nullptr && !record->unavailable &&
-      !record->meta.BmsPath.empty()) {
+      (record->unzipAll || !record->meta.BmsPath.empty())) {
     visible = record->solidArchive;
   }
   if (unzipButtonText != nullptr && !archiveUnzipInProgress()) {
-    unzipButtonText->setText("Unzip");
+    unzipButtonText->setText(record != nullptr && record->unzipAll
+                                ? "Unzip All" : "Unzip");
   }
   setUnzipButtonVisible(visible);
 }
@@ -4697,7 +4705,7 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
       archiveUnzipModal_ == nullptr || record.unavailable ||
-      record.meta.BmsPath.empty() || !record.solidArchive ||
+      (!record.unzipAll && record.meta.BmsPath.empty()) || !record.solidArchive ||
       archive_file::isVirtualPath(record.meta.BmsPath)) {
     return;
   }
@@ -4709,14 +4717,18 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   stopAndClearSelectedChart();
-  if (!archiveUnzipModal_->start(record)) {
+  const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
+                                      : archiveUnzipModal_->start(record);
+  if (!started) {
     return;
   }
   if (unzipButtonText != nullptr) {
-    unzipButtonText->setText("Unzipping...");
+    unzipButtonText->setText(record.unzipAll ? "Unzip All" : "Unzipping...");
   }
   if (replayStatusText != nullptr) {
-    replayStatusText->setText("Unzipping full archive...");
+    replayStatusText->setText(record.unzipAll
+                                 ? "Choose whether to keep or delete archives."
+                                 : "Unzipping full archive...");
   }
   setUnzipButtonVisible(true);
 }

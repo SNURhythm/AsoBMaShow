@@ -25,6 +25,7 @@ public:
   ArchiveUnzipModal &operator=(const ArchiveUnzipModal &) = delete;
 
   bool start(const ChartMetaRecord &record);
+  bool startAll();
   bool inProgress() const;
   bool isVisible() const;
   View *root() const;
@@ -40,6 +41,8 @@ private:
   void build(View *parent);
   void cancelOrClose();
   void deleteArchive();
+  void beginAll(bool deleteAfterUnzip);
+  void setAllChoiceVisible(bool visible);
   void setDeleteVisible(bool visible);
   void updateProgress(double fraction, const std::string &message,
                       std::uint64_t current = 0, std::uint64_t total = 0);
@@ -54,9 +57,13 @@ private:
   TextView *percent_ = nullptr;
   TextView *detail_ = nullptr;
   Button *deleteButton_ = nullptr;
+  TextView *deleteText_ = nullptr;
+  Button *keepButton_ = nullptr;
   Button *cancelButton_ = nullptr;
   TextView *cancelText_ = nullptr;
   std::uint64_t estimatedSize_ = 0;
   bool cancelling_ = false;
+  bool choosingAll_ = false;
+  bool batchMode_ = false;
   bool libraryChangedPending_ = false;
 };

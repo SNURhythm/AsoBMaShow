@@ -1290,11 +1290,13 @@ void MusicSelectScene::applySkinPointerResult(
       syncResolvedFilters();
     }
     selectedBarMoved();
-  } else if (clicked.kind == skin::MusicSelectBarKind::Executable &&
-             clicked.chart && clicked.chart->solidArchive) {
+  } else if (musicSelectIsUnzipAllAction(clicked) ||
+             (clicked.kind == skin::MusicSelectBarKind::Executable &&
+              clicked.chart && clicked.chart->solidArchive)) {
     (void)bars_.select(clicked.id);
     selectedBarMoved();
-    if (activate && musicSelectIsSolidArchiveAction(clicked)) launchSelected();
+    if (activate && (musicSelectIsUnzipAllAction(clicked) ||
+                     musicSelectIsSolidArchiveAction(clicked))) launchSelected();
   } else if (musicSelectPointerKeepsCenteredBar(clicked.kind) && activate) {
     launchSelected();
   }
@@ -2259,7 +2261,10 @@ void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
            }
          }});
   }
-  if (!archiveUnzipModal_ || !archiveUnzipModal_->start(record)) return;
+  if (!archiveUnzipModal_) return;
+  const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
+                                      : archiveUnzipModal_->start(record);
+  if (!started) return;
   resetLogicalInput();
   cancelDirectoryLoad();
   stopPreloadWorker();
@@ -2282,6 +2287,10 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   if (selected.kind == skin::MusicSelectBarKind::Grade ||
       selected.kind == skin::MusicSelectBarKind::RandomCourse) {
     launchCourse(selected, autoplay);
+    return;
+  }
+  if (musicSelectIsUnzipAllAction(selected)) {
+    if (!autoplay && !practice) startArchiveUnzip({.unzipAll = true});
     return;
   }
   if (!selected.chart) return;

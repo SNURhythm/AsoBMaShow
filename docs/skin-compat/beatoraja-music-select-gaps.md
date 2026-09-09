@@ -8,7 +8,26 @@ Scope: `SkinType.MUSIC_SELECT` (type 5) `.luaskin` support routed through the
 new `MusicSelectScene`, as designed in
 `docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md`.
 
-Last updated: 2026-09-09.
+Last updated: 2026-09-10.
+
+## Unzip All (2026-09-10)
+
+Both Solid Archives lists begin with an `Unzip All (N)` action covering the
+library's solid archives. Main Menu exposes its Unzip All button when that row
+is selected; the Lua selector uses normal confirmation. Highlighting does not
+start extraction. The shared native modal first asks whether to keep originals
+or delete each archive after extraction, with Cancel available before starting.
+
+Delete mode processes one archive at a time: extract and index successfully,
+delete that original, then begin the next archive. Failed or cancelled archives
+are never deleted. Keep mode retains all originals. Cancellation stops the
+current archive and remaining queue; failures are summarized without preventing
+later archives from being processed. Single-archive extraction retains its
+existing post-extraction Keep/Delete choice.
+
+Delete mode always extracts into a fresh folder before deleting an original;
+it does not trust a previous completion marker whose extracted files may have
+been changed or removed. Existing extracted folders are left untouched.
 
 ## Solid archive pseudo-folder (2026-09-09)
 

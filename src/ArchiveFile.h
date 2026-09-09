@@ -244,7 +244,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   std::string *errorMessage = nullptr,
                   const std::stop_token *stopToken = nullptr,
                   UnzipProgressCallback progressCallback = nullptr,
-                  PauseCallback pauseCallback = nullptr);
+                  PauseCallback pauseCallback = nullptr,
+                  bool reuseCompletedFolder = true);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
                 std::string *errorMessage = nullptr,

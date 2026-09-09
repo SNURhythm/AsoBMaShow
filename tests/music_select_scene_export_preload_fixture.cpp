@@ -30,6 +30,7 @@ struct Metadata {
 struct ChartMetaRecord {
   Metadata meta;
   bool solidArchive = false;
+  bool unzipAll = false;
   bool unavailable = false;
 };
 namespace bms_parser {
@@ -217,6 +218,7 @@ struct Bar {
 using MusicSelectBar = Bar;
 bool musicSelectIsSolidArchiveDirectory(const Bar &) { return false; }
 bool musicSelectIsSolidArchiveAction(const Bar &) { return false; }
+bool musicSelectIsUnzipAllAction(const Bar &) { return false; }
 struct Bars {
   struct Rows {
     std::string error;

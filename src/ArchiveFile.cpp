@@ -9568,7 +9568,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   std::string *errorMessage,
                   const std::stop_token *stopToken,
                   UnzipProgressCallback progressCallback,
-                  PauseCallback pauseCallback) {
+                  PauseCallback pauseCallback,
+                  bool reuseCompletedFolder) {
   std::string localError;
   if (errorMessage == nullptr) {
     errorMessage = &localError;
@@ -9653,7 +9654,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       markerPath = candidateMarker;
       break;
     }
-    if (unzipMarkerMatches(candidateMarker, key)) {
+    if (reuseCompletedFolder && unzipMarkerMatches(candidateMarker, key)) {
       reportUnzipProgress(progressCallback, 1.0, fileCount, fileCount,
                           "Using existing unzipped folder");
       appendDebugLogLineImpl("Using existing full unzip folder: " +
@@ -9665,6 +9666,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   }
 
   if (outputFolder.empty()) {
+    if (!reuseCompletedFolder) {
+      *errorMessage = "Could not find an unused unzip output folder. Original archive kept.";
+      return std::nullopt;
+    }
     outputFolder = destinationRoot / (baseName + " " + hex64(fnv1a64(key)));
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }

@@ -197,10 +197,15 @@ struct MusicSelectScene {
   bool sceneActive_ = true;
   std::unique_ptr<FixtureUnzipModal> archiveUnzipModal_;
   std::vector<std::filesystem::path> unzippedArchives;
+  int unzipAllPrompts = 0;
   bool selectorInputBlocked() const {
     return launching_ || (archiveUnzipModal_ && archiveUnzipModal_->isVisible());
   }
   void startArchiveUnzip(const ChartMetaRecord &record) {
+    if (record.unzipAll) {
+      ++unzipAllPrompts;
+      return;
+    }
     unzippedArchives.push_back(record.meta.BmsPath);
   }
   FixturePreview previewController_;
@@ -319,6 +324,36 @@ void testSolidArchiveDirectory() {
   scene.restoreDirectories_ = {directory.id};
   scene.continueDirectoryRestore();
   expect(scene.directoryRequest_.has_value(), "pseudo-folder restoration must also load asynchronously");
+}
+
+void testUnzipAllConfirmation() {
+  MusicSelectScene scene;
+  const MusicSelectBar action{
+      .id = {"action:unzip-all-archives"},
+      .kind = skin::MusicSelectBarKind::Executable,
+      .title = "Unzip All (2)",
+      .sortable = false};
+  const auto ordinary = song();
+  scene.bars_.refresh({.bars = {ordinary, action}, .root = {ordinary.id, action.id}});
+  scene.bars_.select(action.id);
+  scene.selectedBarMoved();
+  expect(scene.unzipAllPrompts == 0, "highlighting unzip-all must not open a prompt");
+  scene.launchSelected(true, false);
+  scene.launchSelected(false, true);
+  expect(scene.unzipAllPrompts == 0, "autoplay/practice must not start unzip-all");
+  scene.bars_.select(ordinary.id);
+  scene.applySkinPointerResult({.selectIndex = 1}, MusicSelectPointerOrigin::Mouse);
+  expect(scene.unzipAllPrompts == 1 && scene.unzippedArchives.empty(),
+         "clicked unzip-all opens the batch prompt instead of activating centered song");
+  scene.bars_.select(ordinary.id);
+  scene.applySkinPointerResult({.selectIndex = 1}, MusicSelectPointerOrigin::Touch);
+  expect(scene.unzipAllPrompts == 2, "touch confirmation opens unzip-all prompt");
+  scene.openSelected();
+  expect(scene.unzipAllPrompts == 3, "keyboard confirmation opens unzip-all prompt");
+  scene.archiveUnzipModal_ = std::make_unique<FixtureUnzipModal>();
+  scene.archiveUnzipModal_->visible = true;
+  scene.launchSelected();
+  expect(scene.unzipAllPrompts == 3, "existing modal blocks another unzip-all prompt");
 }
 
 void testFailedPageRecovery() {

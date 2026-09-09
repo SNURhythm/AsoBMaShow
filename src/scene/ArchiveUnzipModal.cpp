@@ -62,6 +62,9 @@ ArchiveUnzipModal::~ArchiveUnzipModal() {
   if (deleteButton_ != nullptr) {
     deleteButton_->setOnClickListener(nullptr);
   }
+  if (keepButton_ != nullptr) {
+    keepButton_->setOnClickListener(nullptr);
+  }
 }
 
 void ArchiveUnzipModal::build(View *parent) {
@@ -104,6 +107,8 @@ void ArchiveUnzipModal::build(View *parent) {
   message_ = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   message_->setThemedColor(ui_theme::textSecondary);
   message_->setHeight(32);
+  message_->setWidth(kModalContentWidth);
+  message_->setWrap(true);
   panel->addView(message_);
 
   track_ = new View();
@@ -126,6 +131,8 @@ void ArchiveUnzipModal::build(View *parent) {
   detail_ = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   detail_->setThemedColor(ui_theme::textMuted);
   detail_->setHeight(54);
+  detail_->setWidth(kModalContentWidth);
+  detail_->setWrap(true);
   panel->addView(detail_);
 
   auto *footer = new View();
@@ -135,10 +142,22 @@ void ArchiveUnzipModal::build(View *parent) {
   footer->setGap(12);
   footer->setHeight(58);
 
-  deleteButton_ = makeModalButton("Delete Archive", 18);
+  keepButton_ = makeModalButton("Keep Archives", 18);
+  keepButton_->setVisible(false);
+  keepButton_->setWidth(0)->setHeight(0);
+  keepButton_->setOnClickListener([this]() { beginAll(false); });
+  footer->addView(keepButton_);
+
+  deleteButton_ = makeModalButton("Delete Archive", 18, &deleteText_);
   deleteButton_->setVisible(false);
   deleteButton_->setWidth(0)->setHeight(0);
-  deleteButton_->setOnClickListener([this]() { deleteArchive(); });
+  deleteButton_->setOnClickListener([this]() {
+    if (choosingAll_) {
+      beginAll(true);
+    } else {
+      deleteArchive();
+    }
+  });
   footer->addView(deleteButton_);
 
   cancelButton_ = makeModalButton("Cancel", 20, &cancelText_);
@@ -149,11 +168,14 @@ void ArchiveUnzipModal::build(View *parent) {
 }
 
 bool ArchiveUnzipModal::start(const ChartMetaRecord &record) {
-  if (!operation_.start(record)) {
+  if (choosingAll_ || !operation_.start(record)) {
     return false;
   }
   estimatedSize_ = record.archiveUncompressedSize;
   cancelling_ = false;
+  batchMode_ = false;
+  setAllChoiceVisible(false);
+  message_->setHeight(32);
   resize(rendering::window_width, rendering::window_height);
   root_->setVisible(true);
   title_->setText("Unzip");
@@ -163,7 +185,43 @@ bool ArchiveUnzipModal::start(const ChartMetaRecord &record) {
   return true;
 }
 
-bool ArchiveUnzipModal::inProgress() const { return operation_.inProgress(); }
+bool ArchiveUnzipModal::startAll() {
+  if (inProgress()) {
+    return false;
+  }
+  operation_.keepArchive();
+  choosingAll_ = true;
+  batchMode_ = true;
+  cancelling_ = false;
+  estimatedSize_ = 0;
+  resize(rendering::window_width, rendering::window_height);
+  root_->setVisible(true);
+  title_->setText("Unzip All");
+  message_->setText("Choose what happens to each original archive before starting.");
+  message_->setHeight(64);
+  detail_->setText("Delete After Unzip deletes each original immediately after successful\nextraction and indexing. Failed or cancelled archives are kept.");
+  cancelText_->setText("Cancel");
+  setAllChoiceVisible(true);
+  root_->applyYogaLayout();
+  return true;
+}
+
+void ArchiveUnzipModal::beginAll(bool deleteAfterUnzip) {
+  if (!choosingAll_) {
+    return;
+  }
+  if (!operation_.startAll(deleteAfterUnzip)) {
+    message_->setText("Could not start Unzip All. Original archives kept.");
+    return;
+  }
+  choosingAll_ = false;
+  setAllChoiceVisible(false);
+  updateProgress(0.0, "Finding solid archives");
+}
+
+bool ArchiveUnzipModal::inProgress() const {
+  return choosingAll_ || operation_.inProgress();
+}
 
 bool ArchiveUnzipModal::isVisible() const {
   return root_ != nullptr && root_->getVisible();
@@ -181,12 +239,22 @@ void ArchiveUnzipModal::update() {
     cancelling_ = false;
     title_->setText(result->success ? "Unzip Complete"
                       : result->cancelled ? "Unzip Cancelled" : "Unzip Failed");
+    if (result->batch) {
+      title_->setText(result->success ? "Unzip All Complete"
+                        : result->cancelled ? "Unzip All Cancelled"
+                                            : "Unzip All Finished with Errors");
+      message_->setHeight(128);
+    }
     updateProgress(result->success ? 1.0 : 0.0, result->message);
     const bool canDelete = operation_.canDeleteArchive();
     setDeleteVisible(canDelete);
     cancelText_->setText(canDelete ? "Keep Archive" : "Close");
     if (canDelete) {
       detail_->setText("Choose whether to keep or delete the original archive.");
+    } else if (result->batch) {
+      detail_->setText("Archives not completed: " +
+                      std::to_string(result->archiveCount - result->completedCount) +
+                      ". Failed or cancelled originals are kept.");
     }
     root_->applyYogaLayout();
   }
@@ -194,7 +262,7 @@ void ArchiveUnzipModal::update() {
       !operation_.inProgress() && operation_.takeLibraryChanged();
   const bool changed = std::exchange(libraryChangedPending_, false) ||
                        operationChanged ||
-                       (result && result->success);
+                       (result && !result->batch && result->success);
   const auto callbacks = callbacks_;
   if (changed && callbacks.libraryChanged) {
     callbacks.libraryChanged();
@@ -217,10 +285,12 @@ void ArchiveUnzipModal::cancelAndWait() {
 }
 
 void ArchiveUnzipModal::hide() {
-  if (inProgress()) {
+  if (operation_.inProgress()) {
     return;
   }
   operation_.keepArchive();
+  choosingAll_ = false;
+  batchMode_ = false;
   estimatedSize_ = 0;
   if (root_ != nullptr) {
     root_->setVisible(false);
@@ -247,7 +317,7 @@ bool ArchiveUnzipModal::handleEvents(SDL_Event &event) {
 }
 
 void ArchiveUnzipModal::cancelOrClose() {
-  if (inProgress()) {
+  if (operation_.inProgress()) {
     cancelling_ = true;
     operation_.requestCancel();
     updateProgress(0.0, "Cancelling...");
@@ -274,6 +344,19 @@ void ArchiveUnzipModal::setDeleteVisible(bool visible) {
   deleteButton_->setHeight(visible ? 58.0f : 0.0f);
 }
 
+void ArchiveUnzipModal::setAllChoiceVisible(bool visible) {
+  detail_->setHeight(visible ? 80.0f : 54.0f);
+  keepButton_->setVisible(visible);
+  keepButton_->setWidth(visible ? 180.0f : 0.0f);
+  keepButton_->setHeight(visible ? 58.0f : 0.0f);
+  deleteText_->setText(visible ? "Delete After Unzip" : "Delete Archive");
+  setDeleteVisible(visible);
+  track_->setVisible(!visible);
+  track_->setHeight(visible ? 0.0f : 24.0f);
+  percent_->setVisible(!visible);
+  percent_->setHeight(visible ? 0.0f : 28.0f);
+}
+
 void ArchiveUnzipModal::updateProgress(double fraction,
                                       const std::string &message,
                                       std::uint64_t current,
@@ -288,7 +371,8 @@ void ArchiveUnzipModal::updateProgress(double fraction,
     text << " (" << current << "/" << total << ")";
   }
   percent_->setText(text.str());
-  std::string detail = total > 0 ? "Processing files" : "Working on archive";
+  std::string detail = batchMode_ ? "Processing archives sequentially"
+                                 : total > 0 ? "Processing files" : "Working on archive";
   if (estimatedSize_ > 0) {
     detail += "\nEstimated unzipped size: " + formatFindBmsBytes(estimatedSize_);
   }

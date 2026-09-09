@@ -85,7 +85,18 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
     const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
         *session, directory, selectedLongNoteMode, nullptr, stop);
     std::vector<MusicSelectBar> children;
-    children.reserve(records.size());
+    children.reserve(records.size() + 1);
+    if (!records.empty()) {
+      const auto title = "Unzip All (" + std::to_string(records.size()) + ")";
+      children.push_back({
+          .id = {"action:unzip-all-archives"},
+          .kind = skin::MusicSelectBarKind::Executable,
+          .title = title,
+          .presentation = {.kind = skin::MusicSelectBarKind::Executable,
+                           .title = title, .exists = true},
+          .selectable = true,
+          .sortable = false});
+    }
     for (const auto &record : records) {
       checkCancelled(stop);
       children.push_back(MusicSelectRepositoryProjection::projectSolidArchive(record));

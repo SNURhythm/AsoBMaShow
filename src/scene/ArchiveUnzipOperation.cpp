@@ -2,6 +2,7 @@
 
 #include "../ChartLibraryScanner.h"
 
+#include <algorithm>
 #include <exception>
 #include <utility>
 
@@ -11,6 +12,37 @@ bool eligible(const ChartMetaRecord &record) {
   return record.solidArchive && !record.unavailable &&
          !record.meta.BmsPath.empty() &&
          !archive_file::isVirtualPath(record.meta.BmsPath);
+}
+
+bool deleteCompletedArchive(const ArchiveUnzipResult &result,
+                            ChartRepository::Session &session,
+                            const std::stop_token &stopToken,
+                            std::string &message, bool &deleted) {
+  deleted = false;
+  if (!result.success || !result.scanCommitted || result.cancelled ||
+      result.archivePath.empty() || stopToken.stop_requested()) {
+    message = "Archive is unavailable for deletion";
+    return false;
+  }
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(result.archivePath, error) || error) {
+    message = "Archive is unavailable for deletion";
+    return false;
+  }
+  if (stopToken.stop_requested()) {
+    message = "Unzip cancelled. Original archive kept.";
+    return false;
+  }
+  if (!std::filesystem::remove(result.archivePath, error)) {
+    message = "Could not delete archive" +
+              (error ? ": " + error.message() : std::string());
+    return false;
+  }
+  deleted = true;
+  const bool refreshed = session.DeleteArchiveRecords(result.archivePath);
+  message = refreshed ? "Original archive deleted"
+                      : "Original archive deleted. Failed to refresh library.";
+  return refreshed;
 }
 
 }
@@ -45,6 +77,30 @@ bool ArchiveUnzipOperation::start(const ChartMetaRecord &record) {
 }
 
 bool ArchiveUnzipOperation::inProgress() const { return inProgress_; }
+
+bool ArchiveUnzipOperation::startAll(bool deleteAfterUnzip) {
+  if (inProgress_) {
+    return false;
+  }
+  cancelAndWait();
+  inProgress_ = true;
+  try {
+    worker_ = std::jthread([this, deleteAfterUnzip](const std::stop_token &stopToken) {
+      auto result = RunAll(repository_, deleteAfterUnzip, stopToken,
+                           [this](const archive_file::UnzipProgress &progress) {
+        std::lock_guard lock(mutex_);
+        pendingProgress_ = progress;
+      });
+      std::lock_guard lock(mutex_);
+      libraryChangedPending_ = libraryChangedPending_ || result.libraryChanged;
+      pendingResult_ = std::move(result);
+    });
+  } catch (...) {
+    inProgress_ = false;
+    return false;
+  }
+  return true;
+}
 
 bool ArchiveUnzipOperation::takeLibraryChanged() {
   std::lock_guard lock(mutex_);
@@ -97,7 +153,8 @@ std::optional<ArchiveUnzipResult> ArchiveUnzipOperation::takeResult() {
 }
 
 bool ArchiveUnzipOperation::canDeleteArchive() const {
-  if (inProgress_ || !result_ || !result_->success || result_->cancelled ||
+  if (inProgress_ || !result_ || result_->batch || !result_->success ||
+      !result_->scanCommitted || result_->cancelled ||
       result_->archivePath.empty()) {
     return false;
   }
@@ -115,25 +172,121 @@ bool ArchiveUnzipOperation::deleteArchive(std::string &message) {
     message = "Could not open library. Original archive kept.";
     return false;
   }
-  std::error_code error;
-  if (!std::filesystem::remove(result_->archivePath, error)) {
-    message = "Could not delete archive" +
-              (error ? ": " + error.message() : std::string());
-    return false;
+  bool deleted = false;
+  deleteCompletedArchive(*result_, *session, {}, message, deleted);
+  if (deleted) {
+    result_.reset();
   }
-  const bool refreshed = session->DeleteArchiveRecords(result_->archivePath);
-  message = refreshed ? "Original archive deleted"
-                      : "Original archive deleted. Failed to refresh library.";
-  result_.reset();
-  return true;
+  return deleted;
 }
 
 void ArchiveUnzipOperation::keepArchive() { result_.reset(); }
 
+ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
+    ChartRepository &repository, bool deleteAfterUnzip,
+    const std::stop_token &stopToken,
+    archive_file::UnzipProgressCallback progress) {
+  ArchiveUnzipResult result;
+  result.batch = true;
+  const auto initialRevision = repository.GetLibraryRevision();
+  std::string lastError;
+  bool queried = false;
+  try {
+    if (!stopToken.stop_requested()) {
+      auto session = repository.OpenSession();
+      if (!session || !session->EnsureSchema()) {
+        lastError = "Could not open library. Original archives kept.";
+      } else {
+        ChartMetaQuery query;
+        query.solidArchivesOnly = true;
+        std::vector<ChartMetaRecord> archives;
+        session->QueryChartMeta(query, archives, stopToken);
+        queried = true;
+        result.archiveCount = archives.size();
+        for (std::size_t archiveIndex = 0; archiveIndex < archives.size(); ++archiveIndex) {
+          if (stopToken.stop_requested()) {
+            break;
+          }
+          const auto &record = archives[archiveIndex];
+          const auto filename = record.meta.BmsPath.filename().string();
+          const auto publish = [&](const archive_file::UnzipProgress &archiveProgress) {
+            if (progress) {
+              progress({
+                  .fraction = (static_cast<double>(archiveIndex) +
+                               std::clamp(archiveProgress.fraction, 0.0, 1.0)) /
+                              static_cast<double>(archives.size()),
+                  .current = archiveIndex + 1,
+                  .total = archives.size(),
+                  .message = filename + " (" + std::to_string(archiveIndex + 1) +
+                             "/" + std::to_string(archives.size()) + ") - " +
+                             archiveProgress.message,
+              });
+            }
+          };
+          publish({.fraction = 0.0, .message = "Preparing unzip"});
+          const auto archiveResult = Run(record, repository, stopToken, publish,
+                                         !deleteAfterUnzip);
+          result.libraryChanged = result.libraryChanged || archiveResult.libraryChanged;
+          result.scanCommitted = result.scanCommitted || archiveResult.scanCommitted;
+          if (archiveResult.cancelled || stopToken.stop_requested()) {
+            break;
+          }
+          ++result.completedCount;
+          if (!archiveResult.success || !archiveResult.scanCommitted) {
+            ++result.failedCount;
+            lastError = filename + ": " + archiveResult.message;
+            continue;
+          }
+          ++result.succeededCount;
+          if (deleteAfterUnzip) {
+            bool deleted = false;
+            std::string message;
+            const bool refreshed = deleteCompletedArchive(
+                archiveResult, *session, stopToken, message, deleted);
+            if (deleted) {
+              ++result.deletedCount;
+              result.libraryChanged = true;
+            }
+            if (!refreshed && !stopToken.stop_requested()) {
+              ++result.deletionFailedCount;
+              lastError = filename + ": " + message;
+            }
+          }
+        }
+      }
+    }
+  } catch (const std::exception &error) {
+    lastError = error.what();
+  } catch (...) {
+    lastError = "Unzip All failed";
+  }
+  result.cancelled = stopToken.stop_requested();
+  result.libraryChanged = result.libraryChanged ||
+                          repository.GetLibraryRevision() != initialRevision;
+  result.success = queried && !result.cancelled && lastError.empty() &&
+                   result.completedCount == result.archiveCount;
+  result.message = result.cancelled ? "Unzip All cancelled. " : "Unzip All: ";
+  result.message += "Unzipped " + std::to_string(result.succeededCount) + "/" +
+                    std::to_string(result.archiveCount) + "; failed " +
+                    std::to_string(result.failedCount);
+  if (deleteAfterUnzip) {
+    result.message += "; deleted " + std::to_string(result.deletedCount) +
+                      "; delete/refresh failures " +
+                      std::to_string(result.deletionFailedCount);
+  } else {
+    result.message += "; originals kept";
+  }
+  if (!lastError.empty()) {
+    result.message += ". " + lastError;
+  }
+  return result;
+}
+
 ArchiveUnzipResult ArchiveUnzipOperation::Run(
     const ChartMetaRecord &record, ChartRepository &repository,
     const std::stop_token &stopToken,
-    archive_file::UnzipProgressCallback progress) {
+    archive_file::UnzipProgressCallback progress,
+    bool reuseCompletedFolder) {
   ArchiveUnzipResult result;
   const auto initialRevision = repository.GetLibraryRevision();
   auto finish = [&]() {
@@ -163,7 +316,8 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
     }
     std::string error;
     const auto extracted = archive_file::unzipArchiveFully(
-        result.archivePath, result.rootPath, &error, &stopToken, progress);
+        result.archivePath, result.rootPath, &error, &stopToken, progress,
+        nullptr, reuseCompletedFolder);
     if (extracted) {
       result.outputFolder = extracted->outputFolder;
     }

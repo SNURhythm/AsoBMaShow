@@ -210,6 +210,54 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_solid_archive_folder_loads_asynchronously_without_autoplay(self):
         self.run_directory_loading_fixture("testSolidArchiveDirectory")
 
+    def test_unzip_all_confirmation_opens_prompt_without_playback(self):
+        self.run_directory_loading_fixture("testUnzipAllConfirmation")
+
+    def test_main_menu_unzip_all_uses_preflight_instead_of_single_start(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        methods = []
+        for signature in (
+            "void MainMenuScene::refreshUnzipButtonForSelection(",
+            "void MainMenuScene::startUnzipSelectedArchiveFolder()",
+            "void MainMenuScene::startUnzipArchiveFolder(",
+        ):
+            start = source.index(signature)
+            methods.append(source[start:source.index("{", start)] +
+                           function_body(source, signature))
+        fixture = (ROOT / "tests/main_menu_unzip_all_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                             .replace("SCENE_METHODS", "\n".join(methods)))
+
+    def test_main_menu_path_selection_accounts_for_unzip_all_leading_row(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        body = function_body(source, "void MainMenuScene::selectChartByPathAfterReload(")
+        offset = body[body.index("if (index >= 0"):body.index(
+            "if (index >= 0 && index < recyclerView->size())")]
+        self.compile_and_run('''
+#include <cassert>
+#include <optional>
+struct LibraryFolderItem {
+  enum class Type { SolidArchives, Course };
+  Type type = Type::SolidArchives;
+  int courseId = 0;
+};
+int main() {
+  LibraryFolderItem activeFolder;
+  std::optional<int> temporaryChartFolder;
+  struct { std::optional<int> leadingRecord = 1; } chartListCache;
+  const auto visibleIndex = [&](int index) { OFFSET return index; };
+  assert(visibleIndex(0) == 1);
+  assert(visibleIndex(4) == 5);
+  assert(visibleIndex(-1) == -1);
+  chartListCache.leadingRecord.reset();
+  assert(visibleIndex(0) == 0);
+  activeFolder.type = LibraryFolderItem::Type::Course;
+  activeFolder.courseId = 1;
+  chartListCache.leadingRecord = 1;
+  assert(visibleIndex(0) == 1);
+}
+'''.replace("OFFSET", offset))
+
     def test_archive_actions_do_not_enable_song_favorite_events(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         event = function_body(source, "void MusicSelectScene::executeEvent(")

@@ -129,6 +129,26 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 }
 
 int main() {
+  const auto unzipAll = main_menu_library::unzipAllRecord(2);
+  ASSERT_EQ(true, unzipAll.has_value(), "solid archives have an unzip-all action");
+  ASSERT_EQ(true, unzipAll->unzipAll, "unzip-all is a distinct pseudo record");
+  ASSERT_EQ(true, unzipAll->solidArchive, "unzip-all disables song-only actions");
+  ASSERT_EQ(true, unzipAll->meta.BmsPath.empty(), "unzip-all has no synthetic filesystem path");
+  ASSERT_EQ(std::string("Unzip All (2)"), unzipAll->meta.Title, "unzip-all title includes archive count");
+  ASSERT_EQ(false, main_menu_library::unzipAllRecord(0).has_value(), "empty library has no unzip-all action");
+  const auto updatedUnzipAll = main_menu_library::unzipAllRecord(1);
+  const auto restoredUnzipAll = main_menu_library::chartSelectionRecordForReload(
+      unzipAll, updatedUnzipAll, true);
+  ASSERT_EQ(std::string("Unzip All (1)"), restoredUnzipAll->meta.Title,
+            "restored pseudo selection updates its archive count");
+  ASSERT_EQ(false, main_menu_library::chartSelectionRecordForReload(
+      unzipAll, std::nullopt, true).has_value(), "removed pseudo row clears retained selection");
+  ASSERT_EQ(false, main_menu_library::chartSelectionRecordForReload(
+      unzipAll, updatedUnzipAll, false).has_value(), "folder navigation clears pseudo selection");
+  ChartMetaRecord ordinary;
+  ordinary.meta.Title = "ordinary";
+  ASSERT_EQ(std::string("ordinary"), main_menu_library::chartSelectionRecordForReload(
+      ordinary, updatedUnzipAll, false)->meta.Title, "ordinary retained selection is unchanged");
   ASSERT_EQ(
       static_cast<int>(
           main_menu_library::EmptyLibraryBootstrapMode::DefaultFolder),
