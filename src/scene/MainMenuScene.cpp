@@ -492,26 +492,6 @@ bool messageStartsWith(const std::string &message, const std::string &prefix) {
   return message.rfind(prefix, 0) == 0;
 }
 
-bool pathIsInsideDirectoryForMenu(const std::filesystem::path &path,
-                                  const std::filesystem::path &directory) {
-  if (path.empty() || directory.empty()) {
-    return false;
-  }
-  const std::filesystem::path normalizedPath = path.lexically_normal();
-  const std::filesystem::path normalizedDirectory =
-      directory.lexically_normal();
-  if (normalizedPath == normalizedDirectory) {
-    return false;
-  }
-  const std::filesystem::path relative =
-      normalizedPath.lexically_relative(normalizedDirectory);
-  if (relative.empty() || relative.is_absolute()) {
-    return false;
-  }
-  const auto first = relative.begin();
-  return first != relative.end() && *first != std::filesystem::path("..") &&
-         *first != std::filesystem::path(".");
-}
 
 double progressRatio(const BmsSearchDownloadProgress &progress) {
   if (progress.totalBytes == 0) {
@@ -872,6 +852,10 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  if (archiveUnzipModal_ != nullptr &&
+      !archiveUnzipModal_->handleEvents(event)) {
+    return {};
+  }
   // While a chart is launching, the decide overlay blocks all input so the
   // user cannot start another chart or mutate the library mid-launch.
   if (willStart.load(std::memory_order_acquire) && decideOverlay_ != nullptr &&
@@ -894,7 +878,7 @@ void MainMenuScene::init() {
     if (replayExportInProgress.load(std::memory_order_acquire)) {
       return "A replay export is active.";
     }
-    if (unzipInProgress.load(std::memory_order_acquire) ||
+    if (archiveUnzipInProgress() ||
         findBmsJobRunning.load(std::memory_order_acquire)) {
       return "A chart archive operation is active.";
     }
@@ -922,6 +906,7 @@ void MainMenuScene::init() {
 }
 
 void MainMenuScene::onPause() {
+  onApplicationBackgroundChanged(true);
   if (revealContextMenu != nullptr) {
     revealContextMenu->dismiss();
   }
@@ -929,6 +914,21 @@ void MainMenuScene::onPause() {
     rankingsModal->close();
   }
   chartListCache.releasePages();
+}
+
+void MainMenuScene::onApplicationBackgroundChanged(bool background) {
+  if (background && archiveUnzipModal_ != nullptr) {
+    const bool wasRunning = archiveUnzipInProgress();
+    archiveUnzipModal_->cancelAndWait();
+    if (wasRunning) {
+      if (unzipButtonText != nullptr) {
+        unzipButtonText->setText("Unzip");
+      }
+      if (replayStatusText != nullptr) {
+        replayStatusText->setText("Unzip cancelled");
+      }
+    }
+  }
 }
 
 void MainMenuScene::onResume() {
@@ -1082,6 +1082,7 @@ void MainMenuScene::refreshTasksButton() {
 }
 
 void MainMenuScene::initView(ApplicationContext &context) {
+  archiveUnzipModal_.reset();
   // Initialize the view
   revealContextMenu.reset();
   recyclerView = nullptr;
@@ -1125,17 +1126,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsPanel = nullptr;
   playOptionsModal.reset();
   musicModalRoot = nullptr;
-  unzipModalRoot = nullptr;
-  unzipProgressTrack = nullptr;
-  unzipProgressFill = nullptr;
-  unzipModalTitleText = nullptr;
-  unzipProgressMessageText = nullptr;
-  unzipProgressPercentText = nullptr;
-  unzipProgressDetailText = nullptr;
-  unzipDeleteArchiveButton = nullptr;
-  unzipCancelButton = nullptr;
-  unzipDeleteArchiveButtonText = nullptr;
-  unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
   parseLogRecyclerView = nullptr;
@@ -1210,16 +1200,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
   playOptionsCloseButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
-  pendingUnzipResult.reset();
-  pendingUnzipProgress.reset();
   pendingSelectChartPath.reset();
   {
     std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
     pendingFindBmsSelectionHandoff.reset();
   }
   suppressPreviewForChartPath.reset();
-  unzipDeleteCandidatePath.reset();
-  unzipEstimatedUncompressedSize = 0;
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   chartSelectionGeneration = 0;
@@ -1228,7 +1214,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
-  unzipInProgress = false;
   tasksModalOpenRequested = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
@@ -3983,7 +3968,7 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
 }
 
 void MainMenuScene::startSelectedCourse() {
-  if (willStart.load() || unzipInProgress.load() ||
+  if (willStart.load() || archiveUnzipInProgress() ||
       pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
@@ -4176,7 +4161,7 @@ void MainMenuScene::startCourseDirect(
 }
 
 void MainMenuScene::startSelectedChart() {
-  if (willStart.load() || unzipInProgress.load() ||
+  if (willStart.load() || archiveUnzipInProgress() ||
       pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
@@ -4405,7 +4390,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 
 void MainMenuScene::openChartViewerForSelection() {
   if (willStart.load() || replayExportInProgress.load() ||
-      unzipInProgress.load() || pendingSelectChartPath.has_value() ||
+      archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
       recyclerView == nullptr) {
@@ -4664,10 +4649,10 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
     return;
   }
 
-  const bool show = visible || unzipInProgress.load();
+  const bool show = visible || archiveUnzipInProgress();
   unzipButtonSlot->setVisible(show);
   unzipButtonSlot->setHeight(show ? 58.0f : 0.0f);
-  if (unzipButtonText != nullptr && unzipInProgress.load()) {
+  if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
     unzipButtonText->setText("Unzipping...");
   }
   if (rootLayout != nullptr) {
@@ -4682,7 +4667,7 @@ void MainMenuScene::refreshUnzipButtonForSelection(
       !record->meta.BmsPath.empty()) {
     visible = record->solidArchive;
   }
-  if (unzipButtonText != nullptr && !unzipInProgress.load()) {
+  if (unzipButtonText != nullptr && !archiveUnzipInProgress()) {
     unzipButtonText->setText("Unzip");
   }
   setUnzipButtonVisible(visible);
@@ -4690,7 +4675,7 @@ void MainMenuScene::refreshUnzipButtonForSelection(
 
 void MainMenuScene::startUnzipSelectedArchiveFolder() {
   if (willStart.load() || replayExportInProgress.load() ||
-      unzipInProgress.load() || pendingSelectChartPath.has_value() ||
+      archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
       recyclerView == nullptr) {
@@ -4707,29 +4692,14 @@ void MainMenuScene::startUnzipSelectedArchiveFolder() {
 }
 
 void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
-  const bool fullArchiveUnzip =
-      record.solidArchive && !archive_file::isVirtualPath(record.meta.BmsPath);
   if (willStart.load() || replayExportInProgress.load() ||
-      pendingSelectChartPath.has_value() ||
+      archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
-      context.chartLibraryFoldersReloadRequested.load() || record.unavailable ||
-      record.meta.BmsPath.empty() || !fullArchiveUnzip) {
+      context.chartLibraryFoldersReloadRequested.load() ||
+      archiveUnzipModal_ == nullptr || record.unavailable ||
+      record.meta.BmsPath.empty() || !record.solidArchive ||
+      archive_file::isVirtualPath(record.meta.BmsPath)) {
     return;
-  }
-  if (unzipInProgress.exchange(true)) {
-    return;
-  }
-
-  if (unzipThread.joinable()) {
-    unzipThread.join();
-  }
-  {
-    std::lock_guard<std::mutex> lock(unzipResultMutex);
-    pendingUnzipResult.reset();
-  }
-  {
-    std::lock_guard<std::mutex> lock(unzipProgressMutex);
-    pendingUnzipProgress.reset();
   }
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
@@ -4739,9 +4709,9 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     pendingStopAndClearSelectedChartAfterPreview = false;
   }
   stopAndClearSelectedChart();
-  unzipEstimatedUncompressedSize =
-      fullArchiveUnzip ? record.archiveUncompressedSize : 0;
-
+  if (!archiveUnzipModal_->start(record)) {
+    return;
+  }
   if (unzipButtonText != nullptr) {
     unzipButtonText->setText("Unzipping...");
   }
@@ -4749,413 +4719,32 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     replayStatusText->setText("Unzipping full archive...");
   }
   setUnzipButtonVisible(true);
-  showUnzipProgressModal();
+}
 
-  const std::filesystem::path sourceArchivePath = record.meta.BmsPath;
-
-  std::filesystem::path outputRoot = sourceArchivePath.parent_path();
-  if (outputRoot.empty()) {
-    outputRoot = ".";
-  }
-  archive_file::appendDebugLogLine(
-      "Unzip requested: " + fspath_to_utf8(record.meta.BmsPath) +
-      " outputRoot=" + fspath_to_utf8(outputRoot) + " mode=full-archive");
-
-  unzipThread = std::jthread([this, record, outputRoot, fullArchiveUnzip,
-                              sourceArchivePath](
-                                 const std::stop_token &stopToken) {
-    PendingUnzipResult result;
-    result.rootPath = outputRoot;
-    result.archivePath = sourceArchivePath;
-    result.canDeleteArchive = fullArchiveUnzip;
-    auto postProgress = [this](const archive_file::UnzipProgress &progress) {
-      std::lock_guard<std::mutex> lock(unzipProgressMutex);
-      pendingUnzipProgress = PendingUnzipProgress{
-          .fraction = progress.fraction,
-          .current = progress.current,
-          .total = progress.total,
-          .message = progress.message,
-      };
-    };
-
-    std::string errorMessage;
-    std::filesystem::path scanRoot = outputRoot;
-    const auto unzippedArchive = archive_file::unzipArchiveFully(
-        record.meta.BmsPath, outputRoot, &errorMessage, &stopToken,
-        postProgress);
-    if (unzippedArchive.has_value()) {
-      result.outputFolder = unzippedArchive->outputFolder;
-      scanRoot = unzippedArchive->outputFolder;
-    }
-
-    if (result.outputFolder.empty()) {
-      result.success = false;
-      result.message =
-          stopToken.stop_requested()
-              ? "Unzip cancelled"
-              : (errorMessage.empty() ? "Unzip failed"
-                                      : "Unzip failed: " + errorMessage);
-    } else if (stopToken.stop_requested()) {
-      result.success = false;
-      result.message = "Unzip cancelled";
-    } else {
-      auto unzipSession = context.chartRepository.OpenSession();
-      if (!unzipSession.has_value()) {
-        result.success = false;
-        result.message = "Unzipped archive. Failed to refresh library.";
-      } else {
-        unzipSession->EnsureSchema();
-        std::vector<std::filesystem::path> roots{scanRoot};
-        postProgress(archive_file::UnzipProgress{
-            .fraction = 0.98, .message = "Refreshing library"});
-        ChartLibraryScanner scanner;
-        const int changedCount = scanner.Scan(*unzipSession, roots,
-                                              &stopToken);
-        if (!stopToken.stop_requested()) {
-          std::vector<bms_parser::ChartMeta> chartMetas;
-          unzipSession->SelectAllChartMeta(chartMetas);
-          for (const auto &meta : chartMetas) {
-            if (pathIsInsideDirectoryForMenu(meta.BmsPath, scanRoot)) {
-              result.chartPath = meta.BmsPath;
-              break;
-            }
-          }
-        }
-
-        result.success = true;
-        result.message = changedCount > 0
-                             ? "Unzipped archive. Library refreshed."
-                             : "Unzipped archive. Library already current.";
-        if (!stopToken.stop_requested()) {
-          requestLibraryReload(true);
-        }
-      }
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(unzipResultMutex);
-      pendingUnzipResult = std::move(result);
-    }
-  });
+bool MainMenuScene::archiveUnzipInProgress() const {
+  return archiveUnzipModal_ != nullptr && archiveUnzipModal_->inProgress();
 }
 
 void MainMenuScene::buildUnzipProgressModal() {
-  constexpr float kModalPanelWidth = 700.0f;
-  constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
-
-  unzipModalRoot = new BlockingOverlayView(0, 0, rendering::window_width,
-                                           rendering::window_height);
-  unzipModalRoot->setPositionType(YGPositionTypeAbsolute);
-  unzipModalRoot->setPosition(Edge::Left, 0);
-  unzipModalRoot->setPosition(Edge::Top, 0);
-  unzipModalRoot->setZIndex(1000);
-  unzipModalRoot->setVisible(false);
-  unzipModalRoot->setFlexDirection(FlexDirection::Column);
-  unzipModalRoot->setAlignItems(YGAlignCenter);
-  unzipModalRoot->setJustifyContent(YGJustifyCenter);
-  unzipModalRoot->setThemedBackgroundColor(ui_theme::scrim);
-
-  auto *panel = new View();
-  panel->setWidth(kModalPanelWidth)
-      ->setFlexDirection(FlexDirection::Column)
-      ->setGap(14)
-      ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(modalPanelBorder)
-      ->setBorderWidth(1);
-
-  unzipModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  unzipModalTitleText->setText("Unzip");
-  unzipModalTitleText->setThemedColor(ui_theme::textPrimary);
-  unzipModalTitleText->setHeight(42);
-  panel->addView(unzipModalTitleText);
-
-  unzipProgressMessageText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  unzipProgressMessageText->setThemedColor(ui_theme::textSecondary);
-  unzipProgressMessageText->setHeight(32);
-  panel->addView(unzipProgressMessageText);
-
-  unzipProgressTrack = new View();
-  unzipProgressTrack->setWidth(kModalContentWidth)
-      ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
-      ->setBorderWidth(1);
-  unzipProgressFill = new View();
-  unzipProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      ui_theme::progressFill());
-  unzipProgressTrack->addView(unzipProgressFill);
-  panel->addView(unzipProgressTrack);
-
-  unzipProgressPercentText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  unzipProgressPercentText->setThemedColor(ui_theme::textSecondary);
-  unzipProgressPercentText->setHeight(28);
-  panel->addView(unzipProgressPercentText);
-
-  unzipProgressDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  unzipProgressDetailText->setThemedColor(ui_theme::textMuted);
-  unzipProgressDetailText->setHeight(54);
-  panel->addView(unzipProgressDetailText);
-
-  auto *footer = new View();
-  footer->setFlexDirection(FlexDirection::Row);
-  footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setGap(12);
-  footer->setHeight(58);
-
-  unzipDeleteArchiveButton =
-      makeModalButton("Delete Archive", 18, &unzipDeleteArchiveButtonText);
-  unzipDeleteArchiveButton->setVisible(false);
-  unzipDeleteArchiveButton->setWidth(0)->setHeight(0);
-  unzipDeleteArchiveButton->setOnClickListener(
-      [this]() { deleteUnzippedSourceArchive(); });
-  footer->addView(unzipDeleteArchiveButton);
-
-  unzipCancelButton = makeModalButton("Cancel", 20, &unzipCancelButtonText);
-  unzipCancelButton->setWidth(130);
-  unzipCancelButton->setOnClickListener([this]() {
-    if (unzipInProgress.load()) {
-      if (unzipThread.joinable()) {
-        unzipThread.request_stop();
-      }
-      updateUnzipProgressUi(0.0, "Cancelling...", 0, 0);
-      return;
+  ArchiveUnzipModalCallbacks callbacks;
+  callbacks.libraryChanged = [this]() { requestLibraryReload(true); };
+  callbacks.finished = [this](const ArchiveUnzipResult &result) {
+    if (unzipButtonText != nullptr) {
+      unzipButtonText->setText(result.success ? "Unzipped" : "Unzip");
     }
-    hideUnzipProgressModal();
-  });
-  footer->addView(unzipCancelButton);
-  panel->addView(footer);
-
-  unzipModalRoot->addView(panel);
-  rootLayout->addView(unzipModalRoot);
-}
-
-void MainMenuScene::showUnzipProgressModal() {
-  if (unzipModalRoot == nullptr) {
-    return;
-  }
-  unzipModalRoot->setSize(rendering::window_width, rendering::window_height);
-  unzipModalRoot->setVisible(true);
-  if (unzipModalTitleText != nullptr) {
-    unzipModalTitleText->setText("Unzip");
-  }
-  if (unzipCancelButtonText != nullptr) {
-    unzipCancelButtonText->setText("Cancel");
-  }
-  setUnzipDeleteArchiveButtonVisible(false);
-  unzipDeleteCandidatePath.reset();
-  updateUnzipProgressUi(0.0, "Preparing unzip", 0, 0);
-  unzipModalRoot->applyYogaLayout();
-}
-
-void MainMenuScene::hideUnzipProgressModal() {
-  if (unzipModalRoot != nullptr) {
-    unzipModalRoot->setVisible(false);
-  }
-  if (!unzipInProgress.load()) {
-    unzipEstimatedUncompressedSize = 0;
-    unzipDeleteCandidatePath.reset();
-    setUnzipDeleteArchiveButtonVisible(false);
-  }
-}
-
-void MainMenuScene::updateUnzipProgressUi(double fraction,
-                                          const std::string &message,
-                                          std::uint64_t current,
-                                          std::uint64_t total) {
-  fraction = std::clamp(fraction, 0.0, 1.0);
-  if (unzipProgressMessageText != nullptr) {
-    unzipProgressMessageText->setText(message);
-  }
-  if (unzipProgressFill != nullptr && unzipProgressTrack != nullptr) {
-    unzipProgressFill->setWidth(
-        std::max(0.0f, (unzipProgressTrack->getWidth() - 4.0f) *
-                           static_cast<float>(fraction)));
-  }
-  if (unzipProgressPercentText != nullptr) {
-    std::ostringstream text;
-    text << std::fixed << std::setprecision(0) << (fraction * 100.0) << "%";
-    if (total > 0) {
-      text << " (" << current << "/" << total << ")";
+    if (result.success && !result.chartPath.empty()) {
+      pendingSelectChartPath = result.chartPath;
     }
-    unzipProgressPercentText->setText(text.str());
-  }
-  if (unzipProgressDetailText != nullptr) {
-    std::string detail = total > 0 ? "Processing files" : "Working on archive";
-    if (unzipEstimatedUncompressedSize > 0) {
-      detail += "\nEstimated unzipped size: " +
-                formatFindBmsBytes(unzipEstimatedUncompressedSize);
+    if (replayStatusText != nullptr) {
+      replayStatusText->setText(result.message);
     }
-    unzipProgressDetailText->setText(detail);
-  }
-  if (unzipModalRoot != nullptr && unzipModalRoot->getVisible()) {
-    unzipModalRoot->applyYogaLayout();
-  }
-}
-
-void MainMenuScene::setUnzipDeleteArchiveButtonVisible(bool visible) {
-  if (unzipDeleteArchiveButton == nullptr) {
-    return;
-  }
-  unzipDeleteArchiveButton->setVisible(visible);
-  unzipDeleteArchiveButton->setWidth(visible ? 210.0f : 0.0f);
-  unzipDeleteArchiveButton->setHeight(visible ? 58.0f : 0.0f);
-  if (unzipDeleteArchiveButtonText != nullptr) {
-    unzipDeleteArchiveButtonText->setText("Delete Archive");
-  }
-  if (unzipModalRoot != nullptr && unzipModalRoot->getVisible()) {
-    unzipModalRoot->applyYogaLayout();
-  }
-}
-
-void MainMenuScene::deleteUnzippedSourceArchive() {
-  if (unzipInProgress.load() || !unzipDeleteCandidatePath.has_value()) {
-    return;
-  }
-
-  const std::filesystem::path archivePath = *unzipDeleteCandidatePath;
-  std::error_code error;
-  const bool archiveExists =
-      std::filesystem::is_regular_file(archivePath, error);
-  if (error) {
-    updateUnzipProgressUi(1.0,
-                          "Could not check archive: " + error.message(), 0, 0);
     archive_file::appendDebugLogLine(
-        "Failed to check source archive before delete: " +
-        fspath_to_utf8(archivePath) + ": " + error.message());
-    return;
-  }
-  if (!archiveExists) {
-    updateUnzipProgressUi(1.0, "Archive is already unavailable", 0, 0);
-    setUnzipDeleteArchiveButtonVisible(false);
-    unzipDeleteCandidatePath.reset();
-    return;
-  }
-
-  const bool removed = std::filesystem::remove(archivePath, error);
-  if (error || !removed) {
-    updateUnzipProgressUi(
-        1.0,
-        "Could not delete archive" +
-            (error ? std::string(": ") + error.message() : std::string()),
-        0, 0);
-    archive_file::appendDebugLogLine(
-        "Failed to delete source archive: " + fspath_to_utf8(archivePath) +
-        (error ? ": " + error.message() : ""));
-    return;
-  }
-
-  auto deleteSession = context.chartRepository.OpenSession();
-  if (deleteSession.has_value()) {
-    deleteSession->DeleteArchiveRecords(archivePath);
-  }
-  requestLibraryReload(true);
-  unzipDeleteCandidatePath.reset();
-  setUnzipDeleteArchiveButtonVisible(false);
-  if (unzipModalTitleText != nullptr) {
-    unzipModalTitleText->setText("Archive Deleted");
-  }
-  if (unzipCancelButtonText != nullptr) {
-    unzipCancelButtonText->setText("Close");
-  }
-  updateUnzipProgressUi(1.0, "Original archive deleted", 0, 0);
-  archive_file::appendDebugLogLine(
-      "Deleted source archive after unzip: " + fspath_to_utf8(archivePath));
-}
-
-void MainMenuScene::applyUnzipProgress() {
-  std::optional<PendingUnzipProgress> progress;
-  {
-    std::lock_guard<std::mutex> lock(unzipProgressMutex);
-    if (!pendingUnzipProgress.has_value()) {
-      return;
-    }
-    progress = std::move(pendingUnzipProgress);
-    pendingUnzipProgress.reset();
-  }
-  updateUnzipProgressUi(progress->fraction, progress->message,
-                        progress->current, progress->total);
-}
-
-void MainMenuScene::applyUnzipResult() {
-  std::optional<PendingUnzipResult> result;
-  {
-    std::lock_guard<std::mutex> lock(unzipResultMutex);
-    if (!pendingUnzipResult.has_value()) {
-      return;
-    }
-    result = std::move(pendingUnzipResult);
-    pendingUnzipResult.reset();
-  }
-
-  if (unzipThread.joinable()) {
-    unzipThread.join();
-  }
-  unzipInProgress.store(false);
-  if (unzipButtonText != nullptr) {
-    unzipButtonText->setText(result->success ? "Unzipped" : "Unzip");
-  }
-  if (unzipModalTitleText != nullptr) {
-    unzipModalTitleText->setText(result->success ? "Unzip Complete"
-                                                 : "Unzip Failed");
-  }
-  updateUnzipProgressUi(result->success ? 1.0 : 0.0, result->message, 0, 0);
-  std::error_code archiveStateError;
-  const bool canDeleteArchive = result->success && result->canDeleteArchive &&
-                                !result->archivePath.empty() &&
-                                std::filesystem::is_regular_file(
-                                    result->archivePath, archiveStateError) &&
-                                !archiveStateError;
-  if (canDeleteArchive) {
-    unzipDeleteCandidatePath = result->archivePath;
-    setUnzipDeleteArchiveButtonVisible(true);
-    if (unzipCancelButtonText != nullptr) {
-      unzipCancelButtonText->setText("Keep Archive");
-    }
-    if (unzipProgressDetailText != nullptr) {
-      unzipProgressDetailText->setText(
-          "Choose whether to keep or delete the original archive.");
-    }
-  } else {
-    unzipDeleteCandidatePath.reset();
-    setUnzipDeleteArchiveButtonVisible(false);
-    if (unzipCancelButtonText != nullptr) {
-      unzipCancelButtonText->setText("Close");
-    }
-  }
-  if (result->success && !result->chartPath.empty()) {
-    pendingSelectChartPath = result->chartPath;
-    requestLibraryReload(true);
-  }
-  if (replayStatusText != nullptr) {
-    replayStatusText->setText(result->message);
-  }
-  archive_file::appendDebugLogLine(
-      result->message +
-      (result->chartPath.empty() ? ""
-                                 : ": " + fspath_to_utf8(result->chartPath)));
-
-  defer(
-      [this, hideModal = result->success && !canDeleteArchive]() {
-        if (!unzipInProgress.load() && replayStatusText != nullptr) {
-          replayStatusText->setText("");
-        }
-        if (!unzipInProgress.load() && unzipButtonText != nullptr) {
-          unzipButtonText->setText("Unzip");
-        }
-        if (hideModal && !unzipInProgress.load() && unzipModalRoot != nullptr &&
-            unzipModalRoot->getVisible()) {
-          hideUnzipProgressModal();
-        }
-        return true;
-      },
-      result->success ? 900 : 1800, true);
+        result.message + (result.chartPath.empty()
+                              ? ""
+                              : ": " + fspath_to_utf8(result.chartPath)));
+  };
+  archiveUnzipModal_ = ArchiveUnzipModal::Create(
+      rootLayout, context.chartRepository, std::move(callbacks));
 }
 
 void MainMenuScene::startLibraryRefresh() {
@@ -8983,8 +8572,9 @@ void MainMenuScene::update(float dt) {
   refreshTasksButton();
   applyPendingUiUpdates();
   applyFindBmsUpdates();
-  applyUnzipProgress();
-  applyUnzipResult();
+  if (archiveUnzipModal_ != nullptr) {
+    archiveUnzipModal_->update();
+  }
   applyReplayLoadCompletion();
   applyReplayExportProgress();
   applyReplayExportResult();
@@ -9061,8 +8651,8 @@ void MainMenuScene::renderScene() {
     findBmsModalRoot->setSize(rendering::window_width,
                               rendering::window_height);
   }
-  if (unzipModalRoot != nullptr) {
-    unzipModalRoot->setSize(rendering::window_width, rendering::window_height);
+  if (archiveUnzipModal_ != nullptr) {
+    archiveUnzipModal_->resize(rendering::window_width, rendering::window_height);
   }
   if (layoutChanged) {
     lastLayoutWidth = rendering::window_width;
@@ -9108,11 +8698,7 @@ void MainMenuScene::cleanupScene() {
     findBmsThread.request_stop();
     findBmsThread.join();
   }
-  if (unzipThread.joinable()) {
-    SDL_Log("Joining unzipThread");
-    unzipThread.request_stop();
-    unzipThread.join();
-  }
+  archiveUnzipModal_.reset();
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
   chartListCache.clear();
@@ -9160,17 +8746,6 @@ void MainMenuScene::cleanupScene() {
   startButtonText = nullptr;
   playOptionsModalRoot = nullptr;
   musicModalRoot = nullptr;
-  unzipModalRoot = nullptr;
-  unzipProgressTrack = nullptr;
-  unzipProgressFill = nullptr;
-  unzipModalTitleText = nullptr;
-  unzipProgressMessageText = nullptr;
-  unzipProgressPercentText = nullptr;
-  unzipProgressDetailText = nullptr;
-  unzipDeleteArchiveButton = nullptr;
-  unzipCancelButton = nullptr;
-  unzipDeleteArchiveButtonText = nullptr;
-  unzipCancelButtonText = nullptr;
   parseLogModalRoot = nullptr;
   tasksModalRoot = nullptr;
   parseLogRecyclerView = nullptr;
@@ -9241,16 +8816,12 @@ void MainMenuScene::cleanupScene() {
   playOptionsCloseButtonText = nullptr;
   pendingReplayExportResult.reset();
   pendingReplayExportProgress.reset();
-  pendingUnzipResult.reset();
-  pendingUnzipProgress.reset();
   pendingSelectChartPath.reset();
   {
     std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
     pendingFindBmsSelectionHandoff.reset();
   }
   suppressPreviewForChartPath.reset();
-  unzipDeleteCandidatePath.reset();
-  unzipEstimatedUncompressedSize = 0;
   pendingFindBmsProgressEvents.clear();
   pendingFindBmsResult.reset();
   chartSelectionGeneration = 0;
@@ -9259,7 +8830,6 @@ void MainMenuScene::cleanupScene() {
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
-  unzipInProgress = false;
   findBmsJobRunning = false;
   findBmsCancelled = false;
   findBmsResult = {};

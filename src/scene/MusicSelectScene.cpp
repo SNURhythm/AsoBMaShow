@@ -656,6 +656,7 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
   folderStatusRowsRevision_.reset();
@@ -713,6 +714,7 @@ void MusicSelectScene::onResume() {
 
 void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
   if (background) {
+    if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
     cancelDirectoryLoad();
     previewController_.reset();
     if (previewAudio_) previewAudio_->silence();
@@ -1288,6 +1290,11 @@ void MusicSelectScene::applySkinPointerResult(
       syncResolvedFilters();
     }
     selectedBarMoved();
+  } else if (clicked.kind == skin::MusicSelectBarKind::Executable &&
+             clicked.chart && clicked.chart->solidArchive) {
+    (void)bars_.select(clicked.id);
+    selectedBarMoved();
+    if (activate && musicSelectIsSolidArchiveAction(clicked)) launchSelected();
   } else if (musicSelectPointerKeepsCenteredBar(clicked.kind) && activate) {
     launchSelected();
   }
@@ -1429,6 +1436,10 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   if (selectorInputBlocked()) resetLogicalInput();
+  if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) {
+    (void)archiveUnzipModal_->handleEvents(event);
+    return {};
+  }
   // While a chart is launching, the decide overlay blocks all input so the
   // user cannot scroll or change selection mid-launch.
   if (launching_ && decideOverlay_ != nullptr &&
@@ -1618,7 +1629,8 @@ void MusicSelectScene::continueDirectoryRestore() {
     const auto directory = view.rowAt(view.selectedIndex);
     if (!directory.childrenLoaded) {
       if (directory.kind == skin::MusicSelectBarKind::Folder ||
-          directory.kind == skin::MusicSelectBarKind::SearchWord) {
+          directory.kind == skin::MusicSelectBarKind::SearchWord ||
+          musicSelectIsSolidArchiveDirectory(directory)) {
         requestDirectoryLoad(directory);
         return;
       }
@@ -1703,7 +1715,8 @@ void MusicSelectScene::applyDirectoryLoads() {
 bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
   if (!skin::musicSelectIsDirectoryBarKind(directory.kind)) return false;
   if ((directory.kind == skin::MusicSelectBarKind::Folder ||
-       directory.kind == skin::MusicSelectBarKind::SearchWord) &&
+       directory.kind == skin::MusicSelectBarKind::SearchWord ||
+       musicSelectIsSolidArchiveDirectory(directory)) &&
       !directory.childrenLoaded) {
     requestDirectoryLoad(directory);
     return false;
@@ -1719,6 +1732,10 @@ bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
 bool MusicSelectScene::loadDirectoryChildren(
     const MusicSelectBar &directory) {
   if (!chartSession_) return false;
+  if (musicSelectIsSolidArchiveDirectory(directory)) {
+    requestDirectoryLoad(directory);
+    return false;
+  }
   const int selectedLongNoteMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   const auto inputFor = [this, selectedLongNoteMode](
@@ -2230,9 +2247,29 @@ bool MusicSelectScene::reusePreloadedChart(
   return true;
 }
 
+void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
+  if (modalLayer_ == nullptr || selectorInputBlocked()) return;
+  if (!archiveUnzipModal_) {
+    archiveUnzipModal_ = ArchiveUnzipModal::Create(
+        modalLayer_, context.chartRepository,
+        {.libraryChanged = [this]() {
+           if (sceneActive_ && !failed_) {
+             reloadLibrary();
+             selectedBarMoved();
+           }
+         }});
+  }
+  if (!archiveUnzipModal_ || !archiveUnzipModal_->start(record)) return;
+  resetLogicalInput();
+  cancelDirectoryLoad();
+  stopPreloadWorker();
+  previewController_.reset();
+  if (previewAudio_) previewAudio_->silence();
+}
+
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   audio::diag::SelectAudioLog("[bgm] launchSelected");
-  if (!sceneActive_ || failed_ || launching_ ||
+  if (!sceneActive_ || failed_ || selectorInputBlocked() ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
@@ -2248,6 +2285,10 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     return;
   }
   if (!selected.chart) return;
+  if (musicSelectIsSolidArchiveAction(selected)) {
+    if (!autoplay && !practice) startArchiveUnzip(*selected.chart);
+    return;
+  }
   StartupTiming::instance().beginSession();
   StartupTiming::instance().mark("selector start press");
   const auto record = *selected.chart;
@@ -2577,6 +2618,7 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
   auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto directory = snapshot.rowAt(snapshot.selectedIndex);
+  if (musicSelectIsSolidArchiveDirectory(directory)) return;
   if ((directory.kind == skin::MusicSelectBarKind::Folder ||
        directory.kind == skin::MusicSelectBarKind::SearchWord) &&
       !directory.childrenLoaded) {
@@ -2779,7 +2821,8 @@ void MusicSelectScene::changeSelectedFavorite(bool song, int direction) {
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
-  if (!selected.chart || selected.chart->meta.BmsPath.empty()) return;
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->solidArchive || selected.chart->meta.BmsPath.empty()) return;
 
   const MusicSelectFavoriteBits bits =
       song ? MusicSelectFavoriteBits{.favorite = 1, .invisible = 4}
@@ -2828,6 +2871,7 @@ void MusicSelectScene::consumeActions() {
   for (const auto &action : skinSession_->takePublishedActions()) {
     if (!sceneActive_ || failed_ ||
         context.appInBackground.load(std::memory_order_acquire)) return;
+    if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) break;
     switch (action.kind) {
     case skin::MusicSelectSkinActionKind::Event:
       commitAudioSettings();
@@ -2881,6 +2925,7 @@ void MusicSelectScene::consumeActions() {
 
 bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ ||
+         (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
          (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
@@ -3105,7 +3150,9 @@ void MusicSelectScene::executeEvent(
       .sortIndex = sortIndex_,
       .hasSelectedPlayConfig = selected != nullptr,
       .selectedSongHasPath =
-          selected != nullptr && selected->chart.has_value() &&
+          selected != nullptr &&
+          selected->kind == skin::MusicSelectBarKind::Song &&
+          selected->chart.has_value() && !selected->chart->solidArchive &&
           !selected->chart->meta.BmsPath.empty(),
       .rivalCount = 0,
       .currentRivalIndex = currentRivalIndex_,
@@ -3338,6 +3385,11 @@ void MusicSelectScene::update(float) {
     applyRecordsExportProgress();
     applyRecordsExportResult();
   }
+  if (archiveUnzipModal_) {
+    archiveUnzipModal_->resize(rendering::window_width,
+                               rendering::window_height);
+    archiveUnzipModal_->update();
+  }
   if (tasksModal_ != nullptr) {
     tasksModal_->setSize(rendering::window_width, rendering::window_height);
     if (tasksModal_->getVisible()) refreshTasksModal();
@@ -3387,7 +3439,9 @@ void MusicSelectScene::update(float) {
       previewSelection(bars_.readView(),
                        context.settings.archiveChartPreviewEnabled),
       songBarChangeMicros_);
-  if (auto preview = previewController_.update(elapsedMicros(), launching_);
+  if (auto preview = previewController_.update(
+          elapsedMicros(), launching_ ||
+              (archiveUnzipModal_ && archiveUnzipModal_->isVisible()));
       preview && previewAudio_) {
     audio::diag::SelectAudioLog(
         std::string("[bgm] scene update switchTo path=") +
@@ -3415,6 +3469,7 @@ void MusicSelectScene::enterError(
     std::vector<skin::SkinDiagnostic> diagnostics) {
   if (failed_) return;
   failed_ = true;
+  if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   stopInputListening();
   previewController_.reset();
@@ -4565,6 +4620,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 
 void MusicSelectScene::cleanupScene() {
   sceneActive_ = false;
+  archiveUnzipModal_.reset();
   ++launchGeneration_;
   cancelDirectoryLoad();
   directoryLoader_.reset();

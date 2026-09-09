@@ -8,7 +8,19 @@ Scope: `SkinType.MUSIC_SELECT` (type 5) `.luaskin` support routed through the
 new `MusicSelectScene`, as designed in
 `docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md`.
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-09.
+
+## Solid archive pseudo-folder (2026-09-09)
+
+The Lua selector adds a `Solid Archives (N)` root folder when the library
+contains solid archives. Its archive rows load asynchronously and remain visible
+regardless of the current key-mode or difficulty filter. Confirming an archive
+opens the same native unzip modal as Main Menu, with progress, cancellation,
+and explicit Keep Archive / Delete Archive choices after successful extraction
+and library indexing. Highlighting, practice, and autoplay do not extract archives.
+Mouse and touch confirmation target the clicked archive, not the centered song.
+Extracted charts become available through the refreshed library; extraction
+does not automatically start gameplay.
 
 ## Intentional mixed-folder divergence (2026-09-08)
 

@@ -204,6 +204,35 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_async_directory_pointer_targets_clicked_folder(self):
         self.run_directory_loading_fixture("testPointerTargetsClickedFolder")
 
+    def test_archive_confirmation_targets_clicked_archive_not_centered_row(self):
+        self.run_directory_loading_fixture("testArchiveConfirmation")
+
+    def test_solid_archive_folder_loads_asynchronously_without_autoplay(self):
+        self.run_directory_loading_fixture("testSolidArchiveDirectory")
+
+    def test_archive_actions_do_not_enable_song_favorite_events(self):
+        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        event = function_body(source, "void MusicSelectScene::executeEvent(")
+        expression = event.split(".selectedSongHasPath =", 1)[1].split(
+            ".rivalCount", 1)[0].strip().rstrip(",")
+        self.compile_and_run('''
+#include "REPOSITORY_ROOT/src/music_select/MusicSelectTypes.h"
+#include <cassert>
+int main() {
+  const auto eligible = [](const MusicSelectBar *selected) { return EXPRESSION; };
+  MusicSelectBar selected;
+  selected.chart = ChartMetaRecord{};
+  selected.chart->meta.BmsPath = "/songs/archive.7z";
+  selected.kind = skin::MusicSelectBarKind::Executable;
+  selected.chart->solidArchive = true;
+  assert(!eligible(&selected));
+  selected.kind = skin::MusicSelectBarKind::Song;
+  selected.chart->solidArchive = false;
+  assert(eligible(&selected));
+  assert(!eligible(nullptr));
+}
+'''.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace("EXPRESSION", expression))
+
     def test_empty_category_autoplay_keeps_directory_reloadable(self):
         self.run_directory_loading_fixture("testEmptyCategoryAutoplay")
 

@@ -34,6 +34,8 @@ struct ExternalUrlService {
 };
 
 struct MusicSelectScene {
+  struct UnzipModal { void cancelAndWait() {} };
+  UnzipModal *archiveUnzipModal_ = nullptr;
   std::atomic_bool launchCancelled_ = false;
   std::uint64_t launchGeneration_ = 0;
   std::jthread launchThread_;

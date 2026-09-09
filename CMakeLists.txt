@@ -4033,6 +4033,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_library_scanner_tests PRIVATE shell32 ole32)
     endif()
 
+    get_target_property(ARCHIVE_UNZIP_TEST_SOURCES chart_library_scanner_tests SOURCES)
+    list(REMOVE_ITEM ARCHIVE_UNZIP_TEST_SOURCES tests/chart_library_scanner_tests.cpp)
+    add_executable(archive_unzip_operation_tests
+        tests/archive_unzip_operation_tests.cpp
+        src/scene/ArchiveUnzipOperation.cpp
+        ${ARCHIVE_UNZIP_TEST_SOURCES}
+    )
+    target_include_directories(archive_unzip_operation_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(archive_unzip_operation_tests PRIVATE cxx_std_23)
+    get_target_property(ARCHIVE_UNZIP_TEST_LIBRARIES chart_library_scanner_tests LINK_LIBRARIES)
+    target_link_libraries(archive_unzip_operation_tests PRIVATE ${ARCHIVE_UNZIP_TEST_LIBRARIES})
+
     add_executable(difficulty_table_importer_tests
         tests/difficulty_table_importer_tests.cpp
         src/DifficultyTableImporter.cpp
@@ -7817,6 +7829,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_selector_query_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
+        archive_unzip_operation_tests
         difficulty_table_importer_tests
         modern_result_recall_tests
         jukebox_restore_tests
@@ -8044,6 +8057,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         archive_asset_batch_loader_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
+        archive_unzip_operation_tests
         difficulty_table_importer_tests
         result_persistence_model_tests
         chart_record_filters_tests

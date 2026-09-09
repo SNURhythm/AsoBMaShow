@@ -128,6 +128,8 @@ struct Modal {
   std::string status;
   void resize(int, int) {}
   void update() {}
+  void cancelAndWait() {}
+  bool isVisible() const { return false; }
   void setExportInProgress(bool value) { exporting = value; }
   void showExportProgress(const char *, const char *) { progressVisible = true; }
   void returnToList(const std::string &message) {
@@ -213,6 +215,8 @@ struct Bar {
   bool childrenLoaded = false;
 };
 using MusicSelectBar = Bar;
+bool musicSelectIsSolidArchiveDirectory(const Bar &) { return false; }
+bool musicSelectIsSolidArchiveAction(const Bar &) { return false; }
 struct Bars {
   struct Rows {
     std::string error;
@@ -315,6 +319,9 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  Modal *archiveUnzipModal_ = nullptr;
+  bool selectorInputBlocked() const { return launching_; }
+  void startArchiveUnzip(const ChartMetaRecord &) {}
   PublishedActions *skinSession_ = nullptr;
   Preview *systemSound_ = nullptr;
   int rankingOffset_ = 0;

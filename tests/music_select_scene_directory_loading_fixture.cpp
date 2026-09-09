@@ -169,6 +169,12 @@ struct FixturePreview {
   void resumeDefaultBgm() {}
 };
 
+struct FixtureUnzipModal {
+  bool visible = false;
+  void cancelAndWait() { visible = false; }
+  bool isVisible() const { return visible; }
+};
+
 struct MusicSelectScene {
   struct Context {
     std::atomic_bool appInBackground = false;
@@ -189,6 +195,14 @@ struct MusicSelectScene {
   bool launching_ = false;
   bool failed_ = false;
   bool sceneActive_ = true;
+  std::unique_ptr<FixtureUnzipModal> archiveUnzipModal_;
+  std::vector<std::filesystem::path> unzippedArchives;
+  bool selectorInputBlocked() const {
+    return launching_ || (archiveUnzipModal_ && archiveUnzipModal_->isVisible());
+  }
+  void startArchiveUnzip(const ChartMetaRecord &record) {
+    unzippedArchives.push_back(record.meta.BmsPath);
+  }
   FixturePreview previewController_;
   FixturePreview *previewAudio_ = nullptr;
   int scoreCache_ = 0;
@@ -247,6 +261,65 @@ struct MusicSelectScene {
 };
 
 SCENE_METHODS
+
+void testArchiveConfirmation() {
+  MusicSelectScene scene;
+  auto first = song();
+  first.id = {"archive:first"};
+  first.kind = skin::MusicSelectBarKind::Executable;
+  first.chart->solidArchive = true;
+  first.chart->meta.BmsPath = "/songs/first.7z";
+  auto second = first;
+  second.id = {"archive:second"};
+  second.chart->meta.BmsPath = "/songs/second.7z";
+  scene.bars_.refresh({.bars = {first, second}, .root = {first.id, second.id}});
+  scene.bars_.select(second.id);
+  scene.selectedBarMoved();
+  expect(scene.unzippedArchives.empty(), "highlighting an archive must not unzip it");
+  scene.bars_.select(first.id);
+  scene.applySkinPointerResult({.selectIndex = 1}, MusicSelectPointerOrigin::Mouse);
+  expect(scene.unzippedArchives == std::vector<std::filesystem::path>{second.chart->meta.BmsPath},
+         "pointer confirmation must unzip the clicked archive instead of centered archive");
+  scene.unzippedArchives.clear();
+  scene.launchSelected(true, false);
+  scene.launchSelected(false, true);
+  expect(scene.unzippedArchives.empty(), "autoplay and practice must not extract archives");
+  scene.openSelected();
+  expect(scene.unzippedArchives.size() == 1, "keyboard confirmation must unzip selected archive");
+  scene.archiveUnzipModal_ = std::make_unique<FixtureUnzipModal>();
+  scene.archiveUnzipModal_->visible = true;
+  scene.launchSelected();
+  expect(scene.unzippedArchives.size() == 1, "visible modal must block duplicate confirmation");
+  scene.archiveUnzipModal_->visible = false;
+  scene.unzippedArchives.clear();
+  scene.bars_.select(first.id);
+  scene.applySkinPointerResult({.selectIndex = 1}, MusicSelectPointerOrigin::Touch);
+  expect(scene.unzippedArchives == std::vector<std::filesystem::path>{second.chart->meta.BmsPath},
+         "touch confirmation must target the touched archive");
+  scene.unzippedArchives.clear();
+  second.chart->unavailable = true;
+  scene.bars_.refresh({.bars = {first, second}, .root = {first.id, second.id}});
+  scene.bars_.select(first.id);
+  scene.applySkinPointerResult({.selectIndex = 1}, MusicSelectPointerOrigin::Mouse);
+  expect(scene.unzippedArchives.empty(), "unavailable clicked archive must not unzip the centered archive");
+}
+
+void testSolidArchiveDirectory() {
+  MusicSelectScene scene;
+  auto directory = folder("container:solid-archives", "Solid Archives (2)");
+  directory.kind = skin::MusicSelectBarKind::Container;
+  scene.bars_.refresh({.bars = {directory}, .root = {directory.id}});
+  scene.launchSelectedDirectoryAutoplay();
+  expect(!scene.directoryRequest_ && scene.launchedPlaylists.empty(),
+         "archive pseudo-folder cannot be autoplayed");
+  scene.openSelected();
+  expect(scene.directoryRequest_ && scene.context.chartRepository.normalLoads == 0,
+         "pseudo-folder must load archive rows asynchronously");
+  scene.cancelDirectoryLoad();
+  scene.restoreDirectories_ = {directory.id};
+  scene.continueDirectoryRestore();
+  expect(scene.directoryRequest_.has_value(), "pseudo-folder restoration must also load asynchronously");
+}
 
 void testFailedPageRecovery() {
   MusicSelectScene scene;

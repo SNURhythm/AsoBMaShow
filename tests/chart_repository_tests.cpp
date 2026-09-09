@@ -1967,6 +1967,71 @@ void testSolidArchiveClassificationMigration() {
   }
 }
 
+void testSolidArchiveDirectoryLoadsOnlyArchiveRecords() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  auto ordinary = chartMeta(temporary.path());
+  assert(session->InsertChartMeta(ordinary));
+  auto batch = session->BeginScanBatch();
+  assert(batch);
+  for (const auto *name : {"alpha.7z", "beta.7z"}) {
+    const auto path = temporary.path() / name;
+    std::ofstream(path) << "fixture";
+    assert(batch->UpsertSolidArchive({.path = path, .uncompressedSize = 4096,
+                                       .fileCount = 2}));
+  }
+  assert(batch->Commit());
+  const auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 0);
+  assert(metadata.solidArchiveCount == 2);
+  const MusicSelectBar directory{
+      .id = {"container:solid-archives"},
+      .kind = skin::MusicSelectBarKind::Container,
+      .title = "Solid Archives (2)"};
+  const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+      *session, directory, 0);
+  assert(records.size() == 2);
+  assert(std::all_of(records.begin(), records.end(), [](const auto &record) {
+    return record.solidArchive && record.archiveFileCount == 2 &&
+           record.archiveUncompressedSize == 4096;
+  }));
+  const auto loaded = loadMusicSelectPhysicalDirectory(repository, metadata, directory,
+      {}, {}, {}, {.modeFilter = "14KEY", .difficultyFilter = "ANOTHER"}, 0);
+  assert(!loaded.provider && loaded.children.size() == 2);
+  for (const auto &child : loaded.children) {
+    assert(child.kind == skin::MusicSelectBarKind::Executable && child.chart &&
+           child.chart->solidArchive && child.selectable);
+  }
+  MusicSelectBarManager manager(
+      MusicSelectRepositoryProjection{}.projectRoot(metadata, {}, 1),
+      {.modeFilter = "14KEY", .difficultyFilter = "ANOTHER"});
+  assert(manager.select(directory.id));
+  assert(manager.installChildren(directory.id, loaded.children));
+  assert(manager.open(directory.id));
+  const auto view = manager.readView();
+  assert(view.rowCount() == 2 && view.resolvedModeFilter == "14KEY" &&
+         view.resolvedDifficultyFilter == "ANOTHER");
+  assert(musicSelectIsSolidArchiveAction(view.rowAt(0)));
+  assert(!musicSelectIsSolidArchiveAction(directory));
+  auto unavailable = view.rowAt(0);
+  unavailable.chart->unavailable = true;
+  assert(!musicSelectIsSolidArchiveAction(unavailable));
+  const auto autoplay = loadMusicSelectPhysicalDirectoryAutoplay(repository, directory, 0);
+  assert(autoplay.children.empty() && !autoplay.provider);
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  bool threw = false;
+  try {
+    (void)loadMusicSelectPhysicalDirectory(repository, metadata, directory,
+        {}, {}, {}, {}, 0, cancelled.get_token());
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  assert(threw);
+}
+
 void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   TempDirectory temporary;
   const auto path = temporary.path() / "release-failure.db";
@@ -3816,6 +3881,7 @@ int main(int argc, char **argv) {
   testFolderProbeAndCancelledReadsDoNotPoisonSession();
   testChartMigrationCompatibilityMatrix();
   testSolidArchiveClassificationMigration();
+  testSolidArchiveDirectoryLoadsOnlyArchiveRecords();
   testChartMigrationReleaseFailureDoesNotReportSuccess();
   testLegacyIosContainerPathRebasesToCurrentDocuments();
   testFindBmsDownloadEntrySelectionLifecycle();

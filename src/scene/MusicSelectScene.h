@@ -4,6 +4,7 @@
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include "ReplayRecordsModal.h"
+#include "ArchiveUnzipModal.h"
 #include "../ReplayVideoExporter.h"
 #include "Scene.h"
 #include "../audio/SkinSystemSoundService.h"
@@ -86,6 +87,7 @@ private:
   void stopInputListening();
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
+  void startArchiveUnzip(const ChartMetaRecord &record);
   void tryCompletePendingPreloadLaunch();
   void launchCourse(const MusicSelectBar &, bool autoplay);
   void launchSelectedDirectoryAutoplay();
@@ -278,6 +280,7 @@ private:
   OverlayPortal *modalOverlayPortal_ = nullptr;
   std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal_;
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
+  std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;
   DecideLoadingOverlay *decideOverlay_ = nullptr;

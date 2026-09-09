@@ -107,6 +107,8 @@ struct PreviewAudio {
   void resumeDefaultBgm() { ++resumes; }
 };
 struct MusicSelectScene {
+  struct UnzipModal {};
+  std::unique_ptr<UnzipModal> archiveUnzipModal_;
   struct Context {
     struct { int skinPlayer2RandomOption = 0; } settings;
     Jukebox jukebox;

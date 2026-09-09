@@ -207,6 +207,8 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  struct UnzipModal { void cancelAndWait() {} };
+  std::unique_ptr<UnzipModal> archiveUnzipModal_;
   SceneManager manager;
   struct {
     Settings settings;

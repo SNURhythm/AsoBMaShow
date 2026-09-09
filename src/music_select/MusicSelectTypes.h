@@ -188,6 +188,19 @@ struct MusicSelectBar {
   bool showInvisibleCharts = false;
 };
 
+[[nodiscard]] inline bool
+musicSelectIsSolidArchiveDirectory(const MusicSelectBar &bar) {
+  return bar.kind == skin::MusicSelectBarKind::Container &&
+         bar.id.value == "container:solid-archives";
+}
+
+[[nodiscard]] inline bool
+musicSelectIsSolidArchiveAction(const MusicSelectBar &bar) {
+  return bar.kind == skin::MusicSelectBarKind::Executable && bar.chart &&
+         bar.chart->solidArchive && !bar.chart->unavailable &&
+         !bar.chart->meta.BmsPath.empty();
+}
+
 class MusicSelectRowProvider {
 public:
   virtual ~MusicSelectRowProvider() = default;

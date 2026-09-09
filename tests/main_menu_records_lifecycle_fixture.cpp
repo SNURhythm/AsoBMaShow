@@ -180,6 +180,7 @@ struct Callbacks {
   std::function<void(const IrRemoteRecordId &, const std::string &)> recallRemote;
 };
 struct MainMenuScene {
+  void onApplicationBackgroundChanged(bool) {}
   SceneManager manager;
   struct {
     struct { int selectedPlaybackRatePercent = 125, selectedPlaybackMode = 1; } settings;
