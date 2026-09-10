@@ -4037,6 +4037,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     list(REMOVE_ITEM ARCHIVE_UNZIP_TEST_SOURCES tests/chart_library_scanner_tests.cpp)
     add_executable(archive_unzip_operation_tests
         tests/archive_unzip_operation_tests.cpp
+        src/library/ArchiveUnzipRecovery.cpp
         src/scene/ArchiveUnzipOperation.cpp
         ${ARCHIVE_UNZIP_TEST_SOURCES}
     )
@@ -4047,6 +4048,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(archive_unzip_modal_tests
         tests/archive_unzip_modal_tests.cpp
+        src/library/ArchiveUnzipRecovery.cpp
         src/scene/ArchiveUnzipModal.cpp
         src/scene/ArchiveUnzipOperation.cpp
         src/scene/FindBmsProgressPresentation.cpp
@@ -4304,6 +4306,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(chart_library_operations_tests
         tests/chart_library_operations_tests.cpp
+        src/library/ArchiveUnzipRecovery.cpp
         src/library/ChartLibraryOperations.cpp
         src/library/ChartLibraryTaskService.cpp
         src/library/ChartLibraryPlatform.cpp

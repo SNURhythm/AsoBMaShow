@@ -3167,6 +3167,7 @@ void MainMenuScene::refreshIrRecordListIfNeeded() {
 }
 
 void MainMenuScene::refreshLibraryIfNeeded() {
+  if (archiveUnzipInProgress()) return;
   const std::uint64_t revision =
       context.chartRepository.GetLibraryRevision();
   if (libraryRevision == 0) {
@@ -3224,6 +3225,7 @@ void MainMenuScene::requestLibraryReload(bool includeFolders) {
 }
 
 void MainMenuScene::applyPendingUiUpdates() {
+  if (archiveUnzipInProgress()) return;
   if (context.chartLibraryTasks) {
     for (auto &completion :
          context.chartLibraryTasks->takeDownloadedIndexCompletions()) {

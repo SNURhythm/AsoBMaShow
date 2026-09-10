@@ -75,7 +75,8 @@ public:
       ChartScanProgressCallback progressCallback = nullptr,
       ChartScanPauseCallback pauseCallback = nullptr,
       ChartScanFlushRequestCallback flushRequestCallback = nullptr,
-      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
+      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr,
+      bool requireReadableStorage = false);
 
   ChartScanResult ScanScopedWithResult(
       ChartRepository::Session &session,
@@ -97,5 +98,6 @@ private:
       ChartScanProgressCallback progressCallback,
       ChartScanPauseCallback pauseCallback,
       ChartScanFlushRequestCallback flushRequestCallback,
-      ChartScanFlushCompleteCallback flushCompleteCallback);
+      ChartScanFlushCompleteCallback flushCompleteCallback,
+      bool requireReadableStorage = false);
 };

@@ -131,6 +131,7 @@ struct Modal {
   void update() {}
   void cancelAndWait() {}
   bool isVisible() const { return false; }
+  bool inProgress() const { return false; }
   void setExportInProgress(bool value) { exporting = value; }
   void showExportProgress(const char *, const char *) { progressVisible = true; }
   void returnToList(const std::string &message) {

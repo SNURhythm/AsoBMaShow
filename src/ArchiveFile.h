@@ -107,6 +107,8 @@ struct UnzipProgress {
 };
 
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
+using UnzipPrepareCallback = std::function<bool(
+    const std::filesystem::path &outputFolder, const std::string &archiveKey)>;
 using PauseCallback = std::function<bool()>;
 using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
 using FileDataCallback = std::function<bool(FileData &&)>;
@@ -246,7 +248,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::stop_token *stopToken = nullptr,
                   UnzipProgressCallback progressCallback = nullptr,
                   PauseCallback pauseCallback = nullptr,
-                  bool reuseCompletedFolder = true);
+                  bool reuseCompletedFolder = true,
+                  UnzipPrepareCallback prepareCallback = nullptr);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
                 std::string *errorMessage = nullptr,

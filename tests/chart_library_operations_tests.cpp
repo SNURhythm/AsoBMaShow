@@ -178,6 +178,82 @@ void testRefreshStopsAtTheExistingPauseCheckpoint() {
   expect(!reloadRequested, "paused refresh does not publish a reload");
 }
 
+void testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal() {
+  TempDirectory temporary;
+  const auto archive = writeArchiveCharts(temporary.path(), 2);
+  const auto databasePath = temporary.path() / "chart.db";
+  {
+    ChartRepository repository(databasePath);
+    auto session = repository.OpenSession();
+    expect(session && session->EnsureSchema(), "recovery repository opens");
+    auto batch = session->BeginScanBatch();
+    expect(batch && batch->UpsertSolidArchive({.path = archive}) && batch->Commit(),
+           "original archive is indexed");
+    const auto revision = repository.GetLibraryRevision();
+    const auto extracted = archive_file::unzipArchiveFully(
+        archive, archive.parent_path(), nullptr, nullptr, nullptr, nullptr, false,
+        [&](const std::filesystem::path &folder, const std::string &key) {
+          return session->SaveUnzipRecovery({.archivePath = archive,
+              .outputFolder = folder, .archiveKey = key, .deleteOriginal = true});
+        });
+    expect(extracted.has_value(), "completed extraction has durable recovery work");
+    expect(repository.GetLibraryRevision() == revision,
+           "journaling does not refresh the chart list");
+    expect(std::filesystem::remove(archive), "original was deleted before interruption");
+  }
+  ChartRepository restarted(databasePath);
+  bool reloadRequested = false;
+  bool accessRestored = false;
+  auto deps = dependencies(restarted, temporary.path(), reloadRequested);
+  deps.refreshFolderAccess = [&](const std::vector<ChartEntry> &) { accessRestored = true; };
+  deps.importDifficultyTablesFromDirectory =
+      [&](ChartRepository::Session &session, const std::filesystem::path &,
+          const DifficultyTableImportCheckpoint &) {
+        expect(accessRestored, "folder access is restored before recovery");
+        expect(session.CountSolidArchives() == 0 && session.CountAllChartMeta() == 2,
+               "startup recovery precedes unrelated table imports");
+        return 0;
+      };
+  chart_library_tasks::ChartLibraryOperations operations(std::move(deps));
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary}, {},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
+         "startup recovery completes without a registered scan root");
+  auto session = restarted.OpenSession();
+  expect(session->CountSolidArchives() == 0, "startup removes stale archive records");
+  expect(session->CountAllChartMeta() == 2, "startup indexes completed extracted charts");
+  const auto pending = session->LoadUnzipRecovery();
+  expect(pending && pending->empty(), "startup acknowledges completed recovery work");
+  expect(reloadRequested, "startup recovery publishes the repaired chart list");
+}
+
+void testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots() {
+  TempDirectory temporary;
+  const auto healthy = temporary.path() / "healthy";
+  writeChart(healthy);
+  ChartRepository repository(temporary.path() / "chart.db");
+  auto session = repository.OpenSession();
+  expect(session && session->EnsureSchema(), "recovery repository opens");
+  expect(session->InsertEntry(healthy), "healthy folder is registered");
+  expect(session->SaveUnzipRecovery({
+             .archivePath = temporary.path() / "offline/archive.zip",
+             .outputFolder = temporary.path() / "offline/archive",
+             .archiveKey = "offline-key", .deleteOriginal = true}),
+         "unavailable recovery work is durable");
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary}, {},
+      [](const ChartScanProgress &, std::string_view) {}, [] { return true; });
+  expect(session->CountAllChartMeta() == 1, "unavailable recovery does not block healthy indexing");
+  expect(session->LoadUnzipRecovery()->size() == 1, "offline work remains pending");
+  expect(reloadRequested, "healthy chart changes are published");
+  expect(result.disposition == chart_library_tasks::TaskRunDisposition::Failed,
+         "unfinished recovery is reported after healthy roots finish");
+}
+
 void testRefreshScansThroughTheRealRepository() {
   TempDirectory temporary;
   const auto libraryRoot = temporary.path() / "library";
@@ -941,6 +1017,8 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 } // namespace
 
 int main() {
+  testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();
+  testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal();
   testRefreshStopsAtTheExistingPauseCheckpoint();
   testRefreshScansThroughTheRealRepository();
   testRebuildTaskRetriesPreserveInitializationAndArchiveProgress();

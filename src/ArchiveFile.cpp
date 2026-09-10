@@ -9569,7 +9569,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::stop_token *stopToken,
                   UnzipProgressCallback progressCallback,
                   PauseCallback pauseCallback,
-                  bool reuseCompletedFolder) {
+                  bool reuseCompletedFolder,
+                  UnzipPrepareCallback prepareCallback) {
   std::string localError;
   if (errorMessage == nullptr) {
     errorMessage = &localError;
@@ -9654,7 +9655,12 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       markerPath = candidateMarker;
       break;
     }
-    if (reuseCompletedFolder && unzipMarkerMatches(candidateMarker, key)) {
+    if (reuseCompletedFolder && unzipMarkerMatches(candidateMarker, key) &&
+        !std::filesystem::exists(candidate / ".asobmashow_unzip_incomplete", error) && !error) {
+      if (prepareCallback && !prepareCallback(candidate, key)) {
+        *errorMessage = "Could not save unzip recovery information. Original archive kept.";
+        return std::nullopt;
+      }
       reportUnzipProgress(progressCallback, 1.0, fileCount, fileCount,
                           "Using existing unzipped folder");
       appendDebugLogLineImpl("Using existing full unzip folder: " +
@@ -9672,6 +9678,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     }
     outputFolder = destinationRoot / (baseName + " " + hex64(fnv1a64(key)));
     markerPath = outputFolder / ".asobmashow_unzip_complete";
+  }
+  if (prepareCallback && !prepareCallback(outputFolder, key)) {
+    *errorMessage = "Could not save unzip recovery information. Original archive kept.";
+    return std::nullopt;
   }
   error.clear();
   std::filesystem::remove_all(outputFolder, error);
@@ -9691,6 +9701,14 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     return std::nullopt;
   }
 
+  const auto incompletePath = outputFolder / ".asobmashow_unzip_incomplete";
+  std::ofstream incomplete(incompletePath, std::ios::binary | std::ios::trunc);
+  incomplete << "1\n";
+  incomplete.close();
+  if (!incomplete) {
+    *errorMessage = "Could not mark incomplete unzip folder. Original archive kept.";
+    return std::nullopt;
+  }
   appendDebugLogLineImpl("Full unzip requested: " + pathForLog(archivePath) +
                          " output=" + pathForLog(outputFolder) +
                          " files=" + std::to_string(fileCount) +
@@ -9739,7 +9757,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
 
   reportUnzipProgress(progressCallback, 0.98, fileCount, fileCount,
                       "Finalizing unzip");
-  std::ofstream marker(markerPath, std::ios::binary | std::ios::trunc);
+  auto temporaryMarkerPath = markerPath;
+  temporaryMarkerPath += ".tmp";
+  std::ofstream marker(temporaryMarkerPath, std::ios::binary | std::ios::trunc);
   if (!marker) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not finalize unzip folder: " +
@@ -9748,6 +9768,20 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     return std::nullopt;
   }
   marker << key << '\n' << pathForLog(archivePath) << '\n';
+  marker.close();
+  if (!marker) {
+    *errorMessage = "Could not finalize unzip folder. Original archive kept.";
+    return std::nullopt;
+  }
+  std::filesystem::rename(temporaryMarkerPath, markerPath, error);
+  if (error) {
+    *errorMessage = "Could not finalize unzip folder. Original archive kept.";
+    return std::nullopt;
+  }
+  if (!std::filesystem::remove(incompletePath, error) || error) {
+    *errorMessage = "Could not finalize unzip folder. Original archive kept.";
+    return std::nullopt;
+  }
   reportUnzipProgress(progressCallback, 1.0, fileCount, fileCount,
                       "Unzip complete");
   appendDebugLogLineImpl("Finished full unzip: " + pathForLog(outputFolder) +

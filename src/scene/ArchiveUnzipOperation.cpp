@@ -1,6 +1,7 @@
 #include "ArchiveUnzipOperation.h"
 
 #include "../ChartLibraryScanner.h"
+#include "../library/ArchiveUnzipRecovery.h"
 
 #include <algorithm>
 #include <exception>
@@ -16,7 +17,8 @@ bool eligible(const ChartMetaRecord &record) {
 
 ArchiveUnzipResult extractArchive(
     const ChartMetaRecord &record, const std::stop_token &stopToken,
-    archive_file::UnzipProgressCallback progress, bool reuseCompletedFolder) {
+    archive_file::UnzipProgressCallback progress, bool reuseCompletedFolder,
+    archive_file::UnzipPrepareCallback prepare = nullptr) {
   ArchiveUnzipResult result;
   result.archivePath = record.meta.BmsPath;
   result.rootPath = result.archivePath.parent_path();
@@ -30,7 +32,7 @@ ArchiveUnzipResult extractArchive(
       std::string error;
       const auto extracted = archive_file::unzipArchiveFully(
           result.archivePath, result.rootPath, &error, &stopToken, progress,
-          nullptr, reuseCompletedFolder);
+          nullptr, reuseCompletedFolder, prepare);
       if (extracted) {
         result.outputFolder = extracted->outputFolder;
         result.success = true;
@@ -52,10 +54,8 @@ ArchiveUnzipResult extractArchive(
 }
 
 bool deleteCompletedArchive(const ArchiveUnzipResult &result,
-                            ChartRepository::Session &session,
                             const std::stop_token &stopToken,
-                            std::string &message, bool &deleted) {
-  deleted = false;
+                            std::string &message) {
   if (!result.success || result.outputFolder.empty() || result.cancelled ||
       result.archivePath.empty() || stopToken.stop_requested()) {
     message = "Archive is unavailable for deletion";
@@ -75,11 +75,8 @@ bool deleteCompletedArchive(const ArchiveUnzipResult &result,
               (error ? ": " + error.message() : std::string());
     return false;
   }
-  deleted = true;
-  const bool refreshed = session.DeleteArchiveRecords(result.archivePath);
-  message = refreshed ? "Original archive deleted"
-                      : "Original archive deleted. Failed to refresh library.";
-  return refreshed;
+  message = "Original archive deleted";
+  return true;
 }
 
 }
@@ -209,9 +206,11 @@ bool ArchiveUnzipOperation::deleteArchive(std::string &message) {
     message = "Could not open library. Original archive kept.";
     return false;
   }
-  bool deleted = false;
-  deleteCompletedArchive(*result_, *session, {}, message, deleted);
+  const bool deleted = deleteCompletedArchive(*result_, {}, message);
   if (deleted) {
+    if (!session->DeleteArchiveRecords(result_->archivePath)) {
+      message = "Original archive deleted. Failed to refresh library.";
+    }
     result_.reset();
   }
   return deleted;
@@ -223,11 +222,13 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
     ChartRepository &repository, bool deleteAfterUnzip,
     const std::stop_token &stopToken,
     archive_file::UnzipProgressCallback progress) {
+  auto lock = archive_unzip_recovery::acquireOperationLock(stopToken);
   ArchiveUnzipResult result;
   result.batch = true;
   const auto initialRevision = repository.GetLibraryRevision();
   std::string lastError;
   std::vector<std::filesystem::path> completedFolders;
+  std::vector<std::filesystem::path> deletedArchives;
   bool queried = false;
   try {
     if (!stopToken.stop_requested()) {
@@ -263,7 +264,12 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
           };
           publish({.fraction = 0.0, .message = "Preparing unzip"});
           const auto archiveResult = extractArchive(record, stopToken, publish,
-                                                    !deleteAfterUnzip);
+              !deleteAfterUnzip,
+              [&](const std::filesystem::path &folder, const std::string &key) {
+                return session->SaveUnzipRecovery({
+                    .archivePath = record.meta.BmsPath, .outputFolder = folder,
+                    .archiveKey = key, .deleteOriginal = deleteAfterUnzip});
+              });
           if (!archiveResult.outputFolder.empty()) {
             completedFolders.push_back(archiveResult.outputFolder);
             ++result.succeededCount;
@@ -279,15 +285,12 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
             continue;
           }
           if (deleteAfterUnzip) {
-            bool deleted = false;
             std::string message;
-            const bool refreshed = deleteCompletedArchive(
-                archiveResult, *session, stopToken, message, deleted);
-            if (deleted) {
+            if (deleteCompletedArchive(archiveResult, stopToken, message)) {
+              deletedArchives.push_back(archiveResult.archivePath);
               ++result.deletedCount;
               result.libraryChanged = true;
-            }
-            if (!refreshed && !stopToken.stop_requested()) {
+            } else if (!stopToken.stop_requested()) {
               ++result.deletionFailedCount;
               lastError = filename + ": " + message;
             }
@@ -308,8 +311,15 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
       }
       auto session = repository.OpenSession();
       if (!session || !session->EnsureSchema()) {
+        result.deletionFailedCount += deletedArchives.size();
         lastError = "Failed to index extracted folders: could not open library. Extracted files are kept.";
       } else {
+        const bool cleaned = archive_unzip_recovery::deleteArchiveRecords(
+            *session, deletedArchives);
+        if (!cleaned) {
+          result.deletionFailedCount += deletedArchives.size();
+          lastError = "Failed to remove deleted archive records. Extracted files are kept; retry a library scan.";
+        }
         ChartLibraryScanner scanner;
         const auto scan = scanner.ScanAddedWithResult(
             *session, completedFolders, nullptr,
@@ -323,12 +333,14 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
                     .indexing = true,
                 });
               }
-            });
+            }, nullptr, nullptr, nullptr, true);
         result.scanCommitted = scan.committed;
         result.libraryChanged = result.libraryChanged ||
                                 (scan.committed && scan.changedCount > 0);
         if (!scan.completed || !scan.committed) {
           lastError = "Failed to index extracted folders. Extracted files are kept; retry a library scan.";
+        } else if (cleaned && !session->ClearUnzipRecovery(completedFolders)) {
+          lastError = "Library refreshed, but recovery work could not be acknowledged; it will retry on startup.";
         }
       }
     } catch (const std::exception &error) {

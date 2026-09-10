@@ -3339,6 +3339,7 @@ void MusicSelectScene::executeEvent(
 }
 
 void MusicSelectScene::refreshRepositoryRevisions() {
+  if (archiveUnzipModal_ && archiveUnzipModal_->inProgress()) return;
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
       context.scoreRepository.GetRevision() != scoreRevision_) {
     reloadLibrary();

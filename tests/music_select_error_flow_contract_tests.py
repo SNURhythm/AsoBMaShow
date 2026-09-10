@@ -518,6 +518,58 @@ int main() {
             "void MusicSelectScene::refreshRepositoryRevisions()",
         ])
 
+    def test_main_menu_defers_pending_refreshes_until_unzip_finishes(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        signature = "void MainMenuScene::refreshLibraryIfNeeded()"
+        method = signature + function_body(source, signature)
+        pending = function_body(source, "void MainMenuScene::applyPendingUiUpdates()")
+        guard = pending[1:pending.index("if (context.chartLibraryTasks)")]
+        self.compile_and_run('''
+#include <cassert>
+#include <cstdint>
+struct ImageView { static void dropAllCache() {} };
+struct MainMenuScene {
+  bool busy = true, pending = true;
+  std::uint64_t libraryRevision = 1;
+  struct Repo { std::uint64_t GetLibraryRevision() { return 2; } };
+  struct { Repo chartRepository; } context;
+  int reloads = 0;
+  bool archiveUnzipInProgress() const { return busy; }
+  void reloadScoreClearRanks() {}
+  void reloadFolderItems(bool) {}
+  void reloadChartList(bool) { ++reloads; }
+  void refreshLibraryIfNeeded();
+  void applyPendingUiUpdates() {
+    PENDING_GUARD
+    if (pending) {
+      ++reloads;
+      pending = false;
+      libraryRevision = context.chartRepository.GetLibraryRevision();
+    }
+  }
+};
+REFRESH_METHOD
+int main() {
+  MainMenuScene scene;
+  for (int frame = 0; frame < 5; ++frame) {
+    scene.refreshLibraryIfNeeded();
+    scene.applyPendingUiUpdates();
+  }
+  assert(scene.reloads == 0 && scene.pending);
+  scene.busy = false;
+  scene.applyPendingUiUpdates();
+  scene.refreshLibraryIfNeeded();
+  scene.applyPendingUiUpdates();
+  assert(scene.reloads == 1 && !scene.pending);
+  MainMenuScene revisionOnly;
+  revisionOnly.pending = false;
+  revisionOnly.busy = false;
+  revisionOnly.refreshLibraryIfNeeded();
+  revisionOnly.refreshLibraryIfNeeded();
+  assert(revisionOnly.reloads == 1);
+}
+'''.replace("PENDING_GUARD", guard).replace("REFRESH_METHOD", method))
+
     def test_modal_reset_preserves_nondefault_timing_and_analog_configuration(self):
         source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
         signature = "void MusicSelectScene::resetLogicalInput()"

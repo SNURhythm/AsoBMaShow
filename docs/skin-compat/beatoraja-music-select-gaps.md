@@ -29,6 +29,23 @@ from being processed. Indexing failures are reported separately from extraction
 failures: extracted files remain, but deleted originals cannot be restored.
 Single-archive extraction retains its existing post-indexing Keep/Delete choice.
 
+Original files are deleted immediately, but their database records are removed
+in one transaction during finalization. Neither scene refreshes its library
+list while unzip or final indexing is active; pending refreshes are retained
+until completion. Deleting an archive no longer triggers a per-archive reload.
+
+Unzip All saves a SQLite recovery record before writing each output folder,
+without changing the library revision. Completed folders receive an atomically
+published completion marker; incomplete folders are excluded from library scans.
+Startup restores folder access and recovers pending work before importing
+difficulty tables: it removes records for already-deleted originals and indexes
+completed folders, without deleting any surviving originals or partial outputs.
+Recovery records are acknowledged only after cleanup and indexing succeed.
+Interrupted recovery, database failures, and inaccessible storage remain queued
+for the next startup or Refresh Library; unavailable recovery locations do not
+block scans of healthy roots. Stored paths use the existing iOS Documents
+normalization so recovery survives app-container relocation.
+
 Delete mode always extracts into a fresh folder before deleting an original;
 it does not trust a previous completion marker whose extracted files may have
 been changed or removed. Existing extracted folders are left untouched.
