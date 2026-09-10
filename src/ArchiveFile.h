@@ -103,6 +103,7 @@ struct UnzipProgress {
   std::uint64_t current = 0;
   std::uint64_t total = 0;
   std::string message;
+  bool indexing = false;
 };
 
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;

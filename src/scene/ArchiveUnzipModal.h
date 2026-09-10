@@ -65,5 +65,6 @@ private:
   bool cancelling_ = false;
   bool choosingAll_ = false;
   bool batchMode_ = false;
+  bool indexing_ = false;
   bool libraryChangedPending_ = false;
 };

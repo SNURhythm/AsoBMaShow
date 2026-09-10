@@ -18,12 +18,16 @@ is selected; the Lua selector uses normal confirmation. Highlighting does not
 start extraction. The shared native modal first asks whether to keep originals
 or delete each archive after extraction, with Cancel available before starting.
 
-Delete mode processes one archive at a time: extract and index successfully,
-delete that original, then begin the next archive. Failed or cancelled archives
-are never deleted. Keep mode retains all originals. Cancellation stops the
-current archive and remaining queue; failures are summarized without preventing
-later archives from being processed. Single-archive extraction retains its
-existing post-extraction Keep/Delete choice.
+Delete mode processes one archive at a time: extract successfully, delete that
+original, then begin the next archive. Failed or unfinished extractions keep
+their originals. Keep mode retains all originals. After the queue finishes or
+is cancelled, one parallel indexing pass scans all completed output folders.
+Cancellation stops extraction but allows this final indexing pass to finish;
+the modal shows indexing progress with its cancel control disabled. Shutdown
+waits for that pass as well. Extraction failures do not prevent later archives
+from being processed. Indexing failures are reported separately from extraction
+failures: extracted files remain, but deleted originals cannot be restored.
+Single-archive extraction retains its existing post-indexing Keep/Delete choice.
 
 Delete mode always extracts into a fresh folder before deleting an original;
 it does not trust a previous completion marker whose extracted files may have

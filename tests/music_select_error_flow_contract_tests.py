@@ -213,6 +213,14 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_unzip_all_confirmation_opens_prompt_without_playback(self):
         self.run_directory_loading_fixture("testUnzipAllConfirmation")
 
+    def test_cancelled_unzip_all_displays_final_indexing_until_completion(self):
+        source = (ROOT / "src/scene/ArchiveUnzipModal.cpp").read_text()
+        methods = "\n".join(signature + function_body(source, signature)
+                            for signature in ("void ArchiveUnzipModal::update()",
+                                              "void ArchiveUnzipModal::cancelOrClose()"))
+        fixture = (ROOT / "tests/archive_unzip_modal_indexing_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("MODAL_METHODS", methods))
+
     def test_main_menu_unzip_all_uses_preflight_instead_of_single_start(self):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
         methods = []

@@ -97,11 +97,12 @@ ArchiveUnzipResult runAll(ChartRepository &repository, bool deleteAfterUnzip,
   return ArchiveUnzipOperation::RunAll(repository, deleteAfterUnzip, stopToken, progress);
 }
 
-void batchDeletesEachIndexedOriginalBeforeStartingNextArchive() {
+void batchDeletesEachOriginalBeforeStartingNextArchiveAndIndexesOnce() {
   Fixture fixture;
   const auto first = fixture.indexedArchive("a.zip");
   const auto second = fixture.indexedArchive("b.zip");
   bool sawSecond = false;
+  int indexStarts = 0;
   const auto result = runAll(fixture.repository, true, {},
       [&](const archive_file::UnzipProgress &progress) {
         assert(progress.fraction >= 0.0 && progress.fraction <= 1.0);
@@ -112,7 +113,12 @@ void batchDeletesEachIndexedOriginalBeforeStartingNextArchive() {
           assert(session->CountSolidArchives() == 1);
           std::vector<bms_parser::ChartMeta> charts;
           session->SelectAllChartMeta(charts);
-          assert(!charts.empty());
+          assert(charts.empty());
+        }
+        if (progress.message == "Indexing extracted folders") {
+          ++indexStarts;
+          assert(!std::filesystem::exists(first.meta.BmsPath));
+          assert(!std::filesystem::exists(second.meta.BmsPath));
         }
       });
   assert(result.success);
@@ -121,6 +127,7 @@ void batchDeletesEachIndexedOriginalBeforeStartingNextArchive() {
   assert(result.failedCount == 0 && result.deletionFailedCount == 0);
   assert(result.deletedCount == 2);
   assert(sawSecond);
+  assert(indexStarts == 1);
   assert(result.chartPath.empty());
   assert(result.libraryChanged);
   assert(!std::filesystem::exists(second.meta.BmsPath));
@@ -139,6 +146,7 @@ void batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives() {
   const auto first = fixture.indexedArchive("a.zip");
   const auto second = fixture.indexedArchive("b.zip");
   const auto unindexed = fixture.archive(1, "unindexed.zip");
+  const auto revision = fixture.repository.GetLibraryRevision();
   const auto result = runAll(fixture.repository, false);
   assert(result.success && result.chartPath.empty());
   assert(result.succeededCount == 2 && result.deletedCount == 0);
@@ -150,6 +158,7 @@ void batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives() {
   std::vector<bms_parser::ChartMeta> charts;
   session->SelectAllChartMeta(charts);
   assert(charts.size() == 2);
+  assert(fixture.repository.GetLibraryRevision() == revision + 1);
 }
 
 void batchFailurePreservesOriginalAndContinues() {
@@ -196,19 +205,23 @@ void batchDeleteReextractsInsteadOfTrustingCompletedFolder(bool removeFile) {
   assert(std::filesystem::exists(original.chartPath) == !removeFile);
 }
 
-void batchFailedScanNeverDeletesOriginals() {
+void batchFailedFinalScanReportsFailureAndPreservesExtractedFiles() {
   Fixture fixture;
   const auto first = fixture.indexedArchive("a.zip");
   const auto second = fixture.indexedArchive("b.zip");
   fixture.failChartWrites();
   const auto result = runAll(fixture.repository, true);
   assert(!result.success && !result.cancelled);
-  assert(result.completedCount == 2 && result.failedCount == 2);
-  assert(result.succeededCount == 0 && result.deletedCount == 0);
-  assert(std::filesystem::exists(first.meta.BmsPath));
-  assert(std::filesystem::exists(second.meta.BmsPath));
+  assert(result.completedCount == 2 && result.failedCount == 0);
+  assert(result.succeededCount == 2 && result.deletedCount == 2);
+  assert(!result.scanCommitted);
+  assert(result.message.find("Failed to index extracted folders") != std::string::npos);
+  assert(!std::filesystem::exists(first.meta.BmsPath));
+  assert(!std::filesystem::exists(second.meta.BmsPath));
+  assert(std::filesystem::exists(fixture.root / "a" / "song" / "chart0.bms"));
+  assert(std::filesystem::exists(fixture.root / "b" / "song" / "chart0.bms"));
   auto session = fixture.repository.OpenSession();
-  assert(session->CountSolidArchives() == 2);
+  assert(session->CountSolidArchives() == 0);
   assert(session->CountAllChartMeta() == 0);
 }
 
@@ -218,19 +231,25 @@ void batchCancellationPreservesCurrentAndRemainderAfterPriorDeletion() {
   const auto second = fixture.indexedArchive("b.zip", 4);
   const auto third = fixture.indexedArchive("c.zip");
   bool sawThird = false;
+  int indexStarts = 0;
   std::stop_source stop;
   const auto result = runAll(fixture.repository, true, stop.get_token(),
       [&](const archive_file::UnzipProgress &progress) {
         sawThird = sawThird || progress.message.find("c.zip") != std::string::npos;
         if (progress.message.find("b.zip") != std::string::npos &&
-            progress.message.find("Indexing extracted charts") != std::string::npos) {
+            progress.message.find("Preparing unzip") != std::string::npos) {
           stop.request_stop();
+        }
+        if (progress.message == "Indexing extracted folders") {
+          ++indexStarts;
+          assert(stop.stop_requested());
         }
       });
   assert(result.cancelled && !result.success);
   assert(result.archiveCount == 3 && result.completedCount == 1);
   assert(result.succeededCount == 1 && result.deletedCount == 1);
   assert(!sawThird);
+  assert(indexStarts == 1 && result.scanCommitted);
   assert(result.libraryChanged && result.chartPath.empty());
   assert(!std::filesystem::exists(first.meta.BmsPath));
   assert(std::filesystem::exists(second.meta.BmsPath));
@@ -239,9 +258,30 @@ void batchCancellationPreservesCurrentAndRemainderAfterPriorDeletion() {
   assert(session->CountSolidArchives() == 2);
   std::vector<bms_parser::ChartMeta> charts;
   session->SelectAllChartMeta(charts);
+  assert(charts.size() == 1);
   for (const auto &chart : charts) {
     assert(chart.Title.find("c.zip") == std::string::npos);
   }
+}
+
+void cancellationDuringFinalIndexDoesNotInterruptTheScan() {
+  Fixture fixture;
+  fixture.indexedArchive("a.zip", 4);
+  fixture.indexedArchive("b.zip", 4);
+  std::stop_source stop;
+  int indexStarts = 0;
+  const auto result = runAll(fixture.repository, false, stop.get_token(),
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.message == "Indexing extracted folders") {
+          ++indexStarts;
+          stop.request_stop();
+        }
+      });
+  assert(indexStarts == 1);
+  assert(result.cancelled && result.scanCommitted && result.libraryChanged);
+  auto session = fixture.repository.OpenSession();
+  assert(session->CountAllChartMeta() == 8);
+  assert(session->CountSolidArchives() == 2);
 }
 
 void batchCancelledBeforeQueryDoesNotExtractOrDelete() {
@@ -483,13 +523,14 @@ void cancelAndWaitPreservesCommittedChangeNotificationExactlyOnce() {
 }
 
 int main() {
-  batchDeletesEachIndexedOriginalBeforeStartingNextArchive();
+  batchDeletesEachOriginalBeforeStartingNextArchiveAndIndexesOnce();
   batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives();
   batchFailurePreservesOriginalAndContinues();
   batchDeleteReextractsInsteadOfTrustingCompletedFolder(true);
   batchDeleteReextractsInsteadOfTrustingCompletedFolder(false);
-  batchFailedScanNeverDeletesOriginals();
+  batchFailedFinalScanReportsFailureAndPreservesExtractedFiles();
   batchCancellationPreservesCurrentAndRemainderAfterPriorDeletion();
+  cancellationDuringFinalIndexDoesNotInterruptTheScan();
   batchCancelledBeforeQueryDoesNotExtractOrDelete();
   batchWorkerGuardsDuplicateStartsAndKeepsShutdownNotifications();
   emptyBatchCompletesWithoutLibraryChanges();

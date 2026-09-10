@@ -106,8 +106,8 @@ void ArchiveUnzipModal::build(View *parent) {
 
   message_ = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
   message_->setThemedColor(ui_theme::textSecondary);
-  message_->setHeight(32);
-  message_->setWidth(kModalContentWidth);
+  message_->setMinHeight(32);
+  message_->setWidthPercent(100);
   message_->setWrap(true);
   panel->addView(message_);
 
@@ -130,8 +130,8 @@ void ArchiveUnzipModal::build(View *parent) {
 
   detail_ = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
   detail_->setThemedColor(ui_theme::textMuted);
-  detail_->setHeight(54);
-  detail_->setWidth(kModalContentWidth);
+  detail_->setMinHeight(54);
+  detail_->setWidthPercent(100);
   detail_->setWrap(true);
   panel->addView(detail_);
 
@@ -174,8 +174,10 @@ bool ArchiveUnzipModal::start(const ChartMetaRecord &record) {
   estimatedSize_ = record.archiveUncompressedSize;
   cancelling_ = false;
   batchMode_ = false;
+  indexing_ = false;
+  cancelButton_->setEnabled(true);
   setAllChoiceVisible(false);
-  message_->setHeight(32);
+  message_->setMinHeight(32);
   resize(rendering::window_width, rendering::window_height);
   root_->setVisible(true);
   title_->setText("Unzip");
@@ -192,14 +194,16 @@ bool ArchiveUnzipModal::startAll() {
   operation_.keepArchive();
   choosingAll_ = true;
   batchMode_ = true;
+  indexing_ = false;
+  cancelButton_->setEnabled(true);
   cancelling_ = false;
   estimatedSize_ = 0;
   resize(rendering::window_width, rendering::window_height);
   root_->setVisible(true);
   title_->setText("Unzip All");
   message_->setText("Choose what happens to each original archive before starting.");
-  message_->setHeight(64);
-  detail_->setText("Delete After Unzip deletes each original immediately after successful\nextraction and indexing. Failed or cancelled archives are kept.");
+  message_->setMinHeight(64);
+  detail_->setText("Delete originals after each successful extraction.\nIndex completed folders once at the end, even if cancelled.\nIndexing failures cannot restore deleted archives.");
   cancelText_->setText("Cancel");
   setAllChoiceVisible(true);
   root_->applyYogaLayout();
@@ -230,20 +234,28 @@ bool ArchiveUnzipModal::isVisible() const {
 View *ArchiveUnzipModal::root() const { return root_; }
 
 void ArchiveUnzipModal::update() {
-  if (const auto progress = operation_.takeProgress(); progress && !cancelling_) {
+  if (const auto progress = operation_.takeProgress();
+      progress && (!cancelling_ || (batchMode_ && progress->indexing))) {
+    if (batchMode_ && progress->indexing) {
+      indexing_ = true;
+      cancelButton_->setEnabled(false);
+      cancelText_->setText("Indexing...");
+    }
     updateProgress(progress->fraction, progress->message,
                    progress->current, progress->total);
   }
   const auto result = operation_.takeResult();
   if (result) {
     cancelling_ = false;
+    indexing_ = false;
+    cancelButton_->setEnabled(true);
     title_->setText(result->success ? "Unzip Complete"
                       : result->cancelled ? "Unzip Cancelled" : "Unzip Failed");
     if (result->batch) {
       title_->setText(result->success ? "Unzip All Complete"
                         : result->cancelled ? "Unzip All Cancelled"
                                             : "Unzip All Finished with Errors");
-      message_->setHeight(128);
+      message_->setMinHeight(128);
     }
     updateProgress(result->success ? 1.0 : 0.0, result->message);
     const bool canDelete = operation_.canDeleteArchive();
@@ -254,7 +266,7 @@ void ArchiveUnzipModal::update() {
     } else if (result->batch) {
       detail_->setText("Archives not completed: " +
                       std::to_string(result->archiveCount - result->completedCount) +
-                      ". Failed or cancelled originals are kept.");
+                      ". Unfinished or failed extractions keep their originals.");
     }
     root_->applyYogaLayout();
   }
@@ -317,10 +329,12 @@ bool ArchiveUnzipModal::handleEvents(SDL_Event &event) {
 }
 
 void ArchiveUnzipModal::cancelOrClose() {
+  if (indexing_) return;
   if (operation_.inProgress()) {
     cancelling_ = true;
     operation_.requestCancel();
-    updateProgress(0.0, "Cancelling...");
+    updateProgress(0.0, batchMode_ ? "Stopping extraction, then indexing completed folders..."
+                                    : "Cancelling...");
   } else {
     hide();
   }
@@ -345,7 +359,7 @@ void ArchiveUnzipModal::setDeleteVisible(bool visible) {
 }
 
 void ArchiveUnzipModal::setAllChoiceVisible(bool visible) {
-  detail_->setHeight(visible ? 80.0f : 54.0f);
+  detail_->setMinHeight(visible ? 80.0f : 54.0f);
   keepButton_->setVisible(visible);
   keepButton_->setWidth(visible ? 180.0f : 0.0f);
   keepButton_->setHeight(visible ? 58.0f : 0.0f);
@@ -373,6 +387,9 @@ void ArchiveUnzipModal::updateProgress(double fraction,
   percent_->setText(text.str());
   std::string detail = batchMode_ ? "Processing archives sequentially"
                                  : total > 0 ? "Processing files" : "Working on archive";
+  if (indexing_) {
+    detail = "Finishing library indexing. This step continues after cancellation.";
+  }
   if (estimatedSize_ > 0) {
     detail += "\nEstimated unzipped size: " + formatFindBmsBytes(estimatedSize_);
   }

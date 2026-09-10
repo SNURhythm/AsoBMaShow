@@ -59,6 +59,27 @@ void click(ArchiveUnzipModal &modal, const std::string &label) {
   modal.handleEvents(event);
 }
 
+void assertDescriptionsFit(ArchiveUnzipModal &modal) {
+  auto *panel = modal.root()->getChildren().front();
+  int descriptions = 0;
+  for (auto *child : panel->getChildren()) {
+    const auto *text = dynamic_cast<TextView *>(child);
+    if (!text || (text->pointSize() != 22 && text->pointSize() != 18)) {
+      continue;
+    }
+    ++descriptions;
+    assert(text->textureWidth() > 0 && text->textureHeight() > 0);
+    assert(text->textureWidth() <= text->getContentWidth());
+    assert(text->textureHeight() <= text->getContentHeight());
+    assert(text->getContentX() >= panel->getContentX());
+    assert(text->getContentX() + text->textureWidth() <=
+           panel->getContentX() + panel->getContentWidth());
+    assert(text->getContentY() + text->textureHeight() <=
+           panel->getContentY() + panel->getContentHeight());
+  }
+  assert(descriptions == 2);
+}
+
 void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool deleteAfter) {
   const auto root = std::filesystem::temp_directory_path() /
       ("archive-unzip-modal-" + std::to_string(
@@ -85,6 +106,7 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     });
     assert(modal->startAll());
     assert(modal->isVisible());
+    assertDescriptionsFit(*modal);
     assert(!modal->startAll());
     assert(findButton(modal->root(), "Keep Archives"));
     assert(findButton(modal->root(), "Delete After Unzip"));
@@ -155,6 +177,7 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     }
     assert(!modal->inProgress());
     assert(changed == 1 && finished == 1);
+    assertDescriptionsFit(*modal);
     assert(std::filesystem::exists(archivePath) == !deleteAfter);
     assert(findButton(modal->root(), "Close"));
     assert(!findButton(modal->root(), "Delete Archive"));
