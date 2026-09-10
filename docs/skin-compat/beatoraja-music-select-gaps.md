@@ -62,6 +62,11 @@ Mouse and touch confirmation target the clicked archive, not the centered song.
 Extracted charts become available through the refreshed library; extraction
 does not automatically start gameplay.
 
+Solid archive and Unzip All actions expose non-playable folder-style skin
+properties, not the random-select flag (1030). Their titles and descriptions
+remain visible without activating random text overlays or duplicate SD-character
+placements in Litone12. Native confirmation still starts the unzip action.
+
 ## Intentional mixed-folder divergence (2026-09-08)
 
 At the user's request, physical folders that have `song.parent` matches now
