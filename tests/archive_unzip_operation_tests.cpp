@@ -5,12 +5,14 @@
 #include "../src/sqlite3.h"
 
 #include <archive_entry.h>
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <thread>
 
 #ifndef _WIN32
@@ -468,6 +470,85 @@ void batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives() {
   assert(fixture.repository.GetLibraryRevision() == revision + 1);
 }
 
+void batchBudgetStopsBeforeNextArchiveAndIndexesCompletedWork(bool deleteOriginals) {
+  Fixture fixture;
+  const auto first = fixture.indexedArchive("a.zip");
+  const auto second = fixture.indexedArchive("b.zip");
+  const auto third = fixture.indexedArchive("c.zip");
+  const auto result = ArchiveUnzipOperation::RunAll(
+      fixture.repository, deleteOriginals, {}, nullptr,
+      {.maximumArchiveBytes = 100, .maximumTotalBytes = 100});
+  assert(!result.success && !result.cancelled);
+  assert(result.succeededCount == 1 && result.failedCount == 1);
+  assert(result.completedCount == 2 && result.archiveCount == 3);
+  assert(result.scanCommitted && result.libraryChanged);
+  assert(result.message.find("expanded-byte limit") != std::string::npos);
+  assert(std::filesystem::exists(first.meta.BmsPath) == !deleteOriginals);
+  assert(std::filesystem::exists(second.meta.BmsPath));
+  assert(std::filesystem::exists(third.meta.BmsPath));
+  auto session = fixture.repository.OpenSession();
+  std::vector<ChartMetaRecord> charts;
+  session->QueryChartMeta({}, charts);
+  assert(std::count_if(charts.begin(), charts.end(), [](const auto &chart) {
+    return !chart.solidArchive;
+  }) == 1);
+}
+
+void batchReservedSpaceRejectsExtractionWithoutDeletingOriginals() {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("space.zip");
+  const auto result = ArchiveUnzipOperation::RunAll(
+      fixture.repository, true, {}, nullptr,
+      {.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max()});
+  assert(!result.success && result.failedCount == 1);
+  assert(result.succeededCount == 0 && result.deletedCount == 0);
+  assert(result.message.find("free-space") != std::string::npos);
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  auto session = fixture.repository.OpenSession();
+  const auto recovery = session->LoadUnzipRecovery();
+  assert(recovery && recovery->empty());
+}
+
+void batchBudgetFailureRemainsVisibleWhenFinalIndexAlsoFails() {
+  Fixture fixture;
+  fixture.indexedArchive("a.zip");
+  const auto second = fixture.indexedArchive("b.zip");
+  fixture.failChartWrites();
+  const auto result = ArchiveUnzipOperation::RunAll(
+      fixture.repository, true, {}, nullptr,
+      {.maximumArchiveBytes = 100, .maximumTotalBytes = 100});
+  assert(!result.success && !result.scanCommitted);
+  assert(result.succeededCount == 1 && result.failedCount == 1);
+  assert(result.message.find("expanded-byte limit") != std::string::npos);
+  assert(result.message.find("Failed to index extracted folders") != std::string::npos);
+  assert(std::filesystem::exists(second.meta.BmsPath));
+}
+
+void batchChargesPartialFailedWritesAgainstLaterArchives() {
+  Fixture fixture;
+  const auto first = fixture.indexedArchive("a.zip", 2);
+  const auto second = fixture.indexedArchive("b.zip");
+  const auto third = fixture.indexedArchive("c.zip");
+  bool blockedSecondFile = false;
+  const auto result = ArchiveUnzipOperation::RunAll(
+      fixture.repository, true, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (!blockedSecondFile && progress.current == 1 &&
+            progress.message.find("Writing unzipped files") != std::string::npos) {
+          std::filesystem::create_directory(fixture.root / "a" / "song" / "chart1.bms");
+          blockedSecondFile = true;
+        }
+      }, {.maximumTotalBytes = 150});
+  assert(blockedSecondFile && !result.success && !result.cancelled);
+  assert(result.succeededCount == 1 && result.failedCount == 2);
+  assert(result.deletedCount == 1 && result.scanCommitted);
+  assert(result.message.find("expanded-byte limit") != std::string::npos);
+  assert(std::filesystem::exists(first.meta.BmsPath));
+  assert(!std::filesystem::exists(second.meta.BmsPath));
+  assert(std::filesystem::exists(third.meta.BmsPath));
+  assert(std::filesystem::exists(fixture.root / "a" / ".asobmashow_unzip_incomplete"));
+}
+
 void batchFailurePreservesOriginalAndContinues() {
   Fixture fixture;
   const auto first = fixture.indexedArchive("a.zip");
@@ -860,6 +941,11 @@ int main(int argc, char **argv) {
     crashRecovery(argv[2]);
   }
   testExecutable = std::filesystem::absolute(argv[0]);
+  batchBudgetStopsBeforeNextArchiveAndIndexesCompletedWork(false);
+  batchBudgetStopsBeforeNextArchiveAndIndexesCompletedWork(true);
+  batchReservedSpaceRejectsExtractionWithoutDeletingOriginals();
+  batchBudgetFailureRemainsVisibleWhenFinalIndexAlsoFails();
+  batchChargesPartialFailedWritesAgainstLaterArchives();
   disconnectedOutputDuringFinalIndexRemainsQueuedAlongsideHealthyOutputs();
   cancellingAnUnzipWaitingForRecoveryDoesNotBlockShutdown();
   inaccessibleChartSubfolderRetainsRecoveryUntilItCanBeIndexed();

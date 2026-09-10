@@ -1363,6 +1363,160 @@ void testDeltaFilteredSevenZipUsesSdk() {
   }));
 }
 
+void testFullUnzipRejectsBudgetBeforePreparingOutput() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "oversized.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(1024, 'x'), true);
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 1023}};
+  bool prepared = false;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      [&](const auto &, const auto &) { prepared = true; return true; }, &budget);
+  assert(!result && !prepared && budget.exhausted && budget.writtenBytes == 0);
+  assert(error.find("expanded-byte limit") != std::string::npos);
+}
+
+void writeFullUnzipBudgetFixture(const std::filesystem::path &path) {
+  auto writer = makeArchiveWriteHandle();
+  const auto extension = path.extension();
+  const int format = extension == ".7z" ? archive_write_set_format_7zip(writer.get()) :
+      extension == ".zip" ? archive_write_set_format_zip(writer.get()) :
+                            archive_write_set_format_pax_restricted(writer.get());
+  assert(format == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+  const std::string payload(1024, 'x');
+  for (const auto *name : {"first.bin", "second.bin"}) {
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name);
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), payload.size());
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), payload.data(), payload.size()) == 1024);
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testFullUnzipRuntimeSpaceCheckPreservesIncompleteOutput(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("space" + extension);
+  writeFullUnzipBudgetFixture(path);
+  archive_file::UnzipBudget budget;
+  std::filesystem::path output;
+  bool wroteFile = false;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr,
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0 && progress.fraction < 0.98) {
+          wroteFile = true;
+          budget.limits.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max();
+        }
+      }, nullptr, true,
+      [&](const auto &folder, const auto &) { output = folder; return true; }, &budget);
+  assert(wroteFile && !result && budget.exhausted && budget.writtenBytes == 1024);
+  assert(error.find("free-space") != std::string::npos);
+  assert(std::filesystem::exists(path));
+  assert(std::filesystem::exists(output / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+}
+
+void testFullUnzipRuntimeByteLimitCannotRestartFallback(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("runtime" + extension);
+  writeFullUnzipBudgetFixture(path);
+  const auto cacheDirectory = temporary.path() / "index";
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error) && entries.size() == 2);
+  const auto cachePath = std::filesystem::directory_iterator(cacheDirectory)->path();
+  {
+    std::fstream cache(cachePath, std::ios::binary | std::ios::in | std::ios::out);
+    const auto readSize = [&] {
+      std::uint64_t size = 0;
+      cache.read(reinterpret_cast<char *>(&size), sizeof(size));
+      assert(cache.good());
+      return size;
+    };
+    cache.seekg(1);
+    const auto keySize = readSize();
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1, std::ios::cur);
+    assert(readSize() == 2);
+    for (int entryIndex = 0; entryIndex < 2; ++entryIndex) {
+      const auto pathSize = readSize();
+      cache.seekg(static_cast<std::streamoff>(pathSize) + 1, std::ios::cur);
+      const auto sizeOffset = cache.tellg();
+      cache.seekp(sizeOffset);
+      const std::uint64_t understatedSize = 1;
+      cache.write(reinterpret_cast<const char *>(&understatedSize), sizeof(understatedSize));
+      cache.seekg(sizeOffset + std::streamoff(8 + 8 + 8 + 1));
+    }
+    assert(cache.good());
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(path, entries, &error) && entries.size() == 2);
+  assert(entries[0].size == 1 && entries[1].size == 1);
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 1024}};
+  std::filesystem::path output;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      [&](const auto &folder, const auto &) {
+        output = folder;
+        return true;
+      }, &budget);
+  assert(!result && budget.exhausted && budget.writtenBytes == 1024);
+  assert(error.find("expanded-byte limit") != std::string::npos);
+  assert(std::filesystem::file_size(output / "first.bin") == 1024);
+  assert(!std::filesystem::exists(output / "second.bin") ||
+         std::filesystem::file_size(output / "second.bin") == 0);
+  assert(std::filesystem::exists(output / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("exact" + extension);
+  writeFullUnzipBudgetFixture(path);
+  archive_file::UnzipBudget budget{
+      .limits = {.maximumArchiveBytes = 2048, .maximumTotalBytes = 2048}};
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      nullptr, &budget);
+  assert(result && !budget.exhausted && budget.writtenBytes == 2048);
+  assert(std::filesystem::file_size(result->outputFolder / "first.bin") == 1024);
+  assert(std::filesystem::file_size(result->outputFolder / "second.bin") == 1024);
+  const auto reused = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      nullptr, &budget);
+  assert(reused && reused->outputFolder == result->outputFolder);
+  assert(!budget.exhausted && budget.writtenBytes == 2048);
+}
+
+void testFullUnzipUnderstatedSizeCannotExceedRuntimeBudget() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "understated.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(128 * 1024, 'x'), true);
+  assert(understateZipUncompressedSizes(path, "payload.bin", 1));
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 1024}};
+  std::filesystem::path output;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      [&](const auto &folder, const auto &) { output = folder; return true; }, &budget);
+  assert(!result && !output.empty());
+  assert(budget.writtenBytes <= 1024);
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+  const auto payload = output / "payload.bin";
+  assert(!std::filesystem::exists(payload) || std::filesystem::file_size(payload) <= 1024);
+}
+
 void testFullUnzipHonorsPauseDuringExtraction() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "pause-during-unzip.zip";
@@ -1889,6 +2043,13 @@ int main() {
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
   testFullUnzipHonorsPauseDuringExtraction();
+  testFullUnzipRejectsBudgetBeforePreparingOutput();
+  testFullUnzipUnderstatedSizeCannotExceedRuntimeBudget();
+  for (const auto *extension : {".zip", ".7z", ".tar"}) {
+    testFullUnzipRuntimeSpaceCheckPreservesIncompleteOutput(extension);
+    testFullUnzipRuntimeByteLimitCannotRestartFallback(extension);
+    testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
+  }
   testArchiveIndexPersistsAcrossColdCacheRestart();
   testArchiveIndexPrunesOrphanedCacheFiles();
   testArchiveIndexPrunesOrphanedTmpCacheFiles();

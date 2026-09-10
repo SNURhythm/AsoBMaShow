@@ -124,6 +124,18 @@ struct UnzipArchiveResult {
   std::uint64_t uncompressedSize = 0;
 };
 
+struct UnzipLimits {
+  std::uint64_t maximumArchiveBytes = 256ull * 1024 * 1024 * 1024;
+  std::uint64_t maximumTotalBytes = 1024ull * 1024 * 1024 * 1024;
+  std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
+};
+
+struct UnzipBudget {
+  UnzipLimits limits;
+  std::uint64_t writtenBytes = 0;
+  bool exhausted = false;
+};
+
 struct TemporaryCacheCleanupResult {
   std::filesystem::path path;
   bool cacheExisted = false;
@@ -249,7 +261,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   UnzipProgressCallback progressCallback = nullptr,
                   PauseCallback pauseCallback = nullptr,
                   bool reuseCompletedFolder = true,
-                  UnzipPrepareCallback prepareCallback = nullptr);
+                  UnzipPrepareCallback prepareCallback = nullptr,
+                  UnzipBudget *budget = nullptr);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
                 std::string *errorMessage = nullptr,

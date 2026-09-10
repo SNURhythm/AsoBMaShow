@@ -24,10 +24,21 @@ their originals. Keep mode retains all originals. After the queue finishes or
 is cancelled, one parallel indexing pass scans all completed output folders.
 Cancellation stops extraction but allows this final indexing pass to finish;
 the modal shows indexing progress with its cancel control disabled. Shutdown
-waits for that pass as well. Extraction failures do not prevent later archives
+waits for that pass as well. Ordinary extraction failures do not prevent later archives
 from being processed. Indexing failures are reported separately from extraction
 failures: extracted files remain, but deleted originals cannot be restored.
 Single-archive extraction retains its existing post-indexing Keep/Delete choice.
+
+Full extraction checks estimated expanded size against available destination
+space before starting, and enforces actual output-write limits in the 7-Zip,
+libarchive, and batched backends. Defaults are 256 GiB per archive, 1 TiB of
+cumulative writes per Unzip All operation, and a 512 MiB free-space reserve.
+Available space is checked again before each data write, including when metadata
+understates the expanded size. Failed attempts still consume the write budget;
+reusing a completed folder does not. A byte-limit or free-space failure stops
+the remaining queue without retrying another backend, keeps the current and
+remaining originals, and indexes earlier completed folders. Partial output stays
+marked incomplete for recovery; original deletion never refunds the byte budget.
 
 Original files are deleted immediately, but their database records are removed
 in one transaction during finalization. Neither scene refreshes its library

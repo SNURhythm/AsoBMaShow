@@ -51,7 +51,8 @@ public:
   static ArchiveUnzipResult
   RunAll(ChartRepository &repository, bool deleteAfterUnzip,
          const std::stop_token &stopToken,
-         archive_file::UnzipProgressCallback progress = nullptr);
+         archive_file::UnzipProgressCallback progress = nullptr,
+         archive_file::UnzipLimits limits = {});
 
 private:
   ChartRepository &repository_;

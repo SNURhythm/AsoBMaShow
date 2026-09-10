@@ -18,7 +18,8 @@ bool eligible(const ChartMetaRecord &record) {
 ArchiveUnzipResult extractArchive(
     const ChartMetaRecord &record, const std::stop_token &stopToken,
     archive_file::UnzipProgressCallback progress, bool reuseCompletedFolder,
-    archive_file::UnzipPrepareCallback prepare = nullptr) {
+    archive_file::UnzipPrepareCallback prepare = nullptr,
+    archive_file::UnzipBudget *budget = nullptr) {
   ArchiveUnzipResult result;
   result.archivePath = record.meta.BmsPath;
   result.rootPath = result.archivePath.parent_path();
@@ -32,7 +33,7 @@ ArchiveUnzipResult extractArchive(
       std::string error;
       const auto extracted = archive_file::unzipArchiveFully(
           result.archivePath, result.rootPath, &error, &stopToken, progress,
-          nullptr, reuseCompletedFolder, prepare);
+          nullptr, reuseCompletedFolder, prepare, budget);
       if (extracted) {
         result.outputFolder = extracted->outputFolder;
         result.success = true;
@@ -221,10 +222,12 @@ void ArchiveUnzipOperation::keepArchive() { result_.reset(); }
 ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
     ChartRepository &repository, bool deleteAfterUnzip,
     const std::stop_token &stopToken,
-    archive_file::UnzipProgressCallback progress) {
+    archive_file::UnzipProgressCallback progress,
+    archive_file::UnzipLimits limits) {
   auto lock = archive_unzip_recovery::acquireOperationLock(stopToken);
   ArchiveUnzipResult result;
   result.batch = true;
+  archive_file::UnzipBudget budget{.limits = limits};
   const auto initialRevision = repository.GetLibraryRevision();
   std::string lastError;
   std::vector<std::filesystem::path> completedFolders;
@@ -269,7 +272,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
                 return session->SaveUnzipRecovery({
                     .archivePath = record.meta.BmsPath, .outputFolder = folder,
                     .archiveKey = key, .deleteOriginal = deleteAfterUnzip});
-              });
+              }, &budget);
           if (!archiveResult.outputFolder.empty()) {
             completedFolders.push_back(archiveResult.outputFolder);
             ++result.succeededCount;
@@ -282,6 +285,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
             ++result.completedCount;
             ++result.failedCount;
             lastError = filename + ": " + archiveResult.message;
+            if (budget.exhausted) break;
             continue;
           }
           if (deleteAfterUnzip) {
@@ -303,6 +307,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
   } catch (...) {
     lastError = "Unzip All failed";
   }
+  const auto extractionLimitError = budget.exhausted ? lastError : std::string();
   if (!completedFolders.empty()) {
     try {
       if (progress) {
@@ -348,6 +353,9 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
     } catch (...) {
       lastError = "Failed to index extracted folders. Extracted files are kept.";
     }
+  }
+  if (!extractionLimitError.empty() && lastError != extractionLimitError) {
+    lastError = extractionLimitError + " " + lastError;
   }
   result.cancelled = stopToken.stop_requested();
   result.libraryChanged = result.libraryChanged ||
