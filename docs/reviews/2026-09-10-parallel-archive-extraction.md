@@ -1,5 +1,9 @@
 # Parallel archive extraction
 
+This records the initial two-archive implementation. The current scheduling and
+single-archive optimizations are documented in
+[Budgeted full-archive parallelism](2026-09-11-budgeted-unzip-parallelism.md).
+
 ## Scope
 
 Unzip All now runs two independent archive workers, rather than overlapping

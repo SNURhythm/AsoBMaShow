@@ -110,7 +110,7 @@ ArchiveUnzipResult runAll(ChartRepository &repository, bool deleteAfterUnzip,
                          std::stop_token stopToken = {},
                          archive_file::UnzipProgressCallback progress = nullptr) {
   return ArchiveUnzipOperation::RunAll(repository, deleteAfterUnzip, stopToken, progress,
-                                     {.maximumConcurrentArchives = 1});
+                                     {.maximumConcurrentArchives = 1, .maximumWorkers = 1});
 }
 
 void executeSql(const std::filesystem::path &path, const char *sql) {
@@ -475,7 +475,8 @@ void batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives() {
 }
 
 void batchUsesTwoWorkerThreadsAndIndexesOnce(
-    const std::string &extension, std::size_t requestedWorkers = 2) {
+    const std::string &extension, std::size_t requestedWorkers = 2,
+    std::size_t expectedWorkers = 2) {
   Fixture fixture;
   for (const auto *name : {"a", "b", "c", "d"}) {
     fixture.indexedArchive(name + extension, 64);
@@ -494,17 +495,19 @@ void batchUsesTwoWorkerThreadsAndIndexesOnce(
           ++indexingPasses;
         }
         if (progress.indexing) return;
-        extractionThreads.insert(std::this_thread::get_id());
         if (progress.message.find("Preparing unzip") != std::string::npos) {
+          extractionThreads.insert(std::this_thread::get_id());
           active.insert(progress.archiveIndex);
           maximumActive = std::max(maximumActive, active.size());
         }
         if (progress.message.find("Unzip complete") != std::string::npos) {
           active.erase(progress.archiveIndex);
         }
-      }, {.maximumConcurrentArchives = requestedWorkers});
+      }, {.maximumConcurrentArchives = requestedWorkers, .maximumWorkers = requestedWorkers,
+          .maximumMemoryBytes = 1024ull * 1024 * 1024});
   assert(result.success && result.succeededCount == 4 && result.deletedCount == 4);
-  assert(maximumActive >= 1 && maximumActive <= 2 && extractionThreads.size() == 2);
+  assert(maximumActive >= 1 && maximumActive <= expectedWorkers &&
+         extractionThreads.size() == expectedWorkers);
   assert(indexingPasses == 1 && result.scanCommitted);
 }
 
@@ -539,6 +542,68 @@ void batchProgressCountsFinishedArchivesRatherThanTheReportingWorker() {
   assert(result.success && !first && previousCount == 2 && active.empty());
 }
 
+void singleZipExtractsOnMultipleWorkers() {
+  Fixture fixture;
+  const auto record = fixture.archive(64);
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 512ull * 1024 * 1024}};
+  std::set<std::thread::id> threads;
+  std::uint64_t previousCount = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      record.meta.BmsPath, fixture.root, &error, nullptr,
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0 && progress.fraction < 0.98) {
+          threads.insert(std::this_thread::get_id());
+          assert(progress.current >= previousCount);
+          previousCount = progress.current;
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result && threads.size() == 4 && previousCount == 64);
+  for (int chart = 0; chart < 64; ++chart) {
+    std::ifstream input(result->outputFolder / "song" / ("chart" + std::to_string(chart) + ".bms"));
+    std::string title;
+    std::getline(input, title);
+    assert(title == "#TITLE Extracted song.zip" + std::to_string(chart));
+  }
+}
+
+void batchAndEntryWorkersShareOneBudget() {
+  Fixture fixture;
+  fixture.indexedArchive("a.zip", 64);
+  fixture.indexedArchive("b.zip", 64);
+  std::set<std::thread::id> threads;
+  const auto result = ArchiveUnzipOperation::RunAll(fixture.repository, false, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (!progress.indexing) threads.insert(std::this_thread::get_id());
+      }, {.maximumConcurrentArchives = 2, .maximumWorkers = 4,
+          .maximumMemoryBytes = 512ull * 1024 * 1024});
+  assert(result.success && threads.size() == 4 && result.succeededCount == 2);
+}
+
+void unzipPlanDividesCpuAndMemoryRatherThanMultiplyingThem() {
+  const archive_file::UnzipLimits limits{
+      .maximumConcurrentArchives = 4, .maximumWorkers = 8,
+      .maximumMemoryBytes = 512ull * 1024 * 1024};
+  const auto single = archive_file::unzipExecutionPlan(limits);
+  assert(single.archiveWorkers == 1 && single.workersPerArchive == 8);
+  assert(single.memoryPerArchive == 512ull * 1024 * 1024);
+  const auto batch = archive_file::unzipExecutionPlan(limits, 4);
+  assert(batch.archiveWorkers == 4 && batch.workersPerArchive == 2);
+  assert(batch.memoryPerArchive == 128ull * 1024 * 1024);
+  const auto automatic = archive_file::unzipExecutionPlan(
+      {.maximumWorkers = 8, .maximumMemoryBytes = 512ull * 1024 * 1024}, 4);
+  assert(automatic.archiveWorkers == 2 && automatic.workersPerArchive == 4);
+  assert(automatic.memoryPerArchive == 256ull * 1024 * 1024);
+  const auto largerDevice = archive_file::unzipExecutionPlan(
+      {.maximumWorkers = 16, .maximumMemoryBytes = 1024ull * 1024 * 1024}, 8);
+  assert(largerDevice.archiveWorkers == 4 && largerDevice.workersPerArchive == 4);
+  const auto lowMemory = archive_file::unzipExecutionPlan(
+      {.maximumWorkers = 8, .maximumMemoryBytes = 128ull * 1024 * 1024}, 4);
+  assert(lowMemory.archiveWorkers == 2 && lowMemory.workersPerArchive == 1);
+  assert(lowMemory.memoryPerArchive == 64ull * 1024 * 1024);
+}
+
 void parallelBatchCancellationKeepsActiveAndQueuedOriginals(const std::string &extension) {
   Fixture fixture;
   for (const auto *name : {"a", "b", "c", "d"}) {
@@ -556,7 +621,7 @@ void parallelBatchCancellationKeepsActiveAndQueuedOriginals(const std::string &e
             progress.message.find("Unzipping archive") != std::string::npos) {
           stop.request_stop();
         }
-      });
+      }, {.maximumConcurrentArchives = 2, .maximumWorkers = 2});
   assert(result.cancelled && !result.success && result.deletedCount == 0);
   assert(!started.empty() && started.size() <= 2);
   for (const auto *name : {"a", "b", "c", "d"}) {
@@ -618,7 +683,7 @@ void batchBudgetStopsBeforeNextArchiveAndIndexesCompletedWork(bool deleteOrigina
   const auto third = fixture.indexedArchive("c.zip");
   const auto result = ArchiveUnzipOperation::RunAll(
       fixture.repository, deleteOriginals, {}, nullptr,
-      {.maximumArchiveBytes = 100, .maximumTotalBytes = 100, .maximumConcurrentArchives = 1});
+      {.maximumArchiveBytes = 100, .maximumTotalBytes = 100, .maximumConcurrentArchives = 1, .maximumWorkers = 1});
   assert(!result.success && !result.cancelled);
   assert(result.succeededCount == 1 && result.failedCount == 1);
   assert(result.completedCount == 2 && result.archiveCount == 3);
@@ -657,7 +722,7 @@ void batchBudgetFailureRemainsVisibleWhenFinalIndexAlsoFails() {
   fixture.failChartWrites();
   const auto result = ArchiveUnzipOperation::RunAll(
       fixture.repository, true, {}, nullptr,
-      {.maximumArchiveBytes = 100, .maximumTotalBytes = 100, .maximumConcurrentArchives = 1});
+      {.maximumArchiveBytes = 100, .maximumTotalBytes = 100, .maximumConcurrentArchives = 1, .maximumWorkers = 1});
   assert(!result.success && !result.scanCommitted);
   assert(result.succeededCount == 1 && result.failedCount == 1);
   assert(result.message.find("expanded-byte limit") != std::string::npos);
@@ -679,7 +744,7 @@ void batchChargesPartialFailedWritesAgainstLaterArchives() {
           std::filesystem::create_directory(fixture.root / "a" / "song" / "chart1.bms");
           blockedSecondFile = true;
         }
-      }, {.maximumTotalBytes = 150, .maximumConcurrentArchives = 1});
+      }, {.maximumTotalBytes = 150, .maximumConcurrentArchives = 1, .maximumWorkers = 1});
   assert(blockedSecondFile && !result.success && !result.cancelled);
   assert(result.succeededCount == 1 && result.failedCount == 2);
   assert(result.deletedCount == 1 && result.scanCommitted);
@@ -1082,10 +1147,13 @@ int main(int argc, char **argv) {
     crashRecovery(argv[2]);
   }
   testExecutable = std::filesystem::absolute(argv[0]);
+  singleZipExtractsOnMultipleWorkers();
+  batchAndEntryWorkersShareOneBudget();
+  unzipPlanDividesCpuAndMemoryRatherThanMultiplyingThem();
   batchProgressCountsFinishedArchivesRatherThanTheReportingWorker();
   batchUsesTwoWorkerThreadsAndIndexesOnce(".zip");
   batchUsesTwoWorkerThreadsAndIndexesOnce(".7z");
-  batchUsesTwoWorkerThreadsAndIndexesOnce(".zip", 16);
+  batchUsesTwoWorkerThreadsAndIndexesOnce(".zip", 4, 4);
   parallelBatchCancellationKeepsActiveAndQueuedOriginals(".zip");
   parallelBatchCancellationKeepsActiveAndQueuedOriginals(".7z");
   parallelBatchJoinsWorkersAfterProgressCallbackFailure();

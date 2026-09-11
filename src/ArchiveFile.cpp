@@ -93,6 +93,21 @@
 
 namespace archive_file {
 
+UnzipExecutionPlan unzipExecutionPlan(const UnzipLimits &limits, std::size_t archiveCount) {
+  constexpr std::uint64_t memoryPerWorker = 64ull * 1024 * 1024;
+  const auto systemMemory = static_cast<std::uint64_t>(std::max(0, SDL_GetSystemRAM())) * 1024 * 1024;
+  const auto memory = limits.maximumMemoryBytes > 0 ? limits.maximumMemoryBytes :
+      std::clamp<std::uint64_t>(systemMemory / 8, memoryPerWorker, 1024ull * 1024 * 1024);
+  const auto requested = limits.maximumWorkers > 0 ? limits.maximumWorkers :
+      static_cast<std::size_t>(std::max(1, SDL_GetCPUCount()));
+  const auto workers = std::max<std::size_t>(1, std::min<std::uint64_t>(requested, memory / memoryPerWorker));
+  const auto automaticArchives = std::max<std::size_t>(2, workers / 4);
+  const auto archives = std::max<std::size_t>(1, std::min({archiveCount, workers,
+      limits.maximumConcurrentArchives > 0 ? limits.maximumConcurrentArchives : automaticArchives}));
+  return {.archiveWorkers = archives, .workersPerArchive = workers / archives,
+          .memoryPerArchive = memory / archives};
+}
+
 std::filesystem::path archiveIndexCacheDirectory();
 
 namespace {
@@ -126,6 +141,14 @@ public:
   }
 
   const std::string &error() const { return error_; }
+
+  bool write(std::ostream &output, const void *data, std::size_t size) {
+    std::lock_guard lock(writeMutex_);
+    if (!consume(size)) return false;
+    output.write(static_cast<const char *>(data), static_cast<std::streamsize>(size));
+    output.flush();
+    return static_cast<bool>(output);
+  }
 
 private:
   bool check(std::uint64_t bytes) {
@@ -162,6 +185,7 @@ private:
   std::uint64_t archiveBytes_ = 0;
   std::uint64_t pendingBytes_ = 0;
   std::string error_;
+  std::mutex writeMutex_;
 };
 
 bool stopRequested(const std::stop_token *stopToken);
@@ -173,6 +197,147 @@ bool unzipCheckpoint(const std::stop_token *stopToken,
 void reportUnzipProgress(const UnzipProgressCallback &callback,
                           double fraction, std::uint64_t current,
                           std::uint64_t total, std::string message);
+
+class UnzipOutputPipeline {
+public:
+  UnzipOutputPipeline(UnzipWriteGuard &guard, const UnzipExecutionPlan &plan,
+                      const std::stop_token *stopToken, PauseCallback pause)
+      : guard_(guard), stopToken_(stopToken), pause_(std::move(pause)),
+        capacity_(static_cast<std::size_t>(std::min<std::uint64_t>(8 * 1024 * 1024, plan.memoryPerArchive / 8))) {
+    if (plan.workersPerArchive > 1 && capacity_ >= 64 * 1024) {
+      worker_ = std::jthread([this] { run(); });
+    }
+  }
+
+  ~UnzipOutputPipeline() {
+    flush();
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    changed_.notify_all();
+    if (worker_.joinable()) worker_.join();
+  }
+
+  bool enabled() const { return worker_.joinable(); }
+  std::size_t bufferBudget() const { return enabled() ? capacity_ : 0; }
+
+  bool write(const std::shared_ptr<std::ofstream> &output, const void *data, std::size_t size) {
+    if (!enabled()) return guard_.write(*output, data, size);
+    if (stagedOutput_ != output && !enqueueStaged()) return false;
+    const auto *bytes = static_cast<const char *>(data);
+    const auto chunkSize = std::min<std::size_t>(1024 * 1024, capacity_ / 2);
+    while (size > 0) {
+      stagedOutput_ = output;
+      const auto count = std::min(size, chunkSize - stagedSize_);
+      if (!stagedBytes_) stagedBytes_.reset(new char[chunkSize]);
+      std::memcpy(stagedBytes_.get() + stagedSize_, bytes, count);
+      stagedSize_ += count;
+      bytes += count;
+      size -= count;
+      if (stagedSize_ == chunkSize && !enqueueStaged()) return false;
+    }
+    return true;
+  }
+
+  bool flush() {
+    try {
+      enqueueStaged();
+    } catch (...) {
+      std::lock_guard lock(mutex_);
+      failed_ = true;
+    }
+    std::unique_lock lock(mutex_);
+    changed_.wait(lock, [&] { return pendingBytes_ == 0; });
+    return !failed_;
+  }
+
+  bool cancelled() const { return cancelled_; }
+
+private:
+  struct Chunk {
+    std::shared_ptr<std::ofstream> output;
+    std::unique_ptr<char[]> bytes;
+    std::size_t size = 0;
+    std::size_t capacity = 0;
+  };
+
+  bool enqueueStaged() {
+    if (stagedSize_ == 0) return true;
+    const auto chunkSize = std::min<std::size_t>(1024 * 1024, capacity_ / 2);
+    std::unique_lock lock(mutex_);
+    changed_.wait(lock, [&] { return failed_ ||
+        (pendingBytes_ + chunkSize <= capacity_ - chunkSize && queue_.size() < 128); });
+    if (failed_) {
+      stagedBytes_.reset();
+      stagedSize_ = 0;
+      stagedOutput_.reset();
+      return false;
+    }
+    queue_.emplace_back();
+    auto &chunk = queue_.back();
+    chunk.output = std::move(stagedOutput_);
+    chunk.bytes = std::move(stagedBytes_);
+    chunk.size = std::exchange(stagedSize_, 0);
+    chunk.capacity = chunkSize;
+    pendingBytes_ += chunkSize;
+    lock.unlock();
+    changed_.notify_all();
+    return true;
+  }
+
+  void run() {
+    for (;;) {
+      Chunk chunk;
+      {
+        std::unique_lock lock(mutex_);
+        changed_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
+        if (queue_.empty()) return;
+        chunk = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      bool success = false;
+      try {
+        if (!unzipCheckpoint(stopToken_, pause_)) {
+          cancelled_ = true;
+        } else {
+          success = guard_.write(*chunk.output, chunk.bytes.get(), chunk.size);
+        }
+      } catch (...) {
+        success = false;
+      }
+      const auto size = chunk.capacity;
+      chunk.bytes.reset();
+      chunk.output.reset();
+      {
+        std::lock_guard lock(mutex_);
+        pendingBytes_ -= size;
+        if (!success) {
+          failed_ = true;
+          queue_.clear();
+          pendingBytes_ = 0;
+        }
+      }
+      changed_.notify_all();
+    }
+  }
+
+  UnzipWriteGuard &guard_;
+  const std::stop_token *stopToken_;
+  PauseCallback pause_;
+  std::size_t capacity_;
+  std::mutex mutex_;
+  std::condition_variable changed_;
+  std::deque<Chunk> queue_;
+  std::shared_ptr<std::ofstream> stagedOutput_;
+  std::unique_ptr<char[]> stagedBytes_;
+  std::size_t stagedSize_ = 0;
+  std::size_t pendingBytes_ = 0;
+  bool stopping_ = false;
+  bool failed_ = false;
+  std::atomic_bool cancelled_ = false;
+  std::jthread worker_;
+};
 bool emitFileData(FileData &&file, const FileDataCallback &onFile,
                   std::string *errorMessage);
 bool archiveReadCancelled(const std::string &errorMessage);
@@ -1735,13 +1900,14 @@ class SevenZipFileOutStream final : public ISequentialOutStream {
 public:
   SevenZipFileOutStream(const std::filesystem::path &path,
                         const std::stop_token *stopToken,
-                        PauseCallback pauseCallback, UnzipWriteGuard &writeGuard)
+                        PauseCallback pauseCallback, UnzipWriteGuard &writeGuard,
+                        UnzipOutputPipeline *pipeline)
       : stopToken_(stopToken), pauseCallback_(std::move(pauseCallback)),
-        writeGuard_(writeGuard) {
-    file_.open(path, std::ios::binary | std::ios::trunc);
+        writeGuard_(writeGuard), pipeline_(pipeline) {
+    file_ = std::make_shared<std::ofstream>(path, std::ios::binary | std::ios::trunc);
   }
 
-  bool isOpen() const { return file_.is_open(); }
+  bool isOpen() const { return file_->is_open(); }
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -1778,16 +1944,12 @@ public:
     if (size == 0) {
       return S_OK;
     }
-    if (data == nullptr || !file_) {
+    if (data == nullptr) {
       return E_FAIL;
     }
-    if (!writeGuard_.consume(size)) {
-      return E_FAIL;
-    }
-    file_.write(static_cast<const char *>(data),
-                static_cast<std::streamsize>(size));
-    file_.flush();
-    if (!file_) {
+    try {
+      if (!(pipeline_ ? pipeline_->write(file_, data, size) : writeGuard_.write(*file_, data, size))) return E_FAIL;
+    } catch (...) {
       return E_FAIL;
     }
     if (processedSize != nullptr) {
@@ -1797,10 +1959,11 @@ public:
   }
 
 private:
-  std::ofstream file_;
+  std::shared_ptr<std::ofstream> file_;
   const std::stop_token *stopToken_ = nullptr;
   PauseCallback pauseCallback_;
   UnzipWriteGuard &writeGuard_;
+  UnzipOutputPipeline *pipeline_;
   ULONG refCount_ = 0;
 };
 
@@ -2208,11 +2371,11 @@ public:
                               const std::stop_token *stopToken,
                               UnzipProgressCallback progressCallback,
                               PauseCallback pauseCallback,
-                              UnzipWriteGuard &writeGuard)
+                              UnzipWriteGuard &writeGuard, UnzipOutputPipeline &pipeline)
       : outputFolder_(std::move(outputFolder)), entries_(std::move(entries)),
         totalFiles_(std::max<std::uint64_t>(totalFiles, 1)),
         stopToken_(stopToken), progressCallback_(std::move(progressCallback)),
-        pauseCallback_(std::move(pauseCallback)), writeGuard_(writeGuard) {}
+        pauseCallback_(std::move(pauseCallback)), writeGuard_(writeGuard), pipeline_(pipeline) {}
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -2278,7 +2441,8 @@ public:
     }
 
     auto *stream =
-        new SevenZipFileOutStream(outputPath, stopToken_, pauseCallback_, writeGuard_);
+        new SevenZipFileOutStream(outputPath, stopToken_, pauseCallback_, writeGuard_,
+                                  it->second.size >= 256 * 1024 ? &pipeline_ : nullptr);
     if (!stream->isOpen()) {
       delete stream;
       failed_ = true;
@@ -2334,11 +2498,12 @@ private:
   UnzipProgressCallback progressCallback_;
   PauseCallback pauseCallback_;
   UnzipWriteGuard &writeGuard_;
+  UnzipOutputPipeline &pipeline_;
   const Entry *currentEntry_ = nullptr;
   std::uint64_t completedFiles_ = 0;
   ULONG refCount_ = 0;
   bool failed_ = false;
-  bool cancelled_ = false;
+  std::atomic_bool cancelled_ = false;
   Int32 operationResult_ = NArchive::NExtract::NOperationResult::kOK;
 };
 
@@ -3448,7 +3613,7 @@ bool extractArchiveFullyWithLibarchive(
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
     const PauseCallback &pauseCallback,
-    std::string *errorMessage, UnzipWriteGuard &writeGuard) {
+    std::string *errorMessage, UnzipWriteGuard &writeGuard, UnzipOutputPipeline &pipeline) {
   auto archiveStorage = openArchive(archivePath, errorMessage);
   if (archiveStorage == nullptr) {
     return false;
@@ -3520,8 +3685,8 @@ bool extractArchiveFullyWithLibarchive(
     if (error) {
       return fail("Could not create unzip subfolder: " + error.message());
     }
-    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
-    if (!output) {
+    auto output = std::make_shared<std::ofstream>(outputPath, std::ios::binary | std::ios::trunc);
+    if (!*output) {
       return fail("Could not write unzipped file: " + pathForLog(outputPath));
     }
     for (;;) {
@@ -3537,12 +3702,10 @@ bool extractArchiveFullyWithLibarchive(
         return fail("Could not read archive entry: " +
                     archiveErrorString(archiveHandle, ""));
       }
-      if (!writeGuard.consume(static_cast<std::uint64_t>(count))) {
-        return fail(writeGuard.error());
-      }
-      output.write(reinterpret_cast<const char *>(buffer.data()), count);
-      output.flush();
-      if (!output) {
+      const bool written = archive_entry_size(entry) >= 256 * 1024 ?
+          pipeline.write(output, buffer.data(), static_cast<std::size_t>(count)) :
+          writeGuard.write(*output, buffer.data(), static_cast<std::size_t>(count));
+      if (!written) {
         return fail("Failed while writing unzipped file: " +
                     pathForLog(outputPath));
       }
@@ -7747,39 +7910,40 @@ bool extractSevenZipArchiveFully(
     const std::stop_token *stopToken,
     const UnzipProgressCallback &progressCallback,
     const PauseCallback &pauseCallback,
-    std::string *errorMessage, UnzipWriteGuard &writeGuard) {
+    std::string *errorMessage, UnzipWriteGuard &writeGuard,
+    UnzipOutputPipeline &pipeline, const UnzipExecutionPlan &execution) {
   if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
       index->sevenZipFormat == 0) {
     return false;
   }
-  bool archiveCacheHit = false;
-  long long openMs = 0;
   const PauseCallback inputPauseCallback = [stopToken, pauseCallback] {
     return !stopRequested(stopToken) && pauseIfNeeded(pauseCallback);
   };
-  const auto archiveState = openCachedSevenZipArchive(
-      archivePath, index->sevenZipFormat, &archiveCacheHit, &openMs,
-      errorMessage, inputPauseCallback);
-  if (archiveState == nullptr) {
+  CMyComPtr<IInArchive> archiveHandle;
+  CMyComPtr<IInStream> inputStream;
+  if (!openSevenZipArchive(archivePath, index->sevenZipFormat, archiveHandle,
+                           inputStream, errorMessage, inputPauseCallback)) {
     return false;
   }
-
-  auto archiveLock =
-      acquireSevenZipArchive(*archiveState, inputPauseCallback, errorMessage);
-  if (!archiveLock.owns_lock()) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Unzip cancelled";
+  IInArchive *archive = archiveHandle.Interface();
+  const auto closeArchive = makeScopeExit([&] { archive->Close(); });
+  const auto decoderThreads = std::min<std::size_t>(32,
+      execution.workersPerArchive > 3 ? execution.workersPerArchive - 2 : 1);
+  if (index->sevenZipFormat == static_cast<unsigned char>(SevenZipFormat::SevenZip)) {
+    CMyComPtr<ISetProperties> properties;
+    const wchar_t *names[] = {L"mt", L"memuse", L"mtf"};
+    PROPVARIANT values[3]{};
+    values[0].vt = VT_UI4;
+    values[0].ulVal = static_cast<UInt32>(decoderThreads);
+    values[1].vt = VT_UI8;
+    values[1].uhVal.QuadPart = execution.memoryPerArchive - pipeline.bufferBudget();
+    values[2].vt = VT_BOOL;
+    values[2].boolVal = VARIANT_FALSE;
+    if (archive->QueryInterface(IID_ISetProperties, reinterpret_cast<void **>(&properties)) != S_OK ||
+        properties->SetProperties(names, values, 3) != S_OK) {
+      *errorMessage = "Could not configure 7-Zip extraction workers.";
+      return false;
     }
-    return false;
-  }
-  SevenZipPauseCallbackScope pauseScope(archiveState->inputStream,
-                                        std::move(inputPauseCallback));
-  IInArchive *archive = archiveState->archive.Interface();
-  if (archive == nullptr) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Cached 7-Zip archive is unavailable.";
-    }
-    return false;
   }
 
   UInt32 itemCount = 0;
@@ -7820,7 +7984,7 @@ bool extractSevenZipArchiveFully(
 
   auto *callback = new SevenZipFullExtractCallback(
       outputFolder, std::move(entries), fileCount, stopToken, progressCallback,
-      pauseCallback, writeGuard);
+      pauseCallback, writeGuard, pipeline);
   IArchiveExtractCallback *callbackInterface = callback;
   callbackInterface->AddRef();
   CMyComPtr<IArchiveExtractCallback> callbackHandle;
@@ -7829,9 +7993,9 @@ bool extractSevenZipArchiveFully(
   appendDebugLogLineImpl("Starting full 7-Zip unzip: " +
                          pathForLog(archivePath) +
                          " files=" + std::to_string(fileCount) +
-                         " archiveCache=" +
-                         (archiveCacheHit ? "hit" : "miss") +
-                         " openMs=" + std::to_string(openMs));
+                         " decoderThreads=" + std::to_string(decoderThreads) +
+                         " outputWorker=" + (pipeline.enabled() ? "1" : "0") +
+                         " memoryBudget=" + std::to_string(execution.memoryPerArchive));
   using Clock = std::chrono::steady_clock;
   const auto extractStart = Clock::now();
   result = archive->Extract(nullptr, static_cast<UInt32>(-1), 0,
@@ -9646,6 +9810,193 @@ bool extractArchiveFullyWithBatchReader(
   return true;
 }
 
+std::optional<bool> unzipEntriesHaveIndependentOutputs(
+    const CachedIndex &index, const std::filesystem::path &outputFolder,
+    const std::stop_token *stopToken, const PauseCallback &pause, std::string *errorMessage) {
+  std::vector<std::filesystem::path> reservations;
+  const auto cleanup = makeScopeExit([&] {
+    for (const auto &path : reservations) {
+      std::error_code error;
+      std::filesystem::remove(path, error);
+    }
+  });
+  for (const auto &entry : index.entries) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return std::nullopt;
+    const auto path = outputFolder / entry.path;
+    std::error_code error;
+    if (entry.directory) {
+      std::filesystem::create_directories(path, error);
+      if (error) return false;
+      continue;
+    }
+    if (std::filesystem::exists(path, error) || error) return false;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) return false;
+    reservations.push_back(path);
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output) return false;
+  }
+  return true;
+}
+
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+std::optional<bool> extractZipArchiveFullyConcurrently(
+    const std::filesystem::path &archivePath, const std::filesystem::path &outputFolder,
+    const CachedIndex &index, std::size_t workers, const std::stop_token *stopToken,
+    const UnzipProgressCallback &progress, const PauseCallback &pause,
+    std::string *errorMessage, UnzipWriteGuard &writeGuard) {
+  if (!hasZipArchiveExtension(archivePath) || workers < 2) return std::nullopt;
+  std::vector<const Entry *> files;
+  std::unordered_set<std::string> names;
+  for (const auto &entry : index.entries) {
+    if (!entry.directory) {
+      if (!names.insert(lowerCopy(entry.path.generic_string())).second) return std::nullopt;
+      files.push_back(&entry);
+    }
+  }
+  if (files.size() < 2) return std::nullopt;
+  mz_zip_archive preflight{};
+  const auto archiveText = fspath_to_utf8(archivePath);
+  if (!mz_zip_reader_init_file_v2(&preflight, archiveText.c_str(),
+                                 MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) return std::nullopt;
+  const auto closePreflight = makeScopeExit([&] { mz_zip_reader_end(&preflight); });
+  for (const auto *entry : files) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+    mz_zip_archive_file_stat stat{};
+    if (entry->order >= mz_zip_reader_get_num_files(&preflight) ||
+        !mz_zip_reader_file_stat(&preflight, static_cast<mz_uint>(entry->order), &stat)) {
+      *errorMessage = "Could not read ZIP central directory entry.";
+      return false;
+    }
+    if (stat.m_is_encrypted || !stat.m_is_supported) return std::nullopt;
+  }
+  for (const auto &entry : index.entries) {
+    for (auto parent = entry.path.parent_path(); !parent.empty(); parent = parent.parent_path()) {
+      if (names.contains(lowerCopy(parent.generic_string()))) return std::nullopt;
+    }
+  }
+  workers = std::min(workers, files.size());
+  std::atomic_size_t nextFile{workers};
+  std::atomic_bool failed{false};
+  std::mutex stateMutex;
+  std::size_t completed = 0;
+  std::string failure;
+  const auto fail = [&](const std::string &message) {
+    std::lock_guard lock(stateMutex);
+    if (failure.empty()) failure = message;
+    failed = true;
+  };
+  const auto checkpoint = [&] { return !failed && unzipCheckpoint(stopToken, pause); };
+  const auto worker = [&](std::size_t fileIndex) {
+    try {
+      mz_zip_archive archive{};
+      const auto archiveText = fspath_to_utf8(archivePath);
+      if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
+                                     MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) {
+        fail("Could not open ZIP central directory.");
+        return;
+      }
+      const auto close = makeScopeExit([&] { mz_zip_reader_end(&archive); });
+      std::array<unsigned char, 64 * 1024> buffer{};
+      while (fileIndex < files.size() && checkpoint()) {
+        const auto &entry = *files[fileIndex];
+        if (entry.order >= mz_zip_reader_get_num_files(&archive)) {
+          fail("ZIP index is out of range.");
+          return;
+        }
+        const auto order = static_cast<mz_uint>(entry.order);
+        mz_zip_archive_file_stat stat{};
+        const auto filename = minizFilename(&archive, order);
+        if (!mz_zip_reader_file_stat(&archive, order, &stat) || !filename ||
+            compareZipEntryName(*filename, normalizeEntryName(entry.path.generic_string())) == ZipNameMatch::Mismatches ||
+            stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
+          fail("ZIP entry does not match the extraction index.");
+          return;
+        }
+        const auto path = outputFolder / entry.path;
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+        if (error) {
+          fail("Could not create unzip subfolder: " + pathForLog(path.parent_path()));
+          return;
+        }
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        if (!output) {
+          fail("Could not write unzipped file: " + pathForLog(path));
+          return;
+        }
+        auto *iterator = mz_zip_reader_extract_iter_new(&archive, order, 0);
+        if (!iterator) {
+          fail("Could not start ZIP entry extraction.");
+          return;
+        }
+        const auto freeIterator = makeScopeExit([&] {
+          if (iterator) mz_zip_reader_extract_iter_free(iterator);
+        });
+        std::uint64_t written = 0;
+        while (checkpoint()) {
+          const auto count = mz_zip_reader_extract_iter_read(iterator, buffer.data(), buffer.size());
+          if (count == 0) break;
+          if (!writeGuard.write(output, buffer.data(), count)) {
+            fail("Failed while writing unzipped file: " + pathForLog(path));
+            return;
+          }
+          written += count;
+        }
+        if (!checkpoint()) break;
+        const bool valid = mz_zip_reader_extract_iter_free(std::exchange(iterator, nullptr));
+        if (!valid || written != stat.m_uncomp_size) {
+          fail("ZIP entry extraction failed integrity/CRC validation.");
+          return;
+        }
+        output.close();
+        if (!output) {
+          fail("Could not finish unzipped file: " + pathForLog(path));
+          return;
+        }
+        {
+          std::lock_guard lock(stateMutex);
+          ++completed;
+          reportUnzipProgress(progress, 0.08 + 0.88 * static_cast<double>(completed) / files.size(),
+                              completed, files.size(), "Unzipping archive");
+        }
+        fileIndex = nextFile.fetch_add(1);
+      }
+    } catch (const std::exception &error) {
+      fail(error.what());
+    } catch (...) {
+      fail("Parallel ZIP extraction failed.");
+    }
+  };
+  appendDebugLogLineImpl("Starting parallel full ZIP unzip: " + pathForLog(archivePath) +
+                         " workers=" + std::to_string(workers));
+  std::vector<std::jthread> threads;
+  threads.reserve(workers - 1);
+  try {
+    for (std::size_t index = 1; index < workers; ++index) {
+      threads.emplace_back([&, index] { worker(index); });
+    }
+    worker(0);
+  } catch (...) {
+    failed = true;
+    throw;
+  }
+  for (auto &thread : threads) thread.join();
+  if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+  if (failed) {
+    *errorMessage = failure;
+    return false;
+  }
+  for (const auto &entry : index.entries) {
+    if (entry.directory) {
+      std::error_code error;
+      if (!createDirectoriesForUnzip(outputFolder / entry.path, "Could not create unzip folder", errorMessage, error)) return false;
+    }
+  }
+  return completed == files.size();
+}
+#endif
+
 std::optional<UnzipArchiveResult>
 unzipArchiveFully(const std::filesystem::path &archivePath,
                   const std::filesystem::path &destinationRoot,
@@ -9658,6 +10009,21 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   UnzipBudget *budget) {
   UnzipBudget localBudget;
   UnzipWriteGuard writeGuard(budget ? *budget : localBudget, destinationRoot);
+  const auto &sharedBudget = budget ? *budget : localBudget;
+  auto execution = unzipExecutionPlan(sharedBudget.limits, sharedBudget.concurrentArchives);
+  std::mutex progressMutex, pauseMutex;
+  if (progressCallback) {
+    progressCallback = [&, callback = std::move(progressCallback)](const UnzipProgress &value) {
+      std::lock_guard lock(progressMutex);
+      callback(value);
+    };
+  }
+  if (pauseCallback) {
+    pauseCallback = [&, callback = std::move(pauseCallback)] {
+      std::lock_guard lock(pauseMutex);
+      return callback();
+    };
+  }
   std::string localError;
   if (errorMessage == nullptr) {
     errorMessage = &localError;
@@ -9802,21 +10168,47 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     return std::nullopt;
   }
   outputLock.unlock();
+  if (execution.workersPerArchive > 1) {
+    const auto independent = unzipEntriesHaveIndependentOutputs(*index, outputFolder, stopToken, pauseCallback, errorMessage);
+    if (!independent) return std::nullopt;
+    if (!*independent) execution.workersPerArchive = 1;
+  }
   appendDebugLogLineImpl("Full unzip requested: " + pathForLog(archivePath) +
                          " output=" + pathForLog(outputFolder) +
                          " files=" + std::to_string(fileCount) +
                          " estimatedUnpacked=" +
                          byteCountForLog(uncompressedSize));
   bool extracted = false;
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  const auto parallelZip = extractZipArchiveFullyConcurrently(
+      archivePath, outputFolder, *index, execution.workersPerArchive, stopToken,
+      progressCallback, pauseCallback, errorMessage, writeGuard);
+  if (parallelZip) {
+    if (!*parallelZip) {
+      if (!writeGuard.error().empty()) *errorMessage = writeGuard.error();
+      return std::nullopt;
+    }
+    extracted = true;
+  }
+#endif
+  auto outputExecution = execution;
+  if (extracted || index->backend == ArchiveIndexBackend::MinizZip) outputExecution.workersPerArchive = 1;
+  UnzipOutputPipeline pipeline(writeGuard, outputExecution, stopToken, pauseCallback);
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
-  if (index->backend == ArchiveIndexBackend::SevenZip) {
+  if (!extracted && index->backend == ArchiveIndexBackend::SevenZip) {
     extracted = extractSevenZipArchiveFully(archivePath, outputFolder, index,
                                             stopToken, progressCallback,
-                                            pauseCallback, errorMessage, writeGuard);
+                                            pauseCallback, errorMessage, writeGuard, pipeline, execution);
+    const bool outputFinished = pipeline.flush();
     if (!writeGuard.error().empty()) {
       *errorMessage = writeGuard.error();
       return std::nullopt;
     }
+    if (!outputFinished) {
+      *errorMessage = pipeline.cancelled() ? "Unzip cancelled" : "Could not finish writing unzipped files. Original archive kept.";
+      return std::nullopt;
+    }
+    if (*errorMessage == "Could not configure 7-Zip extraction workers.") return std::nullopt;
     if (!extracted && archiveReadCancelled(*errorMessage)) {
       *errorMessage = "Unzip cancelled";
       return std::nullopt;
@@ -9824,13 +10216,17 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
-  if (!extracted && !stopRequested(stopToken) &&
-      index->backend == ArchiveIndexBackend::LibArchive) {
+  if (!extracted && !stopRequested(stopToken) && index->backend == ArchiveIndexBackend::LibArchive) {
     extracted = extractArchiveFullyWithLibarchive(
         archivePath, outputFolder, index, stopToken, progressCallback,
-        pauseCallback, errorMessage, writeGuard);
+        pauseCallback, errorMessage, writeGuard, pipeline);
+    const bool outputFinished = pipeline.flush();
     if (!writeGuard.error().empty()) {
       *errorMessage = writeGuard.error();
+      return std::nullopt;
+    }
+    if (!outputFinished) {
+      *errorMessage = pipeline.cancelled() ? "Unzip cancelled" : "Could not finish writing unzipped files. Original archive kept.";
       return std::nullopt;
     }
     if (!extracted && archiveReadCancelled(*errorMessage)) {

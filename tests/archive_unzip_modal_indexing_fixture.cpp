@@ -1,4 +1,5 @@
 #include <cassert>
+#include <algorithm>
 #include <cstdint>
 #include <functional>
 #include <optional>

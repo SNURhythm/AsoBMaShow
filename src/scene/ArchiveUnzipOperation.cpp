@@ -247,6 +247,8 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
         session->QueryChartMeta(query, archives, stopToken);
         queried = true;
         result.archiveCount = archives.size();
+        const auto plan = archive_file::unzipExecutionPlan(limits, archives.size());
+        budget.concurrentArchives = plan.archiveWorkers;
         std::stop_source workersStop;
         std::mutex resultMutex, progressMutex, journalMutex;
         std::vector<double> fractions(archives.size(), 0.0);
@@ -330,8 +332,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
           }
           publish({.message = "Archive finished"}, true, completed);
         };
-        const auto workerCount = std::min(archives.size(),
-            std::clamp<std::size_t>(limits.maximumConcurrentArchives, 1, 2));
+        const auto workerCount = std::min(archives.size(), plan.archiveWorkers);
         std::atomic_size_t nextArchive{workerCount};
         const auto worker = [&](std::size_t archiveIndex) {
           try {

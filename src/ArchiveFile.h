@@ -131,8 +131,19 @@ struct UnzipLimits {
   std::uint64_t maximumArchiveBytes = 256ull * 1024 * 1024 * 1024;
   std::uint64_t maximumTotalBytes = 1024ull * 1024 * 1024 * 1024;
   std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
-  std::size_t maximumConcurrentArchives = 2;
+  std::size_t maximumConcurrentArchives = 0;
+  std::size_t maximumWorkers = 0;
+  std::uint64_t maximumMemoryBytes = 0;
 };
+
+struct UnzipExecutionPlan {
+  std::size_t archiveWorkers = 1;
+  std::size_t workersPerArchive = 1;
+  std::uint64_t memoryPerArchive = 0;
+};
+
+UnzipExecutionPlan unzipExecutionPlan(const UnzipLimits &limits,
+                                     std::size_t archiveCount = 1);
 
 struct UnzipBudget {
   UnzipLimits limits;
@@ -141,6 +152,7 @@ struct UnzipBudget {
   std::mutex mutex;
   std::uint64_t pendingWriteBytes = 0;
   std::string failureMessage;
+  std::size_t concurrentArchives = 1;
 };
 
 struct TemporaryCacheCleanupResult {

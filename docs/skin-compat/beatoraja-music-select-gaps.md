@@ -18,15 +18,16 @@ is selected; the Lua selector uses normal confirmation. Highlighting does not
 start extraction. The shared native modal first asks whether to keep originals
 or delete each archive after extraction, with Cancel available before starting.
 
-Unzip All extracts up to two independent archives concurrently. In Delete mode,
+Unzip All shares a device-sized worker budget across independent archives and
+workers within each archive. In Delete mode,
 each worker extracts successfully, deletes that original, then takes its next
 archive; it never deletes an unfinished original. Keep mode retains all originals.
 Output-folder reservation and recovery-journal writes are serialized so archives
 with matching names cannot overwrite one another. Progress callbacks remain
 serialized and the overall fraction never moves backward. Each progress snapshot
-lets the modal display both active archives in stable
-archive order and counts finished archives, not the reporting worker's queue
-position. Worker updates cannot replace the other archive's status. After workers
+lets the modal display active archives in stable archive order (up to three rows
+plus an additional-active count) and counts finished archives, not the reporting
+worker's queue position. Worker updates cannot replace another archive's status. After workers
 finish or stop, one parallel indexing pass scans all completed output folders.
 Cancellation stops extraction but allows this final indexing pass to finish;
 the modal shows indexing progress with its cancel control disabled. Shutdown
@@ -37,7 +38,7 @@ Single-archive extraction retains its existing post-indexing Keep/Delete choice.
 
 Full extraction checks estimated expanded size against available destination
 space before starting, and enforces actual output-write limits in the 7-Zip,
-libarchive, and batched backends. Defaults are 256 GiB per archive, 1 TiB of
+libarchive, parallel ZIP, and batched backends. Defaults are 256 GiB per archive, 1 TiB of
 cumulative writes per Unzip All operation, and a 512 MiB free-space reserve.
 Available space is checked again before each data write, including when metadata
 understates the expanded size. Concurrent workers share synchronized byte
@@ -47,8 +48,35 @@ reusing a completed folder does not. A byte-limit or free-space failure stops
 active workers and the remaining queue without retrying another backend, keeps
 unfinished originals, and indexes completed folders. Partial output stays
 marked incomplete for recovery; original deletion never refunds the byte budget.
-Callers can request one worker through `UnzipLimits::maximumConcurrentArchives`
-for strictly ordered extraction; the concurrency cap remains two.
+`UnzipLimits::maximumWorkers` defaults to the device CPU count; a scheduling
+memory allowance also limits worker count. The default allowance is one eighth
+of reported RAM, bounded between 64 MiB and 1 GiB; the worker ceiling uses 64 MiB
+per worker, with at least one worker retained.
+The allowance and worker ceiling can be overridden. `maximumConcurrentArchives`
+defaults to automatic: the archive ceiling is the larger of two or one quarter
+of the worker budget, still bounded by available workers and queued archives.
+This leaves parallelism inside each archive without opening too many competing
+output streams. An explicit ceiling overrides that scheduling preference.
+Setting it to one orders archives while still allowing
+parallel work inside each archive. Set `maximumWorkers = 1` for fully serial work.
+Batch and per-archive allocations divide one budget, rather than multiplying
+independent thread pools.
+
+Single ZIP archives stream independent supported entries on separate readers.
+Unsupported ZIP compression methods retain serial fallback; integrity failures
+are terminal. Filesystem-equivalent output names (including Unicode/case aliases)
+disable parallel output to preserve serial overwrite behavior. Large 7-Zip and
+libarchive output streams can overlap decoding with a bounded writer queue,
+which drains before completion markers, indexing, or original deletion.
+Private 7-Zip handlers receive their allocated decoder-thread and memory settings,
+without changing cached library-reader settings. LZMA2 decoding still depends on
+independent chunks in the input; an indivisible LZMA stream cannot be split into
+parallel decoding work.
+
+The scheduling memory allowance is not a hard process-memory limit: the bounded
+output queue is limited to 8 MiB and 128 chunks per archive, and 7-Zip's `memuse`
+setting controls decoder threading, not mandatory dictionaries or encoded-header
+allocations. Large or hostile dictionaries can still exceed that allowance.
 
 Original files are deleted immediately, but their database records are removed
 in one transaction during finalization. Neither scene refreshes its library

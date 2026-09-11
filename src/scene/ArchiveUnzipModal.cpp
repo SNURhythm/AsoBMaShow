@@ -244,9 +244,13 @@ void ArchiveUnzipModal::update() {
     auto message = progress->message;
     if (batchMode_ && !progress->indexing) {
       message.clear();
-      for (const auto &archive : progress->activeArchives) {
+      const auto visibleArchives = std::min<std::size_t>(3, progress->activeArchives.size());
+      for (std::size_t index = 0; index < visibleArchives; ++index) {
         if (!message.empty()) message += '\n';
-        message += archive;
+        message += progress->activeArchives[index];
+      }
+      if (progress->activeArchives.size() > visibleArchives) {
+        message += "\n+ " + std::to_string(progress->activeArchives.size() - visibleArchives) + " other active archives";
       }
       if (message.empty()) message = "Finishing archive extraction";
     }
@@ -396,7 +400,7 @@ void ArchiveUnzipModal::updateProgress(double fraction,
     text << ")";
   }
   percent_->setText(text.str());
-  std::string detail = batchMode_ ? "Processing up to two archives concurrently"
+  std::string detail = batchMode_ ? "Processing archives concurrently within the device budget"
                                  : total > 0 ? "Processing files" : "Working on archive";
   if (indexing_) {
     detail = "Finishing library indexing. This step continues after cancellation.";
