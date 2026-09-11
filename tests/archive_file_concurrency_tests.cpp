@@ -2,6 +2,7 @@
 #include "../src/ArchiveRAII.h"
 #include "../src/scene/play/GameplayBmsResourceAvailability.h"
 #include "fixtures/archive/rar_fixtures.h"
+#include "fixtures/archive/sevenzip_block_fixtures.h"
 
 #include <archive_entry.h>
 
@@ -1494,6 +1495,71 @@ void testSingleEntryZipPreservesIndexedFilename() {
   }
 }
 
+void testFullSevenZipKeepsCompressionBlocksTogether(const unsigned char *fixture,
+                                                    std::size_t fixtureSize,
+                                                    std::size_t workers,
+                                                    std::size_t expectedThreads,
+                                                    std::uint64_t memory = 256ull * 1024 * 1024,
+                                                    bool verifyPreparedHeaders = false) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "blocks.7z";
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(fixture), fixtureSize);
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 2 * 1024 * 1024,
+      .maximumTotalBytes = 2 * 1024 * 1024, .maximumWorkers = workers,
+      .maximumMemoryBytes = memory}};
+  std::set<std::thread::id> threads;
+  std::uint64_t completed = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.fraction > 0.08 && progress.fraction < 0.98 && progress.current > 0) {
+          if (verifyPreparedHeaders && completed == 0) {
+            std::size_t prepared = 0;
+            for (const auto &line : archive_file::debugLogLines()) {
+              if (line.find("Prepared full 7-Zip extraction worker: " + path.string()) != std::string::npos) ++prepared;
+            }
+            assert(prepared == expectedThreads);
+          }
+          assert(progress.current >= completed && progress.total == 9);
+          completed = progress.current;
+          threads.insert(std::this_thread::get_id());
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result && result->fileCount == 9 && completed == 9);
+  assert(budget.writtenBytes == 2 * 1024 * 1024 && budget.pendingWriteBytes == 0);
+  assert(std::filesystem::is_directory(result->outputFolder / "emptydir"));
+  assert(std::filesystem::file_size(result->outputFolder / "empty.bin") == 0);
+  for (std::size_t index = 0; index < 8; ++index) {
+    std::ifstream input(result->outputFolder / ("file" + std::to_string(index) + ".bin"), std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    assert(actual == std::string(256 * 1024, static_cast<char>('a' + index / 2)));
+  }
+  std::cerr << "7z extraction progress threads: " << threads.size() << " expected=" << expectedThreads << '\n';
+  assert(threads.size() == expectedThreads);
+}
+
+void testFullSevenZipDictionaryAdmission(unsigned char dictionary, std::size_t expectedThreads) {
+  std::vector<unsigned char> bytes(std::begin(archive_sevenzip_fixtures::blocksLzma2),
+                                   std::end(archive_sevenzip_fixtures::blocksLzma2));
+  for (std::size_t offset : {0x293, 0x298, 0x29d, 0x2a2}) {
+    assert(bytes[offset] == 0x10);
+    bytes[offset] = dictionary;
+  }
+  const auto checksum = [&](std::size_t begin, std::size_t end) {
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t offset = begin; offset < end; ++offset) {
+      crc ^= bytes[offset];
+      for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+    return crc ^ 0xffffffffu;
+  };
+  writeLeU32(bytes.data() + 28, checksum(32 + readLeU32(bytes.data() + 12), bytes.size()));
+  writeLeU32(bytes.data() + 8, checksum(12, 32));
+  testFullSevenZipKeepsCompressionBlocksTogether(bytes.data(), bytes.size(), 4, expectedThreads);
+}
+
 void testFullRarUsesIndependentEntryWorkers(bool rar4, bool solid, std::size_t workers,
                                            std::uint64_t memory = 256ull * 1024 * 1024,
                                            bool mixedVersions = false) {
@@ -1591,25 +1657,28 @@ void testFullRarSerializesLargeDictionariesAndAliases(bool alias) {
   assert(actual == std::string(1024 * 1024, alias ? 'b' : 'a'));
 }
 
-void testParallelRarFailurePreservesOriginal(int failureKind) {
+void testParallelSdkFailurePreservesOriginal(int failureKind, bool sevenZip = false) {
   TempDirectory temporary;
-  const auto path = temporary.path() / "failure.rar";
-  std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
-                                   std::end(archive_rar_fixtures::nonSolid));
-  if (failureKind == 2) bytes[70] ^= 0x10;
+  const auto path = temporary.path() / (sevenZip ? "failure.7z" : "failure.rar");
+  const auto *fixture = sevenZip ? archive_sevenzip_fixtures::blocksLzma2 : archive_rar_fixtures::nonSolid;
+  const auto size = sevenZip ? sizeof(archive_sevenzip_fixtures::blocksLzma2) : sizeof(archive_rar_fixtures::nonSolid);
+  std::vector<unsigned char> bytes(fixture, fixture + size);
+  if (failureKind == 2) bytes[sevenZip ? 50 : 70] ^= 0x10;
   std::ofstream output(path, std::ios::binary);
   output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
   output.close();
   archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
       .maximumMemoryBytes = 256ull * 1024 * 1024}};
   std::stop_source stop;
+  std::atomic_bool pauseCancelled{false};
   const auto token = stop.get_token();
   std::filesystem::path folder;
   std::string error;
   const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
       &token, [&](const archive_file::UnzipProgress &progress) {
         if (failureKind == 0 && progress.current > 0) stop.request_stop();
-      }, nullptr, false, [&](const auto &destination, const auto &) {
+        if (failureKind == 4 && progress.current > 0) pauseCancelled = true;
+      }, [&] { return !pauseCancelled; }, false, [&](const auto &destination, const auto &) {
         folder = destination;
         if (failureKind == 1) budget.limits.maximumTotalBytes = 1024 * 1024;
         if (failureKind == 3) budget.limits.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max();
@@ -1620,7 +1689,16 @@ void testParallelRarFailurePreservesOriginal(int failureKind) {
   assert(std::filesystem::exists(path));
   assert(std::filesystem::exists(folder / ".asobmashow_unzip_incomplete"));
   assert(!std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+  bool parallelStarted = false;
+  for (const auto &line : archive_file::debugLogLines()) {
+    parallelStarted = parallelStarted || line.find(std::string("Starting parallel full ") +
+        (sevenZip ? "7-Zip" : "RAR") + " unzip: " + path.string()) != std::string::npos;
+    assert(line.find("Starting batched full unzip: " + path.string()) == std::string::npos);
+  }
+  assert(parallelStarted);
+  if (sevenZip) assert(budget.writtenBytes <= 2 * 1024 * 1024);
   if (failureKind == 0) assert(error == "Unzip cancelled" && stop.stop_requested());
+  if (failureKind == 4) assert(error == "Unzip cancelled" && pauseCancelled);
   if (failureKind == 1) assert(budget.exhausted && budget.writtenBytes <= 1024 * 1024 &&
       error.find("expanded-byte limit") != std::string::npos);
   if (failureKind == 3) assert(budget.exhausted && budget.writtenBytes == 0 &&
@@ -2389,6 +2467,27 @@ int main() {
   testParallelZipPreservesUnsupportedCompressionFallback();
   testSingleEntryZipPreservesIndexedFilename();
   testFullRarUsesIndependentEntryWorkers(false, false, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::solidLzma2,
+      sizeof(archive_sevenzip_fixtures::solidLzma2), 4, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::filteredBlocks,
+      sizeof(archive_sevenzip_fixtures::filteredBlocks), 4, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma,
+      sizeof(archive_sevenzip_fixtures::blocksLzma), 1, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma,
+      sizeof(archive_sevenzip_fixtures::blocksLzma), 4, 3);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma2,
+      sizeof(archive_sevenzip_fixtures::blocksLzma2), 4, 3);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma2,
+      sizeof(archive_sevenzip_fixtures::blocksLzma2), 4, 1, 128ull * 1024 * 1024);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma2,
+      sizeof(archive_sevenzip_fixtures::blocksLzma2), 8, 2, 192ull * 1024 * 1024);
+  testFullSevenZipDictionaryAdmission(19, 3);
+  testFullSevenZipDictionaryAdmission(28, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::compressedHeader,
+      sizeof(archive_sevenzip_fixtures::compressedHeader), 4, 3, 256ull * 1024 * 1024, true);
+  for (int failureKind = 0; failureKind < 5; ++failureKind) {
+    testParallelSdkFailurePreservesOriginal(failureKind, true);
+  }
   testFullRarUsesIndependentEntryWorkers(false, true, 4);
   testFullRarUsesIndependentEntryWorkers(false, false, 4);
   testFullRarUsesIndependentEntryWorkers(true, false, 4);
@@ -2397,7 +2496,7 @@ int main() {
   testParallelRarDeclinesMismatchedCachedPath();
   testFullRarSerializesLargeDictionariesAndAliases(false);
   testFullRarSerializesLargeDictionariesAndAliases(true);
-  for (int failureKind = 0; failureKind < 4; ++failureKind) testParallelRarFailurePreservesOriginal(failureKind);
+  for (int failureKind = 0; failureKind < 4; ++failureKind) testParallelSdkFailurePreservesOriginal(failureKind);
   for (const auto *extension : {".zip", ".7z", ".tar"}) {
     testParallelZipSerializesFilesystemAliases(extension);
   }

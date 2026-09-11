@@ -7948,6 +7948,128 @@ std::optional<std::uint64_t> rarDictionaryBytes(IInArchive *archive, UInt32 inde
   return size << shift;
 }
 
+bool configureSevenZipDecoder(IInArchive *archive, std::size_t threads, std::uint64_t memory) {
+  CMyComPtr<ISetProperties> properties;
+  const wchar_t *names[] = {L"mt", L"memuse", L"mtf"};
+  PROPVARIANT values[3]{};
+  values[0].vt = VT_UI4;
+  values[0].ulVal = static_cast<UInt32>(threads);
+  values[1].vt = VT_UI8;
+  values[1].uhVal.QuadPart = memory;
+  values[2].vt = VT_BOOL;
+  values[2].boolVal = VARIANT_FALSE;
+  return archive->QueryInterface(IID_ISetProperties, reinterpret_cast<void **>(&properties)) == S_OK &&
+         properties->SetProperties(names, values, 3) == S_OK;
+}
+
+bool extractSevenZipAssignmentsConcurrently(
+    const std::filesystem::path &archivePath, const std::filesystem::path &outputFolder,
+    SevenZipFormat format, const std::vector<std::vector<const Entry *>> &assignments,
+    std::size_t fileCount, std::uint64_t memoryPerWorker,
+    const std::stop_token *stopToken, const UnzipProgressCallback &progress,
+    const PauseCallback &pause, std::string *errorMessage, UnzipWriteGuard &writeGuard,
+    UnzipOutputPipeline &output, IInArchive *preparedArchive = nullptr) {
+  const auto workers = assignments.size();
+  std::atomic_bool failed{false};
+  std::mutex stateMutex;
+  std::size_t completed = 0;
+  std::string failure;
+  const auto fail = [&](const std::string &message) {
+    std::lock_guard lock(stateMutex);
+    if (failure.empty()) failure = message;
+    failed = true;
+  };
+  const PauseCallback workerPause = [&] { return !failed && unzipCheckpoint(stopToken, pause); };
+  std::vector<CMyComPtr<IInArchive>> preparedArchives(preparedArchive ? workers : 0);
+  std::vector<CMyComPtr<IInStream>> preparedStreams(preparedArchives.size());
+  const auto closePrepared = makeScopeExit([&] {
+    for (auto &archive : preparedArchives) {
+      if (archive.Interface() != nullptr && archive.Interface() != preparedArchive) archive->Close();
+    }
+  });
+  for (std::size_t workerIndex = 0; workerIndex < preparedArchives.size(); ++workerIndex) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+    auto &archive = preparedArchives[workerIndex];
+    if (workerIndex == 0) archive = preparedArchive;
+    else if (!openSevenZipArchiveWithFormat(archivePath, format, archive,
+                                           preparedStreams[workerIndex], errorMessage, workerPause)) return false;
+    if (!configureSevenZipDecoder(archive, 1, memoryPerWorker)) {
+      *errorMessage = "Could not configure 7-Zip extraction workers.";
+      return false;
+    }
+    appendDebugLogLineImpl("Prepared full 7-Zip extraction worker: " + pathForLog(archivePath));
+  }
+  const auto completedFile = [&](const UnzipProgress &) {
+    std::lock_guard lock(stateMutex);
+    ++completed;
+    reportUnzipProgress(progress, 0.08 + 0.88 * static_cast<double>(completed) / fileCount,
+                        completed, fileCount, "Unzipping archive");
+  };
+  const auto worker = [&](std::size_t workerIndex) {
+    try {
+      CMyComPtr<IInArchive> archive;
+      CMyComPtr<IInStream> stream;
+      std::string error;
+      if (preparedArchive) archive = preparedArchives[workerIndex];
+      else if (!openSevenZipArchiveWithFormat(archivePath, format, archive,
+                                             stream, &error, workerPause, 64 * 1024)) {
+        fail(error.empty() ? "Could not open archive extraction worker." : error);
+        return;
+      }
+      const auto close = makeScopeExit([&] { if (!preparedArchive) archive->Close(); });
+      std::vector<UInt32> selected;
+      std::unordered_map<UInt32, Entry> entries;
+      for (const auto *entry : assignments[workerIndex]) {
+        const auto order = static_cast<UInt32>(entry->order);
+        selected.push_back(order);
+        entries.emplace(order, *entry);
+      }
+      std::sort(selected.begin(), selected.end());
+      auto *callback = new SevenZipFullExtractCallback(outputFolder, std::move(entries),
+          selected.size(), stopToken, completedFile, workerPause, writeGuard, output);
+      CMyComPtr<IArchiveExtractCallback> callbackHandle = callback;
+      const auto result = archive->Extract(selected.data(), static_cast<UInt32>(selected.size()), 0, callbackHandle);
+      if (result != S_OK || callback->failed() || callback->cancelled()) {
+        fail(result != S_OK ? sevenZipResultMessage(result) : "Archive extraction failed integrity validation.");
+      }
+    } catch (const std::exception &error) {
+      fail(error.what());
+    } catch (...) {
+      fail("Parallel archive extraction failed.");
+    }
+  };
+  appendDebugLogLineImpl(std::string("Starting parallel full ") +
+                         (format == SevenZipFormat::SevenZip ? "7-Zip" : "RAR") + " unzip: " + pathForLog(archivePath) +
+                         " workers=" + std::to_string(workers));
+  std::vector<std::jthread> threads;
+  threads.reserve(workers - 1);
+  try {
+    for (std::size_t index = 1; index < workers; ++index) {
+      threads.emplace_back([&, index] { worker(index); });
+    }
+    worker(0);
+  } catch (...) {
+    failed = true;
+    throw;
+  }
+  for (auto &thread : threads) thread.join();
+  const bool outputFinished = output.flush();
+  if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+  if (!outputFinished) {
+    *errorMessage = "Could not finish archive output writes.";
+    return false;
+  }
+  if (failed) {
+    *errorMessage = failure;
+    return false;
+  }
+  if (completed != fileCount) {
+    *errorMessage = "Archive extraction did not complete all files.";
+    return false;
+  }
+  return true;
+}
+
 std::optional<bool> extractRarArchiveFullyConcurrently(
     const std::filesystem::path &archivePath, const std::filesystem::path &outputFolder,
     const CachedIndex &index, const UnzipExecutionPlan &execution,
@@ -8014,84 +8136,126 @@ std::optional<bool> extractRarArchiveFullyConcurrently(
     assignments[worker].push_back(entry);
     addClamped(assignedBytes[worker], std::max<std::uint64_t>(entry->size, 64 * 1024));
   }
-  std::atomic_bool failed{false};
-  std::mutex stateMutex;
-  std::size_t completed = 0;
-  std::string failure;
-  const auto fail = [&](const std::string &message) {
-    std::lock_guard lock(stateMutex);
-    if (failure.empty()) failure = message;
-    failed = true;
-  };
-  const PauseCallback workerPause = [&] { return !failed && unzipCheckpoint(stopToken, pause); };
-  UnzipOutputPipeline output(writeGuard, execution, stopToken, workerPause);
-  const auto completedFile = [&](const UnzipProgress &) {
-    std::lock_guard lock(stateMutex);
-    ++completed;
-    reportUnzipProgress(progress, 0.08 + 0.88 * static_cast<double>(completed) / files.size(),
-                        completed, files.size(), "Unzipping archive");
-  };
-  const auto worker = [&](std::size_t workerIndex) {
-    try {
-      CMyComPtr<IInArchive> archive;
-      CMyComPtr<IInStream> stream;
-      std::string error;
-      if (!openSevenZipArchiveWithFormat(archivePath, format, archive,
-                                        stream, &error, workerPause, 64 * 1024)) {
-        fail(error.empty() ? "Could not open RAR extraction worker." : error);
-        return;
-      }
-      const auto close = makeScopeExit([&] { archive->Close(); });
-      std::vector<UInt32> selected;
-      std::unordered_map<UInt32, Entry> entries;
-      for (const auto *entry : assignments[workerIndex]) {
-        const auto order = static_cast<UInt32>(entry->order);
-        selected.push_back(order);
-        entries.emplace(order, *entry);
-      }
-      std::sort(selected.begin(), selected.end());
-      auto *callback = new SevenZipFullExtractCallback(outputFolder, std::move(entries),
-          selected.size(), stopToken, completedFile, workerPause, writeGuard, output);
-      CMyComPtr<IArchiveExtractCallback> callbackHandle = callback;
-      const auto result = archive->Extract(selected.data(), static_cast<UInt32>(selected.size()), 0, callbackHandle);
-      if (result != S_OK || callback->failed() || callback->cancelled()) {
-        fail(result != S_OK ? sevenZipResultMessage(result) : "RAR extraction failed integrity validation.");
-      }
-    } catch (const std::exception &error) {
-      fail(error.what());
-    } catch (...) {
-      fail("Parallel RAR extraction failed.");
+  UnzipOutputPipeline output(writeGuard, execution, stopToken, pause);
+  return extractSevenZipAssignmentsConcurrently(archivePath, outputFolder, format, assignments,
+      files.size(), memoryPerWorker, stopToken, progress, pause, errorMessage, writeGuard, output);
+}
+
+std::optional<std::uint64_t> sevenZipDictionaryBytes(const std::string &method) {
+  std::string_view dictionary(method);
+  if (dictionary.starts_with("LZMA:")) dictionary.remove_prefix(5);
+  else if (dictionary.starts_with("LZMA2:")) dictionary.remove_prefix(6);
+  else return std::nullopt;
+  if (dictionary.empty()) return std::nullopt;
+  unsigned shift = 0;
+  const bool exponent = dictionary.back() >= '0' && dictionary.back() <= '9';
+  if (!exponent) {
+    switch (dictionary.back()) {
+      case 'b': break;
+      case 'k': shift = 10; break;
+      case 'm': shift = 20; break;
+      default: return std::nullopt;
     }
+    dictionary.remove_suffix(1);
+  }
+  std::uint64_t size = 0;
+  const auto parsed = std::from_chars(dictionary.data(), dictionary.data() + dictionary.size(), size);
+  if (parsed.ec != std::errc{} || parsed.ptr != dictionary.data() + dictionary.size()) return std::nullopt;
+  if (exponent) {
+    if (size > 32) return std::nullopt;
+    return std::uint64_t{1} << size;
+  }
+  if (size == 0 || size > (std::numeric_limits<std::uint64_t>::max() >> shift)) return std::nullopt;
+  return size << shift;
+}
+
+std::optional<bool> extractSevenZipBlocksConcurrently(
+    const std::filesystem::path &archivePath, const std::filesystem::path &outputFolder,
+    IInArchive *archive, const CachedIndex &index, UInt32 itemCount,
+    const UnzipExecutionPlan &execution, const std::stop_token *stopToken,
+    const UnzipProgressCallback &progress, const PauseCallback &pause,
+    std::string *errorMessage, UnzipWriteGuard &writeGuard, UnzipOutputPipeline &pipeline) {
+  if (index.sevenZipFormat != static_cast<unsigned char>(SevenZipFormat::SevenZip) ||
+      execution.workersPerArchive < 3 || !pipeline.enabled() ||
+      index.entries.size() != itemCount) return std::nullopt;
+  SevenZipPropVariant blockCount;
+  if (archive->GetArchiveProperty(kpidNumBlocks, &blockCount) == S_OK &&
+      blockCount.vt == VT_UI4 && blockCount.ulVal < 2) return std::nullopt;
+  struct Block {
+    std::vector<const Entry *> files;
+    std::uint64_t bytes = 0;
   };
-  appendDebugLogLineImpl("Starting parallel full RAR unzip: " + pathForLog(archivePath) +
-                         " workers=" + std::to_string(workers));
-  std::vector<std::jthread> threads;
-  threads.reserve(workers - 1);
-  try {
-    for (std::size_t index = 1; index < workers; ++index) {
-      threads.emplace_back([&, index] { worker(index); });
+  std::map<std::uint64_t, Block> blocks;
+  std::unordered_set<UInt32> orders;
+  std::vector<const Entry *> emptyFiles;
+  std::uint64_t metadataPerWorker = 0;
+  for (const auto &entry : index.entries) {
+    addClamped(metadataPerWorker, 512);
+    for (unsigned copy = 0; copy < 4; ++copy) addClamped(metadataPerWorker, entry.path.native().size());
+  }
+  if (metadataPerWorker > execution.memoryPerArchive / 2) return std::nullopt;
+  std::uint64_t memoryPerWorker = 64ull * 1024 * 1024;
+  std::size_t fileCount = 0;
+  for (const auto &entry : index.entries) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+    if (entry.order >= itemCount) return std::nullopt;
+    const auto order = static_cast<UInt32>(entry.order);
+    if (!orders.insert(order).second) return std::nullopt;
+    const auto name = sevenZipStringProperty(archive, order, kpidPath);
+    std::filesystem::path actualPath;
+    if (!name || !safeEntryPath(*name, actualPath) || actualPath != entry.path ||
+        sevenZipBoolProperty(archive, order, kpidIsDir, !entry.directory) != entry.directory ||
+        sevenZipBoolProperty(archive, order, kpidIsAnti, true) ||
+        sevenZipStringProperty(archive, order, kpidSymLink).has_value() ||
+        sevenZipStringProperty(archive, order, kpidHardLink).has_value() ||
+        sevenZipStringProperty(archive, order, kpidCopyLink).has_value()) return std::nullopt;
+    if (entry.directory) continue;
+    if (sevenZipBoolProperty(archive, order, kpidEncrypted, true) ||
+        sevenZipUInt64Property(archive, order, kpidSize, std::numeric_limits<std::uint64_t>::max()) != entry.size) return std::nullopt;
+    const auto block = sevenZipUInt64Property(archive, order, kpidBlock, std::numeric_limits<std::uint64_t>::max());
+    ++fileCount;
+    if (block == std::numeric_limits<std::uint64_t>::max()) {
+      if (entry.size != 0) return std::nullopt;
+      emptyFiles.push_back(&entry);
+      continue;
     }
-    worker(0);
-  } catch (...) {
-    failed = true;
-    throw;
+    const auto method = sevenZipStringProperty(archive, order, kpidMethod);
+    const auto dictionary = method ? sevenZipDictionaryBytes(*method) : std::nullopt;
+    if (!dictionary || *dictionary > execution.memoryPerArchive / 2) return std::nullopt;
+    std::uint64_t allowance = metadataPerWorker;
+    addClamped(allowance, *dictionary * 2);
+    addClamped(allowance, 16 * 1024 * 1024);
+    memoryPerWorker = std::max(memoryPerWorker, allowance);
+    auto &group = blocks[block];
+    group.files.push_back(&entry);
+    addClamped(group.bytes, std::max<std::uint64_t>(entry.size, 64 * 1024));
   }
-  for (auto &thread : threads) thread.join();
-  const bool outputFinished = output.flush();
-  if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
-  if (!outputFinished) {
-    *errorMessage = "Could not finish RAR output writes.";
-    return false;
+  const auto workers = std::min({execution.workersPerArchive - 1, blocks.size(),
+      static_cast<std::size_t>((execution.memoryPerArchive - pipeline.bufferBudget()) / memoryPerWorker)});
+  if (workers < 2) return std::nullopt;
+  std::vector<const Block *> ordered;
+  for (const auto &[block, group] : blocks) ordered.push_back(&group);
+  std::stable_sort(ordered.begin(), ordered.end(), [](const Block *left, const Block *right) {
+    return left->bytes > right->bytes;
+  });
+  std::vector<std::vector<const Entry *>> assignments(workers);
+  std::vector<std::uint64_t> assignedBytes(workers);
+  for (const auto *group : ordered) {
+    const auto worker = std::min_element(assignedBytes.begin(), assignedBytes.end()) - assignedBytes.begin();
+    assignments[worker].insert(assignments[worker].end(), group->files.begin(), group->files.end());
+    addClamped(assignedBytes[worker], group->bytes);
   }
-  if (failed) {
-    *errorMessage = failure;
-    return false;
+  for (const auto *entry : emptyFiles) {
+    const auto worker = std::min_element(assignedBytes.begin(), assignedBytes.end()) - assignedBytes.begin();
+    assignments[worker].push_back(entry);
+    addClamped(assignedBytes[worker], 64 * 1024);
   }
-  if (completed != files.size()) {
-    *errorMessage = "RAR extraction did not complete all files.";
-    return false;
-  }
-  return true;
+  appendDebugLogLineImpl("Parallel full 7-Zip block unzip: " + pathForLog(archivePath) +
+                         " blocks=" + std::to_string(blocks.size()) +
+                         " workers=" + std::to_string(workers) +
+                         " memoryPerWorker=" + std::to_string(memoryPerWorker));
+  return extractSevenZipAssignmentsConcurrently(archivePath, outputFolder, SevenZipFormat::SevenZip,
+      assignments, fileCount, memoryPerWorker, stopToken, progress, pause, errorMessage, writeGuard, pipeline, archive);
 }
 
 bool extractSevenZipArchiveFully(
@@ -8102,7 +8266,8 @@ bool extractSevenZipArchiveFully(
     const UnzipProgressCallback &progressCallback,
     const PauseCallback &pauseCallback,
     std::string *errorMessage, UnzipWriteGuard &writeGuard,
-    UnzipOutputPipeline &pipeline, const UnzipExecutionPlan &execution) {
+    UnzipOutputPipeline &pipeline, const UnzipExecutionPlan &execution,
+    bool &parallelAttempted) {
   if (index == nullptr || index->backend != ArchiveIndexBackend::SevenZip ||
       index->sevenZipFormat == 0) {
     return false;
@@ -8121,17 +8286,8 @@ bool extractSevenZipArchiveFully(
   const auto decoderThreads = std::min<std::size_t>(32,
       execution.workersPerArchive > 3 ? execution.workersPerArchive - 2 : 1);
   if (index->sevenZipFormat == static_cast<unsigned char>(SevenZipFormat::SevenZip)) {
-    CMyComPtr<ISetProperties> properties;
-    const wchar_t *names[] = {L"mt", L"memuse", L"mtf"};
-    PROPVARIANT values[3]{};
-    values[0].vt = VT_UI4;
-    values[0].ulVal = static_cast<UInt32>(decoderThreads);
-    values[1].vt = VT_UI8;
-    values[1].uhVal.QuadPart = execution.memoryPerArchive - pipeline.bufferBudget();
-    values[2].vt = VT_BOOL;
-    values[2].boolVal = VARIANT_FALSE;
-    if (archive->QueryInterface(IID_ISetProperties, reinterpret_cast<void **>(&properties)) != S_OK ||
-        properties->SetProperties(names, values, 3) != S_OK) {
+    if (!configureSevenZipDecoder(archive, decoderThreads,
+                                 execution.memoryPerArchive - pipeline.bufferBudget())) {
       *errorMessage = "Could not configure 7-Zip extraction workers.";
       return false;
     }
@@ -8171,6 +8327,13 @@ bool extractSevenZipArchiveFully(
       ++fileCount;
     }
     entries.emplace(itemIndex, entry);
+  }
+
+  const auto parallel = extractSevenZipBlocksConcurrently(archivePath, outputFolder, archive, *index,
+      itemCount, execution, stopToken, progressCallback, pauseCallback, errorMessage, writeGuard, pipeline);
+  if (parallel) {
+    parallelAttempted = true;
+    return *parallel;
   }
 
   auto *callback = new SevenZipFullExtractCallback(
@@ -10399,9 +10562,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   UnzipOutputPipeline pipeline(writeGuard, outputExecution, stopToken, pauseCallback);
 #if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
   if (!extracted && index->backend == ArchiveIndexBackend::SevenZip) {
+    bool parallelAttempted = false;
     extracted = extractSevenZipArchiveFully(archivePath, outputFolder, index,
                                             stopToken, progressCallback,
-                                            pauseCallback, errorMessage, writeGuard, pipeline, execution);
+                                            pauseCallback, errorMessage, writeGuard, pipeline, execution, parallelAttempted);
     const bool outputFinished = pipeline.flush();
     if (!writeGuard.error().empty()) {
       *errorMessage = writeGuard.error();
@@ -10412,6 +10576,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       return std::nullopt;
     }
     if (*errorMessage == "Could not configure 7-Zip extraction workers.") return std::nullopt;
+    if (!extracted && parallelAttempted) return std::nullopt;
     if (!extracted && archiveReadCancelled(*errorMessage)) {
       *errorMessage = "Unzip cancelled";
       return std::nullopt;
