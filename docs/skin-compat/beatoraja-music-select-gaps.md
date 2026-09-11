@@ -73,6 +73,22 @@ without changing cached library-reader settings. LZMA2 decoding still depends on
 independent chunks in the input; an indivisible LZMA stream cannot be split into
 parallel decoding work.
 
+Non-solid RAR4/RAR5 archives can stream independent entries through private SDK
+handlers. Files are balanced by expanded size and each handler extracts its
+assigned indices in archive order. One shared bounded writer queue serves all
+decoders, and its thread counts against the same per-archive worker budget.
+Parallel RAR requires at least two decoders plus that writer; smaller budgets
+retain the existing route. Private RAR handles use 64 KiB input read-ahead to
+avoid multiplying large header-scan reads; cached library readers are unchanged.
+SDK paths, types, sizes, solid flags, encryption, and link metadata are checked
+before selecting this route. Solid, multi-volume, mismatched, aliased, or
+insufficient-memory cases retain existing extraction behavior. RAR4 scheduling
+allows 320 MiB per decoder to cover its otherwise-hidden 256 MiB PPM allocation
+and declines mixed unpack versions, which can retain multiple decoders per handler;
+RAR5 scheduling includes twice the advertised dictionary plus decoder overhead,
+with a 64 MiB minimum. CRC, cancellation, and write-budget failures after starting
+the concurrent route are terminal, and the shared writer drains before success.
+
 The scheduling memory allowance is not a hard process-memory limit: the bounded
 output queue is limited to 8 MiB and 128 chunks per archive, and 7-Zip's `memuse`
 setting controls decoder threading, not mandatory dictionaries or encoded-header

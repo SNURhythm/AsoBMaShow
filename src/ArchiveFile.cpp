@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <charconv>
 #include <chrono>
 #include <clocale>
 #include <condition_variable>
@@ -223,6 +224,7 @@ public:
   std::size_t bufferBudget() const { return enabled() ? capacity_ : 0; }
 
   bool write(const std::shared_ptr<std::ofstream> &output, const void *data, std::size_t size) {
+    std::lock_guard stagingLock(stagingMutex_);
     if (!enabled()) return guard_.write(*output, data, size);
     if (stagedOutput_ != output && !enqueueStaged()) return false;
     const auto *bytes = static_cast<const char *>(data);
@@ -241,6 +243,7 @@ public:
   }
 
   bool flush() {
+    std::lock_guard stagingLock(stagingMutex_);
     try {
       enqueueStaged();
     } catch (...) {
@@ -326,6 +329,7 @@ private:
   const std::stop_token *stopToken_;
   PauseCallback pause_;
   std::size_t capacity_;
+  std::mutex stagingMutex_;
   std::mutex mutex_;
   std::condition_variable changed_;
   std::deque<Chunk> queue_;
@@ -1672,6 +1676,9 @@ std::uint64_t sevenZipUInt64Property(IInArchive *archive, UInt32 index,
   if (value.vt == VT_UI4) {
     return static_cast<std::uint64_t>(value.ulVal);
   }
+  if (value.vt == VT_UI1) {
+    return value.bVal;
+  }
   if (value.vt == VT_I4) {
     return value.lVal > 0 ? static_cast<std::uint64_t>(value.lVal)
                           : defaultValue;
@@ -1682,11 +1689,11 @@ std::uint64_t sevenZipUInt64Property(IInArchive *archive, UInt32 index,
 class SevenZipInFileStream final : public IInStream, public IStreamGetSize {
 public:
   SevenZipInFileStream(const std::filesystem::path &path, std::uintmax_t size,
-                       PauseCallback pauseCallback)
+                       PauseCallback pauseCallback, std::size_t inputBufferSize = 1u << 20)
       : size_(static_cast<UInt64>(size)),
         pauseCallback_(std::move(pauseCallback)) {
     file_.rdbuf()->pubsetbuf(buffer_.data(),
-                             static_cast<std::streamsize>(buffer_.size()));
+                             static_cast<std::streamsize>(std::clamp<std::size_t>(inputBufferSize, 1, buffer_.size())));
     file_.open(path, std::ios::binary);
   }
 
@@ -2570,7 +2577,8 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
                                    CMyComPtr<IInArchive> &archive,
                                    CMyComPtr<IInStream> &stream,
                                    std::string *errorMessage,
-                                   const PauseCallback &pauseCallback) {
+                                   const PauseCallback &pauseCallback,
+                                   std::size_t inputBufferSize = 1u << 20) {
   archive.Release();
   stream.Release();
 
@@ -2598,7 +2606,7 @@ bool openSevenZipArchiveWithFormat(const std::filesystem::path &archivePath,
   }
 
   auto *fileStream =
-      new SevenZipInFileStream(archivePath, archiveSize, pauseCallback);
+      new SevenZipInFileStream(archivePath, archiveSize, pauseCallback, inputBufferSize);
   if (!fileStream->isOpen()) {
     delete fileStream;
     if (errorMessage != nullptr) {
@@ -7903,6 +7911,189 @@ bool readSevenZipEntriesByIndexConcurrent(
   return true;
 }
 
+std::optional<std::uint64_t> rarDictionaryBytes(IInArchive *archive, UInt32 index,
+                                               SevenZipFormat format) {
+  const auto method = sevenZipStringProperty(archive, index, kpidMethod);
+  if (!method) return std::nullopt;
+  std::size_t methodStart = 0;
+  if (format != SevenZipFormat::Rar) {
+    const auto separator = method->find(":m");
+    if (separator == std::string::npos) return std::nullopt;
+    methodStart = separator + 1;
+  }
+  if (methodStart >= method->size() || (*method)[methodStart] != 'm' ||
+      methodStart + 2 >= method->size() || (*method)[methodStart + 2] != ':') return std::nullopt;
+  const auto end = method->find_first_of(": ", methodStart + 3);
+  std::string_view dictionary(*method);
+  dictionary = dictionary.substr(methodStart + 3, end == std::string::npos ? end : end - methodStart - 3);
+  unsigned shift = 0;
+  if (format != SevenZipFormat::Rar) {
+    if (dictionary.empty()) return std::nullopt;
+    switch (dictionary.back()) {
+      case 'K': shift = 10; break;
+      case 'M': shift = 20; break;
+      case 'G': shift = 30; break;
+      default: return std::nullopt;
+    }
+    dictionary.remove_suffix(1);
+  }
+  std::uint64_t size = 0;
+  const auto parsed = std::from_chars(dictionary.data(), dictionary.data() + dictionary.size(), size);
+  if (parsed.ec != std::errc{} || parsed.ptr != dictionary.data() + dictionary.size()) return std::nullopt;
+  if (format == SevenZipFormat::Rar) {
+    if (size > 22) return std::nullopt;
+    return std::uint64_t{1} << size;
+  }
+  if (size == 0 || size > (std::numeric_limits<std::uint64_t>::max() >> shift)) return std::nullopt;
+  return size << shift;
+}
+
+std::optional<bool> extractRarArchiveFullyConcurrently(
+    const std::filesystem::path &archivePath, const std::filesystem::path &outputFolder,
+    const CachedIndex &index, const UnzipExecutionPlan &execution,
+    const std::stop_token *stopToken, const UnzipProgressCallback &progress,
+    const PauseCallback &pause, std::string *errorMessage, UnzipWriteGuard &writeGuard) {
+  if (!hasRarArchiveExtension(archivePath) || execution.workersPerArchive < 3 ||
+      (index.backend != ArchiveIndexBackend::SevenZip && index.backend != ArchiveIndexBackend::UnarrRar)) return std::nullopt;
+  const auto signature = rarSignature(archivePath);
+  if (signature == RarSignature::Unknown) return std::nullopt;
+  const auto format = signature == RarSignature::Rar4 ? SevenZipFormat::Rar : SevenZipFormat::Rar5;
+  const PauseCallback inputPause = [&] { return unzipCheckpoint(stopToken, pause); };
+  CMyComPtr<IInArchive> preflight;
+  CMyComPtr<IInStream> preflightStream;
+  std::string preflightError;
+  if (!openSevenZipArchiveWithFormat(archivePath, format, preflight,
+                                    preflightStream, &preflightError, inputPause, 64 * 1024)) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+    return std::nullopt;
+  }
+  const auto closePreflight = makeScopeExit([&] { preflight->Close(); });
+  if (sevenZipArchiveBoolProperty(preflight, kpidSolid, true) ||
+      sevenZipArchiveBoolProperty(preflight, kpidIsVolume, true)) return std::nullopt;
+  UInt32 itemCount = 0;
+  if (preflight->GetNumberOfItems(&itemCount) != S_OK) return std::nullopt;
+  std::vector<const Entry *> files;
+  std::uint64_t memoryPerWorker = (format == SevenZipFormat::Rar ? 320ull : 64ull) * 1024 * 1024;
+  std::optional<std::uint64_t> rarVersion;
+  for (const auto &entry : index.entries) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+    if (entry.order >= itemCount) return std::nullopt;
+    const auto order = static_cast<UInt32>(entry.order);
+    const auto name = sevenZipStringProperty(preflight, order, kpidPath);
+    std::filesystem::path actualPath;
+    if (!name || !safeEntryPath(*name, actualPath) || actualPath != entry.path ||
+        sevenZipBoolProperty(preflight, order, kpidIsDir, !entry.directory) != entry.directory) return std::nullopt;
+    if (entry.directory) continue;
+    if (format == SevenZipFormat::Rar) {
+      const auto version = sevenZipUInt64Property(preflight, order, kpidUnpackVer, 255);
+      if (version > 40 || (rarVersion && *rarVersion != version)) return std::nullopt;
+      rarVersion = version;
+    }
+    if (entry.solid || sevenZipBoolProperty(preflight, order, kpidSolid, true) ||
+        sevenZipBoolProperty(preflight, order, kpidEncrypted, true) ||
+        sevenZipUInt64Property(preflight, order, kpidSize, std::numeric_limits<std::uint64_t>::max()) != entry.size ||
+        sevenZipStringProperty(preflight, order, kpidSymLink).has_value() ||
+        sevenZipStringProperty(preflight, order, kpidHardLink).has_value() ||
+        sevenZipStringProperty(preflight, order, kpidCopyLink).has_value()) return std::nullopt;
+    const auto dictionary = rarDictionaryBytes(preflight, order, format);
+    if (!dictionary || *dictionary > execution.memoryPerArchive / 2) return std::nullopt;
+    memoryPerWorker = std::max(memoryPerWorker, *dictionary * 2 + 16 * 1024 * 1024);
+    files.push_back(&entry);
+  }
+  const auto outputMemory = std::min<std::uint64_t>(8 * 1024 * 1024, execution.memoryPerArchive / 8);
+  const auto workers = std::min({execution.workersPerArchive - 1, files.size(),
+      static_cast<std::size_t>((execution.memoryPerArchive - outputMemory) / memoryPerWorker)});
+  if (workers < 2) return std::nullopt;
+  std::sort(files.begin(), files.end(), [](const Entry *left, const Entry *right) {
+    return left->size != right->size ? left->size > right->size : left->order < right->order;
+  });
+  std::vector<std::vector<const Entry *>> assignments(workers);
+  std::vector<std::uint64_t> assignedBytes(workers);
+  for (const auto *entry : files) {
+    const auto worker = std::min_element(assignedBytes.begin(), assignedBytes.end()) - assignedBytes.begin();
+    assignments[worker].push_back(entry);
+    addClamped(assignedBytes[worker], std::max<std::uint64_t>(entry->size, 64 * 1024));
+  }
+  std::atomic_bool failed{false};
+  std::mutex stateMutex;
+  std::size_t completed = 0;
+  std::string failure;
+  const auto fail = [&](const std::string &message) {
+    std::lock_guard lock(stateMutex);
+    if (failure.empty()) failure = message;
+    failed = true;
+  };
+  const PauseCallback workerPause = [&] { return !failed && unzipCheckpoint(stopToken, pause); };
+  UnzipOutputPipeline output(writeGuard, execution, stopToken, workerPause);
+  const auto completedFile = [&](const UnzipProgress &) {
+    std::lock_guard lock(stateMutex);
+    ++completed;
+    reportUnzipProgress(progress, 0.08 + 0.88 * static_cast<double>(completed) / files.size(),
+                        completed, files.size(), "Unzipping archive");
+  };
+  const auto worker = [&](std::size_t workerIndex) {
+    try {
+      CMyComPtr<IInArchive> archive;
+      CMyComPtr<IInStream> stream;
+      std::string error;
+      if (!openSevenZipArchiveWithFormat(archivePath, format, archive,
+                                        stream, &error, workerPause, 64 * 1024)) {
+        fail(error.empty() ? "Could not open RAR extraction worker." : error);
+        return;
+      }
+      const auto close = makeScopeExit([&] { archive->Close(); });
+      std::vector<UInt32> selected;
+      std::unordered_map<UInt32, Entry> entries;
+      for (const auto *entry : assignments[workerIndex]) {
+        const auto order = static_cast<UInt32>(entry->order);
+        selected.push_back(order);
+        entries.emplace(order, *entry);
+      }
+      std::sort(selected.begin(), selected.end());
+      auto *callback = new SevenZipFullExtractCallback(outputFolder, std::move(entries),
+          selected.size(), stopToken, completedFile, workerPause, writeGuard, output);
+      CMyComPtr<IArchiveExtractCallback> callbackHandle = callback;
+      const auto result = archive->Extract(selected.data(), static_cast<UInt32>(selected.size()), 0, callbackHandle);
+      if (result != S_OK || callback->failed() || callback->cancelled()) {
+        fail(result != S_OK ? sevenZipResultMessage(result) : "RAR extraction failed integrity validation.");
+      }
+    } catch (const std::exception &error) {
+      fail(error.what());
+    } catch (...) {
+      fail("Parallel RAR extraction failed.");
+    }
+  };
+  appendDebugLogLineImpl("Starting parallel full RAR unzip: " + pathForLog(archivePath) +
+                         " workers=" + std::to_string(workers));
+  std::vector<std::jthread> threads;
+  threads.reserve(workers - 1);
+  try {
+    for (std::size_t index = 1; index < workers; ++index) {
+      threads.emplace_back([&, index] { worker(index); });
+    }
+    worker(0);
+  } catch (...) {
+    failed = true;
+    throw;
+  }
+  for (auto &thread : threads) thread.join();
+  const bool outputFinished = output.flush();
+  if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+  if (!outputFinished) {
+    *errorMessage = "Could not finish RAR output writes.";
+    return false;
+  }
+  if (failed) {
+    *errorMessage = failure;
+    return false;
+  }
+  if (completed != files.size()) {
+    *errorMessage = "RAR extraction did not complete all files.";
+    return false;
+  }
+  return true;
+}
+
 bool extractSevenZipArchiveFully(
     const std::filesystem::path &archivePath,
     const std::filesystem::path &outputFolder,
@@ -10179,6 +10370,18 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                          " estimatedUnpacked=" +
                          byteCountForLog(uncompressedSize));
   bool extracted = false;
+#if ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP
+  const auto parallelRar = extractRarArchiveFullyConcurrently(
+      archivePath, outputFolder, *index, execution, stopToken, progressCallback,
+      pauseCallback, errorMessage, writeGuard);
+  if (parallelRar) {
+    if (!*parallelRar) {
+      if (!writeGuard.error().empty()) *errorMessage = writeGuard.error();
+      return std::nullopt;
+    }
+    extracted = true;
+  }
+#endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
   const auto parallelZip = extractZipArchiveFullyConcurrently(
       archivePath, outputFolder, *index, execution.workersPerArchive, stopToken,

@@ -3950,6 +3950,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             "${SEVENZIP_TEST_SUPPORT_DIR}/LzmaRegister.cpp.o"
             "${SEVENZIP_TEST_SUPPORT_DIR}/Lzma2Register.cpp.o"
             "${SEVENZIP_TEST_SUPPORT_DIR}/DeltaFilter.cpp.o"
+            "${SEVENZIP_TEST_SUPPORT_DIR}/RarHandler.cpp.o"
+            "${SEVENZIP_TEST_SUPPORT_DIR}/Rar5Handler.cpp.o"
+            "${SEVENZIP_TEST_SUPPORT_DIR}/RarCodecsRegister.cpp.o"
         )
         add_custom_command(
             OUTPUT ${SEVENZIP_TEST_LINK_OBJECTS}
@@ -3962,6 +3965,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 LzmaRegister.cpp.o
                 Lzma2Register.cpp.o
                 DeltaFilter.cpp.o
+                RarHandler.cpp.o
+                Rar5Handler.cpp.o
+                RarCodecsRegister.cpp.o
             WORKING_DIRECTORY "${SEVENZIP_TEST_SUPPORT_DIR}"
             COMMENT "Extracting 7-Zip registrations for concurrency test"
             VERBATIM

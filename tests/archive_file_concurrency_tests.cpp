@@ -1,6 +1,7 @@
 #include "../src/ArchiveFile.h"
 #include "../src/ArchiveRAII.h"
 #include "../src/scene/play/GameplayBmsResourceAvailability.h"
+#include "fixtures/archive/rar_fixtures.h"
 
 #include <archive_entry.h>
 
@@ -1493,6 +1494,189 @@ void testSingleEntryZipPreservesIndexedFilename() {
   }
 }
 
+void testFullRarUsesIndependentEntryWorkers(bool rar4, bool solid, std::size_t workers,
+                                           std::uint64_t memory = 256ull * 1024 * 1024,
+                                           bool mixedVersions = false) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "parallel.rar";
+  const auto *bytes = rar4 ? archive_rar_fixtures::rar4 :
+      solid ? archive_rar_fixtures::solid : archive_rar_fixtures::nonSolid;
+  const auto size = rar4 ? sizeof(archive_rar_fixtures::rar4) : sizeof(archive_rar_fixtures::nonSolid);
+  std::vector<unsigned char> fixture(bytes, bytes + size);
+  if (mixedVersions) {
+    const std::size_t header = 90;
+    fixture[header + 24] = 29;
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t offset = header + 2; offset < header + 50; ++offset) {
+      crc ^= fixture[offset];
+      for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+    crc ^= 0xffffffffu;
+    fixture[header] = static_cast<unsigned char>(crc);
+    fixture[header + 1] = static_cast<unsigned char>(crc >> 8);
+  }
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(fixture.data()), fixture.size());
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = rar4 ? 48ull : 4ull * 1024 * 1024,
+      .maximumTotalBytes = rar4 ? 48ull : 4ull * 1024 * 1024, .maximumWorkers = workers,
+      .maximumMemoryBytes = memory}};
+  std::set<std::thread::id> threads;
+  std::uint64_t completed = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.fraction > 0.08 && progress.fraction < 0.98 && progress.current > 0) {
+          assert(progress.current >= completed);
+          completed = progress.current;
+          threads.insert(std::this_thread::get_id());
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result);
+  std::cerr << "RAR workers: version=" << (rar4 ? 4 : 5) << " solid=" << solid
+            << " requested=" << workers << " observed=" << threads.size() << '\n';
+  assert(threads.size() == (solid || mixedVersions || workers == 1 || (rar4 && memory < 640ull * 1024 * 1024)
+      ? 1 : rar4 ? 3 : workers - 1));
+  const std::size_t fileCount = rar4 ? 3 : 4;
+  assert(completed == fileCount);
+  assert(budget.writtenBytes == (rar4 ? 48 : 4 * 1024 * 1024));
+  assert(budget.pendingWriteBytes == 0);
+  for (std::size_t index = 0; index < fileCount; ++index) {
+    const std::string name = rar4 ? index == 0 ? "test.txt" :
+        index == 1 ? "testlink" : "testdir/test.txt" : "file" + std::to_string(index) + ".bin";
+    std::ifstream input(result->outputFolder / name, std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    const std::string expected = rar4 ? index == 1 ? "test.txt" : "test text document\r\n" :
+        std::string(1024 * 1024, static_cast<char>('a' + index));
+    assert(actual == expected);
+  }
+}
+
+void testFullRarSerializesLargeDictionariesAndAliases(bool alias) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "constrained.rar";
+  std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
+                                   std::end(archive_rar_fixtures::nonSolid));
+  for (std::size_t header : {25, 123, 221, 319}) {
+    if (alias && header != 123) continue;
+    if (alias) {
+      const std::string name = "file0.bin";
+      std::copy(name.begin(), name.end(), bytes.begin() + header + 29);
+    } else {
+      bytes[header + 26] = 0x5b;
+    }
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t offset = header + 4; offset < header + 38; ++offset) {
+      crc ^= bytes[offset];
+      for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+    writeLeU32(bytes.data() + header, crc ^ 0xffffffffu);
+  }
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 256ull * 1024 * 1024}};
+  std::set<std::thread::id> threads;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.fraction > 0.08 && progress.fraction < 0.98 && progress.current > 0) {
+          threads.insert(std::this_thread::get_id());
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result && threads.size() == 1 && budget.writtenBytes == 4 * 1024 * 1024);
+  std::ifstream input(result->outputFolder / "file0.bin", std::ios::binary);
+  const std::string actual((std::istreambuf_iterator<char>(input)), {});
+  assert(actual == std::string(1024 * 1024, alias ? 'b' : 'a'));
+}
+
+void testParallelRarFailurePreservesOriginal(int failureKind) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "failure.rar";
+  std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
+                                   std::end(archive_rar_fixtures::nonSolid));
+  if (failureKind == 2) bytes[70] ^= 0x10;
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 256ull * 1024 * 1024}};
+  std::stop_source stop;
+  const auto token = stop.get_token();
+  std::filesystem::path folder;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      &token, [&](const archive_file::UnzipProgress &progress) {
+        if (failureKind == 0 && progress.current > 0) stop.request_stop();
+      }, nullptr, false, [&](const auto &destination, const auto &) {
+        folder = destination;
+        if (failureKind == 1) budget.limits.maximumTotalBytes = 1024 * 1024;
+        if (failureKind == 3) budget.limits.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max();
+        return true;
+      }, &budget);
+  assert(!result && !error.empty());
+  assert(budget.pendingWriteBytes == 0);
+  assert(std::filesystem::exists(path));
+  assert(std::filesystem::exists(folder / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+  if (failureKind == 0) assert(error == "Unzip cancelled" && stop.stop_requested());
+  if (failureKind == 1) assert(budget.exhausted && budget.writtenBytes <= 1024 * 1024 &&
+      error.find("expanded-byte limit") != std::string::npos);
+  if (failureKind == 3) assert(budget.exhausted && budget.writtenBytes == 0 &&
+      error.find("free-space") != std::string::npos);
+}
+
+void testParallelRarDeclinesMismatchedCachedPath() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "mismatched.rar";
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(archive_rar_fixtures::rar4), sizeof(archive_rar_fixtures::rar4));
+  output.close();
+  const auto cacheDirectory = temporary.path() / "index";
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error) && entries.size() == 3);
+  assert(entries.front().path == "test.txt");
+  const auto cachePath = std::filesystem::directory_iterator(cacheDirectory)->path();
+  {
+    std::fstream cache(cachePath, std::ios::binary | std::ios::in | std::ios::out);
+    cache.seekg(1);
+    std::uint64_t keySize = 0;
+    cache.read(reinterpret_cast<char *>(&keySize), sizeof(keySize));
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1 + 8 + 8, std::ios::cur);
+    cache.seekp(cache.tellg());
+    cache.put('r');
+    assert(cache.good());
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(path, entries, &error) && entries.front().path == "rest.txt");
+  archive_file::UnzipBudget serialBudget{.limits = {.maximumWorkers = 1}};
+  const auto serial = archive_file::unzipArchiveFully(path, temporary.path() / "serial", &error,
+      nullptr, nullptr, nullptr, false, nullptr, &serialBudget);
+  assert(serial);
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 1024ull * 1024 * 1024}};
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, nullptr, nullptr, false, nullptr, &budget);
+  assert(result && std::filesystem::exists(path));
+  assert(budget.writtenBytes == serialBudget.writtenBytes);
+  for (const auto *name : {"test.txt", "rest.txt", "testlink", "testdir/test.txt"}) {
+    assert(std::filesystem::exists(result->outputFolder / name) ==
+           std::filesystem::exists(serial->outputFolder / name));
+    std::ifstream actual(result->outputFolder / name, std::ios::binary);
+    std::ifstream expected(serial->outputFolder / name, std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(actual)), {}) ==
+           std::string((std::istreambuf_iterator<char>(expected)), {}));
+  }
+  for (const auto &line : archive_file::debugLogLines()) {
+    assert(line.find("Starting parallel full RAR unzip: " + path.string()) == std::string::npos);
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
 void testParallelZipSerializesFilesystemAliases(const std::string &extension) {
   TempDirectory temporary;
   const std::string composed = "\xc3\xa9.bin";
@@ -2204,6 +2388,16 @@ int main() {
   testFullUnzipHonorsPauseDuringExtraction();
   testParallelZipPreservesUnsupportedCompressionFallback();
   testSingleEntryZipPreservesIndexedFilename();
+  testFullRarUsesIndependentEntryWorkers(false, false, 1);
+  testFullRarUsesIndependentEntryWorkers(false, true, 4);
+  testFullRarUsesIndependentEntryWorkers(false, false, 4);
+  testFullRarUsesIndependentEntryWorkers(true, false, 4);
+  testFullRarUsesIndependentEntryWorkers(true, false, 4, 1024ull * 1024 * 1024);
+  testFullRarUsesIndependentEntryWorkers(true, false, 4, 1024ull * 1024 * 1024, true);
+  testParallelRarDeclinesMismatchedCachedPath();
+  testFullRarSerializesLargeDictionariesAndAliases(false);
+  testFullRarSerializesLargeDictionariesAndAliases(true);
+  for (int failureKind = 0; failureKind < 4; ++failureKind) testParallelRarFailurePreservesOriginal(failureKind);
   for (const auto *extension : {".zip", ".7z", ".tar"}) {
     testParallelZipSerializesFilesystemAliases(extension);
   }
