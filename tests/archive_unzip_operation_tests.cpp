@@ -1,5 +1,6 @@
 #include "../src/scene/ArchiveUnzipOperation.h"
 #include "../src/ArchiveRAII.h"
+#include "../src/ArchiveSourceIdentity.h"
 #include "../src/ChartLibraryScanner.h"
 #include "../src/library/ArchiveUnzipRecovery.h"
 #include "../src/sqlite3.h"
@@ -213,7 +214,285 @@ void partialExtractionIsNotIndexedByOrdinaryStartupScan() {
   }
   assert(archive_unzip_recovery::recover(*session).completed);
   assert(session->LoadUnzipRecovery()->empty());
-  assert(std::filesystem::exists(folder / "song/chart0.bms"));
+  assert(!std::filesystem::exists(folder));
+}
+
+void cancelledPartialExtractionRecoveryRemovesOwnedOutput() {
+  Fixture fixture;
+  const auto original = fixture.indexedArchive("a.zip", 4);
+  std::stop_source stop;
+  bool wroteFile = false;
+  const auto result = runAll(fixture.repository, true, stop.get_token(),
+      [&](const archive_file::UnzipProgress &progress) {
+        if ((progress.message.find("Unzipping archive") != std::string::npos ||
+             progress.message.find("Writing unzipped files") != std::string::npos) &&
+            std::filesystem::exists(fixture.root / "a/song/chart0.bms")) {
+          wroteFile = true;
+          stop.request_stop();
+        }
+      });
+  assert(wroteFile && result.cancelled && result.deletedCount == 0);
+  auto session = fixture.repository.OpenSession();
+  const auto pending = session->LoadUnzipRecovery();
+  assert(pending && pending->size() == 1);
+  const auto folder = pending->front().outputFolder;
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(!std::filesystem::exists(folder));
+  assert(std::filesystem::exists(original.meta.BmsPath));
+}
+
+void unverifiedPartialOutputRetainsRecovery(const std::string &kind) {
+  Fixture fixture;
+  const auto original = fixture.indexedArchive("a.zip", 4);
+  runCrashingChild(fixture.root, "partial");
+  auto session = fixture.repository.OpenSession();
+  const auto record = session->LoadUnzipRecovery()->front();
+  const auto marker = record.outputFolder / ".asobmashow_unzip_incomplete";
+  if (kind == "legacy") {
+    std::ofstream(marker, std::ios::trunc) << "1\n";
+  } else if (kind == "torn") {
+    std::ofstream(marker, std::ios::trunc) << record.archiveKey << '\n';
+  } else if (kind == "collision") {
+    std::ofstream(marker, std::ios::trunc)
+        << record.archiveKey << '\n' << fspath_to_utf8(fixture.root / "other.zip") << '\n';
+  } else if (kind == "symlink-marker") {
+    const auto moved = fixture.root / "unrelated-marker";
+    std::filesystem::rename(marker, moved);
+    std::filesystem::create_symlink(moved, marker);
+  } else if (kind == "symlink-folder") {
+    const auto moved = fixture.root / "unrelated-folder";
+    std::filesystem::rename(record.outputFolder, moved);
+    std::filesystem::create_directory_symlink(moved, record.outputFolder);
+  } else {
+    assert(std::filesystem::remove(marker));
+  }
+  std::ofstream(record.outputFolder / "unrelated.txt") << "Keep user data";
+  assert(!archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(std::filesystem::exists(record.outputFolder / "song/chart0.bms"));
+  assert(std::filesystem::exists(record.outputFolder / "unrelated.txt"));
+  assert(std::filesystem::exists(original.meta.BmsPath));
+  assert(session->CountAllChartMeta() == 0);
+}
+
+void failedPartialCleanupRetainsRecovery() {
+#ifndef _WIN32
+  if (geteuid() == 0) return;
+  Fixture fixture;
+  const auto original = fixture.indexedArchive("a.zip", 4);
+  runCrashingChild(fixture.root, "partial");
+  auto session = fixture.repository.OpenSession();
+  const auto record = session->LoadUnzipRecovery()->front();
+  const auto denied = record.outputFolder / "song";
+  const auto permissions = std::filesystem::status(denied).permissions();
+  std::filesystem::permissions(denied, std::filesystem::perms::owner_read |
+                                        std::filesystem::perms::owner_exec);
+  const auto recovery = archive_unzip_recovery::recover(*session);
+  std::filesystem::permissions(denied, permissions);
+  assert(!recovery.completed);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(std::filesystem::exists(original.meta.BmsPath));
+  assert(std::filesystem::exists(record.outputFolder / ".asobmashow_unzip_incomplete"));
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(!std::filesystem::exists(record.outputFolder));
+#endif
+}
+
+void absentSourcePreservesPartialOutputAndRecovery() {
+  Fixture fixture;
+  const auto original = fixture.indexedArchive("a.zip", 4);
+  runCrashingChild(fixture.root, "partial");
+  auto session = fixture.repository.OpenSession();
+  const auto record = session->LoadUnzipRecovery()->front();
+  const auto moved = fixture.root / "original.offline";
+  std::filesystem::rename(original.meta.BmsPath, moved);
+  assert(!archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(std::filesystem::exists(record.outputFolder / "song/chart0.bms"));
+  std::filesystem::rename(moved, original.meta.BmsPath);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(!std::filesystem::exists(record.outputFolder));
+}
+
+void inaccessibleSourcePreservesPartialOutputAndRecovery() {
+#ifndef _WIN32
+  if (geteuid() == 0) return;
+  Fixture fixture;
+  fixture.indexedArchive("a.zip", 4);
+  runCrashingChild(fixture.root, "partial");
+  auto session = fixture.repository.OpenSession();
+  const auto record = session->LoadUnzipRecovery()->front();
+  const auto permissions = std::filesystem::status(fixture.root).permissions();
+  std::filesystem::permissions(fixture.root, std::filesystem::perms::none);
+  const auto recovered = archive_unzip_recovery::recover(*session);
+  std::filesystem::permissions(fixture.root, permissions);
+  assert(!recovered.completed);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(std::filesystem::exists(record.outputFolder / "song/chart0.bms"));
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(!std::filesystem::exists(record.outputFolder));
+#endif
+}
+
+void delayedDeletionRejectsReplacement(bool symlink, bool reuseCompletedFolder = false) {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("a.zip");
+  std::filesystem::path reusedFolder;
+  if (reuseCompletedFolder) {
+    const auto extracted = ArchiveUnzipOperation::Run(record, fixture.repository, {});
+    assert(extracted.success);
+    reusedFolder = extracted.outputFolder;
+  }
+  ArchiveUnzipOperation operation(fixture.repository);
+  assert(operation.start(record));
+  const auto result = waitForResult(operation);
+  assert(result.success && operation.canDeleteArchive());
+  if (reuseCompletedFolder) assert(result.outputFolder == reusedFolder);
+  const auto originalKey = archive_file::cacheKeyForPath(record.meta.BmsPath);
+  const auto replacement = fixture.archive(3, "replacement.zip").meta.BmsPath;
+  if (symlink) {
+    assert(std::filesystem::remove(replacement));
+    std::filesystem::rename(record.meta.BmsPath, replacement);
+    std::filesystem::create_symlink(replacement, record.meta.BmsPath);
+    assert(archive_file::cacheKeyForPath(record.meta.BmsPath) == originalKey);
+  } else {
+    assert(std::filesystem::remove(record.meta.BmsPath));
+    std::filesystem::copy_file(replacement, record.meta.BmsPath);
+  }
+  std::string message;
+  assert(!operation.deleteArchive(message));
+  assert(!operation.canDeleteArchive());
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  assert(std::filesystem::exists(replacement));
+  assert(std::filesystem::exists(result.chartPath));
+  assert(fixture.repository.OpenSession()->CountSolidArchives() == 1);
+}
+
+void batchDeletionRejectsReplacement(bool symlink) {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("a.zip");
+  const auto replacement = fixture.archive(3, "replacement.zip").meta.BmsPath;
+  const auto originalKey = archive_file::cacheKeyForPath(record.meta.BmsPath);
+  bool replaced = false;
+  const auto result = runAll(fixture.repository, true, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (replaced || progress.message.find("Unzip complete") == std::string::npos) return;
+        if (symlink) {
+          assert(std::filesystem::remove(replacement));
+          std::filesystem::rename(record.meta.BmsPath, replacement);
+          std::filesystem::create_symlink(replacement, record.meta.BmsPath);
+          assert(archive_file::cacheKeyForPath(record.meta.BmsPath) == originalKey);
+        } else {
+          assert(std::filesystem::remove(record.meta.BmsPath));
+          std::filesystem::copy_file(replacement, record.meta.BmsPath);
+        }
+        replaced = true;
+      });
+  assert(replaced && !result.success && result.scanCommitted);
+  assert(result.succeededCount == 1 && result.deletedCount == 0);
+  assert(result.deletionFailedCount == 1);
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  assert(std::filesystem::exists(replacement));
+  assert(fixture.repository.OpenSession()->CountSolidArchives() == 1);
+}
+
+void reusedCompletedOutputCanDeleteUnchangedArchive() {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("a.zip");
+  const auto extracted = ArchiveUnzipOperation::Run(record, fixture.repository, {});
+  assert(extracted.success);
+  ArchiveUnzipOperation operation(fixture.repository);
+  assert(operation.start(record));
+  const auto reused = waitForResult(operation);
+  assert(reused.success && reused.outputFolder == extracted.outputFolder);
+  assert(operation.canDeleteArchive());
+  std::string message;
+  assert(operation.deleteArchive(message));
+  assert(!std::filesystem::exists(record.meta.BmsPath));
+  assert(std::filesystem::exists(reused.chartPath));
+  assert(fixture.repository.OpenSession()->CountSolidArchives() == 0);
+}
+
+void changeArchivePreservingSizeAndModificationTime(
+    const std::filesystem::path &archivePath, bool replaceFile) {
+  const auto originalKey = archive_file::cacheKeyForPath(archivePath);
+  const auto modified = std::filesystem::last_write_time(archivePath);
+  const auto size = std::filesystem::file_size(archivePath);
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  if (replaceFile) {
+    const auto replacement = archivePath.parent_path() / "replacement.tmp";
+    std::filesystem::copy_file(archivePath, replacement);
+    std::filesystem::remove(archivePath);
+    std::filesystem::rename(replacement, archivePath);
+  } else {
+    std::fstream archive(archivePath, std::ios::binary | std::ios::in | std::ios::out);
+    char firstByte = 0;
+    assert(archive.get(firstByte));
+    archive.seekp(0);
+    archive.put(firstByte ^ 1);
+    archive.close();
+    assert(archive);
+  }
+  std::filesystem::last_write_time(archivePath, modified);
+  assert(std::filesystem::file_size(archivePath) == size);
+  assert(archive_file::cacheKeyForPath(archivePath) == originalKey);
+}
+
+void deletionRejectsChangesWithPreservedMetadata(bool batch, bool replaceFile) {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("a.zip");
+  if (batch) {
+    bool changed = false;
+    const auto result = runAll(fixture.repository, true, {},
+        [&](const archive_file::UnzipProgress &progress) {
+          if (changed || progress.message.find("Unzip complete") == std::string::npos) return;
+          changeArchivePreservingSizeAndModificationTime(record.meta.BmsPath, replaceFile);
+          changed = true;
+        });
+    assert(changed && result.scanCommitted);
+    assert(result.deletedCount == 0 && result.deletionFailedCount == 1);
+    assert(!result.success);
+  } else {
+    ArchiveUnzipOperation operation(fixture.repository);
+    assert(operation.start(record));
+    assert(waitForResult(operation).success && operation.canDeleteArchive());
+    changeArchivePreservingSizeAndModificationTime(record.meta.BmsPath, replaceFile);
+    std::string message;
+    assert(!operation.deleteArchive(message));
+    assert(!operation.canDeleteArchive());
+  }
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  auto session = fixture.repository.OpenSession();
+  assert(session->CountSolidArchives() == 1);
+  assert(session->CountAllChartMeta() == 1);
+}
+
+void sourceIdentityRejectsMissingPathsDirectoriesAndSymlinks() {
+  Fixture fixture;
+  const auto record = fixture.archive();
+  const auto key = archive_source_identity::KeyForPath(record.meta.BmsPath);
+  assert(!key.empty());
+  assert(archive_source_identity::KeyForPath(record.meta.BmsPath) == key);
+  assert(archive_source_identity::KeyForPath(fixture.root).empty());
+  assert(archive_source_identity::KeyForPath(fixture.root / "missing.zip").empty());
+  const auto link = fixture.root / "linked.zip";
+  std::filesystem::create_symlink(record.meta.BmsPath, link);
+  assert(archive_source_identity::KeyForPath(link).empty());
+}
+
+void sourceIdentityDetectsChangesWithPreservedMetadata(bool replaceFile) {
+  Fixture fixture;
+  const auto record = fixture.archive();
+  const auto original = archive_source_identity::KeyForPath(record.meta.BmsPath);
+  assert(!original.empty());
+  changeArchivePreservingSizeAndModificationTime(record.meta.BmsPath, replaceFile);
+  const auto changed = archive_source_identity::KeyForPath(record.meta.BmsPath);
+  assert(!changed.empty() && changed != original);
+  assert(archive_source_identity::KeyForPath(record.meta.BmsPath) == changed);
 }
 
 void restartRecoversEveryCompletedCrashBoundary(const std::string &phase) {
@@ -287,7 +566,7 @@ void journalFailurePreventsExtractionAndDeletion() {
   assert(!std::filesystem::exists(fixture.root / "a"));
 }
 
-void tornMarkerLeavesTheOriginalAndPartialOutputAlone() {
+void tornCompleteMarkerCleansVerifiedPartialOutput() {
   Fixture fixture;
   const auto original = fixture.indexedArchive("a.zip", 4);
   runCrashingChild(fixture.root, "partial");
@@ -298,8 +577,7 @@ void tornMarkerLeavesTheOriginalAndPartialOutputAlone() {
   assert(session->LoadUnzipRecovery()->empty());
   assert(session->CountAllChartMeta() == 0 && session->CountSolidArchives() == 1);
   assert(std::filesystem::exists(original.meta.BmsPath));
-  assert(std::filesystem::exists(record.outputFolder / "song/chart0.bms"));
-  assert(std::filesystem::exists(record.outputFolder / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(record.outputFolder));
 }
 
 void journalNormalizesPathAliasesForRecoveryAndAcknowledgement() {
@@ -740,7 +1018,9 @@ void batchChargesPartialFailedWritesAgainstLaterArchives() {
       fixture.repository, true, {},
       [&](const archive_file::UnzipProgress &progress) {
         if (!blockedSecondFile && progress.archiveIndex == 1 &&
-            progress.message.find("Writing unzipped files") != std::string::npos) {
+            (progress.message.find("Writing unzipped files") != std::string::npos ||
+             progress.message.find("Unzipping archive") != std::string::npos) &&
+            std::filesystem::exists(fixture.root / "a/song/chart0.bms")) {
           std::filesystem::create_directory(fixture.root / "a" / "song" / "chart1.bms");
           blockedSecondFile = true;
         }
@@ -1147,6 +1427,50 @@ int main(int argc, char **argv) {
     crashRecovery(argv[2]);
   }
   testExecutable = std::filesystem::absolute(argv[0]);
+  if (argc == 2) {
+    const std::string test = argv[1];
+    if (test == "--partial-recovery") partialExtractionIsNotIndexedByOrdinaryStartupScan();
+    else if (test == "--cancel-recovery") cancelledPartialExtractionRecoveryRemovesOwnedOutput();
+    else if (test == "--cleanup-failure") failedPartialCleanupRetainsRecovery();
+    else if (test == "--unverified-recovery") unverifiedPartialOutputRetainsRecovery("legacy");
+    else if (test == "--delayed-replacement") delayedDeletionRejectsReplacement(false);
+    else if (test == "--delayed-symlink") delayedDeletionRejectsReplacement(true);
+    else if (test == "--batch-replacement") batchDeletionRejectsReplacement(false);
+    else if (test == "--batch-symlink") batchDeletionRejectsReplacement(true);
+    else if (test == "--delayed-preserved-replacement") deletionRejectsChangesWithPreservedMetadata(false, true);
+    else if (test == "--delayed-preserved-write") deletionRejectsChangesWithPreservedMetadata(false, false);
+    else if (test == "--batch-preserved-replacement") deletionRejectsChangesWithPreservedMetadata(true, true);
+    else if (test == "--batch-preserved-write") deletionRejectsChangesWithPreservedMetadata(true, false);
+    else if (test == "--source-identity") {
+      sourceIdentityRejectsMissingPathsDirectoriesAndSymlinks();
+      sourceIdentityDetectsChangesWithPreservedMetadata(false);
+      sourceIdentityDetectsChangesWithPreservedMetadata(true);
+    }
+    else assert(false && "unknown regression");
+    return 0;
+  }
+  cancelledPartialExtractionRecoveryRemovesOwnedOutput();
+  sourceIdentityRejectsMissingPathsDirectoriesAndSymlinks();
+  sourceIdentityDetectsChangesWithPreservedMetadata(false);
+  sourceIdentityDetectsChangesWithPreservedMetadata(true);
+  for (const bool batch : {false, true}) {
+    for (const bool replaceFile : {false, true}) {
+      deletionRejectsChangesWithPreservedMetadata(batch, replaceFile);
+    }
+  }
+  failedPartialCleanupRetainsRecovery();
+  absentSourcePreservesPartialOutputAndRecovery();
+  inaccessibleSourcePreservesPartialOutputAndRecovery();
+  for (const auto &kind : {"legacy", "torn", "collision", "missing", "symlink-marker", "symlink-folder"}) {
+    unverifiedPartialOutputRetainsRecovery(kind);
+  }
+  delayedDeletionRejectsReplacement(false);
+  delayedDeletionRejectsReplacement(true);
+  delayedDeletionRejectsReplacement(false, true);
+  delayedDeletionRejectsReplacement(true, true);
+  reusedCompletedOutputCanDeleteUnchangedArchive();
+  batchDeletionRejectsReplacement(false);
+  batchDeletionRejectsReplacement(true);
   singleZipExtractsOnMultipleWorkers();
   batchAndEntryWorkersShareOneBudget();
   unzipPlanDividesCpuAndMemoryRatherThanMultiplyingThem();
@@ -1168,7 +1492,7 @@ int main(int argc, char **argv) {
   cancellingAnUnzipWaitingForRecoveryDoesNotBlockShutdown();
   inaccessibleChartSubfolderRetainsRecoveryUntilItCanBeIndexed();
   inaccessibleChartSubfolderRetainsRecoveryUntilItCanBeIndexed(true);
-  tornMarkerLeavesTheOriginalAndPartialOutputAlone();
+  tornCompleteMarkerCleansVerifiedPartialOutput();
   journalNormalizesPathAliasesForRecoveryAndAcknowledgement();
   unexpectedExitPreservesRecoveryWork();
   partialExtractionIsNotIndexedByOrdinaryStartupScan();

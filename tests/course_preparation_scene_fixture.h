@@ -2,7 +2,65 @@
 
 #include "replay/CourseResultPersistence.h"
 
+void testCourseEntryFactStageCountLimits() {
+  AbortTemporaryDirectory temporary;
+  const auto path = temporary.path / "course-stage-limit.bms";
+  {
+    std::ofstream file(path);
+    file << "#PLAYER 1\n#TITLE Course stage limit\n#BPM 120\n#00011:01\n";
+  }
+  for (const std::size_t stageCount : {256U, 0U, 257U}) {
+    auto session = std::make_shared<CoursePlaySession>();
+    session->entries.resize(stageCount);
+    for (auto &entry : session->entries) {
+      entry.meta.BmsPath = path;
+    }
+    std::atomic_bool cancelled = false;
+    std::string diagnostic;
+    const auto revision = archive_file::debugLogRevision();
+    const auto facts =
+        play_options::prepareCourseEntryFacts(*session, cancelled, diagnostic);
+    if (stageCount == 256U) {
+      require(facts && facts->size() == 256U &&
+                  std::all_of(facts->begin(), facts->end(), [](const auto &entry) {
+                    return entry.totalNotes == 1;
+                  }),
+              "PR105 all 256 unplayed course entries prepare without truncation");
+      require(archive_file::debugLogRevision() > revision,
+              "PR105 the boundary fixture exercises real chart parsing");
+      continue;
+    }
+    require(archive_file::debugLogRevision() == revision,
+            "PR105 invalid course stage counts reject before any chart parsing");
+    require(!facts && !diagnostic.empty(),
+            "PR105 empty and 257-stage courses return no facts with a diagnostic");
+    require(session->entries.size() == stageCount,
+            "PR105 invalid courses are rejected rather than truncated");
+
+    session->modernCourseAttemptId = "123e4567-e89b-42d3-a456-426614174000";
+    ResultScene scene;
+    scene.local.courseOptions.session = session;
+    scene.context.persistModernCourse = [](const auto &) {
+      require(false, "PR105 invalid course preparation must not reach persistence");
+      return replay::CourseResultPersistenceOutcome{};
+    };
+    require(scene.persistModernCourseResult(),
+            "PR105 ResultScene owns invalid courses instead of falling back to legacy");
+    require(!session->modernCourseAttempt &&
+                session->modernCoursePersistenceOutcome &&
+                session->modernCoursePersistenceOutcome->state ==
+                    replay::CourseResultPersistenceState::InvalidAttempt &&
+                scene.local.persistenceOptions.outcome.state ==
+                    result_persistence::SaveState::InvalidAttempt &&
+                session->modernCourseDiagnostic == diagnostic,
+            "PR105 preparation failure remains an InvalidAttempt in result presentation");
+    require(archive_file::debugLogRevision() == revision,
+            "PR105 ResultScene rejects invalid course counts without parsing charts");
+  }
+}
+
 void testCourseEntryFactPreparationBoundaries() {
+  testCourseEntryFactStageCountLimits();
   CoursePlaySession session;
   session.longNoteMode = 2;
   session.entries.resize(1);

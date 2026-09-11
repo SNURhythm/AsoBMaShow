@@ -40,6 +40,12 @@ Full extraction checks estimated expanded size against available destination
 space before starting, and enforces actual output-write limits in the 7-Zip,
 libarchive, parallel ZIP, and batched backends. Defaults are 256 GiB per archive, 1 TiB of
 cumulative writes per Unzip All operation, and a 512 MiB free-space reserve.
+Entry admission also limits each archive to 100,000 entries and the batch to
+1,000,000 entries, including empty files, explicit directories, and implicit
+parent directories. These ceilings are configurable through `UnzipLimits`.
+Each archive reserves its entry count before extraction; completed-folder reuse
+does not charge again. Entry exhaustion stops the remaining batch, while prior
+completed outputs remain available.
 Available space is checked again before each data write, including when metadata
 understates the expanded size. Concurrent workers share synchronized byte
 accounting and reserve in-flight writes against available space. Failed attempts
@@ -48,6 +54,11 @@ reusing a completed folder does not. A byte-limit or free-space failure stops
 active workers and the remaining queue without retrying another backend, keeps
 unfinished originals, and indexes completed folders. Partial output stays
 marked incomplete for recovery; original deletion never refunds the byte budget.
+Recovery removes partial output only when a nonsymlink ownership marker matches
+the journal's source and identity. Unverified legacy/torn markers retain their
+journal entries rather than deleting unknown data. Reserved root marker names
+are rejected before extraction. Deletion rechecks the extracted source's file
+identity and change time, including replacements that preserve size and mtime.
 `UnzipLimits::maximumWorkers` defaults to the device CPU count; a scheduling
 memory allowance also limits worker count. The default allowance is one eighth
 of reported RAM, bounded between 64 MiB and 1 GiB; the worker ceiling uses 64 MiB
@@ -63,6 +74,9 @@ Batch and per-archive allocations divide one budget, rather than multiplying
 independent thread pools.
 
 Single ZIP archives stream independent supported entries on separate readers.
+The same chunked reader handles one-worker and single-entry ZIP extraction without
+materializing a whole large member. Other fallback members are bounded to the
+smaller of 64 MiB and the per-archive memory allowance, and fail closed if larger.
 Unsupported ZIP compression methods retain serial fallback; integrity failures
 are terminal. Filesystem-equivalent output names (including Unicode/case aliases)
 disable parallel output to preserve serial overwrite behavior. Large 7-Zip and

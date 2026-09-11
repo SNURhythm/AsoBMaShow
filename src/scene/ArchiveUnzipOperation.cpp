@@ -1,5 +1,6 @@
 #include "ArchiveUnzipOperation.h"
 
+#include "../ArchiveSourceIdentity.h"
 #include "../ChartLibraryScanner.h"
 #include "../library/ArchiveUnzipRecovery.h"
 
@@ -38,6 +39,7 @@ ArchiveUnzipResult extractArchive(
           pause, reuseCompletedFolder, prepare, budget);
       if (extracted) {
         result.outputFolder = extracted->outputFolder;
+        result.archiveKey = extracted->archiveKey;
         result.success = true;
       } else {
         result.message = error.empty() ? "Unzip failed" : "Unzip failed: " + error;
@@ -56,6 +58,11 @@ ArchiveUnzipResult extractArchive(
   return result;
 }
 
+bool archiveIdentityMatches(const ArchiveUnzipResult &result) {
+  return !result.archiveKey.empty() &&
+         archive_source_identity::KeyForPath(result.archivePath) == result.archiveKey;
+}
+
 bool deleteCompletedArchive(const ArchiveUnzipResult &result,
                             const std::stop_token &stopToken,
                             std::string &message) {
@@ -64,15 +71,15 @@ bool deleteCompletedArchive(const ArchiveUnzipResult &result,
     message = "Archive is unavailable for deletion";
     return false;
   }
-  std::error_code error;
-  if (!std::filesystem::is_regular_file(result.archivePath, error) || error) {
-    message = "Archive is unavailable for deletion";
+  if (!archiveIdentityMatches(result)) {
+    message = "Archive changed or is unavailable. Original archive kept.";
     return false;
   }
   if (stopToken.stop_requested()) {
     message = "Unzip cancelled. Original archive kept.";
     return false;
   }
+  std::error_code error;
   if (!std::filesystem::remove(result.archivePath, error)) {
     message = "Could not delete archive" +
               (error ? ": " + error.message() : std::string());
@@ -195,8 +202,7 @@ bool ArchiveUnzipOperation::canDeleteArchive() const {
       result_->archivePath.empty()) {
     return false;
   }
-  std::error_code error;
-  return std::filesystem::is_regular_file(result_->archivePath, error) && !error;
+  return archiveIdentityMatches(*result_);
 }
 
 bool ArchiveUnzipOperation::deleteArchive(std::string &message) {

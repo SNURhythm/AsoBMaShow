@@ -17,7 +17,7 @@ public:
   ArchiveAssetPipeline(std::size_t workerCount, std::uint64_t maximumBytes,
                        std::atomic_bool &cancelled,
                        archive_file::FileDataCallback consumer)
-      : maximumBytes_(std::max<std::uint64_t>(1, maximumBytes)),
+      : maximumBytes_(maximumBytes),
         maximumFiles_(std::max<std::size_t>(1, workerCount) * 2),
         cancelled_(cancelled), consumer_(std::move(consumer)) {
     try {
@@ -35,11 +35,13 @@ public:
 
   bool push(archive_file::FileData &&file) {
     const auto bytes = std::max<std::uint64_t>(1, file.bytes.capacity());
+    if (bytes > maximumBytes_) {
+      return false;
+    }
     std::unique_lock lock(mutex_);
     while (!stopped() && !closed_ &&
            (residentFiles_ >= maximumFiles_ ||
-            (residentBytes_ != 0 &&
-             (bytes > maximumBytes_ || residentBytes_ > maximumBytes_ - bytes)))) {
+            residentBytes_ > maximumBytes_ - bytes)) {
       changed_.wait_for(lock, std::chrono::milliseconds(5));
     }
     if (stopped() || closed_) {

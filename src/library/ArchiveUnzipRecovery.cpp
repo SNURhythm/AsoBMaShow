@@ -1,10 +1,28 @@
 #include "ArchiveUnzipRecovery.h"
-#include "../repositories/ChartStorageIdentity.h"
+#include "../ArchiveFile.h"
 
 #include <chrono>
-#include <fstream>
 
 namespace archive_unzip_recovery {
+
+namespace {
+
+bool removeIncompleteOutput(const std::filesystem::path &outputFolder) {
+  std::error_code error;
+  std::filesystem::directory_iterator entry(outputFolder, error), end;
+  while (!error && entry != end) {
+    if (entry->path().filename() != ".asobmashow_unzip_incomplete") {
+      std::filesystem::remove_all(entry->path(), error);
+      if (error) return false;
+    }
+    entry.increment(error);
+  }
+  if (error) return false;
+  std::filesystem::remove_all(outputFolder, error);
+  return !error;
+}
+
+}
 
 std::timed_mutex &operationMutex() {
   static std::timed_mutex mutex;
@@ -64,6 +82,10 @@ Result recover(ChartRepository::Session &session,
       accessible = false;
       continue;
     }
+    if (!std::filesystem::exists(output) && sourceExists) {
+      acknowledged.push_back(record.outputFolder);
+      continue;
+    }
     error.clear();
     const auto markerPath = record.outputFolder / ".asobmashow_unzip_complete";
     const auto markerStatus = std::filesystem::symlink_status(markerPath, error);
@@ -71,29 +93,17 @@ Result recover(ChartRepository::Session &session,
       accessible = false;
       continue;
     }
-    if (!std::filesystem::exists(markerStatus) && sourceExists) {
-      acknowledged.push_back(record.outputFolder);
-      continue;
-    }
-    if (!std::filesystem::is_directory(output) ||
-        !std::filesystem::is_regular_file(markerStatus)) {
-      accessible = false;
-      continue;
-    }
-    std::ifstream marker(markerPath, std::ios::binary);
-    std::string key, archivePath;
-    const bool readable = bool(std::getline(marker, key)) && bool(std::getline(marker, archivePath));
-    std::filesystem::path markerArchivePath = utf8_to_path_t(archivePath);
-    chart_storage_identity::ToAbsolutePath(markerArchivePath);
-    if (!readable || key != record.archiveKey ||
-        markerArchivePath.lexically_normal() != record.archivePath.lexically_normal()) {
-      error.clear();
-      if (sourceExists && std::filesystem::is_regular_file(
-              record.outputFolder / ".asobmashow_unzip_incomplete", error) && !error) {
+    const bool complete = std::filesystem::is_regular_file(markerStatus) &&
+        archive_file::unzipFolderHasMatchingCompleteMarker(
+            record.outputFolder, record.archivePath, record.archiveKey);
+    if (!complete) {
+      if (sourceExists && archive_file::unzipFolderHasMatchingIncompleteMarker(
+              record.outputFolder, record.archivePath, record.archiveKey) &&
+          removeIncompleteOutput(record.outputFolder)) {
         acknowledged.push_back(record.outputFolder);
-        continue;
+      } else {
+        accessible = false;
       }
-      accessible = false;
       continue;
     }
     error.clear();

@@ -2420,6 +2420,28 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
   [self cleanupStaging];
 }
 
+- (BOOL)admitSpaceAtPath:(NSString *)path
+         remainingBytes:(std::uint64_t)remainingBytes {
+  constexpr std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
+  NSError *capacityError = nil;
+  NSDictionary *attributes = path.length == 0 ? nil :
+      [[NSFileManager defaultManager] attributesOfFileSystemForPath:path
+                                                             error:&capacityError];
+  NSNumber *available = attributes[NSFileSystemFreeSize];
+  if (capacityError != nil || ![available isKindOfClass:[NSNumber class]] ||
+      [available compare:@0] == NSOrderedAscending) {
+    failureMessage = @"Could not determine free space for the archive download.";
+    return NO;
+  }
+  const std::uint64_t freeBytes = available.unsignedLongLongValue;
+  if (freeBytes < reservedFreeBytes ||
+      remainingBytes > freeBytes - reservedFreeBytes) {
+    failureMessage = @"Insufficient free space for the archive download reserve.";
+    return NO;
+  }
+  return YES;
+}
+
 - (BOOL)admitResponse:(NSURLResponse *)response
                  task:(NSURLSessionTask *)task {
   if (abortRequested.load()) {
@@ -2448,6 +2470,15 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
     [task cancel];
     return NO;
   }
+  if (failureMessage != nil) {
+    return NO;
+  }
+  const auto received = std::max<int64_t>(0, task.countOfBytesReceived);
+  const auto remaining = expected > received ? expected - received : 0;
+  if (![self admitSpaceAtPath:NSTemporaryDirectory() remainingBytes:remaining]) {
+    [task cancel];
+    return NO;
+  }
   return failureMessage == nil;
 }
 
@@ -2466,6 +2497,12 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
       (totalBytesExpectedToWrite > 0 &&
        static_cast<std::uint64_t>(totalBytesExpectedToWrite) > maximumBytes)) {
     failureMessage = @"Archive download exceeds the byte limit.";
+    [downloadTask cancel];
+    return;
+  }
+  const auto remaining = totalBytesExpectedToWrite > totalBytesWritten
+                             ? totalBytesExpectedToWrite - totalBytesWritten : 0;
+  if (![self admitSpaceAtPath:NSTemporaryDirectory() remainingBytes:remaining]) {
     [downloadTask cancel];
     return;
   }
@@ -2516,12 +2553,20 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
     failureMessage = @"Archive download exceeds the byte limit.";
     return;
   }
+  if (![self admitSpaceAtPath:location.path remainingBytes:0]) {
+    return;
+  }
   if (::rename(sourcePath, stagedPath.c_str()) == 0) {
     hasDownloadedFile = YES;
     return;
   }
   if (errno != EXDEV) {
     failureMessage = @"Could not stage the downloaded archive file.";
+    return;
+  }
+  NSString *destinationDirectory = [NSString stringWithUTF8String:stagingDirectory.c_str()];
+  const auto sourceBytes = static_cast<std::uint64_t>(sourceStatus.st_size);
+  if (![self admitSpaceAtPath:destinationDirectory remainingBytes:sourceBytes]) {
     return;
   }
   const int destination = ::open(stagedPath.c_str(),
@@ -2543,6 +2588,9 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
       return;
     }
     if (count == 0) {
+      if (![self admitSpaceAtPath:destinationDirectory remainingBytes:0]) {
+        return;
+      }
       if (::close(destination) != 0) {
         closeDestination.dismiss();
         failureMessage = @"Could not close the staged archive file.";
@@ -2560,6 +2608,13 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
     size_t offset = 0;
     while (offset < static_cast<size_t>(count)) {
       if (abortRequested.load()) {
+        return;
+      }
+      const auto persistedBytes = copiedBytes + offset;
+      const auto remainingBytes = std::max<std::uint64_t>(
+          sourceBytes > persistedBytes ? sourceBytes - persistedBytes : 0,
+          static_cast<size_t>(count) - offset);
+      if (![self admitSpaceAtPath:destinationDirectory remainingBytes:remainingBytes]) {
         return;
       }
       const ssize_t written = ::write(destination, buffer.data() + offset,
@@ -4587,6 +4642,10 @@ bool DownloadURLToFileIOS(const std::string &url,
     AsoFileDownloadDelegate *delegate = [[AsoFileDownloadDelegate alloc] init];
     delegate->maximumBytes = maximumBytes;
     delegate->requireHttps = [scheme isEqualToString:@"https"];
+    if (![delegate admitSpaceAtPath:NSTemporaryDirectory() remainingBytes:0]) {
+      errorMessage = std::string(delegate->failureMessage.UTF8String);
+      return false;
+    }
     std::string stagingName =
         (path.parent_path() / ".asobmshow-download-XXXXXX").string();
     if (::mkdtemp(stagingName.data()) == nullptr) {

@@ -803,7 +803,60 @@ void testAbortedRawReplayReconstructsFailureWithoutTrustingSummary() {
   }
 }
 
+void testAuthoritativeAbortRejectsPostAbortStreams() {
+  for (const auto completion : {-1'000'000LL, 1'000'000LL}) {
+    for (const int stream : {0, 1, 2}) {
+      auto value = document();
+      value.timeBounds = {completion, true};
+      value.playback.input.clear();
+      value.playback.touchSamples.clear();
+      value.playback.laneCoverEvents.clear();
+      if (stream == 0) {
+        value.playback.input.push_back({.songTimeMicros = completion + 1,
+            .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+            .pressed = true});
+      } else if (stream == 1) {
+        value.playback.touchSamples.push_back({.action = replay::ReplayTouchAction::Down,
+            .fingerId = 1, .songTimeMicros = completion + 1, .x = 0.5F, .y = 0.5F});
+      } else {
+        value.playback.laneCoverEvents.push_back({.songTimeMicros = completion + 1,
+            .noteStartPositionPercent = 20});
+      }
+      const auto captured = replayCaptureTimeBounds(value.timeBounds,
+          value.playback.input, value.playback.touchSamples, value.playback.laneCoverEvents);
+      expect(captured == value.timeBounds,
+             "post-abort evidence never extends an authoritative abort boundary");
+      expect(!validateReplayPlayback(value.playback, ReplaySetupSource::AsoExtension,
+                                     captured).valid(),
+             "post-abort evidence fails canonical validation instead of moving abort time");
+    }
+  }
+}
+
+void testEmptyAbortDriverUsesConfiguredPreRoll() {
+  for (const bool wider : {true, false}) {
+    auto limits = kReplayLimits;
+    limits.minimumSongTimeMicros = wider ? -60'000'000 : -1'000'000;
+    auto value = document();
+    value.timeBounds = {wider ? -40'000'000 : -2'000'000, true};
+    value.playback.input.clear();
+    value.playback.touchSamples.clear();
+    value.playback.laneCoverEvents.clear();
+    ReplayPlaybackDriver driver(value, limits);
+    expect(driver.valid() == wider,
+           wider ? "empty -40s abort driver accepts configured -60s pre-roll"
+                 : "empty -2s abort driver rejects configured -1s pre-roll");
+    if (wider) {
+      const auto advanced = driver.advanceTo(-40'000'000, {}, 1);
+      expect(advanced.advanced() && driver.complete(),
+             "empty abort reaches its signed completion with wider configured pre-roll");
+    }
+  }
+}
+
 int main() {
+  testEmptyAbortDriverUsesConfiguredPreRoll();
+  testAuthoritativeAbortRejectsPostAbortStreams();
   testAbortedRawReplayReconstructsFailureWithoutTrustingSummary();
   testDriverMergesStreamsWithoutChangingTheirTiming();
   testDriverTrustsStructurallyValidatedDocument();

@@ -125,6 +125,7 @@ struct UnzipArchiveResult {
   std::filesystem::path outputFolder;
   std::uint64_t fileCount = 0;
   std::uint64_t uncompressedSize = 0;
+  std::string archiveKey;
 };
 
 struct UnzipLimits {
@@ -134,6 +135,8 @@ struct UnzipLimits {
   std::size_t maximumConcurrentArchives = 0;
   std::size_t maximumWorkers = 0;
   std::uint64_t maximumMemoryBytes = 0;
+  std::uint64_t maximumArchiveEntries = 100000;
+  std::uint64_t maximumTotalEntries = 1000000;
 };
 
 struct UnzipExecutionPlan {
@@ -153,6 +156,7 @@ struct UnzipBudget {
   std::uint64_t pendingWriteBytes = 0;
   std::string failureMessage;
   std::size_t concurrentArchives = 1;
+  std::uint64_t admittedEntries = 0;
 };
 
 struct TemporaryCacheCleanupResult {
@@ -224,6 +228,12 @@ bool readArchiveEntriesStreaming(
     FileDataCallback onFile,
     std::string *errorMessage = nullptr,
     PauseCallback pauseCallback = nullptr);
+bool readArchiveEntriesStreamingBounded(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile, std::uint64_t maximumBytes,
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
 // Calls onFile from extractor worker threads. The callback must be thread-safe.
 bool readArchiveEntriesConcurrently(
     const std::filesystem::path &archivePath,
@@ -263,6 +273,12 @@ bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
 bool isInSolidArchiveFolder(const std::filesystem::path &path);
 SourcePreference sourcePreferenceForPath(const std::filesystem::path &path);
 std::string cacheKeyForPath(const std::filesystem::path &path);
+bool unzipFolderHasMatchingIncompleteMarker(
+    const std::filesystem::path &outputFolder,
+    const std::filesystem::path &archivePath, const std::string &archiveKey);
+bool unzipFolderHasMatchingCompleteMarker(
+    const std::filesystem::path &outputFolder,
+    const std::filesystem::path &archivePath, const std::string &archiveKey);
 std::optional<std::filesystem::path>
 findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions);

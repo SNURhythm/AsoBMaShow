@@ -1238,8 +1238,8 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
   if (context.stageKeyModes.empty() ||
       (!context.stageTimeBounds.empty() &&
        context.stageKeyModes.size() != context.stageTimeBounds.size()) ||
-      std::ranges::any_of(context.stageTimeBounds, [](ReplayTimeBounds value) {
-        return !value.valid();
+      std::ranges::any_of(context.stageTimeBounds, [&](ReplayTimeBounds value) {
+        return !value.valid(limits_);
       })) {
     outcome.diagnostic = "Replay decode context is incomplete";
     return outcome;

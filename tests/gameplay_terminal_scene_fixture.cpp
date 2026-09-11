@@ -513,6 +513,102 @@ void testAbortOutcome() {
   }
 }
 
+void testSignedAbortCaptureAndWatch() {
+  for (const auto abortTime : {-30'000'000LL, -1'000'000LL, -1LL, 1'000'000LL}) {
+    GamePlayScene scene;
+    configureAbortCapture(scene);
+    scene.context.jukebox.time = abortTime;
+    scene.abortPlayFromStartSelectControl();
+    require(scene.recordedReplay.abortedAtSongTimeMicros == abortTime,
+            "live abort records the exact authoritative song time");
+    scene.context.jukebox.time = 7'000'000;
+    const auto capture = scene.completeModernReplayCapture();
+    require(capture.timeBounds.completionSongTimeMicros == abortTime &&
+                capture.timeBounds.aborted == true && capture.acceptedInput,
+            "completed capture retains recorded abort rather than rereading or clamping the clock");
+    std::string diagnostic;
+    const auto result = result_persistence::captureModernChartResult(
+        "123e4567-e89b-42d3-a456-426614174000", scene.chart->Meta, *scene.state,
+        scene.attemptProvenance, 0, 1'700'000'000'000, diagnostic);
+    require(result.has_value(), diagnostic);
+    const auto attempt = replay::captureChartReplayPersistenceAttempt(
+        {.result = *result,
+         .setupFacts = {.chart = {.md5 = scene.chart->Meta.MD5,
+                                  .sha256 = scene.chart->Meta.SHA256, .keyMode = 7},
+                        .longNoteMode = 1},
+         .acceptedInput = capture.acceptedInput,
+         .touchSamples = capture.touchSamples,
+         .laneCoverEvents = capture.laneCoverEvents,
+         .timeBounds = capture.timeBounds}, diagnostic);
+    require(attempt && attempt->replay, diagnostic);
+    replay::BeatorajaReplayCodec codec;
+    const auto bytes = codec.encodeChart(*attempt->replay, 0, diagnostic);
+    require(bytes.has_value(), diagnostic);
+    const auto decoded = codec.decode(*bytes, {.stageKeyModes = {7}});
+    require(decoded.chart && decoded.chart->timeBounds == capture.timeBounds,
+            "codec roundtrip retains authoritative signed abort");
+    auto chart = freshAbortChart();
+    const auto materialized = replay::ReplayPlaybackMaterializer::materializeForConsumers(
+        *decoded.chart, *result, *chart, 128);
+    require(materialized.matched() && materialized.playable(), materialized.diagnostic);
+    require(materialized.replayData->abortedAtSongTimeMicros == abortTime,
+            "consumer materialization retains authoritative signed abort");
+    GamePlayScene watch;
+    watch.options.replayData = materialized.replayData;
+    watch.buildReplayNoteLookup();
+    watch.processReplayEvents(abortTime - 1);
+    require(!watch.state->isEnding && watch.transitions == 0,
+            "Watch does not abort before the recorded timestamp");
+    watch.processReplayEvents(abortTime);
+    require(watch.state->isEnding && watch.transitions == 1 &&
+                watch.state->judgeCount[Poor] == 2 &&
+                watch.recordedReplay.abortedAtSongTimeMicros == abortTime,
+            "Watch aborts at the signed timestamp and accounts remaining notes once");
+  }
+}
+
+void testAbortCaptureRejectsLateEvidence() {
+  for (const auto abortTime : {-1'000'000LL, 1'000'000LL}) {
+    for (const int stream : {0, 1, 2}) {
+      GamePlayScene scene;
+      configureAbortCapture(scene);
+      scene.context.jukebox.time = abortTime;
+      scene.abortPlayFromStartSelectControl();
+      std::string diagnostic;
+      if (stream == 0) {
+        require(scene.modernReplayInputRecorder->recordSongTime(abortTime + 1,
+                    {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0},
+                    true, diagnostic), diagnostic);
+      } else if (stream == 1) {
+        scene.recordedReplay.touchSamples.push_back({.action = ReplayTouchAction::Down,
+            .fingerId = 1, .songTimeMicros = abortTime + 1, .x = 0.5F, .y = 0.5F});
+      } else {
+        scene.recordedReplay.laneCoverEvents.push_back({.songTimeMicros = abortTime + 1,
+            .noteStartPositionPercent = 20});
+      }
+      const auto capture = scene.completeModernReplayCapture();
+      require(capture.timeBounds.completionSongTimeMicros == abortTime,
+              "late live evidence never moves the recorded abort boundary");
+      if (stream == 0) {
+        require(!capture.acceptedInput && !scene.modernReplayCaptureDiagnostic.empty(),
+                "raw input after abort makes capture unavailable");
+      } else {
+        replay::ReplayPlaybackData playback;
+        playback.setup.chart = {.md5 = scene.chart->Meta.MD5,
+            .sha256 = scene.chart->Meta.SHA256, .keyMode = 7};
+        playback.setup.longNoteMode = 1;
+        playback.touchSamples = capture.touchSamples;
+        playback.laneCoverEvents = capture.laneCoverEvents;
+        const auto validation = replay::validateReplayPlayback(playback,
+            replay::ReplaySetupSource::LocalCapture, capture.timeBounds);
+        require(validation.issue == (stream == 1 ? replay::ReplayPlaybackIssue::TouchTime
+                                                : replay::ReplayPlaybackIssue::LaneCoverTime),
+                "late live auxiliary evidence fails canonical playback validation");
+      }
+    }
+  }
+}
+
 void testAuthoredCourseStageLiveCarry() {
   for (const int authoredMode : {2, 3}) {
     for (const std::size_t affectedStage : {std::size_t{0}, std::size_t{1}}) {
@@ -936,6 +1032,11 @@ int main(int argc, char **argv) {
     testStoppedWorkerAbortWatch(true);
     return 0;
   }
+  if (argc > 1 && std::string_view(argv[1]) == "signed-abort") {
+    testSignedAbortCaptureAndWatch();
+    testAbortCaptureRejectsLateEvidence();
+    return 0;
+  }
   if (argc > 1 && std::string_view(argv[1]) == "export-abort") {
     GamePlayScene scene;
     scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
@@ -980,6 +1081,8 @@ int main(int argc, char **argv) {
   std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();
+  testSignedAbortCaptureAndWatch();
+  testAbortCaptureRejectsLateEvidence();
   testEffectiveCourseFactsPersistThroughResultScene();
   testPartialCourseRetrySameRestoresSavedOptions();
   for (const auto path : {"constructors", "retry", "practice", "skin-practice", "viewer", "in-game-retry"}) {

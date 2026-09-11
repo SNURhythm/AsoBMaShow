@@ -21,6 +21,7 @@ struct ArchiveUnzipResult {
   std::size_t deletedCount = 0;
   std::size_t deletionFailedCount = 0;
   std::filesystem::path rootPath, archivePath, outputFolder, chartPath;
+  std::string archiveKey;
   std::string message;
 };
 

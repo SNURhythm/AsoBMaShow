@@ -3,6 +3,7 @@
 #include "ArchiveFile.h"
 #include "ChartLanePreparation.h"
 #include "CoursePlaySession.h"
+#include "DurablePayloadLimits.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 #include "path.h"
@@ -649,9 +650,14 @@ parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
 inline std::optional<std::vector<result_persistence::ModernCourseEntryFacts>>
 prepareCourseEntryFacts(const CoursePlaySession &session,
                         std::atomic_bool &cancelled, std::string &diagnostic) {
+  if (session.entries.empty() ||
+      session.entries.size() > durable_payload::kMaximumCourseStages) {
+    diagnostic = "Course entry count is outside durable limits.";
+    return std::nullopt;
+  }
   std::vector<result_persistence::ModernCourseEntryFacts> facts;
-  facts.reserve(session.entries.size());
   try {
+    facts.reserve(session.entries.size());
     for (std::size_t index = 0; index < session.entries.size(); ++index) {
       if (cancelled) {
         diagnostic = "Course entry fact preparation was cancelled.";

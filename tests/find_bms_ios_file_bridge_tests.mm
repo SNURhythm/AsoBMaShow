@@ -164,11 +164,13 @@ NSURLSession *recordSession(id receiver, SEL selector,
 
 @interface TransportResponseTaskFixture : NSObject
 @property(nonatomic, strong) NSURLResponse *response;
+@property(nonatomic) int64_t countOfBytesReceived;
+@property(nonatomic) BOOL cancelled;
 - (void)cancel;
 @end
 
 @implementation TransportResponseTaskFixture
-- (void)cancel {}
+- (void)cancel { self.cancelled = YES; }
 @end
 #endif
 
@@ -229,6 +231,187 @@ bool expectedFile(const std::filesystem::path &path, char value, size_t size) {
 }
 
 #if TRANSPORT_HAS_FILE_BRIDGE
+struct DownloadCapacityFixture {
+  std::uint64_t downloadFree = 0;
+  std::uint64_t stagingFree = 0;
+  bool unavailable = false;
+  bool missingSize = false;
+  bool negativeSize = false;
+  bool exhaustDuringCopy = false;
+  std::filesystem::path staging;
+  std::vector<std::filesystem::path> queries;
+} downloadCapacity;
+
+NSDictionary *fixtureCapacity(id, SEL, NSString *path, NSError **) {
+  const std::filesystem::path queried(path.fileSystemRepresentation);
+  downloadCapacity.queries.push_back(queried);
+  if (downloadCapacity.unavailable) return nil;
+  if (downloadCapacity.missingSize) return @{};
+  if (downloadCapacity.negativeSize) return @{NSFileSystemFreeSize: @(-1)};
+  const bool staging = queried == downloadCapacity.staging;
+  const auto available = staging ? downloadCapacity.stagingFree
+                                 : downloadCapacity.downloadFree;
+  const std::uint64_t consumed = staging ? nativeIo.writtenBytes.load() : 0;
+  if (staging && downloadCapacity.exhaustDuringCopy && consumed > 0)
+    return @{NSFileSystemFreeSize: @(512ull * 1024 * 1024 - 1)};
+  return @{NSFileSystemFreeSize: @(available - std::min(available, consumed))};
+}
+
+void exerciseDownloadPreflight(const std::string &origin,
+                                const std::filesystem::path &root) {
+  Method capacityMethod = class_getInstanceMethod(NSFileManager.class,
+      @selector(attributesOfFileSystemForPath:error:));
+  IMP originalCapacity = method_setImplementation(capacityMethod,
+      reinterpret_cast<IMP>(fixtureCapacity));
+  Method factory = class_getClassMethod(NSURLSession.class,
+      @selector(sessionWithConfiguration:delegate:delegateQueue:));
+  originalSessionFactory = method_setImplementation(factory,
+      reinterpret_cast<IMP>(recordSession));
+  auto restore = makeScopeExit([&] {
+    method_setImplementation(factory, originalSessionFactory);
+    method_setImplementation(capacityMethod, originalCapacity);
+    observedFileDelegate = nil;
+    nativeIo.abortRequested = nullptr;
+  });
+  const auto destination = root / "archive.zip";
+  const auto sentinel = root / "unrelated";
+  constexpr std::uint64_t reserve = 512ull * 1024 * 1024;
+  for (const std::string scenario : {"preflight-low", "preflight-unavailable",
+                                     "preflight-missing-size", "preflight-negative-size",
+                                     "small-known-length", "small-unknown-length"}) {
+    downloadCapacity = {};
+    observedFileDelegate = nil;
+    observedStagingDirectory.clear();
+    const bool admitted = scenario.starts_with("small-");
+    downloadCapacity.downloadFree = admitted ? reserve + 131072 : reserve - 1;
+    downloadCapacity.unavailable = scenario == "preflight-unavailable";
+    downloadCapacity.missingSize = scenario == "preflight-missing-size";
+    downloadCapacity.negativeSize = scenario == "preflight-negative-size";
+    std::ofstream(destination, std::ios::trunc) << "zzz";
+    std::atomic_bool cancelled{false};
+    std::string error;
+    const bool unknown = scenario == "small-unknown-length";
+    const bool success = DownloadURLToFileIOS(origin + (unknown ? "/no-length" : "/normal"),
+        destination, cancelled, 8ull * 1024 * 1024 * 1024, error, nullptr, nullptr);
+    expect(success == admitted, scenario + " real file-download entrypoint result");
+    expect((observedFileDelegate != nil) == admitted,
+           scenario + " rejects before creating a session that could resume writes");
+    expect(!downloadCapacity.queries.empty() &&
+               downloadCapacity.queries.front() ==
+                   std::filesystem::path(NSTemporaryDirectory().fileSystemRepresentation),
+           scenario + " preflight uses NSURLSession temporary volume");
+    if (!admitted) {
+      expect(error.find("free space") != std::string::npos,
+             scenario + " reports capacity failure without waiting for response");
+      expect(expectedFile(destination, 'z', 3), scenario + " prior destination preserved");
+    } else {
+      expect(expectedFile(destination, 'a', unknown ? 131072 : 16384),
+             scenario + " small archive succeeds without requiring full 8 GiB headroom");
+    }
+    expect(expectedFile(sentinel, 'z', 1), scenario + " unrelated file preserved");
+    size_t entries = 0;
+    for (const auto &entry : std::filesystem::directory_iterator(root)) {
+      (void)entry;
+      ++entries;
+    }
+    expect(entries == 2, scenario + " no private staging files leaked");
+  }
+}
+
+void exerciseDownloadCapacity(const std::filesystem::path &root) {
+  Method method = class_getInstanceMethod(NSFileManager.class,
+      @selector(attributesOfFileSystemForPath:error:));
+  IMP original = method_setImplementation(method, reinterpret_cast<IMP>(fixtureCapacity));
+  auto restore = makeScopeExit([&] {
+    method_setImplementation(method, original);
+    nativeIo.fault = NativeFileFault::None;
+  });
+  constexpr std::uint64_t reserve = 512ull * 1024 * 1024;
+  auto taskFor = [](bool known, int64_t received) {
+    auto task = [[TransportResponseTaskFixture alloc] init];
+    task.response = [[NSHTTPURLResponse alloc]
+        initWithURL:[NSURL URLWithString:@"https://fixture.invalid/archive"]
+        statusCode:200 HTTPVersion:@"HTTP/1.1"
+        headerFields:known ? @{@"Content-Length": @"131072"} : @{}];
+    task.countOfBytesReceived = received;
+    return task;
+  };
+  for (const std::string scenario : {"admission-low", "unknown-low", "unavailable",
+                                     "missing-size", "negative-size", "known-boundary",
+                                     "progress-no-double-charge", "progress-low",
+                                     "unknown-progress-low", "unknown-boundary"}) {
+    downloadCapacity = {};
+    downloadCapacity.downloadFree = reserve + 131072;
+    const bool unknown = scenario.starts_with("unknown");
+    const bool progress = scenario.find("progress") != std::string::npos;
+    const bool success = scenario == "known-boundary" ||
+                         scenario == "progress-no-double-charge" ||
+                         scenario == "unknown-boundary";
+    const int64_t received = progress ? 65536 : 0;
+    if (scenario == "admission-low") downloadCapacity.downloadFree -= 1;
+    if (scenario == "progress-no-double-charge") downloadCapacity.downloadFree -= 65536;
+    if (scenario == "progress-low") downloadCapacity.downloadFree -= 65537;
+    if (unknown) downloadCapacity.downloadFree = reserve - (success ? 0 : 1);
+    downloadCapacity.unavailable = scenario == "unavailable";
+    downloadCapacity.missingSize = scenario == "missing-size";
+    downloadCapacity.negativeSize = scenario == "negative-size";
+    auto delegate = [[AsoFileDownloadDelegate alloc] init];
+    delegate->maximumBytes = 8ull * 1024 * 1024 * 1024;
+    auto task = taskFor(!unknown, received);
+    if (progress) {
+      [delegate URLSession:nil downloadTask:(NSURLSessionDownloadTask *)task
+          didWriteData:65536 totalBytesWritten:received
+          totalBytesExpectedToWrite:unknown ? -1 : 131072];
+      expect((delegate->failureMessage == nil && !task.cancelled) == success,
+             scenario + " progress reserve decision");
+    } else {
+      expect([delegate admitResponse:task.response task:(NSURLSessionTask *)task] == success,
+             scenario + " response reserve decision");
+    }
+    if (!success)
+      expect(task.cancelled && delegate->failureMessage != nil,
+             scenario + " fails closed with cancellation and diagnostic");
+    expect(!downloadCapacity.queries.empty() &&
+               downloadCapacity.queries.front() ==
+                   std::filesystem::path(NSTemporaryDirectory().fileSystemRepresentation),
+           scenario + " queries NSURLSession temporary volume rather than destination");
+  }
+  for (const std::string scenario : {"copy-low", "copy-boundary", "copy-drains"}) {
+    downloadCapacity = {};
+    downloadCapacity.downloadFree = reserve;
+    downloadCapacity.stagingFree = reserve + 131072 - (scenario == "copy-low" ? 1 : 0);
+    downloadCapacity.exhaustDuringCopy = scenario == "copy-drains";
+    downloadCapacity.staging = root / scenario;
+    std::filesystem::create_directory(downloadCapacity.staging);
+    const auto source = root / "capacity-source";
+    std::ofstream(source, std::ios::binary) << std::string(131072, 'a');
+    auto delegate = [[AsoFileDownloadDelegate alloc] init];
+    delegate->maximumBytes = 8ull * 1024 * 1024 * 1024;
+    delegate->stagingDirectory = downloadCapacity.staging;
+    delegate->stagedPath = downloadCapacity.staging / "archive";
+    auto task = taskFor(true, 131072);
+    nativeIo.fault = NativeFileFault::Copy;
+    nativeIo.writtenBytes.store(0);
+    nativeIo.maximumRead.store(0);
+    [delegate URLSession:nil downloadTask:(NSURLSessionDownloadTask *)task
+        didFinishDownloadingToURL:[NSURL fileURLWithPath:
+            [NSString stringWithUTF8String:source.c_str()]]];
+    const bool success = scenario == "copy-boundary";
+    expect(static_cast<bool>(delegate->hasDownloadedFile) == success,
+           scenario + " EXDEV destination reserve decision");
+    expect(nativeIo.writtenBytes.load() ==
+               (success ? 131072 : scenario == "copy-drains" ? 65536 : 0),
+           scenario + " copy stops before violating reserve without double charging");
+    expect(std::find(downloadCapacity.queries.begin(), downloadCapacity.queries.end(),
+                     downloadCapacity.staging) != downloadCapacity.queries.end(),
+           scenario + " queries separate staging volume");
+    expect(nativeIo.maximumRead.load() <= 65536, scenario + " bounded copy IO");
+    if (!success) expect(delegate->failureMessage != nil, scenario + " explicit space failure");
+    [delegate cleanupStaging];
+    std::filesystem::remove(source);
+  }
+}
+
 void exerciseFileFaults(const std::string &origin,
                          const std::filesystem::path &root) {
   Method factory = class_getClassMethod(NSURLSession.class,
@@ -447,6 +630,8 @@ int main(int argc, char **argv) {
     expect(expectedFile(destination, 'a', 16384) && wholeFileReads.load() == 0,
            "actual Find BMS archive caller uses the file bridge");
 #if TRANSPORT_HAS_FILE_BRIDGE
+    exerciseDownloadPreflight(origin, root);
+    exerciseDownloadCapacity(root);
     exerciseFileFaults(origin, root);
 #endif
     method_setImplementation(method, originalFileRead);

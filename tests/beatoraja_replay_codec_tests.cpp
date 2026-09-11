@@ -697,7 +697,66 @@ void testAbortedCompletionSurvivesCodecRoundTrip() {
   }
 }
 
+void testNegativeAbortCodecBounds() {
+  replay::BeatorajaReplayCodec codec;
+  auto document = chartDocument();
+  document.playback.input.clear();
+  document.playback.touchSamples.clear();
+  document.playback.laneCoverEvents.clear();
+  std::string diagnostic;
+  for (const auto completion : {-30'000'000LL, -1'000'000LL, -1LL}) {
+    document.timeBounds = {completion, true};
+    document.playback.input = {{.songTimeMicros = completion,
+        .control = {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 0},
+        .pressed = true}};
+    document.playback.touchSamples = {{.action = replay::ReplayTouchAction::Down,
+        .fingerId = 1, .songTimeMicros = completion, .x = 0.5F, .y = 0.5F}};
+    document.playback.laneCoverEvents = {{.songTimeMicros = completion,
+        .noteStartPositionPercent = 20}};
+    const auto bytes = codec.encodeChart(document, 0, diagnostic);
+    expect(bytes.has_value(), "pre-song abort encodes using signed completion");
+    if (!bytes) continue;
+    const auto json = outerJson(*bytes);
+    expect(json["asobmashow"]["schemaVersion"] == 4,
+           "pre-song abort uses existing terminal schema");
+    for (const auto stream : {"input", "touchSamples", "laneCoverEvents"}) {
+      auto late = json;
+      late["asobmashow"][stream][0]["songTimeMicros"] = completion + 1;
+      expect(!codec.decode(encodeJson(late), {.stageKeyModes = {7}}).chart,
+             "decoder rejects post-abort stream evidence without shifting terminal time");
+    }
+    for (const auto trusted : {false, true}) {
+      const auto decoded = codec.decode(*bytes, trusted ? context(document) :
+          replay::ReplayDecodeContext{.stageKeyModes = {7}});
+      expect(decoded.chart && decoded.chart->timeBounds == document.timeBounds,
+             "trusted and self-contained decode retain signed abort timestamp");
+    }
+    auto malformed = json;
+    malformed["asobmashow"]["aborted"] = false;
+    expect(!codec.decode(encodeJson(malformed), {.stageKeyModes = {7}}).chart,
+           "negative non-abort terminal document fails closed");
+    malformed["asobmashow"].erase("aborted");
+    malformed["asobmashow"]["schemaVersion"] = 3;
+    expect(!codec.decode(encodeJson(malformed), {.stageKeyModes = {7}}).chart,
+           "negative completion cannot be downgraded to ordinary schema");
+    malformed = json;
+    malformed["asobmashow"]["input"] = Json::array();
+    malformed["asobmashow"]["touchSamples"] = Json::array();
+    malformed["asobmashow"]["laneCoverEvents"] = Json::array();
+    malformed["asobmashow"]["completionSongTimeMicros"] = -30'000'001LL;
+    expect(!codec.decode(encodeJson(malformed), {.stageKeyModes = {7}}).chart,
+           "empty abort before supported pre-roll fails closed");
+    auto limits = replay::kReplayLimits;
+    limits.minimumSongTimeMicros = completion + 1;
+    replay::BeatorajaReplayCodec restricted(limits);
+    expect(!restricted.decode(*bytes, context(document)).chart &&
+               !restricted.decode(*bytes, {.stageKeyModes = {7}}).chart,
+           "trusted and self-contained decode enforce narrower configured pre-roll");
+  }
+}
+
 int main() {
+  testNegativeAbortCodecBounds();
   testAbortedCompletionSurvivesCodecRoundTrip();
   testIndependentStockFixtures();
   testLocalChartRoundTripAndStockProjection();

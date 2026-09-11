@@ -4584,8 +4584,11 @@ void GamePlayScene::finishReplayRecording() {
 GamePlayScene::CompletedModernReplayCapture
 GamePlayScene::completeModernReplayCapture() {
   CompletedModernReplayCapture capture;
-  std::int64_t completionSongTimeMicros = std::max<std::int64_t>(
-      0, getGameplayTimeMicros(context.jukebox.getTimeMicros()));
+  const std::int64_t completionSongTimeMicros =
+      recordedReplay.abortedAtSongTimeMicros.has_value()
+          ? *recordedReplay.abortedAtSongTimeMicros
+          : std::max<std::int64_t>(
+                0, getGameplayTimeMicros(context.jukebox.getTimeMicros()));
   capture.touchSamples.reserve(recordedReplay.touchSamples.size());
   for (const auto &sample : recordedReplay.touchSamples) {
     capture.touchSamples.push_back({.action = modernTouchAction(sample.action),
