@@ -18,10 +18,13 @@ is selected; the Lua selector uses normal confirmation. Highlighting does not
 start extraction. The shared native modal first asks whether to keep originals
 or delete each archive after extraction, with Cancel available before starting.
 
-Delete mode processes one archive at a time: extract successfully, delete that
-original, then begin the next archive. Failed or unfinished extractions keep
-their originals. Keep mode retains all originals. After the queue finishes or
-is cancelled, one parallel indexing pass scans all completed output folders.
+Unzip All extracts up to two independent archives concurrently. In Delete mode,
+each worker extracts successfully, deletes that original, then takes its next
+archive; it never deletes an unfinished original. Keep mode retains all originals.
+Output-folder reservation and recovery-journal writes are serialized so archives
+with matching names cannot overwrite one another. Progress callbacks remain
+serialized and the overall fraction never moves backward. After all workers
+finish or stop, one parallel indexing pass scans all completed output folders.
 Cancellation stops extraction but allows this final indexing pass to finish;
 the modal shows indexing progress with its cancel control disabled. Shutdown
 waits for that pass as well. Ordinary extraction failures do not prevent later archives
@@ -34,11 +37,15 @@ space before starting, and enforces actual output-write limits in the 7-Zip,
 libarchive, and batched backends. Defaults are 256 GiB per archive, 1 TiB of
 cumulative writes per Unzip All operation, and a 512 MiB free-space reserve.
 Available space is checked again before each data write, including when metadata
-understates the expanded size. Failed attempts still consume the write budget;
+understates the expanded size. Concurrent workers share synchronized byte
+accounting and reserve in-flight writes against available space. Failed attempts
+still consume the write budget;
 reusing a completed folder does not. A byte-limit or free-space failure stops
-the remaining queue without retrying another backend, keeps the current and
-remaining originals, and indexes earlier completed folders. Partial output stays
+active workers and the remaining queue without retrying another backend, keeps
+unfinished originals, and indexes completed folders. Partial output stays
 marked incomplete for recovery; original deletion never refunds the byte budget.
+Callers can request one worker through `UnzipLimits::maximumConcurrentArchives`
+for strictly ordered extraction; the concurrency cap remains two.
 
 Original files are deleted immediately, but their database records are removed
 in one transaction during finalization. Neither scene refreshes its library

@@ -97,12 +97,38 @@ std::filesystem::path archiveIndexCacheDirectory();
 
 namespace {
 
+std::mutex gFullUnzipOutputMutex;
+
 class UnzipWriteGuard {
 public:
   UnzipWriteGuard(UnzipBudget &budget, std::filesystem::path destination)
       : budget_(budget), destination_(std::move(destination)) {}
 
+  ~UnzipWriteGuard() {
+    std::lock_guard lock(budget_.mutex);
+    budget_.pendingWriteBytes -= pendingBytes_;
+  }
+
   bool admit(std::uint64_t bytes) {
+    std::lock_guard lock(budget_.mutex);
+    return check(bytes);
+  }
+
+  bool consume(std::uint64_t bytes) {
+    std::lock_guard lock(budget_.mutex);
+    budget_.pendingWriteBytes -= std::exchange(pendingBytes_, 0);
+    if (!check(bytes)) return false;
+    archiveBytes_ += bytes;
+    budget_.writtenBytes += bytes;
+    budget_.pendingWriteBytes += bytes;
+    pendingBytes_ = bytes;
+    return true;
+  }
+
+  const std::string &error() const { return error_; }
+
+private:
+  bool check(std::uint64_t bytes) {
     if (!error_.empty()) return false;
     if (budget_.exhausted ||
         archiveBytes_ > budget_.limits.maximumArchiveBytes ||
@@ -117,31 +143,24 @@ public:
       return reject("Could not check unzip free-space. Original archive kept.");
     }
     if (space.available < budget_.limits.reservedFreeBytes ||
-        bytes > space.available - budget_.limits.reservedFreeBytes) {
+        budget_.pendingWriteBytes > space.available - budget_.limits.reservedFreeBytes ||
+        bytes > space.available - budget_.limits.reservedFreeBytes - budget_.pendingWriteBytes) {
       return reject("Unzip reserved free-space limit reached. Original archive kept.");
     }
     return true;
   }
 
-  bool consume(std::uint64_t bytes) {
-    if (!admit(bytes)) return false;
-    archiveBytes_ += bytes;
-    budget_.writtenBytes += bytes;
-    return true;
-  }
-
-  const std::string &error() const { return error_; }
-
-private:
   bool reject(std::string message) {
+    if (budget_.failureMessage.empty()) budget_.failureMessage = std::move(message);
     budget_.exhausted = true;
-    error_ = std::move(message);
+    error_ = budget_.failureMessage;
     return false;
   }
 
   UnzipBudget &budget_;
   std::filesystem::path destination_;
   std::uint64_t archiveBytes_ = 0;
+  std::uint64_t pendingBytes_ = 0;
   std::string error_;
 };
 
@@ -1767,6 +1786,7 @@ public:
     }
     file_.write(static_cast<const char *>(data),
                 static_cast<std::streamsize>(size));
+    file_.flush();
     if (!file_) {
       return E_FAIL;
     }
@@ -3521,6 +3541,7 @@ bool extractArchiveFullyWithLibarchive(
         return fail(writeGuard.error());
       }
       output.write(reinterpret_cast<const char *>(buffer.data()), count);
+      output.flush();
       if (!output) {
         return fail("Failed while writing unzipped file: " +
                     pathForLog(outputPath));
@@ -9601,6 +9622,7 @@ bool extractArchiveFullyWithBatchReader(
         output.write(reinterpret_cast<const char *>(file.bytes.data()),
                      static_cast<std::streamsize>(file.bytes.size()));
       }
+      output.flush();
       if (!output) {
         if (errorMessage != nullptr) {
           *errorMessage = "Failed while writing unzipped file: " +
@@ -9693,6 +9715,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
 
   reportUnzipProgress(progressCallback, 0.06, 0, fileCount,
                       "Preparing output folder");
+  std::unique_lock outputLock(gFullUnzipOutputMutex);
   if (!createDirectoriesForUnzip(destinationRoot,
                                  "Could not create unzip folder", errorMessage,
                                  error)) {
@@ -9778,6 +9801,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     *errorMessage = "Could not mark incomplete unzip folder. Original archive kept.";
     return std::nullopt;
   }
+  outputLock.unlock();
   appendDebugLogLineImpl("Full unzip requested: " + pathForLog(archivePath) +
                          " output=" + pathForLog(outputFolder) +
                          " files=" + std::to_string(fileCount) +

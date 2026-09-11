@@ -19,7 +19,8 @@ ArchiveUnzipResult extractArchive(
     const ChartMetaRecord &record, const std::stop_token &stopToken,
     archive_file::UnzipProgressCallback progress, bool reuseCompletedFolder,
     archive_file::UnzipPrepareCallback prepare = nullptr,
-    archive_file::UnzipBudget *budget = nullptr) {
+    archive_file::UnzipBudget *budget = nullptr,
+    archive_file::PauseCallback pause = nullptr) {
   ArchiveUnzipResult result;
   result.archivePath = record.meta.BmsPath;
   result.rootPath = result.archivePath.parent_path();
@@ -33,7 +34,7 @@ ArchiveUnzipResult extractArchive(
       std::string error;
       const auto extracted = archive_file::unzipArchiveFully(
           result.archivePath, result.rootPath, &error, &stopToken, progress,
-          nullptr, reuseCompletedFolder, prepare, budget);
+          pause, reuseCompletedFolder, prepare, budget);
       if (extracted) {
         result.outputFolder = extracted->outputFolder;
         result.success = true;
@@ -245,60 +246,106 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
         session->QueryChartMeta(query, archives, stopToken);
         queried = true;
         result.archiveCount = archives.size();
-        for (std::size_t archiveIndex = 0; archiveIndex < archives.size(); ++archiveIndex) {
-          if (stopToken.stop_requested()) {
-            break;
-          }
+        std::stop_source workersStop;
+        std::mutex resultMutex, progressMutex, journalMutex;
+        std::vector<double> fractions(archives.size(), 0.0);
+        double aggregateFraction = 0.0;
+        const auto processArchive = [&](std::size_t archiveIndex) {
           const auto &record = archives[archiveIndex];
           const auto filename = record.meta.BmsPath.filename().string();
+          const auto label = filename + " (" + std::to_string(archiveIndex + 1) +
+                             "/" + std::to_string(archives.size()) + ") - ";
           const auto publish = [&](const archive_file::UnzipProgress &archiveProgress) {
             if (progress) {
+              std::lock_guard progressLock(progressMutex);
+              const auto fraction = std::max(fractions[archiveIndex],
+                  std::clamp(archiveProgress.fraction, 0.0, 1.0));
+              aggregateFraction += fraction - fractions[archiveIndex];
+              fractions[archiveIndex] = fraction;
               progress({
-                  .fraction = 0.9 * (static_cast<double>(archiveIndex) +
-                               std::clamp(archiveProgress.fraction, 0.0, 1.0)) /
-                              static_cast<double>(archives.size()),
+                  .fraction = std::min(0.9, 0.9 * aggregateFraction /
+                                               static_cast<double>(archives.size())),
                   .current = archiveIndex + 1,
                   .total = archives.size(),
-                  .message = filename + " (" + std::to_string(archiveIndex + 1) +
-                             "/" + std::to_string(archives.size()) + ") - " +
-                             archiveProgress.message,
+                  .message = label + archiveProgress.message,
               });
             }
           };
           publish({.fraction = 0.0, .message = "Preparing unzip"});
-          const auto archiveResult = extractArchive(record, stopToken, publish,
+          const auto archiveResult = extractArchive(record, workersStop.get_token(), publish,
               !deleteAfterUnzip,
               [&](const std::filesystem::path &folder, const std::string &key) {
+                std::lock_guard journalLock(journalMutex);
                 return session->SaveUnzipRecovery({
                     .archivePath = record.meta.BmsPath, .outputFolder = folder,
                     .archiveKey = key, .deleteOriginal = deleteAfterUnzip});
-              }, &budget);
+              }, &budget, [&] {
+                if (stopToken.stop_requested()) workersStop.request_stop();
+                return !workersStop.stop_requested();
+              });
+          std::lock_guard resultLock(resultMutex);
           if (!archiveResult.outputFolder.empty()) {
             completedFolders.push_back(archiveResult.outputFolder);
             ++result.succeededCount;
             ++result.completedCount;
           }
           if (archiveResult.cancelled || stopToken.stop_requested()) {
-            break;
+            return;
           }
           if (!archiveResult.success) {
             ++result.completedCount;
             ++result.failedCount;
             lastError = filename + ": " + archiveResult.message;
-            if (budget.exhausted) break;
-            continue;
+            if (budget.exhausted) workersStop.request_stop();
+            return;
           }
-          if (deleteAfterUnzip) {
+          if (deleteAfterUnzip && !workersStop.stop_requested()) {
             std::string message;
             if (deleteCompletedArchive(archiveResult, stopToken, message)) {
               deletedArchives.push_back(archiveResult.archivePath);
               ++result.deletedCount;
               result.libraryChanged = true;
-            } else if (!stopToken.stop_requested()) {
+            } else if (!workersStop.stop_requested()) {
               ++result.deletionFailedCount;
               lastError = filename + ": " + message;
             }
           }
+        };
+        const auto workerCount = std::min(archives.size(),
+            std::clamp<std::size_t>(limits.maximumConcurrentArchives, 1, 2));
+        std::atomic_size_t nextArchive{workerCount};
+        const auto worker = [&](std::size_t archiveIndex) {
+          try {
+            while (archiveIndex < archives.size() && !stopToken.stop_requested() &&
+                   !workersStop.stop_requested() &&
+                   !budget.exhausted) {
+              processArchive(archiveIndex);
+              archiveIndex = nextArchive.fetch_add(1);
+            }
+          } catch (const std::exception &error) {
+            std::lock_guard resultLock(resultMutex);
+            lastError = error.what();
+            workersStop.request_stop();
+          } catch (...) {
+            std::lock_guard resultLock(resultMutex);
+            lastError = "Unzip All failed";
+            workersStop.request_stop();
+          }
+        };
+        if (workerCount == 1) {
+          worker(0);
+        } else {
+          std::vector<std::jthread> workers;
+          workers.reserve(workerCount);
+          try {
+            for (std::size_t workerIndex = 0; workerIndex < workerCount; ++workerIndex) {
+              workers.emplace_back([&, workerIndex] { worker(workerIndex); });
+            }
+          } catch (...) {
+            workersStop.request_stop();
+            throw;
+          }
+          for (auto &thread : workers) thread.join();
         }
       }
     }
@@ -307,7 +354,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
   } catch (...) {
     lastError = "Unzip All failed";
   }
-  const auto extractionLimitError = budget.exhausted ? lastError : std::string();
+  const auto extractionLimitError = budget.exhausted ? budget.failureMessage : std::string();
   if (!completedFolders.empty()) {
     try {
       if (progress) {
@@ -354,7 +401,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
       lastError = "Failed to index extracted folders. Extracted files are kept.";
     }
   }
-  if (!extractionLimitError.empty() && lastError != extractionLimitError) {
+  if (!extractionLimitError.empty() && lastError.find(extractionLimitError) == std::string::npos) {
     lastError = extractionLimitError + " " + lastError;
   }
   result.cancelled = stopToken.stop_requested();

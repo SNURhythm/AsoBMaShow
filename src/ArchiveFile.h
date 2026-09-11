@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -128,12 +129,16 @@ struct UnzipLimits {
   std::uint64_t maximumArchiveBytes = 256ull * 1024 * 1024 * 1024;
   std::uint64_t maximumTotalBytes = 1024ull * 1024 * 1024 * 1024;
   std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
+  std::size_t maximumConcurrentArchives = 2;
 };
 
 struct UnzipBudget {
   UnzipLimits limits;
   std::uint64_t writtenBytes = 0;
-  bool exhausted = false;
+  std::atomic_bool exhausted = false;
+  std::mutex mutex;
+  std::uint64_t pendingWriteBytes = 0;
+  std::string failureMessage;
 };
 
 struct TemporaryCacheCleanupResult {
