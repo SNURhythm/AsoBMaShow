@@ -13,6 +13,7 @@
 #include <future>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <set>
 #include <thread>
 
@@ -495,16 +496,47 @@ void batchUsesTwoWorkerThreadsAndIndexesOnce(
         if (progress.indexing) return;
         extractionThreads.insert(std::this_thread::get_id());
         if (progress.message.find("Preparing unzip") != std::string::npos) {
-          active.insert(progress.current);
+          active.insert(progress.archiveIndex);
           maximumActive = std::max(maximumActive, active.size());
         }
         if (progress.message.find("Unzip complete") != std::string::npos) {
-          active.erase(progress.current);
+          active.erase(progress.archiveIndex);
         }
       }, {.maximumConcurrentArchives = requestedWorkers});
   assert(result.success && result.succeededCount == 4 && result.deletedCount == 4);
   assert(maximumActive >= 1 && maximumActive <= 2 && extractionThreads.size() == 2);
   assert(indexingPasses == 1 && result.scanCommitted);
+}
+
+void batchProgressCountsFinishedArchivesRatherThanTheReportingWorker() {
+  Fixture fixture;
+  fixture.indexedArchive("a.zip", 64);
+  fixture.indexedArchive("b.zip", 64);
+  std::uint64_t previousCount = 0;
+  std::map<std::uint64_t, std::string> active;
+  bool first = true;
+  const auto result = ArchiveUnzipOperation::RunAll(fixture.repository, false, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.indexing) return;
+        if (first) {
+          assert(progress.current == 0);
+          first = false;
+        }
+        assert(progress.current >= previousCount && progress.current <= progress.total);
+        previousCount = progress.current;
+        if (progress.message.find("Archive finished") != std::string::npos) {
+          active.erase(progress.archiveIndex);
+        } else {
+          active[progress.archiveIndex] = progress.message;
+        }
+        assert(active.size() <= 2 && progress.activeArchives.size() == active.size());
+        auto expected = active.begin();
+        for (const auto &message : progress.activeArchives) {
+          assert(message == expected->second);
+          ++expected;
+        }
+      });
+  assert(result.success && !first && previousCount == 2 && active.empty());
 }
 
 void parallelBatchCancellationKeepsActiveAndQueuedOriginals(const std::string &extension) {
@@ -518,7 +550,7 @@ void parallelBatchCancellationKeepsActiveAndQueuedOriginals(const std::string &e
       fixture.repository, true, stop.get_token(),
       [&](const archive_file::UnzipProgress &progress) {
         if (progress.message.find("Preparing unzip") != std::string::npos) {
-          started.insert(progress.current);
+          started.insert(progress.archiveIndex);
         }
         if (progress.message.find("Writing unzipped files") != std::string::npos ||
             progress.message.find("Unzipping archive") != std::string::npos) {
@@ -642,7 +674,7 @@ void batchChargesPartialFailedWritesAgainstLaterArchives() {
   const auto result = ArchiveUnzipOperation::RunAll(
       fixture.repository, true, {},
       [&](const archive_file::UnzipProgress &progress) {
-        if (!blockedSecondFile && progress.current == 1 &&
+        if (!blockedSecondFile && progress.archiveIndex == 1 &&
             progress.message.find("Writing unzipped files") != std::string::npos) {
           std::filesystem::create_directory(fixture.root / "a" / "song" / "chart1.bms");
           blockedSecondFile = true;
@@ -1050,6 +1082,7 @@ int main(int argc, char **argv) {
     crashRecovery(argv[2]);
   }
   testExecutable = std::filesystem::absolute(argv[0]);
+  batchProgressCountsFinishedArchivesRatherThanTheReportingWorker();
   batchUsesTwoWorkerThreadsAndIndexesOnce(".zip");
   batchUsesTwoWorkerThreadsAndIndexesOnce(".7z");
   batchUsesTwoWorkerThreadsAndIndexesOnce(".zip", 16);

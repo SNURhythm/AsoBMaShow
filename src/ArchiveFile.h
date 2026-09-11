@@ -105,6 +105,8 @@ struct UnzipProgress {
   std::uint64_t total = 0;
   std::string message;
   bool indexing = false;
+  std::uint64_t archiveIndex = 0;
+  std::vector<std::string> activeArchives;
 };
 
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;

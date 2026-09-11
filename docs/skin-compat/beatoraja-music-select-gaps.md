@@ -23,7 +23,10 @@ each worker extracts successfully, deletes that original, then takes its next
 archive; it never deletes an unfinished original. Keep mode retains all originals.
 Output-folder reservation and recovery-journal writes are serialized so archives
 with matching names cannot overwrite one another. Progress callbacks remain
-serialized and the overall fraction never moves backward. After all workers
+serialized and the overall fraction never moves backward. Each progress snapshot
+lets the modal display both active archives in stable
+archive order and counts finished archives, not the reporting worker's queue
+position. Worker updates cannot replace the other archive's status. After workers
 finish or stop, one parallel indexing pass scans all completed output folders.
 Cancellation stops extraction but allows this final indexing pass to finish;
 the modal shows indexing progress with its cancel control disabled. Shutdown

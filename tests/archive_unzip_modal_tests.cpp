@@ -148,8 +148,11 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
            static_cast<la_ssize_t>(contents.size()));
     assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+    const auto secondArchivePath = root / "second.zip";
+    std::filesystem::copy_file(archivePath, secondArchivePath);
     auto batch = session->BeginScanBatch();
     assert(batch && batch->UpsertSolidArchive({.path = archivePath}));
+    assert(batch->UpsertSolidArchive({.path = secondArchivePath}));
     assert(batch->Commit());
     batch.reset();
     modal->update();
@@ -161,14 +164,20 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     assert(!modal->start(record));
     assert(session->CountAllChartMeta() == 0);
     click(*modal, deleteAfter ? "Delete After Unzip" : "Keep Archives");
+    for (auto *child : modal->root()->getChildren().front()->getChildren()) {
+      if (const auto *text = dynamic_cast<TextView *>(child); text && text->pointSize() == 18) {
+        assert(text->getText().find("sequentially") == std::string::npos);
+        assert(text->getText().find("concurrently") != std::string::npos);
+      }
+    }
     assert(modal->inProgress());
     assert(!modal->startAll());
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-    while (session->CountAllChartMeta() == 0 &&
+    while (session->CountAllChartMeta() < 2 &&
            std::chrono::steady_clock::now() < deadline) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    assert(session->CountAllChartMeta() == 1);
+    assert(session->CountAllChartMeta() == 2);
     assert(changed == 0 && finished == 0);
     while (modal->inProgress() && std::chrono::steady_clock::now() < deadline) {
       modal->update();
@@ -179,6 +188,7 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     assert(changed == 1 && finished == 1);
     assertDescriptionsFit(*modal);
     assert(std::filesystem::exists(archivePath) == !deleteAfter);
+    assert(std::filesystem::exists(secondArchivePath) == !deleteAfter);
     assert(findButton(modal->root(), "Close"));
     assert(!findButton(modal->root(), "Delete Archive"));
     modal->update();

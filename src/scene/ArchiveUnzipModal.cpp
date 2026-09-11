@@ -241,7 +241,16 @@ void ArchiveUnzipModal::update() {
       cancelButton_->setEnabled(false);
       cancelText_->setText("Indexing...");
     }
-    updateProgress(progress->fraction, progress->message,
+    auto message = progress->message;
+    if (batchMode_ && !progress->indexing) {
+      message.clear();
+      for (const auto &archive : progress->activeArchives) {
+        if (!message.empty()) message += '\n';
+        message += archive;
+      }
+      if (message.empty()) message = "Finishing archive extraction";
+    }
+    updateProgress(progress->fraction, message,
                    progress->current, progress->total);
   }
   const auto result = operation_.takeResult();
@@ -382,10 +391,12 @@ void ArchiveUnzipModal::updateProgress(double fraction,
   std::ostringstream text;
   text << std::fixed << std::setprecision(0) << (fraction * 100.0) << "%";
   if (total > 0) {
-    text << " (" << current << "/" << total << ")";
+    text << " (" << current << "/" << total;
+    if (batchMode_ && !indexing_) text << " archives completed";
+    text << ")";
   }
   percent_->setText(text.str());
-  std::string detail = batchMode_ ? "Processing archives sequentially"
+  std::string detail = batchMode_ ? "Processing up to two archives concurrently"
                                  : total > 0 ? "Processing files" : "Working on archive";
   if (indexing_) {
     detail = "Finishing library indexing. This step continues after cancellation.";

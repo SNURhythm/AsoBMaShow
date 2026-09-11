@@ -4,12 +4,14 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 struct Progress {
   double fraction = 0.95;
   std::string message = "Indexing extracted charts";
   std::uint64_t current = 1, total = 2;
   bool indexing = true;
+  std::vector<std::string> activeArchives;
 };
 struct Result {
   bool success = false, cancelled = true, batch = true;
@@ -53,9 +55,11 @@ public:
     std::function<void(const Result &)> finished;
   } callbacks_;
   std::string displayedProgress;
+  std::uint64_t displayedCurrent = 0;
   void updateProgress(double, const std::string &value,
-                      std::uint64_t = 0, std::uint64_t = 0) {
+                      std::uint64_t current = 0, std::uint64_t = 0) {
     displayedProgress = value;
+    displayedCurrent = current;
   }
   void setDeleteVisible(bool) {}
   void hide() { hidden = true; }
@@ -66,6 +70,24 @@ public:
 MODAL_METHODS
 
 int main() {
+  ArchiveUnzipModal parallel;
+  parallel.operation_.progress = Progress{
+      .fraction = 0.2, .message = "b.zip - Writing", .current = 0, .total = 4,
+      .indexing = false, .activeArchives = {"a.zip - Writing", "b.zip - Writing"}};
+  parallel.update();
+  assert(parallel.displayedProgress == "a.zip - Writing\nb.zip - Writing");
+  assert(parallel.displayedCurrent == 0);
+  parallel.operation_.progress = Progress{
+      .fraction = 0.3, .message = "a.zip - Writing more", .current = 0, .total = 4,
+      .indexing = false, .activeArchives = {"a.zip - Writing more", "b.zip - Writing"}};
+  parallel.update();
+  assert(parallel.displayedProgress == "a.zip - Writing more\nb.zip - Writing");
+  parallel.operation_.progress = Progress{
+      .fraction = 0.4, .current = 1, .total = 4, .indexing = false,
+      .activeArchives = {"b.zip - Writing"}};
+  parallel.update();
+  assert(parallel.displayedProgress == "b.zip - Writing");
+  assert(parallel.displayedCurrent == 1);
   ArchiveUnzipModal modal;
   modal.cancelOrClose();
   assert(modal.cancelling_ && modal.operation_.cancelRequests == 1);
