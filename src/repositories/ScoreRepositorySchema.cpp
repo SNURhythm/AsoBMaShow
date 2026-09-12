@@ -82,6 +82,7 @@ bool backfillScoreSelectorMetrics(sqlite3 *db);
 bool attachChartDatabaseForScoreMigration(
     sqlite3 *db, const std::filesystem::path &chartPath);
 void detachChartDatabaseForScoreMigration(sqlite3 *db);
+bool scoreMigrationChartDatabaseIsAttached(sqlite3 *db);
 bool chartDatabaseHasRowsForScoreMigration(sqlite3 *db);
 std::string scoreMigrationChartMatchPredicate(std::string_view chartAlias);
 std::string scoreMigrationChartMatchRankExpr(std::string_view chartAlias);
@@ -1203,7 +1204,9 @@ bool migrateScoreDatabaseToVersion12(
   }
 
   bool updated = false;
-  if (attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
+  const bool attachedHere = !scoreMigrationChartDatabaseIsAttached(db);
+  if (!attachedHere ||
+      attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
     if (chartDatabaseHasRowsForScoreMigration(db)) {
       const std::string chartTable =
           std::string(kScoreMigrationChartSchema) + ".chart_meta";
@@ -1241,12 +1244,16 @@ bool migrateScoreDatabaseToVersion12(
           " AND play_duration_seconds = 0";
       if (!execSql(db, updateQuery.c_str(),
                    "backfilling score play durations from chart metadata")) {
-        detachChartDatabaseForScoreMigration(db);
+        if (attachedHere) {
+          detachChartDatabaseForScoreMigration(db);
+        }
         return false;
       }
       updated = sqlite3_changes(db) > 0;
     }
-    detachChartDatabaseForScoreMigration(db);
+    if (attachedHere) {
+      detachChartDatabaseForScoreMigration(db);
+    }
   }
   if (!setDatabaseUserVersion(db, kScorePlayDurationSchemaVersion)) {
     return false;
@@ -1735,21 +1742,27 @@ bool migrateLegacyScoreLongNoteModes(
     sqlite3 *db, const std::filesystem::path &chartDatabasePath,
     bool &completed) {
   completed = false;
-  if (!attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
+  const bool attachedHere = !scoreMigrationChartDatabaseIsAttached(db);
+  if (attachedHere &&
+      !attachChartDatabaseForScoreMigration(db, chartDatabasePath)) {
     return false;
   }
 
   const int scoreCount = selectScalarInt(db, "SELECT COUNT(*) FROM scores", 0);
   if (scoreCount > 0 &&
       chartDatabaseRebuildStateForScoreMigration(db) > 0) {
-    detachChartDatabaseForScoreMigration(db);
+    if (attachedHere) {
+      detachChartDatabaseForScoreMigration(db);
+    }
     SDL_Log("Preserving unclassified legacy score ln_mode values because "
             "chart metadata is scheduled for rebuild");
     completed = true;
     return true;
   }
   if (scoreCount > 0 && !chartDatabaseHasRowsForScoreMigration(db)) {
-    detachChartDatabaseForScoreMigration(db);
+    if (attachedHere) {
+      detachChartDatabaseForScoreMigration(db);
+    }
     SDL_Log("Preserving unclassified legacy score ln_mode values because "
             "chart metadata is empty");
     completed = true;
@@ -1806,7 +1819,9 @@ bool migrateLegacyScoreLongNoteModes(
             "releasing score ln_mode migration");
   }
 
-  detachChartDatabaseForScoreMigration(db);
+  if (attachedHere) {
+    detachChartDatabaseForScoreMigration(db);
+  }
   if (ok && changedRows > 0) {
     score_repository_detail::IncrementRevision();
   }

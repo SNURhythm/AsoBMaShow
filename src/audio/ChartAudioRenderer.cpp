@@ -1,8 +1,11 @@
 #include "ChartAudioRenderer.h"
 
 #include "../ArchiveFile.h"
+#include "../AtomicFile.h"
 #include "../ChartPlaybackDuration.h"
+#include "../RAII.h"
 #include "../Utils.h"
+#include "../Uuid.h"
 #include "../path.h"
 #include "../scene/play/ReplayKeysoundSchedule.h"
 #include "ChartAssetExtensions.h"
@@ -15,6 +18,7 @@
 #include <sndfile.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <climits>
@@ -387,20 +391,42 @@ DecodedSound *loadDecodedSound(const bms_parser::Chart &chart, int wav,
   return insertedIt->second.get();
 }
 
-void ensureMixFrames(std::vector<float> &mix, std::size_t frames) {
-  const std::size_t samples = frames * kOutputChannels;
-  if (mix.size() < samples) {
-    mix.resize(samples, 0.0f);
-  }
-}
+struct RenderBudget {
+  const RenderOptions &options;
+  std::atomic_bool &isCancelled;
+  std::size_t maxFrames;
+  std::size_t remainingMixedFrames;
+  std::string error;
+  bool reportedMixProgress = false;
 
-std::size_t audioFramesForMicros(long long durationMicros) {
-  if (durationMicros <= 0) {
-    return 0;
+  bool checkpoint() {
+    if (isCancelled.load(std::memory_order_relaxed)) {
+      error = "Chart audio render cancelled";
+      return false;
+    }
+    return true;
   }
-  return static_cast<std::size_t>(
-      std::ceil(static_cast<long double>(durationMicros) * kOutputSampleRate /
-                1000000.0L));
+
+  bool admitFrames(long double frames) {
+    if (!checkpoint()) return false;
+    if (!std::isfinite(frames) || frames < 0 || frames > maxFrames) {
+      error = "Chart audio output frame limit exceeded";
+      return false;
+    }
+    return true;
+  }
+};
+
+bool ensureMixFrames(std::vector<float> &mix, std::size_t frames,
+                     RenderBudget &budget) {
+  if (!budget.admitFrames(frames)) return false;
+  const std::size_t samples = frames * kOutputChannels;
+  if (mix.capacity() < samples) {
+    mix.reserve(std::min(budget.maxFrames * kOutputChannels,
+                         std::max(samples, mix.capacity() + mix.capacity() / 2)));
+  }
+  if (mix.size() < samples) mix.resize(samples, 0.0f);
+  return true;
 }
 
 long long audioMicrosForFrames(std::size_t frames) {
@@ -426,22 +452,34 @@ float sampleDecodedChannel(const DecodedSound &sound, std::size_t frame,
   return static_cast<float>(sound.pcm[sampleIndex]) / 32768.0f;
 }
 
-void mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
-                long long timeMicros, audio::PlaybackRate playback) {
-  const long long clampedTime =
-      std::max(0LL, outputTimeMicros(timeMicros, playback));
-  const std::size_t startFrame = static_cast<std::size_t>(
-      (static_cast<long double>(clampedTime) * kOutputSampleRate) /
+bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
+                long long timeMicros, audio::PlaybackRate playback,
+                RenderBudget &budget) {
+  const long double start = std::floor(
+      static_cast<long double>(std::max(0LL, timeMicros)) * kOutputSampleRate /
       1000000.0L);
+  if (!budget.admitFrames(start)) return false;
+  const std::size_t startFrame = static_cast<std::size_t>(start);
   const std::size_t sourceFrames = static_cast<std::size_t>(sound.info.frames);
   const double sourceToTarget = static_cast<double>(
       sourceFramesPerOutputFrame(sound.info.samplerate, playback));
-  const std::size_t targetFrames = static_cast<std::size_t>(
-      std::ceil(static_cast<double>(sourceFrames) / sourceToTarget));
-
-  ensureMixFrames(mix, startFrame + targetFrames + 1);
+  const long double target = std::ceil(
+      static_cast<long double>(sourceFrames) / sourceToTarget);
+  if (!budget.admitFrames(target)) return false;
+  const std::size_t targetFrames = static_cast<std::size_t>(target);
+  if (targetFrames >= budget.maxFrames - startFrame) {
+    budget.error = "Chart audio sound-tail frame limit exceeded";
+    return false;
+  }
+  if (targetFrames > budget.remainingMixedFrames) {
+    budget.error = "Chart audio mixing work limit exceeded";
+    return false;
+  }
+  budget.remainingMixedFrames -= targetFrames;
+  if (!ensureMixFrames(mix, startFrame + targetFrames + 1, budget)) return false;
   for (std::size_t targetFrame = 0; targetFrame < targetFrames;
        ++targetFrame) {
+    if (targetFrame % 4096 == 0 && !budget.checkpoint()) return false;
     const double sourcePosition =
         static_cast<double>(targetFrame) * sourceToTarget;
     const std::size_t sourceFrame0 =
@@ -458,41 +496,68 @@ void mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
       const float sample = s0 + (s1 - s0) * fraction;
       mix[(startFrame + targetFrame) * kOutputChannels + channel] += sample;
     }
+    if (targetFrame == 4095 && !budget.reportedMixProgress) {
+      budget.reportedMixProgress = true;
+      logMessage(budget.options, "Chart audio mix started: 4096 frames");
+    }
   }
+  return budget.checkpoint();
 }
 
 bool writeWavFile(const std::filesystem::path &path,
-                  const std::vector<float> &mix, std::string &errorMessage) {
+                  const std::vector<float> &mix, RenderBudget &budget,
+                  const RenderOptions &options) {
+  if (!budget.checkpoint()) return false;
+  const auto stagingDirectory = path.parent_path() /
+                                (".chart-audio-" + uuid::generateV4());
+  std::error_code error;
+  if (!std::filesystem::create_directory(stagingDirectory, error)) {
+    budget.error = "Failed to create chart audio staging directory: " + error.message();
+    return false;
+  }
+  ScopeExit cleanup([&] {
+    std::error_code ignored;
+    std::filesystem::remove_all(stagingDirectory, ignored);
+  });
   SF_INFO outputInfo{};
   outputInfo.samplerate = kOutputSampleRate;
   outputInfo.channels = kOutputChannels;
   outputInfo.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
 
   auto file =
-      asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, outputInfo);
+      asobmashow::audio::openSoundFileHandle(stagingDirectory / "output.wav",
+                                            SFM_WRITE, outputInfo);
   if (file == nullptr) {
-    errorMessage =
+    budget.error =
         std::string("Failed to open chart audio output: ") + sf_strerror(nullptr);
     return false;
   }
 
-  std::vector<short> pcm;
-  pcm.reserve(mix.size());
-  for (const float sample : mix) {
-    const float clamped = std::clamp(sample, -1.0f, 1.0f);
-    pcm.push_back(static_cast<short>(std::lrint(clamped * 32767.0f)));
+  std::array<short, 4096 * kOutputChannels> pcm{};
+  for (std::size_t offset = 0; offset < mix.size();) {
+    if (!budget.checkpoint()) return false;
+    const std::size_t samples = std::min(pcm.size(), mix.size() - offset);
+    for (std::size_t index = 0; index < samples; ++index) {
+      const float clamped = std::clamp(mix[offset + index], -1.0f, 1.0f);
+      pcm[index] = static_cast<short>(std::lrint(clamped * 32767.0f));
+    }
+    const auto frames = static_cast<sf_count_t>(samples / kOutputChannels);
+    if (sf_writef_short(file.get(), pcm.data(), frames) != frames) {
+      budget.error = "Failed to write complete chart audio track";
+      return false;
+    }
+    if (offset == 0) {
+      logMessage(options, "Chart audio output started: " + std::to_string(frames) + " frames");
+    }
+    offset += samples;
   }
-
-  const sf_count_t framesToWrite =
-      static_cast<sf_count_t>(pcm.size() / kOutputChannels);
-  const sf_count_t framesWritten =
-      sf_writef_short(file.get(), pcm.data(), framesToWrite);
-
-  if (framesWritten != framesToWrite) {
-    errorMessage = "Failed to write complete chart audio track";
+  if (sf_close(file.release()) != 0) {
+    budget.error = "Failed to close complete chart audio track";
     return false;
   }
-  return true;
+  if (!budget.checkpoint()) return false;
+  return atomic_file::defaultOperations().replace(stagingDirectory / "output.wav",
+                                                  path, budget.error);
 }
 
 std::vector<AudioEvent>
@@ -636,7 +701,7 @@ CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
 
 RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
                                    const std::filesystem::path &path,
-                                   const RenderOptions &options) {
+                                   const RenderOptions &options) try {
   if (!options.playback.valid() ||
       options.playback.mode != audio::PlaybackMode::PitchShift) {
     return {.success = false,
@@ -654,51 +719,64 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
   std::atomic_bool localCancelled = false;
   std::atomic_bool &isCancelled =
       options.isCancelled == nullptr ? localCancelled : *options.isCancelled;
-
-  const auto audioEvents = resolveAudioEvents(chart, options);
+  RenderBudget budget{options, isCancelled, std::min(options.maxOutputFrames, kMaxOutputFrames),
+                      std::min(options.maxMixedFrames, kMaxMixedFrames), {}};
+  const auto failure = [&]() -> RenderResult {
+    return {.outputPath = path, .message = budget.error};
+  };
+  if (!budget.checkpoint()) return failure();
   const long long baseDuration = baseDurationMicros(chart, options);
-  const std::size_t initialFrames = audioFramesForMicros(baseDuration);
-  std::vector<float> mix(initialFrames * kOutputChannels, 0.0f);
+  const long double initialFrames = std::max(1.0L, std::ceil(
+      static_cast<long double>(baseDuration) * kOutputSampleRate / 1000000.0L));
+  if (!budget.admitFrames(initialFrames)) return failure();
+  std::vector<float> mix;
+  if (!ensureMixFrames(mix, static_cast<std::size_t>(initialFrames), budget)) return failure();
+  const auto audioEvents = resolveAudioEvents(chart, options);
+  if (!budget.checkpoint()) return failure();
   DecodedSoundCache decodedSounds;
   preloadArchivedDecodedSounds(chart, audioEvents, decodedSounds, isCancelled,
                                options);
 
   for (const auto &event : audioEvents) {
-    if (isCancelled) {
-      return {.success = false,
-              .outputPath = path,
-              .message = "Chart audio render cancelled",
-              .durationMicros = audioMicrosForFrames(mix.size() /
-                                                     kOutputChannels),
-              .eventCount = audioEvents.size()};
-    }
+    if (!budget.checkpoint()) return failure();
     DecodedSound *sound =
         loadDecodedSound(chart, event.wav, decodedSounds, isCancelled);
     if (sound == nullptr) {
       continue;
     }
-    mixSoundAt(mix, *sound,
-               event.timeMicros - options.timelineStartMicros,
-               options.playback);
+    if (!mixSoundAt(mix, *sound,
+                    outputTimeMicrosFromTimelineStart(event.timeMicros,
+                        options.timelineStartMicros, options.playback),
+                    options.playback, budget)) return failure();
   }
-  if (options.clubMode && !isCancelled) {
+  if (!budget.checkpoint()) return failure();
+  if (options.clubMode) {
+    long double beatCount = 0;
+    for (const auto *measure : chart.Measures) {
+      if (!budget.checkpoint()) return failure();
+      if (measure == nullptr || !std::isfinite(measure->Scale) || measure->Scale <= 0) continue;
+      beatCount += std::ceil(static_cast<long double>(measure->Scale) * 4);
+      if (beatCount > 100000) {
+        budget.error = "Chart audio club beat plan limit exceeded";
+        return failure();
+      }
+    }
     const DecodedSound kick =
         decodedClubSound(club_beat::synthesizeKick(kOutputSampleRate));
     const DecodedSound clap =
         decodedClubSound(club_beat::synthesizeClap(kOutputSampleRate));
     for (const auto &event : club_beat::buildPlan(chart)) {
-      mixSoundAt(mix, kick,
-                 event.timeMicros - options.timelineStartMicros,
-                 options.playback);
+      const auto time = outputTimeMicrosFromTimelineStart(event.timeMicros,
+          options.timelineStartMicros, options.playback);
+      if (!mixSoundAt(mix, kick, time, options.playback, budget)) return failure();
       if (event.clap) {
-        mixSoundAt(mix, clap,
-                   event.timeMicros - options.timelineStartMicros,
-                   options.playback);
+        if (!mixSoundAt(mix, clap, time, options.playback, budget)) return failure();
       }
     }
   }
   if (options.prepMetronomePlan != nullptr &&
-      options.prepMetronomePlan->enabled && !isCancelled) {
+      options.prepMetronomePlan->enabled) {
+    if (!budget.checkpoint()) return failure();
     const DecodedSound accent = decodedGeneratedPcm(
         prep_metronome_audio::makeClick(true, kOutputSampleRate,
                                         kOutputChannels),
@@ -708,14 +786,13 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
                                         kOutputChannels),
         kOutputSampleRate, kOutputChannels);
     for (const auto &click : options.prepMetronomePlan->clicks) {
-      mixSoundAt(mix, click.accent ? accent : regular,
-                 click.timeMicros - options.timelineStartMicros,
-                 options.playback);
+      if (!mixSoundAt(mix, click.accent ? accent : regular,
+                      outputTimeMicrosFromTimelineStart(click.timeMicros,
+                          options.timelineStartMicros, options.playback),
+                      options.playback, budget)) return failure();
     }
   }
-  if (mix.empty()) {
-    ensureMixFrames(mix, 1);
-  }
+  if (!budget.checkpoint()) return failure();
   const long long durationMicros =
       audioMicrosForFrames(mix.size() / kOutputChannels);
   logMessage(options, "Chart audio duration: " +
@@ -723,11 +800,10 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
                           "s base=" + secondsString(baseDuration, 3) +
                           "s events=" + std::to_string(audioEvents.size()));
 
-  std::string errorMessage;
-  if (!writeWavFile(path, mix, errorMessage)) {
+  if (!writeWavFile(path, mix, budget, options)) {
     return {.success = false,
             .outputPath = path,
-            .message = errorMessage,
+            .message = budget.error,
             .durationMicros = durationMicros,
             .eventCount = audioEvents.size()};
   }
@@ -736,6 +812,8 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
           .message = "Audio exported",
           .durationMicros = durationMicros,
           .eventCount = audioEvents.size()};
+} catch (const std::bad_alloc &) {
+  return {.outputPath = path, .message = "Chart audio memory resource limit exceeded"};
 }
 
 } // namespace chart_audio

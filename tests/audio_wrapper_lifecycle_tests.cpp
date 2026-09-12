@@ -11,17 +11,64 @@
 #include <chrono>
 #include <condition_variable>
 #include <concepts>
+#include <cstdlib>
 #include <deque>
 #include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <unordered_map>
 #include <vector>
+
+namespace resampling_test {
+
+struct AllocationGate {
+  std::mutex mutex;
+  std::condition_variable condition;
+  std::size_t bytes = 44100 * sizeof(short);
+  bool entered = false;
+  bool released = false;
+
+  bool waitUntilEntered() {
+    std::unique_lock lock(mutex);
+    return condition.wait_for(lock, std::chrono::seconds(2),
+                              [this] { return entered; });
+  }
+
+  void release() {
+    std::lock_guard lock(mutex);
+    released = true;
+    condition.notify_all();
+  }
+};
+
+thread_local AllocationGate *allocationGate = nullptr;
+thread_local bool decodeMemoryFixture = false;
+
+}
+
+void *operator new(std::size_t bytes) {
+  if (auto *gate = resampling_test::allocationGate;
+      gate != nullptr && bytes == gate->bytes) {
+    resampling_test::allocationGate = nullptr;
+    std::unique_lock lock(gate->mutex);
+    gate->entered = true;
+    gate->condition.notify_all();
+    gate->condition.wait(lock, [gate] { return gate->released; });
+  }
+  if (void *memory = std::malloc(bytes == 0 ? 1 : bytes)) {
+    return memory;
+  }
+  throw std::bad_alloc();
+}
+
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
 
 bool decodeAudioToPCM(const path_t &, std::vector<short> &, SF_INFO &,
                       std::atomic<bool> &) {
@@ -35,8 +82,15 @@ bool decodeAudioToPCMBounded(const path_t &, std::vector<short> &, SF_INFO &,
 }
 
 bool decodeAudioBytesToPCM(const path_t &, const std::vector<unsigned char> &,
-                           std::vector<short> &, SF_INFO &,
+                           std::vector<short> &pcm, SF_INFO &info,
                            std::atomic<bool> &) {
+  if (resampling_test::decodeMemoryFixture) {
+    pcm.assign(22050, 6000);
+    info.channels = 1;
+    info.samplerate = 22050;
+    info.frames = 22050;
+    return true;
+  }
   return false;
 }
 
@@ -197,6 +251,7 @@ struct FactoryControl {
   bool rejectConcurrentStreams = false;
   int liveStreams = 0;
   std::optional<audio::playback::BackendRunState> authoritativeState;
+  std::optional<std::uint32_t> authoritativeSampleRate;
   audio::RenderCallback renderCallback = nullptr;
   void *renderUserData = nullptr;
 };
@@ -248,7 +303,10 @@ public:
                          : audio::playback::BackendRunState::Stopped)};
   }
   [[nodiscard]] audio::RuntimeState runtimeState() const override {
-    return state_;
+    auto state = state_;
+    state.effectiveSampleRate =
+        control_->authoritativeSampleRate.value_or(state.effectiveSampleRate);
+    return state;
   }
 
 private:
@@ -1430,6 +1488,206 @@ void testPlaybackSnapshotClockModesRestoreWithoutPrematureEligibility() {
   }
 }
 
+class PendingResample {
+public:
+  PendingResample(AudioWrapper &wrapper, const path_t &path) {
+    loaded = std::async(std::launch::async, [this, &wrapper, path] {
+      resampling_test::allocationGate = &gate;
+      resampling_test::decodeMemoryFixture = true;
+      const bool result = wrapper.loadSoundFromMemory(path, {}, cancelled);
+      resampling_test::allocationGate = nullptr;
+      resampling_test::decodeMemoryFixture = false;
+      return result;
+    });
+    if (!gate.waitUntilEntered()) {
+      gate.release();
+      loaded.wait();
+      throw std::runtime_error("load must reach the real resampler allocation");
+    }
+  }
+
+  ~PendingResample() {
+    gate.release();
+    if (loaded.valid()) {
+      loaded.wait();
+    }
+  }
+
+  bool finish() {
+    gate.release();
+    return loaded.get();
+  }
+
+  template <typename Operation> bool completesWhileBlocked(Operation operation) {
+    auto completed = std::async(std::launch::async, std::move(operation));
+    const bool ready = completed.wait_for(2s) == std::future_status::ready;
+    if (!ready) {
+      gate.release();
+      completed.wait();
+      return false;
+    }
+    completed.get();
+    return true;
+  }
+
+  std::atomic_bool cancelled = false;
+
+private:
+  resampling_test::AllocationGate gate;
+  std::future<bool> loaded;
+};
+
+void testResamplingDoesNotBlockPublishedSoundsOrOtherLoads() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t retained = PATH("resample-retained");
+  const path_t pendingPath = PATH("resample-pending");
+  require(wrapper.loadGeneratedSound(retained, std::vector<short>(44100, 3000),
+                                     1, 44100),
+          "retained fixture loads");
+  PendingResample pending(wrapper, pendingPath);
+  require(pending.completesWhileBlocked([&] {
+    require(wrapper.getSoundDurationMicros(retained) == 1'000'000 &&
+                !wrapper.getSoundDurationMicros(pendingPath).has_value(),
+            "only complete sounds are visible during resampling");
+    require(wrapper.loadGeneratedSound(PATH("resample-independent"),
+                                       std::vector<short>(22050, 2000), 1,
+                                       22050),
+            "independent load finishes while another conversion is pending");
+    require(wrapper.playSound(retained, audio::Bus::System),
+            "published audio remains playable during resampling");
+    std::array<std::int16_t, 8> output{};
+    control->renderCallback(output.data(), 4, 2, control->renderUserData);
+    require(output[0] != 0, "authoritative callback renders retained PCM");
+  }), "resampling must not hold the sound publication mutex");
+  require(pending.finish() &&
+              wrapper.getSoundDurationMicros(pendingPath) == 1'000'000,
+          "completed conversion publishes one second of audio");
+}
+
+void testResamplingRetriesAcrossOutputRateChanges() {
+  enum class Transition {
+    Restart,
+    Restore,
+    FailedRestart,
+    FailedRestartThenRestore,
+    Recover,
+    FailedRecovery,
+  };
+  for (const auto transition :
+       {Transition::Restart, Transition::Restore, Transition::FailedRestart,
+        Transition::FailedRestartThenRestore, Transition::Recover,
+        Transition::FailedRecovery}) {
+    Stopwatch stopwatch;
+    auto control = std::make_shared<FactoryControl>();
+    AudioWrapper wrapper(&stopwatch,
+                         std::make_unique<FakeConfigurableFactory>(control));
+    const path_t path = PATH("resample-rate-change");
+    PendingResample pending(wrapper, path);
+    require(pending.completesWhileBlocked([&] {
+      require(wrapper.stopSounds().success, "rate transition drains callback");
+      std::string error;
+      if (transition != Transition::Recover &&
+          transition != Transition::FailedRecovery) {
+        const bool failStart = transition == Transition::FailedRestart ||
+                               transition == Transition::FailedRestartThenRestore;
+        if (failStart) {
+          control->startResults = {false};
+        }
+        require(wrapper.restart({.sampleRate = 48000}, error) ==
+                    !failStart,
+                "configurable rate transition reports candidate start result");
+        if (transition == Transition::Restore ||
+            transition == Transition::FailedRestartThenRestore) {
+          require(wrapper.stopSounds().success &&
+                      wrapper.restore({.request = {},
+                                       .effectiveSampleRate = 44100}, error),
+                  "restore returns the authoritative graph to the original rate");
+        }
+      } else {
+        control->authoritativeSampleRate = 48000;
+        if (transition == Transition::FailedRecovery) {
+          control->startResults = {false};
+        }
+        require(wrapper.startDevice().success ==
+                    (transition != Transition::FailedRecovery),
+                "device recovery reports start failure after PCM rate commit");
+      }
+    }), "rate transition must complete while a new sound is resampling");
+    require(pending.finish() &&
+                wrapper.getSoundDurationMicros(path) == 1'000'000,
+            "published PCM matches the committed graph rate, including failed start");
+    if (transition == Transition::FailedRestart) {
+      std::string error;
+      require(wrapper.restore({.request = {}, .effectiveSampleRate = 44100},
+                               error),
+              "failed configurable candidate requires explicit stream restoration");
+    }
+    require(wrapper.playSound(path, audio::Bus::System),
+            "rate-consistent sound remains playable after recovery");
+    std::array<std::int16_t, 8> output{};
+    control->renderCallback(output.data(), 4, 2, control->renderUserData);
+    require(output[0] != 0, "reconfigured callback renders the published sound");
+  }
+}
+
+void testUnloadInvalidatesPendingResamplingOnlyAfterConfirmedDrain() {
+  for (const bool failStop : {false, true}) {
+    Stopwatch stopwatch;
+    auto control = std::make_shared<FactoryControl>();
+    AudioWrapper wrapper(&stopwatch,
+                         std::make_unique<FakeConfigurableFactory>(control));
+    const path_t path = PATH("resample-unload");
+    PendingResample pending(wrapper, path);
+    require(pending.completesWhileBlocked([&] {
+      control->stopResults = {!failStop};
+      require(wrapper.unloadSounds().success == !failStop,
+              "unload reports whether callback drain was confirmed");
+    }), "unload must not wait for unrelated PCM conversion");
+    require(pending.finish() == failStop,
+            "only successful unload invalidates an in-flight conversion");
+    require(wrapper.getSoundDurationMicros(path).has_value() == failStop,
+            "stale PCM cannot repopulate a successfully unloaded graph");
+    require(wrapper.loadGeneratedSound(path, std::vector<short>(44100, 2000),
+                                       1, 44100),
+            "new loads remain admitted after the unload boundary");
+  }
+}
+
+void testConcurrentDuplicateResamplingKeepsFirstPublishedOwner() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t path = PATH("resample-duplicate");
+  PendingResample pending(wrapper, path);
+  require(pending.completesWhileBlocked([&] {
+    require(wrapper.loadGeneratedSound(path, std::vector<short>(88200, 2000),
+                                       1, 44100),
+            "duplicate load can publish while the earlier load converts");
+  }), "duplicate conversions must not serialize on publication");
+  require(pending.finish() && wrapper.getSoundDurationMicros(path) == 2'000'000,
+          "late conversion succeeds without replacing the first published owner");
+  require(wrapper.unloadSound(path).success &&
+              !wrapper.resolveRealtimeSound(path).has_value(),
+          "one unload removes the sole published duplicate owner");
+}
+
+void testCancellationDuringResamplingDoesNotPublish() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t path = PATH("resample-cancelled");
+  PendingResample pending(wrapper, path);
+  pending.cancelled = true;
+  require(!pending.finish() &&
+              !wrapper.getSoundDurationMicros(path).has_value(),
+          "cancellation during conversion prevents publication");
+}
+
 void testConfigurableWrapperRestartsAndRestoresRetainedPcm() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -2527,6 +2785,11 @@ void testLuaSkinUnknownBackendTeardownTransfersOwnerWithoutSpinning() {
 
 int main() {
   try {
+    testResamplingDoesNotBlockPublishedSoundsOrOtherLoads();
+    testResamplingRetriesAcrossOutputRateChanges();
+    testUnloadInvalidatesPendingResamplingOnlyAfterConfirmedDrain();
+    testConcurrentDuplicateResamplingKeepsFirstPublishedOwner();
+    testCancellationDuringResamplingDoesNotPublish();
     testUnloadOneSerializesDrainClearAndEraseAgainstPlay();
     testUnloadAllSerializesDrainClearAndEraseAgainstPlay();
     testBatchPruneNoOpDoesNotObserveOrDrainBackend();

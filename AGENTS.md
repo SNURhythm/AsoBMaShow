@@ -95,6 +95,10 @@
 
 ## Git Worktrees
 
+- Commit and push completed, verified work to the current branch's upstream
+  unless the user explicitly asks otherwise. Include only task-related changes;
+  leave unrelated local changes untouched. This does not authorize deployment.
+
 - Do NOT create worktrees on your own. Only use one when the user has already
   set it up or explicitly requests it. The user owns worktree provisioning
   (they create them deliberately, e.g. to keep a parallel review branch

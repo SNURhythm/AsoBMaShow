@@ -42,6 +42,7 @@ struct Chart {
   inline static std::atomic_int alive = 0;
   ChartMeta Meta;
   int constraints = 0, longNoteMode = 0;
+  bool requestedDoublePlayFlip = false;
   explicit Chart(std::string path) : Meta{std::move(path)} { ++alive; }
   ~Chart() { --alive; }
 };
@@ -128,7 +129,9 @@ std::unique_ptr<bms_parser::Chart> parseChart(
   return std::make_unique<bms_parser::Chart>(path);
 }
 PlayOptionReplayInfo applySelectedPlayOptions(
-    bms_parser::Chart &, const std::string &first, const std::string &second) {
+    bms_parser::Chart &chart, const std::string &first, const std::string &second,
+    bool doublePlayFlip) {
+  chart.requestedDoublePlayFlip = doublePlayFlip;
   return {first, second, 123, 456};
 }
 }
@@ -193,7 +196,6 @@ TableContext musicSelectTableContextForLaunch(int revision) {
   assertUi();
   return {"Table" + std::to_string(revision), "12"};
 }
-namespace audio::diag { void SelectAudioLog(const char *) {} }
 struct Preview {
   bool silenced = false;
   int resumes = 0;
@@ -204,6 +206,8 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  struct UnzipModal { void cancelAndWait() {} };
+  std::unique_ptr<UnzipModal> archiveUnzipModal_;
   SceneManager manager;
   struct {
     Settings settings;
@@ -463,6 +467,7 @@ void testAsyncCourseOptionsAndParseRetry() {
   assert(session.playOption == options.playOption && session.playOption2 == options.playOption2 &&
          session.playOptionSeed == options.playOptionSeed && session.playOption2Seed == options.playOption2Seed);
   assert(options.doublePlayFlip && options.longNoteMode == 2 && options.assistOption == "ASSIST");
+  assert(scene.manager.gameplay->chart->requestedDoublePlayFlip == options.doublePlayFlip);
   assert(options.tableName == "Table0" && options.tableLevel == "12" && options.clubMode);
   assert(options.playback == course_rules::kRequiredPlaybackRate && options.courseConstraints == 11);
   assert(options.ruleset == 7 && options.requiredRulesetDescriptor == 8 && options.ownsChart);

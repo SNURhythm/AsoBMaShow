@@ -111,7 +111,7 @@ ir::IrOutboxEntry awaitingEntry() {
   entry.state = ir::IrOutboxState::AwaitingRemoteResult;
   entry.nextRequestUserIntent = false;
   entry.remoteJobId = "0123456789abcdefabcd";
-  entry.remoteOrigin = "https://original.example.test";
+  entry.remoteOrigin = "https://boku.tachi.ac";
   return entry;
 }
 
@@ -494,7 +494,7 @@ void testAwaitingRowsPlanAndPollAsOneBatch() {
   auto first = awaitingEntry();
   auto second = awaitingEntry();
   second.id = 2;
-  second.remoteOrigin = "HTTPS://ORIGINAL.EXAMPLE.TEST:443/";
+  second.remoteOrigin = "HTTPS://BOKU.TACHI.AC:443/";
   auto unrelated = awaitingEntry();
   unrelated.id = 3;
   unrelated.remoteJobId = "another-import-job";
@@ -617,7 +617,7 @@ void testDeferredAcceptanceAndValidation() {
   }
 }
 
-void testPollUsesPersistedOriginAndCurrentKey() {
+void testPollRequiresCurrentOriginAuthorization() {
   const ir::tachi::TachiDriver driver;
   FakeHttpClient http;
   http.responses.push_back(
@@ -629,6 +629,34 @@ void testPollUsesPersistedOriginAndCurrentKey() {
   config.apiKey = "replacement-key";
 
   auto result = driver.poll(awaitingEntry(), config, http, {});
+  expect(result.status == ir::DeliveryStatus::BlockedConfiguration,
+         "foreign-origin credential blocks the deferred job");
+  expect(http.requests.empty(),
+         "poll never sends another origin's key to the persisted origin");
+  result = driver.submit(awaitingEntry(), config, http, {});
+  expect(result.status == ir::DeliveryStatus::BlockedConfiguration &&
+             http.requests.empty(),
+         "awaiting submit cannot bypass polling authorization or repost");
+  if (!http.requests.empty()) {
+    return;
+  }
+  for (const std::string_view unauthorizedOrigin : {
+           "", "not-an-origin", "http://boku.tachi.ac",
+           "https://boku.tachi.ac:444", "https://boku.tachi.ac.evil.test"}) {
+    config.serverOrigin = unauthorizedOrigin;
+    result = driver.poll(awaitingEntry(), config, http, {});
+    expect(result.status == ir::DeliveryStatus::BlockedConfiguration &&
+               result.code == "remote_origin_mismatch" && http.requests.empty(),
+           "poll blocks missing, invalid, different-scheme, port and host ownership");
+  }
+  std::stop_source cancelled;
+  cancelled.request_stop();
+  result = driver.poll(awaitingEntry(), config, http, cancelled.get_token());
+  expect(result.status == ir::DeliveryStatus::Cancelled && http.requests.empty(),
+         "cancellation takes precedence over origin blocking without HTTP");
+  config.serverOrigin = "HTTPS://BOKU.TACHI.AC:443/";
+  config.apiKey = "original-origin-replacement-key";
+  result = driver.poll(awaitingEntry(), config, http, {});
   expect(result.status == ir::DeliveryStatus::Ongoing,
          "ongoing poll remains deferred");
   expect(http.requests.size() == 1, "poll performs one request");
@@ -637,13 +665,13 @@ void testPollUsesPersistedOriginAndCurrentKey() {
   }
   const auto &request = http.requests.front();
   expect(request.method == ir::IrHttpMethod::Get, "poll uses GET");
-  expect(request.url == "https://original.example.test/api/v1/imports/"
+  expect(request.url == "https://boku.tachi.ac/api/v1/imports/"
                         "0123456789abcdefabcd/poll-status",
          "poll uses persisted request origin and exact path");
   expect(request.headers ==
              std::vector<std::pair<std::string, std::string>>{
-                 {"Authorization", "Bearer replacement-key"}},
-         "poll sends only the current bearer header");
+                 {"Authorization", "Bearer original-origin-replacement-key"}},
+         "poll sends the replacement key authorized for the original origin");
   expect(request.body.empty(), "poll has no request body");
   expect(!request.followRedirects,
          "authenticated poll does not follow redirects");
@@ -1700,7 +1728,7 @@ int main() {
   testPendingPlanReturnsValidPrefixThenIdentifiesMalformedFirstRow();
   testMalformedAndBoundedDiagnostics();
   testDeferredAcceptanceAndValidation();
-  testPollUsesPersistedOriginAndCurrentKey();
+  testPollRequiresCurrentOriginAuthorization();
   testAuthenticatedHttpOriginsNeverSend();
   testCompletedPollsUseImportParser();
   testAwaitingSubmitNeverPostsAgain();

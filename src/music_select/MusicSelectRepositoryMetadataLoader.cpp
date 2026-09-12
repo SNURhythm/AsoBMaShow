@@ -20,6 +20,10 @@ MusicSelectRepositoryProjection::loadDirectoryRecords(
   query.selectedLongNoteMode = selectedLongNoteMode;
   query.rawSongData = true;
   switch (directory.kind) {
+  case skin::MusicSelectBarKind::Container:
+    if (!musicSelectIsSolidArchiveDirectory(directory)) return {};
+    query.solidArchivesOnly = true;
+    break;
   case skin::MusicSelectBarKind::Folder:
     query.recursiveFolder = directory.directoryPath;
     break;
@@ -115,6 +119,7 @@ skin::MusicSelectBarFrame MusicSelectRepositoryProjection::loadFolderStatus(
 MusicSelectRepositoryMetadata MusicSelectRepositoryProjection::loadMetadata(
     ChartRepository::Session &session, int) {
   MusicSelectRepositoryMetadata metadata;
+  metadata.solidArchiveCount = session.CountSolidArchives();
   metadata.entries = session.SelectEffectiveEntries();
   metadata.folders = session.SelectFolderRecords();
   const auto chartFolders = session.SelectRawChartMetaFolders();

@@ -33,7 +33,7 @@ private:
   static HorieCandidateSearchResult
   findCandidates(const std::string &query, const std::string &title,
                  const std::string &artist, bool requireTitleMatch,
-                 bool requireArtistMatch);
+                 bool requireArtistMatch, const std::atomic_bool &cancelled);
 };
 
 } // namespace asobmshow::bms_search

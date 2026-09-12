@@ -8,6 +8,11 @@ struct Repository {
 };
 
 struct MusicSelectScene {
+  struct Modal {
+    bool active = true;
+    bool inProgress() const { return active; }
+  };
+  Modal *archiveUnzipModal_ = nullptr;
   struct Context {
     Repository chartRepository;
     Repository scoreRepository;
@@ -41,4 +46,15 @@ int main() {
   ++scene.context.chartRepository.revision;
   scene.refreshRepositoryRevisions();
   assert(scene.reloads == 2 && scene.selectionRefreshes == 2);
+  MusicSelectScene::Modal modal;
+  scene.archiveUnzipModal_ = &modal;
+  for (int archive = 0; archive < 5; ++archive) {
+    ++scene.context.chartRepository.revision;
+    scene.refreshRepositoryRevisions();
+    assert(scene.reloads == 2);
+  }
+  modal.active = false;
+  scene.refreshRepositoryRevisions();
+  scene.refreshRepositoryRevisions();
+  assert(scene.reloads == 3 && scene.selectionRefreshes == 3);
 }

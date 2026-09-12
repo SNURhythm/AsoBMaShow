@@ -455,6 +455,24 @@ void testRootProjectionDefersDirectoryContents() {
           "trailing root separators do not create a self-referencing hierarchy");
 }
 
+void testSolidArchivePseudoFolderIsConditionalAndLazy() {
+  MusicSelectRepositoryMetadata metadata;
+  const MusicSelectBarId id{"container:solid-archives"};
+  require(MusicSelectRepositoryProjection{}.projectRoot(metadata, {}, 1).find(id) ==
+              nullptr,
+          "empty libraries have no solid archive pseudo-folder");
+  metadata.solidArchiveCount = 2;
+  const auto root = MusicSelectRepositoryProjection{}.projectRoot(metadata, {}, 2);
+  const auto *folder = root.find(id);
+  require(folder && folder->kind == skin::MusicSelectBarKind::Container &&
+              folder->title == "Solid Archives (2)" && folder->selectable &&
+              !folder->sortable && !folder->childrenLoaded && folder->children.empty(),
+          "solid archives appear as a lazy native-action pseudo-folder");
+  const auto complete = MusicSelectRepositoryProjection{}.project({.metadata = &metadata});
+  require(complete.find(id) != nullptr,
+          "complete projections preserve the same archive pseudo-folder");
+}
+
 void testMixedFolderFlattensDescendantsAndStatus() {
   MusicSelectRepositoryMetadata metadata;
   metadata.entries.push_back({.path = utf8_to_path_t("/pack")});
@@ -769,6 +787,7 @@ int main(int argc, char **argv) {
   testProjectsSearchHistoryAfterCommands();
   testProjectsRecentScoreImprovementCommandChildren();
   testRootProjectionDefersDirectoryContents();
+  testSolidArchivePseudoFolderIsConditionalAndLazy();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_repository_projection_tests", failures,
       "music-select repository projection assertion(s) failed",

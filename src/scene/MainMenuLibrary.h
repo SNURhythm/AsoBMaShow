@@ -13,6 +13,11 @@
 
 namespace main_menu_library {
 
+std::optional<ChartMetaRecord> unzipAllRecord(int archiveCount);
+std::optional<ChartMetaRecord> chartSelectionRecordForReload(
+    const std::optional<ChartMetaRecord> &selection,
+    const std::optional<ChartMetaRecord> &leadingRecord, bool preserveViewState);
+
 struct FindBmsChartIdentity {
   std::string sha256;
   std::string md5;

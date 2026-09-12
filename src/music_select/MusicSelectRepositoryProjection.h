@@ -29,6 +29,7 @@ struct MusicSelectRepositoryMetadata {
   std::vector<ChartEntry> entries;
   std::vector<ChartFolderRecord> folders;
   std::vector<MusicSelectDifficultyTableSource> tables;
+  int solidArchiveCount = 0;
 };
 
 struct MusicSelectSearchSource {
@@ -100,6 +101,9 @@ public:
   [[nodiscard]] static MusicSelectBar
   projectSong(const ChartMetaRecord &, std::string_view context,
               MusicSelectRepositoryProjectionInput);
+
+  [[nodiscard]] static MusicSelectBar
+  projectSolidArchive(const ChartMetaRecord &);
 
   [[nodiscard]] static std::vector<MusicSelectBar>
   projectDirectoryFolders(const MusicSelectRepositoryMetadata &,

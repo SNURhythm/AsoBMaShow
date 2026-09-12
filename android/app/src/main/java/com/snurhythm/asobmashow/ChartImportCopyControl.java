@@ -6,8 +6,11 @@ import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntSupplier;
+import java.util.function.LongSupplier;
 
 final class ChartImportCopyControl {
+    static final long MAXIMUM_ARCHIVE_BYTES = 8L * 1024 * 1024 * 1024;
+    static final long ARCHIVE_RESERVED_BYTES = 256L * 1024 * 1024;
     private final IntSupplier copyState;
     private final BooleanSupplier cancelled;
 
@@ -38,7 +41,26 @@ final class ChartImportCopyControl {
     }
 
     void copy(InputStream input, OutputStream output) throws IOException {
+        copy(input, output, Long.MAX_VALUE, 0, null);
+    }
+
+    void copyArchive(InputStream input, OutputStream output, LongSupplier usableSpace)
+            throws IOException {
+        copyArchive(input, output, MAXIMUM_ARCHIVE_BYTES, ARCHIVE_RESERVED_BYTES, usableSpace);
+    }
+
+    void copyArchive(InputStream input, OutputStream output, long maximumBytes,
+                     long reservedBytes, LongSupplier usableSpace) throws IOException {
+        if (maximumBytes < 0 || reservedBytes < 0 || usableSpace == null) {
+            throw new IllegalArgumentException("Invalid archive copy budget.");
+        }
+        copy(input, output, maximumBytes, reservedBytes, usableSpace);
+    }
+
+    private void copy(InputStream input, OutputStream output, long maximumBytes,
+                      long reservedBytes, LongSupplier usableSpace) throws IOException {
         byte[] buffer = new byte[1024 * 1024];
+        long copiedBytes = 0;
         while (true) {
             checkpoint();
             int count = input.read(buffer);
@@ -46,7 +68,17 @@ final class ChartImportCopyControl {
                 return;
             }
             checkpoint();
+            if (count > maximumBytes - copiedBytes) {
+                throw new IOException("Archive import exceeds the byte limit (" + maximumBytes + " bytes).");
+            }
+            if (usableSpace != null) {
+                long available = usableSpace.getAsLong();
+                if (available < reservedBytes || count > available - reservedBytes) {
+                    throw new IOException("Not enough free space to import archive while preserving storage reserve.");
+                }
+            }
             output.write(buffer, 0, count);
+            copiedBytes += count;
         }
     }
 }

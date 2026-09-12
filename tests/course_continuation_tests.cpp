@@ -171,6 +171,81 @@ void testResultContinuationAdvancesWithoutReplaySetup() {
          "the absent replay setup remains explicit in stage order");
 }
 
+void testAuthoredLongNoteModePreservesFirstAndLaterLiveCarry() {
+  for (const int authoredMode : {2, 3}) {
+    for (const std::size_t affectedStage : {std::size_t{0}, std::size_t{1}}) {
+      for (const bool retainReplaySetup : {false, true}) {
+        auto current = initialState(3);
+        if (affectedStage == 1) {
+          const auto previous = replay::advanceCourseContinuation(
+              current, completion(0, 120, 200, 3, 5, 74.0F, 7, 'a', 0));
+          expect(previous.advanced(), "preceding ordinary stage advances");
+          if (!previous.state) {
+            continue;
+          }
+          current = *previous.state;
+        }
+        auto stage = completion(affectedStage, 120, 200, 7, 9, 60.0F,
+                                7, 'b', 0);
+        stage.setup->longNoteMode = authoredMode;
+        if (!retainReplaySetup) {
+          stage.setup.reset();
+        }
+        const auto advanced = replay::advanceCourseContinuation(current, stage);
+        expect(advanced.advanced() && advanced.state,
+               "authored CN/HCN advances with selected LN, independently of replay availability");
+        if (!advanced.state) {
+          continue;
+        }
+        CoursePlaySession session;
+        session.entries.resize(3);
+        session.currentIndex = affectedStage + 1;
+        session.longNoteMode = 1;
+        session.adoptModernCourseContinuation(*advanced.state);
+        const auto carried = session.courseCarriedGauge();
+        expect(carried && sameGauge(*carried, stage.gauge) &&
+                   carried->currentGauge == 60.0F &&
+                   session.courseCarriedCombo() == 7,
+               "the next stage receives exact completed live gauges and combo");
+        expect(advanced.state->constraints.longNoteMode == 1 &&
+                   advanced.state->stageSetups.back().has_value() == retainReplaySetup,
+               "selected fallback and absent replay remain distinct from authored interpretation");
+        if (retainReplaySetup) {
+          expect(advanced.state->stageSetups.back()->longNoteMode == authoredMode,
+                 "retained setup preserves authored effective mode");
+        }
+      }
+    }
+  }
+}
+
+void testAuthoredModeAllowanceRetainsSetupValidation() {
+  const auto current = initialState();
+  for (const int invalidMode : {-1, 4, 99}) {
+    auto stage = completion(0, 120, 200, 7, 9, 60.0F, 7, 'b', 0);
+    stage.setup->longNoteMode = invalidMode;
+    const auto rejected = replay::advanceCourseContinuation(current, stage);
+    expect(rejected.issue == replay::CourseContinuationIssue::Setup && !rejected.state,
+           "unknown effective long-note modes cannot enter continuation");
+  }
+  for (int mismatch = 0; mismatch < 4; ++mismatch) {
+    auto stage = completion(0, 120, 200, 7, 9, 60.0F, 7, 'b', 0);
+    stage.setup->longNoteMode = 2;
+    if (mismatch == 0) {
+      stage.setup->initialGaugeType = GaugeType::Normal;
+    } else if (mismatch == 1) {
+      stage.setup->gaugeProfile = static_cast<GaugeProfile>(99);
+    } else if (mismatch == 2) {
+      stage.setup->gaugeAutoShift = GaugeAutoShiftMode::None;
+    } else {
+      stage.setup->gaugeAutoShiftLowerBound = GaugeType::Normal;
+    }
+    const auto rejected = replay::advanceCourseContinuation(current, stage);
+    expect(rejected.issue == replay::CourseContinuationIssue::Setup && !rejected.state,
+           "authored LN allowance does not relax gauge/profile/auto-shift agreement");
+  }
+}
+
 void testInvalidTransitionsLeaveThePriorStateUntouched() {
   const auto state = initialState();
 
@@ -334,6 +409,8 @@ int main() {
 #if ASOBMASHOW_HAS_COURSE_CONTINUATION
   testContiguousMixedSetupCourseCarriesEveryStateFact();
   testResultContinuationAdvancesWithoutReplaySetup();
+  testAuthoredLongNoteModePreservesFirstAndLaterLiveCarry();
+  testAuthoredModeAllowanceRetainsSetupValidation();
   testInvalidTransitionsLeaveThePriorStateUntouched();
   testContinuationTrustsStructurallyValidatedStageSetup();
   testScoreOverflowAndCompletedCourseCannotAdvance();

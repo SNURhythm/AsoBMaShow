@@ -17,6 +17,22 @@ std::string fullTitle(const bms_parser::ChartMeta &meta) {
   return meta.SubTitle.empty() ? meta.Title : meta.Title + " " + meta.SubTitle;
 }
 
+void addSolidArchiveRoot(MusicSelectProjection &projection, int count) {
+  if (count <= 0) return;
+  const std::string title = "Solid Archives (" + std::to_string(count) + ")";
+  MusicSelectBar folder{
+      .id = {"container:solid-archives"},
+      .kind = skin::MusicSelectBarKind::Container,
+      .title = title,
+      .presentation = {.kind = skin::MusicSelectBarKind::Container,
+                       .title = title, .exists = true},
+      .selectable = true,
+      .sortable = false,
+      .childrenLoaded = false};
+  projection.root.push_back(folder.id);
+  projection.bars.push_back(std::move(folder));
+}
+
 std::string chartIdentity(const ChartMetaRecord &record) {
   if (!record.meta.SHA256.empty()) return "sha256:" + record.meta.SHA256;
   if (!record.meta.MD5.empty()) return "md5:" + record.meta.MD5;
@@ -319,6 +335,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::projectRoot(
     std::span<const std::string> searches,
     std::uint64_t repositoryRevision) const {
   MusicSelectProjection result{.repositoryRevision = repositoryRevision};
+  addSolidArchiveRoot(result, metadata.solidArchiveCount);
   std::vector<std::filesystem::path> physicalRoots;
   for (const auto &entry : metadata.entries) {
     const auto path = normalizedFolderPath(std::filesystem::path(entry.path));
@@ -428,6 +445,21 @@ MusicSelectBar MusicSelectRepositoryProjection::projectSong(
   ProjectionBuilder builder{.input = std::move(input)};
   builder.addSong(record, context);
   return std::move(builder.result.bars.front());
+}
+
+MusicSelectBar MusicSelectRepositoryProjection::projectSolidArchive(
+    const ChartMetaRecord &record) {
+  const auto title = record.meta.Title.empty()
+      ? fspath_to_utf8(record.meta.BmsPath.filename()) : record.meta.Title;
+  const bool available = record.solidArchive && !record.unavailable &&
+                         !record.meta.BmsPath.empty();
+  return {.id = {"archive:" + fspath_to_utf8(record.meta.BmsPath.lexically_normal())},
+          .kind = skin::MusicSelectBarKind::Executable,
+          .title = title,
+          .chart = record,
+          .presentation = {.kind = skin::MusicSelectBarKind::Executable,
+                           .title = title, .exists = available},
+          .selectable = available};
 }
 
 std::vector<MusicSelectBar>
@@ -783,6 +815,9 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
     builder.aggregate(search, searchSource.records);
     builder.result.root.push_back(search.id);
     builder.result.bars.push_back(std::move(search));
+  }
+  if (input.metadata != nullptr) {
+    addSolidArchiveRoot(builder.result, input.metadata->solidArchiveCount);
   }
   return std::move(builder.result);
 }

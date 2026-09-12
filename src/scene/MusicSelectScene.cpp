@@ -7,8 +7,6 @@
 #include "../ModernResultRecallBuilder.h"
 #include "../ReplayResultStateBuilder.h"
 
-#include "../audio/SelectAudioDiagnostics.h"
-#include "../StartupTiming.h"
 #include "../PlatformOpen.h"
 #include "../targets.h"
 
@@ -527,7 +525,6 @@ void MusicSelectScene::configureSoundServices() {
       skin::musicSelectSystemSoundPath(
           selectSoundRoots, skin::MusicSelectSystemSound::Select)
           .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
-  audio::diag::SelectAudioLog("[bgm] scene default=" + selectBgm.string());
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
       musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm),
       selectBgm);
@@ -622,7 +619,6 @@ void MusicSelectScene::init() {
   preloadWorker_ = new ChartPreloadWorker();
   preloadWorker_->configure(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
-        StartupTiming::instance().mark("preload worker start");
         auto chart = play_options::parseChart(request.meta, cancelled,
                                               "music-select preload");
         if (!chart || cancelled.load(std::memory_order_relaxed) ||
@@ -630,7 +626,6 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
-        StartupTiming::instance().mark("preload parse done, jukebox load begins");
         // Stage the chart without stopping the shared audio device when the
         // jukebox owns no active playback, so the select BGM/preview playing on
         // the same AudioWrapper keep playing through the preload. No explicit
@@ -643,7 +638,6 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
-        StartupTiming::instance().mark("preload jukebox load done");
         std::lock_guard<std::mutex> lock(preloadMutex_);
         if (fspath_to_path_t(preloadedPath_) !=
             fspath_to_path_t(request.meta.BmsPath)) {
@@ -656,6 +650,7 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
   folderStatusRowsRevision_.reset();
@@ -667,7 +662,6 @@ void MusicSelectScene::onPause() {
     launchThread_.request_stop();
     launchThread_.join();
   }
-  audio::diag::SelectAudioLog("[bgm] scene onPause");
   stopPreloadWorker();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
@@ -687,7 +681,6 @@ void MusicSelectScene::onPause() {
 
 void MusicSelectScene::onResume() {
   sceneActive_ = true;
-  audio::diag::SelectAudioLog("[bgm] scene onResume");
   launching_ = false;
   hideDecideOverlay();
   const bool background =
@@ -713,6 +706,7 @@ void MusicSelectScene::onResume() {
 
 void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
   if (background) {
+    if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
     cancelDirectoryLoad();
     previewController_.reset();
     if (previewAudio_) previewAudio_->silence();
@@ -917,14 +911,6 @@ void MusicSelectScene::selectedBarMoved() {
     // Leaving a song folder returns to the looping select BGM: pinned
     // Beatoraja drops the preview but the selector keeps the SELECT sound
     // running, so route through the default rather than going silent.
-    const auto current = previewSelection(
-        snapshot, context.settings.archiveChartPreviewEnabled);
-    audio::diag::SelectAudioLog(
-        std::string("[bgm] scene selectedBarMoved stopAudio") +
-        (current.has_value()
-             ? (" folder=" + current->folder.string()) +
-                   (" preview=" + current->previewPath.string())
-             : " selection=nullopt"));
     previewAudio_->switchTo(std::nullopt);
   }
 
@@ -1288,6 +1274,13 @@ void MusicSelectScene::applySkinPointerResult(
       syncResolvedFilters();
     }
     selectedBarMoved();
+  } else if (musicSelectIsUnzipAllAction(clicked) ||
+             (clicked.kind == skin::MusicSelectBarKind::Executable &&
+              clicked.chart && clicked.chart->solidArchive)) {
+    (void)bars_.select(clicked.id);
+    selectedBarMoved();
+    if (activate && (musicSelectIsUnzipAllAction(clicked) ||
+                     musicSelectIsSolidArchiveAction(clicked))) launchSelected();
   } else if (musicSelectPointerKeepsCenteredBar(clicked.kind) && activate) {
     launchSelected();
   }
@@ -1429,6 +1422,10 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   if (selectorInputBlocked()) resetLogicalInput();
+  if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) {
+    (void)archiveUnzipModal_->handleEvents(event);
+    return {};
+  }
   // While a chart is launching, the decide overlay blocks all input so the
   // user cannot scroll or change selection mid-launch.
   if (launching_ && decideOverlay_ != nullptr &&
@@ -1618,7 +1615,8 @@ void MusicSelectScene::continueDirectoryRestore() {
     const auto directory = view.rowAt(view.selectedIndex);
     if (!directory.childrenLoaded) {
       if (directory.kind == skin::MusicSelectBarKind::Folder ||
-          directory.kind == skin::MusicSelectBarKind::SearchWord) {
+          directory.kind == skin::MusicSelectBarKind::SearchWord ||
+          musicSelectIsSolidArchiveDirectory(directory)) {
         requestDirectoryLoad(directory);
         return;
       }
@@ -1703,7 +1701,8 @@ void MusicSelectScene::applyDirectoryLoads() {
 bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
   if (!skin::musicSelectIsDirectoryBarKind(directory.kind)) return false;
   if ((directory.kind == skin::MusicSelectBarKind::Folder ||
-       directory.kind == skin::MusicSelectBarKind::SearchWord) &&
+       directory.kind == skin::MusicSelectBarKind::SearchWord ||
+       musicSelectIsSolidArchiveDirectory(directory)) &&
       !directory.childrenLoaded) {
     requestDirectoryLoad(directory);
     return false;
@@ -1719,6 +1718,10 @@ bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
 bool MusicSelectScene::loadDirectoryChildren(
     const MusicSelectBar &directory) {
   if (!chartSession_) return false;
+  if (musicSelectIsSolidArchiveDirectory(directory)) {
+    requestDirectoryLoad(directory);
+    return false;
+  }
   const int selectedLongNoteMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   const auto inputFor = [this, selectedLongNoteMode](
@@ -2141,7 +2144,6 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
   // Stop the preload worker before gameplay starts so it cannot keep touching
   // the jukebox while GamePlayScene uses it.
   stopPreloadWorker();
-  StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   const auto snapshot = bars_.readView();
@@ -2204,6 +2206,9 @@ bool MusicSelectScene::reusePreloadedChart(
   }
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
+  if (context.settings.skinDoublePlayOption == 1) {
+    applyDoublePlayFlipToChart(*cached);
+  }
   if (!play_options::applyPlayOptionModifier(
           *cached, selections.playOption, std::nullopt, 0, playInfo.option,
           playInfo.seed, "music-select")) {
@@ -2227,9 +2232,31 @@ bool MusicSelectScene::reusePreloadedChart(
   return true;
 }
 
+void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
+  if (modalLayer_ == nullptr || selectorInputBlocked()) return;
+  if (!archiveUnzipModal_) {
+    archiveUnzipModal_ = ArchiveUnzipModal::Create(
+        modalLayer_, context.chartRepository,
+        {.libraryChanged = [this]() {
+           if (sceneActive_ && !failed_) {
+             reloadLibrary();
+             selectedBarMoved();
+           }
+         }});
+  }
+  if (!archiveUnzipModal_) return;
+  const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
+                                      : archiveUnzipModal_->start(record);
+  if (!started) return;
+  resetLogicalInput();
+  cancelDirectoryLoad();
+  stopPreloadWorker();
+  previewController_.reset();
+  if (previewAudio_) previewAudio_->silence();
+}
+
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
-  audio::diag::SelectAudioLog("[bgm] launchSelected");
-  if (!sceneActive_ || failed_ || launching_ ||
+  if (!sceneActive_ || failed_ || selectorInputBlocked() ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
@@ -2244,9 +2271,15 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     launchCourse(selected, autoplay);
     return;
   }
+  if (musicSelectIsUnzipAllAction(selected)) {
+    if (!autoplay && !practice) startArchiveUnzip({.unzipAll = true});
+    return;
+  }
   if (!selected.chart) return;
-  StartupTiming::instance().beginSession();
-  StartupTiming::instance().mark("selector start press");
+  if (musicSelectIsSolidArchiveAction(selected)) {
+    if (!autoplay && !practice) startArchiveUnzip(*selected.chart);
+    return;
+  }
   const auto record = *selected.chart;
   if (record.unavailable || record.solidArchive ||
       record.meta.BmsPath.empty()) {
@@ -2279,7 +2312,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     // Stop the preload worker before gameplay starts so it cannot keep
     // touching the jukebox while GamePlayScene uses it.
     stopPreloadWorker();
-    StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
     if (!launching_) {
       launching_ = true;
       StartOptions options{
@@ -2323,7 +2355,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       preloadWorker_->isRequesting(fspath_to_utf8(record.meta.BmsPath))) {
     launching_ = true;
     pendingLaunch_ = PendingPreloadLaunch{record, autoplay, practice};
-    StartupTiming::instance().mark("waiting for in-flight preload to complete");
     return;
   }
 
@@ -2361,6 +2392,9 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           return;
         }
         play_options::PlayOptionReplayInfo playInfo;
+        if (doublePlayFlip) {
+          applyDoublePlayFlipToChart(*chart);
+        }
         if (!play_options::applyPlayOptionModifier(
                 *chart, selections.playOption, std::nullopt, 0,
                 playInfo.option, playInfo.seed, "music-select")) {
@@ -2405,7 +2439,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
                   launchCancelled_.load(std::memory_order_acquire)) {
                 return true;
               }
-              StartupTiming::instance().mark("parse + jukebox load done, changing scene");
               StartOptions options{
                   .startPosition = 0,
                   .autoKeySound = autoKeySound,
@@ -2505,7 +2538,8 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
         }
         applyCourseConstraintsToChart(*chart, session->constraints);
         const auto playInfo = play_options::applySelectedPlayOptions(
-            *chart, session->requestedPlayOption, session->requestedPlayOption2);
+            *chart, session->requestedPlayOption, session->requestedPlayOption2,
+            session->doublePlayFlip);
         applyEffectiveLongNoteModeToChart(*chart, session->longNoteMode);
         session->playOption = playInfo.option;
         session->playOptionSeed = playInfo.seed;
@@ -2570,6 +2604,7 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
   auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto directory = snapshot.rowAt(snapshot.selectedIndex);
+  if (musicSelectIsSolidArchiveDirectory(directory)) return;
   if ((directory.kind == skin::MusicSelectBarKind::Folder ||
        directory.kind == skin::MusicSelectBarKind::SearchWord) &&
       !directory.childrenLoaded) {
@@ -2772,7 +2807,8 @@ void MusicSelectScene::changeSelectedFavorite(bool song, int direction) {
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
-  if (!selected.chart || selected.chart->meta.BmsPath.empty()) return;
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->solidArchive || selected.chart->meta.BmsPath.empty()) return;
 
   const MusicSelectFavoriteBits bits =
       song ? MusicSelectFavoriteBits{.favorite = 1, .invisible = 4}
@@ -2821,6 +2857,7 @@ void MusicSelectScene::consumeActions() {
   for (const auto &action : skinSession_->takePublishedActions()) {
     if (!sceneActive_ || failed_ ||
         context.appInBackground.load(std::memory_order_acquire)) return;
+    if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) break;
     switch (action.kind) {
     case skin::MusicSelectSkinActionKind::Event:
       commitAudioSettings();
@@ -2874,6 +2911,7 @@ void MusicSelectScene::consumeActions() {
 
 bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ ||
+         (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
          (playOptionsModal_ != nullptr && playOptionsModal_->root() != nullptr &&
@@ -3098,7 +3136,9 @@ void MusicSelectScene::executeEvent(
       .sortIndex = sortIndex_,
       .hasSelectedPlayConfig = selected != nullptr,
       .selectedSongHasPath =
-          selected != nullptr && selected->chart.has_value() &&
+          selected != nullptr &&
+          selected->kind == skin::MusicSelectBarKind::Song &&
+          selected->chart.has_value() && !selected->chart->solidArchive &&
           !selected->chart->meta.BmsPath.empty(),
       .rivalCount = 0,
       .currentRivalIndex = currentRivalIndex_,
@@ -3276,6 +3316,7 @@ void MusicSelectScene::executeEvent(
 }
 
 void MusicSelectScene::refreshRepositoryRevisions() {
+  if (archiveUnzipModal_ && archiveUnzipModal_->inProgress()) return;
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
       context.scoreRepository.GetRevision() != scoreRevision_) {
     reloadLibrary();
@@ -3331,6 +3372,11 @@ void MusicSelectScene::update(float) {
     applyRecordsExportProgress();
     applyRecordsExportResult();
   }
+  if (archiveUnzipModal_) {
+    archiveUnzipModal_->resize(rendering::window_width,
+                               rendering::window_height);
+    archiveUnzipModal_->update();
+  }
   if (tasksModal_ != nullptr) {
     tasksModal_->setSize(rendering::window_width, rendering::window_height);
     if (tasksModal_->getVisible()) refreshTasksModal();
@@ -3380,11 +3426,10 @@ void MusicSelectScene::update(float) {
       previewSelection(bars_.readView(),
                        context.settings.archiveChartPreviewEnabled),
       songBarChangeMicros_);
-  if (auto preview = previewController_.update(elapsedMicros(), launching_);
+  if (auto preview = previewController_.update(
+          elapsedMicros(), launching_ ||
+              (archiveUnzipModal_ && archiveUnzipModal_->isVisible()));
       preview && previewAudio_) {
-    audio::diag::SelectAudioLog(
-        std::string("[bgm] scene update switchTo path=") +
-        (preview->path.has_value() ? preview->path->string() : "<default>"));
     previewAudio_->switchTo(std::move(preview->path));
   }
   updateRanking();
@@ -3408,6 +3453,7 @@ void MusicSelectScene::enterError(
     std::vector<skin::SkinDiagnostic> diagnostics) {
   if (failed_) return;
   failed_ = true;
+  if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   stopInputListening();
   previewController_.reset();
@@ -4558,6 +4604,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 
 void MusicSelectScene::cleanupScene() {
   sceneActive_ = false;
+  archiveUnzipModal_.reset();
   ++launchGeneration_;
   cancelDirectoryLoad();
   directoryLoader_.reset();

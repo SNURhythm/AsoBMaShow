@@ -112,7 +112,8 @@ bool DownloadURLTextAndroid(const std::string &url, std::string &body,
                             AndroidDownloadCheckpoint checkpoint = nullptr,
                             AndroidDownloadPauseProbe pauseRequested = nullptr);
 bool PostURLTextAndroid(const std::string &url, std::string &body,
-                        std::string &errorMessage);
+                        std::string &errorMessage,
+                        AndroidDownloadCheckpoint checkpoint = nullptr);
 bool DownloadURLToFileAndroid(const std::string &url,
                               const std::filesystem::path &path,
                               std::atomic_bool &cancelled,

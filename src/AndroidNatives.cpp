@@ -1441,13 +1441,26 @@ bool DownloadURLTextAndroid(const std::string &url, std::string &body,
 }
 
 bool PostURLTextAndroid(const std::string &url, std::string &body,
-                        std::string &errorMessage) {
+                        std::string &errorMessage,
+                        AndroidDownloadCheckpoint checkpoint) {
   body.clear();
+  AndroidDownloadProgressBridge bridge;
+  jlong checkpointToken = 0;
+  if (checkpoint) {
+    bridge.checkpoint = &checkpoint;
+    checkpointToken = registerAndroidDownloadProgressBridge(bridge);
+  }
+  struct CheckpointBridgeCleanup {
+    jlong token;
+    ~CheckpointBridgeCleanup() {
+      if (token != 0) unregisterAndroidDownloadProgressBridge(token);
+    }
+  } cleanup{checkpointToken};
+
   std::string callError;
-  const std::string result =
-      callActivityStringMethod("postUrlText", "(Ljava/lang/String;)"
-                                              "Ljava/lang/String;",
-                               url.c_str(), callError);
+  const std::string result = callActivityStringMethodLong(
+      "postUrlText", "(Ljava/lang/String;J)Ljava/lang/String;",
+      url.c_str(), checkpointToken, callError);
   if (!callError.empty()) {
     errorMessage = callError;
     return false;

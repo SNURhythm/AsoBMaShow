@@ -2817,14 +2817,29 @@ int coroutineCreate(lua_State *state) {
 }
 
 int resumeThread(lua_State *state, lua_State *thread, int firstArgument) {
-  const int count = lua_gettop(state) - firstArgument + 1;
-  for (int index = firstArgument; index <= lua_gettop(state); ++index) {
+  const int lastArgument = lua_gettop(state);
+  const int count = lastArgument - firstArgument + 1;
+  if (!lua_checkstack(state, std::max(count, 2)) ||
+      !lua_checkstack(thread, count)) {
+    lua_settop(state, 0);
+    lua_pushboolean(state, 0);
+    lua_pushliteral(state, "too many arguments to resume");
+    return 2;
+  }
+  for (int index = firstArgument; index <= lastArgument; ++index) {
     lua_pushvalue(state, index);
   }
   lua_xmove(state, thread, count);
   const int status = lua_resume(thread, count);
   const int results = lua_gettop(thread);
   if (status == 0 || status == LUA_YIELD) {
+    if (!lua_checkstack(state, results + 1)) {
+      lua_settop(thread, 0);
+      lua_settop(state, 0);
+      lua_pushboolean(state, 0);
+      lua_pushliteral(state, "too many results to resume");
+      return 2;
+    }
     lua_pushboolean(state, 1);
     lua_xmove(thread, state, results);
     return results + 1;

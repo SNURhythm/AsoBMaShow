@@ -105,8 +105,8 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
     def test_mobile_difficulty_table_downloads_observe_task_checkpoints(self):
         self.assertIn("IOSDownloadCheckpoint", self.ios_natives_header)
         ios_text_download = self.ios_natives.split(
-            "bool DownloadURLTextIOS", 1
-        )[1].split("bool PostURLTextIOS", 1)[0]
+            "bool RequestURLTextIOS", 1
+        )[1].split("bool DownloadURLTextIOS", 1)[0]
         self.assertIn("checkpoint()", ios_text_download)
         self.assertIn("[task suspend]", ios_text_download)
         self.assertIn("[task resume]", ios_text_download)

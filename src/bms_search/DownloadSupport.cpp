@@ -119,19 +119,47 @@ void reportIOSDownloadProgress(void *context, std::uint64_t downloadedBytes,
        .totalBytes = totalBytes});
 }
 
-std::optional<std::string> fetchUrlText(const std::string &url,
-                                        std::string &errorMessage) {
+std::optional<std::string> fetchUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
   std::string body;
-  if (!DownloadURLTextIOS(url, body, errorMessage)) {
+  const bool success = DownloadURLTextIOS(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); },
+      maximumResponseBytes);
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
     return std::nullopt;
   }
   return body;
 }
 
-std::optional<std::string> postUrlText(const std::string &url,
-                                       std::string &errorMessage) {
+std::optional<std::string> postUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
   std::string body;
-  if (!PostURLTextIOS(url, body, errorMessage)) {
+  const bool success = PostURLTextIOS(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); },
+      maximumResponseBytes);
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
     return std::nullopt;
   }
   return body;
@@ -147,51 +175,114 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }
-  std::vector<unsigned char> data;
+  constexpr std::uint64_t maximumArchiveBytes = 8ULL * 1024 * 1024 * 1024;
   IOSDownloadProgressContext progressContext{
       .progressCallback = &progressCallback};
-  if (!DownloadURLBinaryIOS(url, data, errorMessage,
-                            reportIOSDownloadProgress, &progressContext)) {
-    return false;
-  }
-  if (cancelled.load()) {
-    errorMessage = "Download cancelled.";
-    return false;
-  }
-  std::ofstream file(path, std::ios::binary);
-  if (!file) {
-    errorMessage = "Could not create downloaded archive.";
-    return false;
-  }
-  file.write(reinterpret_cast<const char *>(data.data()),
-             static_cast<std::streamsize>(data.size()));
-  if (!file) {
-    errorMessage = "Could not write downloaded archive.";
+  if (!DownloadURLToFileIOS(url, path, cancelled, maximumArchiveBytes,
+                            errorMessage, reportIOSDownloadProgress,
+                            &progressContext)) {
     return false;
   }
   if (progressCallback) {
+    std::error_code sizeError;
+    const auto size = std::filesystem::file_size(path, sizeError);
+    const auto byteCount = sizeError ? 0 : static_cast<std::uint64_t>(size);
     progressCallback({.message = "Download complete",
-                      .downloadedBytes = data.size(),
-                      .totalBytes = data.size()});
+                      .downloadedBytes = byteCount,
+                      .totalBytes = byteCount});
   }
   return true;
 }
 #else
 std::once_flag curlInitFlag;
 
+enum class CurlTextReceiveError { None, Cancelled, TooLarge, AllocationFailed };
+
+struct CurlTextResponseContext {
+  std::string body;
+  size_t maximumResponseBytes = 0;
+  const std::atomic_bool *cancelled = nullptr;
+  CurlTextReceiveError error = CurlTextReceiveError::None;
+};
+
 size_t appendCurlResponse(char *ptr, size_t size, size_t nmemb,
                           void *userdata) {
+  auto *context = static_cast<CurlTextResponseContext *>(userdata);
+  if (context->cancelled != nullptr && context->cancelled->load()) {
+    context->error = CurlTextReceiveError::Cancelled;
+    return 0;
+  }
+  if (context->error != CurlTextReceiveError::None) {
+    return 0;
+  }
+  if (size != 0 && nmemb > std::numeric_limits<size_t>::max() / size) {
+    context->error = CurlTextReceiveError::TooLarge;
+    return 0;
+  }
   const size_t byteCount = size * nmemb;
-  auto *response = static_cast<std::string *>(userdata);
-  response->append(ptr, byteCount);
+  if (context->body.size() > context->maximumResponseBytes ||
+      byteCount > context->maximumResponseBytes - context->body.size()) {
+    context->error = CurlTextReceiveError::TooLarge;
+    return 0;
+  }
+  if (byteCount == 0) {
+    return 0;
+  }
+  try {
+    context->body.append(ptr, byteCount);
+  } catch (const std::exception &) {
+    context->error = CurlTextReceiveError::AllocationFailed;
+    return 0;
+  }
   return byteCount;
 }
 
-std::optional<std::string> fetchUrlText(const std::string &url,
-                                        std::string &errorMessage) {
+int curlTextProgress(void *userdata, curl_off_t, curl_off_t,
+                      curl_off_t, curl_off_t) {
+  auto *context = static_cast<CurlTextResponseContext *>(userdata);
+  if (context->cancelled != nullptr && context->cancelled->load()) {
+    context->error = CurlTextReceiveError::Cancelled;
+    return 1;
+  }
+  return context->error == CurlTextReceiveError::None ? 0 : 1;
+}
+
+bool curlTextReceiveFailed(const CurlTextResponseContext &context,
+                            std::string &errorMessage) {
+  if ((context.cancelled != nullptr && context.cancelled->load()) ||
+      context.error == CurlTextReceiveError::Cancelled) {
+    errorMessage = "Lookup cancelled.";
+    return true;
+  }
+  if (context.error == CurlTextReceiveError::TooLarge) {
+    errorMessage = "Metadata response exceeds the byte limit (" +
+                   std::to_string(context.maximumResponseBytes) + " bytes).";
+    return true;
+  }
+  if (context.error == CurlTextReceiveError::AllocationFailed) {
+    errorMessage = "Could not retain the metadata response.";
+    return true;
+  }
+  return false;
+}
+
+std::optional<std::string> fetchUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
 #if TARGET_OS_ANDROID
+  (void)maximumResponseBytes;
   std::string body;
-  if (!DownloadURLTextAndroid(url, body, errorMessage)) {
+  const bool success = DownloadURLTextAndroid(url, body, errorMessage, [&] { return cancelled == nullptr || !cancelled->load(); });
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
     if (errorMessage.empty()) {
       errorMessage = "Failed to download " + url;
     }
@@ -206,7 +297,8 @@ std::optional<std::string> fetchUrlText(const std::string &url,
     return std::nullopt;
   }
 
-  std::string body;
+  CurlTextResponseContext context{.maximumResponseBytes = maximumResponseBytes,
+                                  .cancelled = cancelled};
   char curlError[CURL_ERROR_SIZE] = {};
   curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl.get(), CURLOPT_FOLLOWLOCATION, 1L);
@@ -215,7 +307,10 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
   curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
   curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
-  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlTextProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
@@ -226,6 +321,9 @@ std::optional<std::string> fetchUrlText(const std::string &url,
   long statusCode = 0;
   curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
 
+  if (curlTextReceiveFailed(context, errorMessage)) {
+    return std::nullopt;
+  }
   if (result != CURLE_OK) {
     errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
     return std::nullopt;
@@ -235,15 +333,29 @@ std::optional<std::string> fetchUrlText(const std::string &url,
                    url;
     return std::nullopt;
   }
-  return body;
+  return std::move(context.body);
 #endif
 }
 
-std::optional<std::string> postUrlText(const std::string &url,
-                                       std::string &errorMessage) {
+std::optional<std::string> postUrlText(
+    const std::string &url, std::string &errorMessage,
+    const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
+  errorMessage.clear();
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
 #if TARGET_OS_ANDROID
+  (void)maximumResponseBytes;
   std::string body;
-  if (!PostURLTextAndroid(url, body, errorMessage)) {
+  const bool success = PostURLTextAndroid(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); });
+  if (cancelled != nullptr && cancelled->load()) {
+    errorMessage = "Lookup cancelled.";
+    return std::nullopt;
+  }
+  if (!success) {
     if (errorMessage.empty()) {
       errorMessage = "Failed to post " + url;
     }
@@ -258,7 +370,8 @@ std::optional<std::string> postUrlText(const std::string &url,
     return std::nullopt;
   }
 
-  std::string body;
+  CurlTextResponseContext context{.maximumResponseBytes = maximumResponseBytes,
+                                  .cancelled = cancelled};
   char curlError[CURL_ERROR_SIZE] = {};
   curl_easy_setopt(curl.get(), CURLOPT_URL, url.c_str());
   curl_easy_setopt(curl.get(), CURLOPT_POST, 1L);
@@ -268,7 +381,10 @@ std::optional<std::string> postUrlText(const std::string &url,
   curl_easy_setopt(curl.get(), CURLOPT_CONNECTTIMEOUT, 10L);
   curl_easy_setopt(curl.get(), CURLOPT_TIMEOUT, 25L);
   curl_easy_setopt(curl.get(), CURLOPT_WRITEFUNCTION, appendCurlResponse);
-  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(curl.get(), CURLOPT_WRITEDATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFOFUNCTION, curlTextProgress);
+  curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &context);
+  curl_easy_setopt(curl.get(), CURLOPT_NOPROGRESS, 0L);
   curl_easy_setopt(curl.get(), CURLOPT_ERRORBUFFER, curlError);
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
@@ -279,6 +395,9 @@ std::optional<std::string> postUrlText(const std::string &url,
   long statusCode = 0;
   curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
 
+  if (curlTextReceiveFailed(context, errorMessage)) {
+    return std::nullopt;
+  }
   if (result != CURLE_OK) {
     errorMessage = curlError[0] != '\0' ? curlError : curl_easy_strerror(result);
     return std::nullopt;
@@ -288,7 +407,7 @@ std::optional<std::string> postUrlText(const std::string &url,
                    url;
     return std::nullopt;
   }
-  return body;
+  return std::move(context.body);
 #endif
 }
 
@@ -543,9 +662,11 @@ bool downloadAndExtractArchive(
           [](const std::filesystem::path &path,
              const std::filesystem::path &destination,
              std::string &errorMessage,
-             BmsSearchDownloadProgressCallback callback) {
+             BmsSearchDownloadProgressCallback callback,
+             ArchiveExtractionCancelled extractionCancelled) {
             return extractDownloadedArchive(path, destination, errorMessage,
-                                            std::move(callback));
+                                            std::move(callback),
+                                            std::move(extractionCancelled));
           },
       .decideExtracted = decideExtractedArchive,
       .commitArtifact =

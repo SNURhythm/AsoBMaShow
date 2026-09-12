@@ -455,15 +455,19 @@ void projectSelectedBar(Properties &out,
   const MusicSelectBar *selected =
       bars.selectedIndex < bars.rowCount() ? &bars.rowAt(bars.selectedIndex)
                                            : nullptr;
+  const bool archiveAction = selected &&
+      selected->kind == skin::MusicSelectBarKind::Executable &&
+      (musicSelectIsUnzipAllAction(*selected) ||
+       (selected->chart && selected->chart->solidArchive));
   const bool directory =
-      selected && skin::musicSelectIsDirectoryBarKind(selected->kind);
+      selected && (archiveAction || skin::musicSelectIsDirectoryBarKind(selected->kind));
   const bool song = selected && selected->kind == skin::MusicSelectBarKind::Song;
   const bool course = selected && selected->kind == skin::MusicSelectBarKind::Grade;
   out.booleans[1] = directory;
   out.booleans[2] = song;
   out.booleans[3] = course;
-  out.booleans[5] = selected && isPlayableBar(*selected);
-  out.booleans[1030] = selected &&
+  out.booleans[5] = selected && !archiveAction && isPlayableBar(*selected);
+  out.booleans[1030] = selected && !archiveAction &&
                        selected->kind == skin::MusicSelectBarKind::Executable;
   out.booleans[1031] = selected &&
                        selected->kind == skin::MusicSelectBarKind::RandomCourse;
@@ -471,6 +475,19 @@ void projectSelectedBar(Properties &out,
   if (!selected) return;
   out.strings[10] = selected->title;
   out.strings[12] = selected->title;
+
+  if (archiveAction) {
+    if (selected->chart) {
+      const auto &meta = selected->chart->meta;
+      out.strings[11] = meta.SubTitle;
+      out.strings[13] = meta.Genre;
+      out.strings[14] = meta.Artist;
+      out.strings[15] = meta.SubArtist;
+      out.strings[16] = meta.SubArtist.empty() ? meta.Artist
+                                              : meta.Artist + " " + meta.SubArtist;
+    }
+    return;
+  }
 
   if (course || selected->kind == skin::MusicSelectBarKind::RandomCourse) {
     projectCourse(out, *selected);

@@ -178,6 +178,8 @@ std::shared_ptr<CoursePlaySession> makeCourseReplayLaunchSession(
   session->longNoteMode = replayData->longNoteMode;
   session->constraints = constraintSettings.rules;
   session->requestedPlayOption = replayData->requestedPlayOption;
+  session->requestedPlayOption2 = savedResult.provenance.player2.option;
+  session->doublePlayFlip = savedResult.provenance.doublePlayFlip;
   session->assistOption = replayData->assistOption;
   session->autoKeySound = false;
   session->preparedCourseCharts = std::move(outcome.charts);

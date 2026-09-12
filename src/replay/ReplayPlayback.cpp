@@ -210,7 +210,7 @@ ReplayTimeBounds replayCaptureTimeBounds(
     ReplayTimeBounds observed, std::span<const InputTransition> input,
     std::span<const ReplayTouchSample> touchSamples,
     std::span<const ReplayLaneCoverEvent> laneCoverEvents) noexcept {
-  if (!observed.valid()) {
+  if (!observed.valid() || observed.aborted.value_or(false)) {
     return observed;
   }
   for (const auto &transition : input) {
@@ -264,7 +264,7 @@ ReplayPlaybackValidation validateReplayPlayback(const ReplayPlaybackData &data,
   if (!setup.valid()) {
     return {.issue = ReplayPlaybackIssue::Setup, .setupIssue = setup.issue};
   }
-  if (!timeBounds.valid()) {
+  if (!timeBounds.valid(limits)) {
     return invalid(ReplayPlaybackIssue::TimeBounds);
   }
   if (const auto issue = validateInput(data.input, data.setup.chart.keyMode,

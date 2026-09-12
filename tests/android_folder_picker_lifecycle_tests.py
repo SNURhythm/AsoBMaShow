@@ -34,7 +34,9 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
         signatures = ["protected void onResume()", "protected void onPause()",
                       "protected void onActivityResult(",
                       "protected void onDestroy()", "public String pickChartFolder(",
-                      "public String ensureManageExternalStorageAccess("]
+                      "public String ensureManageExternalStorageAccess(",
+                      "private boolean hasManageExternalStorageAccess()",
+                      "private String directPathForTree("]
         for optional in ["private void finishPicker()",
                          "private void finishManageStorageRequest()"]:
             if optional in activity:
@@ -91,6 +93,11 @@ class AndroidFolderPickerLifecycleTests(unittest.TestCase):
     def test_permission_result_before_resume(self):
         self.run_scenario("result-grant")
         self.run_scenario("result-deny")
+
+    def test_storage_tree_access_matches_actual_permission(self):
+        for scenario in ("storage-28", "storage-29", "storage-30-denied",
+                         "storage-30-granted", "storage-play"):
+            self.run_scenario(scenario)
 
 
 if __name__ == "__main__":

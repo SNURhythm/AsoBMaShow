@@ -520,11 +520,14 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result, "courseGraphPaddingForEntry(",
                   "course result graphs pad unplayed stages after an early failure");
   requireContains(result,
-                  "for (auto &history : dynamic->gaugeHistories) {\n"
-                  "    history.assign(static_cast<std::size_t>(gaugeSamples), 0.0F);\n"
+                  "dynamic->gaugeHistoryOmitted = gaugeSamples > kSkinMaximumGaugeGraphSamples;\n"
+                  "  dynamic->gaugeType = gaugeType;\n"
+                  "  for (auto &history : dynamic->gaugeHistories) {\n"
+                  "    history.assign(dynamic->gaugeHistoryOmitted\n"
+                  "                       ? 0 : static_cast<std::size_t>(gaugeSamples), 0.0F);\n"
                   "  }",
-                  "course result graph padding reserves every source gauge type for "
-                  "an auto-shifted final gauge");
+                  "course result graph padding zero-initializes every admitted source gauge "
+                  "channel and omits excessive durations before allocation");
   requireContains(result,
                   "SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.",
                   "course result graph retains the source-sampled stage gauge logs");

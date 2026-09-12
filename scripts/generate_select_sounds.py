@@ -1,260 +1,89 @@
 #!/usr/bin/env python3
-"""Deterministic synth for AsoBMaShow's bundled music-select default sounds.
+"""Generate the original Signal Select BGM and bundled selector sound effects.
 
-Pure-Python DSP (math/struct/wave only, no third-party deps). Writes 44100 Hz
-16-bit mono WAVs that the music-select system-sound resolution (
-SkinSystemSoundService) finds under its bundled assets root.
+The score is 32 bars of 4/4 at 128 BPM (60 seconds), rendered deterministically
+with standard-library Python DSP. Note releases and delay tails wrap around the
+loop; there is no master fade that drops the groove at each repetition.
 
-Design notes
-------------
-* The select BGM is length-exactly 2.0 s with every carrier/detune/tremolo
-  partial an integer number of cycles across the buffer, so the sample at the
-  loop point is a phase-continuous continuation (no click when looping).
-  A seam check asserts the boundary step stays within the internal step
-  envelope.
-* Non-loop SEs fade the final 5 ms to zero to avoid clicks.
-* Peak-normalisation (to 0.8) happens inside write_wav so every file is
-  uniformly loud; fine-tune per-SE colours by editing the make_* functions.
+BGM is mono 44.1 kHz Ogg Vorbis; the short UI effects remain 16-bit WAVs.
+Encoding requires sndfile-convert from libsndfile's command-line tools.
+The encoder round-trip is checked for sample count, clipping, clicks and gaps
+before publication. An obsolete assets/select.wav is removed only after the
+replacement Ogg has passed validation, so the resolver cannot prefer stale BGM.
 
-Run from anywhere; the default output root is ../assets relative to this file
-(the bundled assets root), matching where the runtime looks.
+Run from anywhere. --output-root is relative to the repository root unless
+absolute; output filenames already include assets/.
 """
 
 import argparse
 import math
 import os
-import random
+from pathlib import Path
+import shutil
 import struct
+import subprocess
+import tempfile
 import wave
 
+from select_bgm import render_select
+
 SR = 44100
-random.seed(0xC0FFEE)
 
 
-def out_path(root, p):
-    path = os.path.join(root, p)
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
-    return path
+def out_path(root, path):
+    destination = os.path.join(root, path)
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    return destination
 
 
 def write_wav(root, path, samples):
-    peak = max(1e-9, max(abs(s) for s in samples))
+    peak = max(1e-9, max(abs(sample) for sample in samples))
     gain = 0.8 / peak
     data = bytearray()
-    for s in samples:
-        v = int(round(max(-1.0, min(1.0, s * gain)) * 32767))
-        data += struct.pack("<h", v)
-    with wave.open(out_path(root, path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(SR)
-        w.writeframes(bytes(data))
+    for sample in samples:
+        value = int(round(max(-1.0, min(1.0, sample * gain)) * 32767))
+        data += struct.pack("<h", value)
+    with wave.open(out_path(root, path), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(SR)
+        output.writeframes(data)
     print(f"wrote {os.path.join(root, path)}: {len(samples)/SR:.3f}s peak={peak:.3f}")
 
 
-def partial(t, f, amp, harm=1.0, detune_hz=0.0):
-    return amp * math.sin(2 * math.pi * (f + detune_hz) * harm * t)
+def write_float_wav(path, samples):
+    """Keep encoder headroom: sndfile-convert peak-normalizes integer inputs."""
+    peak = max(abs(sample) for sample in samples)
+    if not math.isfinite(peak) or peak <= 0 or any(not math.isfinite(sample) for sample in samples):
+        raise ValueError("BGM must contain finite, non-silent audio")
+    gain = .8 / peak
+    data = bytearray()
+    for sample in samples:
+        data += struct.pack("<f", sample * gain)
+    with Path(path).open("wb") as output:
+        output.write(struct.pack("<4sI4s", b"RIFF", 48 + len(data), b"WAVE"))
+        output.write(struct.pack("<4sIHHIIHH", b"fmt ", 16, 3, 1, SR, SR * 4, 4, 32))
+        output.write(struct.pack("<4sII", b"fact", 4, len(samples)))
+        output.write(struct.pack("<4sI", b"data", len(data)))
+        output.write(data)
 
 
-def exp_env(t, tau):
-    return math.exp(-t / tau)
+def exp_env(time, tau):
+    return math.exp(-time / tau)
 
 
 def lin_fade_out(samples, seconds=0.005):
-    n = int(seconds * SR)
-    for i in range(n):
-        index = len(samples) - 1 - i
+    count = int(seconds * SR)
+    for offset in range(count):
+        index = len(samples) - 1 - offset
         if index < 0:
             break
-        samples[index] *= i / n
+        samples[index] *= offset / count
     return samples
 
 
-def swept_noise(n_samples, f0, f1, amp):
-    """White noise shaped by a sweeping one-pole low-pass and a swell envelope."""
-    out = []
-    y = 0.0
-    for i in range(n_samples):
-        t = i / SR
-        progress = i / n_samples
-        fc = f0 * (f1 / f0) ** progress
-        alpha = 1.0 - math.exp(-2 * math.pi * fc / SR)
-        x = random.uniform(-1, 1)
-        y = alpha * x + (1 - alpha) * y
-        envelope = math.sin(math.pi * progress) ** 0.6
-        out.append(y * amp * envelope)
-    return out
-
-
-def swept_tone(n_samples, f0, f1, amp, harmonics=1, vib_depth=0.0, vib_rate=0.0):
-    """Two-exponential sweep of a harmonic additive tone; optional FM vibrato."""
-    out = []
-    phase = [0.0] * harmonics
-    for i in range(n_samples):
-        t = i / SR
-        progress = i / n_samples
-        f = f0 * (f1 / f0) ** progress
-        if vib_depth:
-            f += vib_depth * math.sin(2 * math.pi * vib_rate * t)
-        s = 0.0
-        for h in range(harmonics):
-            phase[h] += 2 * math.pi * f * (h + 1) / SR
-            s += math.sin(phase[h]) / (h + 1)
-        out.append(s * amp)
-    return out
-
-
-# ---------------------------------------------------------------- select BGM
-# A bright rhythm-game menu track with high-pitched instruments: a sparkling
-# plucky lead in the C6-E7 register, airy high chord stabs, a light
-# high-octave bass, and a driving beat. No tremolo or detune beating.
-
-EQ = {
-    "A1": 55.00, "C1": 32.70, "C2": 65.41, "D2": 73.42, "E2": 82.41,
-    "F2": 87.31, "G2": 98.00, "A2": 110.00, "B2": 123.47,
-    "C3": 130.81, "D3": 146.83, "E3": 164.81, "F3": 174.61, "G3": 196.00,
-    "A3": 220.00, "B3": 246.94,
-    "C4": 261.63, "D4": 293.66, "E4": 329.63, "F4": 349.23, "G4": 392.00,
-    "A4": 440.00, "B4": 493.88, "C5": 523.25, "D5": 587.33, "E5": 659.26,
-    "F5": 698.46, "G5": 783.99, "A5": 880.00, "B5": 987.77, "C6": 1046.50,
-    "D6": 1174.66, "E6": 1318.51, "F6": 1396.91, "G6": 1567.98,
-    "A6": 1760.00, "B6": 1975.53, "C7": 2093.00, "D7": 2349.32,
-    "E7": 2637.02, "F7": 2793.83, "G7": 3135.96,
-}
-
-SELECT_SECONDS = 20
-BEAT = 0.5
-
-
-def bright_tone(freq, t, n_harmonics=3):
-    """A bright/glassy tone: fundamental plus a few harmonics, so high-pitch
-    instruments cut through instead of sounding like dull sines."""
-    s = 0.0
-    for h in range(1, n_harmonics + 1):
-        s += math.sin(2 * math.pi * freq * h * t) / h
-    return s
-
-
-def make_kick(when_sec, amp=0.24):
-    """A soft kick: a low sine with a quick pitch drop."""
-    n = SR * SELECT_SECONDS
-    out = [0.0] * n
-    on = int(when_sec * SR)
-    dur = int(0.16 * SR)
-    for i in range(on, min(n, on + dur)):
-        t = (i - on) / SR
-        freq = 130.0 * math.exp(-t / 0.03) + 48.0
-        env = min(1.0, t / 0.002) * exp_env(t, 0.045)
-        out[i] += amp * math.sin(2 * math.pi * freq * t) * env
-    return out
-
-
-def make_rhythm_bar(start_sec, duration_sec, bass, bass_high, voices, lead):
-    """A bright rhythm-game bar: kick + light high-octave bass, high staccato
-    chord stabs, and a sparkling high lead."""
-    n = SR * SELECT_SECONDS
-    out = [0.0] * n
-    onset = int(start_sec * SR)
-    end = min(n, onset + int(duration_sec * SR))
-    beats = int(duration_sec / BEAT)
-
-    # Kick on every beat (the drive).
-    for b in range(beats):
-        kick = make_kick(start_sec + b * BEAT)
-        for i in range(onset, end):
-            out[i] += kick[i]
-    # Light high-octave bass (clean, not muddy): root on downbeats, fifth on
-    # offbeats, in a higher register with a soft envelope.
-    step = BEAT / 2
-    for beat in range(int(duration_sec / step)):
-        when = start_sec + beat * step
-        freq = bass if beat % 2 == 0 else bass_high
-        on = int(when * SR)
-        for i in range(on, min(end, on + int(step * SR))):
-            t = (i - on) / SR
-            attack = min(1.0, t / 0.004)
-            release = min(1.0, (step - t) / 0.05)
-            env = max(0.0, attack * release)
-            out[i] += 0.15 * bright_tone(EQ[freq], t, n_harmonics=2) * env
-    # High staccato chord stabs on each beat (airy, bright).
-    for b in range(beats):
-        when = start_sec + b * BEAT
-        on = int(when * SR)
-        stab_len = int(0.26 * SR)
-        for i in range(on, min(end, on + stab_len)):
-            t = (i - on) / SR
-            attack = min(1.0, t / 0.003)
-            release = min(1.0, (stab_len / SR - t) / 0.05)
-            env = max(0.0, attack * release)
-            s = 0.0
-            for f, amp in voices:
-                s += amp * bright_tone(EQ[f], t, n_harmonics=3)
-            out[i] += s * env
-    # Sparkling high lead (C6-E7 register), fast plucky decay.
-    for m_start, note, amp in lead:
-        m_onset = onset + int(m_start * SR)
-        for i in range(m_onset, end):
-            t = (i - m_onset) / SR
-            attack = min(1.0, t / 0.004)
-            release = min(1.0, (0.18 - t) / 0.055)
-            env = max(0.0, attack * release)
-            out[i] += amp * bright_tone(EQ[note], t, n_harmonics=4) * env
-    return out
-
-
 def make_select():
-    n = SR * SELECT_SECONDS
-    out = [0.0] * n
-    # Bright, high-pitched verse/chorus in C. Each bar carries a distinct
-    # melody phrase (different rhythm, syncopation, and contour) so the track
-    # does not sound like the same arpeggio repeated.
-    sections = [
-        # ---- Verse (C - G - Am - F): varied, conversational phrases. ----
-        make_rhythm_bar(0.0, 2.5, "C3", "C4",
-                        [("C5", 0.045), ("E5", 0.045), ("G5", 0.04), ("B5", 0.035)],
-                        [(0.0, "E6", 0.085), (0.5, "C7", 0.085), (1.0, "G6", 0.07),
-                         (1.75, "E6", 0.08), (2.2, "G6", 0.07)]),
-        make_rhythm_bar(2.5, 2.5, "G3", "G4",
-                        [("G5", 0.045), ("B5", 0.045), ("D6", 0.04), ("F6", 0.035)],
-                        [(2.6, "D7", 0.08), (3.0, "B6", 0.075), (3.4, "G6", 0.07),
-                         (3.8, "D7", 0.075), (4.2, "B6", 0.07)]),
-        make_rhythm_bar(5.0, 2.5, "A2", "A3",
-                        [("A4", 0.04), ("C5", 0.04), ("E5", 0.035), ("G5", 0.03)],
-                        [(5.0, "A6", 0.075), (5.6, "E6", 0.07), (6.25, "C7", 0.07),
-                         (6.75, "A6", 0.07)]),
-        make_rhythm_bar(7.5, 2.5, "F3", "F4",
-                        [("F5", 0.045), ("A5", 0.045), ("C6", 0.04), ("E6", 0.035)],
-                        [(7.5, "F6", 0.08), (8.0, "A6", 0.075), (8.3, "C7", 0.08),
-                         (9.0, "A6", 0.07), (9.4, "F6", 0.06)]),
-        # ---- Chorus (C - Am - F - G): soar higher, iconic hook. ----
-        make_rhythm_bar(10.0, 2.5, "C3", "C4",
-                        [("C5", 0.05), ("E5", 0.05), ("G5", 0.045), ("B5", 0.04)],
-                        [(10.0, "E7", 0.085), (10.5, "C7", 0.085), (10.8, "G6", 0.07),
-                         (11.4, "C7", 0.08), (12.1, "E7", 0.075)]),
-        make_rhythm_bar(12.5, 2.5, "A2", "A3",
-                        [("A4", 0.045), ("C5", 0.045), ("E5", 0.04), ("G5", 0.035)],
-                        [(12.6, "A6", 0.075), (13.1, "C7", 0.08), (13.4, "E7", 0.07),
-                         (14.0, "A6", 0.075), (14.5, "C7", 0.07)]),
-        make_rhythm_bar(15.0, 2.5, "F3", "F4",
-                        [("F5", 0.05), ("A5", 0.05), ("C6", 0.045), ("E6", 0.04)],
-                        [(15.0, "C7", 0.08), (15.5, "A6", 0.08), (16.0, "F6", 0.07),
-                         (16.5, "A6", 0.07), (17.0, "C7", 0.065)]),
-        make_rhythm_bar(17.5, 2.5, "G3", "G4",
-                        [("G5", 0.05), ("B5", 0.05), ("D6", 0.045), ("F6", 0.04)],
-                        [(17.6, "D7", 0.08), (18.1, "B6", 0.075), (18.5, "G6", 0.07),
-                         (19.0, "B6", 0.075), (19.4, "D7", 0.07)]),
-    ]
-    for i in range(n):
-        for section in sections:
-            out[i] += section[i]
-    # Master fade-in/out so the loop point is smooth.
-    fade = int(0.5 * SR)
-    for i in range(fade):
-        out[i] *= i / fade
-        out[n - 1 - i] *= i / fade
-    return out
+    return render_select(SR)
 
 
 # ---------------------------------------------------------------- tick SEs
@@ -309,7 +138,6 @@ def make_scratch():
 
 
 WRITERS = [
-    ("assets/select.wav", make_select),
     ("assets/decide.wav", make_decide),
     ("assets/f-open.wav", make_folder_open),
     ("assets/f-close.wav", make_folder_close),
@@ -320,36 +148,83 @@ WRITERS = [
 ]
 
 
+def read_wav(path):
+    with wave.open(str(path), "rb") as source:
+        if source.getnchannels() != 1 or source.getsampwidth() != 2:
+            raise ValueError("loop validation requires mono 16-bit PCM")
+        sample_rate = source.getframerate()
+        frames = source.readframes(source.getnframes())
+    return sample_rate, struct.unpack(f"<{len(frames) // 2}h", frames)
+
+
 def loop_seam_check(root, select_path):
-    """All select partials are integer-cycle over the exact 2.0 s buffer, so
-    the loop point (last sample -> first sample) must be a smooth continuation
-    within the internal step envelope."""
-    import wave as _w
-    path = os.path.join(root, select_path)
-    with _w.open(path, "rb") as w:
-        frames = w.readframes(w.getnframes())
-    samp = struct.unpack(f"<{len(frames)//2}h", frames)
-    boundary_step = abs(samp[0] - samp[-1])
-    internal_steps = [abs(samp[i + 1] - samp[i]) for i in range(1000, 3000)]
-    max_internal = max(internal_steps)
-    print(f"select loop seam: boundary_step={boundary_step} "
-          f"max_internal_step={max_internal} peak={max(abs(s) for s in samp)}")
-    assert boundary_step <= max_internal * 1.5, "select loop seam is not smooth"
+    sample_rate, samples = read_wav(os.path.join(root, select_path))
+    if len(samples) < sample_rate:
+        raise ValueError("loop is too short to validate")
+    peak = max(abs(sample) for sample in samples)
+    if peak == 0 or peak >= 32767:
+        raise ValueError("loop is silent or clipped")
+    edge = sample_rate // 20
+    window = sample_rate // 2
+
+    def energy(values):
+        return math.sqrt(sum(value * value for value in values) / len(values))
+
+    for end, body in ((samples[:edge], samples[:window]),
+                      (samples[-edge:], samples[-window:])):
+        if energy(end) < .3 * energy(body):
+            raise ValueError("silent gap or energy dip at the loop boundary")
+    boundary_step = abs(samples[0] - samples[-1])
+    internal_step = max(abs(after - before)
+                        for neighbors in (samples[:edge], samples[-edge:])
+                        for before, after in zip(neighbors, neighbors[1:]))
+    if boundary_step > min(peak * .2, internal_step * 1.5):
+        raise ValueError("click at the loop boundary")
+    print(f"loop: {len(samples) / sample_rate:.3f}s, peak={peak / 32768:.3f}, "
+          f"boundary step={boundary_step / 32768:.5f}")
+    return sample_rate, len(samples)
+
+
+def write_select_ogg(root, samples, encoder):
+    destination = Path(out_path(root, "assets/select.ogg"))
+    with tempfile.TemporaryDirectory(prefix=".select-render-", dir=destination.parent) as directory:
+        temporary = Path(directory)
+        source = temporary / "source.wav"
+        encoded = temporary / "select.ogg"
+        decoded = temporary / "roundtrip.wav"
+        write_float_wav(source, samples)
+        subprocess.run([encoder, "-vorbis", str(source), str(encoded)], check=True)
+        subprocess.run([encoder, "-pcm16", str(encoded), str(decoded)], check=True)
+        rate, count = loop_seam_check(temporary, decoded.name)
+        if rate != SR or count != len(samples):
+            raise ValueError("Vorbis round-trip changed the loop duration")
+        if encoded.stat().st_size >= 1024 * 1024:
+            raise ValueError("select BGM exceeds the 1 MiB encoded budget")
+        with encoded.open("rb") as stream:
+            header = stream.read(64)
+        if not header.startswith(b"OggS") or b"vorbis" not in header:
+            raise ValueError("encoder did not produce Ogg Vorbis")
+        os.replace(encoded, destination)
+    legacy = destination.with_suffix(".wav")
+    if legacy.exists():
+        legacy.unlink()
+    print(f"wrote {destination}: {destination.stat().st_size / 1024:.1f} KiB")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate AsoBMaShow bundled music-select sounds.")
-    parser.add_argument(
-        "-o", "--output-root", default=".",
-        help="Output directory (default %(default)s = repo root; WRITERS paths "
-             "already carry the assets/ subpath).")
+    parser = argparse.ArgumentParser(description="Generate AsoBMaShow selector music and sounds.")
+    parser.add_argument("-o", "--output-root", default=".",
+                        help="Output root relative to the repository, or an absolute directory.")
+    parser.add_argument("--vorbis-encoder", default="sndfile-convert",
+                        help="Path to sndfile-convert (requires libsndfile with Vorbis support).")
     args = parser.parse_args()
-    root = os.path.abspath(
-        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                     args.output_root))
-    for path, fn in WRITERS:
-        write_wav(root, path, fn())
-    loop_seam_check(root, "assets/select.wav")
+    encoder = shutil.which(args.vorbis_encoder)
+    if encoder is None:
+        parser.error("sndfile-convert is required; install libsndfile tools or set --vorbis-encoder")
+    root = Path(__file__).resolve().parents[1] / args.output_root
+    write_select_ogg(root, make_select(), encoder)
+    for path, render in WRITERS:
+        write_wav(root, path, render())
 
 
 if __name__ == "__main__":

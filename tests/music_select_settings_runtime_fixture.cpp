@@ -84,7 +84,6 @@ struct AudioLimits {
 int createLuaSkinApplicationAudioBackend(int, std::function<float()>, AudioLimits,
                                         const std::shared_ptr<int> &) { return 0; }
 }
-namespace audio::diag { void SelectAudioLog(const char *) {} }
 namespace rendering { constexpr int render_width = 1280, render_height = 720; }
 namespace archive_file { constexpr int readFileBounded = 0; }
 struct SceneReturnTarget {

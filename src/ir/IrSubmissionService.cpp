@@ -406,8 +406,8 @@ struct IrSubmissionService::Impl {
 
   void waitForSignal(std::unique_lock<std::mutex> &lock,
                      std::stop_token stopToken,
-                     std::optional<SteadyTimePoint> deadline) {
-    const std::uint64_t observed = wakeRevision;
+                     std::optional<SteadyTimePoint> deadline,
+                     std::uint64_t observed) {
     if (options.waitUntil) {
       lock.unlock();
       try {
@@ -1202,17 +1202,19 @@ struct IrSubmissionService::Impl {
     while (!stopToken.stop_requested()) {
       IrActiveProfileConfig config;
       std::uint64_t currentGeneration = 0;
+      std::uint64_t observedWakeRevision = 0;
       std::optional<ReconciliationCommand> reconciliation;
       {
         std::unique_lock lock(mutex);
         while (!stopToken.stop_requested() &&
                (stopped || profilePaused || !applicationActive)) {
-          waitForSignal(lock, stopToken, std::nullopt);
+          waitForSignal(lock, stopToken, std::nullopt, wakeRevision);
         }
         if (stopToken.stop_requested() || stopped) {
           break;
         }
         workerBusy = true;
+        observedWakeRevision = wakeRevision;
         config = profile;
         currentGeneration = generation;
         if (pendingReconciliation) {
@@ -1256,7 +1258,7 @@ struct IrSubmissionService::Impl {
             std::max<std::int64_t>(0, *nextWallTime - now);
         deadline = monotonicNow(options) + std::chrono::milliseconds(delay);
       }
-      waitForSignal(lock, stopToken, deadline);
+      waitForSignal(lock, stopToken, deadline, observedWakeRevision);
     }
     std::lock_guard lock(mutex);
     workerBusy = false;

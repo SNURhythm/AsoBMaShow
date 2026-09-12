@@ -73,7 +73,7 @@ bool validState(const CourseContinuationState &state,
 
 bool setupAgreesWithCourse(const ReplaySetup &setup,
                            const CourseContinuationState &state) noexcept {
-  return setup.longNoteMode == state.constraints.longNoteMode &&
+  return result_contract::isKnownLongNoteMode(setup.longNoteMode) &&
          setup.initialGaugeType == state.gauge.selectedGaugeType &&
          setup.gaugeProfile == state.gauge.gaugeProfile &&
          setup.gaugeAutoShift == state.gauge.gaugeAutoShift &&

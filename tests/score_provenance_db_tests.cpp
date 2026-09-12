@@ -4,6 +4,7 @@
 #include "../src/repositories/ReplayRepository.h"
 #include "../src/repositories/ScoreCacheQueries.h"
 #include "../src/repositories/ScoreRepository.h"
+#include "../src/repositories/ScoreRepositoryInternal.h"
 #include "../src/ScoreProvenance.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
@@ -591,6 +592,106 @@ void createVersion5ScoreFixture(const std::filesystem::path &path) {
                               kLegacyProvenanceJson + "'");
   }
   execOrAbort(db.get(), "PRAGMA user_version = 5");
+}
+
+void testLegacyScoreUpgradeReusesChartAttachment(
+    const std::filesystem::path &root) {
+  for (const int version : {0, 1, -1}) {
+    const auto directory = root / ("legacy-score-attach-" +
+                                   std::to_string(version));
+    const auto scorePath = directory / "score.db";
+    const auto chartPath = directory / "chart.db";
+    {
+      auto charts = openDatabase(chartPath);
+      execOrAbort(charts.get(),
+                  "CREATE TABLE chart_meta(path TEXT, md5 TEXT, sha256 TEXT, "
+                  "length INTEGER, source_priority INTEGER, "
+                  "source_archive_size INTEGER, total_long_notes INTEGER, "
+                  "total_backspin_notes INTEGER);");
+      execOrAbort(charts.get(),
+                  "INSERT INTO chart_meta VALUES ('BMS/legacy.bms','" +
+                      std::string(kMd5A) + "','" + std::string(kShaA) +
+                      "',12999999,0,0,5,0)");
+    }
+    if (version >= 0) {
+      auto scores = openDatabase(scorePath);
+      execOrAbort(scores.get(),
+                  "CREATE TABLE scores (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                  "chart_path TEXT, chart_md5 TEXT, chart_sha256 TEXT NOT NULL,"
+                  "score INTEGER NOT NULL, max_score INTEGER NOT NULL,"
+                  "max_combo INTEGER NOT NULL, combo_break INTEGER NOT NULL,"
+                  "pgreat INTEGER NOT NULL, great INTEGER NOT NULL,"
+                  "good INTEGER NOT NULL, bad INTEGER NOT NULL,"
+                  "poor INTEGER NOT NULL, kpoor INTEGER NOT NULL,"
+                  "fast INTEGER NOT NULL, slow INTEGER NOT NULL,"
+                  "final_gauge REAL NOT NULL, clear_type INTEGER NOT NULL,"
+                  "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+      execOrAbort(scores.get(),
+                  "INSERT INTO scores VALUES (7,'BMS/legacy.bms','" +
+                      std::string(kMd5A) + "','" + std::string(kShaA) +
+                      "',1234,2000,456,7,500,100,20,3,4,5,6,7,73.5,300,"
+                      "'2026-01-02 03:04:05')");
+      if (version == 1) {
+        execOrAbort(scores.get(),
+                    "ALTER TABLE scores ADD COLUMN ln_mode INTEGER "
+                    "NOT NULL DEFAULT 0; PRAGMA user_version = 1");
+      }
+    }
+    {
+      auto scores = openDatabase(scorePath);
+      const auto originalSchema = schemaSnapshot(scores.get());
+      for (const int attempt : {1, 2}) {
+        execOrAbort(scores.get(), "BEGIN IMMEDIATE");
+        if (!score_repository_detail::EnsureSchemaOnConnection(
+                scores.get(), chartPath)) {
+          std::cerr << "transactional legacy score upgrade failed: version="
+                    << version << " attempt=" << attempt << std::endl;
+          std::abort();
+        }
+        assert(sqlite3_get_autocommit(scores.get()) == 0);
+        assert(queryInt(scores.get(), "PRAGMA user_version") ==
+               ScoreRepository::kCurrentSchemaVersion);
+        assert(queryInt(scores.get(),
+                        "SELECT COUNT(*) FROM pragma_database_list "
+                        "WHERE name='score_migration_chart'") == 1);
+        execOrAbort(scores.get(), "ROLLBACK");
+        assert(queryInt(scores.get(), "PRAGMA user_version") ==
+               (version == 1 ? 1 : 0));
+        assert(schemaSnapshot(scores.get()) == originalSchema);
+        if (version >= 0) {
+          assert(queryInt(scores.get(),
+                          "SELECT COUNT(*) FROM scores WHERE id=7 "
+                          "AND score=1234 AND final_gauge=73.5") == 1);
+        }
+      }
+    }
+    for (const bool reopening : {false, true}) {
+      ScoreRepository repository(scorePath);
+      repository.SetChartDatabasePath(chartPath);
+      if (!repository.EnsureSchema()) {
+        std::cerr << "legacy score upgrade failed: version=" << version
+                  << " reopening=" << reopening << std::endl;
+        std::abort();
+      }
+      auto scores = openDatabase(scorePath);
+      assert(queryInt(scores.get(), "PRAGMA user_version") ==
+             ScoreRepository::kCurrentSchemaVersion);
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM scores") ==
+             (version >= 0 ? 1 : 0));
+      if (version >= 0) {
+        assert(queryInt(scores.get(), "SELECT ln_mode FROM scores") == 1);
+        assert(queryInt(scores.get(),
+                        "SELECT play_duration_seconds FROM scores") == 12);
+        assert(queryInt(scores.get(),
+                        "SELECT COUNT(*) FROM scores WHERE id=7 AND score=1234 "
+                        "AND max_score=2000 AND max_combo=456 AND combo_break=7 "
+                        "AND pgreat=500 AND great=100 AND good=20 AND bad=3 "
+                        "AND poor=4 AND kpoor=5 AND fast=6 AND slow=7 "
+                        "AND final_gauge=73.5 AND clear_type=300 "
+                        "AND created_at='2026-01-02 03:04:05'") == 1);
+      }
+    }
+  }
 }
 
 void createVersion5CourseMigrationFixture(const std::filesystem::path &path) {
@@ -3492,6 +3593,7 @@ int main() {
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(root);
 
+  testLegacyScoreUpgradeReusesChartAttachment(root);
   testVersion8MigrationAddsCurrentScoreIdentity(root);
   testStaleVersionRecognizesAppliedAttemptIdentity(root);
   testStaleVersionRejectsPartialAttemptIdentity(root);

@@ -1,4 +1,5 @@
 #include "scene/play/PlayfieldChartVisualModel.h"
+#include "graph_allocation_guard.h"
 #include "bms_parser.hpp"
 
 #include <algorithm>
@@ -271,6 +272,7 @@ bool testSongInformationDensityMatchesPinnedConstructor() {
 }
 
 bool testSongInformationUsesSparseDistantTimelineBuckets() {
+  graph_test::AllocationGuard guard;
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
   chart.Meta.TotalNotes = 1;
@@ -287,7 +289,9 @@ bool testSongInformationUsesSparseDistantTimelineBuckets() {
   const auto model = buildPlayfieldChartVisualModel(chart, 1);
   const auto &information = model.staticMetadata.songInformation;
   constexpr double kBucketCount = 100'000'002.0;
-  return information.has_value() &&
+  return model.skinGameplayGraph.normalDistribution.empty() &&
+         model.skinGameplayGraph.judgementDistributionSeconds == 100'000'001ULL &&
+         information.has_value() &&
          std::abs(information->density - 1.0 / kBucketCount) < 0.000000001 &&
          std::abs(information->peakDensity - 1.0) < 0.000001 &&
          std::abs(information->endDensity - 0.2) < 0.000001;

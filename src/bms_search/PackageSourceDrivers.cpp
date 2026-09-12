@@ -12,13 +12,14 @@ DownloadCandidate packageDownloadCandidate(const std::string &downloadUrl,
 }
 
 PackageSourceLookupResult
-GingerRushDriver::lookupByMd5(const std::string &md5) {
+GingerRushDriver::lookupByMd5(
+    const std::string &md5, const std::atomic_bool &cancelled) {
   PackageSourceLookupResult result;
   result.sourceName = "Ginger";
   result.sourceUrl = "https://gingerrush.com/download/package/" + md5;
 
   std::string errorMessage;
-  const auto body = fetchUrlText(result.sourceUrl, errorMessage);
+  const auto body = fetchUrlText(result.sourceUrl, errorMessage, &cancelled);
   if (!body) {
     result.errorMessage =
         errorMessage.empty() ? "Ginger did not find a package." : errorMessage;
@@ -48,13 +49,14 @@ GingerRushDriver::lookupByMd5(const std::string &md5) {
   return result;
 }
 
-PackageSourceLookupResult KonmaiDriver::lookupByMd5(const std::string &md5) {
+PackageSourceLookupResult KonmaiDriver::lookupByMd5(
+    const std::string &md5, const std::atomic_bool &cancelled) {
   PackageSourceLookupResult result;
   result.sourceName = "Konmai";
   result.sourceUrl = "https://bms.alvorna.com/api/hash?md5=" + md5;
 
   std::string errorMessage;
-  const auto body = fetchUrlText(result.sourceUrl, errorMessage);
+  const auto body = fetchUrlText(result.sourceUrl, errorMessage, &cancelled);
   if (!body) {
     result.errorMessage =
         errorMessage.empty() ? "Konmai did not find a package." : errorMessage;
@@ -109,8 +111,10 @@ PackageSourceLookupResult KonmaiDriver::lookupByMd5(const std::string &md5) {
   return result;
 }
 
-PackageSourceLookupResult WriggleDriver::lookupByMd5(const std::string &md5) {
+PackageSourceLookupResult WriggleDriver::lookupByMd5(
+    const std::string &md5, const std::atomic_bool &cancelled) {
   PackageSourceLookupResult result;
+  (void)cancelled;
   result.sourceName = "Wriggle";
   result.sourceUrl = "https://bms.wrigglebug.xyz/download/package/" + md5;
   result.candidate =
@@ -133,7 +137,8 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
   std::string lastLookupError;
   struct PackageSource {
     const char *name;
-    PackageSourceLookupResult (*lookupByMd5)(const std::string &);
+    PackageSourceLookupResult (*lookupByMd5)(const std::string &,
+                                           const std::atomic_bool &);
   };
   const std::array<PackageSource, 3> sources = {
       PackageSource{"Ginger", GingerRushDriver::lookupByMd5},
@@ -152,7 +157,12 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
       progressCallback({.message = "Searching " + std::string(source.name) +
                                    " package source"});
     }
-    const auto lookup = source.lookupByMd5(md5Hash);
+    const auto lookup = source.lookupByMd5(md5Hash, cancelled);
+    if (cancelled.load()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Lookup cancelled.";
+      return true;
+    }
     if (!lookup.candidate || !lookup.candidate->supported) {
       if (!lookup.errorMessage.empty()) {
         lastLookupError = lookup.sourceName + ": " + lookup.errorMessage;

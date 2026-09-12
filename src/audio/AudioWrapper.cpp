@@ -1,6 +1,5 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "AudioWrapper.h"
-#include "SelectAudioDiagnostics.h"
 #include <stdexcept>
 #include <SDL2/SDL.h>
 #include "decoder.h"
@@ -849,27 +848,45 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
   soundData->sourceFrameCount =
       soundData->sourceData.size() / static_cast<size_t>(channels);
 
-  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  std::unique_lock<std::mutex> lock(soundDataListMutex);
+  if (isCancelled) {
+    return false;
+  }
   if (soundDataIndexMap.contains(path)) {
     return true;
   }
-  const int targetSampleRate =
-      currentSampleRate.load(std::memory_order_acquire);
-  SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
-                 "Target sample rate: %d, File sample rate: %d",
-                 targetSampleRate, sampleRate);
+  const std::uint64_t loadGeneration = soundLoadGeneration;
+  for (;;) {
+    const int targetSampleRate =
+        currentSampleRate.load(std::memory_order_acquire);
+    lock.unlock();
+    SDL_LogVerbose(SDL_LOG_CATEGORY_APPLICATION,
+                   "Target sample rate: %d, File sample rate: %d",
+                   targetSampleRate, sampleRate);
 
-  soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
-                                             sampleRate, targetSampleRate);
-  if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
-      isCancelled) {
-    return false;
+    soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
+                                               sampleRate, targetSampleRate);
+    if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
+        isCancelled) {
+      return false;
+    }
+    soundData->outputFrameCount =
+        soundData->outputData.size() / static_cast<size_t>(channels);
+
+    lock.lock();
+    if (isCancelled || soundLoadGeneration != loadGeneration) {
+      return false;
+    }
+    if (soundDataIndexMap.contains(path)) {
+      return true;
+    }
+    if (currentSampleRate.load(std::memory_order_acquire) != targetSampleRate) {
+      continue;
+    }
+    soundDataIndexMap[path] = soundDataList.size();
+    soundDataList.push_back(soundData);
+    return true;
   }
-  soundData->outputFrameCount =
-      soundData->outputData.size() / static_cast<size_t>(channels);
-  soundDataIndexMap[path] = soundDataList.size();
-  soundDataList.push_back(soundData);
-  return true;
 }
 
 void AudioWrapper::preloadSounds(const std::vector<path_t> &paths,
@@ -1016,15 +1033,8 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
               stop) ||
           isCancelled || sfInfo.channels <= 0 || sfInfo.samplerate <= 0 ||
           pcmData.size() % static_cast<std::size_t>(sfInfo.channels) != 0) {
-        audio::diag::SelectAudioLog("loadSkinSound DECODE FAILED: " +
-                                    path_t_to_utf8(path));
         return {};
       }
-      audio::diag::SelectAudioLog("loadSkinSound ok ch=" +
-                                  std::to_string(sfInfo.channels) +
-                                  " rate=" + std::to_string(sfInfo.samplerate) +
-                                  " frames=" +
-                                  std::to_string(pcmData.size() / static_cast<std::size_t>(sfInfo.channels)));
       privateSound = std::make_shared<SoundData>();
       privateSound->channels = sfInfo.channels;
       privateSound->sourceSampleRate = sfInfo.samplerate;
@@ -1105,7 +1115,6 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
     }
     const auto started = startDeviceWithLifecycleAndSoundLocked();
     if (!started.success) {
-      audio::diag::SelectAudioLog("playSkinSound device-start failed");
       return false;
     }
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
@@ -1120,8 +1129,6 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
         &submissionSequence);
     if (accepted) {
       found->second.lastPlaySequence = submissionSequence;
-    } else {
-      audio::diag::SelectAudioLog("playSkinSound command NOT accepted");
     }
     return accepted;
   } catch (...) {
@@ -1582,8 +1589,6 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
       runtimeState_.effectiveSampleRate =
           static_cast<std::uint32_t>(std::max(0, targetSampleRate));
     }
-  } else {
-    audio::diag::SelectAudioLog("device start failed: " + result.diagnostic);
   }
   return result;
 }
@@ -1707,6 +1712,7 @@ audio::playback::BackendOperationResult AudioWrapper::unloadSounds() {
   if (!stopped.success) {
     return stopped;
   }
+  ++soundLoadGeneration;
   soundDataList.clear();
   soundDataIndexMap.clear();
   skinSounds.clear();

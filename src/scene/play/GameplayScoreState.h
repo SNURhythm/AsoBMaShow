@@ -607,9 +607,10 @@ public:
   }
 
   void configureBoundedGaugeHistory(std::size_t capacity) {
-    gaugeHistory.reserve(capacity);
+    const std::size_t initialCapacity = std::min<std::size_t>(capacity, 4096);
+    gaugeHistory.reserve(initialCapacity);
     for (auto &history : gaugeHistories) {
-      history.reserve(capacity);
+      history.reserve(initialCapacity);
     }
     gaugeHistoryCapacity_ = capacity;
     boundedGaugeHistory_ = true;
@@ -874,6 +875,19 @@ public:
                  : ClearType::LightAssistedEasyClear;
     }
     return gaugeClearType;
+  }
+
+  void failUnfinishedAttempt() {
+    combo = 0;
+    stageCombo = 0;
+    currentGauge = 0.0F;
+    gaugeValues.fill(0.0F);
+    for (std::size_t index = 0; index < kGaugeTypeCount; ++index) {
+      gaugeSurvivalFailed[index] =
+          gaugeDefinition(gaugeTypeAtIndex(static_cast<int>(index))).survival;
+    }
+    recalledClearTypeRank_.reset();
+    recordGaugeHistory(0.0F);
   }
 
   [[nodiscard]] int getClearTypeRank() const {

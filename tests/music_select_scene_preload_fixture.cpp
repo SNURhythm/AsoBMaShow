@@ -4,10 +4,6 @@
 #include <mutex>
 #include <string>
 
-struct StartupTiming {
-  static StartupTiming &instance() { static StartupTiming timing; return timing; }
-  void mark(const char *) {}
-};
 struct Chart {};
 struct ChartMetaRecord { struct Meta { std::string BmsPath; } meta; };
 std::string fspath_to_utf8(const std::string &path) { return path; }

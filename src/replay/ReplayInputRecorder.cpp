@@ -40,7 +40,7 @@ normalizeReplayInput(std::span<const InputTransition> input,
                      const ReplayLimits &limits) noexcept {
   diagnostic.clear();
   try {
-    if (!limits.valid() || !bounds.valid() ||
+    if (!limits.valid() || !bounds.valid(limits) ||
         input.size() > limits.maxInputTransitions) {
       diagnostic = "Replay input limits or completion bounds are invalid";
       return std::nullopt;

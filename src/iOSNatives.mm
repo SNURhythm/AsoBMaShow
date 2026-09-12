@@ -25,6 +25,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -2292,6 +2294,87 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
 }
 @end
 
+@interface AsoTextDownloadDelegate
+    : AsoHttpsRedirectDelegate <NSURLSessionDataDelegate> {
+ @public
+  std::string responseBody;
+  NSURLResponse *urlResponse;
+  NSError *requestError;
+  NSString *failureMessage;
+  dispatch_semaphore_t semaphore;
+  std::size_t maximumResponseBytes;
+  std::atomic_bool abortRequested;
+}
+@end
+
+@implementation AsoTextDownloadDelegate
+- (instancetype)init {
+  self = [super init];
+  if (self != nil) {
+    semaphore = dispatch_semaphore_create(0);
+    maximumResponseBytes = 0;
+    abortRequested.store(false);
+  }
+  return self;
+}
+
+- (void)URLSession:(NSURLSession *)session
+              dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveResponse:(NSURLResponse *)response
+     completionHandler:
+         (void (^)(NSURLSessionResponseDisposition disposition))completionHandler {
+  (void)session;
+  (void)dataTask;
+  if (abortRequested.load() || failureMessage != nil) {
+    completionHandler(NSURLSessionResponseCancel);
+    return;
+  }
+  urlResponse = response;
+  const long long expected = response.expectedContentLength;
+  if (expected > 0 &&
+      static_cast<unsigned long long>(expected) > maximumResponseBytes) {
+    failureMessage = @"Metadata response exceeds size limit.";
+    completionHandler(NSURLSessionResponseCancel);
+    return;
+  }
+  completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveData:(NSData *)data {
+  (void)session;
+  if (abortRequested.load() || failureMessage != nil) {
+    [dataTask cancel];
+    return;
+  }
+  if (responseBody.size() > maximumResponseBytes ||
+      data.length > maximumResponseBytes - responseBody.size()) {
+    failureMessage = @"Metadata response exceeds size limit.";
+    [dataTask cancel];
+    return;
+  }
+  if (data.length == 0) {
+    return;
+  }
+  try {
+    responseBody.append(static_cast<const char *>(data.bytes), data.length);
+  } catch (...) {
+    failureMessage = @"Could not retain metadata response.";
+    [dataTask cancel];
+  }
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    didCompleteWithError:(NSError *)error {
+  (void)session;
+  (void)task;
+  requestError = error;
+  dispatch_semaphore_signal(semaphore);
+}
+@end
+
 @interface AsoBinaryDownloadDelegate
     : AsoHttpsRedirectDelegate <NSURLSessionDownloadDelegate> {
  @public
@@ -2357,6 +2440,285 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
   if (error != nil) {
     requestError = error;
   }
+  dispatch_semaphore_signal(semaphore);
+}
+@end
+
+@interface AsoFileDownloadDelegate
+    : AsoHttpsRedirectDelegate <NSURLSessionDownloadDelegate> {
+ @public
+  std::atomic_bool abortRequested;
+  std::mutex progressMutex;
+  std::mutex stagingMutex;
+  std::filesystem::path stagingDirectory;
+  std::filesystem::path stagedPath;
+  std::uint64_t maximumBytes;
+  BOOL hasDownloadedFile;
+  NSString *failureMessage;
+  NSURLResponse *urlResponse;
+  NSError *requestError;
+  dispatch_semaphore_t semaphore;
+  IOSDownloadProgressCallback progressCallback;
+  void *progressContext;
+}
+- (void)detachProgress;
+- (void)cleanupStaging;
+@end
+
+@implementation AsoFileDownloadDelegate
+- (instancetype)init {
+  self = [super init];
+  if (self == nil) {
+    return nil;
+  }
+  abortRequested.store(false);
+  maximumBytes = 0;
+  hasDownloadedFile = NO;
+  semaphore = dispatch_semaphore_create(0);
+  progressCallback = nullptr;
+  progressContext = nullptr;
+  return self;
+}
+
+- (void)detachProgress {
+  std::lock_guard lock(progressMutex);
+  progressCallback = nullptr;
+  progressContext = nullptr;
+}
+
+- (void)cleanupStaging {
+  std::lock_guard lock(stagingMutex);
+  if (!stagingDirectory.empty()) {
+    std::error_code ignored;
+    std::filesystem::remove_all(stagingDirectory, ignored);
+    stagingDirectory.clear();
+    stagedPath.clear();
+    hasDownloadedFile = NO;
+  }
+}
+
+- (void)dealloc {
+  [self cleanupStaging];
+}
+
+- (BOOL)admitSpaceAtPath:(NSString *)path
+         remainingBytes:(std::uint64_t)remainingBytes {
+  constexpr std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
+  NSError *capacityError = nil;
+  NSDictionary *attributes = path.length == 0 ? nil :
+      [[NSFileManager defaultManager] attributesOfFileSystemForPath:path
+                                                             error:&capacityError];
+  NSNumber *available = attributes[NSFileSystemFreeSize];
+  if (capacityError != nil || ![available isKindOfClass:[NSNumber class]] ||
+      [available compare:@0] == NSOrderedAscending) {
+    failureMessage = @"Could not determine free space for the archive download.";
+    return NO;
+  }
+  const std::uint64_t freeBytes = available.unsignedLongLongValue;
+  if (freeBytes < reservedFreeBytes ||
+      remainingBytes > freeBytes - reservedFreeBytes) {
+    failureMessage = @"Insufficient free space for the archive download reserve.";
+    return NO;
+  }
+  return YES;
+}
+
+- (BOOL)admitResponse:(NSURLResponse *)response
+                 task:(NSURLSessionTask *)task {
+  if (abortRequested.load()) {
+    [task cancel];
+    return NO;
+  }
+  if (rejectedInsecureRedirect || rejectedInvalidRedirect) {
+    [task cancel];
+    return NO;
+  }
+  if (![response isKindOfClass:[NSHTTPURLResponse class]]) {
+    failureMessage = @"Download did not return an HTTP response.";
+    [task cancel];
+    return NO;
+  }
+  NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+  if (httpResponse.statusCode >= 400) {
+    failureMessage = [NSString stringWithFormat:@"HTTP %ld while downloading archive.",
+                                               (long)httpResponse.statusCode];
+    [task cancel];
+    return NO;
+  }
+  const long long expected = response.expectedContentLength;
+  if (expected > 0 && static_cast<std::uint64_t>(expected) > maximumBytes) {
+    failureMessage = @"Archive download exceeds the byte limit.";
+    [task cancel];
+    return NO;
+  }
+  if (failureMessage != nil) {
+    return NO;
+  }
+  const auto received = std::max<int64_t>(0, task.countOfBytesReceived);
+  const auto remaining = expected > received ? expected - received : 0;
+  if (![self admitSpaceAtPath:NSTemporaryDirectory() remainingBytes:remaining]) {
+    [task cancel];
+    return NO;
+  }
+  return failureMessage == nil;
+}
+
+- (void)URLSession:(NSURLSession *)session
+                 downloadTask:(NSURLSessionDownloadTask *)downloadTask
+                 didWriteData:(int64_t)bytesWritten
+            totalBytesWritten:(int64_t)totalBytesWritten
+    totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
+  (void)session;
+  (void)bytesWritten;
+  if (![self admitResponse:downloadTask.response task:downloadTask]) {
+    return;
+  }
+  if (totalBytesWritten < 0 ||
+      static_cast<std::uint64_t>(totalBytesWritten) > maximumBytes ||
+      (totalBytesExpectedToWrite > 0 &&
+       static_cast<std::uint64_t>(totalBytesExpectedToWrite) > maximumBytes)) {
+    failureMessage = @"Archive download exceeds the byte limit.";
+    [downloadTask cancel];
+    return;
+  }
+  const auto remaining = totalBytesExpectedToWrite > totalBytesWritten
+                             ? totalBytesExpectedToWrite - totalBytesWritten : 0;
+  if (![self admitSpaceAtPath:NSTemporaryDirectory() remainingBytes:remaining]) {
+    [downloadTask cancel];
+    return;
+  }
+  std::lock_guard lock(progressMutex);
+  if (abortRequested.load() || progressCallback == nullptr) {
+    return;
+  }
+  try {
+    progressCallback(progressContext,
+                     static_cast<std::uint64_t>(totalBytesWritten),
+                     totalBytesExpectedToWrite > 0
+                         ? static_cast<std::uint64_t>(totalBytesExpectedToWrite)
+                         : 0);
+  } catch (...) {
+    failureMessage = @"Download progress callback failed.";
+    [downloadTask cancel];
+  }
+}
+
+- (void)URLSession:(NSURLSession *)session
+                 downloadTask:(NSURLSessionDownloadTask *)downloadTask
+    didFinishDownloadingToURL:(NSURL *)location {
+  (void)session;
+  urlResponse = downloadTask.response;
+  if (![self admitResponse:urlResponse task:downloadTask]) {
+    return;
+  }
+  std::lock_guard lock(stagingMutex);
+  if (abortRequested.load()) {
+    return;
+  }
+  const char *sourcePath = location.fileSystemRepresentation;
+  const int source = sourcePath == nullptr
+                         ? -1
+                         : ::open(sourcePath, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+  if (source < 0) {
+    failureMessage = @"Could not open the downloaded archive file.";
+    return;
+  }
+  auto closeSource = makeScopeExit([source] { ::close(source); });
+  struct stat sourceStatus {};
+  if (::fstat(source, &sourceStatus) != 0 || !S_ISREG(sourceStatus.st_mode) ||
+      sourceStatus.st_size < 0) {
+    failureMessage = @"Could not inspect the downloaded archive file.";
+    return;
+  }
+  if (static_cast<std::uint64_t>(sourceStatus.st_size) > maximumBytes) {
+    failureMessage = @"Archive download exceeds the byte limit.";
+    return;
+  }
+  if (![self admitSpaceAtPath:location.path remainingBytes:0]) {
+    return;
+  }
+  if (::rename(sourcePath, stagedPath.c_str()) == 0) {
+    hasDownloadedFile = YES;
+    return;
+  }
+  if (errno != EXDEV) {
+    failureMessage = @"Could not stage the downloaded archive file.";
+    return;
+  }
+  NSString *destinationDirectory = [NSString stringWithUTF8String:stagingDirectory.c_str()];
+  const auto sourceBytes = static_cast<std::uint64_t>(sourceStatus.st_size);
+  if (![self admitSpaceAtPath:destinationDirectory remainingBytes:sourceBytes]) {
+    return;
+  }
+  const int destination = ::open(stagedPath.c_str(),
+      O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+  if (destination < 0) {
+    failureMessage = @"Could not create the staged archive file.";
+    return;
+  }
+  auto closeDestination = makeScopeExit([destination] { ::close(destination); });
+  std::array<char, 64 * 1024> buffer;
+  std::uint64_t copiedBytes = 0;
+  while (!abortRequested.load()) {
+    const ssize_t count = ::read(source, buffer.data(), buffer.size());
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      failureMessage = @"Could not read the downloaded archive file.";
+      return;
+    }
+    if (count == 0) {
+      if (![self admitSpaceAtPath:destinationDirectory remainingBytes:0]) {
+        return;
+      }
+      if (::close(destination) != 0) {
+        closeDestination.dismiss();
+        failureMessage = @"Could not close the staged archive file.";
+        return;
+      }
+      closeDestination.dismiss();
+      hasDownloadedFile = YES;
+      return;
+    }
+    const auto byteCount = static_cast<std::uint64_t>(count);
+    if (copiedBytes > maximumBytes || byteCount > maximumBytes - copiedBytes) {
+      failureMessage = @"Archive download exceeds the byte limit.";
+      return;
+    }
+    size_t offset = 0;
+    while (offset < static_cast<size_t>(count)) {
+      if (abortRequested.load()) {
+        return;
+      }
+      const auto persistedBytes = copiedBytes + offset;
+      const auto remainingBytes = std::max<std::uint64_t>(
+          sourceBytes > persistedBytes ? sourceBytes - persistedBytes : 0,
+          static_cast<size_t>(count) - offset);
+      if (![self admitSpaceAtPath:destinationDirectory remainingBytes:remainingBytes]) {
+        return;
+      }
+      const ssize_t written = ::write(destination, buffer.data() + offset,
+                                      static_cast<size_t>(count) - offset);
+      if (written < 0 && errno == EINTR) {
+        continue;
+      }
+      if (written <= 0) {
+        failureMessage = @"Could not write the staged archive file.";
+        return;
+      }
+      offset += static_cast<size_t>(written);
+    }
+    copiedBytes += byteCount;
+  }
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    didCompleteWithError:(NSError *)error {
+  (void)session;
+  urlResponse = task.response;
+  requestError = error;
   dispatch_semaphore_signal(semaphore);
 }
 @end
@@ -4026,10 +4388,16 @@ std::vector<std::string> ListDocumentFilesRecursively() {
   return filesVec;
 }
 
-bool DownloadURLTextIOS(const std::string &url, std::string &body,
-                        std::string &errorMessage,
-                        IOSDownloadCheckpoint checkpoint) {
+static bool RequestURLTextIOS(const std::string &url, std::string &body,
+                               std::string &errorMessage, NSString *method,
+                               IOSDownloadCheckpoint checkpoint,
+                               std::size_t maximumResponseBytes) {
   @autoreleasepool {
+    errorMessage.clear();
+    if (checkpoint && !checkpoint()) {
+      errorMessage = "Download interrupted.";
+      return false;
+    }
     NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
     NSURL *nsUrl = [NSURL URLWithString:urlString];
     if (nsUrl == nil) {
@@ -4047,14 +4415,13 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
          requestWithURL:nsUrl
             cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
         timeoutInterval:25.0];
+    request.HTTPMethod = method;
     [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
 
-    __block NSData *responseData = nil;
-    __block NSURLResponse *urlResponse = nil;
-    __block NSError *requestError = nil;
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    AsoHttpsRedirectDelegate *delegate =
-        [[AsoHttpsRedirectDelegate alloc] init];
+    const std::string action =
+        [method isEqualToString:@"POST"] ? "posting " : "downloading ";
+    AsoTextDownloadDelegate *delegate = [[AsoTextDownloadDelegate alloc] init];
+    delegate->maximumResponseBytes = maximumResponseBytes;
     delegate->requireHttps = [scheme isEqualToString:@"https"];
     NSURLSessionConfiguration *configuration =
         [NSURLSessionConfiguration ephemeralSessionConfiguration];
@@ -4062,15 +4429,11 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
                                                           delegate:delegate
                                                      delegateQueue:nil];
-    NSURLSessionDataTask *task = [session
-        dataTaskWithRequest:request
-          completionHandler:^(NSData *data, NSURLResponse *response,
-                              NSError *error) {
-            responseData = data;
-            urlResponse = response;
-            requestError = error;
-            dispatch_semaphore_signal(semaphore);
-          }];
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:request];
+    auto cleanup = makeScopeExit([&] {
+      delegate->abortRequested.store(true);
+      [session invalidateAndCancel];
+    });
     [task resume];
     constexpr int kWaitSliceMilliseconds = 100;
     constexpr int kActiveWaitSliceLimit = 300;
@@ -4078,14 +4441,12 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     int activeWaitSlices = 0;
     while (activeWaitSlices < kActiveWaitSliceLimit &&
            (waitResult = dispatch_semaphore_wait(
-                semaphore,
+                delegate->semaphore,
                 dispatch_time(DISPATCH_TIME_NOW,
                               kWaitSliceMilliseconds * NSEC_PER_MSEC))) != 0) {
       if (checkpoint) {
         [task suspend];
         if (!checkpoint()) {
-          [task cancel];
-          [session invalidateAndCancel];
           errorMessage = "Download interrupted.";
           return false;
         }
@@ -4094,13 +4455,15 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
       ++activeWaitSlices;
     }
     if (waitResult != 0) {
-      [task cancel];
-      [session invalidateAndCancel];
-      errorMessage = "Timed out while downloading " + url;
+      errorMessage = "Timed out while " + action + url;
       return false;
     }
     [session finishTasksAndInvalidate];
 
+    if (checkpoint && !checkpoint()) {
+      errorMessage = "Download interrupted.";
+      return false;
+    }
     if (delegate->rejectedInsecureRedirect) {
       errorMessage = "HTTPS download redirected to insecure HTTP.";
       return false;
@@ -4110,135 +4473,60 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
       return false;
     }
 
-    if (requestError != nil) {
+    if (delegate->failureMessage != nil) {
+      errorMessage = std::string(delegate->failureMessage.UTF8String);
+      return false;
+    }
+    if (delegate->requestError != nil) {
       errorMessage =
-          std::string([[requestError localizedDescription] UTF8String]);
+          std::string(delegate->requestError.localizedDescription.UTF8String);
       return false;
     }
 
     NSHTTPURLResponse *httpResponse =
-        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
-            ? (NSHTTPURLResponse *)urlResponse
+        [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)delegate->urlResponse
             : nil;
     if (httpResponse != nil && httpResponse.statusCode >= 400) {
       errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
-                     " while downloading " + url;
+                     " while " + action + url;
       return false;
     }
 
-    if (responseData == nil) {
-      errorMessage = "No response body while downloading " + url;
+    if (delegate->urlResponse == nil) {
+      errorMessage = "No response body while " + action + url;
       return false;
     }
 
-    NSString *text = [[NSString alloc] initWithData:responseData
-                                           encoding:NSUTF8StringEncoding];
+    NSString *text = [[NSString alloc]
+        initWithBytesNoCopy:delegate->responseBody.data()
+                     length:delegate->responseBody.size()
+                   encoding:NSUTF8StringEncoding
+               freeWhenDone:NO];
     if (text == nil) {
       errorMessage = "Downloaded response is not UTF-8: " + url;
       return false;
     }
 
-    body = std::string([text UTF8String]);
+    body = std::move(delegate->responseBody);
     return true;
   }
 }
 
+bool DownloadURLTextIOS(const std::string &url, std::string &body,
+                        std::string &errorMessage,
+                        IOSDownloadCheckpoint checkpoint,
+                        std::size_t maximumResponseBytes) {
+  return RequestURLTextIOS(url, body, errorMessage, @"GET",
+                           std::move(checkpoint), maximumResponseBytes);
+}
+
 bool PostURLTextIOS(const std::string &url, std::string &body,
-                    std::string &errorMessage) {
-  @autoreleasepool {
-    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
-    NSURL *nsUrl = [NSURL URLWithString:urlString];
-    if (nsUrl == nil) {
-      errorMessage = "Invalid URL: " + url;
-      return false;
-    }
-    NSString *scheme = nsUrl.scheme.lowercaseString;
-    if (![scheme isEqualToString:@"http"] &&
-        ![scheme isEqualToString:@"https"]) {
-      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
-      return false;
-    }
-
-    NSMutableURLRequest *request = [NSMutableURLRequest
-         requestWithURL:nsUrl
-            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-        timeoutInterval:25.0];
-    request.HTTPMethod = @"POST";
-    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
-
-    __block NSData *responseData = nil;
-    __block NSURLResponse *urlResponse = nil;
-    __block NSError *requestError = nil;
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    AsoHttpsRedirectDelegate *delegate =
-        [[AsoHttpsRedirectDelegate alloc] init];
-    delegate->requireHttps = [scheme isEqualToString:@"https"];
-    NSURLSessionConfiguration *configuration =
-        [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
-                                                          delegate:delegate
-                                                     delegateQueue:nil];
-    NSURLSessionDataTask *task = [session
-        dataTaskWithRequest:request
-          completionHandler:^(NSData *data, NSURLResponse *response,
-                              NSError *error) {
-            responseData = data;
-            urlResponse = response;
-            requestError = error;
-            dispatch_semaphore_signal(semaphore);
-          }];
-    [task resume];
-    const long waitResult = dispatch_semaphore_wait(
-        semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
-    if (waitResult != 0) {
-      [task cancel];
-      [session invalidateAndCancel];
-      errorMessage = "Timed out while posting " + url;
-      return false;
-    }
-    [session finishTasksAndInvalidate];
-
-    if (delegate->rejectedInsecureRedirect) {
-      errorMessage = "HTTPS download redirected to insecure HTTP.";
-      return false;
-    }
-    if (delegate->rejectedInvalidRedirect) {
-      errorMessage = "Download redirected to a non-HTTP URL.";
-      return false;
-    }
-
-    if (requestError != nil) {
-      errorMessage =
-          std::string([[requestError localizedDescription] UTF8String]);
-      return false;
-    }
-
-    NSHTTPURLResponse *httpResponse =
-        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
-            ? (NSHTTPURLResponse *)urlResponse
-            : nil;
-    if (httpResponse != nil && httpResponse.statusCode >= 400) {
-      errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
-                     " while posting " + url;
-      return false;
-    }
-
-    if (responseData == nil) {
-      errorMessage = "No response body while posting " + url;
-      return false;
-    }
-
-    NSString *text = [[NSString alloc] initWithData:responseData
-                                           encoding:NSUTF8StringEncoding];
-    if (text == nil) {
-      errorMessage = "Downloaded response is not UTF-8: " + url;
-      return false;
-    }
-
-    body = std::string([text UTF8String]);
-    return true;
-  }
+                    std::string &errorMessage,
+                    IOSDownloadCheckpoint checkpoint,
+                    std::size_t maximumResponseBytes) {
+  return RequestURLTextIOS(url, body, errorMessage, @"POST",
+                           std::move(checkpoint), maximumResponseBytes);
 }
 
 bool DownloadURLBinaryIOS(const std::string &url,
@@ -4324,6 +4612,136 @@ bool DownloadURLBinaryIOS(const std::string &url,
     const auto *bytes =
         static_cast<const unsigned char *>(delegate->responseData.bytes);
     body.assign(bytes, bytes + delegate->responseData.length);
+    return true;
+  }
+}
+
+bool DownloadURLToFileIOS(const std::string &url,
+                          const std::filesystem::path &path,
+                          std::atomic_bool &cancelled,
+                          std::uint64_t maximumBytes,
+                          std::string &errorMessage,
+                          IOSDownloadProgressCallback progressCallback,
+                          void *progressContext) {
+  @autoreleasepool {
+    errorMessage.clear();
+    if (cancelled.load()) {
+      errorMessage = "Download cancelled.";
+      return false;
+    }
+    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
+    NSURL *nsUrl = [NSURL URLWithString:urlString];
+    if (nsUrl == nil) {
+      errorMessage = "Invalid URL: " + url;
+      return false;
+    }
+    NSString *scheme = nsUrl.scheme.lowercaseString;
+    if (![scheme isEqualToString:@"http"] &&
+        ![scheme isEqualToString:@"https"]) {
+      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
+      return false;
+    }
+    if (path.empty() || path.filename().empty() || path.parent_path().empty()) {
+      errorMessage = "Invalid private archive destination.";
+      return false;
+    }
+
+    AsoFileDownloadDelegate *delegate = [[AsoFileDownloadDelegate alloc] init];
+    delegate->maximumBytes = maximumBytes;
+    delegate->requireHttps = [scheme isEqualToString:@"https"];
+    if (![delegate admitSpaceAtPath:NSTemporaryDirectory() remainingBytes:0]) {
+      errorMessage = std::string(delegate->failureMessage.UTF8String);
+      return false;
+    }
+    std::string stagingName =
+        (path.parent_path() / ".asobmshow-download-XXXXXX").string();
+    if (::mkdtemp(stagingName.data()) == nullptr) {
+      errorMessage = "Could not create private archive download staging.";
+      return false;
+    }
+    delegate->stagingDirectory = stagingName;
+    delegate->stagedPath = delegate->stagingDirectory / "archive";
+    delegate->progressCallback = progressCallback;
+    delegate->progressContext = progressContext;
+
+    NSMutableURLRequest *request = [NSMutableURLRequest
+         requestWithURL:nsUrl
+            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+        timeoutInterval:180.0];
+    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
+    NSURLSessionConfiguration *configuration =
+        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    NSOperationQueue *delegateQueue = [[NSOperationQueue alloc] init];
+    delegateQueue.maxConcurrentOperationCount = 1;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
+                                                          delegate:delegate
+                                                     delegateQueue:delegateQueue];
+    auto cleanup = makeScopeExit([&] {
+      delegate->abortRequested.store(true);
+      [session invalidateAndCancel];
+      [delegate detachProgress];
+      [delegate cleanupStaging];
+    });
+    NSURLSessionDownloadTask *task = [session downloadTaskWithRequest:request];
+    [task resume];
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(190);
+    while (dispatch_semaphore_wait(
+               delegate->semaphore,
+               dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) != 0) {
+      if (cancelled.load()) {
+        errorMessage = "Download cancelled.";
+        return false;
+      }
+      if (std::chrono::steady_clock::now() >= deadline) {
+        errorMessage = "Timed out while downloading " + url;
+        return false;
+      }
+    }
+    [delegate detachProgress];
+    if (cancelled.load()) {
+      errorMessage = "Download cancelled.";
+      return false;
+    }
+    if (delegate->rejectedInsecureRedirect) {
+      errorMessage = "HTTPS download redirected to insecure HTTP.";
+      return false;
+    }
+    if (delegate->rejectedInvalidRedirect) {
+      errorMessage = "Download redirected to a non-HTTP URL.";
+      return false;
+    }
+    if (delegate->failureMessage != nil) {
+      errorMessage = std::string(delegate->failureMessage.UTF8String);
+      return false;
+    }
+    if (delegate->requestError != nil) {
+      errorMessage =
+          std::string(delegate->requestError.localizedDescription.UTF8String);
+      return false;
+    }
+
+    std::lock_guard lock(delegate->stagingMutex);
+    struct stat stagedStatus {};
+    if (!delegate->hasDownloadedFile ||
+        ::lstat(delegate->stagedPath.c_str(), &stagedStatus) != 0 ||
+        !S_ISREG(stagedStatus.st_mode) || stagedStatus.st_size < 0) {
+      errorMessage = "No completed archive file while downloading " + url;
+      return false;
+    }
+    if (static_cast<std::uint64_t>(stagedStatus.st_size) > maximumBytes) {
+      errorMessage = "Archive download exceeds the byte limit.";
+      return false;
+    }
+    if (cancelled.load()) {
+      errorMessage = "Download cancelled.";
+      return false;
+    }
+    if (::rename(delegate->stagedPath.c_str(), path.c_str()) != 0) {
+      errorMessage = "Could not publish the downloaded archive file.";
+      return false;
+    }
     return true;
   }
 }

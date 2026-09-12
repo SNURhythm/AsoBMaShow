@@ -457,6 +457,56 @@ void testProjectsExactBarClassConditions() {
           "a SongBar with a non-NoPlay clear is not unplayed");
 }
 
+void testArchiveActionsDoNotActivateRandomSelectSkinLayers() {
+  for (const auto variant : {0, 1, 2}) {
+    MusicSelectBarManagerSnapshot bars;
+    MusicSelectBar archive;
+    archive.id = {variant == 1 ? "action:unzip-all-archives" : "archive:/charts/song.7z"};
+    archive.kind = skin::MusicSelectBarKind::Executable;
+    archive.title = variant == 1 ? "Unzip All (2)" : "song.7z";
+    archive.selectable = variant != 2;
+    archive.presentation = {.kind = archive.kind, .exists = variant != 2};
+    if (variant != 1) {
+      archive.chart.emplace();
+      archive.chart->solidArchive = true;
+      archive.chart->unavailable = variant == 2;
+      archive.chart->meta.BmsPath = "/charts/song.7z";
+      archive.chart->meta.Genre = "Solid archive";
+      archive.chart->meta.Artist = "Solid archive: unzip to browse charts";
+    }
+    bars.rows.push_back(std::move(archive));
+    const auto values = projectMusicSelectProperties(AppSettings{}, bars, {});
+    require(!values.booleans.at(1030) && !values.booleans.at(1031),
+            "archive actions never activate random-select text or character layers");
+    require(values.booleans.at(1) && !values.booleans.at(2) && !values.booleans.at(5),
+            "archive actions use non-playable folder presentation without becoming songs");
+    const bool songCharacter = values.booleans.at(2) || values.booleans.at(1030) || values.booleans.at(1031);
+    const bool folderCharacter = values.booleans.at(1) || values.booleans.at(1030) || values.booleans.at(1031);
+    require(!songCharacter && folderCharacter,
+            "Litone12's two SD-character predicates enable exactly the folder placement");
+    require(values.strings.at(10) == bars.rows.front().title &&
+                values.strings.at(12) == bars.rows.front().title,
+            "archive and Unzip All titles remain visible even without chart-title metadata");
+    if (variant != 1) {
+      require(values.strings.at(14) == "Solid archive: unzip to browse charts" &&
+                  values.strings.at(16) == values.strings.at(14),
+              "archive descriptions remain visible through both artist properties");
+    }
+    require(bars.rows.front().kind == skin::MusicSelectBarKind::Executable &&
+                (variant == 2 || musicSelectIsSolidArchiveAction(bars.rows.front()) ||
+                 musicSelectIsUnzipAllAction(bars.rows.front())),
+            "skin projection preserves native archive action dispatch");
+  }
+
+  MusicSelectBarManagerSnapshot random;
+  random.rows.push_back({.kind = skin::MusicSelectBarKind::Executable,
+                         .presentation = {.kind = skin::MusicSelectBarKind::Executable,
+                                          .exists = true}});
+  const auto values = projectMusicSelectProperties(AppSettings{}, random, {});
+  require(values.booleans.at(1030) && values.booleans.at(5) && !values.booleans.at(1),
+          "real random-select ExecutableBars keep their Beatoraja skin flags");
+}
+
 void testProjectsDirectoryAndFinishedRanking() {
   AppSettings settings;
   MusicSelectBar folder;
@@ -606,6 +656,7 @@ void testPagedReadViewProjectsWithoutMaterializingRows() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testArchiveActionsDoNotActivateRandomSelectSkinLayers();
   testPagedReadViewProjectsWithoutMaterializingRows();
   testProjectsSelectedSongAndPlayerConfiguration();
   testProjectsDirectoryAndFinishedRanking();

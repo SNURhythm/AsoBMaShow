@@ -64,10 +64,9 @@ std::optional<std::string> beatorajaReplayOptionName(int value) {
 namespace long_note_mode { int valueFromId(int value) { return value; } }
 int normalizeChartLongNoteModeValue(int value) { return value; }
 void applyEffectiveLongNoteModeToChart(bms_parser::Chart &, int) {}
-struct StartupTiming {
-  static StartupTiming &instance() { static StartupTiming timing; return timing; }
-  void mark(const char *) {}
-};
+void applyDoublePlayFlipToChart(bms_parser::Chart &) {
+  assert(false && "launch cancellation fixture does not enable double-play flip");
+}
 struct StartOptions {
   int startPosition, autoKeySound, autoPlay, gaugeType, gaugeAutoShift;
   int gaugeAutoShiftLowerBound, playOption, playOptionSeed, playOption2;
@@ -104,6 +103,8 @@ struct PreviewAudio {
   void resumeDefaultBgm() { ++resumes; }
 };
 struct MusicSelectScene {
+  struct UnzipModal {};
+  std::unique_ptr<UnzipModal> archiveUnzipModal_;
   struct Context {
     struct { int skinPlayer2RandomOption = 0; } settings;
     Jukebox jukebox;

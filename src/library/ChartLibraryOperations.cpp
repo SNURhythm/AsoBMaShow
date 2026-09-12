@@ -1,5 +1,6 @@
 #include "ChartLibraryOperations.h"
 #include "ChartLibraryPlatform.h"
+#include "ArchiveUnzipRecovery.h"
 
 #include "../ArchiveFile.h"
 #include "../Utils.h"
@@ -224,6 +225,28 @@ TaskRunResult ChartLibraryOperations::runRefresh(
                        .iosBookmark = request.iosBookmark});
   }
 
+  const auto pendingUnzips = session->LoadUnzipRecovery();
+  if (pendingUnzips && !pendingUnzips->empty()) {
+    dependencies_.refreshFolderAccess(session->SelectEffectiveEntries());
+  }
+  std::atomic_bool recoveryPaused{false};
+  const auto recovery = archive_unzip_recovery::recover(
+      *session, stopToken,
+      [&](const ChartScanProgress &value) {
+        progress(value, "Recovering interrupted unzip");
+      },
+      [&] {
+        const bool resumed = !stopToken.stop_requested() &&
+                             !(dependencies_.pauseRequested && dependencies_.pauseRequested());
+        if (!resumed) recoveryPaused.store(true, std::memory_order_relaxed);
+        return resumed;
+      });
+  if (recovery.libraryChanged && dependencies_.requestReload) {
+    dependencies_.requestReload(true);
+  }
+  if (stopToken.stop_requested() || recoveryPaused.load(std::memory_order_relaxed)) return pausedResult;
+  const auto recoveryDetail = "Unzip recovery is pending; restore folder access and retry Refresh Library.";
+
   progress({.current = 2,
             .total = 100,
             .stage = ChartScanProgressStage::Preparing},
@@ -273,10 +296,6 @@ TaskRunResult ChartLibraryOperations::runRefresh(
       entries = session->SelectEffectiveEntries();
     }
   }
-  if (entries.empty()) {
-    return {.detail = "Complete"};
-  }
-
   if (!waitForResume() || stopToken.stop_requested()) {
     return pausedResult;
   }
@@ -285,6 +304,11 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   // this list. Keep the scan roots scoped to a newly added folder, but always
   // reopen every effective entry.
   dependencies_.refreshFolderAccess(session->SelectEffectiveEntries());
+
+  if (entries.empty()) {
+    return {.disposition = recovery.completed ? TaskRunDisposition::Complete : TaskRunDisposition::Failed,
+            .detail = recovery.completed ? "Complete" : recoveryDetail};
+  }
 
   if (request.rebuildLibraryMetadata) {
     progress({.current = 8,
@@ -355,7 +379,8 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
-  return {.detail = "Complete",
+  return {.disposition = recovery.completed ? TaskRunDisposition::Complete : TaskRunDisposition::Failed,
+          .detail = recovery.completed ? "Complete" : recoveryDetail,
           .rebuildLibraryMetadataCleared = pausedResult.rebuildLibraryMetadataCleared,
           .folderRegistrationCompleted = pausedResult.folderRegistrationCompleted};
 }

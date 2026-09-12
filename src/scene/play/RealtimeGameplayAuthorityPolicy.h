@@ -32,6 +32,7 @@ enum class RealtimeGameplayTerminalAction {
   CompleteChart,
   CompletePractice,
   SurvivalGaugeFailed,
+  Abort,
   IntegrityFailure,
 };
 

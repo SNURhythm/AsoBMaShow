@@ -1,4 +1,6 @@
 #include "FileChecksum.h"
+#include "RAII.h"
+#include "Utils.h"
 #include "skin/beatoraja/SkinResourceCatalog.h"
 #include "skin/beatoraja/SkinMovieCatalog.h"
 #include "skin/beatoraja/SkinBitmapFontParser.h"
@@ -14,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -3445,6 +3448,20 @@ void testSkinImagesAreCachedAcrossDecodeRuns() {
 }
 
 int main() {
+#ifndef _WIN32
+  TemporaryDirectory documentsSandbox;
+  const char *home = std::getenv("HOME");
+  const std::optional<std::string> previousHome = home ? std::make_optional(home) : std::nullopt;
+  if (setenv("HOME", documentsSandbox.root.c_str(), 1) != 0) return 2;
+  ScopeExit restoreHome([&] {
+    if (previousHome) setenv("HOME", previousHome->c_str(), 1);
+    else unsetenv("HOME");
+  });
+  const auto documents = Utils::GetDocumentsPath();
+  std::filesystem::create_directories(documents);
+  expect(!std::filesystem::exists(documents / "startup-timings.log"),
+         "resource preparation starts without a startup timing log");
+#endif
   testBitmapFontDescriptorParsingMatchesPinnedSources();
   testInstalledSelectorBmFontsWhenRequested();
   testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs();
@@ -3464,6 +3481,10 @@ int main() {
   testSkinImagesAreCachedAcrossDecodeRuns();
   testCancelledImagePlansReleaseEveryDecodeTicket();
   testImagePlanningBoundsAdmittedAndReadyOwnership();
+#ifndef _WIN32
+  expect(!std::filesystem::exists(documents / "startup-timings.log"),
+         "resource preparation does not write startup-timings.log to documents");
+#endif
   if (failures) return 1;
   std::cout << "Skin resource catalog tests passed\n";
   return 0;

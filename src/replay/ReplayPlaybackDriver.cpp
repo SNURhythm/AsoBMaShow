@@ -234,7 +234,7 @@ ReplayPlaybackDriver::ReplayPlaybackDriver(const ReplayChartDocument &document,
                                            ReplayLimits limits)
     : document_(document), limits_(limits),
       currentTimeMicros_(limits.minimumSongTimeMicros) {
-  valid_ = limits.valid() && document.timeBounds.valid();
+  valid_ = limits.valid() && document.timeBounds.valid(limits);
   if (!valid_) {
     diagnostic_ = "Replay playback limits or completion bounds are invalid.";
   }

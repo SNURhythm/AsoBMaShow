@@ -30,7 +30,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 10;
+constexpr int kChartDatabaseSchemaVersion = 11;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -677,6 +677,29 @@ bool migrateChartDatabaseToVersion10(sqlite3 *db, bool &completed) {
   return true;
 }
 
+bool migrateChartDatabaseToVersion11(sqlite3 *db, bool &completed) {
+  for (const auto *table : {"archive_scan_cache", "chart_scan_completed_archive"}) {
+    bool exists = false;
+    if (!sqliteTableExists(db, table, exists,
+                           "checking legacy solid archive classification cache")) {
+      return false;
+    }
+    if (!exists) {
+      continue;
+    }
+    const bool scanCache = std::string_view(table) == "archive_scan_cache";
+    const std::string column = scanCache ? "path" : "archive_path";
+    const std::string query = std::string("DELETE FROM ") + table +
+        " WHERE (lower(" + column + ") LIKE '%.7z' OR lower(" + column +
+        ") LIKE '%.cb7')" + (scanCache ? " AND solid = 0" : "");
+    if (!execSql(db, query.c_str(), "invalidating legacy solid archive classification")) {
+      return false;
+    }
+  }
+  completed = true;
+  return true;
+}
+
 bool runChartDatabaseMigrationPasses(
     sqlite3 *db, const ChartDatabaseMigrationPass *passes,
     std::size_t passCount, int latestVersion) {
@@ -729,6 +752,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {9, "persist chart BGA content metadata",
        migrateChartDatabaseToVersion9},
       {10, "persist selector folder add dates", migrateChartDatabaseToVersion10},
+      {11, "refresh 7-Zip solid classification", migrateChartDatabaseToVersion11},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -1025,6 +1049,66 @@ int ChartRepository::Session::DeleteChartMetaInDirectory(
 bool ChartRepository::Session::DeleteArchiveRecords(
     const std::filesystem::path &archivePath) {
   return deleteArchiveRecords(impl_->database(), archivePath);
+}
+
+bool ChartRepository::Session::SaveUnzipRecovery(
+    const ArchiveUnzipRecoveryRecord &record) {
+  if (record.archivePath.empty() || record.outputFolder.empty() ||
+      record.archiveKey.empty()) return false;
+  auto *database = impl_->database();
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database,
+          "INSERT INTO archive_unzip_recovery(output_folder, archive_path, archive_key, delete_original) "
+          "VALUES(?1, ?2, ?3, ?4) ON CONFLICT(output_folder) DO UPDATE SET "
+          "archive_path=excluded.archive_path, archive_key=excluded.archive_key, "
+          "delete_original=excluded.delete_original", statement) != SQLITE_OK) {
+    return false;
+  }
+  bindSqliteText(statement, 1, chart_storage_identity::StoredPathText(record.outputFolder));
+  bindSqliteText(statement, 2, chart_storage_identity::StoredPathText(record.archivePath));
+  bindSqliteText(statement, 3, record.archiveKey);
+  sqlite3_bind_int(statement, 4, record.deleteOriginal);
+  return sqlite3_step(statement) == SQLITE_DONE;
+}
+
+std::optional<std::vector<ArchiveUnzipRecoveryRecord>>
+ChartRepository::Session::LoadUnzipRecovery() {
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(impl_->database(),
+          "SELECT archive_path, output_folder, archive_key, delete_original "
+          "FROM archive_unzip_recovery ORDER BY output_folder", statement) != SQLITE_OK) {
+    return std::nullopt;
+  }
+  std::vector<ArchiveUnzipRecoveryRecord> records;
+  int result;
+  while ((result = sqlite3_step(statement)) == SQLITE_ROW) {
+    records.push_back({.archivePath = readStoredPath(statement, 0),
+                       .outputFolder = readStoredPath(statement, 1),
+                       .archiveKey = columnString(statement, 2),
+                       .deleteOriginal = sqlite3_column_int(statement, 3) != 0});
+    chart_storage_identity::ToAbsolutePath(records.back().archivePath);
+    chart_storage_identity::ToAbsolutePath(records.back().outputFolder);
+  }
+  if (result != SQLITE_DONE) return std::nullopt;
+  return records;
+}
+
+bool ChartRepository::Session::ClearUnzipRecovery(
+    std::span<const std::filesystem::path> folders) {
+  if (folders.empty()) return true;
+  auto *database = impl_->database();
+  std::string error;
+  SqliteTransactionHandle transaction(database, "BEGIN IMMEDIATE", error);
+  SqliteStatementHandle statement;
+  if (!transaction.active() || prepareSqliteStatement(database,
+          "DELETE FROM archive_unzip_recovery WHERE output_folder=?1",
+          statement) != SQLITE_OK) return false;
+  for (const auto &folder : folders) {
+    sqlite3_reset(statement);
+    bindSqliteText(statement, 1, chart_storage_identity::StoredPathText(folder));
+    if (sqlite3_step(statement) != SQLITE_DONE) return false;
+  }
+  return transaction.commit(error);
 }
 
 bool ChartRepository::Session::ClearChartMeta() {
@@ -1522,7 +1606,12 @@ bool chart_repository_detail::EnsureCoreSchema(sqlite3 *database) {
   return createChartMetaTable(database) && createFolderTableSchema(database) &&
          createSolidArchiveTable(database) &&
          createFavoritesTable(database) && createEntriesTable(database) &&
-         createChartStateTables(database);
+         createChartStateTables(database) &&
+         execSql(database,
+                 "CREATE TABLE IF NOT EXISTS archive_unzip_recovery ("
+                 "output_folder TEXT PRIMARY KEY, archive_path TEXT NOT NULL, "
+                 "archive_key TEXT NOT NULL, delete_original INTEGER NOT NULL)",
+                 "creating unzip recovery journal");
 }
 
 static bool insertEntry(sqlite3 *db, const std::filesystem::path &path,

@@ -8315,6 +8315,31 @@ void testResultBridgePreservesCompletedGameplayGraph() {
          "result bridge preserves the completed gameplay graph snapshot");
 }
 
+void testResultBridgeDoesNotResurrectOmittedGaugeHistory() {
+  RhythmState state(nullptr, false);
+  state.gaugeHistory = {20.0F, 80.0F};
+  auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
+  dynamic->gaugeHistoryOmitted = true;
+  ResultSkinStateBridge omitted(
+      {.state = &state, .gameplayGraph = {.dynamic = dynamic}}, 1, 0);
+  expect(omitted.gameplayGraphState().gaugeHistory.empty() &&
+             omitted.gaugeState().supported && state.gaugeHistory.size() == 2,
+         "GAME-03 explicit gauge omission prevents legacy fallback while keeping live scalar");
+  ResultSkinStateBridge admitted({.state = &state}, 1, 0);
+  expect(admitted.gameplayGraphState().gaugeHistory.size() == 2,
+         "GAME-03 legacy admitted event history remains available");
+  state.gaugeHistory.assign(4097, 20.0F);
+  ResultSkinStateBridge oversized({.state = &state}, 1, 0);
+  expect(oversized.gameplayGraphState().gaugeHistory.empty() &&
+             state.gaugeHistory.size() == 4097,
+         "GAME-03 result bridge bounds display copies without dropping durable events");
+  ResultPresentationModel remote{.gaugeSeries = {{.points = {20.0F}}}};
+  remote.gaugeSeries.front().points.resize(4097, 20.0F);
+  ResultSkinStateBridge remoteOversized({.presentation = &remote}, 1, 0);
+  expect(remoteOversized.gameplayGraphState().gaugeHistory.empty(),
+         "GAME-03 result bridge admits remote display history before copying");
+}
+
 void testResultBridgeUsesRawChartBpmForResultProperties() {
   bms_parser::ChartMeta meta;
   meta.MinBpm = 120.0;
@@ -8523,6 +8548,7 @@ int main(int argc, char **argv) {
   testCourseResultBridgeDoesNotInventMusicResultTimingStatistics();
   testResultBridgeUsesRemotePresentationValues();
   testResultBridgePreservesCompletedGameplayGraph();
+  testResultBridgeDoesNotResurrectOmittedGaugeHistory();
   testResultBridgeUsesRawChartBpmForResultProperties();
   testRequestedExternalResultSkinCreatesSession();
   return music_select_runtime_ledger_assertions::finish(

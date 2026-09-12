@@ -477,6 +477,7 @@ void testSkinMenuPracticeModifierRemovesOutOfRangeLandmines() {
 
 void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
   bms_parser::Chart chart;
+  chart.Meta.IsDP = true;
   auto *measure = new bms_parser::Measure();
   auto *timeline = new bms_parser::TimeLine(16, false);
   auto *note = new bms_parser::Note(1);
@@ -494,6 +495,7 @@ void testSkinMenuDoublePlayFlipSwapsSourcePlayerHalves() {
 
 void testSkinMenuDoublePlayFlipSwapsLandminePlayerHalves() {
   bms_parser::Chart chart;
+  chart.Meta.IsDP = true;
   auto *measure = new bms_parser::Measure();
   auto *timeline = new bms_parser::TimeLine(16, false);
   auto *mine = new bms_parser::LandmineNote(24.0F);

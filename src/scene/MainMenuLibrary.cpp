@@ -108,6 +108,27 @@ FindBmsChartIdentity findBmsChartIdentity(const bms_parser::ChartMeta &meta) {
   };
 }
 
+std::optional<ChartMetaRecord> unzipAllRecord(int archiveCount) {
+  if (archiveCount <= 0) return std::nullopt;
+  ChartMetaRecord record;
+  record.unzipAll = true;
+  record.solidArchive = true;
+  record.meta.Title = "Unzip All (" + std::to_string(archiveCount) + ")";
+  record.meta.Artist = "Choose Keep or Delete before starting";
+  record.difficultyTableLabels = "ALL";
+  return record;
+}
+
+std::optional<ChartMetaRecord> chartSelectionRecordForReload(
+    const std::optional<ChartMetaRecord> &selection,
+    const std::optional<ChartMetaRecord> &leadingRecord, bool preserveViewState) {
+  if (selection && selection->unzipAll) {
+    return preserveViewState && leadingRecord && leadingRecord->unzipAll
+               ? leadingRecord : std::nullopt;
+  }
+  return selection;
+}
+
 bool sameChartSelection(const ChartMetaRecord &left,
                         const ChartMetaRecord &right) {
   const bool leftHasPath = !left.meta.BmsPath.empty();
@@ -117,6 +138,7 @@ bool sameChartSelection(const ChartMetaRecord &left,
            left.meta.BmsPath.lexically_normal() ==
                right.meta.BmsPath.lexically_normal() &&
            left.courseStart == right.courseStart &&
+           left.unzipAll == right.unzipAll &&
            left.unavailable == right.unavailable &&
            left.solidArchive == right.solidArchive;
   }
@@ -134,6 +156,7 @@ bool sameChartSelection(const ChartMetaRecord &left,
          left.meta.SubTitle == right.meta.SubTitle &&
          left.meta.Artist == right.meta.Artist &&
          left.courseStart == right.courseStart &&
+         left.unzipAll == right.unzipAll &&
          left.unavailable == right.unavailable &&
          left.solidArchive == right.solidArchive;
 }

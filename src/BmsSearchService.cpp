@@ -141,7 +141,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
   }
 
   std::string errorMessage;
-  const auto patternHtml = fetchUrlText(result.patternUrl, errorMessage);
+  const auto patternHtml = fetchUrlText(result.patternUrl, errorMessage, &cancelled);
   if (cancelled.load()) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Lookup cancelled.";
@@ -182,7 +182,12 @@ BmsSearchResult BmsSearchService::findAndDownload(
       progressCallback({.message = "Opening BMS Search details page"});
     }
     std::string bmsError;
-    const auto bmsHtml = fetchUrlText(bmsUrl, bmsError);
+    const auto bmsHtml = fetchUrlText(bmsUrl, bmsError, &cancelled);
+    if (cancelled.load()) {
+      result.status = BmsSearchResult::Status::DownloadFailed;
+      result.message = "Lookup cancelled.";
+      return result;
+    }
     if (!bmsHtml) {
       SDL_Log("Failed to fetch BMS Search details page %s: %s",
               bmsUrl.c_str(), bmsError.c_str());

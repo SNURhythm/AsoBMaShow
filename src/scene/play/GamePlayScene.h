@@ -239,7 +239,8 @@ private:
   void appendReplayEvent(ReplayEventAction action, int lane,
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
-                         const JudgeResult &judgeResult);
+                         const JudgeResult &judgeResult,
+                         bool checkGaugeFailure = true);
   void recordPreparationLaneEvent(ReplayEventAction action, int lane,
                                   long long songTimeMicros);
   void appendReplayLaneCoverEvent(int noteStartPositionPercent,

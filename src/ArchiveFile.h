@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -103,9 +104,14 @@ struct UnzipProgress {
   std::uint64_t current = 0;
   std::uint64_t total = 0;
   std::string message;
+  bool indexing = false;
+  std::uint64_t archiveIndex = 0;
+  std::vector<std::string> activeArchives;
 };
 
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
+using UnzipPrepareCallback = std::function<bool(
+    const std::filesystem::path &outputFolder, const std::string &archiveKey)>;
 using PauseCallback = std::function<bool()>;
 using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
 using FileDataCallback = std::function<bool(FileData &&)>;
@@ -119,6 +125,39 @@ struct UnzipArchiveResult {
   std::filesystem::path outputFolder;
   std::uint64_t fileCount = 0;
   std::uint64_t uncompressedSize = 0;
+  std::string archiveKey;
+  bool reusedCompletedFolder = false;
+};
+
+struct UnzipLimits {
+  std::uint64_t maximumArchiveBytes = 256ull * 1024 * 1024 * 1024;
+  std::uint64_t maximumTotalBytes = 1024ull * 1024 * 1024 * 1024;
+  std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
+  std::size_t maximumConcurrentArchives = 0;
+  std::size_t maximumWorkers = 0;
+  std::uint64_t maximumMemoryBytes = 0;
+  std::uint64_t maximumArchiveEntries = 100000;
+  std::uint64_t maximumTotalEntries = 1000000;
+};
+
+struct UnzipExecutionPlan {
+  std::size_t archiveWorkers = 1;
+  std::size_t workersPerArchive = 1;
+  std::uint64_t memoryPerArchive = 0;
+};
+
+UnzipExecutionPlan unzipExecutionPlan(const UnzipLimits &limits,
+                                     std::size_t archiveCount = 1);
+
+struct UnzipBudget {
+  UnzipLimits limits;
+  std::uint64_t writtenBytes = 0;
+  std::atomic_bool exhausted = false;
+  std::mutex mutex;
+  std::uint64_t pendingWriteBytes = 0;
+  std::string failureMessage;
+  std::size_t concurrentArchives = 1;
+  std::uint64_t admittedEntries = 0;
 };
 
 struct TemporaryCacheCleanupResult {
@@ -175,6 +214,10 @@ bool listEntries(const std::filesystem::path &archivePath,
                  std::vector<Entry> &entries,
                  std::string *errorMessage = nullptr,
                  PauseCallback pauseCallback = nullptr);
+bool listEntriesBounded(const std::filesystem::path &archivePath,
+                        std::vector<Entry> &entries, std::uint64_t maximumEntries,
+                        std::string *errorMessage = nullptr,
+                        PauseCallback pauseCallback = nullptr);
 bool readArchiveEntries(const std::filesystem::path &archivePath,
                         const std::vector<std::filesystem::path> &innerPaths,
                         std::vector<FileData> &files,
@@ -184,6 +227,12 @@ bool readArchiveEntriesStreaming(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     FileDataCallback onFile,
+    std::string *errorMessage = nullptr,
+    PauseCallback pauseCallback = nullptr);
+bool readArchiveEntriesStreamingBounded(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile, std::uint64_t maximumBytes,
     std::string *errorMessage = nullptr,
     PauseCallback pauseCallback = nullptr);
 // Calls onFile from extractor worker threads. The callback must be thread-safe.
@@ -216,9 +265,22 @@ bool readFileBounded(const std::filesystem::path &path,
                      std::size_t maximumBytes,
                      std::string *errorMessage = nullptr,
                      std::stop_token stop = {});
+bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
+                                   std::vector<unsigned char> &bytes,
+                                   std::size_t maximumBytes,
+                                   std::string *errorMessage,
+                                   std::stop_token stop,
+                                   PauseCallback pauseCallback);
 bool isInSolidArchiveFolder(const std::filesystem::path &path);
 SourcePreference sourcePreferenceForPath(const std::filesystem::path &path);
 std::string cacheKeyForPath(const std::filesystem::path &path);
+bool unzipFolderHasMatchingIncompleteMarker(
+    const std::filesystem::path &outputFolder,
+    const std::filesystem::path &archivePath, const std::string &archiveKey,
+    std::error_code *readError = nullptr);
+bool unzipFolderHasMatchingCompleteMarker(
+    const std::filesystem::path &outputFolder,
+    const std::filesystem::path &archivePath, const std::string &archiveKey);
 std::optional<std::filesystem::path>
 findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions);
@@ -234,7 +296,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   std::string *errorMessage = nullptr,
                   const std::stop_token *stopToken = nullptr,
                   UnzipProgressCallback progressCallback = nullptr,
-                  PauseCallback pauseCallback = nullptr);
+                  PauseCallback pauseCallback = nullptr,
+                  bool reuseCompletedFolder = true,
+                  UnzipPrepareCallback prepareCallback = nullptr,
+                  UnzipBudget *budget = nullptr);
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path,
                 std::string *errorMessage = nullptr,

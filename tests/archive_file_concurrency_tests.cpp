@@ -1,6 +1,10 @@
 #include "../src/ArchiveFile.h"
 #include "../src/ArchiveRAII.h"
+#include "../src/ArchiveSourceIdentity.h"
 #include "../src/scene/play/GameplayBmsResourceAvailability.h"
+#include "fixtures/archive/rar_fixtures.h"
+#include "fixtures/archive/sevenzip_block_fixtures.h"
+#include "fixtures/archive/mixed_encryption_sevenzip.h"
 
 #include <archive_entry.h>
 
@@ -11,6 +15,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +25,7 @@
 #include <memory>
 #include <mutex>
 #include <new>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -29,6 +35,8 @@ namespace bounded_allocation_probe {
 thread_local bool enabled = false;
 thread_local std::size_t largest = 0;
 thread_local std::stop_source *cancelOnChunk = nullptr;
+std::atomic_size_t observedEntrySize{0};
+thread_local unsigned char *observedEntry = nullptr;
 }
 
 void *operator new(std::size_t size) {
@@ -39,7 +47,13 @@ void *operator new(std::size_t size) {
   if (bounded_allocation_probe::cancelOnChunk != nullptr && size >= 64 * 1024) {
     bounded_allocation_probe::cancelOnChunk->request_stop();
   }
-  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) {
+    if (size == bounded_allocation_probe::observedEntrySize.load()) {
+      bounded_allocation_probe::observedEntry =
+          static_cast<unsigned char *>(memory);
+    }
+    return memory;
+  }
   throw std::bad_alloc();
 }
 
@@ -108,7 +122,7 @@ private:
 };
 
 void writeSevenZip(const std::filesystem::path &path,
-                   const std::string &contents) {
+                   const std::string &contents, bool multipleEntries = false) {
   auto writer = makeArchiveWriteHandle();
   assert(writer);
   assert(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK);
@@ -126,7 +140,96 @@ void writeSevenZip(const std::filesystem::path &path,
   assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
          static_cast<la_ssize_t>(contents.size()));
   assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  if (multipleEntries) {
+    archive_entry_set_pathname(entry.get(), "song/chart.bms");
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+           static_cast<la_ssize_t>(contents.size()));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testSevenZipArchiveLevelSolidDetection() {
+  TempDirectory temporary;
+  const auto solidPath = temporary.path() / "solid.7z";
+  const auto plainPath = temporary.path() / "plain.7z";
+  const std::string contents = "#TITLE Solid archive\n#BPM 120\n";
+  writeSevenZip(solidPath, contents, true);
+  writeSevenZip(plainPath, contents);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(solidPath, entries, &error));
+  assert(entries.size() == 2);
+  assert(std::all_of(entries.begin(), entries.end(),
+                     [](const auto &entry) { return entry.solid; }));
+  const auto chartPath = archive_file::makeVirtualPath(solidPath, "song/chart.bms");
+  assert(archive_file::isInSolidArchiveFolder(chartPath));
+  assert(archive_file::sourcePreferenceForPath(chartPath).priority == 2);
+  const std::vector<std::filesystem::path> paths{"readme.txt", "song/chart.bms"};
+  std::vector<archive_file::FileData> files;
+  assert(archive_file::readArchiveEntries(solidPath, paths, files, &error));
+  assert(files.size() == 2);
+  std::size_t streamed = 0;
+  assert(archive_file::readArchiveEntriesStreaming(
+      solidPath, paths, [&](archive_file::FileData &&file) {
+        assert(std::string(file.bytes.begin(), file.bytes.end()) == contents);
+        ++streamed;
+        return true;
+      }, &error));
+  assert(streamed == 2);
+  assert(archive_file::listEntriesBounded(solidPath, entries, 10, &error));
+  assert(std::all_of(entries.begin(), entries.end(),
+                     [](const auto &entry) { return entry.solid; }));
+  assert(archive_file::listEntries(plainPath, entries, &error));
+  assert(entries.size() == 1 && !entries.front().solid);
+}
+
+void testLegacySolidIndexIsRebuilt() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "legacy.7z";
+  writeSevenZip(archivePath, "#TITLE Legacy\n", true);
+  const auto cacheDir = temporary.path() / "idx";
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  const auto cacheFile = std::filesystem::directory_iterator(cacheDir)->path();
+  {
+    std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+    auto readSize = [&] {
+      std::uint64_t value = 0;
+      cache.read(reinterpret_cast<char *>(&value), sizeof(value));
+      assert(cache.good());
+      return value;
+    };
+    cache.put(2);
+    cache.seekg(1);
+    const auto keySize = readSize();
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1,
+                 std::ios::cur);
+    const auto count = readSize();
+    for (std::uint64_t index = 0; index < count; ++index) {
+      const auto pathSize = readSize();
+      cache.seekg(static_cast<std::streamoff>(pathSize) + 1 + 8 + 8 + 8,
+                   std::ios::cur);
+      const auto solidOffset = cache.tellg();
+      cache.seekp(solidOffset);
+      cache.put(0);
+      cache.seekg(solidOffset + std::streamoff(1));
+    }
+    assert(cache.good());
+  }
+  for (int restart = 0; restart < 2; ++restart) {
+    archive_file::clearArchiveIndexCacheForTesting();
+    archive_file::setArchiveIndexCacheDirectory(cacheDir);
+    assert(archive_file::listEntries(archivePath, entries, &error));
+    assert(entries.size() == 2);
+    assert(std::all_of(entries.begin(), entries.end(),
+                       [](const auto &entry) { return entry.solid; }));
+  }
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
 }
 
 void writeStoredZip(const std::filesystem::path &path,
@@ -364,11 +467,14 @@ void testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce() {
 
 void writeStoredZipContents(const std::filesystem::path &path,
                             const std::string &entryPath,
-                            const std::string &contents) {
+                            const std::string &contents,
+                            bool deflated = false) {
   auto writer = makeArchiveWriteHandle();
   assert(writer);
   assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
-  assert(archive_write_set_options(writer.get(), "zip:compression=store") ==
+  assert(archive_write_set_options(writer.get(), deflated
+                                                   ? "zip:compression=deflate"
+                                                   : "zip:compression=store") ==
          ARCHIVE_OK);
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
          ARCHIVE_OK);
@@ -387,6 +493,172 @@ void writeStoredZipContents(const std::filesystem::path &path,
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
 }
 
+void testLargeZipCancellation(bool deflated, bool concurrent,
+                              bool afterOutputProduced) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "large-cancellable.zip";
+  const std::string payload(8 * 1024 * 1024, 'x');
+  writeStoredZipContents(archivePath, "large.bin", payload, deflated);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+
+  std::atomic_int checkpoints{0};
+  std::atomic_int emitted{0};
+  bounded_allocation_probe::observedEntry = nullptr;
+  bounded_allocation_probe::observedEntrySize = payload.size();
+  auto checkpoint = [&] {
+    const auto *entry = bounded_allocation_probe::observedEntry;
+    if (entry == nullptr ||
+        (afterOutputProduced && entry[payload.size() - 1] != 'x')) {
+      return true;
+    }
+    return ++checkpoints < 4;
+  };
+  auto consume = [&](archive_file::FileData &&) {
+    ++emitted;
+    return true;
+  };
+  const bool read = concurrent
+      ? archive_file::readArchiveEntriesConcurrently(
+            archivePath, {"large.bin"}, consume, 2, payload.size() * 2,
+            &error, checkpoint)
+      : archive_file::readArchiveEntriesStreaming(
+            archivePath, {"large.bin"}, consume, &error, checkpoint);
+  bounded_allocation_probe::observedEntrySize = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  assert(!read);
+  assert(checkpoints >= 4);
+  assert(emitted == 0);
+  assert(error == "Operation cancelled");
+
+  error.clear();
+  auto verify = [&](archive_file::FileData &&file) {
+    assert(file.path == "large.bin");
+    assert(std::string_view(reinterpret_cast<const char *>(file.bytes.data()),
+                            file.bytes.size()) == payload);
+    ++emitted;
+    return true;
+  };
+  assert(archive_file::readArchiveEntriesConcurrently(
+      archivePath, {"large.bin"}, verify, 2, payload.size() * 2, &error));
+  assert(emitted == 1);
+}
+
+void testBatchCancellationDoesNotRestartFallback(bool sevenZip, bool ranged) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() /
+      (sevenZip ? "terminal-cancellation.7z" : "terminal-cancellation.zip");
+  if (sevenZip) {
+    writeSevenZip(archivePath, "entry");
+  } else {
+    writeStoredZip(archivePath, {"readme.txt"});
+  }
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  for (bool reportError : {false, true}) {
+    int checkpoints = 0;
+    std::vector<archive_file::FileData> files;
+    error.clear();
+    auto checkpoint = [&] { return ++checkpoints != 1; };
+    const bool read = ranged
+        ? archive_file::readArchiveEntriesInRange(
+              archivePath, {"readme.txt"}, {0, 0}, files,
+              reportError ? &error : nullptr, checkpoint)
+        : archive_file::readArchiveEntries(
+              archivePath, {"readme.txt"}, files,
+              reportError ? &error : nullptr, checkpoint);
+    assert(!read);
+    assert(files.empty());
+    assert(checkpoints == 1);
+    if (reportError) {
+      assert(error == "Operation cancelled");
+    }
+  }
+}
+
+void testCachedSevenZipHandleWaitCancellation(int operation) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "held-handle.7z";
+  writeSevenZip(archivePath, "entry");
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+
+  std::promise<void> holderEntered;
+  auto holderEnteredFuture = holderEntered.get_future();
+  std::promise<void> releaseHolder;
+  auto releaseHolderFuture = releaseHolder.get_future().share();
+  auto holder = std::async(std::launch::async, [&] {
+    std::string holderError;
+    return archive_file::readArchiveEntriesStreaming(
+        archivePath, {"readme.txt"}, [&](archive_file::FileData &&file) {
+          assert(file.bytes.size() == 5);
+          holderEntered.set_value();
+          assert(releaseHolderFuture.wait_for(30s) ==
+                 std::future_status::ready);
+          assert(file.bytes.front() == 'e');
+          return true;
+        }, &holderError);
+  });
+  assert(holderEnteredFuture.wait_for(10s) == std::future_status::ready);
+  if (operation == 4) {
+    archive_file::clearArchiveIndexCacheForTesting();
+  }
+  std::atomic_int checkpoints{0};
+  std::vector<archive_file::FileData> files;
+  std::vector<unsigned char> bytes;
+  auto waiter = std::async(std::launch::async, [&] {
+    auto checkpoint = [&] { return ++checkpoints != 32 || operation == 5; };
+    switch (operation) {
+    case 0:
+      return archive_file::readArchiveEntries(
+          archivePath, {"readme.txt"}, files, &error, checkpoint);
+    case 1:
+      return archive_file::readArchiveEntriesStreaming(
+          archivePath, {"readme.txt"}, [&](archive_file::FileData &&file) {
+            files.push_back(std::move(file));
+            return true;
+          }, &error, checkpoint);
+    case 2:
+      return archive_file::readArchiveEntriesInRange(
+          archivePath, {"readme.txt"}, {0, 0}, files, &error, checkpoint);
+    case 3:
+      return archive_file::readFileBoundedWithCheckpoint(
+          archive_file::makeVirtualPath(archivePath, "readme.txt"), bytes,
+          1024, &error, {}, checkpoint);
+    case 4:
+      return archive_file::listEntries(archivePath, entries, &error, checkpoint);
+    default:
+      return archive_file::unzipArchiveFully(
+          archivePath, temporary.path() / "output", &error, nullptr,
+          nullptr, checkpoint).has_value();
+    }
+  });
+  const bool cancelledWhileHeld =
+      waiter.wait_for(10s) == std::future_status::ready;
+  assert(holder.wait_for(0s) == std::future_status::timeout);
+  releaseHolder.set_value();
+  assert(holder.wait_for(10s) == std::future_status::ready);
+  assert(holder.get());
+  assert(waiter.wait_for(10s) == std::future_status::ready);
+  const bool read = waiter.get();
+  assert(cancelledWhileHeld);
+  assert(read == (operation == 5));
+  if (operation != 5) assert(checkpoints == 32);
+  assert(files.empty());
+  assert(bytes.empty());
+  assert(error == (operation == 5 ? "" : "Operation cancelled"));
+
+  error.clear();
+  assert(archive_file::readArchiveEntries(
+      archivePath, {"readme.txt"}, files, &error));
+  assert(files.size() == 1);
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) ==
+         "entry");
+}
+
 std::uint32_t readLeU32(const unsigned char *bytes) {
   return static_cast<std::uint32_t>(bytes[0]) |
          (static_cast<std::uint32_t>(bytes[1]) << 8u) |
@@ -399,6 +671,240 @@ void writeLeU32(unsigned char *bytes, std::uint32_t value) {
   bytes[1] = static_cast<unsigned char>((value >> 8u) & 0xffu);
   bytes[2] = static_cast<unsigned char>((value >> 16u) & 0xffu);
   bytes[3] = static_cast<unsigned char>((value >> 24u) & 0xffu);
+}
+
+bool readZipFixture(const std::filesystem::path &archivePath, int operation,
+                    std::vector<archive_file::FileData> &files,
+                    std::string &error,
+                    archive_file::PauseCallback checkpoint) {
+  auto consume = [&](archive_file::FileData &&file) {
+    files.push_back(std::move(file));
+    return true;
+  };
+  switch (operation) {
+  case 0:
+    return archive_file::readArchiveEntriesConcurrently(
+        archivePath, {"payload.bin", "missing.bin", "payload.bin"},
+        consume, 2, 4 * 1024 * 1024, &error, checkpoint);
+  case 1:
+    return archive_file::readArchiveEntriesStreaming(
+        archivePath, {"payload.bin"}, consume, &error, checkpoint);
+  case 2:
+    return archive_file::readArchiveEntries(
+        archivePath, {"payload.bin"}, files, &error, checkpoint);
+  default:
+    return archive_file::readArchiveEntriesInRange(
+        archivePath, {"payload.bin"}, {0, 0}, files, &error, checkpoint);
+  }
+}
+
+void writeZipWithEmptyDeflateBlocks(const std::filesystem::path &archivePath,
+                                    const std::string &payload,
+                                    bool emptyPrefix) {
+  constexpr std::string_view name = "payload.bin";
+  const std::string emptyBlock("\0\0\0\xff\xff", 5);
+  std::string emptyBlocks;
+  for (std::size_t block = 0; block < 1024 * 1024; ++block) {
+    emptyBlocks += emptyBlock;
+  }
+  std::string compressed;
+  if (emptyPrefix) {
+    compressed += emptyBlocks;
+  }
+  for (std::size_t offset = 0; offset < payload.size();) {
+    const auto count = std::min<std::size_t>(65535, payload.size() - offset);
+    compressed.push_back('\0');
+    compressed.push_back(static_cast<char>(count & 0xffu));
+    compressed.push_back(static_cast<char>(count >> 8u));
+    compressed.push_back(static_cast<char>(~count & 0xffu));
+    compressed.push_back(static_cast<char>((~count >> 8u) & 0xffu));
+    compressed.append(payload, offset, count);
+    offset += count;
+  }
+  if (!emptyPrefix) {
+    compressed += emptyBlocks;
+  }
+  compressed.append("\1\0\0\xff\xff", 5);
+
+  std::uint32_t crc = 0xffffffffu;
+  for (unsigned char byte : payload) {
+    crc ^= byte;
+    for (int bit = 0; bit < 8; ++bit) {
+      crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+  }
+  crc ^= 0xffffffffu;
+
+  std::string localHeader(30, '\0');
+  auto *local = reinterpret_cast<unsigned char *>(localHeader.data());
+  writeLeU32(local, 0x04034b50u);
+  local[4] = 20;
+  local[8] = 8;
+  writeLeU32(local + 14, crc);
+  writeLeU32(local + 18, static_cast<std::uint32_t>(compressed.size()));
+  writeLeU32(local + 22, static_cast<std::uint32_t>(payload.size()));
+  local[26] = static_cast<unsigned char>(name.size());
+
+  std::string centralHeader(46, '\0');
+  auto *central = reinterpret_cast<unsigned char *>(centralHeader.data());
+  writeLeU32(central, 0x02014b50u);
+  central[4] = 20;
+  central[6] = 20;
+  central[10] = 8;
+  writeLeU32(central + 16, crc);
+  writeLeU32(central + 20, static_cast<std::uint32_t>(compressed.size()));
+  writeLeU32(central + 24, static_cast<std::uint32_t>(payload.size()));
+  central[28] = static_cast<unsigned char>(name.size());
+
+  std::string endRecord(22, '\0');
+  auto *end = reinterpret_cast<unsigned char *>(endRecord.data());
+  writeLeU32(end, 0x06054b50u);
+  end[8] = 1;
+  end[10] = 1;
+  writeLeU32(end + 12,
+              static_cast<std::uint32_t>(centralHeader.size() + name.size()));
+  writeLeU32(end + 16, static_cast<std::uint32_t>(
+                           localHeader.size() + name.size() + compressed.size()));
+  std::ofstream output(archivePath, std::ios::binary);
+  assert(output);
+  output << localHeader << name << compressed << centralHeader << name
+         << endRecord;
+  output.close();
+  assert(output);
+}
+
+void testZipCancellationDuringEmptyDeflateBlocks(bool emptyPrefix,
+                                                int operation) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "empty-blocks.zip";
+  const std::string payload(65537, 'x');
+  writeZipWithEmptyDeflateBlocks(archivePath, payload, emptyPrefix);
+  std::vector<archive_file::FileData> files;
+  std::string error;
+  assert(readZipFixture(archivePath, operation, files, error,
+                         [] { return true; }));
+  assert(files.size() == 1);
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) ==
+         payload);
+  files.clear();
+
+  int checkpoints = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  bounded_allocation_probe::observedEntrySize = payload.size();
+  const bool read = readZipFixture(archivePath, operation, files, error, [&] {
+    const auto *entry = bounded_allocation_probe::observedEntry;
+    if (entry == nullptr) {
+      return true;
+    }
+    if (++checkpoints != 16) {
+      return true;
+    }
+    assert(entry[0] == (emptyPrefix ? '\0' : 'x'));
+    return false;
+  });
+  bounded_allocation_probe::observedEntrySize = 0;
+  bounded_allocation_probe::observedEntry = nullptr;
+  assert(!read);
+  assert(files.empty());
+  assert(checkpoints == 16);
+  assert(error == "Operation cancelled");
+
+  error.clear();
+  assert(readZipFixture(archivePath, operation, files, error,
+                         [] { return true; }));
+  assert(files.size() == 1);
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) ==
+         payload);
+}
+
+void testZipInputCallbackRestoresAcrossEntries() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "restore-read-callback.zip";
+  writeStoredZip(archivePath, {"first.bin", "second.bin"});
+  std::vector<archive_file::FileData> files;
+  std::string error;
+  assert(archive_file::readArchiveEntriesStreaming(
+      archivePath, {"first.bin", "second.bin"}, [&](archive_file::FileData &&file) {
+        files.push_back(std::move(file));
+        return true;
+      }, &error, [] { return true; }));
+  assert(files.size() == 2);
+  assert(files[0].path == "first.bin");
+  assert(files[1].path == "second.bin");
+  for (const auto &file : files) {
+    assert(std::string(file.bytes.begin(), file.bytes.end()) == "entry");
+  }
+}
+
+void testZipChunkedReadBoundaryIntegrity(bool deflated) {
+  TempDirectory temporary;
+  for (std::size_t size : {0U, 1U, 65535U, 65536U, 65537U, 1048576U}) {
+    std::string payload(size, '\0');
+    std::uint32_t randomState = 0x12345678u;
+    for (char &byte : payload) {
+      randomState ^= randomState << 13;
+      randomState ^= randomState >> 17;
+      randomState ^= randomState << 5;
+      byte = static_cast<char>(randomState & 0xffu);
+    }
+    const auto archivePath =
+        temporary.path() / (std::to_string(size) + ".zip");
+    writeStoredZipContents(archivePath, "payload.bin", payload, deflated);
+
+    for (int operation = 0; operation < 4; ++operation) {
+      std::string error;
+      std::vector<archive_file::FileData> files;
+      assert(readZipFixture(archivePath, operation, files, error,
+                             [] { return true; }));
+      assert(error.empty());
+      assert(files.size() == 1);
+      assert(files.front().path == "payload.bin");
+      assert(std::string(files.front().bytes.begin(),
+                         files.front().bytes.end()) == payload);
+    }
+
+    std::ifstream input(archivePath, std::ios::binary);
+    assert(input);
+    std::string archiveBytes((std::istreambuf_iterator<char>(input)),
+                             std::istreambuf_iterator<char>());
+    const auto centralOffset = archiveBytes.rfind(std::string("PK\1\2", 4));
+    assert(centralOffset != std::string::npos);
+    assert(centralOffset + 46 <= archiveBytes.size());
+    archiveBytes[centralOffset + 16] ^= 1;
+    archiveBytes[14] ^= 1;
+    const auto *header =
+        reinterpret_cast<const unsigned char *>(archiveBytes.data());
+    const auto dataOffset = 30 + (readLeU32(header + 26) & 0xffffu) +
+                            (readLeU32(header + 28) & 0xffffu);
+    const auto descriptorOffset =
+        dataOffset + readLeU32(header + centralOffset + 20);
+    if ((header[6] & 8u) != 0) {
+      assert(readLeU32(header + descriptorOffset) == 0x08074b50u);
+      archiveBytes[descriptorOffset + 4] ^= 1;
+    }
+    const auto corruptPath =
+        temporary.path() / (std::to_string(size) + "-corrupt.zip");
+    std::ofstream output(corruptPath, std::ios::binary);
+    assert(output);
+    output.write(archiveBytes.data(),
+                 static_cast<std::streamsize>(archiveBytes.size()));
+    output.close();
+    assert(output);
+
+    for (bool checkpointEnabled : {false, true}) {
+      archive_file::PauseCallback checkpoint;
+      if (checkpointEnabled) {
+        checkpoint = [] { return true; };
+      }
+      for (int operation = 0; operation < 4; ++operation) {
+        std::vector<archive_file::FileData> files;
+        std::string error;
+        assert(!readZipFixture(corruptPath, operation, files, error, checkpoint));
+        assert(files.empty());
+        assert(error.find("CRC") != std::string::npos);
+      }
+    }
+  }
 }
 
 // Rewrites the declared uncompressed size in the central directory of a stored
@@ -577,6 +1083,41 @@ void testBoundedReadFallsBackToAlternativeAudioExtension() {
   assert(bytes == std::vector<unsigned char>(payload.begin(), payload.end()));
 }
 
+void testFileExtensionResolutionSharesPriorityAcrossStorage(bool archived) {
+  TempDirectory temporary;
+  const std::vector<std::string> files{
+      "exact.wav", "exact.flac", "preferred.mp3", "preferred.ogg",
+      "preferred.wav", "preferred.flac", "compressed.mp3", "compressed.ogg",
+      "last.mp3", "extensionless.ogg", "folder/deep.song.ogg", "image.png"};
+  const auto archivePath = temporary.path() / "extensions.zip";
+  if (archived) {
+    writeStoredZip(archivePath, files);
+  } else {
+    for (const auto &file : files) {
+      const auto path = temporary.path() / file;
+      std::filesystem::create_directories(path.parent_path());
+      std::ofstream(path) << "entry";
+    }
+  }
+  const auto storagePath = [&](const std::string &file) {
+    return archived ? archive_file::makeVirtualPath(archivePath, file)
+                    : temporary.path() / file;
+  };
+  const std::vector<std::string_view> extensions{"flac", "wav", "ogg", "mp3"};
+  for (const auto &[requested, expected] : std::vector<std::pair<std::string, std::string>>{
+           {"exact.wav", "exact.wav"}, {"preferred.aif", "preferred.flac"},
+           {"compressed.wav", "compressed.ogg"}, {"last.wav", "last.mp3"},
+           {"extensionless", "extensionless.ogg"},
+           {"folder/deep.song.wav", "folder/deep.song.ogg"}}) {
+    const auto resolved = archive_file::findFileWithExtensions(storagePath(requested), extensions);
+    assert(resolved == storagePath(expected));
+  }
+  assert(!archive_file::findFileWithExtensions(storagePath("missing.wav"), extensions));
+  assert(!archive_file::findFileWithExtensions(storagePath("compressed.wav"), {}));
+  assert(archive_file::findFileWithExtensions(storagePath("image.bmp"), {"png"}) ==
+         storagePath("image.png"));
+}
+
 void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "lied-central-dir.zip";
@@ -663,6 +1204,20 @@ void testBzipZipFallbackStopsBeforeOversizedAllocation() {
     assert(!succeeded && bytes.empty());
     assert(bounded_allocation_probe::largest <= budget);
     assert(error.find("exceeds bounded read limit") != std::string::npos);
+    bool consumed = false;
+    bounded_allocation_probe::largest = 0;
+    bounded_allocation_probe::enabled = true;
+    const bool streamed = archive_file::readArchiveEntriesStreamingBounded(
+        forged, {"artwork.png"}, [&](archive_file::FileData &&) { consumed = true; return true; }, budget, &error);
+    bounded_allocation_probe::enabled = false;
+    assert(!streamed && !consumed && bounded_allocation_probe::largest <= budget);
+    archive_file::UnzipBudget unzipBudget{.limits = {.maximumWorkers = 1, .maximumMemoryBytes = budget}};
+    bounded_allocation_probe::largest = 0;
+    bounded_allocation_probe::enabled = true;
+    const auto unzipped = archive_file::unzipArchiveFully(forged, temporary.path() / std::to_string(budget),
+        &error, nullptr, nullptr, nullptr, false, nullptr, &unzipBudget);
+    bounded_allocation_probe::enabled = false;
+    assert(!unzipped && unzipBudget.writtenBytes == 0 && bounded_allocation_probe::largest <= budget);
   }
   std::vector<unsigned char> bytes;
   assert(archive_file::readFileBounded(
@@ -863,6 +1418,1149 @@ void testDeltaFilteredSevenZipUsesSdk() {
   }));
 }
 
+void testBoundedStreamingRejectsOversizedPayload() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "bounded.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(128 * 1024, 'x'), true);
+  std::string error;
+  std::size_t received = 0;
+  const auto consume = [&](archive_file::FileData &&file) {
+    ++received;
+    assert(file.bytes.size() <= 128 * 1024);
+    return true;
+  };
+  assert(!archive_file::readArchiveEntriesStreamingBounded(path, {"payload.bin"}, consume, 1024, &error));
+  assert(received == 0 && !error.empty());
+  assert(archive_file::readArchiveEntriesStreamingBounded(path, {"payload.bin"}, consume, 128 * 1024, &error));
+  assert(received == 1);
+  archive_file::clearArchiveIndexCacheForTesting();
+  assert(understateZipUncompressedSizes(path, "payload.bin", 1));
+  assert(!archive_file::readArchiveEntriesStreamingBounded(path, {"payload.bin"}, consume, 1024, &error));
+  assert(received == 1);
+}
+
+void testConcurrentReaderRejectsOversizedPayload() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "bounded-concurrent.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(128 * 1024, 'x'), true);
+  std::atomic_size_t received = 0;
+  std::string error;
+  assert(!archive_file::readArchiveEntriesConcurrently(path, {"payload.bin"},
+      [&](archive_file::FileData &&) { ++received; return true; }, 2, 1024, &error));
+  assert(received == 0 && !error.empty());
+}
+
+void testSerialZipUnzipDoesNotMaterializeLargeMembers() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "large.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(4 * 1024 * 1024, 'x'), true);
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 1, .maximumMemoryBytes = 1024 * 1024}};
+  bounded_allocation_probe::largest = 0;
+  bounded_allocation_probe::enabled = true;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, nullptr, nullptr, true, nullptr, &budget);
+  bounded_allocation_probe::enabled = false;
+  assert(result && std::filesystem::file_size(result->outputFolder / "payload.bin") == 4 * 1024 * 1024);
+  assert(bounded_allocation_probe::largest < 1024 * 1024);
+}
+
+void testFullUnzipCountsEntriesAndImplicitDirectories() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "deep.zip";
+  writeStoredZipContents(path, "first/second/empty.bin", "");
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveEntries = 2}};
+  std::string error;
+  bool prepared = false;
+  const auto rejected = archive_file::unzipArchiveFully(path, temporary.path() / "rejected", &error,
+      nullptr, nullptr, nullptr, true, [&](const auto &, const auto &) { prepared = true; return true; }, &budget);
+  assert(!rejected && !prepared && error.find("entry-count") != std::string::npos);
+  archive_file::UnzipBudget shared{.limits = {.maximumArchiveEntries = 3, .maximumTotalEntries = 5}};
+  const auto first = archive_file::unzipArchiveFully(path, temporary.path() / "accepted", &error,
+      nullptr, nullptr, nullptr, true, nullptr, &shared);
+  assert(first && shared.admittedEntries == 3);
+  const auto reused = archive_file::unzipArchiveFully(path, temporary.path() / "accepted", &error,
+      nullptr, nullptr, nullptr, true, nullptr, &shared);
+  assert(reused && shared.admittedEntries == 3);
+  const auto second = archive_file::unzipArchiveFully(path, temporary.path() / "second", &error,
+      nullptr, nullptr, nullptr, true, nullptr, &shared);
+  assert(!second && shared.admittedEntries == 3 && shared.exhausted);
+  assert(std::filesystem::exists(path));
+}
+
+void testFullUnzipCountsExplicitDirectoriesAndEmptyFiles(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("empty-entries" + extension);
+  auto writer = makeArchiveWriteHandle();
+  assert((extension == ".zip" ? archive_write_set_format_zip(writer.get()) :
+      extension == ".7z" ? archive_write_set_format_7zip(writer.get()) :
+      archive_write_set_format_pax_restricted(writer.get())) == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+  for (const auto *name : {"dir/", "dir/empty.bin", "other.bin"}) {
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name);
+    archive_entry_set_filetype(entry.get(), std::string_view(name).ends_with('/') ? AE_IFDIR : AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0755);
+    archive_entry_set_size(entry.get(), 0);
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  std::string error;
+  archive_file::UnzipBudget exact{.limits = {.maximumArchiveEntries = 3, .maximumTotalEntries = 3}};
+  const auto accepted = archive_file::unzipArchiveFully(path, temporary.path() / "exact", &error,
+      nullptr, nullptr, nullptr, true, nullptr, &exact);
+  assert(accepted && exact.admittedEntries == 3 && accepted->fileCount == 2);
+  archive_file::UnzipBudget small{.limits = {.maximumArchiveEntries = 2}};
+  bool prepared = false;
+  assert(!archive_file::unzipArchiveFully(path, temporary.path() / "small", &error,
+      nullptr, nullptr, nullptr, true, [&](const auto &, const auto &) { prepared = true; return true; }, &small));
+  assert(!prepared && error.find("entry-count") != std::string::npos);
+}
+
+void testFullUnzipPreservesUnownedHashedFallback() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "packed.zip";
+  const auto root = temporary.path() / "output";
+  writeStoredZipContents(path, "payload.bin", "archive payload");
+  for (int candidate = 1; candidate <= 100; ++candidate) {
+    std::filesystem::create_directories(root / (candidate == 1 ? "packed" : "packed " + std::to_string(candidate)));
+  }
+  std::string error;
+  const auto first = archive_file::unzipArchiveFully(path, root, &error);
+  assert(first);
+  std::ofstream(first->outputFolder / "precious.txt") << "unrelated user data";
+  std::filesystem::remove(first->outputFolder / ".asobmashow_unzip_complete");
+  const auto second = archive_file::unzipArchiveFully(path, root, &error);
+  assert(!second || second->outputFolder != first->outputFolder);
+  std::ifstream preserved(first->outputFolder / "precious.txt");
+  assert(std::string((std::istreambuf_iterator<char>(preserved)), {}) == "unrelated user data");
+}
+
+void testFullUnzipRejectsReservedRootNames() {
+  for (const std::string name : {".asobmashow_unzip_incomplete", ".asobmashow_unzip_complete",
+       ".asobmashow_unzip_complete.tmp", ".ASOBMASHOW_UNZIP_COMPLETE",
+       ".asobmashow_unzip_incomplete/child.bin", ".asobmashow_unzip_complete. "}) {
+    TempDirectory temporary;
+    const auto path = temporary.path() / "reserved.zip";
+    writeStoredZipContents(path, name, "archive payload");
+    bool prepared = false;
+    std::string error;
+    const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+        nullptr, nullptr, nullptr, true, [&](const auto &, const auto &) { prepared = true; return true; });
+    assert(!result && !prepared && error.find("reserved") != std::string::npos);
+    assert(std::filesystem::exists(path));
+  }
+  TempDirectory temporary;
+  const auto path = temporary.path() / "nested.zip";
+  writeStoredZipContents(path, "song/.asobmashow_unzip_complete", "ordinary nested file");
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error);
+  assert(result);
+  std::ifstream nested(result->outputFolder / "song/.asobmashow_unzip_complete");
+  assert(std::string((std::istreambuf_iterator<char>(nested)), {}) == "ordinary nested file");
+}
+
+void testMixedEncryptionSevenZipRejectsFullUnzip(const std::string &cacheState) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "mixed.7z";
+  const auto cacheDirectory = temporary.path() / "cache";
+  std::ofstream archive(path, std::ios::binary);
+  archive.write(reinterpret_cast<const char *>(archive_sevenzip_fixtures::mixedEncryption),
+                sizeof(archive_sevenzip_fixtures::mixedEncryption));
+  archive.close();
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  if (cacheState != "cold") {
+    assert(archive_file::listEntries(path, entries, &error));
+    assert(entries.size() == 1 && entries.front().path == "chart.bms");
+    if (cacheState == "legacy") {
+      const auto cacheFile = std::filesystem::directory_iterator(cacheDirectory)->path();
+      std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+      cache.put(4);
+      assert(cache.good());
+      cache.close();
+      std::filesystem::resize_file(cacheFile, std::filesystem::file_size(cacheFile) - 1);
+    }
+    if (cacheState != "memory") {
+      archive_file::clearArchiveIndexCacheForTesting();
+      archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+    }
+    if (cacheState == "disk") assert(archive_file::listEntries(path, entries, &error));
+  }
+  for (const bool reuse : {false, true}) {
+    bool prepared = false;
+    const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+        nullptr, nullptr, nullptr, reuse,
+        [&](const auto &, const auto &) { prepared = true; return true; });
+    assert(!result && !prepared && error.find("encrypted") != std::string::npos);
+    assert(std::filesystem::exists(path));
+    assert(!std::filesystem::exists(temporary.path() / "output"));
+  }
+  assert(archive_file::listEntries(path, entries, &error));
+  assert(entries.size() == 1 && entries.front().path == "chart.bms");
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, "chart.bms"), bytes, &error));
+  assert(std::string(bytes.begin(), bytes.end()) == archive_sevenzip_fixtures::mixedChart);
+  const bool restoredFromDisk = archive_file::debugLogText().find(
+      "Loaded archive index from disk cache: " + path.string()) != std::string::npos;
+  assert(restoredFromDisk == (cacheState == "disk"));
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testForgedEncryptionFlagCannotCertifyFullUnzip(const std::string &mode) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "mixed.7z";
+  const auto cacheDirectory = temporary.path() / "cache";
+  const auto outputRoot = temporary.path() / "output";
+  const auto completedFolder = outputRoot / "mixed";
+  std::ofstream archive(path, std::ios::binary);
+  archive.write(reinterpret_cast<const char *>(archive_sevenzip_fixtures::mixedEncryption),
+                sizeof(archive_sevenzip_fixtures::mixedEncryption));
+  archive.close();
+  const auto identity = archive_source_identity::KeyForPath(path);
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error));
+  const auto cacheFile = std::filesystem::directory_iterator(cacheDirectory)->path();
+  {
+    std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+    cache.seekg(-1, std::ios::end);
+    assert(cache.get() == 1);
+    cache.seekp(-1, std::ios::end);
+    cache.put(0);
+    assert(cache.good());
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  if (mode != "disk") {
+    assert(archive_file::listEntries(path, entries, &error));
+    assert(entries.size() == 1 && entries.front().path == "chart.bms");
+    assert(archive_file::debugLogText().find("Loaded archive index from disk cache: " +
+        path.string()) != std::string::npos);
+  }
+  if (mode == "reuse") {
+    std::filesystem::create_directories(completedFolder);
+    std::ofstream(completedFolder / "chart.bms") << archive_sevenzip_fixtures::mixedChart;
+    std::ofstream(completedFolder / ".asobmashow_unzip_complete") << identity << '\n' << path.string() << '\n';
+    assert(archive_file::unzipFolderHasMatchingCompleteMarker(completedFolder, path, identity));
+  }
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 1}};
+  bool prepared = false;
+  const auto result = archive_file::unzipArchiveFully(path, outputRoot, &error,
+      nullptr, nullptr, nullptr, mode == "reuse",
+      [&](const auto &, const auto &) { prepared = true; return true; }, &budget);
+  assert(!result && !prepared && error.find("encrypted") != std::string::npos);
+  assert(archive_source_identity::KeyForPath(path) == identity);
+  assert(mode == "reuse" || !std::filesystem::exists(outputRoot));
+  assert(!std::filesystem::exists(outputRoot / "mixed 2"));
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testForgedManifestCannotCertifyFullUnzip(const std::string &mode) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "manifest.zip";
+  const auto cacheDirectory = temporary.path() / "cache";
+  writeStoredZip(path, {"first.bms", "second.bms"});
+  const auto identity = archive_source_identity::KeyForPath(path);
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error));
+  const auto cacheFile = std::filesystem::directory_iterator(cacheDirectory)->path();
+  std::ifstream input(cacheFile, std::ios::binary);
+  std::string bytes((std::istreambuf_iterator<char>(input)), {});
+  input.close();
+  std::size_t offset = 1;
+  const auto readSize = [&] {
+    std::uint64_t value = 0;
+    assert(offset + sizeof(value) <= bytes.size());
+    std::memcpy(&value, bytes.data() + offset, sizeof(value));
+    offset += sizeof(value);
+    return value;
+  };
+  const auto keySize = readSize();
+  offset += keySize + 8 + 8 + 1 + 1;
+  const auto countOffset = offset;
+  assert(readSize() == 2);
+  const auto firstLength = readSize();
+  assert(bytes.substr(offset, firstLength) == "first.bms");
+  if (mode == "rename") {
+    bytes.replace(offset, firstLength, "alias.bms");
+  } else {
+    offset += firstLength + 1 + 8 + 8 + 8 + 1;
+    const auto secondOffset = offset;
+    const auto secondLength = readSize();
+    assert(bytes.substr(offset, secondLength) == "second.bms");
+    bytes.erase(secondOffset, 8 + secondLength + 1 + 8 + 8 + 8 + 1);
+    const std::uint64_t count = 1;
+    std::memcpy(bytes.data() + countOffset, &count, sizeof(count));
+  }
+  std::ofstream(cacheFile, std::ios::binary | std::ios::trunc).write(bytes.data(), bytes.size());
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(path, entries, &error));
+  assert(entries.size() == (mode == "rename" ? 2 : 1));
+  assert(entries.front().path == (mode == "rename" ? "alias.bms" : "first.bms"));
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 1,
+      .maximumArchiveEntries = mode == "limit" ? 1u : 100u}};
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, nullptr, nullptr, false, nullptr, &budget);
+  if (mode == "limit") {
+    assert(!result && budget.exhausted && error.find("entry-count") != std::string::npos);
+    assert(!std::filesystem::exists(temporary.path() / "output"));
+  } else {
+    assert(result && result->fileCount == 2);
+    for (const auto *name : {"first.bms", "second.bms"}) {
+      std::ifstream extracted(result->outputFolder / name, std::ios::binary);
+      assert(std::string((std::istreambuf_iterator<char>(extracted)), {}) == "entry");
+    }
+    assert(!std::filesystem::exists(result->outputFolder / "alias.bms"));
+  }
+  assert(archive_source_identity::KeyForPath(path) == identity);
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testLiveManifestPromotionCoalescesAndCancelsWaiters() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "promotion.zip";
+  const auto cacheDirectory = temporary.path() / "cache";
+  writeStoredZip(path, {"song/chart.bms"});
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(path, entries));
+  archive_file::resetSingleFlightWaiterCountForTesting();
+  std::promise<void> paused;
+  auto pausedFuture = paused.get_future();
+  std::promise<void> resume;
+  auto resumeFuture = resume.get_future().share();
+  auto builder = std::async(std::launch::async, [&] {
+    int checkpoints = 0;
+    return archive_file::unzipArchiveFully(path, temporary.path() / "builder", nullptr,
+        nullptr, nullptr, [&] {
+          if (++checkpoints == 2) {
+            paused.set_value();
+            assert(resumeFuture.wait_for(10s) == std::future_status::ready);
+          }
+          return true;
+        });
+  });
+  assert(pausedFuture.wait_for(10s) == std::future_status::ready);
+  auto healthy = std::async(std::launch::async, [&] {
+    return archive_file::unzipArchiveFully(path, temporary.path() / "healthy");
+  });
+  std::stop_source stop;
+  const auto token = stop.get_token();
+  std::string cancelledError;
+  auto cancelled = std::async(std::launch::async, [&] {
+    return archive_file::unzipArchiveFully(path, temporary.path() / "cancelled", &cancelledError, &token);
+  });
+  const auto deadline = std::chrono::steady_clock::now() + 2s;
+  while (archive_file::singleFlightWaiterCountForTesting() < 2 && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(1ms);
+  }
+  const auto waiterCount = archive_file::singleFlightWaiterCountForTesting();
+  stop.request_stop();
+  const bool cancelledWhilePaused = cancelled.wait_for(2s) == std::future_status::ready;
+  assert(archive_file::listEntries(path, entries));
+  resume.set_value();
+  assert(waiterCount == 2 && cancelledWhilePaused);
+  assert(!cancelled.get() && cancelledError == "Unzip cancelled");
+  assert(builder.get() && healthy.get());
+  assert(archive_file::unzipArchiveFully(path, temporary.path() / "repeat"));
+  const auto lines = archive_file::debugLogLines();
+  const auto indexed = std::count_if(lines.begin(), lines.end(), [&](const auto &line) {
+    return line.find("Indexed archive with ") != std::string::npos &&
+           line.find(path.string()) != std::string::npos;
+  });
+  assert(indexed == 2);
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testFullUnzipIncompleteMarkerRecordsOwnership() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "cancelled.zip";
+  writeStoredZipContents(path, "payload.bin", "archive payload");
+  std::stop_source stop;
+  const auto token = stop.get_token();
+  std::filesystem::path folder;
+  std::string key;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      &token, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0) stop.request_stop();
+      }, nullptr, true, [&](const auto &destination, const auto &identity) {
+        folder = destination;
+        key = identity;
+        return true;
+      });
+  assert(!result && stop.stop_requested());
+  std::ifstream marker(folder / ".asobmashow_unzip_incomplete");
+  std::string actualKey, actualPath;
+  assert(std::getline(marker, actualKey) && std::getline(marker, actualPath));
+  assert(actualKey == key && std::filesystem::path(actualPath) == path);
+}
+
+void testUnzipMarkerMatchesRelocatedContainer() {
+  TempDirectory temporary;
+  const auto previous = temporary.path() / "old-container/Documents/archive.zip";
+  const auto current = temporary.path() / "new-container/Documents/archive.zip";
+  const auto folder = temporary.path() / "output";
+  std::filesystem::create_directory(folder);
+  std::ofstream(folder / ".asobmashow_unzip_incomplete") << "identity\n" << previous.string() << '\n';
+  archive_file::setCachePathNormalizer([&](std::filesystem::path &path) {
+    if (path == previous || path == current) path = "Documents/archive.zip";
+  });
+  const bool matches = archive_file::unzipFolderHasMatchingIncompleteMarker(folder, current, "identity");
+  archive_file::setCachePathNormalizer({});
+  assert(matches);
+}
+
+void testFullUnzipRejectsBudgetBeforePreparingOutput() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "oversized.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(1024, 'x'), true);
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 1023}};
+  bool prepared = false;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      [&](const auto &, const auto &) { prepared = true; return true; }, &budget);
+  assert(!result && !prepared && budget.exhausted && budget.writtenBytes == 0);
+  assert(error.find("expanded-byte limit") != std::string::npos);
+}
+
+void writeFullUnzipBudgetFixture(const std::filesystem::path &path, std::size_t bytes = 1024) {
+  auto writer = makeArchiveWriteHandle();
+  const auto extension = path.extension();
+  const int format = extension == ".7z" ? archive_write_set_format_7zip(writer.get()) :
+      extension == ".zip" ? archive_write_set_format_zip(writer.get()) :
+                            archive_write_set_format_pax_restricted(writer.get());
+  assert(format == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+  const std::string payload(bytes, 'x');
+  for (const auto *name : {"first.bin", "second.bin"}) {
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name);
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), payload.size());
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), payload.data(), payload.size()) == static_cast<la_ssize_t>(bytes));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testSingleArchiveOverlapsDecodingAndWriting(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("pipeline" + extension);
+  writeFullUnzipBudgetFixture(path, 1024 * 1024);
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 2}};
+  std::set<std::thread::id> threads;
+  std::mutex mutex;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, [&] {
+        std::lock_guard lock(mutex);
+        threads.insert(std::this_thread::get_id());
+        return true;
+      }, false, nullptr, &budget);
+  assert(result && threads.size() == 2 && budget.writtenBytes == 2 * 1024 * 1024);
+  for (const auto *name : {"first.bin", "second.bin"}) {
+    std::ifstream input(result->outputFolder / name, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    assert(bytes == std::string(1024 * 1024, 'x'));
+  }
+}
+
+void testParallelZipPreservesUnsupportedCompressionFallback() {
+  constexpr unsigned char fixture[] = {
+      0x50,0x4b,0x03,0x04,0x2e,0x00,0x00,0x00,0x0c,0x00,0x23,0x8f,0x2b,0x5d,0xb9,0x97,
+      0x55,0x7c,0x2d,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x09,0x00,0x00,0x00,0x66,0x69,
+      0x72,0x73,0x74,0x2e,0x62,0x69,0x6e,0x42,0x5a,0x68,0x39,0x31,0x41,0x59,0x26,0x53,
+      0x59,0x51,0xd4,0xf6,0x50,0x00,0x00,0x04,0x41,0x00,0xc0,0x00,0x20,0x00,0x00,0x08,
+      0x20,0x00,0x30,0xcc,0x05,0x53,0x6a,0x62,0x28,0x3c,0x5d,0xc9,0x14,0xe1,0x42,0x41,
+      0x47,0x53,0xd9,0x40,0x50,0x4b,0x03,0x04,0x14,0x00,0x00,0x00,0x08,0x00,0x23,0x8f,
+      0x2b,0x5d,0xec,0x0a,0x0d,0x43,0x0b,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x0a,0x00,
+      0x00,0x00,0x73,0x65,0x63,0x6f,0x6e,0x64,0x2e,0x62,0x69,0x6e,0x4b,0x4a,0x1a,0x05,
+      0xa3,0x60,0x14,0x8c,0x54,0x00,0x00,0x50,0x4b,0x01,0x02,0x2e,0x03,0x2e,0x00,0x00,
+      0x00,0x0c,0x00,0x23,0x8f,0x2b,0x5d,0xb9,0x97,0x55,0x7c,0x2d,0x00,0x00,0x00,0x00,
+      0x04,0x00,0x00,0x09,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,
+      0x01,0x00,0x00,0x00,0x00,0x66,0x69,0x72,0x73,0x74,0x2e,0x62,0x69,0x6e,0x50,0x4b,
+      0x01,0x02,0x14,0x03,0x14,0x00,0x00,0x00,0x08,0x00,0x23,0x8f,0x2b,0x5d,0xec,0x0a,
+      0x0d,0x43,0x0b,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x0a,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x01,0x54,0x00,0x00,0x00,0x73,0x65,0x63,0x6f,
+      0x6e,0x64,0x2e,0x62,0x69,0x6e,0x50,0x4b,0x05,0x06,0x00,0x00,0x00,0x00,0x02,0x00,
+      0x02,0x00,0x6f,0x00,0x00,0x00,0x87,0x00,0x00,0x00,0x00,0x00};
+  TempDirectory temporary;
+  for (const bool reversed : {false, true}) {
+    const auto path = temporary.path() / (reversed ? "reversed.zip" : "mixed.zip");
+    std::vector<unsigned char> contents(std::begin(fixture), std::end(fixture));
+    if (reversed) {
+      contents.clear();
+      contents.insert(contents.end(), fixture + 84, fixture + 135);
+      contents.insert(contents.end(), fixture, fixture + 84);
+      contents.insert(contents.end(), fixture + 190, fixture + 246);
+      contents.insert(contents.end(), fixture + 135, fixture + 190);
+      contents.insert(contents.end(), fixture + 246, std::end(fixture));
+      writeLeU32(contents.data() + 135 + 42, 0);
+      writeLeU32(contents.data() + 191 + 42, 51);
+    }
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(contents.data()), contents.size());
+    output.close();
+    for (std::size_t workers : {1, 4}) {
+      archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers}};
+      std::string error;
+      const auto result = archive_file::unzipArchiveFully(
+          path, temporary.path() / (std::to_string(workers) + (reversed ? "-reversed" : "")), &error, nullptr,
+          nullptr, nullptr, false, nullptr, &budget);
+      assert(result && budget.writtenBytes == 2048);
+      for (const auto &[name, value] : {std::pair{"first.bin", 'a'}, {"second.bin", 'b'}}) {
+        std::ifstream input(result->outputFolder / name, std::ios::binary);
+        const std::string actual((std::istreambuf_iterator<char>(input)), {});
+        assert(actual == std::string(1024, value));
+      }
+    }
+  }
+}
+
+void testSingleEntryZipPreservesIndexedFilename() {
+  static constexpr unsigned char fixture[] = {
+      0x50,0x4b,0x03,0x04,0x14,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x21,0x00,0x63,0xf0,
+      0xd7,0x48,0x0b,0x00,0x00,0x00,0x00,0x04,0x00,0x00,0x0a,0x00,0x13,0x00,0x6c,0x69,
+      0x73,0x74,0x65,0x64,0x2e,0x62,0x69,0x6e,0x75,0x70,0x0f,0x00,0x01,0xaa,0xcd,0x69,
+      0xc3,0x6d,0x61,0x70,0x70,0x65,0x64,0x2e,0x62,0x69,0x6e,0xab,0xa8,0x18,0x05,0xa3,
+      0x60,0x14,0x8c,0x54,0x00,0x00,0x50,0x4b,0x01,0x02,0x14,0x03,0x14,0x00,0x00,0x00,
+      0x08,0x00,0x00,0x00,0x21,0x00,0x63,0xf0,0xd7,0x48,0x0b,0x00,0x00,0x00,0x00,0x04,
+      0x00,0x00,0x0a,0x00,0x13,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x01,
+      0x00,0x00,0x00,0x00,0x6c,0x69,0x73,0x74,0x65,0x64,0x2e,0x62,0x69,0x6e,0x75,0x70,
+      0x0f,0x00,0x01,0xaa,0xcd,0x69,0xc3,0x6d,0x61,0x70,0x70,0x65,0x64,0x2e,0x62,0x69,
+      0x6e,0x50,0x4b,0x05,0x06,0x00,0x00,0x00,0x00,0x01,0x00,0x01,0x00,0x4b,0x00,0x00,
+      0x00,0x46,0x00,0x00,0x00,0x00,0x00};
+  TempDirectory temporary;
+  const auto path = temporary.path() / "unicode-path.zip";
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
+  output.close();
+  for (std::size_t workers : {1, 4}) {
+    archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers}};
+    std::string error;
+    const auto result = archive_file::unzipArchiveFully(
+        path, temporary.path() / std::to_string(workers), &error, nullptr,
+        nullptr, nullptr, false, nullptr, &budget);
+    assert(result && budget.writtenBytes == 1024);
+    std::ifstream input(result->outputFolder / "listed.bin", std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    assert(actual == std::string(1024, 'x'));
+    assert(!std::filesystem::exists(result->outputFolder / "mapped.bin"));
+  }
+}
+
+void testFullSevenZipKeepsCompressionBlocksTogether(const unsigned char *fixture,
+                                                    std::size_t fixtureSize,
+                                                    std::size_t workers,
+                                                    std::size_t expectedThreads,
+                                                    std::uint64_t memory = 256ull * 1024 * 1024,
+                                                    bool verifyPreparedHeaders = false) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "blocks.7z";
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(fixture), fixtureSize);
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 2 * 1024 * 1024,
+      .maximumTotalBytes = 2 * 1024 * 1024, .maximumWorkers = workers,
+      .maximumMemoryBytes = memory}};
+  std::set<std::thread::id> threads;
+  std::uint64_t completed = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.fraction > 0.08 && progress.fraction < 0.98 && progress.current > 0) {
+          if (verifyPreparedHeaders && completed == 0) {
+            std::size_t prepared = 0;
+            for (const auto &line : archive_file::debugLogLines()) {
+              if (line.find("Prepared full 7-Zip extraction worker: " + path.string()) != std::string::npos) ++prepared;
+            }
+            assert(prepared == expectedThreads);
+          }
+          assert(progress.current >= completed && progress.total == 9);
+          completed = progress.current;
+          threads.insert(std::this_thread::get_id());
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result && result->fileCount == 9 && completed == 9);
+  assert(budget.writtenBytes == 2 * 1024 * 1024 && budget.pendingWriteBytes == 0);
+  assert(std::filesystem::is_directory(result->outputFolder / "emptydir"));
+  assert(std::filesystem::file_size(result->outputFolder / "empty.bin") == 0);
+  for (std::size_t index = 0; index < 8; ++index) {
+    std::ifstream input(result->outputFolder / ("file" + std::to_string(index) + ".bin"), std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    assert(actual == std::string(256 * 1024, static_cast<char>('a' + index / 2)));
+  }
+  std::cerr << "7z extraction progress threads: " << threads.size() << " expected=" << expectedThreads << '\n';
+  assert(threads.size() == expectedThreads);
+}
+
+void testFullSevenZipDictionaryAdmission(unsigned char dictionary, std::size_t expectedThreads) {
+  std::vector<unsigned char> bytes(std::begin(archive_sevenzip_fixtures::blocksLzma2),
+                                   std::end(archive_sevenzip_fixtures::blocksLzma2));
+  for (std::size_t offset : {0x293, 0x298, 0x29d, 0x2a2}) {
+    assert(bytes[offset] == 0x10);
+    bytes[offset] = dictionary;
+  }
+  const auto checksum = [&](std::size_t begin, std::size_t end) {
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t offset = begin; offset < end; ++offset) {
+      crc ^= bytes[offset];
+      for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+    return crc ^ 0xffffffffu;
+  };
+  writeLeU32(bytes.data() + 28, checksum(32 + readLeU32(bytes.data() + 12), bytes.size()));
+  writeLeU32(bytes.data() + 8, checksum(12, 32));
+  testFullSevenZipKeepsCompressionBlocksTogether(bytes.data(), bytes.size(), 4, expectedThreads);
+}
+
+void testFullRarUsesIndependentEntryWorkers(bool rar4, bool solid, std::size_t workers,
+                                           std::uint64_t memory = 256ull * 1024 * 1024,
+                                           bool mixedVersions = false) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "parallel.rar";
+  const auto *bytes = rar4 ? archive_rar_fixtures::rar4 :
+      solid ? archive_rar_fixtures::solid : archive_rar_fixtures::nonSolid;
+  const auto size = rar4 ? sizeof(archive_rar_fixtures::rar4) : sizeof(archive_rar_fixtures::nonSolid);
+  std::vector<unsigned char> fixture(bytes, bytes + size);
+  if (mixedVersions) {
+    const std::size_t header = 90;
+    fixture[header + 24] = 29;
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t offset = header + 2; offset < header + 50; ++offset) {
+      crc ^= fixture[offset];
+      for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+    crc ^= 0xffffffffu;
+    fixture[header] = static_cast<unsigned char>(crc);
+    fixture[header + 1] = static_cast<unsigned char>(crc >> 8);
+  }
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(fixture.data()), fixture.size());
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = rar4 ? 48ull : 4ull * 1024 * 1024,
+      .maximumTotalBytes = rar4 ? 48ull : 4ull * 1024 * 1024, .maximumWorkers = workers,
+      .maximumMemoryBytes = memory}};
+  std::set<std::thread::id> threads;
+  std::uint64_t completed = 0;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.fraction > 0.08 && progress.fraction < 0.98 && progress.current > 0) {
+          assert(progress.current >= completed);
+          completed = progress.current;
+          threads.insert(std::this_thread::get_id());
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result);
+  std::cerr << "RAR workers: version=" << (rar4 ? 4 : 5) << " solid=" << solid
+            << " requested=" << workers << " observed=" << threads.size() << '\n';
+  assert(threads.size() == (solid || mixedVersions || workers == 1 || (rar4 && memory < 640ull * 1024 * 1024)
+      ? 1 : rar4 ? 3 : workers - 1));
+  const std::size_t fileCount = rar4 ? 3 : 4;
+  assert(completed == fileCount);
+  assert(budget.writtenBytes == (rar4 ? 48 : 4 * 1024 * 1024));
+  assert(budget.pendingWriteBytes == 0);
+  for (std::size_t index = 0; index < fileCount; ++index) {
+    const std::string name = rar4 ? index == 0 ? "test.txt" :
+        index == 1 ? "testlink" : "testdir/test.txt" : "file" + std::to_string(index) + ".bin";
+    std::ifstream input(result->outputFolder / name, std::ios::binary);
+    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    const std::string expected = rar4 ? index == 1 ? "test.txt" : "test text document\r\n" :
+        std::string(1024 * 1024, static_cast<char>('a' + index));
+    assert(actual == expected);
+  }
+}
+
+void testFullRarSerializesLargeDictionaries() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "constrained.rar";
+  std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
+                                   std::end(archive_rar_fixtures::nonSolid));
+  for (std::size_t header : {25, 123, 221, 319}) {
+    bytes[header + 26] = 0x5b;
+    std::uint32_t crc = 0xffffffffu;
+    for (std::size_t offset = header + 4; offset < header + 38; ++offset) {
+      crc ^= bytes[offset];
+      for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+    }
+    writeLeU32(bytes.data() + header, crc ^ 0xffffffffu);
+  }
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 256ull * 1024 * 1024}};
+  std::set<std::thread::id> threads;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, [&](const archive_file::UnzipProgress &progress) {
+        if (progress.fraction > 0.08 && progress.fraction < 0.98 && progress.current > 0) {
+          threads.insert(std::this_thread::get_id());
+        }
+      }, nullptr, false, nullptr, &budget);
+  assert(result && threads.size() == 1 && budget.writtenBytes == 4 * 1024 * 1024);
+  std::ifstream input(result->outputFolder / "file0.bin", std::ios::binary);
+  const std::string actual((std::istreambuf_iterator<char>(input)), {});
+  assert(actual == std::string(1024 * 1024, 'a'));
+}
+
+void testParallelSdkFailurePreservesOriginal(int failureKind, bool sevenZip = false) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / (sevenZip ? "failure.7z" : "failure.rar");
+  const auto *fixture = sevenZip ? archive_sevenzip_fixtures::blocksLzma2 : archive_rar_fixtures::nonSolid;
+  const auto size = sevenZip ? sizeof(archive_sevenzip_fixtures::blocksLzma2) : sizeof(archive_rar_fixtures::nonSolid);
+  std::vector<unsigned char> bytes(fixture, fixture + size);
+  if (failureKind == 2) bytes[sevenZip ? 50 : 70] ^= 0x10;
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+  output.close();
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 256ull * 1024 * 1024}};
+  std::stop_source stop;
+  std::atomic_bool pauseCancelled{false};
+  const auto token = stop.get_token();
+  std::filesystem::path folder;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      &token, [&](const archive_file::UnzipProgress &progress) {
+        if (failureKind == 0 && progress.current > 0) stop.request_stop();
+        if (failureKind == 4 && progress.current > 0) pauseCancelled = true;
+      }, [&] { return !pauseCancelled; }, false, [&](const auto &destination, const auto &) {
+        folder = destination;
+        if (failureKind == 1) budget.limits.maximumTotalBytes = 1024 * 1024;
+        if (failureKind == 3) budget.limits.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max();
+        return true;
+      }, &budget);
+  assert(!result && !error.empty());
+  assert(budget.pendingWriteBytes == 0);
+  assert(std::filesystem::exists(path));
+  assert(std::filesystem::exists(folder / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+  bool parallelStarted = false;
+  for (const auto &line : archive_file::debugLogLines()) {
+    parallelStarted = parallelStarted || line.find(std::string("Starting parallel full ") +
+        (sevenZip ? "7-Zip" : "RAR") + " unzip: " + path.string()) != std::string::npos;
+    assert(line.find("Starting batched full unzip: " + path.string()) == std::string::npos);
+  }
+  assert(parallelStarted);
+  if (sevenZip) assert(budget.writtenBytes <= 2 * 1024 * 1024);
+  if (failureKind == 0) assert(error == "Unzip cancelled" && stop.stop_requested());
+  if (failureKind == 4) assert(error == "Unzip cancelled" && pauseCancelled);
+  if (failureKind == 1) assert(budget.exhausted && budget.writtenBytes <= 1024 * 1024 &&
+      error.find("expanded-byte limit") != std::string::npos);
+  if (failureKind == 3) assert(budget.exhausted && budget.writtenBytes == 0 &&
+      error.find("free-space") != std::string::npos);
+}
+
+void testFullRarRebuildsMismatchedCachedPath() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "mismatched.rar";
+  std::ofstream output(path, std::ios::binary);
+  output.write(reinterpret_cast<const char *>(archive_rar_fixtures::rar4), sizeof(archive_rar_fixtures::rar4));
+  output.close();
+  const auto cacheDirectory = temporary.path() / "index";
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error) && entries.size() == 3);
+  assert(entries.front().path == "test.txt");
+  const auto cachePath = std::filesystem::directory_iterator(cacheDirectory)->path();
+  {
+    std::fstream cache(cachePath, std::ios::binary | std::ios::in | std::ios::out);
+    cache.seekg(1);
+    std::uint64_t keySize = 0;
+    cache.read(reinterpret_cast<char *>(&keySize), sizeof(keySize));
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1 + 8 + 8, std::ios::cur);
+    cache.seekp(cache.tellg());
+    cache.put('r');
+    assert(cache.good());
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(path, entries, &error) && entries.front().path == "rest.txt");
+  archive_file::UnzipBudget serialBudget{.limits = {.maximumWorkers = 1}};
+  const auto serial = archive_file::unzipArchiveFully(path, temporary.path() / "serial", &error,
+      nullptr, nullptr, nullptr, false, nullptr, &serialBudget);
+  assert(serial && std::filesystem::exists(path));
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 4,
+      .maximumMemoryBytes = 1024ull * 1024 * 1024}};
+  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+      nullptr, nullptr, nullptr, false, nullptr, &budget);
+  assert(result && std::filesystem::exists(path));
+  for (const auto &folder : {serial->outputFolder, result->outputFolder}) {
+    assert(std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+    assert(!std::filesystem::exists(folder / "rest.txt"));
+    std::ifstream restored(folder / "test.txt", std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(restored)), {}) == "test text document\r\n");
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void writeFullUnzipOutputCollisionFixture(const std::filesystem::path &path,
+                                         const std::vector<std::string> &names) {
+  assert(names.size() == 4);
+  const auto extension = path.extension();
+  if (extension == ".rar") {
+    std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
+                                     std::end(archive_rar_fixtures::nonSolid));
+    const std::array<std::size_t, 4> headers{25, 123, 221, 319};
+    for (std::size_t index = names.size(); index-- > 0;) {
+      const auto header = headers[index];
+      const auto &name = names[index];
+      assert(!name.ends_with('/') && name.size() < 100);
+      assert(bytes[header + 4] == 33 && bytes[header + 28] == 9);
+      bytes.erase(bytes.begin() + header + 29, bytes.begin() + header + 38);
+      bytes.insert(bytes.begin() + header + 29, name.begin(), name.end());
+      bytes[header + 4] = static_cast<unsigned char>(24 + name.size());
+      bytes[header + 28] = static_cast<unsigned char>(name.size());
+      std::uint32_t crc = 0xffffffffu;
+      for (std::size_t offset = header + 4; offset < header + 29 + name.size(); ++offset) {
+        crc ^= bytes[offset];
+        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+      }
+      writeLeU32(bytes.data() + header, crc ^ 0xffffffffu);
+    }
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    output.close();
+    assert(output.good());
+    return;
+  }
+  auto writer = makeArchiveWriteHandle();
+  assert((extension == ".7z" ? archive_write_set_format_7zip(writer.get()) :
+          extension == ".tar" ? archive_write_set_format_pax_restricted(writer.get()) :
+                                archive_write_set_format_zip(writer.get())) == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+  char value = 'a';
+  for (const auto &name : names) {
+    const bool directory = name.ends_with('/');
+    const std::string payload(directory ? 0 : 1024, value++);
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name.c_str());
+    archive_entry_set_filetype(entry.get(), directory ? AE_IFDIR : AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), payload.size());
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), payload.data(), payload.size()) == static_cast<la_ssize_t>(payload.size()));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+}
+
+void testFullUnzipOutputCollisions(const std::string &extension, std::size_t workers,
+                                  const std::string &selectedCase = "") {
+  struct Fixture {
+    std::string name;
+    std::vector<std::string> paths;
+    bool collision;
+  };
+  const std::vector<Fixture> fixtures{
+      {"duplicate", {"before.bin", "same.bin", "same.bin", "after.bin"}, true},
+      {"case", {"before.bin", "File.bin", "file.bin", "after.bin"}, true},
+      {"unicode", {"before.bin", "\xc3\xa9.bin", "e\xcc\x81.bin", "after.bin"}, true},
+      {"directory-case", {"before.bin", "Song/a.bin", "song/b.bin", "after.bin"}, true},
+      {"prefix", {"before.bin", "node", "node/child.bin", "after.bin"}, true},
+      {"prefix-reversed", {"before.bin", "node/child.bin", "node", "after.bin"}, true},
+      {"directory", {"before.bin", "node/", "node", "after.bin"}, true},
+      {"short-name-first", {"before.bin", "LONGFI~1.BIN", "LongFileName.bin", "after.bin"}, false},
+      {"long-name-first", {"before.bin", "LongFileName.bin", "LONGFI~1.BIN", "after.bin"}, false},
+      {"shared-parent", {"song/a.bin", "song/b.bin", "song/sub/c.bin", "song/sub/d.bin"}, false},
+      {"nonalias-prefix", {"song/a", "song/ab", "song/b/a", "song/b/ab"}, false},
+      {"explicit-parent", {"song/", "song/a.bin", "song/b.bin", "song/sub/c.bin"}, false}};
+  bool exercised = false;
+  for (const auto &fixture : fixtures) {
+    if (!selectedCase.empty() && fixture.name != selectedCase) continue;
+    if (fixture.name.ends_with("name-first") && extension != ".zip") continue;
+    if (extension == ".rar" && (fixture.name == "directory" || fixture.name == "explicit-parent")) continue;
+    exercised = true;
+    TempDirectory temporary;
+    bool collision = fixture.collision;
+    if (fixture.name == "case" || fixture.name == "unicode" || fixture.name == "directory-case" ||
+        fixture.name.ends_with("name-first")) {
+      const auto probe = temporary.path() / "probe";
+      std::filesystem::create_directory(probe);
+      if (fixture.name == "directory-case") {
+        assert(std::filesystem::create_directory(probe / "Song"));
+        collision = std::filesystem::exists(probe / "song");
+      } else {
+        std::ofstream output(probe / fixture.paths[1], std::ios::binary);
+        output.put('x');
+        output.close();
+        assert(output.good());
+        collision = std::filesystem::exists(probe / fixture.paths[2]);
+      }
+    }
+    const auto path = temporary.path() / (fixture.name + extension);
+    writeFullUnzipOutputCollisionFixture(path, fixture.paths);
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    assert(archive_file::listEntries(path, entries, &error) && entries.size() == fixture.paths.size());
+    std::multiset<std::string> expectedFiles;
+    for (const auto &name : fixture.paths) {
+      if (!name.ends_with('/')) expectedFiles.insert(name);
+    }
+    std::multiset<std::string> indexedFiles;
+    for (const auto &entry : entries) {
+      if (!entry.directory) indexedFiles.insert(fspath_to_utf8(entry.path));
+    }
+    if (fixture.name == "unicode") {
+      assert(indexedFiles.count("before.bin") == 1 && indexedFiles.count("after.bin") == 1);
+      const auto composedCount = indexedFiles.count(fixture.paths[1]);
+      const auto decomposedCount = indexedFiles.count(fixture.paths[2]);
+      assert(composedCount + decomposedCount == 2);
+      collision = collision || composedCount == 2 || decomposedCount == 2;
+    } else {
+      assert(indexedFiles == expectedFiles);
+    }
+    std::ifstream originalInput(path, std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(originalInput)), {});
+    originalInput.close();
+    const auto outputRoot = temporary.path() / "output";
+    archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers,
+        .maximumMemoryBytes = 256ull * 1024 * 1024}};
+    std::cerr << "Full unzip output collision: " << extension << ' ' << fixture.name
+              << " workers=" << workers << " reject=" << collision << '\n';
+    const auto result = archive_file::unzipArchiveFully(path, outputRoot, &error,
+        nullptr, nullptr, nullptr, false, nullptr, &budget);
+    assert(std::filesystem::exists(path));
+    std::ifstream retainedInput(path, std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(retainedInput)), {}) == original);
+    assert(budget.pendingWriteBytes == 0);
+    if (collision) {
+      assert(!result && !error.empty());
+      assert(budget.writtenBytes == 0);
+      if (std::filesystem::exists(outputRoot)) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(outputRoot)) {
+          assert(entry.path().filename() != ".asobmashow_unzip_complete");
+          assert(entry.path().filename() != ".asobmashow_unzip_complete.tmp");
+          if (entry.is_regular_file() && entry.path().filename() != ".asobmashow_unzip_incomplete") {
+            assert(entry.file_size() == 0);
+          }
+        }
+      }
+    } else {
+      const std::size_t payloadSize = extension == ".rar" ? 1024 * 1024 : 1024;
+      assert(result && result->fileCount == expectedFiles.size());
+      assert(budget.writtenBytes == payloadSize * expectedFiles.size());
+      assert(std::filesystem::exists(result->outputFolder / ".asobmashow_unzip_complete"));
+      assert(!std::filesystem::exists(result->outputFolder / ".asobmashow_unzip_incomplete"));
+      for (std::size_t index = 0; index < fixture.paths.size(); ++index) {
+        const auto destination = result->outputFolder / fixture.paths[index];
+        if (fixture.paths[index].ends_with('/')) {
+          assert(std::filesystem::is_directory(destination));
+          continue;
+        }
+        std::ifstream input(destination, std::ios::binary);
+        const std::string actual((std::istreambuf_iterator<char>(input)), {});
+        assert(actual == std::string(payloadSize, static_cast<char>('a' + index)));
+      }
+    }
+  }
+  assert(exercised);
+}
+
+void testFullUnzipKeepsReservedOutputIdentities(const std::string &extension,
+                                               std::size_t workers) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / ("reservations" + extension);
+  const std::vector<std::string> names{
+      "file0.bin", "file1.bin", "song/file2.bin", "song/file3.bin"};
+  writeFullUnzipOutputCollisionFixture(archivePath, names);
+  const auto identities = temporary.path() / "identities";
+  assert(std::filesystem::create_directory(identities));
+  std::filesystem::path outputFolder;
+  bool captured = false;
+  std::string error;
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers,
+      .maximumMemoryBytes = 256ull * 1024 * 1024}};
+  const auto result = archive_file::unzipArchiveFully(
+      archivePath, temporary.path() / "output", &error, nullptr, nullptr,
+      [&] {
+        if (captured || outputFolder.empty()) return true;
+        for (const auto &name : names) {
+          if (!std::filesystem::is_regular_file(outputFolder / name) ||
+              std::filesystem::file_size(outputFolder / name) != 0) return true;
+        }
+        for (std::size_t index = 0; index < names.size(); ++index) {
+          std::filesystem::create_hard_link(outputFolder / names[index],
+                                            identities / std::to_string(index));
+        }
+        captured = true;
+        return true;
+      }, false, [&](const auto &folder, const auto &) { outputFolder = folder; return true; }, &budget);
+  assert(result && captured);
+  const std::size_t payloadSize = extension == ".rar" ? 1024 * 1024 : 1024;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const auto identity = identities / std::to_string(index);
+    assert(std::filesystem::equivalent(identity, result->outputFolder / names[index]));
+    std::ifstream input(identity, std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(input)), {}) ==
+           std::string(payloadSize, static_cast<char>('a' + index)));
+  }
+}
+
+void testPipelinedUnzipCancellationDrainsWithoutCompleting(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("cancel-pipeline" + extension);
+  writeFullUnzipBudgetFixture(path, 1024 * 1024);
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 2}};
+  std::stop_source stop;
+  const auto token = stop.get_token();
+  const auto caller = std::this_thread::get_id();
+  std::filesystem::path output;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, &token, nullptr, [&] {
+        if (std::this_thread::get_id() != caller) stop.request_stop();
+        return !stop.stop_requested();
+      }, false, [&](const auto &folder, const auto &) { output = folder; return true; }, &budget);
+  assert(!result && stop.stop_requested() && budget.writtenBytes == 0);
+  assert(error == "Unzip cancelled");
+  assert(std::filesystem::exists(path));
+  assert(std::filesystem::exists(output / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+}
+
+void testFullUnzipRuntimeSpaceCheckPreservesIncompleteOutput(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("space" + extension);
+  writeFullUnzipBudgetFixture(path);
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 1}};
+  std::filesystem::path output;
+  bool wroteFile = false;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr,
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0 && progress.fraction < 0.98) {
+          wroteFile = true;
+          budget.limits.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max();
+        }
+      }, nullptr, true,
+      [&](const auto &folder, const auto &) { output = folder; return true; }, &budget);
+  assert(wroteFile && !result && budget.exhausted && budget.writtenBytes == 1024);
+  assert(error.find("free-space") != std::string::npos);
+  assert(std::filesystem::exists(path));
+  assert(std::filesystem::exists(output / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+}
+
+void testFullUnzipRuntimeByteLimitCannotRestartFallback(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("runtime" + extension);
+  writeFullUnzipBudgetFixture(path);
+  const auto cacheDirectory = temporary.path() / "index";
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error) && entries.size() == 2);
+  const auto cachePath = std::filesystem::directory_iterator(cacheDirectory)->path();
+  {
+    std::fstream cache(cachePath, std::ios::binary | std::ios::in | std::ios::out);
+    const auto readSize = [&] {
+      std::uint64_t size = 0;
+      cache.read(reinterpret_cast<char *>(&size), sizeof(size));
+      assert(cache.good());
+      return size;
+    };
+    cache.seekg(1);
+    const auto keySize = readSize();
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1, std::ios::cur);
+    assert(readSize() == 2);
+    for (int entryIndex = 0; entryIndex < 2; ++entryIndex) {
+      const auto pathSize = readSize();
+      cache.seekg(static_cast<std::streamoff>(pathSize) + 1, std::ios::cur);
+      const auto sizeOffset = cache.tellg();
+      cache.seekp(sizeOffset);
+      const std::uint64_t understatedSize = 1;
+      cache.write(reinterpret_cast<const char *>(&understatedSize), sizeof(understatedSize));
+      cache.seekg(sizeOffset + std::streamoff(8 + 8 + 8 + 1));
+    }
+    assert(cache.good());
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(path, entries, &error) && entries.size() == 2);
+  assert(entries[0].size == 1 && entries[1].size == 1);
+  archive_file::UnzipBudget rejected{.limits = {.maximumArchiveBytes = 1024, .maximumWorkers = 1}};
+  assert(!archive_file::unzipArchiveFully(path, temporary.path() / "rejected", &error,
+      nullptr, nullptr, nullptr, false, nullptr, &rejected));
+  assert(rejected.exhausted && rejected.writtenBytes == 0);
+  assert(!std::filesystem::exists(temporary.path() / "rejected/runtime"));
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 2048, .maximumWorkers = 1}};
+  std::filesystem::path output;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      [&](const auto &folder, const auto &) {
+        output = folder;
+        budget.limits.maximumArchiveBytes = 1024;
+        return true;
+      }, &budget);
+  assert(!result && budget.exhausted && budget.writtenBytes == 1024);
+  assert(error.find("expanded-byte limit") != std::string::npos);
+  assert(std::filesystem::file_size(output / "first.bin") == 1024);
+  assert(!std::filesystem::exists(output / "second.bin") ||
+         std::filesystem::file_size(output / "second.bin") == 0);
+  assert(std::filesystem::exists(output / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+  archive_file::setArchiveIndexCacheDirectory({});
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("exact" + extension);
+  writeFullUnzipBudgetFixture(path);
+  archive_file::UnzipBudget budget{
+      .limits = {.maximumArchiveBytes = 2048, .maximumTotalBytes = 2048}};
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      nullptr, &budget);
+  assert(result && !budget.exhausted && budget.writtenBytes == 2048);
+  assert(std::filesystem::file_size(result->outputFolder / "first.bin") == 1024);
+  assert(std::filesystem::file_size(result->outputFolder / "second.bin") == 1024);
+  const auto reused = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      nullptr, &budget);
+  assert(reused && reused->outputFolder == result->outputFolder);
+  assert(!budget.exhausted && budget.writtenBytes == 2048);
+}
+
+void testFullUnzipUnderstatedSizeCannotExceedRuntimeBudget() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "understated.zip";
+  writeStoredZipContents(path, "payload.bin", std::string(128 * 1024, 'x'), true);
+  assert(understateZipUncompressedSizes(path, "payload.bin", 1));
+  archive_file::UnzipBudget budget{.limits = {.maximumArchiveBytes = 1024}};
+  std::filesystem::path output;
+  std::string error;
+  const auto result = archive_file::unzipArchiveFully(
+      path, temporary.path() / "output", &error, nullptr, nullptr, nullptr, true,
+      [&](const auto &folder, const auto &) { output = folder; return true; }, &budget);
+  assert(!result && !output.empty());
+  assert(budget.writtenBytes <= 1024);
+  assert(!std::filesystem::exists(output / ".asobmashow_unzip_complete"));
+  const auto payload = output / "payload.bin";
+  assert(!std::filesystem::exists(payload) || std::filesystem::file_size(payload) <= 1024);
+}
+
 void testFullUnzipHonorsPauseDuringExtraction() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "pause-during-unzip.zip";
@@ -887,6 +2585,41 @@ void testFullUnzipHonorsPauseDuringExtraction() {
   assert(wroteFirstFile);
   assert(pauseCalls > 0);
   assert(error == "Unzip cancelled");
+}
+
+void testArchiveIndexRejectsPreservedMetadataReplacement(bool coldCache,
+                                                        bool replaceFile) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "source.zip";
+  const auto replacementPath = temporary.path() / "replacement.zip";
+  const auto cacheDir = temporary.path() / "indexes";
+  writeStoredZip(archivePath, {"old.wav"});
+  writeStoredZip(replacementPath, {"new.wav"});
+  const auto size = std::filesystem::file_size(archivePath);
+  assert(std::filesystem::file_size(replacementPath) == size);
+  const auto modified = std::filesystem::last_write_time(archivePath);
+  const auto oldKey = archive_file::cacheKeyForPath(archivePath);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1 && entries.front().path == "old.wav");
+  if (replaceFile) {
+    std::filesystem::rename(replacementPath, archivePath);
+  } else {
+    std::filesystem::copy_file(replacementPath, archivePath,
+                               std::filesystem::copy_options::overwrite_existing);
+  }
+  std::filesystem::last_write_time(archivePath, modified);
+  assert(archive_file::cacheKeyForPath(archivePath) == oldKey);
+  if (coldCache) {
+    archive_file::clearArchiveIndexCacheForTesting();
+    archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  }
+  entries.clear();
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1 && entries.front().path == "new.wav");
+  archive_file::clearArchiveIndexCacheForTesting();
 }
 
 void testArchiveIndexPersistsAcrossColdCacheRestart() {
@@ -1068,6 +2801,131 @@ void testArchiveIndexPruningPreservesShortUnrelatedFiles() {
     archive_file::clearArchiveIndexCacheForTesting();
   }
   assert(!threw);
+}
+
+void testCorruptIndexPathIsRebuilt(const std::string &kind) {
+  std::stop_source cancellation;
+  const auto token = cancellation.get_token();
+  std::jthread watchdog([&](std::stop_token stop) {
+    std::mutex mutex;
+    std::condition_variable_any finished;
+    std::unique_lock lock(mutex);
+    finished.wait_for(lock, stop, 2s, [] { return false; });
+    if (stop.stop_requested()) return;
+    cancellation.request_stop();
+    std::cerr << "Requesting cancellation for cached-path unzip: " << kind << '\n';
+    if (!finished.wait_for(lock, stop, 3s, [] { return false; }) && !stop.stop_requested()) {
+      std::cerr << "FAIL: cached-path unzip exceeded process timeout: " << kind << '\n';
+      std::_Exit(86);
+    }
+  });
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "corrupt-path.zip";
+  const auto cacheDirectory = temporary.path() / "idx";
+  const auto outputRoot = temporary.path() / "output";
+  const std::string forged = kind == "root" ? "/ong/chart0.bms" :
+      kind == "traversal" ? "../escaped/reservation.bin" :
+      kind == "dot" ? "song/./chart0.bms" :
+      kind == "normalized-traversal" ? "song/../chart0.bms" :
+      kind == "separators" ? "song//chart0.bms" :
+      kind == "backslash" ? "song\\chart0.bms" :
+      std::string("song/ch\0rt0.bms", 15);
+  const std::string original = kind == "root" ? "song/chart0.bms" :
+      std::string(forged.size() - 4, 'a') + ".bms";
+  writeStoredZip(archivePath, {original, "other.bms"});
+  const auto readBytes = [](const std::filesystem::path &path) {
+    std::ifstream input(path, std::ios::binary);
+    assert(input);
+    return std::string((std::istreambuf_iterator<char>(input)), {});
+  };
+  const auto archiveBytes = readBytes(archivePath);
+  const auto archiveTime = std::filesystem::last_write_time(archivePath);
+  const auto archiveIdentity = archive_source_identity::KeyForPath(archivePath);
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 2 && entries.front().path == original);
+  const auto cacheFile = std::filesystem::directory_iterator(cacheDirectory)->path();
+  const auto originalCache = readBytes(cacheFile);
+  {
+    std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+    const auto readSize = [&] {
+      std::uint64_t value = 0;
+      cache.read(reinterpret_cast<char *>(&value), sizeof(value));
+      assert(cache.good());
+      return value;
+    };
+    cache.seekg(1);
+    const auto keySize = readSize();
+    cache.seekg(static_cast<std::streamoff>(keySize) + 8 + 8 + 1 + 1, std::ios::cur);
+    assert(readSize() == 2);
+    assert(readSize() == forged.size());
+    const auto pathOffset = cache.tellg();
+    cache.seekp(pathOffset);
+    cache.write(forged.data(), static_cast<std::streamsize>(forged.size()));
+    cache.close();
+    assert(cache);
+    auto expectedCache = originalCache;
+    expectedCache.replace(static_cast<std::size_t>(pathOffset), forged.size(), forged);
+    assert(readBytes(cacheFile) == expectedCache);
+  }
+  for (int restart = 0; restart < 2; ++restart) {
+    archive_file::clearArchiveIndexCacheForTesting();
+    archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+    assert(archive_file::listEntries(archivePath, entries, &error));
+    assert(entries.size() == 2 && entries.front().path == original);
+    archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 2}};
+    bool outsideReservation = false;
+    const auto result = archive_file::unzipArchiveFully(archivePath, outputRoot, &error,
+        &token, nullptr, [&] {
+          outsideReservation |= std::filesystem::exists(outputRoot / "escaped");
+          return true;
+        }, false, nullptr, &budget);
+    assert(!outsideReservation && !std::filesystem::exists(outputRoot / "escaped"));
+    assert(result && result->fileCount == 2);
+    assert(std::filesystem::exists(result->outputFolder / original));
+    assert(readBytes(result->outputFolder / original) == "entry");
+    assert(readBytes(result->outputFolder / "other.bms") == "entry");
+    assert(readBytes(archivePath) == archiveBytes);
+    assert(std::filesystem::last_write_time(archivePath) == archiveTime);
+    assert(archive_source_identity::KeyForPath(archivePath) == archiveIdentity);
+    assert(archive_file::listEntries(archivePath, entries, &error));
+    assert(entries.size() == 2 && entries.front().path == original);
+    const bool restoredFromDisk = archive_file::debugLogText().find(
+        "Loaded archive index from disk cache: " + archivePath.string()) != std::string::npos;
+    assert(restoredFromDisk == (restart == 1));
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testCanonicalDiskCachePreservesSupportedNames() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "valid-paths.zip";
+  const auto cacheDirectory = temporary.path() / "idx";
+  const std::vector<std::string> names = {
+      "nested/deeper/chart.bms", "space dir/ [mix] #1.bms", "hidden/.chart.bms",
+      "unicode/한글-日本語-é.bms"};
+  writeStoredZip(archivePath, names);
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  const auto result = archive_file::unzipArchiveFully(archivePath, temporary.path() / "output", &error);
+  assert(result && result->fileCount == names.size());
+  assert(archive_file::debugLogText().find("Loaded archive index from disk cache: " +
+      archivePath.string()) != std::string::npos);
+  for (const auto &name : names) {
+    std::vector<unsigned char> bytes;
+    assert(archive_file::readFile(archive_file::makeVirtualPath(archivePath, utf8_to_path_t(name)), bytes, &error));
+    assert(std::string(bytes.begin(), bytes.end()) == "entry");
+    std::ifstream extracted(result->outputFolder / utf8_to_path_t(name), std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(extracted)), {}) == "entry");
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
 }
 
 void testCorruptIndexEntryCountIsRejected() {
@@ -1362,7 +3220,39 @@ void testDebugLogRetainsNewestThousandLines() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--output-reservations") {
+    testFullUnzipKeepsReservedOutputIdentities(".zip", 4);
+    return 0;
+  }
+  if (argc == 5 && std::string(argv[1]) == "--output-collision") {
+    testFullUnzipOutputCollisions(argv[2], std::stoul(argv[4]), argv[3]);
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--live-manifest-promotion") {
+    testLiveManifestPromotionCoalescesAndCancelsWaiters();
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--forged-encryption") {
+    testForgedEncryptionFlagCannotCertifyFullUnzip(argv[2]);
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--forged-manifest") {
+    testForgedManifestCannotCertifyFullUnzip(argv[2]);
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--corrupt-index-path") {
+    testCorruptIndexPathIsRebuilt(argv[2]);
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--valid-index-paths") {
+    testCanonicalDiskCachePreservesSupportedNames();
+    return 0;
+  }
+  if (argc == 3 && std::string(argv[1]) == "--mixed-encryption") {
+    testMixedEncryptionSevenZipRejectsFullUnzip(argv[2]);
+    return 0;
+  }
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
   testGameplayBmsResourceAvailabilityPublishesLoaderResult();
@@ -1373,6 +3263,8 @@ int main() {
   testBoundedReadRejectsOversizedIndexedEntryBeforeExtraction();
   testBoundedReadStreamsOrdinaryPlatformPathExactlyOnce();
   testIndependentSevenZipCacheMissesOpenConcurrently();
+  testSevenZipArchiveLevelSolidDetection();
+  testLegacySolidIndexIsRebuilt();
   // Deliberately registered after the 7-Zip index-count assertion above:
   // these bounded-read tests index real archives, which would otherwise pollute
   // that assertion's retained debug-log window.
@@ -1380,21 +3272,116 @@ int main() {
   testZipBoundedReadAcceptsEmptyStoredEntry();
   testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc();
   testBoundedReadFallsBackToAlternativeAudioExtension();
+  testFileExtensionResolutionSharesPriorityAcrossStorage(false);
+  testFileExtensionResolutionSharesPriorityAcrossStorage(true);
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
   testBoundedReadRejectsOversizedSevenZipEntry();
   testBzipZipFallbackStopsBeforeOversizedAllocation();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
+  for (const auto *cacheState : {"cold", "memory", "disk", "legacy"}) {
+    testMixedEncryptionSevenZipRejectsFullUnzip(cacheState);
+  }
   testFullUnzipHonorsPauseDuringExtraction();
+  testParallelZipPreservesUnsupportedCompressionFallback();
+  testSingleEntryZipPreservesIndexedFilename();
+  testFullRarUsesIndependentEntryWorkers(false, false, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::solidLzma2,
+      sizeof(archive_sevenzip_fixtures::solidLzma2), 4, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::filteredBlocks,
+      sizeof(archive_sevenzip_fixtures::filteredBlocks), 4, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma,
+      sizeof(archive_sevenzip_fixtures::blocksLzma), 1, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma,
+      sizeof(archive_sevenzip_fixtures::blocksLzma), 4, 3);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma2,
+      sizeof(archive_sevenzip_fixtures::blocksLzma2), 4, 3);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma2,
+      sizeof(archive_sevenzip_fixtures::blocksLzma2), 4, 1, 128ull * 1024 * 1024);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::blocksLzma2,
+      sizeof(archive_sevenzip_fixtures::blocksLzma2), 8, 2, 192ull * 1024 * 1024);
+  testFullSevenZipDictionaryAdmission(19, 3);
+  testFullSevenZipDictionaryAdmission(28, 1);
+  testFullSevenZipKeepsCompressionBlocksTogether(archive_sevenzip_fixtures::compressedHeader,
+      sizeof(archive_sevenzip_fixtures::compressedHeader), 4, 3, 256ull * 1024 * 1024, true);
+  for (int failureKind = 0; failureKind < 5; ++failureKind) {
+    testParallelSdkFailurePreservesOriginal(failureKind, true);
+  }
+  testFullRarUsesIndependentEntryWorkers(false, true, 4);
+  testFullRarUsesIndependentEntryWorkers(false, false, 4);
+  testFullRarUsesIndependentEntryWorkers(true, false, 4);
+  testFullRarUsesIndependentEntryWorkers(true, false, 4, 1024ull * 1024 * 1024);
+  testFullRarUsesIndependentEntryWorkers(true, false, 4, 1024ull * 1024 * 1024, true);
+  testFullRarRebuildsMismatchedCachedPath();
+  testFullRarSerializesLargeDictionaries();
+  for (int failureKind = 0; failureKind < 4; ++failureKind) testParallelSdkFailurePreservesOriginal(failureKind);
+  for (const auto *extension : {".zip", ".7z", ".tar", ".rar"}) {
+    for (std::size_t workers : {1, 4}) {
+      testFullUnzipOutputCollisions(extension, workers);
+      testFullUnzipKeepsReservedOutputIdentities(extension, workers);
+    }
+  }
+  testPipelinedUnzipCancellationDrainsWithoutCompleting(".7z");
+  testPipelinedUnzipCancellationDrainsWithoutCompleting(".tar");
+  testSingleArchiveOverlapsDecodingAndWriting(".7z");
+  testSingleArchiveOverlapsDecodingAndWriting(".tar");
+  testFullUnzipRejectsBudgetBeforePreparingOutput();
+  testFullUnzipPreservesUnownedHashedFallback();
+  testFullUnzipRejectsReservedRootNames();
+  testFullUnzipIncompleteMarkerRecordsOwnership();
+  for (const auto *mode : {"disk", "memory", "reuse"}) testForgedEncryptionFlagCannotCertifyFullUnzip(mode);
+  for (const auto *mode : {"omission", "rename", "limit"}) testForgedManifestCannotCertifyFullUnzip(mode);
+  testLiveManifestPromotionCoalescesAndCancelsWaiters();
+  testBoundedStreamingRejectsOversizedPayload();
+  testConcurrentReaderRejectsOversizedPayload();
+  testSerialZipUnzipDoesNotMaterializeLargeMembers();
+  testFullUnzipCountsEntriesAndImplicitDirectories();
+  for (const auto *extension : {".zip", ".7z", ".tar"}) testFullUnzipCountsExplicitDirectoriesAndEmptyFiles(extension);
+  testUnzipMarkerMatchesRelocatedContainer();
+  testFullUnzipUnderstatedSizeCannotExceedRuntimeBudget();
+  for (const auto *extension : {".zip", ".7z", ".tar"}) {
+    testFullUnzipRuntimeSpaceCheckPreservesIncompleteOutput(extension);
+    testFullUnzipRuntimeByteLimitCannotRestartFallback(extension);
+    testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
+  }
   testArchiveIndexPersistsAcrossColdCacheRestart();
+  for (const bool coldCache : {true, false}) {
+    for (const bool replaceFile : {false, true}) {
+      testArchiveIndexRejectsPreservedMetadataReplacement(coldCache, replaceFile);
+    }
+  }
   testArchiveIndexPrunesOrphanedCacheFiles();
   testArchiveIndexPrunesOrphanedTmpCacheFiles();
   testArchiveIndexPruningPreservesShortUnrelatedFiles();
+  for (const auto *kind : {"root", "traversal", "dot", "normalized-traversal", "separators", "backslash", "nul"}) {
+    testCorruptIndexPathIsRebuilt(kind);
+  }
+  testCanonicalDiskCachePreservesSupportedNames();
   testCorruptIndexEntryCountIsRejected();
   testSingleFlightWaiterCancellation(false);
   testSingleFlightWaiterCancellation(true);
   testSingleFlightWaitersDoNotEachReindexAfterFailedBuild();
+  for (bool deflated : {false, true}) {
+    testZipChunkedReadBoundaryIntegrity(deflated);
+    testLargeZipCancellation(deflated, true, false);
+    testLargeZipCancellation(deflated, true, true);
+    testLargeZipCancellation(deflated, false, false);
+  }
+  for (bool emptyPrefix : {false, true}) {
+    for (int operation = 1; operation < 4; ++operation) {
+      testZipCancellationDuringEmptyDeflateBlocks(emptyPrefix, operation);
+    }
+  }
+  testZipInputCallbackRestoresAcrossEntries();
+  for (bool sevenZip : {false, true}) {
+    for (bool ranged : {false, true}) {
+      testBatchCancellationDoesNotRestartFallback(sevenZip, ranged);
+    }
+  }
+  for (int operation = 0; operation < 6; ++operation) {
+    testCachedSevenZipHandleWaitCancellation(operation);
+  }
   testDebugLogRetainsNewestThousandLines();
   return 0;
 }

@@ -363,7 +363,7 @@ void MusicSelectBarManager::rebuildRows(
             kModeFilters[(modeStart + modeTrial) % kModeFilters.size()];
         (*rows_).clear();
         for (const auto &bar : original) {
-          if (!bar.chart ||
+          if (!bar.chart || bar.chart->solidArchive ||
               ((showInvisibleCharts ||
                 (bar.chart->songReviewFavorite & (4 | 8)) == 0) &&
                modeMatches(mode, songMode(bar.chart->meta)) &&

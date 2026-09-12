@@ -1,7 +1,9 @@
 #pragma once
 
 #include "ArchiveFile.h"
+#include "ChartLanePreparation.h"
 #include "CoursePlaySession.h"
+#include "DurablePayloadLimits.h"
 #include "ReplayData.h"
 #include "bms_parser.hpp"
 #include "path.h"
@@ -13,6 +15,7 @@
 #include <atomic>
 #include <cctype>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -428,6 +431,7 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
   }
 
   modifier->Modify(chart);
+  applyEffectiveLongNoteModeToChart(chart);
   appliedOption = modifier->Name();
   appliedSeed = usesRandomizer(*appliedOption)
                     ? std::optional<long long>(modifier->GetSeed())
@@ -440,6 +444,9 @@ applyPlayOptionModifier(bms_parser::Chart &chart, const std::string &option,
 
 inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
                                    const ReplayData &replay) {
+  if (replay.provenance.doublePlayFlip) {
+    applyDoublePlayFlipToChart(chart);
+  }
   std::optional<std::string> ignoredOption;
   std::optional<long long> ignoredSeed;
   if (replay.playOption.has_value() &&
@@ -458,7 +465,10 @@ inline bool applyReplayPlayOptions(bms_parser::Chart &chart,
 
 inline PlayOptionReplayInfo
 applySelectedPlayOptions(bms_parser::Chart &chart, const std::string &option,
-                         const std::string &option2) {
+                         const std::string &option2, bool doublePlayFlip = false) {
+  if (doublePlayFlip) {
+    applyDoublePlayFlipToChart(chart);
+  }
   PlayOptionReplayInfo info;
   if (!applyPlayOptionModifier(chart, option, std::nullopt, 0, info.option,
                                info.seed)) {
@@ -637,6 +647,92 @@ parseChartForReplay(const std::filesystem::path &path, const ReplayData &replay,
                     "replay");
 }
 
+inline std::optional<std::vector<result_persistence::ModernCourseEntryFacts>>
+prepareCourseEntryFacts(const CoursePlaySession &session,
+                        std::atomic_bool &cancelled, std::string &diagnostic) {
+  if (session.entries.empty() ||
+      session.entries.size() > durable_payload::kMaximumCourseStages) {
+    diagnostic = "Course entry count is outside durable limits.";
+    return std::nullopt;
+  }
+  std::vector<result_persistence::ModernCourseEntryFacts> facts;
+  try {
+    facts.reserve(session.entries.size());
+    for (std::size_t index = 0; index < session.entries.size(); ++index) {
+      if (cancelled) {
+        diagnostic = "Course entry fact preparation was cancelled.";
+        return std::nullopt;
+      }
+      if (index < session.modernCourseStageResults.size()) {
+        const auto &stage = session.modernCourseStageResults[index];
+        if (stage.stageIndex != static_cast<int>(index) ||
+            stage.score.maxScore <= 0 || stage.score.maxScore % 2 != 0 ||
+            index >= session.completedResults.size()) {
+          diagnostic = "Completed course entry facts are unavailable.";
+          return std::nullopt;
+        }
+        facts.push_back({
+            .totalNotes = stage.score.maxScore / 2,
+            .playLengthMicros = std::max<std::int64_t>(
+                0, session.completedResults[index].meta.PlayLength),
+        });
+        continue;
+      }
+      std::unique_ptr<bms_parser::Chart> parsed;
+      const bms_parser::Chart *chart =
+          session.hasPreparedCourseChart(index)
+              ? session.preparedCourseCharts[index].get()
+              : nullptr;
+      if (chart == nullptr) {
+        parsed = parseChart(session.entries[index].meta, cancelled,
+                            "course entry facts");
+        chart = parsed.get();
+      }
+      if (chart == nullptr || cancelled) {
+        diagnostic = "Unplayed course entry fact preparation failed.";
+        return std::nullopt;
+      }
+      std::int64_t totalNotes = 0;
+      for (const auto *measure : chart->Measures) {
+        if (measure == nullptr) {
+          continue;
+        }
+        for (const auto *timeline : measure->TimeLines) {
+          if (cancelled) {
+            diagnostic = "Course entry fact preparation was cancelled.";
+            return std::nullopt;
+          }
+          if (timeline == nullptr) {
+            continue;
+          }
+          for (auto *note : timeline->Notes) {
+            if (note != nullptr && !note->IsLandmineNote() &&
+                (!note->IsLongNote() ||
+                 effectiveLongNoteIsCounted(
+                     static_cast<bms_parser::LongNote *>(note), *chart,
+                     session.longNoteMode))) {
+              ++totalNotes;
+            }
+          }
+        }
+      }
+      if (totalNotes <= 0 ||
+          totalNotes > std::numeric_limits<int>::max() / 2) {
+        diagnostic = "Unplayed course entry note count is invalid.";
+        return std::nullopt;
+      }
+      facts.push_back({
+          .totalNotes = static_cast<int>(totalNotes),
+          .playLengthMicros = std::max<std::int64_t>(0, chart->Meta.PlayLength),
+      });
+    }
+  } catch (const std::exception &error) {
+    diagnostic = std::string("Course entry fact preparation failed: ") + error.what();
+    return std::nullopt;
+  }
+  return facts;
+}
+
 inline std::unique_ptr<bms_parser::Chart>
 prepareReplayChart(const std::filesystem::path &path, const ReplayData &replay,
                    std::atomic_bool &cancelled) {
@@ -669,9 +765,8 @@ parseChartForRetry(const ReplayData &retrySource,
   }
   auto chart = parseChart(chartMeta.BmsPath, randomSeed, randomPrng,
                           randomValues, cancelled, "retry");
-  if (chart != nullptr && !cancelled && chart->Meta.LnMode == 0 &&
-      normalizeChartLongNoteModeValue(chartMeta.LnMode) > 0) {
-    chart->Meta.LnMode = chartMeta.LnMode;
+  if (chart != nullptr && !cancelled) {
+    applyEffectiveLongNoteModeToChart(*chart, chartMeta.LnMode);
   }
   return chart;
 }

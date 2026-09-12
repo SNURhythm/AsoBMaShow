@@ -75,6 +75,7 @@ enum class GameplayTerminalReason {
   ReplayCapacityExceeded,
   AutomaticResultCapacityExceeded,
   GaugeHistoryCapacityExceeded,
+  Aborted,
 };
 
 struct GameplayFinalSummary {
@@ -183,6 +184,7 @@ public:
   GameplayAdvanceResult
   finalizePracticeRange(std::int64_t finalizationTimeMicros,
                         std::int64_t visualTimeMicros);
+  GameplayAdvanceResult finalizeAbortedAttempt(std::int64_t finalizationTimeMicros);
   [[nodiscard]] NoteId
   previewPressSoundNote(int mainLane, int compensateLane,
                         const GameplayInputContext &context);
@@ -209,6 +211,9 @@ public:
   [[nodiscard]] GameplayFinalSummary finalSummary() const noexcept;
 
 private:
+  GameplayAdvanceResult finalizePendingNotes(
+      const GameplayTimeRange &range, std::int64_t finalizationTimeMicros,
+      bool aborted);
   struct LaneRuntimeState {
     int lane = -1;
     bool pressed = false;

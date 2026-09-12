@@ -1,7 +1,5 @@
 #include "AudioBackend.h"
 
-#include "SelectAudioDiagnostics.h"
-
 #include "../targets.h"
 
 #include <miniaudio.h>
@@ -132,8 +130,6 @@ public:
 #else
     const ma_result result = ma_device_init(nullptr, &config, &device_);
 #endif
-    audio::diag::SelectAudioLog("miniaudio init result=" +
-                                std::string(ma_result_description(result)));
     if (result != MA_SUCCESS) {
       errorMessage = std::string("Miniaudio device initialization failed: ") +
                      ma_result_description(result);
