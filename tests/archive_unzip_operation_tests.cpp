@@ -243,6 +243,52 @@ void mixedEncryptionDeleteModePreservesOriginal(bool warmCache) {
   assert(session->CountAllChartMeta() == 0 && session->CountSolidArchives() == 1);
 }
 
+void forgedEncryptionDeleteChild(const std::filesystem::path &root) {
+  ChartRepository repository(root / "library.db");
+  const auto path = root / "mixed.7z";
+  const auto identity = archive_source_identity::KeyForPath(path);
+  archive_file::setArchiveIndexCacheDirectory(root / "cache");
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 1 && entries.front().path == "chart.bms");
+  const auto result = runAll(repository, true);
+  assert(std::filesystem::exists(path));
+  assert(!result.success && !result.cancelled && result.deletedCount == 0);
+  assert(result.message.find("encrypted") != std::string::npos);
+  assert(archive_source_identity::KeyForPath(path) == identity);
+  assert(!std::filesystem::exists(root / "mixed/.asobmashow_unzip_complete"));
+}
+
+void forgedEncryptionDeletePreservesOriginal() {
+  Fixture fixture;
+  const auto path = fixture.root / "mixed.7z";
+  std::ofstream archive(path, std::ios::binary);
+  archive.write(reinterpret_cast<const char *>(archive_sevenzip_fixtures::mixedEncryption),
+                sizeof(archive_sevenzip_fixtures::mixedEncryption));
+  archive.close();
+  auto session = fixture.repository.OpenSession();
+  auto batch = session->BeginScanBatch();
+  assert(batch && batch->UpsertSolidArchive({.path = path}));
+  assert(batch->Commit());
+  batch.reset();
+  session.reset();
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  const auto cacheFile = std::filesystem::directory_iterator(fixture.root / "cache")->path();
+  {
+    std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+    cache.seekg(-1, std::ios::end);
+    assert(cache.get() == 1);
+    cache.seekp(-1, std::ios::end);
+    cache.put(0);
+    assert(cache.good());
+  }
+  const auto command = "\"" + testExecutable.string() + "\" --forged-encryption-delete-child \"" +
+                       fixture.root.string() + "\"";
+  assert(std::system(command.c_str()) == 0);
+  assert(std::filesystem::exists(path));
+}
+
 void cancellationAfterJournalLeavesRecoverableOwnership(bool cancelInPause) {
   Fixture fixture;
   const auto original = fixture.indexedArchive("a.zip");
@@ -1714,6 +1760,10 @@ void cancelAndWaitPreservesCommittedChangeNotificationExactlyOnce() {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 3 && std::string(argv[1]) == "--forged-encryption-delete-child") {
+    forgedEncryptionDeleteChild(argv[2]);
+    return 0;
+  }
   if (argc == 4 && std::string(argv[1]) == "--crash-unzip") {
     crashUnzip(argv[2], argv[3]);
   }
@@ -1739,6 +1789,7 @@ int main(int argc, char **argv) {
     else if (test == "--cancel-after-directory") cancellationAfterJournalLeavesRecoverableOwnership(true);
     else if (test == "--mixed-encryption-cold") mixedEncryptionDeleteModePreservesOriginal(false);
     else if (test == "--mixed-encryption-warm") mixedEncryptionDeleteModePreservesOriginal(true);
+    else if (test == "--forged-encryption-delete") forgedEncryptionDeletePreservesOriginal();
     else if (test == "--cleanup-failure") failedPartialCleanupRetainsRecovery();
     else if (test == "--unverified-recovery") unverifiedPartialOutputRetainsRecovery("legacy");
     else if (test == "--delayed-replacement") delayedDeletionRejectsReplacement(false);
@@ -1779,6 +1830,7 @@ int main(int argc, char **argv) {
   cancellationAfterJournalLeavesRecoverableOwnership(true);
   mixedEncryptionDeleteModePreservesOriginal(false);
   mixedEncryptionDeleteModePreservesOriginal(true);
+  forgedEncryptionDeletePreservesOriginal();
   sourceIdentityRejectsMissingPathsDirectoriesAndSymlinks();
   sourceIdentityDetectsChangesWithPreservedMetadata(false);
   sourceIdentityDetectsChangesWithPreservedMetadata(true);

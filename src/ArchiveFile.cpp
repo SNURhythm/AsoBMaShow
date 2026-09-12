@@ -551,6 +551,18 @@ bool safeEntryPath(const std::string &name, std::filesystem::path &outPath) {
   return true;
 }
 
+bool isCanonicalEntryPath(const std::filesystem::path &path) {
+  if (path.empty() || path.has_root_path()) return false;
+  const auto name = path.generic_string();
+  if (name.find('\0') != std::string::npos ||
+      name.find('\\') != std::string::npos ||
+      name != path.lexically_normal().generic_string()) return false;
+  for (const auto &part : path) {
+    if (part == "." || part == "..") return false;
+  }
+  return true;
+}
+
 bool pathIsInsideFolder(const std::filesystem::path &path,
                         const std::filesystem::path &folderPath) {
   const std::string normalized = normalizeEntryName(path.generic_string());
@@ -771,6 +783,7 @@ struct CachedIndex {
   ArchiveIndexBackend backend = ArchiveIndexBackend::Unknown;
   unsigned char sevenZipFormat = 0;
   bool hasEncryptedEntries = false;
+  bool liveSourceManifest = false;
   std::vector<Entry> entries;
   std::unordered_map<std::string, std::size_t> exact;
   std::unordered_map<std::string, std::size_t> lower;
@@ -4123,6 +4136,9 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
     file.read(pathText.data(), static_cast<std::streamsize>(pathLen));
     Entry entry;
     entry.path = utf8_to_path_t(pathText);
+    if (!isCanonicalEntryPath(entry.path) || entry.path.generic_string() != pathText) {
+      return nullptr;
+    }
     entry.directory = readU8() != 0;
     entry.size = readU64();
     entry.order = static_cast<std::size_t>(readU64());
@@ -4168,7 +4184,8 @@ std::shared_ptr<const CachedIndex>
 cachedIndexForArchive(const std::filesystem::path &archivePath,
                       std::string *errorMessage,
                       const PauseCallback &pauseCallback = nullptr,
-                      std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max()) {
+                      std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
+                      bool requireLiveSource = false) {
   const auto boundedIndex = [&](std::shared_ptr<const CachedIndex> index) {
     if (index && index->entries.size() > maximumEntries) {
       if (errorMessage) *errorMessage = "Archive exceeds the verification entry-count limit.";
@@ -4187,13 +4204,16 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
 
   const std::string key = archiveKey(archivePath);
   const auto sourceIdentity = archive_source_identity::KeyForPath(archivePath);
+  const auto usableIndex = [&](const std::shared_ptr<const CachedIndex> &index) {
+    return !sourceIdentity.empty() && index && index->sourceIdentity == sourceIdentity &&
+           index->size == size && index->mtime == mtime &&
+           (!requireLiveSource || index->liveSourceManifest);
+  };
   bool hadCachedIndex = false;
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     const auto it = gIndexCache.find(key);
-    if (!sourceIdentity.empty() && it != gIndexCache.end() && it->second != nullptr &&
-        it->second->sourceIdentity == sourceIdentity &&
-        it->second->size == size && it->second->mtime == mtime) {
+    if (it != gIndexCache.end() && usableIndex(it->second)) {
       return boundedIndex(it->second);
     }
     hadCachedIndex = it != gIndexCache.end() && it->second != nullptr;
@@ -4201,7 +4221,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
 
   // Try to restore a previously persisted index from disk (cold start) before
   // rebuilding. Validate the source identity as well as size and mtime.
-  if (!hadCachedIndex) {
+  if (!hadCachedIndex && !requireLiveSource) {
     auto diskIndex = readCachedIndexFromDisk(key, size, mtime, sourceIdentity, maximumEntries);
     if (diskIndex != nullptr) {
       buildIndexLookups(*diskIndex);
@@ -4209,6 +4229,10 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                              pathForLog(archivePath) + " entries=" +
                              std::to_string(diskIndex->entries.size()));
       std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+      const auto current = gIndexCache.find(key);
+      if (current != gIndexCache.end() && usableIndex(current->second)) {
+        return boundedIndex(current->second);
+      }
       gIndexCache[key] = diskIndex;
       return diskIndex;
     }
@@ -4251,10 +4275,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     }
     std::lock_guard<std::mutex> cacheLock(gIndexMutex);
     const auto cacheIt = gIndexCache.find(key);
-    if (builtOk && !sourceIdentity.empty() && cacheIt != gIndexCache.end() &&
-        cacheIt->second != nullptr && cacheIt->second->size == size &&
-        cacheIt->second->mtime == mtime &&
-        cacheIt->second->sourceIdentity == sourceIdentity) {
+    if (builtOk && cacheIt != gIndexCache.end() && usableIndex(cacheIt->second)) {
       return boundedIndex(cacheIt->second);
     }
     if (builtFailed) {
@@ -4288,10 +4309,22 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   // or a backend throws, the in-flight flag is cleared and every waiter wakes
   // with a recorded failure instead of blocking forever.
   IndexBuildScope buildScope(key);
+  std::shared_ptr<const CachedIndex> completedIndex;
+  {
+    std::lock_guard cacheLock(gIndexMutex);
+    const auto current = gIndexCache.find(key);
+    if (current != gIndexCache.end() && usableIndex(current->second)) {
+      completedIndex = current->second;
+    }
+  }
+  if (completedIndex) {
+    buildScope.complete(true);
+    return boundedIndex(completedIndex);
+  }
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ || ASOBMSHOW_ARCHIVEFILE_HAS_SEVENZIP || \
     ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
-  appendDebugLogLineImpl((hadCachedIndex ? "Archive changed; rebuilding index: "
+  appendDebugLogLineImpl((hadCachedIndex ? "Rebuilding archive index: "
                                          : "Indexing archive: ") +
                          pathForLog(archivePath) + " (" +
                          byteCountForLog(size) + ")");
@@ -4414,6 +4447,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                            std::to_string(skippedSystemEntries));
   }
   buildIndexLookups(*loaded);
+  loaded->liveSourceManifest = true;
   appendDebugLogLineImpl("Indexed archive with " + backendName(loaded->backend) +
                          ": " + pathForLog(archivePath) + " entries=" +
                          std::to_string(loaded->entries.size()));
@@ -10457,6 +10491,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
   }
   for (const auto &entry : index.entries) {
     for (auto parent = entry.path.parent_path(); !parent.empty(); parent = parent.parent_path()) {
+      if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
       if (names.contains(lowerCopy(parent.generic_string()))) return std::nullopt;
     }
   }
@@ -10644,7 +10679,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   };
   const auto index =
       cachedIndexForArchive(archivePath, errorMessage, indexPauseCallback,
-                             sharedBudget.limits.maximumArchiveEntries);
+                             sharedBudget.limits.maximumArchiveEntries, true);
   if (index == nullptr) {
     if (errorMessage->find("entry-count limit") != std::string::npos) writeGuard.rejectEntryLimit();
     if (archiveReadCancelled(*errorMessage)) {
@@ -10662,6 +10697,11 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   }
   std::uint64_t explicitDirectories = 0;
   for (const Entry &entry : index->entries) {
+    if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) return std::nullopt;
+    if (!isCanonicalEntryPath(entry.path)) {
+      *errorMessage = "Archive index contains an unsafe or noncanonical entry path. Original archive kept.";
+      return std::nullopt;
+    }
     if (isReservedUnzipEntryPath(entry.path)) {
       *errorMessage = "Archive entry uses a reserved unzip marker name. Original archive kept.";
       return std::nullopt;
@@ -10679,6 +10719,7 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   const auto uniqueExplicitDirectories = directories.size();
   for (const Entry &entry : index->entries) {
     for (auto parent = entry.path.parent_path(); !parent.empty(); parent = parent.parent_path()) {
+      if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) return std::nullopt;
       directories.insert(parent);
       if (directories.size() > sharedBudget.limits.maximumArchiveEntries) {
         writeGuard.rejectEntryLimit();
