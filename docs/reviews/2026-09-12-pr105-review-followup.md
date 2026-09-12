@@ -147,3 +147,23 @@ Second-pass verification on 2026-09-12:
 
 Windows-native and physical-device runtime checks remain untested. No release
 policy, signing requirement, or distribution action is changed by this follow-up.
+
+## Third review follow-up
+
+Recovery now acknowledges a definitely missing output folder even when the source
+archive has also been removed. The existing parent-storage accessibility,
+filesystem-error, symlink, and unverified-existing-output guards remain intact.
+
+- Eight regression cases cover source present/absent, keep/delete-original mode,
+  and accessible/offline parent storage. They verify retention while storage is
+  offline, acknowledgement after restoration, source preservation, and repeat
+  recovery. The source-absent case fails before the fix and passes afterward.
+- The older output-only rename expectation is removed: with accessible parent
+  storage, a renamed output is indistinguishable from a deleted output at its
+  recorded path. Invalid completion-marker retention remains tested; the new
+  cases cover actual parent-storage unavailability.
+- Full desktop build passes, the archive unzip operation suite passes three
+  consecutive runs, and parallel CTest passes **357/357** tests.
+- Read-only review approves the final delta. `git diff --check` passes.
+
+Mobile builds were not rerun for this follow-up. No deployment was performed.

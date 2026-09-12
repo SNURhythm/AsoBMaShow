@@ -82,7 +82,7 @@ Result recover(ChartRepository::Session &session,
       accessible = false;
       continue;
     }
-    if (!std::filesystem::exists(output) && sourceExists) {
+    if (!std::filesystem::exists(output)) {
       acknowledged.push_back(record.outputFolder);
       continue;
     }

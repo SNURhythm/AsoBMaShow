@@ -430,6 +430,39 @@ void unverifiedPartialOutputRetainsRecovery(const std::string &kind) {
   assert(session->CountAllChartMeta() == 0);
 }
 
+void missingOutputRecoveryAcknowledgesOnlyAccessibleStorage(
+    bool sourcePresent, bool deleteOriginal, bool storageAvailable) {
+  Fixture fixture;
+  const auto storage = fixture.root / "storage";
+  const auto offlineStorage = fixture.root / "offline";
+  const auto output = storage / "unzipped";
+  std::filesystem::create_directories(output);
+  const auto original = fixture.archive(1, "storage/song.zip");
+  auto session = fixture.repository.OpenSession();
+  assert(session->SaveUnzipRecovery({
+      .archivePath = original.meta.BmsPath, .outputFolder = output,
+      .archiveKey = archive_source_identity::KeyForPath(original.meta.BmsPath),
+      .deleteOriginal = deleteOriginal}));
+  std::ofstream(output / "partial.bms") << "partial output";
+  std::filesystem::remove_all(output);
+  if (!sourcePresent) assert(std::filesystem::remove(original.meta.BmsPath));
+  if (!storageAvailable) std::filesystem::rename(storage, offlineStorage);
+
+  const auto recovered = archive_unzip_recovery::recover(*session);
+  assert(recovered.completed == storageAvailable);
+  assert(!recovered.libraryChanged);
+  assert(session->LoadUnzipRecovery()->size() == (storageAvailable ? 0 : 1));
+  if (!storageAvailable) {
+    std::filesystem::rename(offlineStorage, storage);
+    assert(archive_unzip_recovery::recover(*session).completed);
+    assert(session->LoadUnzipRecovery()->empty());
+  }
+  assert(std::filesystem::exists(original.meta.BmsPath) == sourcePresent);
+  assert(!std::filesystem::exists(output));
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+}
+
 void failedPartialCleanupRetainsRecovery() {
 #ifndef _WIN32
   if (geteuid() == 0) return;
@@ -837,19 +870,13 @@ void disconnectedOutputDuringFinalIndexRemainsQueuedAlongsideHealthyOutputs() {
   assert(session->CountAllChartMeta() == 6);
 }
 
-void unavailableOrInvalidCompletedOutputRetainsRecoveryWork() {
+void invalidCompletedOutputRetainsRecoveryWork() {
   Fixture fixture;
   fixture.indexedArchive("a.zip");
   fixture.indexedArchive("b.zip");
   runCrashingChild(fixture.root, "after-delete");
   auto session = fixture.repository.OpenSession();
   const auto record = session->LoadUnzipRecovery()->front();
-  const auto moved = record.outputFolder.string() + "-offline";
-  std::filesystem::rename(record.outputFolder, moved);
-  assert(!archive_unzip_recovery::recover(*session).completed);
-  assert(session->LoadUnzipRecovery()->size() == 1);
-  assert(session->CountSolidArchives() == 2);
-  std::filesystem::rename(moved, record.outputFolder);
   const auto marker = record.outputFolder / ".asobmashow_unzip_complete";
   std::ofstream(marker, std::ios::trunc) << "wrong key\n";
   assert(!archive_unzip_recovery::recover(*session).completed);
@@ -1658,6 +1685,14 @@ int main(int argc, char **argv) {
     else assert(false && "unknown regression");
     return 0;
   }
+  for (const bool sourcePresent : {false, true}) {
+    for (const bool deleteOriginal : {false, true}) {
+      for (const bool storageAvailable : {true, false}) {
+        missingOutputRecoveryAcknowledgesOnlyAccessibleStorage(
+            sourcePresent, deleteOriginal, storageAvailable);
+      }
+    }
+  }
   singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(true);
   singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(false);
   singleSuccessfulIndexAcknowledgesRecovery(false);
@@ -1719,7 +1754,7 @@ int main(int argc, char **argv) {
   }
   recoveryRetriesFailedCleanupIndexAndAcknowledgement();
   journalFailurePreventsExtractionAndDeletion();
-  unavailableOrInvalidCompletedOutputRetainsRecoveryWork();
+  invalidCompletedOutputRetainsRecoveryWork();
   batchDeletesEachOriginalBeforeStartingNextArchiveAndIndexesOnce();
   batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives();
   batchFailurePreservesOriginalAndContinues();
