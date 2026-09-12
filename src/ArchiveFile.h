@@ -126,6 +126,7 @@ struct UnzipArchiveResult {
   std::uint64_t fileCount = 0;
   std::uint64_t uncompressedSize = 0;
   std::string archiveKey;
+  bool reusedCompletedFolder = false;
 };
 
 struct UnzipLimits {

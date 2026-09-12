@@ -46,7 +46,8 @@ public:
     std::filesystem::remove_all(root, error);
   }
 
-  ChartMetaRecord archive(int chartCount = 1, const std::string &name = "song.zip") {
+  ChartMetaRecord archive(int chartCount = 1, const std::string &name = "song.zip",
+                          bool includeMedia = false) {
     const auto archivePath = root / name;
     auto writer = makeArchiveWriteHandle();
     assert((archivePath.extension() == ".7z" ? archive_write_set_format_7zip(writer.get()) :
@@ -56,7 +57,8 @@ public:
       auto entry = std::unique_ptr<archive_entry, decltype(&archive_entry_free)>(
           archive_entry_new(), archive_entry_free);
       const std::string contents = "#TITLE Extracted " + name + std::to_string(chartIndex) +
-          "\n#BPM 120\n#WAV01 sound.wav\n#00111:01\n";
+          "\n#BPM 120\n#WAV01 sound.wav\n#00111:01\n" +
+          (includeMedia ? "#BMP01 movie.mpg\n#00104:01\n" : "");
       const std::string path = "song/chart" + std::to_string(chartIndex) + ".bms";
       archive_entry_set_pathname(entry.get(), path.c_str());
       archive_entry_set_size(entry.get(), contents.size());
@@ -67,6 +69,21 @@ public:
              static_cast<la_ssize_t>(contents.size()));
       assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
     }
+    if (includeMedia) {
+      for (const auto &path : {"song/sound.wav", "song/movie.mpg"}) {
+        auto entry = std::unique_ptr<archive_entry, decltype(&archive_entry_free)>(
+            archive_entry_new(), archive_entry_free);
+        const std::string contents = "original media payload";
+        archive_entry_set_pathname(entry.get(), path);
+        archive_entry_set_size(entry.get(), contents.size());
+        archive_entry_set_filetype(entry.get(), AE_IFREG);
+        archive_entry_set_perm(entry.get(), 0644);
+        assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+        assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+               static_cast<la_ssize_t>(contents.size()));
+        assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+      }
+    }
     assert(archive_write_close(writer.get()) == ARCHIVE_OK);
     ChartMetaRecord record;
     record.solidArchive = true;
@@ -74,8 +91,9 @@ public:
     return record;
   }
 
-  ChartMetaRecord indexedArchive(const std::string &name, int chartCount = 1) {
-    const auto record = archive(chartCount, name);
+  ChartMetaRecord indexedArchive(const std::string &name, int chartCount = 1,
+                                 bool includeMedia = false) {
+    const auto record = archive(chartCount, name, includeMedia);
     auto session = repository.OpenSession();
     auto batch = session->BeginScanBatch();
     assert(batch && batch->UpsertSolidArchive({.path = record.meta.BmsPath}));
@@ -736,7 +754,7 @@ void delayedDeletionRejectsReplacement(bool symlink, bool reuseCompletedFolder =
   ArchiveUnzipOperation operation(fixture.repository);
   assert(operation.start(record));
   const auto result = waitForResult(operation);
-  assert(result.success && operation.canDeleteArchive());
+  assert(result.success && operation.canDeleteArchive() == !reuseCompletedFolder);
   if (reuseCompletedFolder) assert(result.outputFolder == reusedFolder);
   const auto originalKey = archive_file::cacheKeyForPath(record.meta.BmsPath);
   const auto replacement = fixture.archive(3, "replacement.zip").meta.BmsPath;
@@ -786,21 +804,63 @@ void batchDeletionRejectsReplacement(bool symlink) {
   assert(fixture.repository.OpenSession()->CountSolidArchives() == 1);
 }
 
-void reusedCompletedOutputCanDeleteUnchangedArchive() {
+void reusedCompletedOutputNeverAuthorizesDeletion(const std::string &mediaState) {
   Fixture fixture;
-  const auto record = fixture.indexedArchive("a.zip");
-  const auto extracted = ArchiveUnzipOperation::Run(record, fixture.repository, {});
-  assert(extracted.success);
+  const auto record = fixture.indexedArchive("a.zip", 1, true);
+  const auto extracted = ArchiveUnzipOperation::Run(record, fixture.repository, {}, nullptr, false);
+  assert(extracted.success && !extracted.reusedCompletedFolder &&
+         std::filesystem::exists(extracted.chartPath));
+  for (const auto &name : {"sound.wav", "movie.mpg"}) {
+    const auto path = extracted.chartPath.parent_path() / name;
+    assert(std::filesystem::is_regular_file(path));
+    if (mediaState == "missing") {
+      assert(std::filesystem::remove(path));
+    } else if (mediaState == "corrupted") {
+      const auto size = std::filesystem::file_size(path);
+      std::ofstream(path, std::ios::binary | std::ios::trunc) << std::string(size, 'x');
+      assert(std::filesystem::file_size(path) == size);
+    }
+  }
+  assert(archive_file::unzipFolderHasMatchingCompleteMarker(
+      extracted.outputFolder, record.meta.BmsPath, extracted.archiveKey));
   ArchiveUnzipOperation operation(fixture.repository);
   assert(operation.start(record));
   const auto reused = waitForResult(operation);
-  assert(reused.success && reused.outputFolder == extracted.outputFolder);
-  assert(operation.canDeleteArchive());
-  std::string message;
-  assert(deleteArchiveAndWait(operation, message));
-  assert(!std::filesystem::exists(record.meta.BmsPath));
+  assert(reused.success && reused.scanCommitted && reused.outputFolder == extracted.outputFolder);
+  assert(reused.reusedCompletedFolder);
+  assert(!operation.canDeleteArchive());
+  assert(!operation.startDeleteArchive());
+  assert(!operation.inProgress() && !operation.takeDeleteResult());
+  assert(reused.message.find("Original archive kept") != std::string::npos);
+  assert(reused.message.find("not verified") != std::string::npos);
+  assert(std::filesystem::exists(record.meta.BmsPath));
   assert(std::filesystem::exists(reused.chartPath));
-  assert(fixture.repository.OpenSession()->CountSolidArchives() == 0);
+  assert(fixture.repository.OpenSession()->CountSolidArchives() == 1);
+  assert(fixture.repository.OpenSession()->CountAllChartMeta() == 1);
+  for (const auto &name : {"sound.wav", "movie.mpg"}) {
+    const auto path = reused.chartPath.parent_path() / name;
+    assert(std::filesystem::exists(path) == (mediaState != "missing"));
+    if (mediaState != "missing") {
+      std::ifstream input(path, std::ios::binary);
+      const std::string contents((std::istreambuf_iterator<char>(input)), {});
+      assert(contents == (mediaState == "corrupted"
+                              ? std::string(22, 'x') : "original media payload"));
+    }
+  }
+  const auto kept = runAll(fixture.repository, false);
+  assert(kept.success && kept.scanCommitted && kept.reusedCompletedFolder);
+  assert(kept.deletedCount == 0 && std::filesystem::exists(record.meta.BmsPath));
+  assert(kept.message.find("not verified") != std::string::npos);
+  const auto fresh = runAll(fixture.repository, true);
+  assert(fresh.success && !fresh.reusedCompletedFolder &&
+         fresh.deletedCount == 1 && fresh.deletionFailedCount == 0);
+  assert(!std::filesystem::exists(record.meta.BmsPath));
+  auto freshOutput = extracted.outputFolder;
+  freshOutput += " 2";
+  for (const auto &name : {"sound.wav", "movie.mpg"}) {
+    std::ifstream input(freshOutput / "song" / name, std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(input)), {}) == "original media payload");
+  }
 }
 
 void changeArchivePreservingSizeAndModificationTime(
@@ -1425,8 +1485,12 @@ void batchChargesPartialFailedWritesAgainstLaterArchives() {
         if (!blockedSecondFile && progress.archiveIndex == 1 &&
             (progress.message.find("Writing unzipped files") != std::string::npos ||
              progress.message.find("Unzipping archive") != std::string::npos) &&
-            std::filesystem::exists(fixture.root / "a/song/chart0.bms")) {
-          std::filesystem::create_directory(fixture.root / "a" / "song" / "chart1.bms");
+            std::filesystem::exists(fixture.root / "a/song/chart0.bms") &&
+            std::filesystem::file_size(fixture.root / "a/song/chart0.bms") > 0) {
+          const auto blocked = fixture.root / "a" / "song" / "chart1.bms";
+          assert(std::filesystem::is_regular_file(blocked) && std::filesystem::file_size(blocked) == 0);
+          assert(std::filesystem::remove(blocked));
+          std::filesystem::create_directory(blocked);
           blockedSecondFile = true;
         }
       }, {.maximumTotalBytes = 150, .maximumConcurrentArchives = 1, .maximumWorkers = 1});
@@ -1665,6 +1729,7 @@ void successPreservesUnrelatedLibraryAndRequiresExplicitDeletion() {
   assert(std::filesystem::exists(result.chartPath));
   assert(result.chartPath.lexically_relative(result.outputFolder).begin()->string() != "..");
   assert(result.archivePath == record.meta.BmsPath);
+  assert(!result.reusedCompletedFolder);
   assert(std::filesystem::exists(record.meta.BmsPath));
   std::vector<bms_parser::ChartMeta> charts;
   session->SelectAllChartMeta(charts);
@@ -2002,9 +2067,11 @@ int main(int argc, char **argv) {
   }
   delayedDeletionRejectsReplacement(false);
   delayedDeletionRejectsReplacement(true);
+  for (const auto &mediaState : {"missing", "corrupted", "unchanged"}) {
+    reusedCompletedOutputNeverAuthorizesDeletion(mediaState);
+  }
   delayedDeletionRejectsReplacement(false, true);
   delayedDeletionRejectsReplacement(true, true);
-  reusedCompletedOutputCanDeleteUnchangedArchive();
   batchDeletionRejectsReplacement(false);
   batchDeletionRejectsReplacement(true);
   singleZipExtractsOnMultipleWorkers();

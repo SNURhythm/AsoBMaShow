@@ -14,6 +14,7 @@ struct ArchiveUnzipResult {
   bool libraryChanged = false;
   bool scanCommitted = false;
   bool batch = false;
+  bool reusedCompletedFolder = false;
   std::size_t archiveCount = 0;
   std::size_t completedCount = 0;
   std::size_t succeededCount = 0;

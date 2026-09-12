@@ -3,6 +3,7 @@
 #include "FileExtensionResolver.h"
 
 #include "BmsMetadataText.h"
+#include "archive/WindowsExtractionPathPolicy.h"
 #include "audio/ChartAssetExtensions.h"
 #include "targets.h"
 #include "RAII.h"
@@ -10438,32 +10439,70 @@ bool extractArchiveFullyWithBatchReader(
   return true;
 }
 
-std::optional<bool> unzipEntriesHaveIndependentOutputs(
+bool validateUnzipOutputPaths(
     const CachedIndex &index, const std::filesystem::path &outputFolder,
     const std::stop_token *stopToken, const PauseCallback &pause, std::string *errorMessage) {
   std::vector<std::filesystem::path> reservations;
+  std::unordered_set<std::filesystem::path> directories;
+  bool validated = false;
   const auto cleanup = makeScopeExit([&] {
+    if (validated) return;
     for (const auto &path : reservations) {
       std::error_code error;
       std::filesystem::remove(path, error);
     }
   });
-  for (const auto &entry : index.entries) {
-    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return std::nullopt;
-    const auto path = outputFolder / entry.path;
+  const auto reserve = [&](const std::filesystem::path &relative, bool directory) {
+    const auto path = outputFolder / relative;
     std::error_code error;
-    if (entry.directory) {
-      std::filesystem::create_directories(path, error);
-      if (error) return false;
-      continue;
+    bool created = false;
+    if (directory) {
+      created = std::filesystem::create_directory(path, error);
+    } else {
+#ifdef _WIN32
+      const HANDLE output = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+                                        CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (output == INVALID_HANDLE_VALUE) {
+        error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+      } else {
+        created = true;
+        if (GetFileType(output) != FILE_TYPE_DISK) error = std::make_error_code(std::errc::invalid_argument);
+        if (!CloseHandle(output) && !error)
+          error = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+      }
+#else
+      const int output = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+      if (output < 0) {
+        error = std::error_code(errno, std::generic_category());
+      } else {
+        created = true;
+        if (::close(output) != 0) error = std::error_code(errno, std::generic_category());
+      }
+#endif
+      if (created) reservations.push_back(path);
     }
-    if (std::filesystem::exists(path, error) || error) return false;
-    std::filesystem::create_directories(path.parent_path(), error);
-    if (error) return false;
-    reservations.push_back(path);
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) return false;
+    if (created && !error) return true;
+    *errorMessage = error && error != std::errc::file_exists
+        ? "Could not validate unzip output paths: " + error.message() + ". Original archive kept."
+        : "Archive entries have colliding output paths. Original archive kept.";
+    return false;
+  };
+  for (const auto &entry : index.entries) {
+    if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+    const auto parent = entry.directory ? entry.path : entry.path.parent_path();
+    std::filesystem::path prefix;
+    for (const auto &component : parent) {
+      if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
+      if (component.empty()) continue;
+      prefix /= component;
+      if (directories.contains(prefix)) continue;
+      if (!reserve(prefix, true)) return false;
+      directories.insert(prefix);
+    }
+    if (entry.directory) continue;
+    if (!reserve(entry.path, false)) return false;
   }
+  validated = true;
   return true;
 }
 
@@ -10715,6 +10754,14 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       *errorMessage = "Archive entry uses a reserved unzip marker name. Original archive kept.";
       return std::nullopt;
     }
+#ifdef _WIN32
+    const auto windowsPath = entry.directory && !entry.path.has_filename()
+        ? entry.path.parent_path() : entry.path;
+    if (!isSafeWindowsExtractionPath(fspath_to_utf8(windowsPath))) {
+      *errorMessage = "Archive entry uses an unsafe Windows output name. Original archive kept.";
+      return std::nullopt;
+    }
+#endif
     if (entry.directory) {
       directories.insert(entry.path.has_filename() ? entry.path : entry.path.parent_path());
       ++explicitDirectories;
@@ -10794,7 +10841,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
       return UnzipArchiveResult{.outputFolder = candidate,
                                 .fileCount = fileCount,
                                 .uncompressedSize = uncompressedSize,
-                                .archiveKey = key};
+                                .archiveKey = key,
+                                .reusedCompletedFolder = true};
     }
   }
 
@@ -10828,11 +10876,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
     return std::nullopt;
   }
-  if (execution.workersPerArchive > 1) {
-    const auto independent = unzipEntriesHaveIndependentOutputs(*index, outputFolder, stopToken, pauseCallback, errorMessage);
-    if (!independent) return std::nullopt;
-    if (!*independent) execution.workersPerArchive = 1;
-  }
+  if (!validateUnzipOutputPaths(*index, outputFolder, stopToken, pauseCallback, errorMessage))
+    return std::nullopt;
   appendDebugLogLineImpl("Full unzip requested: " + pathForLog(archivePath) +
                          " output=" + pathForLog(outputFolder) +
                          " files=" + std::to_string(fileCount) +

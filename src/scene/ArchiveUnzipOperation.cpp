@@ -11,6 +11,9 @@
 
 namespace {
 
+constexpr auto reusedOutputMessage =
+    "Reused existing unzipped folder; contents not verified. Original archive kept.";
+
 bool eligible(const ChartMetaRecord &record) {
   return record.solidArchive && !record.unavailable &&
          !record.meta.BmsPath.empty() &&
@@ -40,6 +43,7 @@ ArchiveUnzipResult extractArchive(
       if (extracted) {
         result.outputFolder = extracted->outputFolder;
         result.archiveKey = extracted->archiveKey;
+        result.reusedCompletedFolder = extracted->reusedCompletedFolder;
         result.success = true;
       } else {
         result.message = error.empty() ? "Unzip failed" : "Unzip failed: " + error;
@@ -66,6 +70,10 @@ bool archiveIdentityMatches(const ArchiveUnzipResult &result) {
 bool deleteCompletedArchive(const ArchiveUnzipResult &result,
                             const std::stop_token &stopToken,
                             std::string &message) {
+  if (result.reusedCompletedFolder) {
+    message = reusedOutputMessage;
+    return false;
+  }
   if (!result.success || result.outputFolder.empty() || result.cancelled ||
       result.archivePath.empty() || stopToken.stop_requested()) {
     message = "Archive is unavailable for deletion";
@@ -199,7 +207,7 @@ std::optional<ArchiveUnzipResult> ArchiveUnzipOperation::takeResult() {
 
 bool ArchiveUnzipOperation::canDeleteArchive() const {
   if (inProgress_ || !result_ || result_->batch || !result_->success ||
-      !result_->scanCommitted || result_->cancelled ||
+      !result_->scanCommitted || result_->cancelled || result_->reusedCompletedFolder ||
       result_->archivePath.empty()) {
     return false;
   }
@@ -208,7 +216,7 @@ bool ArchiveUnzipOperation::canDeleteArchive() const {
 
 bool ArchiveUnzipOperation::startDeleteArchive() {
   if (inProgress_ || !result_ || result_->batch || !result_->success ||
-      !result_->scanCommitted || result_->cancelled ||
+      !result_->scanCommitted || result_->cancelled || result_->reusedCompletedFolder ||
       result_->archivePath.empty()) {
     return false;
   }
@@ -231,7 +239,8 @@ bool ArchiveUnzipOperation::startDeleteArchive() {
             }
           }
         }
-        result.canRetry = !result.deleted && archiveIdentityMatches(completed);
+        result.canRetry = !result.deleted && !completed.reusedCompletedFolder &&
+                          archiveIdentityMatches(completed);
       } catch (...) {
         result.message = result.deleted
             ? "Original archive deleted. Failed to refresh library."
@@ -352,6 +361,8 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
           bool completed = false;
           {
             std::lock_guard resultLock(resultMutex);
+            result.reusedCompletedFolder = result.reusedCompletedFolder ||
+                                           archiveResult.reusedCompletedFolder;
             if (!archiveResult.outputFolder.empty()) {
               completedFolders.push_back(archiveResult.outputFolder);
               ++result.succeededCount;
@@ -494,6 +505,9 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
   if (!lastError.empty()) {
     result.message += ". " + lastError;
   }
+  if (result.reusedCompletedFolder) {
+    result.message += ". " + std::string(reusedOutputMessage);
+  }
   return result;
 }
 
@@ -514,6 +528,9 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
   auto finish = [&]() {
     result.libraryChanged = result.libraryChanged ||
                             repository.GetLibraryRevision() != initialRevision;
+    if (result.reusedCompletedFolder) {
+      result.message += " " + std::string(reusedOutputMessage);
+    }
     return result;
   };
   auto cancel = [&]() {

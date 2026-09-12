@@ -2087,19 +2087,13 @@ void testFullRarUsesIndependentEntryWorkers(bool rar4, bool solid, std::size_t w
   }
 }
 
-void testFullRarSerializesLargeDictionariesAndAliases(bool alias) {
+void testFullRarSerializesLargeDictionaries() {
   TempDirectory temporary;
   const auto path = temporary.path() / "constrained.rar";
   std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
                                    std::end(archive_rar_fixtures::nonSolid));
   for (std::size_t header : {25, 123, 221, 319}) {
-    if (alias && header != 123) continue;
-    if (alias) {
-      const std::string name = "file0.bin";
-      std::copy(name.begin(), name.end(), bytes.begin() + header + 29);
-    } else {
-      bytes[header + 26] = 0x5b;
-    }
+    bytes[header + 26] = 0x5b;
     std::uint32_t crc = 0xffffffffu;
     for (std::size_t offset = header + 4; offset < header + 38; ++offset) {
       crc ^= bytes[offset];
@@ -2123,7 +2117,7 @@ void testFullRarSerializesLargeDictionariesAndAliases(bool alias) {
   assert(result && threads.size() == 1 && budget.writtenBytes == 4 * 1024 * 1024);
   std::ifstream input(result->outputFolder / "file0.bin", std::ios::binary);
   const std::string actual((std::istreambuf_iterator<char>(input)), {});
-  assert(actual == std::string(1024 * 1024, alias ? 'b' : 'a'));
+  assert(actual == std::string(1024 * 1024, 'a'));
 }
 
 void testParallelSdkFailurePreservesOriginal(int failureKind, bool sevenZip = false) {
@@ -2218,47 +2212,207 @@ void testFullRarRebuildsMismatchedCachedPath() {
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
-void testParallelZipSerializesFilesystemAliases(const std::string &extension) {
-  TempDirectory temporary;
-  const std::string composed = "\xc3\xa9.bin";
-  const std::string decomposed = "e\xcc\x81.bin";
-  std::ofstream(temporary.path() / composed).put('x');
-  if (!std::filesystem::exists(temporary.path() / decomposed)) return;
-  const auto path = temporary.path() / ("aliases" + extension);
+void writeFullUnzipOutputCollisionFixture(const std::filesystem::path &path,
+                                         const std::vector<std::string> &names) {
+  assert(names.size() == 4);
+  const auto extension = path.extension();
+  if (extension == ".rar") {
+    std::vector<unsigned char> bytes(std::begin(archive_rar_fixtures::nonSolid),
+                                     std::end(archive_rar_fixtures::nonSolid));
+    const std::array<std::size_t, 4> headers{25, 123, 221, 319};
+    for (std::size_t index = names.size(); index-- > 0;) {
+      const auto header = headers[index];
+      const auto &name = names[index];
+      assert(!name.ends_with('/') && name.size() < 100);
+      assert(bytes[header + 4] == 33 && bytes[header + 28] == 9);
+      bytes.erase(bytes.begin() + header + 29, bytes.begin() + header + 38);
+      bytes.insert(bytes.begin() + header + 29, name.begin(), name.end());
+      bytes[header + 4] = static_cast<unsigned char>(24 + name.size());
+      bytes[header + 28] = static_cast<unsigned char>(name.size());
+      std::uint32_t crc = 0xffffffffu;
+      for (std::size_t offset = header + 4; offset < header + 29 + name.size(); ++offset) {
+        crc ^= bytes[offset];
+        for (int bit = 0; bit < 8; ++bit) crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+      }
+      writeLeU32(bytes.data() + header, crc ^ 0xffffffffu);
+    }
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    output.close();
+    assert(output.good());
+    return;
+  }
   auto writer = makeArchiveWriteHandle();
   assert((extension == ".7z" ? archive_write_set_format_7zip(writer.get()) :
           extension == ".tar" ? archive_write_set_format_pax_restricted(writer.get()) :
                                 archive_write_set_format_zip(writer.get())) == ARCHIVE_OK);
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
   char value = 'a';
-  for (const auto &name : {composed, decomposed}) {
-    const std::string payload(1024 * 1024, value++);
+  for (const auto &name : names) {
+    const bool directory = name.ends_with('/');
+    const std::string payload(directory ? 0 : 1024, value++);
     ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
     archive_entry_set_pathname(entry.get(), name.c_str());
-    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_filetype(entry.get(), directory ? AE_IFDIR : AE_IFREG);
     archive_entry_set_perm(entry.get(), 0644);
     archive_entry_set_size(entry.get(), payload.size());
     assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
     assert(archive_write_data(writer.get(), payload.data(), payload.size()) == static_cast<la_ssize_t>(payload.size()));
+    assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
   }
   assert(archive_write_close(writer.get()) == ARCHIVE_OK);
-  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = 2}};
-  std::set<std::thread::id> threads;
-  std::mutex threadsMutex;
+}
+
+void testFullUnzipOutputCollisions(const std::string &extension, std::size_t workers,
+                                  const std::string &selectedCase = "") {
+  struct Fixture {
+    std::string name;
+    std::vector<std::string> paths;
+    bool collision;
+  };
+  const std::vector<Fixture> fixtures{
+      {"duplicate", {"before.bin", "same.bin", "same.bin", "after.bin"}, true},
+      {"case", {"before.bin", "File.bin", "file.bin", "after.bin"}, true},
+      {"unicode", {"before.bin", "\xc3\xa9.bin", "e\xcc\x81.bin", "after.bin"}, true},
+      {"directory-case", {"before.bin", "Song/a.bin", "song/b.bin", "after.bin"}, true},
+      {"prefix", {"before.bin", "node", "node/child.bin", "after.bin"}, true},
+      {"prefix-reversed", {"before.bin", "node/child.bin", "node", "after.bin"}, true},
+      {"directory", {"before.bin", "node/", "node", "after.bin"}, true},
+      {"short-name-first", {"before.bin", "LONGFI~1.BIN", "LongFileName.bin", "after.bin"}, false},
+      {"long-name-first", {"before.bin", "LongFileName.bin", "LONGFI~1.BIN", "after.bin"}, false},
+      {"shared-parent", {"song/a.bin", "song/b.bin", "song/sub/c.bin", "song/sub/d.bin"}, false},
+      {"nonalias-prefix", {"song/a", "song/ab", "song/b/a", "song/b/ab"}, false},
+      {"explicit-parent", {"song/", "song/a.bin", "song/b.bin", "song/sub/c.bin"}, false}};
+  bool exercised = false;
+  for (const auto &fixture : fixtures) {
+    if (!selectedCase.empty() && fixture.name != selectedCase) continue;
+    if (fixture.name.ends_with("name-first") && extension != ".zip") continue;
+    if (extension == ".rar" && (fixture.name == "directory" || fixture.name == "explicit-parent")) continue;
+    exercised = true;
+    TempDirectory temporary;
+    bool collision = fixture.collision;
+    if (fixture.name == "case" || fixture.name == "unicode" || fixture.name == "directory-case" ||
+        fixture.name.ends_with("name-first")) {
+      const auto probe = temporary.path() / "probe";
+      std::filesystem::create_directory(probe);
+      if (fixture.name == "directory-case") {
+        assert(std::filesystem::create_directory(probe / "Song"));
+        collision = std::filesystem::exists(probe / "song");
+      } else {
+        std::ofstream output(probe / fixture.paths[1], std::ios::binary);
+        output.put('x');
+        output.close();
+        assert(output.good());
+        collision = std::filesystem::exists(probe / fixture.paths[2]);
+      }
+    }
+    const auto path = temporary.path() / (fixture.name + extension);
+    writeFullUnzipOutputCollisionFixture(path, fixture.paths);
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    assert(archive_file::listEntries(path, entries, &error) && entries.size() == fixture.paths.size());
+    std::multiset<std::string> expectedFiles;
+    for (const auto &name : fixture.paths) {
+      if (!name.ends_with('/')) expectedFiles.insert(name);
+    }
+    std::multiset<std::string> indexedFiles;
+    for (const auto &entry : entries) {
+      if (!entry.directory) indexedFiles.insert(fspath_to_utf8(entry.path));
+    }
+    if (fixture.name == "unicode") {
+      assert(indexedFiles.count("before.bin") == 1 && indexedFiles.count("after.bin") == 1);
+      const auto composedCount = indexedFiles.count(fixture.paths[1]);
+      const auto decomposedCount = indexedFiles.count(fixture.paths[2]);
+      assert(composedCount + decomposedCount == 2);
+      collision = collision || composedCount == 2 || decomposedCount == 2;
+    } else {
+      assert(indexedFiles == expectedFiles);
+    }
+    std::ifstream originalInput(path, std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(originalInput)), {});
+    originalInput.close();
+    const auto outputRoot = temporary.path() / "output";
+    archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers,
+        .maximumMemoryBytes = 256ull * 1024 * 1024}};
+    std::cerr << "Full unzip output collision: " << extension << ' ' << fixture.name
+              << " workers=" << workers << " reject=" << collision << '\n';
+    const auto result = archive_file::unzipArchiveFully(path, outputRoot, &error,
+        nullptr, nullptr, nullptr, false, nullptr, &budget);
+    assert(std::filesystem::exists(path));
+    std::ifstream retainedInput(path, std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(retainedInput)), {}) == original);
+    assert(budget.pendingWriteBytes == 0);
+    if (collision) {
+      assert(!result && !error.empty());
+      assert(budget.writtenBytes == 0);
+      if (std::filesystem::exists(outputRoot)) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(outputRoot)) {
+          assert(entry.path().filename() != ".asobmashow_unzip_complete");
+          assert(entry.path().filename() != ".asobmashow_unzip_complete.tmp");
+          if (entry.is_regular_file() && entry.path().filename() != ".asobmashow_unzip_incomplete") {
+            assert(entry.file_size() == 0);
+          }
+        }
+      }
+    } else {
+      const std::size_t payloadSize = extension == ".rar" ? 1024 * 1024 : 1024;
+      assert(result && result->fileCount == expectedFiles.size());
+      assert(budget.writtenBytes == payloadSize * expectedFiles.size());
+      assert(std::filesystem::exists(result->outputFolder / ".asobmashow_unzip_complete"));
+      assert(!std::filesystem::exists(result->outputFolder / ".asobmashow_unzip_incomplete"));
+      for (std::size_t index = 0; index < fixture.paths.size(); ++index) {
+        const auto destination = result->outputFolder / fixture.paths[index];
+        if (fixture.paths[index].ends_with('/')) {
+          assert(std::filesystem::is_directory(destination));
+          continue;
+        }
+        std::ifstream input(destination, std::ios::binary);
+        const std::string actual((std::istreambuf_iterator<char>(input)), {});
+        assert(actual == std::string(payloadSize, static_cast<char>('a' + index)));
+      }
+    }
+  }
+  assert(exercised);
+}
+
+void testFullUnzipKeepsReservedOutputIdentities(const std::string &extension,
+                                               std::size_t workers) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / ("reservations" + extension);
+  const std::vector<std::string> names{
+      "file0.bin", "file1.bin", "song/file2.bin", "song/file3.bin"};
+  writeFullUnzipOutputCollisionFixture(archivePath, names);
+  const auto identities = temporary.path() / "identities";
+  assert(std::filesystem::create_directory(identities));
+  std::filesystem::path outputFolder;
+  bool captured = false;
   std::string error;
-  const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
-      nullptr, [&](const archive_file::UnzipProgress &progress) {
-        std::lock_guard lock(threadsMutex);
-        if (progress.current > 0) threads.insert(std::this_thread::get_id());
-      }, [&] {
-        std::lock_guard lock(threadsMutex);
-        threads.insert(std::this_thread::get_id());
+  archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers,
+      .maximumMemoryBytes = 256ull * 1024 * 1024}};
+  const auto result = archive_file::unzipArchiveFully(
+      archivePath, temporary.path() / "output", &error, nullptr, nullptr,
+      [&] {
+        if (captured || outputFolder.empty()) return true;
+        for (const auto &name : names) {
+          if (!std::filesystem::is_regular_file(outputFolder / name) ||
+              std::filesystem::file_size(outputFolder / name) != 0) return true;
+        }
+        for (std::size_t index = 0; index < names.size(); ++index) {
+          std::filesystem::create_hard_link(outputFolder / names[index],
+                                            identities / std::to_string(index));
+        }
+        captured = true;
         return true;
-      }, false, nullptr, &budget);
-  assert(result && threads.size() == 1);
-  std::ifstream input(result->outputFolder / composed, std::ios::binary);
-  const std::string actual((std::istreambuf_iterator<char>(input)), {});
-  assert(actual == std::string(1024 * 1024, 'b'));
+      }, false, [&](const auto &folder, const auto &) { outputFolder = folder; return true; }, &budget);
+  assert(result && captured);
+  const std::size_t payloadSize = extension == ".rar" ? 1024 * 1024 : 1024;
+  for (std::size_t index = 0; index < names.size(); ++index) {
+    const auto identity = identities / std::to_string(index);
+    assert(std::filesystem::equivalent(identity, result->outputFolder / names[index]));
+    std::ifstream input(identity, std::ios::binary);
+    assert(std::string((std::istreambuf_iterator<char>(input)), {}) ==
+           std::string(payloadSize, static_cast<char>('a' + index)));
+  }
 }
 
 void testPipelinedUnzipCancellationDrainsWithoutCompleting(const std::string &extension) {
@@ -3067,6 +3221,14 @@ void testDebugLogRetainsNewestThousandLines() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--output-reservations") {
+    testFullUnzipKeepsReservedOutputIdentities(".zip", 4);
+    return 0;
+  }
+  if (argc == 5 && std::string(argv[1]) == "--output-collision") {
+    testFullUnzipOutputCollisions(argv[2], std::stoul(argv[4]), argv[3]);
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--live-manifest-promotion") {
     testLiveManifestPromotionCoalescesAndCancelsWaiters();
     return 0;
@@ -3152,11 +3314,13 @@ int main(int argc, char **argv) {
   testFullRarUsesIndependentEntryWorkers(true, false, 4, 1024ull * 1024 * 1024);
   testFullRarUsesIndependentEntryWorkers(true, false, 4, 1024ull * 1024 * 1024, true);
   testFullRarRebuildsMismatchedCachedPath();
-  testFullRarSerializesLargeDictionariesAndAliases(false);
-  testFullRarSerializesLargeDictionariesAndAliases(true);
+  testFullRarSerializesLargeDictionaries();
   for (int failureKind = 0; failureKind < 4; ++failureKind) testParallelSdkFailurePreservesOriginal(failureKind);
-  for (const auto *extension : {".zip", ".7z", ".tar"}) {
-    testParallelZipSerializesFilesystemAliases(extension);
+  for (const auto *extension : {".zip", ".7z", ".tar", ".rar"}) {
+    for (std::size_t workers : {1, 4}) {
+      testFullUnzipOutputCollisions(extension, workers);
+      testFullUnzipKeepsReservedOutputIdentities(extension, workers);
+    }
   }
   testPipelinedUnzipCancellationDrainsWithoutCompleting(".7z");
   testPipelinedUnzipCancellationDrainsWithoutCompleting(".tar");

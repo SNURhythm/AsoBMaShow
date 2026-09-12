@@ -3933,6 +3933,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(archive_asset_batch_loader_tests PRIVATE cxx_std_23)
     target_link_libraries(archive_asset_batch_loader_tests PRIVATE Threads::Threads)
 
+    add_executable(windows_extraction_path_policy_tests
+        tests/windows_extraction_path_policy_tests.cpp
+    )
+    target_compile_features(windows_extraction_path_policy_tests PRIVATE cxx_std_23)
+
     add_executable(archive_file_concurrency_tests
         tests/archive_file_concurrency_tests.cpp
         src/ArchiveFile.cpp
@@ -8084,6 +8089,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         chart_scan_work_scheduler_tests
         archive_asset_pipeline_tests
         archive_asset_batch_loader_tests
+        windows_extraction_path_policy_tests
         archive_file_concurrency_tests
         chart_library_scanner_tests
         archive_unzip_operation_tests
