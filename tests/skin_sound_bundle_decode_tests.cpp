@@ -46,17 +46,16 @@ public:
   SoundSandbox(const SoundSandbox &) = delete;
   SoundSandbox &operator=(const SoundSandbox &) = delete;
 
-  // Copies a repo asset ("assets/select.wav") into the sandbox so decoding
-  // exercises a real bundled WAV rather than a hand-written fixture.
-  std::filesystem::path copyBundledWav() {
+  std::filesystem::path copyBundledAudio() {
     const std::filesystem::path source =
-        std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "assets" / "select.wav";
-    const auto destination = root_ / "select.wav";
+        std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "assets" / "select.ogg";
+    const auto destination = root_ / "select.ogg";
     std::ifstream input(source, std::ios::binary);
+    expect(input.is_open(), "open the real assets/select.ogg fixture");
     std::ofstream output(destination, std::ios::binary);
     output << input.rdbuf();
     if (!output) {
-      expect(false, "sandbox copies assets/select.wav into the temp dir");
+      expect(false, "sandbox copies assets/select.ogg into the temp dir");
     }
     return destination;
   }
@@ -67,22 +66,27 @@ private:
   std::filesystem::path root_;
 };
 
-void testBundleAwareDecodeProducesPcm() {
+void testBundleAwareDecodeProducesPcm(bool extensionFallback) {
   SoundSandbox sandbox;
-  const auto wavPath = sandbox.copyBundledWav();
+  const auto audioPath = sandbox.copyBundledAudio();
+  const auto requestedPath = extensionFallback ? sandbox.root() / "select.wav" : audioPath;
+  expect(std::filesystem::file_size(audioPath) < 1024U * 1024U,
+         "the bundled select Ogg stays below one MiB");
   std::vector<short> pcm;
-  SF_INFO info;
+  SF_INFO info{};
   std::atomic<bool> cancelled{false};
   const bool decoded = decodeSkinSoundBundleAware(
-      fspath_to_path_t(wavPath), pcm, info, cancelled, {});
-  expect(decoded,
-         "the bundle-aware skin-sound decode reads a real bundled WAV");
-  expect(!pcm.empty(),
-         "the bundle-aware decode produces non-empty PCM");
-  expect(info.channels > 0,
-         "the bundle-aware decode reports a positive channel count");
-  expect(info.samplerate > 0,
-         "the bundle-aware decode reports a positive sample rate");
+      fspath_to_path_t(requestedPath), pcm, info, cancelled, {});
+  expect(decoded, extensionFallback
+                      ? "the bundled select.wav hint resolves to the real select.ogg"
+                      : "the bundle-aware skin-sound decode reads the real bundled Ogg");
+  expect(pcm.size() == 2646000 && info.frames == 2646000,
+         "the bundle-aware decode produces the complete 60-second select track");
+  expect(info.channels == 1 && info.samplerate == 44100,
+         "the bundle-aware decode preserves mono 44100 Hz select audio");
+  expect((info.format & SF_FORMAT_TYPEMASK) == SF_FORMAT_OGG &&
+             (info.format & SF_FORMAT_SUBMASK) == SF_FORMAT_VORBIS,
+         "the bundled select track decodes as Ogg Vorbis");
   expect(!cancelled.load(), "an uncancelled decode stays uncancelled");
 }
 
@@ -153,12 +157,12 @@ void testPreviewExtensionFallback(bool archived, bool bundleAware) {
 
 void testBundleAwareDecodeHonorsPcmBudget() {
   SoundSandbox sandbox;
-  const auto wavPath = sandbox.copyBundledWav();
+  const auto audioPath = sandbox.copyBundledAudio();
   std::vector<short> pcm;
   SF_INFO info;
   std::atomic<bool> cancelled{false};
   const bool decoded = decodeSkinSoundBundleAware(
-      fspath_to_path_t(wavPath), pcm, info, cancelled,
+      fspath_to_path_t(audioPath), pcm, info, cancelled,
       {.maximumPcmSamples = 1});
   expect(!decoded,
          "a decode past the PCM sample budget is rejected before allocation");
@@ -168,15 +172,16 @@ void testBundleAwareDecodeHonorsPcmBudget() {
 
 void testBundleAwareDecodeRejectsOversizedEncodedFile() {
   SoundSandbox sandbox;
-  const auto wavPath = sandbox.copyBundledWav();
+  const auto audioPath = sandbox.copyBundledAudio();
   std::vector<short> pcm;
   SF_INFO info;
   std::atomic<bool> cancelled{false};
   const bool decoded = decodeSkinSoundBundleAware(
-      fspath_to_path_t(wavPath), pcm, info, cancelled,
+      fspath_to_path_t(audioPath), pcm, info, cancelled,
       {.maximumEncodedBytes = 1});
   expect(!decoded,
          "an encoded file past the byte cap is rejected without allocation");
+  expect(pcm.empty(), "the rejected encoded file leaves no partial PCM behind");
 }
 
 void testBundleAwareDecodeMissingFileFallsBackToRecordedFailure() {
@@ -191,15 +196,13 @@ void testBundleAwareDecodeMissingFileFallsBackToRecordedFailure() {
 }
 
 void testBundleAwareDecodeBoundedEncodedFallback() {
-  // An absolute user file (a real WAV in the temp dir) that the bundle read
-  // also resolves must decode through the same bounded budget path.
   SoundSandbox sandbox;
-  const auto wavPath = sandbox.copyBundledWav();
+  const auto audioPath = sandbox.copyBundledAudio();
   std::vector<short> pcm;
   SF_INFO info;
   std::atomic<bool> cancelled{false};
   const bool decoded = decodeSkinSoundBundleAware(
-      fspath_to_path_t(wavPath), pcm, info, cancelled,
+      fspath_to_path_t(audioPath), pcm, info, cancelled,
       {.maximumEncodedBytes = 4U * 1024U * 1024U,
        .maximumPcmSamples = 4U * 1024U * 1024U});
   expect(decoded && info.channels > 0 && info.samplerate > 0,
@@ -209,14 +212,14 @@ void testBundleAwareDecodeBoundedEncodedFallback() {
 
 void testBundleAwareDecodeHonorsStopToken() {
   SoundSandbox sandbox;
-  const auto wavPath = sandbox.copyBundledWav();
+  const auto audioPath = sandbox.copyBundledAudio();
   std::vector<short> pcm;
   SF_INFO info;
   std::atomic<bool> cancelled{false};
   std::stop_source source;
   source.request_stop();
   const bool decoded = decodeSkinSoundBundleAware(
-      fspath_to_path_t(wavPath), pcm, info, cancelled, {},
+      fspath_to_path_t(audioPath), pcm, info, cancelled, {},
       source.get_token());
   expect(!decoded,
          "a stop-requested bundle-aware decode returns no audio");
@@ -233,7 +236,7 @@ void testBundleOnlyPreviewExtensionFallback(const char *executable) {
   std::filesystem::create_directories(binary.parent_path());
   std::filesystem::create_directories(resources);
   std::filesystem::copy_file(std::filesystem::absolute(executable), binary);
-  std::filesystem::copy_file(sandbox.copyBundledWav(), resources / "select.wav");
+  std::filesystem::copy_file(sandbox.copyBundledAudio(), resources / "select.ogg");
   std::ofstream(bundle / "Info.plist") <<
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
       "<plist version=\"1.0\"><dict>"
@@ -255,18 +258,40 @@ void testBundleOnlyPreviewExtensionFallback(const char *executable) {
 }
 
 int runBundleOnlyPreviewDecode() {
-  const std::filesystem::path requested = "bundle-preview/select.ogg";
-  expect(!std::filesystem::exists("bundle-preview/select.wav"),
+  const std::filesystem::path requested = "bundle-preview/select.wav";
+  expect(!std::filesystem::exists(requested) &&
+             !std::filesystem::exists("bundle-preview/select.ogg"),
          "the preview fixture is not visible through ordinary filesystem lookup");
   std::vector<short> pcm;
   SF_INFO info{};
   std::atomic<bool> cancelled{false};
-  expect(decodeSkinSoundBundleAware(PATH("bundle-preview/select.wav"), pcm, info, cancelled, {}),
-         "the real SDL bundle reader can reach the exact fixture");
+  expect(decodeSkinSoundBundleAware(PATH("bundle-preview/select.ogg"), pcm, info, cancelled, {}),
+         "the real SDL bundle reader can reach the exact Ogg fixture");
+  expect(pcm.size() == 2646000 && info.channels == 1 && info.samplerate == 44100,
+         "the exact bundled Ogg decodes the complete select track");
+  const auto exactPcm = pcm;
   pcm.clear();
   expect(decodeSkinSoundBundleAware(fspath_to_path_t(requested), pcm, info, cancelled, {}),
-         "the real SDL bundle reader resolves select.ogg to bundled select.wav");
-  expect(!pcm.empty(), "bundle-only extension fallback publishes decoded PCM");
+         "the real SDL bundle reader resolves select.wav to bundled select.ogg");
+  expect(!pcm.empty() && pcm == exactPcm,
+         "bundle-only extension fallback publishes the same complete Ogg PCM");
+  for (const auto limits : {AudioDecodeLimits{.maximumEncodedBytes = 1},
+                           AudioDecodeLimits{.maximumPcmSamples = 1}}) {
+    pcm.clear();
+    expect(!decodeSkinSoundBundleAware(fspath_to_path_t(requested), pcm, info,
+                                      cancelled, limits),
+           "bundle-only Ogg fallback preserves encoded and decoded size limits");
+    expect(pcm.empty(), "oversized bundled Ogg fallback does not publish partial PCM");
+  }
+  std::stop_source stopped;
+  stopped.request_stop();
+  expect(!decodeSkinSoundBundleAware(fspath_to_path_t(requested), pcm, info,
+                                    cancelled, {}, stopped.get_token()),
+         "a stopped bundle-only Ogg fallback does not decode audio");
+  cancelled = true;
+  expect(!decodeSkinSoundBundleAware(fspath_to_path_t(requested), pcm, info, cancelled, {}),
+         "a cancelled bundle-only Ogg fallback does not decode audio");
+  expect(pcm.empty(), "cancelled bundled Ogg fallback does not publish PCM");
   return failures == 0 ? 0 : 1;
 }
 #endif
@@ -294,7 +319,8 @@ int main(int argc, char **argv) {
 #ifdef __APPLE__
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
-  testBundleAwareDecodeProducesPcm();
+  testBundleAwareDecodeProducesPcm(false);
+  testBundleAwareDecodeProducesPcm(true);
   for (bool archived : {false, true}) {
     for (bool bundleAware : {false, true}) {
       testPreviewExtensionFallback(archived, bundleAware);

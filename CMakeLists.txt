@@ -543,11 +543,13 @@ elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_custom_command(
         TARGET main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:main>/Contents/Resources
+        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/select.wav
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets
     )
 else()
     add_custom_command(
         TARGET main POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE_DIR:main>/assets/select.wav
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:main>/assets
     )
 endif()
@@ -638,6 +640,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     find_package(BZip2 REQUIRED)
     find_package(LibLZMA REQUIRED)
     find_package(ZLIB REQUIRED)
+
+    add_test(NAME generate_select_sounds_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/generate_select_sounds_tests.py -v)
+    set_tests_properties(generate_select_sounds_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        TIMEOUT 60
+    )
 
     add_test(NAME android_folder_picker_lifecycle_tests
         COMMAND ${Python3_EXECUTABLE}
