@@ -337,7 +337,7 @@ int main() {
         moved = function_body(source, "void MusicSelectScene::selectedBarMoved()")
         launch = function_body(source, "void MusicSelectScene::launchSelected(")
         methods.append("void MusicSelectScene::launchSelected(bool autoplay, bool practice)" +
-                       launch[:launch.index("StartupTiming::instance().beginSession()")] + "}")
+                       launch[:launch.index("const auto record = *selected.chart;")] + "}")
         guard_start = moved.index("if (directoryRequest_ &&")
         guard_end = moved.index("requestFolderStatus(snapshot);", guard_start)
         reload = function_body(source, "void MusicSelectScene::reloadLibrary(")

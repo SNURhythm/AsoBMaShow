@@ -67,10 +67,6 @@ void applyEffectiveLongNoteModeToChart(bms_parser::Chart &, int) {}
 void applyDoublePlayFlipToChart(bms_parser::Chart &) {
   assert(false && "launch cancellation fixture does not enable double-play flip");
 }
-struct StartupTiming {
-  static StartupTiming &instance() { static StartupTiming timing; return timing; }
-  void mark(const char *) {}
-};
 struct StartOptions {
   int startPosition, autoKeySound, autoPlay, gaugeType, gaugeAutoShift;
   int gaugeAutoShiftLowerBound, playOption, playOptionSeed, playOption2;

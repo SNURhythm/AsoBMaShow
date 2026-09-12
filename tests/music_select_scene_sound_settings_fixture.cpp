@@ -13,7 +13,6 @@ int previewCreated = 0;
 int previewAlive = 0;
 int systemAlive = 0;
 int scopesClosed = 0;
-namespace audio::diag { void SelectAudioLog(const std::string &) {} }
 void SDL_Log(const char *, ...) {}
 std::string fspath_to_utf8(const std::filesystem::path &path) { return path.string(); }
 void *StartIOSSecurityScopedResource(const std::string &, const std::string &,

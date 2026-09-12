@@ -248,7 +248,6 @@ struct Bars {
 };
 namespace audio {
 struct PlaybackRate { int percent; int mode; };
-namespace diag { void SelectAudioLog(const std::string &) {} }
 }
 struct StartOptions {
   int startPosition;
@@ -287,11 +286,6 @@ auto musicSelectTableContextForLaunch(const Bars &) {
   struct Table { std::string name = "table", level = "12"; };
   return Table{};
 }
-struct StartupTiming {
-  static StartupTiming &instance() { static StartupTiming timing; return timing; }
-  void mark(const char *) {}
-  void beginSession() {}
-};
 namespace rendering { int window_width = 1280, window_height = 720; }
 namespace platform_open { bool openExternalUrl(const std::string &, std::string &) { return true; } }
 struct View {

@@ -753,7 +753,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(skin_draw_command_tests
             tests/skin_draw_command_tests.cpp
-            src/StartupTiming.cpp
             src/Utils.cpp
             src/path.cpp
             src/FileChecksum.cpp
@@ -809,7 +808,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(play_skin_touch_geometry_tests
             tests/play_skin_touch_geometry_tests.cpp
-            src/StartupTiming.cpp
             src/Utils.cpp
             src/path.cpp
             src/FileChecksum.cpp
@@ -1373,7 +1371,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(music_select_preview_tests
             tests/music_select_preview_tests.cpp
-            src/audio/SelectAudioDiagnostics.cpp
             src/music_select/MusicSelectPreview.cpp
             src/music_select/MusicSelectPreviewAudioService.cpp
             src/Utils.cpp
@@ -2116,7 +2113,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(beatoraja_gameplay_cross_format_tests
             tests/beatoraja_gameplay_cross_format_tests.cpp
-            src/StartupTiming.cpp
             src/Utils.cpp
             src/path.cpp
             src/FileChecksum.cpp
@@ -4444,7 +4440,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/ClubBeat.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
-        src/audio/SelectAudioDiagnostics.cpp
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/ReplayKeysoundSchedule.cpp
         src/ArchiveFile.cpp
@@ -4480,7 +4475,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioBackend.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
-        src/audio/SelectAudioDiagnostics.cpp
         src/skin/beatoraja/LuaSkinApplicationAudioBackend.cpp
         src/Utils.cpp
         src/path.cpp
@@ -4494,7 +4488,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(skin_sound_bundle_decode_tests
         tests/skin_sound_bundle_decode_tests.cpp
         src/audio/decoder.cpp
-        src/audio/SelectAudioDiagnostics.cpp
         src/ArchiveFile.cpp
         src/MinizBridge.c
         src/Utils.cpp
@@ -4525,7 +4518,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
-        src/audio/SelectAudioDiagnostics.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
@@ -4706,7 +4698,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
             src/skin/beatoraja/SkinModelValidator.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -4758,7 +4749,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -4790,7 +4780,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -5789,7 +5778,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/AudioDeviceManager.cpp
         src/audio/AudioMix.cpp
         src/audio/AudioWrapper.cpp
-        src/audio/SelectAudioDiagnostics.cpp
         src/audio/ClubBeat.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/audio/Jukebox.cpp
@@ -5940,7 +5928,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
@@ -5968,7 +5955,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -6120,7 +6106,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/MusicSelectSkinSession.cpp
             src/skin/beatoraja/MusicSelectSkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/ResultSkinSession.cpp
@@ -6149,7 +6134,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp
@@ -6307,7 +6291,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinTableDecoder.cpp
             src/skin/beatoraja/NumericGlyphAtlas.cpp
             src/skin/beatoraja/PlaySkinSession.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/PlaySkinStateBridge.cpp
             src/skin/beatoraja/PlaySkinViewport.cpp
             src/skin/beatoraja/Skin2DRenderer.cpp
@@ -6335,7 +6318,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/SkinMovieCatalog.cpp
             src/skin/beatoraja/SkinMovieCatalogFrame.cpp
             src/skin/beatoraja/SkinResourceCatalog.cpp
-            src/StartupTiming.cpp
             src/skin/beatoraja/SkinDecodeCache.cpp
             src/skin/beatoraja/PomyuCharaResource.cpp
             src/skin/beatoraja/SkinBitmapFontParser.cpp

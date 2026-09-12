@@ -1,14 +1,18 @@
 #include "audio/decoder.h"
 #include "ArchiveFile.h"
 #include "ArchiveRAII.h"
+#include "RAII.h"
+#include "Utils.h"
 
 #include <archive_entry.h>
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -274,6 +278,20 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::string_view(argv[1]) == "--bundle-preview") {
     return runBundleOnlyPreviewDecode();
   }
+#endif
+#ifndef _WIN32
+  SoundSandbox documentsSandbox;
+  const char *home = std::getenv("HOME");
+  const std::optional<std::string> previousHome = home ? std::make_optional(home) : std::nullopt;
+  if (setenv("HOME", documentsSandbox.root().c_str(), 1) != 0) return 2;
+  ScopeExit restoreHome([&] {
+    if (previousHome) setenv("HOME", previousHome->c_str(), 1);
+    else unsetenv("HOME");
+  });
+  const auto documents = Utils::GetDocumentsPath();
+  std::filesystem::create_directories(documents);
+#endif
+#ifdef __APPLE__
   testBundleOnlyPreviewExtensionFallback(argv[0]);
 #endif
   testBundleAwareDecodeProducesPcm();
@@ -287,6 +305,10 @@ int main(int argc, char **argv) {
   testBundleAwareDecodeMissingFileFallsBackToRecordedFailure();
   testBundleAwareDecodeBoundedEncodedFallback();
   testBundleAwareDecodeHonorsStopToken();
+#ifndef _WIN32
+  expect(std::filesystem::is_empty(documents),
+         "skin sound decoding does not create debug files in documents");
+#endif
   if (failures != 0) {
     std::cerr << "skin_sound_bundle_decode_tests: " << failures
               << " assertion(s) failed\n";

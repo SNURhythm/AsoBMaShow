@@ -1,6 +1,5 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "AudioWrapper.h"
-#include "SelectAudioDiagnostics.h"
 #include <stdexcept>
 #include <SDL2/SDL.h>
 #include "decoder.h"
@@ -1034,15 +1033,8 @@ audio::SkinSoundLoadResult AudioWrapper::loadSkinSound(
               stop) ||
           isCancelled || sfInfo.channels <= 0 || sfInfo.samplerate <= 0 ||
           pcmData.size() % static_cast<std::size_t>(sfInfo.channels) != 0) {
-        audio::diag::SelectAudioLog("loadSkinSound DECODE FAILED: " +
-                                    path_t_to_utf8(path));
         return {};
       }
-      audio::diag::SelectAudioLog("loadSkinSound ok ch=" +
-                                  std::to_string(sfInfo.channels) +
-                                  " rate=" + std::to_string(sfInfo.samplerate) +
-                                  " frames=" +
-                                  std::to_string(pcmData.size() / static_cast<std::size_t>(sfInfo.channels)));
       privateSound = std::make_shared<SoundData>();
       privateSound->channels = sfInfo.channels;
       privateSound->sourceSampleRate = sfInfo.samplerate;
@@ -1123,7 +1115,6 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
     }
     const auto started = startDeviceWithLifecycleAndSoundLocked();
     if (!started.success) {
-      audio::diag::SelectAudioLog("playSkinSound device-start failed");
       return false;
     }
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
@@ -1138,8 +1129,6 @@ bool AudioWrapper::playSkinSound(audio::SkinSoundHandle handle, float gain,
         &submissionSequence);
     if (accepted) {
       found->second.lastPlaySequence = submissionSequence;
-    } else {
-      audio::diag::SelectAudioLog("playSkinSound command NOT accepted");
     }
     return accepted;
   } catch (...) {
@@ -1600,8 +1589,6 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
       runtimeState_.effectiveSampleRate =
           static_cast<std::uint32_t>(std::max(0, targetSampleRate));
     }
-  } else {
-    audio::diag::SelectAudioLog("device start failed: " + result.diagnostic);
   }
   return result;
 }

@@ -8,10 +8,6 @@
 #include <optional>
 #include "REPOSITORY_ROOT/src/music_select/MusicSelectFolderStatusLoader.h"
 
-namespace audio::diag {
-void SelectAudioLog(const char *) {}
-}
-
 struct Preview {
   void reset() {}
   void silence() {}

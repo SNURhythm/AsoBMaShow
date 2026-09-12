@@ -196,7 +196,6 @@ TableContext musicSelectTableContextForLaunch(int revision) {
   assertUi();
   return {"Table" + std::to_string(revision), "12"};
 }
-namespace audio::diag { void SelectAudioLog(const char *) {} }
 struct Preview {
   bool silenced = false;
   int resumes = 0;

@@ -4,10 +4,6 @@
 #include <optional>
 #include <thread>
 
-namespace audio::diag {
-void SelectAudioLog(const char *) {}
-}
-
 struct Preview {
   bool suppressed = false;
   bool playing = true;

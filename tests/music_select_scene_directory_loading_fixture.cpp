@@ -20,7 +20,6 @@ void expect(bool condition, const char *message) {
 }
 
 void SDL_Log(const char *, ...) {}
-namespace audio::diag { void SelectAudioLog(const char *) {} }
 
 namespace long_note_mode {
 int valueFromId(const std::string &) { return 0; }

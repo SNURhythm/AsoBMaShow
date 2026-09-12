@@ -7,8 +7,6 @@
 #include "../ModernResultRecallBuilder.h"
 #include "../ReplayResultStateBuilder.h"
 
-#include "../audio/SelectAudioDiagnostics.h"
-#include "../StartupTiming.h"
 #include "../PlatformOpen.h"
 #include "../targets.h"
 
@@ -527,7 +525,6 @@ void MusicSelectScene::configureSoundServices() {
       skin::musicSelectSystemSoundPath(
           selectSoundRoots, skin::MusicSelectSystemSound::Select)
           .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
-  audio::diag::SelectAudioLog("[bgm] scene default=" + selectBgm.string());
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
       musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm),
       selectBgm);
@@ -622,7 +619,6 @@ void MusicSelectScene::init() {
   preloadWorker_ = new ChartPreloadWorker();
   preloadWorker_->configure(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
-        StartupTiming::instance().mark("preload worker start");
         auto chart = play_options::parseChart(request.meta, cancelled,
                                               "music-select preload");
         if (!chart || cancelled.load(std::memory_order_relaxed) ||
@@ -630,7 +626,6 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
-        StartupTiming::instance().mark("preload parse done, jukebox load begins");
         // Stage the chart without stopping the shared audio device when the
         // jukebox owns no active playback, so the select BGM/preview playing on
         // the same AudioWrapper keep playing through the preload. No explicit
@@ -643,7 +638,6 @@ void MusicSelectScene::init() {
                 fspath_to_utf8(request.meta.BmsPath))) {
           return;
         }
-        StartupTiming::instance().mark("preload jukebox load done");
         std::lock_guard<std::mutex> lock(preloadMutex_);
         if (fspath_to_path_t(preloadedPath_) !=
             fspath_to_path_t(request.meta.BmsPath)) {
@@ -668,7 +662,6 @@ void MusicSelectScene::onPause() {
     launchThread_.request_stop();
     launchThread_.join();
   }
-  audio::diag::SelectAudioLog("[bgm] scene onPause");
   stopPreloadWorker();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (skinTextInput_ != nullptr) skinTextInput_->endEditing();
@@ -688,7 +681,6 @@ void MusicSelectScene::onPause() {
 
 void MusicSelectScene::onResume() {
   sceneActive_ = true;
-  audio::diag::SelectAudioLog("[bgm] scene onResume");
   launching_ = false;
   hideDecideOverlay();
   const bool background =
@@ -919,14 +911,6 @@ void MusicSelectScene::selectedBarMoved() {
     // Leaving a song folder returns to the looping select BGM: pinned
     // Beatoraja drops the preview but the selector keeps the SELECT sound
     // running, so route through the default rather than going silent.
-    const auto current = previewSelection(
-        snapshot, context.settings.archiveChartPreviewEnabled);
-    audio::diag::SelectAudioLog(
-        std::string("[bgm] scene selectedBarMoved stopAudio") +
-        (current.has_value()
-             ? (" folder=" + current->folder.string()) +
-                   (" preview=" + current->previewPath.string())
-             : " selection=nullopt"));
     previewAudio_->switchTo(std::nullopt);
   }
 
@@ -2160,7 +2144,6 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
   // Stop the preload worker before gameplay starts so it cannot keep touching
   // the jukebox while GamePlayScene uses it.
   stopPreloadWorker();
-  StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
   const auto selections =
       main_menu_profile::Selections::fromSettings(context.settings);
   const auto snapshot = bars_.readView();
@@ -2273,7 +2256,6 @@ void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
 }
 
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
-  audio::diag::SelectAudioLog("[bgm] launchSelected");
   if (!sceneActive_ || failed_ || selectorInputBlocked() ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   const auto snapshot = bars_.readView();
@@ -2298,8 +2280,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     if (!autoplay && !practice) startArchiveUnzip(*selected.chart);
     return;
   }
-  StartupTiming::instance().beginSession();
-  StartupTiming::instance().mark("selector start press");
   const auto record = *selected.chart;
   if (record.unavailable || record.solidArchive ||
       record.meta.BmsPath.empty()) {
@@ -2332,7 +2312,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
     // Stop the preload worker before gameplay starts so it cannot keep
     // touching the jukebox while GamePlayScene uses it.
     stopPreloadWorker();
-    StartupTiming::instance().mark("reused preloaded chart (no parse/load at start)");
     if (!launching_) {
       launching_ = true;
       StartOptions options{
@@ -2376,7 +2355,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       preloadWorker_->isRequesting(fspath_to_utf8(record.meta.BmsPath))) {
     launching_ = true;
     pendingLaunch_ = PendingPreloadLaunch{record, autoplay, practice};
-    StartupTiming::instance().mark("waiting for in-flight preload to complete");
     return;
   }
 
@@ -2461,7 +2439,6 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
                   launchCancelled_.load(std::memory_order_acquire)) {
                 return true;
               }
-              StartupTiming::instance().mark("parse + jukebox load done, changing scene");
               StartOptions options{
                   .startPosition = 0,
                   .autoKeySound = autoKeySound,
@@ -3453,9 +3430,6 @@ void MusicSelectScene::update(float) {
           elapsedMicros(), launching_ ||
               (archiveUnzipModal_ && archiveUnzipModal_->isVisible()));
       preview && previewAudio_) {
-    audio::diag::SelectAudioLog(
-        std::string("[bgm] scene update switchTo path=") +
-        (preview->path.has_value() ? preview->path->string() : "<default>"));
     previewAudio_->switchTo(std::move(preview->path));
   }
   updateRanking();
