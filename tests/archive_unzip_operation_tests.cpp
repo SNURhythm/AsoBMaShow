@@ -4,6 +4,7 @@
 #include "../src/ChartLibraryScanner.h"
 #include "../src/library/ArchiveUnzipRecovery.h"
 #include "../src/sqlite3.h"
+#include "fixtures/archive/mixed_encryption_sevenzip.h"
 
 #include <archive_entry.h>
 #include <algorithm>
@@ -215,6 +216,73 @@ void partialExtractionIsNotIndexedByOrdinaryStartupScan() {
   assert(archive_unzip_recovery::recover(*session).completed);
   assert(session->LoadUnzipRecovery()->empty());
   assert(!std::filesystem::exists(folder));
+}
+
+void mixedEncryptionDeleteModePreservesOriginal(bool warmCache) {
+  Fixture fixture;
+  const auto path = fixture.root / "mixed.7z";
+  std::ofstream archive(path, std::ios::binary);
+  archive.write(reinterpret_cast<const char *>(archive_sevenzip_fixtures::mixedEncryption),
+                sizeof(archive_sevenzip_fixtures::mixedEncryption));
+  archive.close();
+  auto session = fixture.repository.OpenSession();
+  auto batch = session->BeginScanBatch();
+  assert(batch && batch->UpsertSolidArchive({.path = path}));
+  assert(batch->Commit());
+  batch.reset();
+  if (warmCache) {
+    std::vector<archive_file::Entry> entries;
+    assert(archive_file::listEntries(path, entries));
+    assert(entries.size() == 1 && entries.front().path == "chart.bms");
+  }
+  const auto result = runAll(fixture.repository, true);
+  assert(!result.success && !result.cancelled && result.deletedCount == 0);
+  assert(std::filesystem::exists(path));
+  assert(!std::filesystem::exists(fixture.root / "mixed/.asobmashow_unzip_complete"));
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 0 && session->CountSolidArchives() == 1);
+}
+
+void cancellationAfterJournalLeavesRecoverableOwnership(bool cancelInPause) {
+  Fixture fixture;
+  const auto original = fixture.indexedArchive("a.zip");
+  auto session = fixture.repository.OpenSession();
+  std::stop_source stop;
+  const auto token = stop.get_token();
+  std::filesystem::path folder;
+  std::string key, error;
+  bool sawCreatedFolder = false;
+  const auto result = archive_file::unzipArchiveFully(original.meta.BmsPath, fixture.root, &error,
+      &token, nullptr, [&] {
+        if (cancelInPause && !folder.empty() && std::filesystem::exists(folder)) {
+          sawCreatedFolder = true;
+          stop.request_stop();
+          return false;
+        }
+        return true;
+      }, false, [&](const auto &destination, const auto &identity) {
+        folder = destination;
+        key = identity;
+        const bool saved = session->SaveUnzipRecovery({
+            .archivePath = original.meta.BmsPath, .outputFolder = folder,
+            .archiveKey = key, .deleteOriginal = true});
+        if (!cancelInPause) stop.request_stop();
+        return saved;
+      });
+  assert(!result && stop.stop_requested() && error == "Unzip cancelled");
+  assert(!cancelInPause || sawCreatedFolder);
+  assert(std::filesystem::is_directory(folder));
+  assert(archive_file::unzipFolderHasMatchingIncompleteMarker(folder, original.meta.BmsPath, key));
+  assert(!std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(!std::filesystem::exists(folder));
+  assert(std::filesystem::exists(original.meta.BmsPath));
+  const auto retried = runAll(fixture.repository, false);
+  assert(retried.success && !retried.cancelled && retried.deletedCount == 0);
+  assert(std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+  assert(session->LoadUnzipRecovery()->empty());
 }
 
 void cancelledPartialExtractionRecoveryRemovesOwnedOutput() {
@@ -1667,6 +1735,10 @@ int main(int argc, char **argv) {
     else if (test == "--single-unreadable-folder") singleUnreadableOutputRetainsRecoveryUntilReadable(false);
     else if (test == "--single-unreadable-file") singleUnreadableOutputRetainsRecoveryUntilReadable(true);
     else if (test == "--cancel-recovery") cancelledPartialExtractionRecoveryRemovesOwnedOutput();
+    else if (test == "--cancel-after-journal") cancellationAfterJournalLeavesRecoverableOwnership(false);
+    else if (test == "--cancel-after-directory") cancellationAfterJournalLeavesRecoverableOwnership(true);
+    else if (test == "--mixed-encryption-cold") mixedEncryptionDeleteModePreservesOriginal(false);
+    else if (test == "--mixed-encryption-warm") mixedEncryptionDeleteModePreservesOriginal(true);
     else if (test == "--cleanup-failure") failedPartialCleanupRetainsRecovery();
     else if (test == "--unverified-recovery") unverifiedPartialOutputRetainsRecovery("legacy");
     else if (test == "--delayed-replacement") delayedDeletionRejectsReplacement(false);
@@ -1703,6 +1775,10 @@ int main(int argc, char **argv) {
   singleUnreadableOutputRetainsRecoveryUntilReadable(false);
   singleUnreadableOutputRetainsRecoveryUntilReadable(true);
   cancelledPartialExtractionRecoveryRemovesOwnedOutput();
+  cancellationAfterJournalLeavesRecoverableOwnership(false);
+  cancellationAfterJournalLeavesRecoverableOwnership(true);
+  mixedEncryptionDeleteModePreservesOriginal(false);
+  mixedEncryptionDeleteModePreservesOriginal(true);
   sourceIdentityRejectsMissingPathsDirectoriesAndSymlinks();
   sourceIdentityDetectsChangesWithPreservedMetadata(false);
   sourceIdentityDetectsChangesWithPreservedMetadata(true);

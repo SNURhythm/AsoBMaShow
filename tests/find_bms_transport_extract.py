@@ -46,6 +46,20 @@ def main():
     callback_stop = header.index(";", callback_start) + 1
     pieces = [header[callback_start:callback_stop],
               objective_class(native, "AsoHttpsRedirectDelegate")]
+    pieces.append("using IOSDownloadCheckpoint = std::function<bool()>;")
+    for name in ("DownloadURLTextIOS", "PostURLTextIOS"):
+        start = header.index("bool " + name + "(")
+        pieces.append(header[start:header.index(";", start) + 1])
+    bounded = "@interface AsoTextDownloadDelegate" in native
+    pieces.append(f"#define IOS_METADATA_HAS_BOUNDED_DELEGATE {int(bounded)}")
+    if bounded:
+        pieces.append(objective_class(native, "AsoTextDownloadDelegate"))
+    if "bool RequestURLTextIOS(" in native:
+        pieces.append(function(native, "bool RequestURLTextIOS("))
+    for name in ("DownloadURLTextIOS", "PostURLTextIOS"):
+        pieces.append(function(native, "bool " + name + "("))
+    for name in ("fetchUrlText", "postUrlText"):
+        pieces.append(function(transport, "std::optional<std::string> " + name + "("))
     has_file_bridge = "bool DownloadURLToFileIOS(" in native
     pieces.insert(0, f"#define TRANSPORT_HAS_FILE_BRIDGE {int(has_file_bridge)}")
     if has_file_bridge:

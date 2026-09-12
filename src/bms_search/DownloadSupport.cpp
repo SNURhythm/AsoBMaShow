@@ -122,14 +122,16 @@ void reportIOSDownloadProgress(void *context, std::uint64_t downloadedBytes,
 std::optional<std::string> fetchUrlText(
     const std::string &url, std::string &errorMessage,
     const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
-  (void)maximumResponseBytes;
   errorMessage.clear();
   if (cancelled != nullptr && cancelled->load()) {
     errorMessage = "Lookup cancelled.";
     return std::nullopt;
   }
   std::string body;
-  const bool success = DownloadURLTextIOS(url, body, errorMessage, [&] { return cancelled == nullptr || !cancelled->load(); });
+  const bool success = DownloadURLTextIOS(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); },
+      maximumResponseBytes);
   if (cancelled != nullptr && cancelled->load()) {
     errorMessage = "Lookup cancelled.";
     return std::nullopt;
@@ -143,14 +145,16 @@ std::optional<std::string> fetchUrlText(
 std::optional<std::string> postUrlText(
     const std::string &url, std::string &errorMessage,
     const std::atomic_bool *cancelled, size_t maximumResponseBytes) {
-  (void)maximumResponseBytes;
   errorMessage.clear();
   if (cancelled != nullptr && cancelled->load()) {
     errorMessage = "Lookup cancelled.";
     return std::nullopt;
   }
   std::string body;
-  const bool success = PostURLTextIOS(url, body, errorMessage);
+  const bool success = PostURLTextIOS(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); },
+      maximumResponseBytes);
   if (cancelled != nullptr && cancelled->load()) {
     errorMessage = "Lookup cancelled.";
     return std::nullopt;

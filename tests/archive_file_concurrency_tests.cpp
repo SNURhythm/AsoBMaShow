@@ -3,6 +3,7 @@
 #include "../src/scene/play/GameplayBmsResourceAvailability.h"
 #include "fixtures/archive/rar_fixtures.h"
 #include "fixtures/archive/sevenzip_block_fixtures.h"
+#include "fixtures/archive/mixed_encryption_sevenzip.h"
 
 #include <archive_entry.h>
 
@@ -1523,6 +1524,54 @@ void testFullUnzipRejectsReservedRootNames() {
   assert(std::string((std::istreambuf_iterator<char>(nested)), {}) == "ordinary nested file");
 }
 
+void testMixedEncryptionSevenZipRejectsFullUnzip(const std::string &cacheState) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "mixed.7z";
+  const auto cacheDirectory = temporary.path() / "cache";
+  std::ofstream archive(path, std::ios::binary);
+  archive.write(reinterpret_cast<const char *>(archive_sevenzip_fixtures::mixedEncryption),
+                sizeof(archive_sevenzip_fixtures::mixedEncryption));
+  archive.close();
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  if (cacheState != "cold") {
+    assert(archive_file::listEntries(path, entries, &error));
+    assert(entries.size() == 1 && entries.front().path == "chart.bms");
+    if (cacheState == "legacy") {
+      const auto cacheFile = std::filesystem::directory_iterator(cacheDirectory)->path();
+      std::fstream cache(cacheFile, std::ios::binary | std::ios::in | std::ios::out);
+      cache.put(4);
+      assert(cache.good());
+      cache.close();
+      std::filesystem::resize_file(cacheFile, std::filesystem::file_size(cacheFile) - 1);
+    }
+    if (cacheState != "memory") {
+      archive_file::clearArchiveIndexCacheForTesting();
+      archive_file::setArchiveIndexCacheDirectory(cacheDirectory);
+    }
+  }
+  for (const bool reuse : {false, true}) {
+    bool prepared = false;
+    const auto result = archive_file::unzipArchiveFully(path, temporary.path() / "output", &error,
+        nullptr, nullptr, nullptr, reuse,
+        [&](const auto &, const auto &) { prepared = true; return true; });
+    assert(!result && !prepared && error.find("encrypted") != std::string::npos);
+    assert(std::filesystem::exists(path));
+    assert(!std::filesystem::exists(temporary.path() / "output"));
+  }
+  assert(archive_file::listEntries(path, entries, &error));
+  assert(entries.size() == 1 && entries.front().path == "chart.bms");
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, "chart.bms"), bytes, &error));
+  assert(std::string(bytes.begin(), bytes.end()) == archive_sevenzip_fixtures::mixedChart);
+  const bool restoredFromDisk = archive_file::debugLogText().find(
+      "Loaded archive index from disk cache: " + path.string()) != std::string::npos;
+  assert(restoredFromDisk == (cacheState == "disk"));
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
 void testFullUnzipIncompleteMarkerRecordsOwnership() {
   TempDirectory temporary;
   const auto path = temporary.path() / "cancelled.zip";
@@ -2674,7 +2723,11 @@ void testDebugLogRetainsNewestThousandLines() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc == 3 && std::string(argv[1]) == "--mixed-encryption") {
+    testMixedEncryptionSevenZipRejectsFullUnzip(argv[2]);
+    return 0;
+  }
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
   testGameplayBmsResourceAvailabilityPublishesLoaderResult();
@@ -2700,6 +2753,9 @@ int main() {
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
   testDeltaFilteredSevenZipUsesSdk();
+  for (const auto *cacheState : {"cold", "memory", "disk", "legacy"}) {
+    testMixedEncryptionSevenZipRejectsFullUnzip(cacheState);
+  }
   testFullUnzipHonorsPauseDuringExtraction();
   testParallelZipPreservesUnsupportedCompressionFallback();
   testSingleEntryZipPreservesIndexedFilename();

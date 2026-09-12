@@ -14,6 +14,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = urlsplit(self.path).path
+        if route.startswith("/ios-metadata/"):
+            self.ios_metadata(route.removeprefix("/ios-metadata"))
+            return
         if route.startswith("/metadata/"):
             scenario = route.rsplit("/", 1)[-1]
             payload = b"12345678abcdefgh!"
@@ -83,6 +86,64 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.do_GET()
+
+    def ios_metadata(self, route):
+        if route in ("/redirect", "/redirect-over", "/invalid-redirect"):
+            self.send_response(307)
+            self.send_header("Location", {
+                "/redirect": "/ios-metadata/normal",
+                "/redirect-over": "/ios-metadata/oversized",
+                "/invalid-redirect": "file:///fixture-must-not-open",
+            }[route])
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        payload = b"12345678abcdefgh!"
+        if route == "/normal":
+            payload = self.command.encode()
+        elif route == "/exact":
+            payload = b"12345678abcdefgh"
+        elif route == "/empty":
+            payload = b""
+        elif route == "/utf8":
+            payload = "가나다".encode()
+        elif route == "/invalid-utf8":
+            payload = b"\xc0\xaf"
+        elif route == "/nul":
+            payload = b"a\0b"
+        elif route == "/error":
+            payload = b"error"
+        chunked = route in ("/chunked", "/stream-stall", "/cancel")
+        self.send_response(503 if route == "/error" else 200)
+        self.send_header("Content-Type", "application/json")
+        if chunked:
+            self.send_header("Transfer-Encoding", "chunked")
+        elif route != "/no-length":
+            self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        if route in ("/header-stall", "/cancel"):
+            if route == "/header-stall":
+                self.wfile.write(payload[:1])
+                self.wfile.flush()
+                payload = payload[1:]
+            time.sleep(2)
+        try:
+            for offset in range(0, len(payload), 8):
+                chunk = payload[offset:offset + 8]
+                if chunked:
+                    self.wfile.write(f"{len(chunk):x}\r\n".encode())
+                self.wfile.write(chunk)
+                if chunked:
+                    self.wfile.write(b"\r\n")
+                self.wfile.flush()
+            if route == "/stream-stall":
+                time.sleep(2)
+            if chunked:
+                self.wfile.write(b"0\r\n\r\n")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        self.close_connection = True
 
 
 def main():

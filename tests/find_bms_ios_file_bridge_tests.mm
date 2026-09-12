@@ -548,6 +548,8 @@ void exerciseFileFaults(const std::string &origin,
 }
 #endif
 
+#include "ios_metadata_transport_tests.mm"
+
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   @autoreleasepool {
@@ -636,6 +638,7 @@ int main(int argc, char **argv) {
 #endif
     method_setImplementation(method, originalFileRead);
     std::filesystem::remove_all(root);
+    exerciseIOSMetadataTransport(origin + "/ios-metadata");
   }
   std::cout << "macOS Foundation native bridge failures=" << failures
             << "; NOT iOS runtime validation\n";

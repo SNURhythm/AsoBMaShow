@@ -770,6 +770,7 @@ struct CachedIndex {
   std::string sourceIdentity;
   ArchiveIndexBackend backend = ArchiveIndexBackend::Unknown;
   unsigned char sevenZipFormat = 0;
+  bool hasEncryptedEntries = false;
   std::vector<Entry> entries;
   std::unordered_map<std::string, std::size_t> exact;
   std::unordered_map<std::string, std::size_t> lower;
@@ -837,7 +838,7 @@ private:
 };
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
-constexpr std::uint8_t kArchiveIndexCacheVersion = 4;
+constexpr std::uint8_t kArchiveIndexCacheVersion = 5;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
@@ -2841,8 +2842,10 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
                          unsigned char &formatUsed,
                          std::string *errorMessage,
                          const PauseCallback &pauseCallback,
-                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max()) {
+                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
+                         bool *hasEncryptedEntries = nullptr) {
   entries.clear();
+  if (hasEncryptedEntries) *hasEncryptedEntries = false;
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -2888,6 +2891,11 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
       entries.clear();
       return false;
     }
+    if (sevenZipBoolProperty(archive, index, kpidEncrypted, false)) {
+      if (hasEncryptedEntries) *hasEncryptedEntries = true;
+      ++skippedEncrypted;
+      continue;
+    }
     auto entryName = sevenZipStringProperty(archive, index, kpidPath);
     if (!entryName.has_value() || entryName->empty()) {
       entryName = sevenZipStringProperty(archive, index, kpidName);
@@ -2911,11 +2919,6 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
         sevenZipBoolProperty(archive, index, kpidIsDir, false);
     const bool solid = !directory &&
                        sevenZipBoolProperty(archive, index, kpidSolid, archiveSolid);
-    if (!directory &&
-        sevenZipBoolProperty(archive, index, kpidEncrypted, false)) {
-      ++skippedEncrypted;
-      continue;
-    }
     if (solid) {
       ++solidEntries;
     }
@@ -4008,6 +4011,7 @@ bool writeCachedIndexToDisk(const std::string &key,
     writeU64(index.sourceIdentity.size());
     stream.write(index.sourceIdentity.data(),
                  static_cast<std::streamsize>(index.sourceIdentity.size()));
+    writeU8(index.hasEncryptedEntries ? 1 : 0);
     stream.flush();
     return stream.good();
   };
@@ -4134,6 +4138,7 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
   index->sourceIdentity.resize(sourceIdentity.size());
   file.read(index->sourceIdentity.data(),
             static_cast<std::streamsize>(index->sourceIdentity.size()));
+  index->hasEncryptedEntries = readU8() != 0;
   if (!file.good() || index->sourceIdentity != sourceIdentity) return nullptr;
   return index;
 }
@@ -4360,7 +4365,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   if (!loadedEntries && hasSevenZipArchiveExtension(archivePath) &&
       listSevenZipEntries(archivePath, loaded->entries,
                           loaded->sevenZipFormat, &sevenZipError,
-                          pauseCallback, maximumEntries)) {
+                          pauseCallback, maximumEntries, &loaded->hasEncryptedEntries)) {
     loaded->backend = ArchiveIndexBackend::SevenZip;
     loadedEntries = true;
   } else if (!loadedEntries && hasSevenZipArchiveExtension(archivePath) &&
@@ -10651,6 +10656,10 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   std::uint64_t fileCount = 0;
   std::uint64_t uncompressedSize = 0;
   std::unordered_set<std::filesystem::path> directories;
+  if (index->hasEncryptedEntries) {
+    *errorMessage = "Archive contains encrypted entries that cannot be fully unzipped. Original archive kept.";
+    return std::nullopt;
+  }
   std::uint64_t explicitDirectories = 0;
   for (const Entry &entry : index->entries) {
     if (isReservedUnzipEntryPath(entry.path)) {
@@ -10756,9 +10765,6 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     *errorMessage = "Could not create unused unzip output folder. Original archive kept.";
     return std::nullopt;
   }
-  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
-    return std::nullopt;
-  }
 
   const auto incompletePath = outputFolder / ".asobmashow_unzip_incomplete";
   std::ofstream incomplete(incompletePath, std::ios::binary | std::ios::trunc);
@@ -10769,6 +10775,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
     return std::nullopt;
   }
   outputLock.unlock();
+  if (!unzipCheckpoint(stopToken, pauseCallback, errorMessage)) {
+    return std::nullopt;
+  }
   if (execution.workersPerArchive > 1) {
     const auto independent = unzipEntriesHaveIndependentOutputs(*index, outputFolder, stopToken, pauseCallback, errorMessage);
     if (!independent) return std::nullopt;

@@ -2294,6 +2294,87 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
 }
 @end
 
+@interface AsoTextDownloadDelegate
+    : AsoHttpsRedirectDelegate <NSURLSessionDataDelegate> {
+ @public
+  std::string responseBody;
+  NSURLResponse *urlResponse;
+  NSError *requestError;
+  NSString *failureMessage;
+  dispatch_semaphore_t semaphore;
+  std::size_t maximumResponseBytes;
+  std::atomic_bool abortRequested;
+}
+@end
+
+@implementation AsoTextDownloadDelegate
+- (instancetype)init {
+  self = [super init];
+  if (self != nil) {
+    semaphore = dispatch_semaphore_create(0);
+    maximumResponseBytes = 0;
+    abortRequested.store(false);
+  }
+  return self;
+}
+
+- (void)URLSession:(NSURLSession *)session
+              dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveResponse:(NSURLResponse *)response
+     completionHandler:
+         (void (^)(NSURLSessionResponseDisposition disposition))completionHandler {
+  (void)session;
+  (void)dataTask;
+  if (abortRequested.load() || failureMessage != nil) {
+    completionHandler(NSURLSessionResponseCancel);
+    return;
+  }
+  urlResponse = response;
+  const long long expected = response.expectedContentLength;
+  if (expected > 0 &&
+      static_cast<unsigned long long>(expected) > maximumResponseBytes) {
+    failureMessage = @"Metadata response exceeds size limit.";
+    completionHandler(NSURLSessionResponseCancel);
+    return;
+  }
+  completionHandler(NSURLSessionResponseAllow);
+}
+
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveData:(NSData *)data {
+  (void)session;
+  if (abortRequested.load() || failureMessage != nil) {
+    [dataTask cancel];
+    return;
+  }
+  if (responseBody.size() > maximumResponseBytes ||
+      data.length > maximumResponseBytes - responseBody.size()) {
+    failureMessage = @"Metadata response exceeds size limit.";
+    [dataTask cancel];
+    return;
+  }
+  if (data.length == 0) {
+    return;
+  }
+  try {
+    responseBody.append(static_cast<const char *>(data.bytes), data.length);
+  } catch (...) {
+    failureMessage = @"Could not retain metadata response.";
+    [dataTask cancel];
+  }
+}
+
+- (void)URLSession:(NSURLSession *)session
+                    task:(NSURLSessionTask *)task
+    didCompleteWithError:(NSError *)error {
+  (void)session;
+  (void)task;
+  requestError = error;
+  dispatch_semaphore_signal(semaphore);
+}
+@end
+
 @interface AsoBinaryDownloadDelegate
     : AsoHttpsRedirectDelegate <NSURLSessionDownloadDelegate> {
  @public
@@ -4307,10 +4388,16 @@ std::vector<std::string> ListDocumentFilesRecursively() {
   return filesVec;
 }
 
-bool DownloadURLTextIOS(const std::string &url, std::string &body,
-                        std::string &errorMessage,
-                        IOSDownloadCheckpoint checkpoint) {
+static bool RequestURLTextIOS(const std::string &url, std::string &body,
+                               std::string &errorMessage, NSString *method,
+                               IOSDownloadCheckpoint checkpoint,
+                               std::size_t maximumResponseBytes) {
   @autoreleasepool {
+    errorMessage.clear();
+    if (checkpoint && !checkpoint()) {
+      errorMessage = "Download interrupted.";
+      return false;
+    }
     NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
     NSURL *nsUrl = [NSURL URLWithString:urlString];
     if (nsUrl == nil) {
@@ -4328,14 +4415,13 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
          requestWithURL:nsUrl
             cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
         timeoutInterval:25.0];
+    request.HTTPMethod = method;
     [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
 
-    __block NSData *responseData = nil;
-    __block NSURLResponse *urlResponse = nil;
-    __block NSError *requestError = nil;
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    AsoHttpsRedirectDelegate *delegate =
-        [[AsoHttpsRedirectDelegate alloc] init];
+    const std::string action =
+        [method isEqualToString:@"POST"] ? "posting " : "downloading ";
+    AsoTextDownloadDelegate *delegate = [[AsoTextDownloadDelegate alloc] init];
+    delegate->maximumResponseBytes = maximumResponseBytes;
     delegate->requireHttps = [scheme isEqualToString:@"https"];
     NSURLSessionConfiguration *configuration =
         [NSURLSessionConfiguration ephemeralSessionConfiguration];
@@ -4343,15 +4429,11 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
                                                           delegate:delegate
                                                      delegateQueue:nil];
-    NSURLSessionDataTask *task = [session
-        dataTaskWithRequest:request
-          completionHandler:^(NSData *data, NSURLResponse *response,
-                              NSError *error) {
-            responseData = data;
-            urlResponse = response;
-            requestError = error;
-            dispatch_semaphore_signal(semaphore);
-          }];
+    NSURLSessionDataTask *task = [session dataTaskWithRequest:request];
+    auto cleanup = makeScopeExit([&] {
+      delegate->abortRequested.store(true);
+      [session invalidateAndCancel];
+    });
     [task resume];
     constexpr int kWaitSliceMilliseconds = 100;
     constexpr int kActiveWaitSliceLimit = 300;
@@ -4359,14 +4441,12 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
     int activeWaitSlices = 0;
     while (activeWaitSlices < kActiveWaitSliceLimit &&
            (waitResult = dispatch_semaphore_wait(
-                semaphore,
+                delegate->semaphore,
                 dispatch_time(DISPATCH_TIME_NOW,
                               kWaitSliceMilliseconds * NSEC_PER_MSEC))) != 0) {
       if (checkpoint) {
         [task suspend];
         if (!checkpoint()) {
-          [task cancel];
-          [session invalidateAndCancel];
           errorMessage = "Download interrupted.";
           return false;
         }
@@ -4375,13 +4455,15 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
       ++activeWaitSlices;
     }
     if (waitResult != 0) {
-      [task cancel];
-      [session invalidateAndCancel];
-      errorMessage = "Timed out while downloading " + url;
+      errorMessage = "Timed out while " + action + url;
       return false;
     }
     [session finishTasksAndInvalidate];
 
+    if (checkpoint && !checkpoint()) {
+      errorMessage = "Download interrupted.";
+      return false;
+    }
     if (delegate->rejectedInsecureRedirect) {
       errorMessage = "HTTPS download redirected to insecure HTTP.";
       return false;
@@ -4391,135 +4473,60 @@ bool DownloadURLTextIOS(const std::string &url, std::string &body,
       return false;
     }
 
-    if (requestError != nil) {
+    if (delegate->failureMessage != nil) {
+      errorMessage = std::string(delegate->failureMessage.UTF8String);
+      return false;
+    }
+    if (delegate->requestError != nil) {
       errorMessage =
-          std::string([[requestError localizedDescription] UTF8String]);
+          std::string(delegate->requestError.localizedDescription.UTF8String);
       return false;
     }
 
     NSHTTPURLResponse *httpResponse =
-        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
-            ? (NSHTTPURLResponse *)urlResponse
+        [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]
+            ? (NSHTTPURLResponse *)delegate->urlResponse
             : nil;
     if (httpResponse != nil && httpResponse.statusCode >= 400) {
       errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
-                     " while downloading " + url;
+                     " while " + action + url;
       return false;
     }
 
-    if (responseData == nil) {
-      errorMessage = "No response body while downloading " + url;
+    if (delegate->urlResponse == nil) {
+      errorMessage = "No response body while " + action + url;
       return false;
     }
 
-    NSString *text = [[NSString alloc] initWithData:responseData
-                                           encoding:NSUTF8StringEncoding];
+    NSString *text = [[NSString alloc]
+        initWithBytesNoCopy:delegate->responseBody.data()
+                     length:delegate->responseBody.size()
+                   encoding:NSUTF8StringEncoding
+               freeWhenDone:NO];
     if (text == nil) {
       errorMessage = "Downloaded response is not UTF-8: " + url;
       return false;
     }
 
-    body = std::string([text UTF8String]);
+    body = std::move(delegate->responseBody);
     return true;
   }
 }
 
+bool DownloadURLTextIOS(const std::string &url, std::string &body,
+                        std::string &errorMessage,
+                        IOSDownloadCheckpoint checkpoint,
+                        std::size_t maximumResponseBytes) {
+  return RequestURLTextIOS(url, body, errorMessage, @"GET",
+                           std::move(checkpoint), maximumResponseBytes);
+}
+
 bool PostURLTextIOS(const std::string &url, std::string &body,
-                    std::string &errorMessage) {
-  @autoreleasepool {
-    NSString *urlString = [NSString stringWithUTF8String:url.c_str()];
-    NSURL *nsUrl = [NSURL URLWithString:urlString];
-    if (nsUrl == nil) {
-      errorMessage = "Invalid URL: " + url;
-      return false;
-    }
-    NSString *scheme = nsUrl.scheme.lowercaseString;
-    if (![scheme isEqualToString:@"http"] &&
-        ![scheme isEqualToString:@"https"]) {
-      errorMessage = "Network URL must use HTTP or HTTPS: " + url;
-      return false;
-    }
-
-    NSMutableURLRequest *request = [NSMutableURLRequest
-         requestWithURL:nsUrl
-            cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
-        timeoutInterval:25.0];
-    request.HTTPMethod = @"POST";
-    [request setValue:@"AsoBMaShow" forHTTPHeaderField:@"User-Agent"];
-
-    __block NSData *responseData = nil;
-    __block NSURLResponse *urlResponse = nil;
-    __block NSError *requestError = nil;
-    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-    AsoHttpsRedirectDelegate *delegate =
-        [[AsoHttpsRedirectDelegate alloc] init];
-    delegate->requireHttps = [scheme isEqualToString:@"https"];
-    NSURLSessionConfiguration *configuration =
-        [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration
-                                                          delegate:delegate
-                                                     delegateQueue:nil];
-    NSURLSessionDataTask *task = [session
-        dataTaskWithRequest:request
-          completionHandler:^(NSData *data, NSURLResponse *response,
-                              NSError *error) {
-            responseData = data;
-            urlResponse = response;
-            requestError = error;
-            dispatch_semaphore_signal(semaphore);
-          }];
-    [task resume];
-    const long waitResult = dispatch_semaphore_wait(
-        semaphore, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
-    if (waitResult != 0) {
-      [task cancel];
-      [session invalidateAndCancel];
-      errorMessage = "Timed out while posting " + url;
-      return false;
-    }
-    [session finishTasksAndInvalidate];
-
-    if (delegate->rejectedInsecureRedirect) {
-      errorMessage = "HTTPS download redirected to insecure HTTP.";
-      return false;
-    }
-    if (delegate->rejectedInvalidRedirect) {
-      errorMessage = "Download redirected to a non-HTTP URL.";
-      return false;
-    }
-
-    if (requestError != nil) {
-      errorMessage =
-          std::string([[requestError localizedDescription] UTF8String]);
-      return false;
-    }
-
-    NSHTTPURLResponse *httpResponse =
-        [urlResponse isKindOfClass:[NSHTTPURLResponse class]]
-            ? (NSHTTPURLResponse *)urlResponse
-            : nil;
-    if (httpResponse != nil && httpResponse.statusCode >= 400) {
-      errorMessage = "HTTP " + std::to_string(httpResponse.statusCode) +
-                     " while posting " + url;
-      return false;
-    }
-
-    if (responseData == nil) {
-      errorMessage = "No response body while posting " + url;
-      return false;
-    }
-
-    NSString *text = [[NSString alloc] initWithData:responseData
-                                           encoding:NSUTF8StringEncoding];
-    if (text == nil) {
-      errorMessage = "Downloaded response is not UTF-8: " + url;
-      return false;
-    }
-
-    body = std::string([text UTF8String]);
-    return true;
-  }
+                    std::string &errorMessage,
+                    IOSDownloadCheckpoint checkpoint,
+                    std::size_t maximumResponseBytes) {
+  return RequestURLTextIOS(url, body, errorMessage, @"POST",
+                           std::move(checkpoint), maximumResponseBytes);
 }
 
 bool DownloadURLBinaryIOS(const std::string &url,
