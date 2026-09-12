@@ -460,8 +460,15 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
     const std::stop_token &stopToken,
     archive_file::UnzipProgressCallback progress,
     bool reuseCompletedFolder) {
+  auto lock = archive_unzip_recovery::acquireOperationLock(stopToken);
   const auto initialRevision = repository.GetLibraryRevision();
-  auto result = extractArchive(record, stopToken, progress, reuseCompletedFolder);
+  auto result = extractArchive(record, stopToken, progress, reuseCompletedFolder,
+      [&](const std::filesystem::path &folder, const std::string &key) {
+        auto session = repository.OpenSession();
+        return session && session->EnsureSchema() && session->SaveUnzipRecovery({
+            .archivePath = record.meta.BmsPath, .outputFolder = folder,
+            .archiveKey = key, .deleteOriginal = false});
+      });
   auto finish = [&]() {
     result.libraryChanged = result.libraryChanged ||
                             repository.GetLibraryRevision() != initialRevision;
@@ -502,7 +509,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
                                : "Refreshing library",
             });
           }
-        });
+        }, nullptr, nullptr, nullptr, true);
     result.scanCommitted = scan.committed;
     result.libraryChanged = scan.committed && scan.changedCount > 0;
     if (stopToken.stop_requested()) {
@@ -521,6 +528,10 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
     session->QueryChartMeta(query, charts, stopToken);
     if (stopToken.stop_requested()) {
       cancel();
+      return finish();
+    }
+    if (!session->ClearUnzipRecovery({&result.outputFolder, 1})) {
+      result.message = "Unzipped archive. Library refreshed, but recovery work could not be acknowledged; it will retry on startup.";
       return finish();
     }
     if (!charts.empty()) {

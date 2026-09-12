@@ -2166,6 +2166,41 @@ void testFullUnzipHonorsPauseDuringExtraction() {
   assert(error == "Unzip cancelled");
 }
 
+void testArchiveIndexRejectsPreservedMetadataReplacement(bool coldCache,
+                                                        bool replaceFile) {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "source.zip";
+  const auto replacementPath = temporary.path() / "replacement.zip";
+  const auto cacheDir = temporary.path() / "indexes";
+  writeStoredZip(archivePath, {"old.wav"});
+  writeStoredZip(replacementPath, {"new.wav"});
+  const auto size = std::filesystem::file_size(archivePath);
+  assert(std::filesystem::file_size(replacementPath) == size);
+  const auto modified = std::filesystem::last_write_time(archivePath);
+  const auto oldKey = archive_file::cacheKeyForPath(archivePath);
+  archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1 && entries.front().path == "old.wav");
+  if (replaceFile) {
+    std::filesystem::rename(replacementPath, archivePath);
+  } else {
+    std::filesystem::copy_file(replacementPath, archivePath,
+                               std::filesystem::copy_options::overwrite_existing);
+  }
+  std::filesystem::last_write_time(archivePath, modified);
+  assert(archive_file::cacheKeyForPath(archivePath) == oldKey);
+  if (coldCache) {
+    archive_file::clearArchiveIndexCacheForTesting();
+    archive_file::setArchiveIndexCacheDirectory(cacheDir);
+  }
+  entries.clear();
+  assert(archive_file::listEntries(archivePath, entries, &error));
+  assert(entries.size() == 1 && entries.front().path == "new.wav");
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
 void testArchiveIndexPersistsAcrossColdCacheRestart() {
   constexpr int kEntryCount = 20;
   TempDirectory temporary;
@@ -2723,6 +2758,11 @@ int main() {
     testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
   }
   testArchiveIndexPersistsAcrossColdCacheRestart();
+  for (const bool coldCache : {true, false}) {
+    for (const bool replaceFile : {false, true}) {
+      testArchiveIndexRejectsPreservedMetadataReplacement(coldCache, replaceFile);
+    }
+  }
   testArchiveIndexPrunesOrphanedCacheFiles();
   testArchiveIndexPrunesOrphanedTmpCacheFiles();
   testArchiveIndexPruningPreservesShortUnrelatedFiles();

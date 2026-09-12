@@ -1,4 +1,5 @@
 #include "Jukebox.h"
+#include "../ArchiveSourceIdentity.h"
 #include "../targets.h"
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
@@ -2856,10 +2857,11 @@ Jukebox::reconcileChartResources(
         const auto archiveKey = fspath_to_path_t(archivePath.lexically_normal());
         auto [identity, inserted] = currentIdentities.try_emplace(archiveKey);
         if (inserted) {
-          identity->second = archive_file::cacheKeyForPath(archivePath);
+          identity->second = archive_source_identity::KeyForPath(archivePath);
         }
         const auto previous = soundArchiveIdentities.find(archiveKey);
-        reusable = reusable && previous != soundArchiveIdentities.end() &&
+        reusable = reusable && !identity->second.empty() &&
+                   previous != soundArchiveIdentities.end() &&
                    previous->second == identity->second;
       }
       if (reusable) {

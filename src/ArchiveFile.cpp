@@ -767,6 +767,7 @@ std::uint64_t directoryByteSize(const std::filesystem::path &root,
 struct CachedIndex {
   std::uintmax_t size = 0;
   std::filesystem::file_time_type mtime{};
+  std::string sourceIdentity;
   ArchiveIndexBackend backend = ArchiveIndexBackend::Unknown;
   unsigned char sevenZipFormat = 0;
   std::vector<Entry> entries;
@@ -836,7 +837,7 @@ private:
 };
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
-constexpr std::uint8_t kArchiveIndexCacheVersion = 3;
+constexpr std::uint8_t kArchiveIndexCacheVersion = 4;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
@@ -2550,6 +2551,7 @@ struct SevenZipArchiveState {
 
   std::uintmax_t size = 0;
   std::filesystem::file_time_type mtime{};
+  std::string sourceIdentity;
   unsigned char formatId = 0;
   CMyComPtr<IInArchive> archive;
   CMyComPtr<IInStream> stream;
@@ -2702,12 +2704,14 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   }
 
   const std::string key = archiveKey(archivePath);
+  const auto sourceIdentity = archive_source_identity::KeyForPath(archivePath);
   {
     std::lock_guard<std::mutex> cacheLock(gSevenZipArchiveMutex);
     const auto cachedIt = gSevenZipArchiveCache.find(key);
     if (cachedIt != gSevenZipArchiveCache.end()) {
       const auto &cached = cachedIt->second;
-      if (cached != nullptr && cached->size == archiveSize &&
+      if (cached != nullptr && !sourceIdentity.empty() &&
+          cached->sourceIdentity == sourceIdentity && cached->size == archiveSize &&
           cached->mtime == archiveMtime &&
           (requestedFormatId == 0 || cached->formatId == requestedFormatId)) {
         cached->lastUse = ++gSevenZipArchiveUseCounter;
@@ -2742,6 +2746,11 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   if (!opened) {
     return nullptr;
   }
+  if (!sourceIdentity.empty() &&
+      archive_source_identity::KeyForPath(archivePath) != sourceIdentity) {
+    if (errorMessage) *errorMessage = "Archive changed while opening.";
+    return nullptr;
+  }
   if (requestedFormatId != 0) {
     formatUsed = static_cast<SevenZipFormat>(requestedFormatId);
   }
@@ -2749,17 +2758,20 @@ std::shared_ptr<SevenZipArchiveState> openCachedSevenZipArchive(
   auto state = std::make_shared<SevenZipArchiveState>();
   state->size = archiveSize;
   state->mtime = archiveMtime;
+  state->sourceIdentity = sourceIdentity;
   state->formatId = static_cast<unsigned char>(formatUsed);
   state->archive = archive;
   state->stream = stream;
   state->inputStream =
       static_cast<SevenZipInFileStream *>(state->stream.Interface());
+  if (sourceIdentity.empty()) return state;
   {
     std::lock_guard<std::mutex> cacheLock(gSevenZipArchiveMutex);
     const auto cachedIt = gSevenZipArchiveCache.find(key);
     if (cachedIt != gSevenZipArchiveCache.end()) {
       const auto &cached = cachedIt->second;
-      if (cached != nullptr && cached->size == archiveSize &&
+      if (cached != nullptr && cached->sourceIdentity == sourceIdentity &&
+          cached->size == archiveSize &&
           cached->mtime == archiveMtime &&
           (requestedFormatId == 0 || cached->formatId == requestedFormatId)) {
         cached->lastUse = ++gSevenZipArchiveUseCounter;
@@ -3821,7 +3833,7 @@ void buildIndexLookups(CachedIndex &index) {
 // listing before any chart can be read. When a cache directory is configured,
 // each built CachedIndex is serialized to a per-archive file keyed by a hash
 // of the normalized archive path, and reloaded on the next launch when the
-// archive's size and mtime still match (so the entry offsets stay valid).
+// archive's size, mtime, and source identity still match.
 // ---------------------------------------------------------------------------
 
 std::string hex64(std::uint64_t value);
@@ -3957,7 +3969,7 @@ std::size_t pruneArchiveIndexCacheImpl(
 bool writeCachedIndexToDisk(const std::string &key,
                             const CachedIndex &index) {
   const std::filesystem::path directory = archiveIndexCacheDirectory();
-  if (directory.empty()) {
+  if (directory.empty() || index.sourceIdentity.empty()) {
     return false;
   }
   std::error_code error;
@@ -3993,6 +4005,9 @@ bool writeCachedIndexToDisk(const std::string &key,
       writeU64(static_cast<std::uint64_t>(entry.offset));
       writeU8(entry.solid ? 1 : 0);
     }
+    writeU64(index.sourceIdentity.size());
+    stream.write(index.sourceIdentity.data(),
+                 static_cast<std::streamsize>(index.sourceIdentity.size()));
     stream.flush();
     return stream.good();
   };
@@ -4035,9 +4050,10 @@ bool writeCachedIndexToDisk(const std::string &key,
 std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
     const std::string &key, std::uintmax_t size,
     std::filesystem::file_time_type mtime,
+    const std::string &sourceIdentity,
     std::uint64_t maximumEntries) {
   const std::filesystem::path directory = archiveIndexCacheDirectory();
-  if (directory.empty()) {
+  if (directory.empty() || sourceIdentity.empty()) {
     return nullptr;
   }
   const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
@@ -4113,6 +4129,12 @@ std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
     }
     index->entries.push_back(std::move(entry));
   }
+  const auto identityLength = readU64();
+  if (!file.good() || identityLength != sourceIdentity.size()) return nullptr;
+  index->sourceIdentity.resize(sourceIdentity.size());
+  file.read(index->sourceIdentity.data(),
+            static_cast<std::streamsize>(index->sourceIdentity.size()));
+  if (!file.good() || index->sourceIdentity != sourceIdentity) return nullptr;
   return index;
 }
 
@@ -4125,10 +4147,13 @@ cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath) {
   }
 
   const std::string key = archiveKey(archivePath);
+  const auto sourceIdentity = archive_source_identity::KeyForPath(archivePath);
+  if (sourceIdentity.empty()) return nullptr;
   std::lock_guard<std::mutex> lock(gIndexMutex);
   const auto it = gIndexCache.find(key);
   if (it != gIndexCache.end() && it->second != nullptr &&
-      it->second->size == size && it->second->mtime == mtime) {
+      it->second->size == size && it->second->mtime == mtime &&
+      it->second->sourceIdentity == sourceIdentity) {
     return it->second;
   }
   return nullptr;
@@ -4156,11 +4181,13 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   }
 
   const std::string key = archiveKey(archivePath);
+  const auto sourceIdentity = archive_source_identity::KeyForPath(archivePath);
   bool hadCachedIndex = false;
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     const auto it = gIndexCache.find(key);
-    if (it != gIndexCache.end() && it->second != nullptr &&
+    if (!sourceIdentity.empty() && it != gIndexCache.end() && it->second != nullptr &&
+        it->second->sourceIdentity == sourceIdentity &&
         it->second->size == size && it->second->mtime == mtime) {
       return boundedIndex(it->second);
     }
@@ -4168,9 +4195,9 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   }
 
   // Try to restore a previously persisted index from disk (cold start) before
-  // rebuilding. Validated by size+mtime so offsets remain valid.
+  // rebuilding. Validate the source identity as well as size and mtime.
   if (!hadCachedIndex) {
-    auto diskIndex = readCachedIndexFromDisk(key, size, mtime, maximumEntries);
+    auto diskIndex = readCachedIndexFromDisk(key, size, mtime, sourceIdentity, maximumEntries);
     if (diskIndex != nullptr) {
       buildIndexLookups(*diskIndex);
       appendDebugLogLineImpl("Loaded archive index from disk cache: " +
@@ -4219,9 +4246,10 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     }
     std::lock_guard<std::mutex> cacheLock(gIndexMutex);
     const auto cacheIt = gIndexCache.find(key);
-    if (builtOk && cacheIt != gIndexCache.end() &&
+    if (builtOk && !sourceIdentity.empty() && cacheIt != gIndexCache.end() &&
         cacheIt->second != nullptr && cacheIt->second->size == size &&
-        cacheIt->second->mtime == mtime) {
+        cacheIt->second->mtime == mtime &&
+        cacheIt->second->sourceIdentity == sourceIdentity) {
       return boundedIndex(cacheIt->second);
     }
     if (builtFailed) {
@@ -4265,6 +4293,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   auto loaded = std::make_shared<CachedIndex>();
   loaded->size = size;
   loaded->mtime = mtime;
+  loaded->sourceIdentity = sourceIdentity;
   bool loadedEntries = false;
    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
      buildScope.complete(false);
@@ -4364,6 +4393,12 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   if (!loadedEntries) {
     appendDebugLogLineImpl("Archive indexing failed: " +
                            pathForLog(archivePath));
+    buildScope.complete(false);
+    return nullptr;
+  }
+  if (!sourceIdentity.empty() &&
+      archive_source_identity::KeyForPath(archivePath) != sourceIdentity) {
+    if (errorMessage) *errorMessage = "Archive changed while indexing.";
     buildScope.complete(false);
     return nullptr;
   }

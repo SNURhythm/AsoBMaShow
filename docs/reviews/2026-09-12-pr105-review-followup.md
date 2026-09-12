@@ -101,3 +101,49 @@ was removed rather than weakening the existing intentional-omission policy.
 
 No distribution upload or deployment was performed. The iOS artifact is unsigned;
 Windows-native compilation and physical-device runtime checks were not run.
+
+## Second review follow-up
+
+The two additional findings at `446b69f6` concern single-archive recovery and
+decoded sound reuse after archive replacement.
+
+- Single extraction now uses the same operation lock and durable ownership
+  journal as batch extraction. A journal-write failure prevents output creation;
+  cancellation and extraction/indexing failures retain the recovery row. Only
+  successfully indexed, readable output is acknowledged. Startup recovery can
+  clean owned partial output, retain completed output for indexing, and retry
+  without deleting the source archive.
+- Decoded sounds use the existing file-ID/change-time source identity, not only
+  size and mtime. The archive index and cached 7-Zip reader validate the same
+  identity, so reordered members cannot redirect a sound read through stale
+  entry positions. Unavailable identities are never treated as cache hits.
+- Disk entry indexes advance from version 3 to version 4 and persist the source
+  identity. Older indexes rebuild automatically; chart databases, replay formats,
+  ownership marker formats, and user data are unchanged. Cache files remain
+  keyed by archive path rather than accumulating one file per source generation.
+- Regression tests render positive PCM from the original archive and negative
+  PCM from its replacement, covering ZIP/7z, reordered entries, in-place changes,
+  and file replacement with size/mtime preserved. They also cover hot/cold entry
+  indexes and retention of unchanged decoded sounds. Recovery tests exercise
+  actual partial writes, cancellation, journal/scan failures, and retry cleanup.
+
+Second-pass verification on 2026-09-12:
+
+- Full desktop build passes. Final parallel CTest is **355/357**: the unchanged
+  150 ms scheduler-stop assertion in `foundation_av_jukebox_restore` and a
+  disappearing temporary workspace during `foundation_profile_archive_portable`
+  fail under the parallel run. These unrelated checks were not weakened or fixed.
+- Jukebox, archive concurrency, single/batch unzip operations, unzip modal, and
+  profile archive portability all pass **three consecutive isolated runs each**
+  (`ctest --repeat until-fail:3 -j 1`, restricted to those five suites).
+- An earlier parallel run also hit the existing `visual_catch_up` 40-second
+  timeout; that test passes in the final parallel run.
+- `IOS_RELEASE_BUILD_JOBS=6 scripts/ios_release_verify.sh` passes: 66 native tests,
+  88 Python contract tests, unsigned arm64 device build, and artifact audit.
+- `scripts/android_firebase_deploy.sh --build-only` produces the release APK
+  successfully, including release lint/signing validation. No upload is performed.
+- Read-only follow-up review approves both fixes after strict storage-readability
+  regression tests were added. `git diff --check` passes.
+
+Windows-native and physical-device runtime checks remain untested. No release
+policy, signing requirement, or distribution action is changed by this follow-up.

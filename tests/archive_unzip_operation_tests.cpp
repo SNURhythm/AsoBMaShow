@@ -242,6 +242,160 @@ void cancelledPartialExtractionRecoveryRemovesOwnedOutput() {
   assert(std::filesystem::exists(original.meta.BmsPath));
 }
 
+void singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(bool cancel) {
+  Fixture fixture;
+  const auto original = fixture.archive(64);
+  const auto folder = fixture.root / "song";
+  std::stop_source stop;
+  bool wroteFile = false;
+  const auto result = ArchiveUnzipOperation::Run(
+      original, fixture.repository, stop.get_token(),
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.current > 0 && progress.current < progress.total &&
+            progress.fraction < 0.98 &&
+            progress.message.find("Unzipping archive") != std::string::npos) {
+          for (const auto &entry : std::filesystem::directory_iterator(folder / "song")) {
+            if (entry.is_regular_file() && entry.file_size() > 0) wroteFile = true;
+          }
+          if (wroteFile) {
+            if (cancel) stop.request_stop();
+            else throw std::runtime_error("test extraction failure");
+          }
+        }
+      });
+  assert(wroteFile && !result.success && result.cancelled == cancel);
+  assert(!result.scanCommitted && !result.libraryChanged);
+  assert(std::filesystem::exists(folder / ".asobmashow_unzip_incomplete"));
+  assert(!std::filesystem::exists(folder / ".asobmashow_unzip_complete"));
+  auto session = fixture.repository.OpenSession();
+  const auto pending = session->LoadUnzipRecovery();
+  assert(pending && pending->size() == 1);
+  assert(pending->front().archivePath == original.meta.BmsPath);
+  assert(pending->front().outputFolder == folder);
+  assert(!pending->front().archiveKey.empty() && !pending->front().deleteOriginal);
+  assert(session->CountAllChartMeta() == 0);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(!std::filesystem::exists(folder));
+  assert(std::filesystem::exists(original.meta.BmsPath));
+  const auto retried = ArchiveUnzipOperation::Run(original, fixture.repository, {});
+  assert(retried.success && retried.scanCommitted && retried.outputFolder == folder);
+  assert(session->CountAllChartMeta() == 64);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(std::filesystem::exists(original.meta.BmsPath));
+}
+
+void singleSuccessfulIndexAcknowledgesRecovery(bool failAcknowledgement) {
+  Fixture fixture;
+  const auto record = fixture.archive();
+  auto session = fixture.repository.OpenSession();
+  if (failAcknowledgement) {
+    executeSql(fixture.root / "library.db",
+        "CREATE TRIGGER reject_ack BEFORE DELETE ON archive_unzip_recovery "
+        "BEGIN SELECT RAISE(FAIL, 'test acknowledgement failure'); END");
+  }
+  bool sawPendingRecovery = false;
+  const auto result = ArchiveUnzipOperation::Run(record, fixture.repository, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.message == "Unzip complete") {
+          const auto pending = session->LoadUnzipRecovery();
+          assert(pending && pending->size() == 1);
+          assert(!pending->front().deleteOriginal);
+          assert(session->CountAllChartMeta() == 0);
+          sawPendingRecovery = true;
+        }
+      });
+  assert(sawPendingRecovery && result.scanCommitted && !result.cancelled);
+  assert(session->CountAllChartMeta() == 1);
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  assert(session->LoadUnzipRecovery()->size() == (failAcknowledgement ? 1 : 0));
+  if (failAcknowledgement) {
+    assert(result.message.find("recovery") != std::string::npos);
+    executeSql(fixture.root / "library.db", "DROP TRIGGER reject_ack");
+    assert(archive_unzip_recovery::recover(*session).completed);
+    assert(session->LoadUnzipRecovery()->empty());
+    assert(std::filesystem::exists(record.meta.BmsPath));
+  } else {
+    assert(result.success);
+  }
+}
+
+void singleJournalFailurePreventsOutputCreation() {
+  Fixture fixture;
+  const auto record = fixture.archive();
+  executeSql(fixture.root / "library.db",
+      "CREATE TRIGGER reject_journal BEFORE INSERT ON archive_unzip_recovery "
+      "BEGIN SELECT RAISE(FAIL, 'test journal failure'); END");
+  const auto result = ArchiveUnzipOperation::Run(record, fixture.repository, {});
+  assert(!std::filesystem::exists(fixture.root / "song"));
+  assert(!result.success && !result.cancelled && !result.scanCommitted);
+  assert(!result.libraryChanged && result.outputFolder.empty());
+  assert(result.message.find("recovery") != std::string::npos);
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  auto session = fixture.repository.OpenSession();
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 0);
+}
+
+void singleDisconnectedOutputRetainsRecoveryUntilRestored() {
+  Fixture fixture;
+  const auto record = fixture.archive();
+  const auto folder = fixture.root / "song";
+  const auto moved = fixture.root / "song-offline";
+  bool disconnected = false;
+  const auto result = ArchiveUnzipOperation::Run(record, fixture.repository, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.message == "Refreshing library" && !disconnected) {
+          std::filesystem::rename(folder, moved);
+          disconnected = true;
+        }
+      });
+  assert(disconnected);
+  std::filesystem::rename(moved, folder);
+  auto session = fixture.repository.OpenSession();
+  const auto pending = session->LoadUnzipRecovery();
+  assert(pending && pending->size() == 1);
+  assert(pending->front().outputFolder == folder && !pending->front().deleteOriginal);
+  assert(!result.success && !result.cancelled && !result.scanCommitted);
+  assert(result.chartPath.empty() && session->CountAllChartMeta() == 0);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 1);
+  assert(std::filesystem::exists(record.meta.BmsPath));
+}
+
+void singleUnreadableOutputRetainsRecoveryUntilReadable(bool denyFile) {
+#ifndef _WIN32
+  if (geteuid() == 0) return;
+  Fixture fixture;
+  const auto record = fixture.archive();
+  const auto folder = fixture.root / "song";
+  const auto denied = denyFile ? folder / "song/chart0.bms" : folder;
+  auto permissions = std::filesystem::perms::unknown;
+  bool inaccessible = false;
+  const auto result = ArchiveUnzipOperation::Run(record, fixture.repository, {},
+      [&](const archive_file::UnzipProgress &progress) {
+        if (progress.message == "Refreshing library" && !inaccessible) {
+          permissions = std::filesystem::status(denied).permissions();
+          std::filesystem::permissions(denied, std::filesystem::perms::none);
+          inaccessible = true;
+        }
+      });
+  assert(inaccessible);
+  std::filesystem::permissions(denied, permissions);
+  auto session = fixture.repository.OpenSession();
+  const auto pending = session->LoadUnzipRecovery();
+  assert(pending && pending->size() == 1);
+  assert(pending->front().outputFolder == folder && !pending->front().deleteOriginal);
+  assert(!result.success && !result.cancelled);
+  assert(result.chartPath.empty() && session->CountAllChartMeta() == 0);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 1);
+  assert(std::filesystem::exists(record.meta.BmsPath));
+#endif
+}
+
 void unverifiedPartialOutputRetainsRecovery(const std::string &kind) {
   Fixture fixture;
   const auto original = fixture.indexedArchive("a.zip", 4);
@@ -610,6 +764,31 @@ void cancellingAnUnzipWaitingForRecoveryDoesNotBlockShutdown() {
   recoveryLock.unlock();
   shutdown.get();
   assert(cancelledWithoutRecoveryFinishing);
+}
+
+void singleUnzipWaitsForRecoveryAndCancelsWhileWaiting() {
+  Fixture fixture;
+  const auto record = fixture.archive();
+  std::stop_source stop;
+  std::promise<void> started;
+  auto ready = started.get_future();
+  std::unique_lock recoveryLock(archive_unzip_recovery::operationMutex());
+  auto worker = std::async(std::launch::async, [&] {
+    started.set_value();
+    return ArchiveUnzipOperation::Run(record, fixture.repository, stop.get_token());
+  });
+  ready.wait();
+  const bool waited = worker.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout;
+  stop.request_stop();
+  const bool cancelledWithoutRecoveryFinishing =
+      worker.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+  recoveryLock.unlock();
+  const auto result = worker.get();
+  assert(waited && cancelledWithoutRecoveryFinishing);
+  assert(result.cancelled && !result.success && result.outputFolder.empty());
+  assert(!std::filesystem::exists(fixture.root / "song"));
+  auto session = fixture.repository.OpenSession();
+  assert(session->LoadUnzipRecovery()->empty());
 }
 
 void inaccessibleChartSubfolderRetainsRecoveryUntilItCanBeIndexed(bool denyFile = false) {
@@ -1320,6 +1499,12 @@ void cancellationBeforeExtractionAndDuringRefreshIsNotSuccess() {
   assert(after.cancelled && !after.success);
   assert(!after.outputFolder.empty());
   assert(std::filesystem::exists(record.meta.BmsPath));
+  auto session = fixture.repository.OpenSession();
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 1);
+  assert(std::filesystem::exists(record.meta.BmsPath));
 }
 
 void failedScanIsNotSuccess() {
@@ -1332,6 +1517,16 @@ void failedScanIsNotSuccess() {
   assert(!result.success && !result.cancelled);
   assert(!result.outputFolder.empty());
   assert(!operation.canDeleteArchive());
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  auto session = fixture.repository.OpenSession();
+  const auto pending = session->LoadUnzipRecovery();
+  assert(pending && pending->size() == 1);
+  assert(pending->front().outputFolder == result.outputFolder);
+  assert(!pending->front().deleteOriginal);
+  executeSql(fixture.root / "library.db", "DROP TRIGGER reject_chart");
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 1);
   assert(std::filesystem::exists(record.meta.BmsPath));
 }
 
@@ -1371,6 +1566,10 @@ void cancelledScanExposesCommittedChangesWithoutSuccess() {
   assert(result.libraryChanged);
   assert(result.scanCommitted);
   assert(std::filesystem::exists(record.meta.BmsPath));
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(archive_unzip_recovery::recover(*session).completed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 4);
 }
 
 void unavailableAndMissingArchivesNeverChangeLibraryOrAllowDeletion() {
@@ -1430,6 +1629,16 @@ int main(int argc, char **argv) {
   if (argc == 2) {
     const std::string test = argv[1];
     if (test == "--partial-recovery") partialExtractionIsNotIndexedByOrdinaryStartupScan();
+    else if (test == "--single-cancel-recovery") singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(true);
+    else if (test == "--single-failure-recovery") singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(false);
+    else if (test == "--single-ack") singleSuccessfulIndexAcknowledgesRecovery(false);
+    else if (test == "--single-ack-failure") singleSuccessfulIndexAcknowledgesRecovery(true);
+    else if (test == "--single-journal-failure") singleJournalFailurePreventsOutputCreation();
+    else if (test == "--single-scan-failure") failedScanIsNotSuccess();
+    else if (test == "--single-lock") singleUnzipWaitsForRecoveryAndCancelsWhileWaiting();
+    else if (test == "--single-disconnected") singleDisconnectedOutputRetainsRecoveryUntilRestored();
+    else if (test == "--single-unreadable-folder") singleUnreadableOutputRetainsRecoveryUntilReadable(false);
+    else if (test == "--single-unreadable-file") singleUnreadableOutputRetainsRecoveryUntilReadable(true);
     else if (test == "--cancel-recovery") cancelledPartialExtractionRecoveryRemovesOwnedOutput();
     else if (test == "--cleanup-failure") failedPartialCleanupRetainsRecovery();
     else if (test == "--unverified-recovery") unverifiedPartialOutputRetainsRecovery("legacy");
@@ -1449,6 +1658,15 @@ int main(int argc, char **argv) {
     else assert(false && "unknown regression");
     return 0;
   }
+  singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(true);
+  singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(false);
+  singleSuccessfulIndexAcknowledgesRecovery(false);
+  singleSuccessfulIndexAcknowledgesRecovery(true);
+  singleJournalFailurePreventsOutputCreation();
+  singleUnzipWaitsForRecoveryAndCancelsWhileWaiting();
+  singleDisconnectedOutputRetainsRecoveryUntilRestored();
+  singleUnreadableOutputRetainsRecoveryUntilReadable(false);
+  singleUnreadableOutputRetainsRecoveryUntilReadable(true);
   cancelledPartialExtractionRecoveryRemovesOwnedOutput();
   sourceIdentityRejectsMissingPathsDirectoriesAndSymlinks();
   sourceIdentityDetectsChangesWithPreservedMetadata(false);

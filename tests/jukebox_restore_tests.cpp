@@ -7,6 +7,7 @@
 #include <archive_entry.h>
 #include <bgfx/bgfx.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <ctime>
@@ -178,7 +179,7 @@ std::string singleFrameY4m() {
   return bytes;
 }
 
-std::string shortWave(unsigned frames = 64) {
+std::string shortWave(unsigned frames = 64, std::int16_t sample = 1000) {
   std::string bytes;
   auto append = [&](unsigned value, unsigned count) {
     for (unsigned offset = 0; offset < count; ++offset) {
@@ -198,7 +199,7 @@ std::string shortWave(unsigned frames = 64) {
   bytes += "data";
   append(frames * 2, 4);
   for (unsigned frame = 0; frame < frames; ++frame) {
-    append(1000, 2);
+    append(static_cast<std::uint16_t>(sample), 2);
   }
   return bytes;
 }
@@ -497,6 +498,74 @@ void testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(bool sevenZip)
           "empty chart retires all old assets");
 }
 
+void testArchivedChartReloadsPreservedMetadataReplacement(bool sevenZip,
+                                                        bool replaceFile) {
+  TemporaryArchivedVisualFixture fixture;
+  if (sevenZip) fixture.archivePath.replace_extension(".7z");
+  const auto replacementPath = fixture.directory /
+      (sevenZip ? "replacement.7z" : "replacement.zip");
+  writeChartArchive(fixture.archivePath,
+                    {{"song/shared.wav", shortWave()},
+                     {"song/other.wav", shortWave(64, 2000)}});
+  writeChartArchive(replacementPath,
+                    {{"song/other.wav", shortWave(64, 2000)},
+                     {"song/shared.wav", shortWave(64, -1000)}});
+  const auto size = std::max(std::filesystem::file_size(fixture.archivePath),
+                             std::filesystem::file_size(replacementPath));
+  std::filesystem::resize_file(fixture.archivePath, size);
+  std::filesystem::resize_file(replacementPath, size);
+  const auto modified = std::filesystem::last_write_time(fixture.archivePath);
+  const auto originalKey = archive_file::cacheKeyForPath(fixture.archivePath);
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = archive_file::makeVirtualPath(fixture.archivePath, "song");
+  chart.Meta.BmsPath = chart.Meta.Folder / "chart.bms";
+  chart.ReferencedWavTable = {{1, "shared.wav"}};
+  std::atomic_bool cancelled = false;
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "original archive sound loads");
+  const auto original = jukebox.resolveRealtimeKeySound(1);
+  require(original && original->valid(), "original decoded sound is live");
+  auto renderSound = [&] {
+    require(jukebox.play(0).success, "replacement fixture starts playback");
+    jukebox.playKeySound(1);
+    std::vector<std::int16_t> output(128);
+    control->renderCallback(output.data(), 64, 2, control->renderUserData);
+    require(jukebox.stopKeepDevice().success, "replacement fixture stops playback");
+    return output;
+  };
+  const auto initialOutput = renderSound();
+  require(std::any_of(initialOutput.begin(), initialOutput.end(),
+                      [](auto sample) { return sample > 0; }),
+          "original archive renders positive PCM");
+  if (replaceFile) {
+    std::filesystem::rename(replacementPath, fixture.archivePath);
+  } else {
+    std::filesystem::copy_file(replacementPath, fixture.archivePath,
+                               std::filesystem::copy_options::overwrite_existing);
+  }
+  std::filesystem::last_write_time(fixture.archivePath, modified);
+  require(std::filesystem::file_size(fixture.archivePath) == size &&
+              archive_file::cacheKeyForPath(fixture.archivePath) == originalKey,
+          "replacement preserves size, mtime, and legacy cache key");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "preserved-metadata replacement reloads");
+  require(!original->valid(), "preserved-metadata replacement retires stale PCM");
+  const auto replacement = jukebox.resolveRealtimeKeySound(1);
+  require(replacement && replacement->valid(), "replacement decoded sound is live");
+  const auto output = renderSound();
+  require(std::any_of(output.begin(), output.end(),
+                      [](auto sample) { return sample < 0; }) &&
+              std::none_of(output.begin(), output.end(),
+                           [](auto sample) { return sample > 0; }),
+          "replacement renders new negative PCM rather than cached positive PCM");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
+              replacement->valid(),
+          "unchanged replacement retains its decoded sound");
+}
+
 void testArchivedChartCombinesSoundAndVisualExtraction(bool sevenZip) {
   TemporaryArchivedVisualFixture fixture;
   if (sevenZip) {
@@ -767,6 +836,9 @@ int main() {
     for (const bool sevenZip : {false, true}) {
       testArchivedChartCombinesSoundAndVisualExtraction(sevenZip);
       testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(sevenZip);
+      for (const bool replaceFile : {false, true}) {
+        testArchivedChartReloadsPreservedMetadataReplacement(sevenZip, replaceFile);
+      }
     }
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
