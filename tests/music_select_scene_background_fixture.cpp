@@ -4,10 +4,6 @@
 #include <optional>
 #include <thread>
 
-namespace audio::diag {
-void SelectAudioLog(const char *) {}
-}
-
 struct Preview {
   bool suppressed = false;
   bool playing = true;
@@ -34,6 +30,8 @@ struct ExternalUrlService {
 };
 
 struct MusicSelectScene {
+  struct UnzipModal { void cancelAndWait() {} };
+  UnzipModal *archiveUnzipModal_ = nullptr;
   std::atomic_bool launchCancelled_ = false;
   std::uint64_t launchGeneration_ = 0;
   std::jthread launchThread_;

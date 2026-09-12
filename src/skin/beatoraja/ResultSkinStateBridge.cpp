@@ -254,15 +254,20 @@ ResultSkinStateBridge::ResultSkinStateBridge(ResultSkinData data,
     : data_(std::move(data)), frameSerial_(frameSerial),
       elapsedMillis_(std::max<std::int64_t>(0, elapsedMillis)),
       configuration_(configuration), model_(model) {
-  if (data_.state != nullptr) {
-    gaugeHistory_ = data_.state->gaugeHistory;
-  } else if (data_.presentation != nullptr &&
+  const bool gaugeOmitted = data_.gameplayGraph.dynamic != nullptr &&
+                            data_.gameplayGraph.dynamic->gaugeHistoryOmitted;
+  if (!gaugeOmitted && data_.state != nullptr) {
+    if (data_.state->gaugeHistory.size() <= kSkinMaximumGaugeGraphSamples) {
+      gaugeHistory_ = data_.state->gaugeHistory;
+    }
+  } else if (!gaugeOmitted && data_.state == nullptr && data_.presentation != nullptr &&
              !data_.presentation->gaugeSeries.empty()) {
     const auto &series = data_.presentation->gaugeSeries.front();
     // SkinGameplayGraphStateView has a dense gauge span. Never turn an IR
     // service's missing sample into a fabricated 0% point: omit this graph
     // until it can be represented losslessly.
-    if (std::ranges::all_of(series.points,
+    if (series.points.size() <= kSkinMaximumGaugeGraphSamples &&
+        std::ranges::all_of(series.points,
                             [](const auto &point) { return point.has_value(); })) {
       gaugeHistory_.reserve(series.points.size());
       for (const auto point : series.points) {
@@ -1903,7 +1908,9 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
     result.timingDistributionStandardDeviationMillis =
         data_.timingStandardDeviationMillis;
   }
-  if (!result.gaugeHistory.empty() || !gaugeHistory_.empty()) {
+  const bool gaugeOmitted = data_.gameplayGraph.dynamic != nullptr &&
+                            data_.gameplayGraph.dynamic->gaugeHistoryOmitted;
+  if (!gaugeOmitted && (!result.gaugeHistory.empty() || !gaugeHistory_.empty())) {
     if (result.gaugeHistory.empty()) {
       result.gaugeHistory = gaugeHistory_;
       result.gaugeRevision = gaugeRevision_;
@@ -1923,7 +1930,7 @@ ResultSkinStateBridge::gameplayGraphState() const noexcept {
       !result.recentJudgeTimingsMillis.empty()) {
     return result;
   }
-  if (gaugeHistory_.empty()) return {};
+  if (gaugeOmitted || gaugeHistory_.empty()) return result;
   if (!type) {
     return {.gaugeHistory = gaugeHistory_, .gaugeRevision = gaugeRevision_};
   }

@@ -245,6 +245,7 @@ private:
   std::size_t skinSoundDecodedBytes = 0;
   std::uint64_t nextSkinSoundHandle = 0;
   mutable std::mutex soundDataListMutex;
+  std::uint64_t soundLoadGeneration = 0;
   std::vector<float> mixBuffer;
   Biquad bassFilter;
   Biquad trebleFilter;

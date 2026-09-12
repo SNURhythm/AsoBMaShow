@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 namespace replay {
 
@@ -46,17 +47,22 @@ withinReplayCountLimit(std::size_t count, std::size_t maximum) noexcept {
 
 struct ReplayTimeBounds {
   std::int64_t completionSongTimeMicros = -1;
+  std::optional<bool> aborted;
 
   bool operator==(const ReplayTimeBounds &) const = default;
 
-  [[nodiscard]] constexpr bool valid() const noexcept {
-    return completionSongTimeMicros >= 0;
+  [[nodiscard]] constexpr bool
+  valid(const ReplayLimits &limits = kReplayLimits) const noexcept {
+    return limits.valid() &&
+           (completionSongTimeMicros >= 0 ||
+            (aborted.value_or(false) &&
+             completionSongTimeMicros >= limits.minimumSongTimeMicros));
   }
 
   [[nodiscard]] constexpr bool
   contains(std::int64_t songTimeMicros,
            const ReplayLimits &limits = kReplayLimits) const noexcept {
-    return limits.valid() && valid() &&
+    return valid(limits) &&
            songTimeMicros >= limits.minimumSongTimeMicros &&
            songTimeMicros <= completionSongTimeMicros;
   }

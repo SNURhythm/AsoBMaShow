@@ -30,6 +30,7 @@ struct Metadata {
 struct ChartMetaRecord {
   Metadata meta;
   bool solidArchive = false;
+  bool unzipAll = false;
   bool unavailable = false;
 };
 namespace bms_parser {
@@ -88,6 +89,9 @@ int valueFromId(const std::string &) { return 0; }
 }
 int normalizeChartLongNoteModeValue(int value) { return value; }
 void applyEffectiveLongNoteModeToChart(bms_parser::Chart &, int) {}
+void applyDoublePlayFlipToChart(bms_parser::Chart &) {
+  assert(false && "export preload fixture does not enable double-play flip");
+}
 struct ModernChartResultRecord {};
 struct ReplayData {};
 namespace replay {
@@ -125,6 +129,9 @@ struct Modal {
   std::string status;
   void resize(int, int) {}
   void update() {}
+  void cancelAndWait() {}
+  bool isVisible() const { return false; }
+  bool inProgress() const { return false; }
   void setExportInProgress(bool value) { exporting = value; }
   void showExportProgress(const char *, const char *) { progressVisible = true; }
   void returnToList(const std::string &message) {
@@ -210,6 +217,9 @@ struct Bar {
   bool childrenLoaded = false;
 };
 using MusicSelectBar = Bar;
+bool musicSelectIsSolidArchiveDirectory(const Bar &) { return false; }
+bool musicSelectIsSolidArchiveAction(const Bar &) { return false; }
+bool musicSelectIsUnzipAllAction(const Bar &) { return false; }
 struct Bars {
   struct Rows {
     std::string error;
@@ -238,7 +248,6 @@ struct Bars {
 };
 namespace audio {
 struct PlaybackRate { int percent; int mode; };
-namespace diag { void SelectAudioLog(const std::string &) {} }
 }
 struct StartOptions {
   int startPosition;
@@ -277,11 +286,6 @@ auto musicSelectTableContextForLaunch(const Bars &) {
   struct Table { std::string name = "table", level = "12"; };
   return Table{};
 }
-struct StartupTiming {
-  static StartupTiming &instance() { static StartupTiming timing; return timing; }
-  void mark(const char *) {}
-  void beginSession() {}
-};
 namespace rendering { int window_width = 1280, window_height = 720; }
 namespace platform_open { bool openExternalUrl(const std::string &, std::string &) { return true; } }
 struct View {
@@ -312,6 +316,9 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  Modal *archiveUnzipModal_ = nullptr;
+  bool selectorInputBlocked() const { return launching_; }
+  void startArchiveUnzip(const ChartMetaRecord &) {}
   PublishedActions *skinSession_ = nullptr;
   Preview *systemSound_ = nullptr;
   int rankingOffset_ = 0;

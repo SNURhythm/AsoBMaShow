@@ -264,6 +264,29 @@ IrSettingsActionModel::setServerOrigin(std::string_view serverOrigin) {
     return {.status = IrSettingsActionResult::Status::Invalid,
             .diagnostic = "Enter an HTTP or HTTPS server origin."};
   }
+  if (*normalized != settings_.serverOrigin) {
+    std::optional<std::string> credential;
+    std::string ignoredDiagnostic;
+    bool credentialLoaded = false;
+    try {
+      credentialLoaded = dependencies_.loadCredential &&
+                         dependencies_.loadCredential(credential,
+                                                      ignoredDiagnostic);
+    } catch (...) {
+      credentialLoaded = false;
+    }
+    if (!credentialLoaded) {
+      return {.status = IrSettingsActionResult::Status::StorageFailure,
+              .diagnostic = "The saved API key could not be checked; the "
+                            "server origin was not changed."};
+    }
+    hasCredential_ = credential.has_value();
+    if (hasCredential_) {
+      return {.status = IrSettingsActionResult::Status::Invalid,
+              .diagnostic = "Remove the saved API key before changing the server "
+                            "origin, then save a key for the new origin."};
+    }
+  }
   IrProviderSettings candidate = settings_;
   candidate.serverOrigin = *normalized;
   if (!isHttpsServerOrigin(candidate.serverOrigin)) {

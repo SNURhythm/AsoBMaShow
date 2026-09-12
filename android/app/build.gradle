@@ -97,6 +97,7 @@ android {
         ndkVersion requiredAndroidNdkVersion
         versionCode androidVersionCodeText.toInteger()
         versionName androidVersionNameText.toString()
+        testInstrumentationRunner 'com.snurhythm.asobmashow.PlatformBoundaryInstrumentation'
 
         externalNativeBuild {
             cmake {
@@ -127,6 +128,8 @@ android {
             }
         }
     }
+
+    testBuildType findProperty('androidBoundaryTestBuildType') ?: 'debug'
 
     externalNativeBuild {
         cmake {

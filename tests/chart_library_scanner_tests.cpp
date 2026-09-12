@@ -375,6 +375,72 @@ void testBasicNoOpAndDeleteScan() {
   assert(repository.GetLibraryRevision() > stableRevision);
 }
 
+void testUpgradedSolidSevenZipReplacesPlayableCachedChart() {
+  TempDirectory temporary;
+  const auto archivePath = temporary.path() / "solid.7z";
+  const auto databasePath = temporary.path() / "chart.db";
+  {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), archivePath.string().c_str()) ==
+           ARCHIVE_OK);
+    const auto contents = chartText("Solid Chart");
+    for (const auto *name : {"song/chart.bms", "song/other.bms"}) {
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      archive_entry_set_pathname(entry.get(), name);
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_perm(entry.get(), 0644);
+      archive_entry_set_size(entry.get(), static_cast<la_int64_t>(contents.size()));
+      assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+      assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+             static_cast<la_ssize_t>(contents.size()));
+      assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  {
+    TestChartRepository repository(databasePath);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session);
+    auto batch = session->BeginScanBatch();
+    assert(batch);
+    bms_parser::ChartMeta meta;
+    meta.BmsPath = archive_file::makeVirtualPath(archivePath, "song/chart.bms");
+    meta.Folder = archive_file::makeVirtualPath(archivePath, "song");
+    meta.Title = "Previously misclassified";
+    meta.MD5 = "11111111111111111111111111111111";
+    meta.SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    assert(batch->UpsertChart(meta, std::nullopt, false, {}));
+    assert(batch->UpsertArchiveCache({.path = archivePath,
+                                      .solid = false,
+                                      .fileCount = 2,
+                                      .chartCount = 1}));
+    assert(batch->Commit());
+    assert(session->CountAllChartMeta() == 1 && session->CountSolidArchives() == 0);
+  }
+  {
+    sqlite3 *database = nullptr;
+    assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+    assert(sqlite3_exec(database, "PRAGMA user_version=10", nullptr, nullptr, nullptr) ==
+           SQLITE_OK);
+    assert(sqlite3_close(database) == SQLITE_OK);
+  }
+  TestChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartLibraryScanner scanner;
+  for (int scan = 0; scan < 2; ++scan) {
+    const auto result = scanner.ScanWithResult(*session, {archivePath});
+    assert(result.completed && result.committed);
+    assert(session->CountAllChartMeta() == 0);
+    assert(session->CountSolidArchives() == 1);
+    const auto snapshot = session->LoadScanSnapshot();
+    assert(snapshot.archiveCache.size() == 1 && snapshot.archiveCache.front().solid);
+  }
+}
+
 void testSequenceFeaturesMatchBeatorajaSongData() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2599,6 +2665,95 @@ void testClearChartMetaThenRescanRepopulatesLibrary() {
   assert(session->CountAllChartMeta() == 3 * kChartsPerArchive);
 }
 
+void testUntrustedIncompleteMarkersDoNotHideCharts() {
+  for (int ownership = 0; ownership < 4; ++ownership) {
+    for (int rootKind = 0; rootKind < 3; ++rootKind) {
+      TempDirectory temporary;
+      const auto root = temporary.path() / "library";
+      const auto folder = root / "songs";
+      const auto chart = writeChart(folder, "chart", "Visible Despite Marker Filename");
+      const auto archive = temporary.path() / "source.zip";
+      std::ofstream(folder / ".asobmashow_unzip_incomplete") << "key\n" << fspath_to_utf8(archive) << '\n';
+      TestChartRepository repository(temporary.path() / "chart.db");
+      assert(repository.EnsureReady());
+      auto session = repository.OpenSession();
+      assert(session);
+      if (ownership != 0) {
+        assert(session->SaveUnzipRecovery({
+            .archivePath = ownership == 3 ? temporary.path() / "other.zip" : archive,
+            .outputFolder = ownership == 1 ? root / "other" : folder,
+            .archiveKey = ownership == 2 ? "other-key" : "key",
+        }));
+      }
+      ChartLibraryScanner scanner;
+      const auto scan = scanner.ScanAddedWithResult(
+          *session, {rootKind == 0 ? root : rootKind == 1 ? folder : chart});
+      assert(scan.completed && scan.committed);
+      assert(session->CountAllChartMeta() == 1);
+      assert(std::filesystem::exists(folder / ".asobmashow_unzip_incomplete"));
+      assert(session->LoadUnzipRecovery()->size() == (ownership == 0 ? 0 : 1));
+    }
+  }
+}
+
+void testOwnedIncompleteMarkersRemainExcluded(bool requireReadable, bool registerDuringScan) {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto folder = root / "partial";
+  writeChart(folder / "song", "chart", "Incomplete Chart");
+  const ArchiveUnzipRecoveryRecord record{
+      .archivePath = temporary.path() / "source.zip", .outputFolder = folder, .archiveKey = "key"};
+  std::ofstream(folder / ".asobmashow_unzip_incomplete") << record.archiveKey << '\n'
+      << fspath_to_utf8(record.archivePath) << '\n';
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  bool registered = !registerDuringScan;
+  if (registered) assert(session->SaveUnzipRecovery(record));
+  ChartLibraryScanner scanner;
+  const auto scan = scanner.ScanAddedWithResult(*session, {root}, nullptr,
+      [&](const ChartScanProgress &progress) {
+        if (!registered && progress.stage == ChartScanProgressStage::ScanningRoots) {
+          assert(session->SaveUnzipRecovery(record));
+          registered = true;
+        }
+      }, nullptr, nullptr, nullptr, requireReadable);
+  assert(registered && scan.completed == !requireReadable);
+  if (requireReadable) assert(!scan.committed);
+  assert(session->CountAllChartMeta() == 0);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  assert(std::filesystem::remove(folder / ".asobmashow_unzip_incomplete"));
+  const auto completed = scanner.ScanAddedWithResult(*session, {root});
+  assert(completed.completed && completed.committed);
+  assert(session->CountAllChartMeta() == 1);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+}
+
+void testUnavailableMarkerJournalDoesNotDeleteExistingCharts() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto folder = root / "songs";
+  const auto chart = writeChart(folder, "chart", "Retained Chart");
+  const auto databasePath = temporary.path() / "chart.db";
+  TestChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {root}).committed);
+  assert(session->CountAllChartMeta() == 1);
+  std::ofstream(folder / ".asobmashow_unzip_incomplete") << "key\nsource.zip\n";
+  assert(std::filesystem::remove(chart));
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(databasePath.string().c_str(), &database) == SQLITE_OK);
+  assert(sqlite3_exec(database, "DROP TABLE archive_unzip_recovery", nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+  const auto scan = scanner.ScanWithResult(*session, {root});
+  assert(!scan.completed && !scan.committed);
+  assert(session->CountAllChartMeta() == 1);
+}
+
 void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
   constexpr int kChartsPerArchive = 25;
   TempDirectory temporary;
@@ -2688,7 +2843,15 @@ void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
 } // namespace
 
 int main() {
+  testUntrustedIncompleteMarkersDoNotHideCharts();
+  for (bool requireReadable : {false, true}) {
+    for (bool registerDuringScan : {false, true}) {
+      testOwnedIncompleteMarkersRemainExcluded(requireReadable, registerDuringScan);
+    }
+  }
+  testUnavailableMarkerJournalDoesNotDeleteExistingCharts();
   testBasicNoOpAndDeleteScan();
+  testUpgradedSolidSevenZipReplacesPlayableCachedChart();
   testSequenceFeaturesMatchBeatorajaSongData();
   testFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan();

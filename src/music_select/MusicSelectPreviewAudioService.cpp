@@ -1,6 +1,5 @@
 #include "MusicSelectPreview.h"
 
-#include "../audio/SelectAudioDiagnostics.h"
 #include <SDL2/SDL.h>
 
 #include <atomic>
@@ -50,10 +49,6 @@ public:
       }
       requestedPath_ = std::move(path);
       ++requestSerial_;
-      audio::diag::SelectAudioLog(
-          std::string("[bgm] svc switchTo serial=") +
-          std::to_string(requestSerial_) + " path=" +
-          (requestedPath_.has_value() ? requestedPath_->string() : "<default>"));
     }
     condition_.notify_one();
   }
@@ -73,8 +68,6 @@ void silence() {
     }
     requestedPath_ = emptyPath;
     ++requestSerial_;
-    audio::diag::SelectAudioLog(std::string("[bgm] svc silence serial=") +
-                                std::to_string(requestSerial_));
     condition_.notify_one();
   }
 
@@ -89,15 +82,11 @@ void resumeDefaultBgm() {
     }
     requestedPath_.reset();
     ++requestSerial_;
-    audio::diag::SelectAudioLog(
-        std::string("[bgm] svc resumeDefault serial=") +
-        std::to_string(requestSerial_));
     condition_.notify_one();
   }
 
 private:
   void run(std::stop_token stop) {
-    audio::diag::SelectAudioLog("[bgm] worker started");
     std::uint64_t observedSerial = 0;
     std::optional<std::filesystem::path> playingPath;
     while (!stop.stop_requested()) {
@@ -117,8 +106,6 @@ private:
         cancellation = std::make_shared<std::atomic_bool>(false);
         loadCancellation_ = cancellation;
       }
-      audio::diag::SelectAudioLog("[bgm] worker woke serial=" +
-                                  std::to_string(serial));
 
       std::filesystem::path target = requested.value_or(defaultPath_);
       if (suppressed || target.empty()) {
@@ -132,13 +119,10 @@ private:
         continue;
       }
 
-      audio::diag::SelectAudioLog("[bgm] worker target=" + target.string());
       SDL_Log("[select-audio] worker play target=%s",
               target.string().c_str());
       bool ok = port_.play(target, true, cancellation, stop);
       SDL_Log("[select-audio] worker play result=%d", ok ? 1 : 0);
-      audio::diag::SelectAudioLog(std::string("[bgm] worker play result=") +
-                                  (ok ? "ok" : "FAILED"));
       bool stale = false;
       {
         std::lock_guard lock(mutex_);
@@ -148,7 +132,6 @@ private:
       if (!ok && !stale && requested.has_value() &&
           !defaultPath_.empty() && target != defaultPath_) {
         target = defaultPath_;
-        audio::diag::SelectAudioLog("[bgm] worker fallback=" + target.string());
         ok = port_.play(target, true, cancellation, stop);
       }
       {

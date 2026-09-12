@@ -75,6 +75,24 @@ void testOrderingIsMonotonicAndNeverSortedIntoValidity() {
          "ordered timestamp still respects completion");
 }
 
+void testNegativeCompletionRequiresBoundedExplicitAbort() {
+  for (const auto completion : {-30'000'000LL, -1'000'000LL, -1LL}) {
+    const replay::ReplayTimeBounds bounds{
+        .completionSongTimeMicros = completion, .aborted = true};
+    expect(bounds.valid() && bounds.contains(completion),
+           "explicit pre-song abort accepts its exact signed boundary");
+    expect(bounds.contains(-30'000'000) && !bounds.contains(completion + 1),
+           "pre-song abort accepts pre-roll but never post-abort evidence");
+    expect(!replay::ReplayTimeBounds{completion, false}.valid() &&
+               !replay::ReplayTimeBounds{completion, std::nullopt}.valid(),
+           "negative completion without explicit abort remains invalid");
+  }
+  expect(!replay::ReplayTimeBounds{-30'000'001, true}.valid(),
+         "abort before supported pre-roll remains invalid");
+  expect(!replay::ReplayTimeBounds{}.valid(),
+         "default completion remains invalid");
+}
+
 void testCourseRestUsesOnePredicateAndClamp() {
   expect(replay::validCourseRestMicros(0), "zero rest is valid");
   expect(replay::validCourseRestMicros(3'600'000'000LL),
@@ -125,6 +143,7 @@ void testMalformedCustomLimitSetsFailClosed() {
 int main() {
   testDefaultResourceLimitsArePinned();
   testSignedSongTimeUsesInclusiveAttemptBounds();
+  testNegativeCompletionRequiresBoundedExplicitAbort();
   testOrderingIsMonotonicAndNeverSortedIntoValidity();
   testCourseRestUsesOnePredicateAndClamp();
   testCountsUseInclusiveUpperBounds();

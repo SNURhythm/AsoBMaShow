@@ -156,6 +156,9 @@ inline void applySkinMenuAttemptPlanToStartOptions(
 inline bool applyPracticePlayOptions(bms_parser::Chart &chart,
                                      StartOptions &options,
                                      std::string_view logContext) {
+  if (options.doublePlayFlip) {
+    applyDoublePlayFlipToChart(chart);
+  }
   const auto applyForPlayer = [&](int player,
                                   std::optional<std::string> &option,
                                   std::optional<long long> &seed) {
@@ -462,6 +465,23 @@ buildGameplayRulesetPolicyAtPlayStart(
         "This course stage uses a different gameplay ruleset.";
   }
   return outcome;
+}
+
+[[nodiscard]] inline gameplay::GameplayPolicyBuildOutcome
+buildGameplayRulesetPolicyAtPlayStart(
+    const StartOptions &options, bms_parser::Chart &chart,
+    AppSettings::NotePriorityMode notePriorityMode) {
+  const int replayLongNoteMode =
+      options.replayData != nullptr
+          ? options.replayData->chartMeta.LnMode
+          : (options.gbattleRecordData != nullptr
+                 ? options.gbattleRecordData->chartMeta.LnMode
+                 : 0);
+  applyEffectiveLongNoteModeToChart(chart, replayLongNoteMode > 0
+                                             ? replayLongNoteMode
+                                             : options.longNoteMode);
+  return buildGameplayRulesetPolicyAtPlayStart(options, chart.Meta,
+                                               notePriorityMode);
 }
 
 [[nodiscard]] inline StartOptions

@@ -22,6 +22,12 @@
 
 class ScoreRepository;
 
+struct ArchiveUnzipRecoveryRecord {
+  std::filesystem::path archivePath, outputFolder;
+  std::string archiveKey;
+  bool deleteOriginal = false;
+};
+
 enum class ChartRecordSortCriterion {
   Default,
   ClearMark,
@@ -96,6 +102,7 @@ struct ChartMetaRecord {
   bool hasRandomSequence = false;
   std::string difficultyTableLabels;
   bool courseStart = false;
+  bool unzipAll = false;
   bool unavailable = false;
   bool solidArchive = false;
   std::uint64_t archiveSize = 0;
@@ -363,6 +370,9 @@ public:
     bool DeleteChartMeta(std::filesystem::path path);
     int DeleteChartMetaInDirectory(const std::filesystem::path &directory);
     bool DeleteArchiveRecords(const std::filesystem::path &archivePath);
+    bool SaveUnzipRecovery(const ArchiveUnzipRecoveryRecord &record);
+    std::optional<std::vector<ArchiveUnzipRecoveryRecord>> LoadUnzipRecovery();
+    bool ClearUnzipRecovery(std::span<const std::filesystem::path> folders);
     bool ClearChartMeta();
     bool InsertEntry(const std::filesystem::path &path,
                      const std::string &iosBookmark = "");

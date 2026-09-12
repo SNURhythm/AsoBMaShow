@@ -1,7 +1,6 @@
 #include "SkinResourceCatalog.h"
 
 #include "../../ArchiveFile.h"
-#include "../../StartupTiming.h"
 #include "SkinTextAtlas.h"
 #include "../LuaGameplaySkinFeature.h"
 #include "../package/SkinPackageTypes.h"
@@ -13,7 +12,6 @@
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include <algorithm>
-#include <chrono>
 #include <atomic>
 #include <cctype>
 #include <cmath>
@@ -1149,24 +1147,11 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
       SkinTextAtlasBuildResult result;
       result.atlas = *cached;
       result.atlas->id = id;
-      StartupTiming::instance().note(
-          "atlas cache HIT key=" + contentKey.substr(0, 12));
       return result;
     }
-    StartupTiming::instance().note(
-        "atlas cache MISS key=" + contentKey.substr(0, 12) +
-        " revision=" + files.revision().lowercaseSha256.substr(0, 12));
   }
-  const auto facesStart = std::chrono::steady_clock::now();
   const auto faces = readFontFaces(request, files, session, diagnostics,
                                    cancellationRequested, safetyPolicy);
-  const auto facesMillis = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - facesStart)
-                               .count();
-  if (facesMillis >= 5) {
-    StartupTiming::instance().note(
-        "font faces read took " + std::to_string(facesMillis) + "ms");
-  }
   if (!faces) return std::nullopt;
   const auto reservePaintAttemptWork =
       [&remainingScalableFontPaintAttemptWork](std::size_t work) {
@@ -3172,10 +3157,6 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       return false;
     }
     for (const auto &[reference, encoded] : encodedByReference) {
-      std::ostringstream builtinNote;
-      builtinNote << "builtin reference " << reference << " bytes "
-                  << encoded.size();
-      StartupTiming::instance().note(builtinNote.str());
       SkinResourceSessionAccounting candidateSession = session;
       if (!candidateSession.addImage(
               /*physicalResources=*/1, /*logicalResources=*/1,
@@ -3594,7 +3575,6 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     }
   }
   if (!drainPendingImages()) return result;
-  StartupTiming::instance().mark("decodeAndPlan: image decodes finished");
   const auto fontRequests = collectFontAtlasRequests(
       input.model, uses, input.fileSystem, input.configuration,
       input.requiredRuntimeStrings, input.requiredRuntimeStringsByObject,
@@ -3616,21 +3596,6 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
         input.safetyPolicy, input.stop, bitmapFontCache, requestAccounting,
         remainingScalableFontPaintAttemptWork, coordinator_, &decodeCache_,
         this);
-    {
-      std::ostringstream fontNote;
-      fontNote << "font request object";
-      for (const SkinObjectId object : request.objects) {
-        fontNote << " " << object;
-      }
-      fontNote << " codepoints=" << request.codepoints.size()
-               << " built=" << (built && built->atlas ? "yes" : "no");
-      StartupTiming::instance().note(fontNote.str());
-    }
-    StartupTiming::instance().mark(
-        ("decodeAndPlan: font atlas done (" +
-         std::to_string(plan.atlases.size()) + "/" +
-         std::to_string(fontRequests.size()) + ")")
-            .c_str());
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
     if (!built) continue;
     if (cancellationRequested(input.stop)) { result.cancelled = true; return result; }
@@ -3645,19 +3610,6 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
                                         built->atlas->kerning.size(),
                                         delta->physicalResources,
                                         built->atlas->paintBlendOperations)) {
-      {
-        std::ostringstream rejectNote;
-        rejectNote << "font atlas REJECTED for object";
-        for (const SkinObjectId object : request.objects) {
-          rejectNote << " " << object;
-        }
-        rejectNote << " decoded=" << (delta ? delta->decodedBytes : 0)
-                   << " glyphs=" << built->atlas->glyphs.size()
-                   << " pairs=" << built->atlas->kerning.size()
-                   << " phys=" << (delta ? delta->physicalResources : 0)
-                   << " sessionDecoded=" << fontSession.decodedBytes();
-        StartupTiming::instance().note(rejectNote.str());
-      }
       result.diagnostics.push_back(fontDiagnostic(request.font, request.critical, "skin.resource.atlas_limit", "font atlas session aggregate exceeds policy"));
       continue;
     }
@@ -3675,9 +3627,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
   // Chart-owned images are optional SkinSourceReference inputs. Prepare them
   // only from the budget left after package-critical images/fonts so an
   // oversized stage file cannot starve the authored skin resources.
-  StartupTiming::instance().mark("decodeAndPlan: font atlases done");
   if (!prepareChartBuiltinImages()) return result;
-  StartupTiming::instance().mark("decodeAndPlan: chart builtins done");
   if (std::ranges::any_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; })) return result;
   {
     std::lock_guard lock(serviceMutex_);

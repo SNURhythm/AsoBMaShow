@@ -37,6 +37,7 @@
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include "ReplayRecordsModal.h"
+#include "ArchiveUnzipModal.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -70,6 +71,7 @@ public:
   void init() override;
   void onPause() override;
   void onResume() override;
+  void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
 
   void update(float dt) override;
@@ -99,13 +101,11 @@ private:
   std::function<void()> pendingReplayLoadCompletion;
   std::atomic_bool replayLoadInProgress = false;
   std::jthread replayExportThread;
-  std::jthread unzipThread;
   bool prioritizeVisibleArtworkBindings = false;
   std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
   std::unordered_map<std::string, std::uint64_t> replayIrObservedRevisions;
-  std::atomic_bool unzipInProgress = false;
   std::atomic_bool tasksModalOpenRequested = false;
   using LibraryTaskStatus = chart_library_tasks::TaskStatus;
   using LibraryTaskInfo = chart_library_tasks::TaskInfo;
@@ -223,17 +223,7 @@ private:
   View *parseLogModalRoot = nullptr;
   View *musicModalRoot = nullptr;
   View *tasksModalRoot = nullptr;
-  View *unzipModalRoot = nullptr;
-  View *unzipProgressTrack = nullptr;
-  View *unzipProgressFill = nullptr;
-  TextView *unzipModalTitleText = nullptr;
-  TextView *unzipProgressMessageText = nullptr;
-  TextView *unzipProgressPercentText = nullptr;
-  TextView *unzipProgressDetailText = nullptr;
-  Button *unzipDeleteArchiveButton = nullptr;
-  Button *unzipCancelButton = nullptr;
-  TextView *unzipDeleteArchiveButtonText = nullptr;
-  TextView *unzipCancelButtonText = nullptr;
+  std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   RecyclerView<MainMenuParseLogRow> *parseLogRecyclerView = nullptr;
   TextView *parseLogExportStatusText = nullptr;
   Button *parseLogExportButton = nullptr;
@@ -318,25 +308,6 @@ private:
   };
   std::mutex replayExportProgressMutex;
   std::optional<PendingReplayExportProgress> pendingReplayExportProgress;
-  struct PendingUnzipResult {
-    bool success = false;
-    std::filesystem::path chartPath;
-    std::filesystem::path rootPath;
-    std::filesystem::path outputFolder;
-    std::filesystem::path archivePath;
-    std::string message;
-    bool canDeleteArchive = false;
-  };
-  struct PendingUnzipProgress {
-    double fraction = 0.0;
-    std::uint64_t current = 0;
-    std::uint64_t total = 0;
-    std::string message;
-  };
-  std::mutex unzipResultMutex;
-  std::optional<PendingUnzipResult> pendingUnzipResult;
-  std::mutex unzipProgressMutex;
-  std::optional<PendingUnzipProgress> pendingUnzipProgress;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct PendingFindBmsSelectionHandoff {
     std::filesystem::path chartPath;
@@ -347,8 +318,6 @@ private:
   std::optional<PendingFindBmsSelectionHandoff>
       pendingFindBmsSelectionHandoff;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
-  std::optional<std::filesystem::path> unzipDeleteCandidatePath;
-  std::uint64_t unzipEstimatedUncompressedSize = 0;
   std::atomic_bool findBmsJobRunning = false;
   std::atomic_bool findBmsCancelled = false;
   ChartMetaRecord findBmsModalChart;
@@ -547,14 +516,7 @@ private:
   void setUnzipButtonVisible(bool visible);
   void refreshUnzipButtonForSelection(const ChartMetaRecord *record);
   void buildUnzipProgressModal();
-  void showUnzipProgressModal();
-  void hideUnzipProgressModal();
-  void updateUnzipProgressUi(double fraction, const std::string &message,
-                             std::uint64_t current, std::uint64_t total);
-  void setUnzipDeleteArchiveButtonVisible(bool visible);
-  void deleteUnzippedSourceArchive();
-  void applyUnzipProgress();
-  void applyUnzipResult();
+  bool archiveUnzipInProgress() const;
   enum class AutoSelectionPreview { Load, Suppress };
   void selectChartByPathAfterReload(const std::filesystem::path &path,
                                     AutoSelectionPreview preview);

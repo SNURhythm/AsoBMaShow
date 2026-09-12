@@ -6,11 +6,16 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.lang.reflect.Method;
+import java.io.File;
 
 public final class AndroidFolderPickerActivityFixture {
     public static void main(String[] arguments) throws Exception {
         String scenario = arguments[0];
         PickerActivity activity = new PickerActivity();
+        if (scenario.startsWith("storage-")) {
+            testStorageAccess(activity, scenario);
+            return;
+        }
         if (scenario.startsWith("resume-") || scenario.startsWith("result-")) {
             testPermissionReturn(activity, scenario);
             return;
@@ -78,7 +83,7 @@ public final class AndroidFolderPickerActivityFixture {
                 throw new AssertionError("Permission completed without leaving Activity");
             }
             activity.onPause();
-            activity.permissionGranted = scenario.endsWith("grant");
+            Environment.permissionGranted = scenario.endsWith("grant");
             if (scenario.startsWith("result-")) {
                 activity.onActivityResult(activity.lastCode, 0, null);
             }
@@ -99,6 +104,49 @@ public final class AndroidFolderPickerActivityFixture {
         java.lang.reflect.Field active = NativeFolderPickerRequests.class.getDeclaredField("active");
         active.setAccessible(true);
         return ((NativeFolderPickerRequests.Request) active.get(activity.folderPickerRequests)).code;
+    }
+
+    private static void testStorageAccess(PickerActivity activity, String scenario)
+            throws Exception {
+        Build.VERSION.SDK_INT = scenario.equals("storage-28") ? 28
+                : scenario.equals("storage-29") ? 29 : 30;
+        BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = !scenario.equals("storage-play");
+        Environment.permissionGranted = scenario.endsWith("granted") || scenario.equals("storage-play");
+        Method direct = PickerActivity.class.getDeclaredMethod("directPathForTree", Uri.class);
+        direct.setAccessible(true);
+        String path = (String) direct.invoke(activity, Uri.parse("content://tree"));
+        String expected = scenario.endsWith("granted") ? "/storage/emulated/0/Charts" : "";
+        if (!expected.equals(path)) {
+            throw new AssertionError("SAF must not be replaced by an unauthorized direct path: " + path);
+        }
+        if (Build.VERSION.SDK_INT < 30 || !BuildConfig.ASOBMSHOW_MANAGE_EXTERNAL_STORAGE) {
+            String permission = activity.ensureManageExternalStorageAccess("1");
+            if (!"0".equals(permission) || !activity.ui.isEmpty()) {
+                throw new AssertionError("SAF-only platforms must skip unavailable all-files settings");
+            }
+        }
+        AtomicReference<String> result = new AtomicReference<>();
+        Thread worker = new Thread(() -> result.set(activity.pickChartFolder("1")));
+        worker.start();
+        try {
+            Runnable dispatch = activity.ui.poll(2, TimeUnit.SECONDS);
+            if (dispatch == null) throw new AssertionError("SAF picker was not queued");
+            dispatch.run();
+            Intent returned = new Intent("result");
+            returned.setData(Uri.parse("content://tree"));
+            returned.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+            activity.onActivityResult(activity.lastCode, Activity.RESULT_OK, returned);
+            worker.join(2000);
+            if (worker.isAlive() || !("content://tree\nfolder\n" + expected).equals(result.get())) {
+                throw new AssertionError("Folder handoff lost SAF grant or returned wrong raw path");
+            }
+            if (!activity.resolver.persisted) throw new AssertionError("Read grant was not persisted");
+        } finally {
+            worker.interrupt();
+            worker.join(2000);
+        }
+        System.out.println("PASS " + scenario);
     }
 }
 
@@ -124,7 +172,6 @@ class PickerActivity extends FakeSdlActivity {
     final BlockingQueue<Runnable> ui = new LinkedBlockingQueue<>();
     int launches;
     int lastCode;
-    boolean permissionGranted;
     static final String ERROR_PREFIX = "__ERROR__:", CANCELLED_RESULT = "__CANCELLED__";
     static final int REQUEST_OPEN_TREE = 1, REQUEST_MANAGE_EXTERNAL_STORAGE = 2;
     final Object pickerLock = new Object(), manageStorageLock = new Object();
@@ -139,7 +186,6 @@ class PickerActivity extends FakeSdlActivity {
     void runOnUiThread(Runnable action) { ui.add(action); }
     void startActivityForResult(Intent intent, int code) { launches++; lastCode = code; }
     String getPackageName() { return "fixture"; }
-    boolean hasManageExternalStorageAccess() { return permissionGranted; }
     void setRequestedOrientation(int orientation) {}
     void nativeGyroscopeActivityResumed() {}
     void nativeGyroscopeActivityPaused() {}
@@ -151,9 +197,10 @@ class PickerActivity extends FakeSdlActivity {
     final AtomicReference<String> archivePickerError = new AtomicReference<>("");
     final AtomicReference<Boolean> archivePickerTree = new AtomicReference<>(false);
     void completeDocumentSelectionLocked(DocumentHandoffOperation operation, Uri uri, String result) {}
-    Dummy getContentResolver() { return new Dummy(); }
+    final Dummy resolver = new Dummy();
+    Dummy getContentResolver() { return resolver; }
     String displayNameForTree(Uri uri) { return "folder"; }
-    String directPathForTree(Uri uri) { return "/folder"; }
+    String normalizeRelativePath(String path) { return path; }
     String displayNameForUri(Uri uri) { return "archive"; }
     boolean isSupportedArchiveUri(Uri uri, String name) { return true; }
     void finishArchivePicker() {}
@@ -170,16 +217,29 @@ class PickerActivity extends FakeSdlActivity {
 }
 
 class Dummy {
+    boolean persisted;
     void setActivityResumed(boolean resumed) {}
-    void takePersistableUriPermission(Uri uri, int flags) {}
+    void takePersistableUriPermission(Uri uri, int flags) { persisted = true; }
     void destroy() {}
     void cancel(Object value) {}
 }
 class DocumentHandoffOperation { Object operationToken; int requestCode; }
 class ActivityInfo { static final int SCREEN_ORIENTATION_LANDSCAPE = 0; }
 class Activity { static final int RESULT_OK = -1; }
-class DocumentsContract { static boolean isTreeUri(Uri uri) { return true; } }
-class BuildConfig { static final boolean ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = true; }
+class DocumentsContract {
+    static boolean isTreeUri(Uri uri) { return true; }
+    static String getTreeDocumentId(Uri uri) { return "primary:Charts"; }
+}
+class BuildConfig { static boolean ASOBMSHOW_MANAGE_EXTERNAL_STORAGE = true; }
+class Build {
+    static class VERSION { static int SDK_INT = 30; }
+    static class VERSION_CODES { static final int R = 30; }
+}
+class Environment {
+    static boolean permissionGranted;
+    static boolean isExternalStorageManager() { return permissionGranted; }
+    static File getExternalStorageDirectory() { return new File("/storage/emulated/0"); }
+}
 class Looper {
     static final Object MAIN = new Object();
     static Object myLooper() { return null; }
@@ -189,15 +249,21 @@ class Settings {
     static final String ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION = "app-permission";
     static final String ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION = "permission";
 }
-class Uri { static Uri parse(String text) { return new Uri(); } }
+class Uri {
+    static Uri parse(String text) { return new Uri(); }
+    String getAuthority() { return "com.android.externalstorage.documents"; }
+    public String toString() { return "content://tree"; }
+}
 class Intent {
-    Uri getData() { return null; }
-    int getFlags() { return 0; }
+    Uri data;
+    int flags;
+    Uri getData() { return data; }
+    int getFlags() { return flags; }
     static final String ACTION_OPEN_DOCUMENT_TREE = "tree";
     static final int FLAG_GRANT_READ_URI_PERMISSION = 1;
     static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 2;
     static final int FLAG_GRANT_PREFIX_URI_PERMISSION = 4;
     Intent(String action) {}
-    void setData(Uri uri) {}
-    void addFlags(int flags) {}
+    void setData(Uri uri) { data = uri; }
+    void addFlags(int flags) { this.flags |= flags; }
 }

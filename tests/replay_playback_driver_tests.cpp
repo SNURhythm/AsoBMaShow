@@ -719,7 +719,145 @@ void testMaterializationBudgetStopsBeforeResultConstruction() {
 
 } // namespace
 
+void testAbortedRawReplayReconstructsFailureWithoutTrustingSummary() {
+  for (const auto gauge : {GaugeType::Hard, GaugeType::ExHard, GaugeType::Hazard,
+                           GaugeType::Normal}) {
+    for (const auto shift : {GaugeAutoShiftMode::None, GaugeAutoShiftMode::BestClear,
+                             GaugeAutoShiftMode::SelectToUnder}) {
+      for (const bool midway : {false, true}) {
+        auto chart = oneNoteChart();
+        auto *timeline = new bms_parser::TimeLine(8, false);
+        timeline->Timing = 1'500'000;
+        timeline->SetNote(1, new bms_parser::Note(1));
+        chart.Measures.front()->TimeLines.push_back(timeline);
+        chart.Meta.TotalNotes = 2;
+        auto raw = document();
+        raw.timeBounds = {.completionSongTimeMicros = midway ? 550'000 : 400'000,
+                           .aborted = true};
+        raw.playback.setup.initialGaugeType = gauge;
+        raw.playback.setup.gaugeAutoShift = shift;
+        raw.playback.setup.startingGaugePercent = 100;
+        raw.playback.setup.ruleset = RulesetDescriptor::Current();
+        raw.playback.touchSamples.clear();
+        raw.playback.laneCoverEvents.clear();
+        raw.playback.input.clear();
+        if (midway) {
+          raw.playback.input = {
+              {.songTimeMicros = 500'000,
+               .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+               .pressed = true},
+              {.songTimeMicros = 510'000,
+               .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+               .pressed = false}};
+        }
+        auto saved = savedResult();
+        ScoreProvenanceBuildInput provenance;
+        provenance.chartMeta = chart.Meta;
+        provenance.longNoteMode = 1;
+        provenance.sourceJudgeRank = 2;
+        provenance.effectiveJudgeWindows = {
+            {PGreat, {-20'000, 20'000}}, {Great, {-50'000, 50'000}},
+            {Good, {-100'000, 100'000}}, {Bad, {-200'000, 200'000}},
+            {Kpoor, {-1'000'000, 0}}};
+        provenance.totalNotes = 2;
+        provenance.authoredGaugeTotal = 200.0;
+        provenance.effectiveGaugeTotal = 200.0;
+        provenance.gaugeType = gauge;
+        provenance.gaugeAutoShift = shift;
+        provenance.startingGaugePercent = 100;
+        provenance.inputDevices = {InputDeviceCategory::Keyboard};
+        saved.score.provenance = makeScoreProvenance(provenance);
+        saved.score.clearType = kClearTypeFullComboRank;
+        saved.score.finalGauge = 100;
+        saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
+        const auto outcome = ReplayPlaybackMaterializer::materializeForConsumers(
+            raw, saved, chart, 128);
+        if (!outcome.judgedResult) {
+          std::cerr << "Abort fixture rejected: " << outcome.diagnostic << '\n';
+        }
+        expect(outcome.judgedResult &&
+                   outcome.judgedResult->score.clearType == kClearTypeFailedRank &&
+                   outcome.judgedResult->score.finalGauge == 0,
+               "COR02: raw aborted completion reconstructs failure despite forged successful summary");
+        expect(outcome.judgedResult &&
+                   outcome.judgedResult->score.pGreat == (midway ? 1 : 0) &&
+                   outcome.judgedResult->score.poor == (midway ? 1 : 2) &&
+                   outcome.judgedResult->score.comboBreak == (midway ? 1 : 2),
+               "COR02: reconstructed abort accounts every remaining note exactly once");
+        expect(!outcome.playable(),
+               "COR02: forged terminal outcome cannot become an accepted consumer track");
+        if (outcome.judgedResult) {
+          const auto accepted = ReplayPlaybackMaterializer::materializeForConsumers(
+              raw, *outcome.judgedResult, chart, 128);
+          expect(accepted.replayData && accepted.replayData->abortedAtSongTimeMicros ==
+                                          raw.timeBounds.completionSongTimeMicros,
+                 "COR02: agreed consumer track retains the terminal abort boundary");
+          raw.timeBounds.aborted = false;
+          const auto forgedFlag = ReplayPlaybackMaterializer::materializeForConsumers(
+              raw, *outcome.judgedResult, chart, 128);
+          expect(!forgedFlag.playable(),
+                 "COR02: removing abort evidence cannot admit a different terminal outcome");
+        }
+      }
+    }
+  }
+}
+
+void testAuthoritativeAbortRejectsPostAbortStreams() {
+  for (const auto completion : {-1'000'000LL, 1'000'000LL}) {
+    for (const int stream : {0, 1, 2}) {
+      auto value = document();
+      value.timeBounds = {completion, true};
+      value.playback.input.clear();
+      value.playback.touchSamples.clear();
+      value.playback.laneCoverEvents.clear();
+      if (stream == 0) {
+        value.playback.input.push_back({.songTimeMicros = completion + 1,
+            .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+            .pressed = true});
+      } else if (stream == 1) {
+        value.playback.touchSamples.push_back({.action = replay::ReplayTouchAction::Down,
+            .fingerId = 1, .songTimeMicros = completion + 1, .x = 0.5F, .y = 0.5F});
+      } else {
+        value.playback.laneCoverEvents.push_back({.songTimeMicros = completion + 1,
+            .noteStartPositionPercent = 20});
+      }
+      const auto captured = replayCaptureTimeBounds(value.timeBounds,
+          value.playback.input, value.playback.touchSamples, value.playback.laneCoverEvents);
+      expect(captured == value.timeBounds,
+             "post-abort evidence never extends an authoritative abort boundary");
+      expect(!validateReplayPlayback(value.playback, ReplaySetupSource::AsoExtension,
+                                     captured).valid(),
+             "post-abort evidence fails canonical validation instead of moving abort time");
+    }
+  }
+}
+
+void testEmptyAbortDriverUsesConfiguredPreRoll() {
+  for (const bool wider : {true, false}) {
+    auto limits = kReplayLimits;
+    limits.minimumSongTimeMicros = wider ? -60'000'000 : -1'000'000;
+    auto value = document();
+    value.timeBounds = {wider ? -40'000'000 : -2'000'000, true};
+    value.playback.input.clear();
+    value.playback.touchSamples.clear();
+    value.playback.laneCoverEvents.clear();
+    ReplayPlaybackDriver driver(value, limits);
+    expect(driver.valid() == wider,
+           wider ? "empty -40s abort driver accepts configured -60s pre-roll"
+                 : "empty -2s abort driver rejects configured -1s pre-roll");
+    if (wider) {
+      const auto advanced = driver.advanceTo(-40'000'000, {}, 1);
+      expect(advanced.advanced() && driver.complete(),
+             "empty abort reaches its signed completion with wider configured pre-roll");
+    }
+  }
+}
+
 int main() {
+  testEmptyAbortDriverUsesConfiguredPreRoll();
+  testAuthoritativeAbortRejectsPostAbortStreams();
+  testAbortedRawReplayReconstructsFailureWithoutTrustingSummary();
   testDriverMergesStreamsWithoutChangingTheirTiming();
   testDriverTrustsStructurallyValidatedDocument();
   testDriverRejectsReverseTimeAndBoundsEachAdvance();

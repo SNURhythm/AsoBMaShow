@@ -212,8 +212,11 @@ ReplayPlaybackMaterializer::materializeForConsumers(
             .gaugeAutoShift = setup.gaugeAutoShift,
             .gaugeProfile = setup.gaugeProfile,
             .gaugeAutoShiftLowerBound = setup.gaugeAutoShiftLowerBound,
-            .startingGaugePercent = static_cast<int>(
-                std::lround(setup.startingGaugePercent)),
+            .startingGaugePercent =
+                savedResult.score.provenance.startingGaugePercent.has_value()
+                    ? std::optional(static_cast<int>(
+                          std::lround(setup.startingGaugePercent)))
+                    : std::nullopt,
             .carriedGauge = carry.gauge,
             .carriedCombo = carry.combo,
             .carriedMaxCombo = carry.maximumCombo,
@@ -269,8 +272,13 @@ ReplayPlaybackMaterializer::materializeForConsumers(
                               std::string &diagnostic) {
     return adapter.applyBatch(transitions, currentSongTime, diagnostic);
   };
+  std::size_t acceptedReplayEventCount = 0;
   judge.finish = [&](std::string &diagnostic)
       -> std::optional<result_persistence::ModernChartResult> {
+    acceptedReplayEventCount = simulation.replayEvents().size();
+    if (document.timeBounds.aborted.value_or(false)) {
+      simulation.finalizeAbortedAttempt(document.timeBounds.completionSongTimeMicros);
+    }
     if (simulation.replayOverflowed() ||
         simulation.automaticResultOverflowed() ||
         simulation.scoreState().gaugeHistoryOverflowed()) {
@@ -308,6 +316,12 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   if (!outcome.judgedResult.has_value()) {
     return outcome;
   }
+  if (document.timeBounds.aborted.has_value() && !outcome.matched()) {
+    outcome.state = ReplayPlaybackMaterializationState::JudgingFailed;
+    outcome.diagnostic = "Replay terminal evidence disagrees with the saved result: " +
+                         outcome.diagnostic;
+    return outcome;
+  }
 
   std::string setupDiagnostic;
   auto replayValue = makeReplayDataFromSetup(
@@ -329,7 +343,14 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   replay.maxCombo = savedResult.score.maxCombo;
   replay.finalGauge = savedResult.score.finalGauge;
   replay.clearType = savedResult.score.clearType;
-  const auto events = simulation.replayEvents();
+  if (document.timeBounds.aborted.value_or(false)) {
+    replay.abortedAtSongTimeMicros = document.timeBounds.completionSongTimeMicros;
+    replay.finalScore = outcome.judgedResult->score.score;
+    replay.maxCombo = outcome.judgedResult->score.maxCombo;
+    replay.finalGauge = outcome.judgedResult->score.finalGauge;
+    replay.clearType = outcome.judgedResult->score.clearType;
+  }
+  const auto events = simulation.replayEvents().first(acceptedReplayEventCount);
   replay.events.reserve(events.size());
   for (const auto &event : events) {
     replay.events.push_back({.action = replayAction(event.action),

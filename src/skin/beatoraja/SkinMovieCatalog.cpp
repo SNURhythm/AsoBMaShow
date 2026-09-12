@@ -458,7 +458,6 @@ public:
       return std::nullopt;
     }
     auto entry = std::make_unique<Entry>();
-    entry->clock.start();
     entry->player = std::make_unique<VideoPlayer>(&entry->clock);
     std::atomic_bool cancelled{stop.stop_requested()};
     std::stop_callback cancellation(stop, [&] {
@@ -522,11 +521,10 @@ public:
     if (entry.durationMillis > 0) {
       sourceMillis %= entry.durationMillis;
     }
+    entry.clock.seek(sourceMillis * 1000);
     if (!entry.started || sourceMillis < entry.lastSourceMillis) {
       entry.player->playFrom(sourceMillis * 1000);
       entry.started = true;
-    } else {
-      entry.clock.seek(sourceMillis * 1000);
     }
     entry.lastSourceMillis = sourceMillis;
     entry.player->update();

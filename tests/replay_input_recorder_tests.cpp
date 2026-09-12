@@ -165,7 +165,29 @@ void testUnsupportedControlsFailClosed() {
 
 } // namespace
 
+void testEmptyAbortCaptureUsesConfiguredPreRoll() {
+  bool allMatched = true;
+  for (const bool wider : {true, false}) {
+    auto limits = replay::kReplayLimits;
+    limits.minimumSongTimeMicros = wider ? -60'000'000 : -1'000'000;
+    replay::ReplayInputRecorder recorder({}, limits);
+    std::string diagnostic;
+    const auto result = recorder.finish(
+        {.completionSongTimeMicros = wider ? -40'000'000 : -2'000'000,
+         .aborted = true}, diagnostic);
+    const bool matched = wider ? result && result->empty() && diagnostic.empty()
+                               : !result && !diagnostic.empty();
+    if (!matched) {
+      std::cerr << (wider ? "FAIL: empty -40s abort must capture with -60s pre-roll\n"
+                         : "FAIL: empty -2s abort must reject with -1s pre-roll\n");
+      allMatched = false;
+    }
+  }
+  require(allMatched, "empty abort capture must use configured pre-roll");
+}
+
 int main() {
+  testEmptyAbortCaptureUsesConfiguredPreRoll();
   testRecordsSignedMonotonicSongTimeWithoutSorting();
   testOutOfOrderAndRedundantObserverEdgesAreNormalized();
   testOverflowInvalidatesTheWholeAttachment();

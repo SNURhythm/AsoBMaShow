@@ -27,6 +27,19 @@ class VideoPlayer {
 public:
   enum class MemoryPressureMode { PreserveActive, DiscardIdle };
 
+  class DecodeBatch {
+  public:
+    explicit DecodeBatch(VideoPlayer &player);
+    ~DecodeBatch();
+    DecodeBatch(const DecodeBatch &) = delete;
+    DecodeBatch &operator=(const DecodeBatch &) = delete;
+    DecodeBatch(DecodeBatch &&other) noexcept;
+    DecodeBatch &operator=(DecodeBatch &&) = delete;
+
+  private:
+    VideoPlayer *player;
+  };
+
   struct PreparedEmbeddedSubmission {
     video::EmbeddedYuvQuadLayout quad;
     std::uint64_t state = 0;
@@ -101,6 +114,7 @@ private:
   std::atomic<bool> isPaused{false};
   std::atomic<bool> predecodingActive{false};
   std::atomic<bool> decodeSuspended{false};
+  std::atomic<std::size_t> decodeBatchDepth{0};
   std::atomic<std::uint64_t> decodeGeneration{0};
   std::thread predecodeThread;
 

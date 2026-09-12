@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from android_folder_picker_lifecycle_tests import method
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,15 +132,26 @@ class AndroidReleaseWorkflowTests(unittest.TestCase):
                 self.fail("JAVA_HOME must provide a working Java 8+ compiler and compatible runtime")
             self.skipTest("No working Java 8+ compiler and compatible runtime found")
         with tempfile.TemporaryDirectory() as output:
+            signatures = ("private String copyArchiveUriToInternalStorage(",
+                          "private File uniqueFile(", "private void deleteRecursively(",
+                          "private String sanitizeFileName(")
+            methods = "\n".join(method(self.activity, signature) for signature in signatures)
+            fixture = read("tests/java/AndroidArchiveCopyActivityFixture.java")
+            generated = Path(output) / "AndroidArchiveCopyActivityFixture.java"
+            generated.write_text(fixture.replace("ACTIVITY_METHODS", methods))
             subprocess.run(
                 [javac, "-d", output, str(source),
-                 str(ROOT / "tests/java/ChartImportCopyControlTests.java")],
+                 str(ROOT / "tests/java/ChartImportCopyControlTests.java"), str(generated)],
                 check=True,
             )
             subprocess.run(
                 [java, "-cp", output, "com.snurhythm.asobmashow.ChartImportCopyControlTests"],
                 check=True,
                 timeout=15,
+            )
+            subprocess.run(
+                [java, "-cp", output, "com.snurhythm.asobmashow.AndroidArchiveCopyActivityFixture",
+                 str(Path(output) / "private-files")], check=True, timeout=15,
             )
 
     def test_destroyed_import_picker_cannot_wait_or_enqueue(self):

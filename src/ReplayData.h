@@ -94,6 +94,7 @@ struct ReplayData {
   int maxCombo = 0;
   float finalGauge = 0.0f;
   int clearType = kClearTypeFailedRank;
+  std::optional<long long> abortedAtSongTimeMicros;
   std::string createdAt;
   std::vector<ReplayEvent> events;
   std::vector<ReplayTouchSample> touchSamples;

@@ -81,6 +81,28 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
   if (!opened) throw std::runtime_error("Unable to open chart repository session");
   auto session = std::make_shared<ChartRepository::Session>(std::move(*opened));
   checkCancelled(stop);
+  if (musicSelectIsSolidArchiveDirectory(directory)) {
+    const auto records = MusicSelectRepositoryProjection::loadDirectoryRecords(
+        *session, directory, selectedLongNoteMode, nullptr, stop);
+    std::vector<MusicSelectBar> children;
+    children.reserve(records.size() + 1);
+    if (!records.empty()) {
+      const auto title = "Unzip All (" + std::to_string(records.size()) + ")";
+      children.push_back({
+          .id = {"action:unzip-all-archives"},
+          .kind = skin::MusicSelectBarKind::Executable,
+          .title = title,
+          .presentation = {.kind = skin::MusicSelectBarKind::Executable,
+                           .title = title, .exists = true},
+          .selectable = true,
+          .sortable = false});
+    }
+    for (const auto &record : records) {
+      checkCancelled(stop);
+      children.push_back(MusicSelectRepositoryProjection::projectSolidArchive(record));
+    }
+    return {.children = std::move(children)};
+  }
   const bool search = directory.kind == skin::MusicSelectBarKind::SearchWord;
   constexpr std::string_view searchPrefix = "search:";
   if (search && (!directory.id.value.starts_with(searchPrefix) ||
@@ -174,6 +196,7 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectoryAutoplay(
     ChartRepository &repository, const MusicSelectBar &directory,
     int selectedLongNoteMode, std::stop_token stop) {
   checkCancelled(stop);
+  if (musicSelectIsSolidArchiveDirectory(directory)) return {};
   auto session = repository.OpenSession();
   if (!session) throw std::runtime_error("Unable to open chart repository session");
   checkCancelled(stop);

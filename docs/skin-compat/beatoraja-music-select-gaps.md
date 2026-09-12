@@ -8,7 +8,143 @@ Scope: `SkinType.MUSIC_SELECT` (type 5) `.luaskin` support routed through the
 new `MusicSelectScene`, as designed in
 `docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md`.
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-10.
+
+## Unzip All (2026-09-10)
+
+Both Solid Archives lists begin with an `Unzip All (N)` action covering the
+library's solid archives. Main Menu exposes its Unzip All button when that row
+is selected; the Lua selector uses normal confirmation. Highlighting does not
+start extraction. The shared native modal first asks whether to keep originals
+or delete each archive after extraction, with Cancel available before starting.
+
+Unzip All shares a device-sized worker budget across independent archives and
+workers within each archive. In Delete mode,
+each worker extracts successfully, deletes that original, then takes its next
+archive; it never deletes an unfinished original. Keep mode retains all originals.
+Output-folder reservation and recovery-journal writes are serialized so archives
+with matching names cannot overwrite one another. Progress callbacks remain
+serialized and the overall fraction never moves backward. Each progress snapshot
+lets the modal display active archives in stable archive order (up to three rows
+plus an additional-active count) and counts finished archives, not the reporting
+worker's queue position. Worker updates cannot replace another archive's status. After workers
+finish or stop, one parallel indexing pass scans all completed output folders.
+Cancellation stops extraction but allows this final indexing pass to finish;
+the modal shows indexing progress with its cancel control disabled. Shutdown
+waits for that pass as well. Ordinary extraction failures do not prevent later archives
+from being processed. Indexing failures are reported separately from extraction
+failures: extracted files remain, but deleted originals cannot be restored.
+Single-archive extraction retains its existing post-indexing Keep/Delete choice.
+
+Full extraction checks estimated expanded size against available destination
+space before starting, and enforces actual output-write limits in the 7-Zip,
+libarchive, parallel ZIP, and batched backends. Defaults are 256 GiB per archive, 1 TiB of
+cumulative writes per Unzip All operation, and a 512 MiB free-space reserve.
+Entry admission also limits each archive to 100,000 entries and the batch to
+1,000,000 entries, including empty files, explicit directories, and implicit
+parent directories. These ceilings are configurable through `UnzipLimits`.
+Each archive reserves its entry count before extraction; completed-folder reuse
+does not charge again. Entry exhaustion stops the remaining batch, while prior
+completed outputs remain available.
+Available space is checked again before each data write, including when metadata
+understates the expanded size. Concurrent workers share synchronized byte
+accounting and reserve in-flight writes against available space. Failed attempts
+still consume the write budget;
+reusing a completed folder does not. A byte-limit or free-space failure stops
+active workers and the remaining queue without retrying another backend, keeps
+unfinished originals, and indexes completed folders. Partial output stays
+marked incomplete for recovery; original deletion never refunds the byte budget.
+Recovery removes partial output only when a nonsymlink ownership marker matches
+the journal's source and identity. Unverified legacy/torn markers retain their
+journal entries rather than deleting unknown data. Reserved root marker names
+are rejected before extraction. Deletion rechecks the extracted source's file
+identity and change time, including replacements that preserve size and mtime.
+`UnzipLimits::maximumWorkers` defaults to the device CPU count; a scheduling
+memory allowance also limits worker count. The default allowance is one eighth
+of reported RAM, bounded between 64 MiB and 1 GiB; the worker ceiling uses 64 MiB
+per worker, with at least one worker retained.
+The allowance and worker ceiling can be overridden. `maximumConcurrentArchives`
+defaults to automatic: the archive ceiling is the larger of two or one quarter
+of the worker budget, still bounded by available workers and queued archives.
+This leaves parallelism inside each archive without opening too many competing
+output streams. An explicit ceiling overrides that scheduling preference.
+Setting it to one orders archives while still allowing
+parallel work inside each archive. Set `maximumWorkers = 1` for fully serial work.
+Batch and per-archive allocations divide one budget, rather than multiplying
+independent thread pools.
+
+Single ZIP archives stream independent supported entries on separate readers.
+The same chunked reader handles one-worker and single-entry ZIP extraction without
+materializing a whole large member. Other fallback members are bounded to the
+smaller of 64 MiB and the per-archive memory allowance, and fail closed if larger.
+Unsupported ZIP compression methods retain serial fallback; integrity failures
+are terminal. Filesystem-equivalent output names (including Unicode/case aliases)
+disable parallel output to preserve serial overwrite behavior. Large 7-Zip and
+libarchive output streams can overlap decoding with a bounded writer queue,
+which drains before completion markers, indexing, or original deletion.
+Private 7-Zip handlers receive their allocated decoder-thread and memory settings,
+without changing cached library-reader settings. LZMA2 decoding still depends on
+independent chunks in the input; an indivisible LZMA stream cannot be split into
+parallel decoding work.
+
+Non-solid RAR4/RAR5 archives can stream independent entries through private SDK
+handlers. Files are balanced by expanded size and each handler extracts its
+assigned indices in archive order. One shared bounded writer queue serves all
+decoders, and its thread counts against the same per-archive worker budget.
+Parallel RAR requires at least two decoders plus that writer; smaller budgets
+retain the existing route. Private RAR handles use 64 KiB input read-ahead to
+avoid multiplying large header-scan reads; cached library readers are unchanged.
+SDK paths, types, sizes, solid flags, encryption, and link metadata are checked
+before selecting this route. Solid, multi-volume, mismatched, aliased, or
+insufficient-memory cases retain existing extraction behavior. RAR4 scheduling
+allows 320 MiB per decoder to cover its otherwise-hidden 256 MiB PPM allocation
+and declines mixed unpack versions, which can retain multiple decoders per handler;
+RAR5 scheduling includes twice the advertised dictionary plus decoder overhead,
+with a 64 MiB minimum. CRC, cancellation, and write-budget failures after starting
+the concurrent route are terminal, and the shared writer drains before success.
+
+The scheduling memory allowance is not a hard process-memory limit: the bounded
+output queue is limited to 8 MiB and 128 chunks per archive, and 7-Zip's `memuse`
+setting controls decoder threading, not mandatory dictionaries or encoded-header
+allocations. Large or hostile dictionaries can still exceed that allowance.
+
+Original files are deleted immediately, but their database records are removed
+in one transaction during finalization. Neither scene refreshes its library
+list while unzip or final indexing is active; pending refreshes are retained
+until completion. Deleting an archive no longer triggers a per-archive reload.
+
+Unzip All saves a SQLite recovery record before writing each output folder,
+without changing the library revision. Completed folders receive an atomically
+published completion marker; incomplete folders are excluded from library scans.
+Startup restores folder access and recovers pending work before importing
+difficulty tables: it removes records for already-deleted originals and indexes
+completed folders, without deleting any surviving originals or partial outputs.
+Recovery records are acknowledged only after cleanup and indexing succeed.
+Interrupted recovery, database failures, and inaccessible storage remain queued
+for the next startup or Refresh Library; unavailable recovery locations do not
+block scans of healthy roots. Stored paths use the existing iOS Documents
+normalization so recovery survives app-container relocation.
+
+Delete mode always extracts into a fresh folder before deleting an original;
+it does not trust a previous completion marker whose extracted files may have
+been changed or removed. Existing extracted folders are left untouched.
+
+## Solid archive pseudo-folder (2026-09-09)
+
+The Lua selector adds a `Solid Archives (N)` root folder when the library
+contains solid archives. Its archive rows load asynchronously and remain visible
+regardless of the current key-mode or difficulty filter. Confirming an archive
+opens the same native unzip modal as Main Menu, with progress, cancellation,
+and explicit Keep Archive / Delete Archive choices after successful extraction
+and library indexing. Highlighting, practice, and autoplay do not extract archives.
+Mouse and touch confirmation target the clicked archive, not the centered song.
+Extracted charts become available through the refreshed library; extraction
+does not automatically start gameplay.
+
+Solid archive and Unzip All actions expose non-playable folder-style skin
+properties, not the random-select flag (1030). Their titles and descriptions
+remain visible without activating random text overlays or duplicate SD-character
+placements in Litone12. Native confirmation still starts the unzip action.
 
 ## Intentional mixed-folder divergence (2026-09-08)
 
@@ -126,7 +262,7 @@ row currently encodes:
    resolve across a user-configurable sound-set folder in every Beatoraja
    extension — see gap #3).
 3. **No default select BGM / decide sound** (**ADDRESSED**: a looping `SELECT`
-   default and `DECIDE` on launch are wired; bundled `assets/select.wav` and
+   default and `DECIDE` on launch are wired; bundled `assets/select.ogg` and
    `assets/decide.wav` ship in the repo, synthesized by
    `scripts/generate_select_sounds.py`, and a user-configured sound-set folder
    is searched first for `select.*`/`decide.*` — see gap #4).
@@ -301,9 +437,19 @@ bookmark / Android SAF tree URI in `skinSelectSoundSetBookmark`) so the folder
 is re-accessible after relaunch; the row keeps a typed path that works on every
 platform, so desktop/mac keeps the typed input as its only affordance. A stock
 checkout now also has bundled defaults: the repo ships
-`assets/select.wav` and `assets/decide.wav` (plus all eight select SEs) generated
-deterministically by `scripts/generate_select_sounds.py` (pure-Python DSP, no
-third-party deps, select is a seamless 2.0 s loop), so the default load never
+`assets/select.ogg` and the seven WAV UI effects generated by
+`scripts/generate_select_sounds.py`. The original **Signal Select** cue is a
+60-second, 32-bar arcade-funk loop at 128 BPM: a syncopated call-and-response hook,
+straight drums, syncopated bass, voiced chord stabs, a contrasting bridge and
+turnaround fills. The score
+and DSP live in `scripts/select_bgm.py` and use deterministic standard-library
+Python; note releases and delay tails wrap rather than fading out each lap.
+Regenerate with `python3 scripts/generate_select_sounds.py`; encoding requires
+`sndfile-convert` from libsndfile tools (`--vorbis-encoder` overrides its path).
+Only the music uses mono 44.1 kHz Ogg Vorbis, capped at 1 MiB; the short UI
+effects remain unchanged WAVs. The generator validates decoded duration,
+headroom and loop continuity before replacing the BGM and removing the old
+`select.wav`, so the default load never
 fails on a fresh install. Bundled and user sound-set assets are now loaded via a
 **bundle-aware read** (`decodeSkinSoundBundleAware`: `AudioWrapper::loadSkinSound`
 → byte read through `SDL_RWFromFile`, which resolves relative `assets/*.wav`

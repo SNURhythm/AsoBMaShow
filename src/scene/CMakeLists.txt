@@ -1,4 +1,6 @@
 target_sources(main PRIVATE
+    ArchiveUnzipModal.cpp
+    ArchiveUnzipOperation.cpp
     ChartFilterSortPanelView.cpp
     ChartPreloadWorker.cpp
     ChartRecordsScene.cpp

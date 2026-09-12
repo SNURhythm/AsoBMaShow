@@ -24,6 +24,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -60,6 +61,41 @@ bool isFindBmsPrivateStorageDirectory(const std::filesystem::path &path) {
   }
   return fspath_to_utf8(path.filename()) ==
          asobmshow::bms_search::kFindBmsTransactionDirectoryName;
+}
+
+std::optional<bool> isIncompleteUnzipFolder(
+    const std::filesystem::path &path, ChartRepository::Session &session) {
+  std::error_code error;
+  const auto marker = std::filesystem::symlink_status(
+      path / ".asobmashow_unzip_incomplete", error);
+  if (error && error != std::errc::no_such_file_or_directory &&
+      error != std::errc::not_a_directory) return std::nullopt;
+  if (!std::filesystem::is_regular_file(marker)) return false;
+  const auto pending = session.LoadUnzipRecovery();
+  if (!pending) return std::nullopt;
+  for (const auto &record : *pending) {
+    error.clear();
+    if (std::filesystem::equivalent(path, record.outputFolder, error) && !error) {
+      const bool matches = archive_file::unzipFolderHasMatchingIncompleteMarker(
+          record.outputFolder, record.archivePath, record.archiveKey, &error);
+      if (error) return std::nullopt;
+      if (matches) return true;
+    }
+  }
+  return false;
+}
+
+std::optional<bool> hasIncompleteUnzipParent(
+    std::filesystem::path path, ChartRepository::Session &session) {
+  path = path.lexically_normal();
+  while (!path.empty()) {
+    const auto incomplete = isIncompleteUnzipFolder(path, session);
+    if (!incomplete || *incomplete) return incomplete;
+    const auto parent = path.parent_path();
+    if (parent == path) break;
+    path = parent;
+  }
+  return false;
 }
 
 std::int64_t clampScanInteger(std::uint64_t value) {
@@ -455,11 +491,12 @@ ChartScanResult ChartLibraryScanner::ScanAddedWithResult(
     ChartScanProgressCallback progressCallback,
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
-    ChartScanFlushCompleteCallback flushCompleteCallback) {
+    ChartScanFlushCompleteCallback flushCompleteCallback,
+    bool requireReadableStorage) {
   return ScanImpl(session, roots, ReconcileMode::None, stopToken,
                   std::move(progressCallback), std::move(pauseCallback),
                   std::move(flushRequestCallback),
-                  std::move(flushCompleteCallback));
+                  std::move(flushCompleteCallback), requireReadableStorage);
 }
 
 ChartScanResult ChartLibraryScanner::ScanScopedWithResult(
@@ -484,7 +521,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     ChartScanProgressCallback progressCallback,
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
-    ChartScanFlushCompleteCallback flushCompleteCallback) {
+    ChartScanFlushCompleteCallback flushCompleteCallback,
+    bool requireReadableStorage) {
   if (stopRequested(stopToken)) {
     return {};
   }
@@ -1377,6 +1415,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
   auto scheduleOrdinaryChart = [&](const std::filesystem::path &path,
                                    bool hasDocument) {
+    if (requireReadableStorage && !std::ifstream(path, std::ios::binary)) {
+      discoveryHealthy.store(false, std::memory_order_relaxed);
+      return;
+    }
     const path_t key = fspath_to_path_t(path);
     if (reconcileMode != ReconcileMode::Scoped && knownChartPaths.contains(key)) {
       documentFlagUpdates.emplace_back(path, hasDocument);
@@ -1426,6 +1468,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   };
 
   auto scheduleArchivePath = [&](const std::filesystem::path &archivePath) {
+    if (requireReadableStorage && !std::ifstream(archivePath, std::ios::binary)) {
+      discoveryHealthy.store(false, std::memory_order_relaxed);
+      return;
+    }
     if (shouldStop()) {
       return;
     }
@@ -1583,7 +1629,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       continue;
     }
     if (!rootExists) {
-      if (reconcileExisting) {
+      if (reconcileExisting || requireReadableStorage) {
         traversalHealthy = false;
         SDL_Log("Configured chart folder is unavailable: %s",
                 fspath_to_utf8(root).c_str());
@@ -1593,6 +1639,12 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
 
     std::error_code rootTypeError;
+    const auto incompleteRoot = hasIncompleteUnzipParent(root, session);
+    if (!incompleteRoot || *incompleteRoot) {
+      if (!incompleteRoot || requireReadableStorage) traversalHealthy = false;
+      ++scannedRootCount;
+      continue;
+    }
     if (std::filesystem::is_regular_file(root, rootTypeError) &&
         !rootTypeError) {
       if (asobmshow::bms_chart_file::isBmsChartPath(root)) {
@@ -1613,7 +1665,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
 
     std::filesystem::recursive_directory_iterator iterator(
-        root, std::filesystem::directory_options::skip_permission_denied,
+        root, requireReadableStorage ? std::filesystem::directory_options::none
+                                     : std::filesystem::directory_options::skip_permission_denied,
         error);
     for (const auto end = std::filesystem::recursive_directory_iterator();
          !error && iterator != end; iterator.increment(error)) {
@@ -1623,14 +1676,22 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
       std::error_code directoryTypeError;
       if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
+        const auto incomplete = isIncompleteUnzipFolder(iterator->path(), session);
+        if (!incomplete || *incomplete) {
+          if (!incomplete || requireReadableStorage) traversalHealthy = false;
+          iterator.disable_recursion_pending();
+          continue;
+        }
         observeFolder(iterator->path());
         if (isFindBmsPrivateStorageDirectory(iterator->path())) {
           iterator.disable_recursion_pending();
         }
         continue;
       }
+      if (requireReadableStorage && directoryTypeError) traversalHealthy = false;
       std::error_code typeError;
       if (!iterator->is_regular_file(typeError) || typeError) {
+        if (requireReadableStorage && typeError) traversalHealthy = false;
         continue;
       }
       const std::filesystem::path path = iterator->path();

@@ -307,8 +307,10 @@ void testGameplayGraphGaugeHistorySamplesEveryTypeEveryHalfSecond() {
   (void)simulation.advanceTo(2'100'000, 2'100'000);
   require(std::ranges::all_of(
               simulation.skinGameplayGraphState().gaugeHistories,
-              [](const auto &history) { return history.size() == 3; }),
-          "per-type gauge graph histories remain bounded after later samples");
+              [](const auto &history) { return history.empty(); }) &&
+              simulation.skinGameplayGraphState().gaugeHistoryOmitted &&
+              !simulation.scoreState().gaugeHistoryOverflowed(),
+          "exhausted sampled graph is omitted without a partial axis or event overflow");
 }
 
 struct KeysoundEntry {

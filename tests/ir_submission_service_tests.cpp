@@ -101,6 +101,30 @@ private:
   std::vector<ir::IrHttpRequest> requests_;
 };
 
+class TachiDeferredHttpClient final : public ir::IrHttpClient {
+public:
+  ir::IrHttpResponse perform(const ir::IrHttpRequest &request,
+                             std::stop_token) noexcept override {
+    std::lock_guard lock(mutex_);
+    requests_.push_back(request);
+    if (request.method == ir::IrHttpMethod::Post) {
+      return {.statusCode = 202,
+              .body = R"({"importID":"origin-a-job"})"};
+    }
+    return {.statusCode = 200,
+            .body = R"({"success":true,"body":{"importStatus":"ongoing"}})"};
+  }
+
+  std::vector<ir::IrHttpRequest> requests() const {
+    std::lock_guard lock(mutex_);
+    return requests_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::vector<ir::IrHttpRequest> requests_;
+};
+
 struct DriverCall {
   bool poll = false;
   bool userIntent = false;
@@ -123,8 +147,13 @@ public:
   std::string_view providerId() const noexcept override { return "fake"; }
   ir::IrDriverCapabilities capabilities() const noexcept override {
     ++capabilitiesCalls_;
+    if (capabilitiesObserved) {
+      capabilitiesObserved();
+    }
     return capabilities_;
   }
+
+  std::function<void()> capabilitiesObserved;
 
   [[nodiscard]] int capabilitiesCalls() const noexcept {
     return capabilitiesCalls_.load();
@@ -1869,7 +1898,7 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
          "202 persists job, request origin, and poll delay");
 
   harness.service->activateProfile(
-      profile(true, true, "https://changed.example.test"));
+      profile(true, true, "https://old.example.test"));
   expect(harness.service->retry(awaiting.id).status ==
              ir::IrOutboxMutationStatus::Updated,
          "manual retry makes deferred row due without clearing it");
@@ -1879,7 +1908,7 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
   expect(!calls[1].userIntent && calls[1].poll &&
              calls[1].remoteJobId == "job-remote" &&
              calls[1].remoteOrigin == "https://old.example.test" &&
-             calls[1].configuredOrigin == "https://changed.example.test",
+             calls[1].configuredOrigin == "https://old.example.test",
          "poll retains original origin and never carries user intent");
   expect(harness.waitForSnapshot(
              attemptId(8),
@@ -1913,6 +1942,263 @@ void testDeferredPollingPinsOriginAndNeverReposts() {
              callbacks.front().find("https://old.example.test") !=
                  std::string::npos,
          "completion invalidates ranking cache at persisted origin");
+}
+
+void testTachiDeferredCredentialOwnershipThroughReactivation() {
+  enum class OriginSwitchPath {
+    Direct,
+    Settings,
+    RecoveredPresenceRead,
+    FailedPresenceRead,
+  };
+  for (const bool manual : {false, true}) {
+    for (const auto path : {OriginSwitchPath::Direct, OriginSwitchPath::Settings,
+                            OriginSwitchPath::RecoveredPresenceRead,
+                            OriginSwitchPath::FailedPresenceRead}) {
+      const bool throughSettings = path != OriginSwitchPath::Direct;
+      TemporaryDirectory temp;
+      ReplayRepository repository(temp.path() / "replays.db");
+      expect(repository.EnsureSchema(), "origin ownership schema initializes");
+      ir::IrDriverRegistry registry;
+      auto driver = std::make_shared<ir::tachi::TachiDriver>();
+      std::string diagnostic;
+      expect(registry.registerDriver(driver, diagnostic),
+             "origin ownership uses the real Tachi driver");
+      TachiDeferredHttpClient http;
+      ManualWaiter waiter;
+      std::atomic<std::int64_t> now{1'000'000'000'000LL};
+      std::mutex credentialMutex;
+      std::string credential = "dummy-origin-a-key";
+      std::atomic_bool credentialReadsFail{false};
+      int settingsStores = 0;
+      int settingsPublications = 0;
+      int reactivations = 0;
+      const auto setCredential = [&](std::string_view value) {
+        std::lock_guard lock(credentialMutex);
+        credential = value;
+      };
+      const auto readCredential = [&] {
+        std::lock_guard lock(credentialMutex);
+        return credential;
+      };
+      ir::IrSubmissionServiceOptions options;
+      options.wallNowUnixMillis = [&] { return now.load(); };
+      options.credentialLookup = [&](std::string_view, std::string_view) {
+        return credentialReadsFail.load() ? std::string{} : readCredential();
+      };
+      options.waitUntil = [&](std::stop_token token, auto deadline) {
+        waiter.wait(token, deadline);
+      };
+      options.wake = [&] { waiter.wake(); };
+      ir::IrSubmissionService service(repository, registry, http,
+                                      std::move(options));
+      const auto value = tachiDraft(232, now.load());
+      const auto result = canonicalModernResult(value, temp.path());
+      const auto snapshot = ir::captureIrSubmissionSnapshot(result, diagnostic);
+      expect(snapshot.has_value(), "origin ownership captures canonical proof");
+      expect(repository.StageModernChartResult(result, snapshot, std::nullopt)
+                     .status == ModernChartStageStatus::Staged,
+             "origin ownership stages canonical result");
+      const auto inserted = repository.EnqueueReadyIrOutboxDraft(value, false);
+      expect(inserted.entry.has_value(), "origin ownership enqueues result");
+      if (!inserted.entry) continue;
+      ir::IrActiveProfileConfig config{.profileId = "profile-a"};
+      config.providers["tachi"] = {.enabled = true,
+                                    .autoSubmit = true,
+                                    .serverOrigin = "https://origin-a.test"};
+      const auto waitFor = [&](auto predicate) {
+        const auto deadline = std::chrono::steady_clock::now() + 3s;
+        while (std::chrono::steady_clock::now() < deadline) {
+          const auto status = service.status("tachi", value.attemptId);
+          if (status.found && predicate(status)) return true;
+          std::this_thread::yield();
+        }
+        return false;
+      };
+      const auto expectBlocked = [&] {
+        expect(waitFor([](const auto &status) {
+                 return status.state == ir::IrOutboxState::BlockedConfiguration;
+               }), "incompatible deferred job reaches recoverable blocked state");
+        const auto stored = repository.LoadIrOutbox("tachi", value.attemptId);
+        expect(stored.entry && stored.entry->id == inserted.entry->id &&
+                   stored.entry->remoteJobId == "origin-a-job" &&
+                   stored.entry->remoteOrigin == "https://origin-a.test" &&
+                   !stored.entry->nextRequestUserIntent,
+               "blocking preserves row, destination, job and no-repost intent");
+      };
+      ir::IrSettingsActionDependencies dependencies{
+          .storeSettings = [&](const auto &, std::string &) {
+            ++settingsStores;
+            return true;
+          },
+          .settingsCommitted = [&](const auto &candidate) {
+            ++settingsPublications;
+            config.providers["tachi"] = candidate;
+            service.activateProfile(config);
+          },
+          .quiesceRemoteWork = [&](std::string &) {
+            service.pauseAndCancel();
+            return true;
+          },
+          .loadCredential = [&](std::optional<std::string> &key, std::string &) {
+            key.reset();
+            if (credentialReadsFail.load()) return false;
+            const auto current = readCredential();
+            key = current.empty() ? std::nullopt : std::optional(current);
+            return true;
+          },
+          .invalidateProviderIdentity = [&](std::string_view provider,
+                                             std::string &) {
+            const auto cleared = repository.ClearIrProviderAccountEvidence(provider);
+            return cleared.status == ir::IrOutboxMutationStatus::Updated ||
+                   cleared.status == ir::IrOutboxMutationStatus::NotFound;
+          },
+          .replaceCredential = [&](std::string_view key, std::string &) {
+            setCredential(key);
+            return true;
+          },
+          .removeCredential = [&](std::string &) {
+            setCredential({});
+            return true;
+          },
+          .credentialCommitted = [&] { service.notifyConfigurationChanged(); },
+          .reactivateRemoteWork = [&](std::string &) {
+            ++reactivations;
+            service.activateProfile(config);
+            return true;
+          },
+          .retryAll = [&] { return service.retryAll("tachi"); },
+      };
+      ir::IrSettingsActionModel model("tachi", driver->capabilities(),
+                                       config.providers.at("tachi"), true,
+                                       dependencies);
+      service.start(config);
+      expect(waitFor([](const auto &status) {
+               return status.state == ir::IrOutboxState::AwaitingRemoteResult;
+             }), "real HTTP 202 creates the deferred job at A");
+
+      if (throughSettings) {
+        expect(model.setServerOrigin("HTTPS://ORIGIN-A.TEST:443/").succeeded() &&
+                   model.hasCredential(),
+               "equivalent normalized origin keeps its authorized key");
+        expect(!model.setServerOrigin("https://origin-b.test").succeeded(),
+               "origin cannot change while the old origin's key is installed");
+        expect(model.removeCredential().succeeded(), "old credential is removed");
+        expect(model.setServerOrigin("https://origin-b.test").succeeded(),
+               "keyless origin switch succeeds");
+        expect(model.replaceCredential("dummy-origin-b-key").succeeded(),
+               "B credential installs through quiescence and reactivation");
+      } else {
+        service.pauseAndCancel();
+        setCredential("dummy-origin-b-key");
+        config.providers["tachi"].serverOrigin = "https://origin-b.test";
+        service.activateProfile(config);
+      }
+      if (manual) {
+        expect(service.retry(inserted.entry->id).status ==
+                   ir::IrOutboxMutationStatus::Updated,
+               "manual retry preserves deferred identity");
+      } else {
+        now += 200;
+        service.notifyOutboxChanged();
+      }
+      expectBlocked();
+      expect(http.requests().size() == 1,
+             "automatic and manual foreign-origin polling issue no HTTP");
+
+      if (throughSettings) {
+        expect(model.retryAll().succeeded(), "settings retry-all is accepted");
+        expectBlocked();
+        if (path == OriginSwitchPath::RecoveredPresenceRead ||
+            path == OriginSwitchPath::FailedPresenceRead) {
+          credentialReadsFail = true;
+          std::optional<std::string> displayedKey;
+          const bool presenceLoaded =
+              dependencies.loadCredential(displayedKey, diagnostic);
+          expect(!presenceLoaded && !displayedKey &&
+                     readCredential() == "dummy-origin-b-key",
+                 "failed presence read leaves the prepared profile's B key stored");
+          model = ir::IrSettingsActionModel(
+              "tachi", driver->capabilities(), config.providers.at("tachi"),
+              presenceLoaded && displayedKey && !displayedKey->empty(),
+              dependencies);
+          expect(!model.hasCredential(),
+                 "settings reopen maps the failed read to absent display state");
+          credentialReadsFail = path == OriginSwitchPath::FailedPresenceRead;
+        }
+        const int storesBeforeOriginSave = settingsStores;
+        const int publicationsBeforeOriginSave = settingsPublications;
+        const int reactivationsBeforeOriginSave = reactivations;
+        const auto originSave = model.setServerOrigin("https://origin-a.test");
+        expect(originSave.status ==
+                   (path == OriginSwitchPath::FailedPresenceRead
+                        ? ir::IrSettingsActionResult::Status::StorageFailure
+                        : ir::IrSettingsActionResult::Status::Invalid),
+               "returning to A cannot reactivate its job with B's key");
+        expect(settingsStores == storesBeforeOriginSave &&
+                   settingsPublications == publicationsBeforeOriginSave &&
+                   reactivations == reactivationsBeforeOriginSave &&
+                   config.providers.at("tachi").serverOrigin ==
+                       "https://origin-b.test" &&
+                   readCredential() == "dummy-origin-b-key",
+               "unknown or recovered presence never stores or activates origin A");
+        credentialReadsFail = false;
+        if (manual) {
+          expect(model.retryAll().succeeded(),
+                 "retry after the rejected origin switch remains available");
+        } else {
+          expect(model.setEnabled(false).succeeded() &&
+                     model.setEnabled(true).succeeded(),
+                 "settings reactivation makes the blocked job automatically due");
+        }
+        expectBlocked();
+        expect(http.requests().size() == 1,
+               "an origin-first return cannot poll A with B's retained key");
+        expect(model.removeCredential().succeeded(), "B credential is removed");
+        expect(model.setServerOrigin("https://origin-a.test").succeeded(),
+               "returning to A succeeds only without B's credential");
+        expect(service.retry(inserted.entry->id).status ==
+                   ir::IrOutboxMutationStatus::Updated,
+               "keyless deferred retry remains recoverable");
+        expectBlocked();
+        expect(http.requests().size() == 1,
+               "settings ordering never dispatches B's key to A");
+        expect(model.replaceCredential("dummy-origin-a-key").succeeded(),
+               "explicit original-origin credential restores authorization");
+      } else {
+        service.pauseAndCancel();
+        setCredential("dummy-origin-a-key");
+        config.providers["tachi"].serverOrigin = "https://origin-a.test";
+        service.activateProfile(config);
+      }
+      expect(waitFor([&](const auto &status) {
+               const auto stored = repository.LoadIrOutbox("tachi", value.attemptId);
+               return status.state == ir::IrOutboxState::AwaitingRemoteResult &&
+                      stored.entry && stored.entry->remotePollCount == 1;
+             }), "restoring authorized A configuration automatically resumes polling");
+      service.pauseAndCancel();
+      const auto requests = http.requests();
+      expect(requests.size() == 2,
+             "deferred job is POSTed once and resumed with exactly one GET");
+      if (requests.size() == 2) {
+        expect(requests[0].method == ir::IrHttpMethod::Post &&
+                   requests[0].url == "https://origin-a.test/ir/direct-manual/import" &&
+                   requests[1].method == ir::IrHttpMethod::Get &&
+                   requests[1].url ==
+                       "https://origin-a.test/api/v1/imports/origin-a-job/poll-status",
+               "recovery never rewrites the destination or reposts the score");
+      }
+      for (const auto &request : requests) {
+        expect(std::ranges::find(request.headers,
+                   std::pair<std::string, std::string>{
+                       "Authorization", "Bearer dummy-origin-a-key"}) !=
+                   request.headers.end() && !request.followRedirects,
+               "every recorded HTTP request carries only A's authorized key");
+      }
+      service.stop();
+      repository.Shutdown();
+    }
+  }
 }
 
 void testAdaptiveDeferredPollingCadence() {
@@ -2705,6 +2991,107 @@ void testPauseCancelsReconciliationBetweenLocalCandidatePages() {
          "snapshot apply");
 }
 
+void testDefaultWaitRetainsWorkQueuedDuringInspection() {
+  for (const bool reconciliation : {true, false}) {
+    TemporaryDirectory temp;
+    ReplayRepository repository(temp.path() / "replays.db");
+    expect(repository.EnsureSchema(), "default waiter schema initializes");
+    auto driver = std::make_shared<FakeDriver>(ir::IrDriverCapabilities{
+        .scoreSubmission = true,
+        .deferredSubmission = true,
+        .scoreReconciliation = true});
+    driver->releaseReconciliationStage(2);
+    ir::IrDriverRegistry registry;
+    std::string diagnostic;
+    expect(registry.registerDriver(driver, diagnostic),
+           "default waiter driver registers");
+    FakeHttpClient http;
+    const auto callerThread = std::this_thread::get_id();
+    const std::int64_t now = 1'000'000'000'000LL;
+    std::mutex gateMutex;
+    std::condition_variable gateChanged;
+    bool entered = false;
+    bool released = false;
+    int workerCapabilityCalls = 0;
+    const auto enterGate = [&] {
+      std::unique_lock lock(gateMutex);
+      if (entered) return;
+      entered = true;
+      gateChanged.notify_all();
+      gateChanged.wait(lock, [&] { return released; });
+    };
+    if (!reconciliation) {
+      driver->capabilitiesObserved = [&] {
+        if (std::this_thread::get_id() != callerThread &&
+            ++workerCapabilityCalls == 2) {
+          enterGate();
+        }
+      };
+    }
+    ir::IrSubmissionServiceOptions options;
+    options.wallNowUnixMillis = [&] {
+      if (reconciliation && std::this_thread::get_id() != callerThread) {
+        enterGate();
+      }
+      return now;
+    };
+    options.credentialLookup = [](std::string_view, std::string_view) {
+      return std::string("dummy-default-wait-key");
+    };
+    ir::IrSubmissionService service(repository, registry, http,
+                                    std::move(options));
+    const auto value = draft(233, now);
+    if (!reconciliation) {
+      const auto result = canonicalModernResult(value, temp.path());
+      const auto snapshot = ir::captureIrSubmissionSnapshot(result, diagnostic);
+      expect(repository.StageModernChartResult(result, snapshot, std::nullopt)
+                     .status == ModernChartStageStatus::Staged,
+             "default waiter stages the canonical upload before work inspection");
+    }
+    service.start(profile(true));
+    {
+      std::unique_lock lock(gateMutex);
+      expect(gateChanged.wait_for(lock, 3s, [&] { return entered; }),
+             "worker pauses after command inspection or the empty due query");
+    }
+    if (reconciliation) {
+      expect(service.requestUserScoreReconciliation("fake") ==
+                 ir::IrReconciliationRequestStatus::Accepted,
+             "record import is accepted while the worker inspects empty work");
+      expect(service.reconciliationStatus("fake").phase ==
+                 ir::IrReconciliationPhase::Queued,
+             "record import publishes queued before its only notification");
+    } else {
+      expect(service.enqueueManual(value).status ==
+                 ir::IrOutboxInsertStatus::Inserted,
+             "newly due upload is enqueued after the worker's empty due query");
+    }
+    {
+      std::lock_guard lock(gateMutex);
+      released = true;
+      gateChanged.notify_all();
+    }
+    expect(reconciliation ? driver->waitForReconciliationCalls(1)
+                          : driver->waitForCalls(1),
+           "the production waiter retains the sole work notification");
+    bool succeeded = false;
+    const auto deadline = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline) {
+      succeeded = reconciliation
+                      ? service.reconciliationStatus("fake").phase ==
+                            ir::IrReconciliationPhase::Succeeded
+                      : service.status("fake", value.attemptId).state ==
+                            ir::IrOutboxState::Succeeded;
+      if (succeeded) break;
+      std::this_thread::yield();
+    }
+    expect(succeeded,
+           "accepted work completes with no second signal or periodic deadline");
+    service.stop();
+    repository.Shutdown();
+  }
+}
+
 void testReconciliationCoalescesAndSerializesNewOutboxDelivery() {
   Harness harness({.readOnly = false,
                    .chartRankings = false,
@@ -3346,6 +3733,7 @@ int main() {
   testManualBatchPublishesAndWakesOnceWithSingularCompatibility();
   testAutomaticAndManualRequestsUseCurrentOrigin();
   testDeferredPollingPinsOriginAndNeverReposts();
+  testTachiDeferredCredentialOwnershipThroughReactivation();
   testAdaptiveDeferredPollingCadence();
   testDeferredInitialPollIgnoresEarlierPostFailures();
   testPersistedBackoffAndRetryAfter();
@@ -3363,6 +3751,7 @@ int main() {
   testPauseCancelsAQueuedReconciliationBeforeAnyApply();
   testPauseCancelsReconciliationBetweenLocalCandidatePages();
   testReconciliationCoalescesAndSerializesNewOutboxDelivery();
+  testDefaultWaitRetainsWorkQueuedDuringInspection();
   testReconciliationUsesExactMonotonicCooldownAfterSuccessAndFailure();
   testProfileAndOriginChangeDropAnInflightSnapshotBeforeApply();
   testReconciliationLoadsPlansAndAppliesOneCompleteSnapshot();

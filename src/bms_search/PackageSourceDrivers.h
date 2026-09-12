@@ -6,17 +6,20 @@ namespace asobmshow::bms_search {
 
 class GingerRushDriver {
 public:
-  static PackageSourceLookupResult lookupByMd5(const std::string &md5);
+  static PackageSourceLookupResult lookupByMd5(
+      const std::string &md5, const std::atomic_bool &cancelled);
 };
 
 class KonmaiDriver {
 public:
-  static PackageSourceLookupResult lookupByMd5(const std::string &md5);
+  static PackageSourceLookupResult lookupByMd5(
+      const std::string &md5, const std::atomic_bool &cancelled);
 };
 
 class WriggleDriver {
 public:
-  static PackageSourceLookupResult lookupByMd5(const std::string &md5);
+  static PackageSourceLookupResult lookupByMd5(
+      const std::string &md5, const std::atomic_bool &cancelled);
 };
 
 class EndlessDreamSourcesDriver {

@@ -8,10 +8,6 @@
 #include <optional>
 #include "REPOSITORY_ROOT/src/music_select/MusicSelectFolderStatusLoader.h"
 
-namespace audio::diag {
-void SelectAudioLog(const char *) {}
-}
-
 struct Preview {
   void reset() {}
   void silence() {}
@@ -31,6 +27,8 @@ struct Worker {
 };
 
 struct MusicSelectScene {
+  struct UnzipModal { void cancelAndWait() {} };
+  UnzipModal *archiveUnzipModal_ = nullptr;
   std::atomic_bool launchCancelled_ = false;
   std::uint64_t launchGeneration_ = 0;
   std::jthread launchThread_;

@@ -4193,6 +4193,10 @@ ReplayVideoExportResult
 ReplayVideoExporter::Export(ApplicationContext &context,
                             bms_parser::Chart *chart, const ReplayData &replay,
                             const ReplayVideoExportOptions &options) {
+  if (replay.abortedAtSongTimeMicros.has_value()) {
+    return {.success = false,
+            .message = "Video export of aborted replays is unsupported."};
+  }
   if (chart == nullptr) {
     return {.success = false, .message = "No chart selected"};
   }
@@ -4393,6 +4397,12 @@ ReplayVideoExportResult exportCourseReplayImpl(
     std::vector<std::unique_ptr<bms_parser::Chart>> *preparedCharts,
     const CourseMaterializedStages *materializedStages,
     const ReplayVideoExportOptions &options) {
+  for (const auto &stage : replay.stages) {
+    if (stage.replay.abortedAtSongTimeMicros.has_value()) {
+      return {.success = false,
+              .message = "Video export of aborted replays is unsupported."};
+    }
+  }
   if (replay.stages.empty() ||
       (preparedCharts != nullptr &&
        preparedCharts->size() != replay.stages.size()) ||

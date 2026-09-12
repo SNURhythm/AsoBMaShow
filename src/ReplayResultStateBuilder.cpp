@@ -335,16 +335,8 @@ SkinGameplayGraphState BuildSkinGameplayGraphState(
 
   auto dynamic =
       std::make_shared<SkinGameplayDynamicGraphState>(accumulator.state());
-  dynamic->gaugeHistories = state.gaugeHistories;
-  const int activeGaugeIndex = gaugeTypeIndex(state.gaugeType);
-  if (activeGaugeIndex >= 0 &&
-      static_cast<std::size_t>(activeGaugeIndex) <
-          dynamic->gaugeHistories.size() &&
-      dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)]
-          .empty()) {
-    dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)] =
-        state.gaugeHistory;
-  }
+  copySkinGameplayGaugeHistoryForDisplay(
+      *dynamic, state.gaugeHistories, state.gaugeHistory, state.gaugeType);
   // The immutable replay-state history replaces the accumulator's sampled
   // collection, so force a distinct renderer cache revision.
   ++dynamic->gaugeRevision;
@@ -358,16 +350,11 @@ SkinGameplayGraphState BuildSkinGameplayChartGraphState(
   auto chartGraph =
       std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
   auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();
-  dynamic->gaugeHistories = state.gaugeHistories;
+  dynamic->gaugeHistoryOmitted = !skinGameplayGaugeDurationAdmitted(
+      model.skinGameplayGraph.judgementDistributionSeconds);
+  copySkinGameplayGaugeHistoryForDisplay(
+      *dynamic, state.gaugeHistories, state.gaugeHistory, state.gaugeType);
   const int activeGaugeIndex = gaugeTypeIndex(state.gaugeType);
-  if (activeGaugeIndex >= 0 &&
-      static_cast<std::size_t>(activeGaugeIndex) <
-          dynamic->gaugeHistories.size() &&
-      dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)]
-          .empty()) {
-    dynamic->gaugeHistories[static_cast<std::size_t>(activeGaugeIndex)] =
-        state.gaugeHistory;
-  }
   dynamic->gaugeType = state.gaugeType;
   if (activeGaugeIndex >= 0 &&
       static_cast<std::size_t>(activeGaugeIndex) <

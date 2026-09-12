@@ -2,12 +2,112 @@
 
 #include "../BmsChartFile.h"
 #include "../CanonicalDigest.h"
+#include "../RAII.h"
+#include "../../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
 
 #if ASOBMSHOW_HAS_LIBARCHIVE
 #include "../ArchiveRAII.h"
 #endif
 
 namespace asobmshow::bms_search {
+
+namespace {
+
+class ArchiveExtractionBudget {
+public:
+  ArchiveExtractionBudget(ArchiveExtractionLimits limits,
+                           ArchiveExtractionCancelled cancelled,
+                           std::string &errorMessage)
+      : limits_(limits), cancelled_(std::move(cancelled)), error_(errorMessage) {}
+
+  bool checkpoint() {
+    if (cancelled_ && cancelled_()) {
+      error_ = "Archive extraction cancelled.";
+      return false;
+    }
+    return true;
+  }
+
+  bool prepare(const std::filesystem::path &outputPath) {
+    error_.clear();
+    if (!checkpoint()) {
+      return false;
+    }
+    std::error_code spaceError;
+    const auto space = std::filesystem::space(outputPath, spaceError);
+    if (spaceError) {
+      error_ = "Could not check free space for archive extraction: " +
+               spaceError.message();
+      return false;
+    }
+    if (space.available < limits_.reservedFreeBytes) {
+      error_ = "Not enough free space for archive extraction; free storage and retry.";
+      return false;
+    }
+    usableBytes_ = space.available - limits_.reservedFreeBytes;
+    return true;
+  }
+
+  bool beginEntry(std::optional<std::uint64_t> declaredSize) {
+    if (!checkpoint()) {
+      return false;
+    }
+    if (entries_ >= limits_.maxEntries) {
+      error_ = "Archive exceeds the entry-count limit (" +
+               std::to_string(limits_.maxEntries) + ").";
+      return false;
+    }
+    ++entries_;
+    entryBytes_ = 0;
+    const auto size = declaredSize.value_or(0);
+    if (!admit(size, declaredBytes_)) {
+      return false;
+    }
+    declaredBytes_ += size;
+    return true;
+  }
+
+  bool consume(std::uint64_t size) {
+    if (!checkpoint() || !admit(size, totalBytes_)) {
+      return false;
+    }
+    entryBytes_ += size;
+    totalBytes_ += size;
+    return true;
+  }
+
+  std::uint64_t entryBytes() const { return entryBytes_; }
+
+private:
+  bool admit(std::uint64_t size, std::uint64_t total) {
+    if (size > limits_.maxEntryBytes - entryBytes_) {
+      error_ = "Archive exceeds the expanded member limit (" +
+               std::to_string(limits_.maxEntryBytes) + " bytes).";
+      return false;
+    }
+    if (size > limits_.maxTotalBytes - total) {
+      error_ = "Archive exceeds the total expansion limit (" +
+               std::to_string(limits_.maxTotalBytes) + " bytes).";
+      return false;
+    }
+    if (size > usableBytes_ - total) {
+      error_ = "Archive expansion exceeds available staging space; free storage and retry.";
+      return false;
+    }
+    return true;
+  }
+
+  ArchiveExtractionLimits limits_;
+  ArchiveExtractionCancelled cancelled_;
+  std::string &error_;
+  std::uint64_t usableBytes_ = 0;
+  std::uint64_t entries_ = 0;
+  std::uint64_t declaredBytes_ = 0;
+  std::uint64_t totalBytes_ = 0;
+  std::uint64_t entryBytes_ = 0;
+};
+
+}
 
 bool safeArchivePath(const std::string &name, std::filesystem::path &outPath) {
   if (name.empty() || name.find('\0') != std::string::npos) {
@@ -200,13 +300,19 @@ bool hasZipSignature(const std::filesystem::path &path) {
          bytes == std::array<unsigned char, 4>{'P', 'K', 0x05, 0x06} ||
          bytes == std::array<unsigned char, 4>{'P', 'K', 0x07, 0x08};
 }
+#endif
 
 bool extractZipArchive(const std::filesystem::path &archivePath,
                        const std::filesystem::path &outputPath,
                        std::string &errorMessage,
-                       BmsSearchDownloadProgressCallback progressCallback) {
-  if (!ensureArchiveOutputDirectory(
-          outputPath, "Could not create output folder", errorMessage)) {
+                       BmsSearchDownloadProgressCallback progressCallback,
+                       ArchiveExtractionCancelled cancelled,
+                       ArchiveExtractionLimits limits) {
+  ArchiveExtractionBudget budget(limits, std::move(cancelled), errorMessage);
+  if (!budget.checkpoint() ||
+      !ensureArchiveOutputDirectory(
+          outputPath, "Could not create output folder", errorMessage) ||
+      !budget.prepare(outputPath)) {
     return false;
   }
 
@@ -217,15 +323,29 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
     errorMessage = "Could not open ZIP archive.";
     return false;
   }
+  auto archiveCleanup = makeScopeExit([&] { mz_zip_reader_end(&archive); });
 
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
+  if (fileCount > limits.maxEntries) {
+    errorMessage = "Archive exceeds the entry-count limit (" +
+                   std::to_string(limits.maxEntries) + ").";
+    return false;
+  }
   int extractedFiles = 0;
   bool ok = true;
   for (mz_uint i = 0; i < fileCount; ++i) {
+    if (!budget.checkpoint()) {
+      ok = false;
+      break;
+    }
     mz_zip_archive_file_stat stat{};
     if (!mz_zip_reader_file_stat(&archive, i, &stat)) {
       ok = false;
       errorMessage = "Could not read ZIP directory entry.";
+      break;
+    }
+    if (!budget.beginEntry(stat.m_uncomp_size)) {
+      ok = false;
       break;
     }
 
@@ -256,16 +376,43 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
                         .totalBytes = fileCount});
     }
 
-    const std::string destinationText = fspath_to_utf8(destination);
-    if (!mz_zip_reader_extract_to_file(&archive, i, destinationText.c_str(),
-                                       0)) {
+    if (!budget.checkpoint()) {
       ok = false;
-      errorMessage = "Could not extract " + fspath_to_utf8(relativePath);
+      break;
+    }
+    std::ofstream output(destination, std::ios::binary);
+    if (!output) {
+      ok = false;
+      errorMessage = "Could not create " + fspath_to_utf8(relativePath);
+      break;
+    }
+    struct WriteContext {
+      ArchiveExtractionBudget &budget;
+      std::ofstream &output;
+    } context{budget, output};
+    const auto writeChunk = [](void *opaque, mz_uint64 offset,
+                                const void *bytes, size_t size) -> size_t {
+      auto &context = *static_cast<WriteContext *>(opaque);
+      if (offset != context.budget.entryBytes() ||
+          !context.budget.consume(size)) {
+        return 0;
+      }
+      context.output.write(static_cast<const char *>(bytes),
+                           static_cast<std::streamsize>(size));
+      return context.output ? size : 0;
+    };
+    const bool extracted = mz_zip_reader_extract_to_callback(
+        &archive, i, writeChunk, &context, 0);
+    output.close();
+    if (!extracted || !output || !budget.checkpoint()) {
+      ok = false;
+      if (errorMessage.empty()) {
+        errorMessage = "Could not extract " + fspath_to_utf8(relativePath);
+      }
       break;
     }
     ++extractedFiles;
   }
-  mz_zip_reader_end(&archive);
 
   if (!ok) {
     return false;
@@ -276,7 +423,6 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
   }
   return true;
 }
-#endif
 
 #if ASOBMSHOW_HAS_LIBARCHIVE
 bool localeNameLooksUtf8(const char *localeName) {
@@ -362,9 +508,13 @@ void preferJapaneseArchiveHeaderCharset(archive *archiveHandle) {
 bool extractArchiveWithLibarchive(
     const std::filesystem::path &archivePath,
     const std::filesystem::path &outputPath, std::string &errorMessage,
-    BmsSearchDownloadProgressCallback progressCallback) {
-  if (!ensureArchiveOutputDirectory(
-          outputPath, "Could not create output folder", errorMessage)) {
+    BmsSearchDownloadProgressCallback progressCallback,
+    ArchiveExtractionCancelled cancelled, ArchiveExtractionLimits limits) {
+  ArchiveExtractionBudget budget(limits, std::move(cancelled), errorMessage);
+  if (!budget.checkpoint() ||
+      !ensureArchiveOutputDirectory(
+          outputPath, "Could not create output folder", errorMessage) ||
+      !budget.prepare(outputPath)) {
     return false;
   }
 
@@ -394,15 +544,54 @@ bool extractArchiveWithLibarchive(
   int skippedUnsupportedTypes = 0;
   int directoryEntries = 0;
   std::uint64_t entryIndex = 0;
+  unsigned headerRetries = 0;
+  auto readEntry = [&](std::ofstream *output) {
+    std::array<char, 64 * 1024> buffer{};
+    for (;;) {
+      if (!budget.checkpoint()) {
+        return false;
+      }
+      const la_ssize_t bytes = archive_read_data(
+          archiveHandle.get(), buffer.data(), buffer.size());
+      if (bytes < 0) {
+        errorMessage = "Could not extract archive member: " +
+                       archiveErrorString(archiveHandle.get(), "");
+        return false;
+      }
+      if (!budget.consume(static_cast<std::uint64_t>(bytes))) {
+        return false;
+      }
+      if (bytes == 0) {
+        return true;
+      }
+      if (output != nullptr) {
+        output->write(buffer.data(), static_cast<std::streamsize>(bytes));
+        if (!*output) {
+          errorMessage = "Could not write extracted archive member.";
+          return false;
+        }
+      }
+    }
+  };
   archive_entry *entry = nullptr;
   for (;;) {
+    if (!budget.checkpoint()) {
+      ok = false;
+      break;
+    }
     status = archive_read_next_header(archiveHandle.get(), &entry);
     if (status == ARCHIVE_EOF) {
       break;
     }
     if (status == ARCHIVE_RETRY) {
+      if (++headerRetries > 8) {
+        ok = false;
+        errorMessage = "Archive reader made no progress reading a header.";
+        break;
+      }
       continue;
     }
+    headerRetries = 0;
     if (status < ARCHIVE_WARN) {
       ok = false;
       errorMessage =
@@ -414,8 +603,24 @@ bool extractArchiveWithLibarchive(
       SDL_Log("Continuing after archive warning: %s",
               archiveErrorString(archiveHandle.get(), "").c_str());
     }
+    std::optional<std::uint64_t> declaredSize;
+    if (entry != nullptr && archive_entry_size_is_set(entry)) {
+      if (archive_entry_size(entry) < 0) {
+        ok = false;
+        errorMessage = "Archive member has an invalid expanded size.";
+        break;
+      }
+      declaredSize = static_cast<std::uint64_t>(archive_entry_size(entry));
+    }
+    if (!budget.beginEntry(declaredSize)) {
+      ok = false;
+      break;
+    }
     if (entry == nullptr) {
-      archive_read_data_skip(archiveHandle.get());
+      if (!readEntry(nullptr)) {
+        ok = false;
+        break;
+      }
       continue;
     }
 
@@ -428,7 +633,10 @@ bool extractArchiveWithLibarchive(
     std::filesystem::path relativePath;
     if (!safeArchivePath(entryName, relativePath)) {
       ++skippedInvalidPaths;
-      archive_read_data_skip(archiveHandle.get());
+      if (!readEntry(nullptr)) {
+        ok = false;
+        break;
+      }
       continue;
     }
 
@@ -440,7 +648,8 @@ bool extractArchiveWithLibarchive(
         (unknownFileType && entryNameLooksDirectory)) {
       ++directoryEntries;
       if (!ensureArchiveOutputDirectory(
-              destination, "Could not create archive folder", errorMessage)) {
+              destination, "Could not create archive folder", errorMessage) ||
+          !readEntry(nullptr)) {
         ok = false;
         break;
       }
@@ -448,7 +657,10 @@ bool extractArchiveWithLibarchive(
     }
     if (!unknownFileType && fileType != AE_IFREG) {
       ++skippedUnsupportedTypes;
-      archive_read_data_skip(archiveHandle.get());
+      if (!readEntry(nullptr)) {
+        ok = false;
+        break;
+      }
       continue;
     }
 
@@ -465,6 +677,10 @@ bool extractArchiveWithLibarchive(
                         .totalBytes = 0});
     }
 
+    if (!budget.checkpoint()) {
+      ok = false;
+      break;
+    }
     std::ofstream output(destination, std::ios::binary);
     if (!output) {
       ok = false;
@@ -472,26 +688,11 @@ bool extractArchiveWithLibarchive(
       break;
     }
 
-    std::array<char, 64 * 1024> buffer{};
-    for (;;) {
-      const la_ssize_t bytes =
-          archive_read_data(archiveHandle.get(), buffer.data(),
-                            buffer.size());
-      if (bytes == 0) {
-        break;
-      }
-      if (bytes < 0) {
-        ok = false;
-        errorMessage = "Could not extract " + fspath_to_utf8(relativePath) +
-                       ": " + archiveErrorString(archiveHandle.get(), "");
-        break;
-      }
-      output.write(buffer.data(), static_cast<std::streamsize>(bytes));
-      if (!output) {
-        ok = false;
-        errorMessage = "Could not write " + fspath_to_utf8(relativePath);
-        break;
-      }
+    ok = readEntry(&output);
+    output.close();
+    if (!output) {
+      ok = false;
+      errorMessage = "Could not finish writing " + fspath_to_utf8(relativePath);
     }
     if (!ok) {
       break;
@@ -520,10 +721,12 @@ bool extractArchiveWithLibarchive(
 bool extractDownloadedArchive(
     const std::filesystem::path &archivePath,
     const std::filesystem::path &outputPath, std::string &errorMessage,
-    BmsSearchDownloadProgressCallback progressCallback) {
+    BmsSearchDownloadProgressCallback progressCallback,
+    ArchiveExtractionCancelled cancelled, ArchiveExtractionLimits limits) {
 #if ASOBMSHOW_HAS_LIBARCHIVE
   return extractArchiveWithLibarchive(archivePath, outputPath, errorMessage,
-                                      progressCallback);
+                                      progressCallback, std::move(cancelled),
+                                      limits);
 #else
   if (!hasZipSignature(archivePath)) {
     errorMessage =
@@ -531,7 +734,7 @@ bool extractDownloadedArchive(
     return false;
   }
   return extractZipArchive(archivePath, outputPath, errorMessage,
-                           progressCallback);
+                           progressCallback, std::move(cancelled), limits);
 #endif
 }
 

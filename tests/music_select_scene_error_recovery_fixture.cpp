@@ -68,6 +68,11 @@ struct PreviewAudio {
   void silence() { silenced = true; }
 };
 struct MusicSelectScene : Scene {
+  struct UnzipModal {
+    bool cancelled = false;
+    void cancelAndWait() { cancelled = true; }
+  } unzipModal;
+  UnzipModal *archiveUnzipModal_ = &unzipModal;
   SceneManager manager;
   struct { SceneManager *sceneManager; } context{&manager};
   bool failed_ = false;
@@ -119,6 +124,7 @@ SDL_Event controllerEvent(int button, int type = SDL_CONTROLLERBUTTONDOWN) {
 void enterFailure(MusicSelectScene &scene) {
   scene.enterError({{.code = "fixture.failure", .message = "Skin failed"}});
   assert(scene.failed_ && !scene.listening && !scene.directoryPending);
+  assert(scene.unzipModal.cancelled && "skin error must stop archive work before hiding its controls");
   assert(scene.previewAudio_->silenced && !scene.previewController_);
   assert(!scene.searchInput.editing && !scene.searchOverlay.visible);
   assert(!scene.toolbar.visible && scene.errorView_ != nullptr);

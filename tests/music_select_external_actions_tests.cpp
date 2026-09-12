@@ -183,6 +183,31 @@ void testFolderAndDownloadSiteBranches() {
          std::vector<std::string>({"https://example.test/archive.zip"}));
 }
 
+void testTableDownloadTargetsReachTheSharedBrowserPolicyUnchanged() {
+  auto bar = song("missing-table-chart.bms", false);
+  const std::vector<std::string> unsafeTargets{
+      "C:\\Windows\\System32\\calc.exe", "\\\\server\\share\\launch.exe",
+      "//server/share/launch.exe", "/tmp/launch", "file:///tmp/launch",
+      "custom:launch", "javascript:alert(1)", "https://example.test\\launch",
+      std::string("https://example.test") + '\0' + ".exe",
+      "https://example.test/\tlaunch", "https://example.test/\rlaunch",
+      "https://example.test/\nlaunch", "https://example.test/\x7f"};
+  for (const auto &target : unsafeTargets) {
+    bar.chart->downloadUrl = target;
+    bar.chart->appendDownloadUrl = "https://example.test/safe-patch.zip";
+    const auto urls = musicSelectDownloadUrls(bar);
+    assert(urls.size() == 2 && urls.front() == target);
+    assert(!platform_open::isWebUrl(urls.front()));
+    assert(platform_open::isWebUrl(urls.back()));
+    bar.chart->downloadUrl = "http://example.test/safe-archive.zip";
+    bar.chart->appendDownloadUrl = target;
+    const auto swapped = musicSelectDownloadUrls(bar);
+    assert(swapped.size() == 2 && swapped.back() == target);
+    assert(platform_open::isWebUrl(swapped.front()));
+    assert(!platform_open::isWebUrl(swapped.back()));
+  }
+}
+
 void testRefreshPathUsesThePhysicalArchive() {
   const auto splitArchive = [](const std::filesystem::path &path,
                                std::filesystem::path &archive,
@@ -328,6 +353,7 @@ int main() {
   testArchivedDocumentsUseMaterializedResolverPaths();
   testExplorerBranchPriority();
   testFolderAndDownloadSiteBranches();
+  testTableDownloadTargetsReachTheSharedBrowserPolicyUnchanged();
   testRefreshPathUsesThePhysicalArchive();
   testTouchRowsUseTheSameActivationAsDesktopPointers();
   testTouchGestureDefersBarTapAndConvertsVerticalDragToRows();
