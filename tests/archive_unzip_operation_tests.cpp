@@ -108,6 +108,25 @@ ArchiveUnzipResult waitForResult(ArchiveUnzipOperation &operation) {
   return {};
 }
 
+ArchiveDeleteResult waitForDeleteResult(ArchiveUnzipOperation &operation) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto result = operation.takeDeleteResult()) {
+      return *result;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  assert(false && "archive deletion did not finish");
+  return {};
+}
+
+bool deleteArchiveAndWait(ArchiveUnzipOperation &operation, std::string &message) {
+  if (!operation.startDeleteArchive()) return false;
+  const auto result = waitForDeleteResult(operation);
+  message = result.message;
+  return result.deleted;
+}
+
 ArchiveUnzipResult runAll(ChartRepository &repository, bool deleteAfterUnzip,
                          std::stop_token stopToken = {},
                          archive_file::UnzipProgressCallback progress = nullptr) {
@@ -665,7 +684,7 @@ void delayedDeletionRejectsReplacement(bool symlink, bool reuseCompletedFolder =
     std::filesystem::copy_file(replacement, record.meta.BmsPath);
   }
   std::string message;
-  assert(!operation.deleteArchive(message));
+  assert(!deleteArchiveAndWait(operation, message));
   assert(!operation.canDeleteArchive());
   assert(std::filesystem::exists(record.meta.BmsPath));
   assert(std::filesystem::exists(replacement));
@@ -712,7 +731,7 @@ void reusedCompletedOutputCanDeleteUnchangedArchive() {
   assert(reused.success && reused.outputFolder == extracted.outputFolder);
   assert(operation.canDeleteArchive());
   std::string message;
-  assert(operation.deleteArchive(message));
+  assert(deleteArchiveAndWait(operation, message));
   assert(!std::filesystem::exists(record.meta.BmsPath));
   assert(std::filesystem::exists(reused.chartPath));
   assert(fixture.repository.OpenSession()->CountSolidArchives() == 0);
@@ -763,7 +782,7 @@ void deletionRejectsChangesWithPreservedMetadata(bool batch, bool replaceFile) {
     assert(waitForResult(operation).success && operation.canDeleteArchive());
     changeArchivePreservingSizeAndModificationTime(record.meta.BmsPath, replaceFile);
     std::string message;
-    assert(!operation.deleteArchive(message));
+    assert(!deleteArchiveAndWait(operation, message));
     assert(!operation.canDeleteArchive());
   }
   assert(std::filesystem::exists(record.meta.BmsPath));
@@ -1570,7 +1589,7 @@ void successPreservesUnrelatedLibraryAndRequiresExplicitDeletion() {
   const auto record = fixture.archive();
   ArchiveUnzipOperation operation(fixture.repository);
   std::string message;
-  assert(!operation.deleteArchive(message));
+  assert(!deleteArchiveAndWait(operation, message));
   assert(operation.start(record));
   assert(!operation.start(record));
   const auto result = waitForResult(operation);
@@ -1585,11 +1604,81 @@ void successPreservesUnrelatedLibraryAndRequiresExplicitDeletion() {
   session->SelectAllChartMeta(charts);
   assert(charts.size() == 2);
   assert(operation.canDeleteArchive());
-  assert(operation.deleteArchive(message));
+  assert(deleteArchiveAndWait(operation, message));
   assert(!std::filesystem::exists(record.meta.BmsPath));
   assert(std::filesystem::exists(result.chartPath));
   assert(!operation.canDeleteArchive());
-  assert(!operation.deleteArchive(message));
+  assert(!deleteArchiveAndWait(operation, message));
+}
+
+void singleDeleteCancellationAllowsRetryAndGuardsDuplicateStarts() {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("a.zip");
+  ArchiveUnzipOperation operation(fixture.repository);
+  assert(operation.start(record));
+  const auto extracted = waitForResult(operation);
+  assert(extracted.success && operation.takeLibraryChanged());
+  auto operationLock = archive_unzip_recovery::acquireOperationLock({});
+  assert(operation.startDeleteArchive());
+  assert(operation.inProgress());
+  assert(!operation.startDeleteArchive());
+  assert(!operation.start(record) && !operation.startAll(true));
+  assert(!operation.canDeleteArchive());
+  assert(!operation.takeResult() && !operation.takeDeleteResult());
+  operation.requestCancel();
+  const auto cancelled = waitForDeleteResult(operation);
+  assert(!cancelled.deleted && cancelled.canRetry);
+  assert(!operation.inProgress() && operation.canDeleteArchive());
+  assert(!operation.takeLibraryChanged());
+  assert(std::filesystem::exists(record.meta.BmsPath));
+  assert(fixture.repository.OpenSession()->CountSolidArchives() == 1);
+  operationLock.unlock();
+  assert(operation.startDeleteArchive());
+  const auto deleted = waitForDeleteResult(operation);
+  assert(deleted.deleted && !deleted.canRetry);
+  assert(!operation.inProgress() && !operation.canDeleteArchive());
+  assert(!operation.takeResult() && !operation.takeDeleteResult());
+  assert(operation.takeLibraryChanged() && !operation.takeLibraryChanged());
+  assert(!std::filesystem::exists(record.meta.BmsPath));
+  assert(std::filesystem::exists(extracted.chartPath));
+  assert(fixture.repository.OpenSession()->CountSolidArchives() == 0);
+}
+
+void singleDeleteKeepsMutationNotification(bool failCleanup, bool shutdown) {
+  Fixture fixture;
+  const auto record = fixture.indexedArchive("a.zip");
+  ArchiveUnzipOperation operation(fixture.repository);
+  assert(operation.start(record));
+  const auto extracted = waitForResult(operation);
+  assert(extracted.success && operation.takeLibraryChanged());
+  if (failCleanup) {
+    executeSql(fixture.root / "library.db",
+        "CREATE TRIGGER reject_archive_delete BEFORE DELETE ON solid_archives "
+        "BEGIN SELECT RAISE(FAIL, 'test cleanup failure'); END");
+  }
+  assert(operation.startDeleteArchive());
+  if (shutdown) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (std::filesystem::exists(record.meta.BmsPath) &&
+           std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(!std::filesystem::exists(record.meta.BmsPath));
+    operation.cancelAndWait();
+    operation.cancelAndWait();
+  } else {
+    const auto deleted = waitForDeleteResult(operation);
+    assert(deleted.deleted && !deleted.canRetry);
+    assert((deleted.message.find("Failed to refresh library") != std::string::npos) == failCleanup);
+  }
+  assert(!operation.inProgress() && !operation.canDeleteArchive());
+  assert(!operation.takeResult() && !operation.takeDeleteResult());
+  assert(operation.takeLibraryChanged() && !operation.takeLibraryChanged());
+  assert(!std::filesystem::exists(record.meta.BmsPath));
+  assert(std::filesystem::exists(extracted.chartPath));
+  auto session = fixture.repository.OpenSession();
+  assert(session->CountAllChartMeta() == 1);
+  assert(session->CountSolidArchives() == (failCleanup ? 1 : 0));
 }
 
 void keepAndDestructionNeverDeleteArchive() {
@@ -1602,7 +1691,7 @@ void keepAndDestructionNeverDeleteArchive() {
     operation.keepArchive();
     std::string message;
     assert(!operation.canDeleteArchive());
-    assert(!operation.deleteArchive(message));
+    assert(!deleteArchiveAndWait(operation, message));
   }
   assert(std::filesystem::exists(record.meta.BmsPath));
 }
@@ -1896,6 +1985,12 @@ int main(int argc, char **argv) {
   batchWorkerGuardsDuplicateStartsAndKeepsShutdownNotifications();
   emptyBatchCompletesWithoutLibraryChanges();
   successPreservesUnrelatedLibraryAndRequiresExplicitDeletion();
+  singleDeleteCancellationAllowsRetryAndGuardsDuplicateStarts();
+  for (bool failCleanup : {false, true}) {
+    for (bool shutdown : {false, true}) {
+      singleDeleteKeepsMutationNotification(failCleanup, shutdown);
+    }
+  }
   keepAndDestructionNeverDeleteArchive();
   failuresNeverOfferDeletion();
   cancellationBeforeExtractionAndDuringRefreshIsNotSuccess();

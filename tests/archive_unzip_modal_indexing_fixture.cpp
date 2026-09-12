@@ -19,6 +19,10 @@ struct Result {
   std::size_t archiveCount = 2, completedCount = 1;
   std::string message = "Unzip All cancelled. Library indexed.";
 };
+struct DeleteResult {
+  bool deleted = false, canRetry = false;
+  std::string message;
+};
 struct Operation {
   std::optional<Progress> progress;
   std::optional<Result> result;
@@ -30,6 +34,7 @@ struct Operation {
     return std::exchange(result, std::nullopt);
   }
   bool inProgress() const { return active; }
+  std::optional<DeleteResult> takeDeleteResult() { return std::nullopt; }
   bool canDeleteArchive() const { return false; }
   bool takeLibraryChanged() { return std::exchange(changed, false); }
   void requestCancel() { ++cancelRequests; }
@@ -46,8 +51,8 @@ struct Control {
 class ArchiveUnzipModal {
 public:
   Operation operation_;
-  bool cancelling_ = false, batchMode_ = true, indexing_ = false;
-  bool libraryChangedPending_ = false, hidden = false;
+  bool cancelling_ = false, batchMode_ = true, indexing_ = false, deleting_ = false;
+  bool hidden = false;
   Control title, message, cancel, cancelText, detail, root;
   Control *title_ = &title, *message_ = &message, *cancelButton_ = &cancel;
   Control *cancelText_ = &cancelText, *detail_ = &detail, *root_ = &root;

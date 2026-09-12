@@ -283,10 +283,17 @@ void ArchiveUnzipModal::update() {
     }
     root_->applyYogaLayout();
   }
+  if (const auto deletion = operation_.takeDeleteResult()) {
+    deleting_ = false;
+    cancelButton_->setEnabled(true);
+    title_->setText(deletion->deleted ? "Archive Deleted" : "Delete Failed");
+    setDeleteVisible(deletion->canRetry);
+    cancelText_->setText(deletion->canRetry ? "Keep Archive" : "Close");
+    updateProgress(1.0, deletion->message);
+  }
   const bool operationChanged =
       !operation_.inProgress() && operation_.takeLibraryChanged();
-  const bool changed = std::exchange(libraryChangedPending_, false) ||
-                       operationChanged ||
+  const bool changed = operationChanged ||
                        (result && !result->batch && result->success);
   const auto callbacks = callbacks_;
   if (changed && callbacks.libraryChanged) {
@@ -316,6 +323,7 @@ void ArchiveUnzipModal::hide() {
   operation_.keepArchive();
   choosingAll_ = false;
   batchMode_ = false;
+  deleting_ = false;
   estimatedSize_ = 0;
   if (root_ != nullptr) {
     root_->setVisible(false);
@@ -342,7 +350,7 @@ bool ArchiveUnzipModal::handleEvents(SDL_Event &event) {
 }
 
 void ArchiveUnzipModal::cancelOrClose() {
-  if (indexing_) return;
+  if (indexing_ || deleting_) return;
   if (operation_.inProgress()) {
     cancelling_ = true;
     operation_.requestCancel();
@@ -354,15 +362,15 @@ void ArchiveUnzipModal::cancelOrClose() {
 }
 
 void ArchiveUnzipModal::deleteArchive() {
-  std::string message;
-  const bool deleted = operation_.deleteArchive(message);
-  setDeleteVisible(operation_.canDeleteArchive());
-  if (deleted) {
-    title_->setText("Archive Deleted");
-    cancelText_->setText("Close");
-    libraryChangedPending_ = true;
+  if (!operation_.startDeleteArchive()) {
+    return;
   }
-  updateProgress(1.0, message);
+  deleting_ = true;
+  setDeleteVisible(false);
+  cancelButton_->setEnabled(false);
+  cancelText_->setText("Deleting...");
+  title_->setText("Deleting Archive");
+  updateProgress(1.0, "Deleting original archive and refreshing library...");
 }
 
 void ArchiveUnzipModal::setDeleteVisible(bool visible) {

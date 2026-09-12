@@ -165,6 +165,7 @@ void ArchiveUnzipOperation::cancelAndWait() {
   std::lock_guard lock(mutex_);
   pendingProgress_.reset();
   pendingResult_.reset();
+  pendingDeleteResult_.reset();
   result_.reset();
   inProgress_ = false;
 }
@@ -205,24 +206,65 @@ bool ArchiveUnzipOperation::canDeleteArchive() const {
   return archiveIdentityMatches(*result_);
 }
 
-bool ArchiveUnzipOperation::deleteArchive(std::string &message) {
-  if (!canDeleteArchive()) {
-    message = "Archive is unavailable for deletion";
+bool ArchiveUnzipOperation::startDeleteArchive() {
+  if (inProgress_ || !result_ || result_->batch || !result_->success ||
+      !result_->scanCommitted || result_->cancelled ||
+      result_->archivePath.empty()) {
     return false;
   }
-  auto session = repository_.OpenSession();
-  if (!session || !session->EnsureSchema()) {
-    message = "Could not open library. Original archive kept.";
+  inProgress_ = true;
+  try {
+    worker_ = std::jthread([this, completed = *result_](const std::stop_token &stopToken) {
+      ArchiveDeleteResult result;
+      try {
+        auto operationLock = archive_unzip_recovery::acquireOperationLock(stopToken);
+        if (!operationLock.owns_lock() || stopToken.stop_requested()) {
+          result.message = "Deletion cancelled. Original archive kept.";
+        } else {
+          auto session = repository_.OpenSession();
+          if (!session || !session->EnsureSchema()) {
+            result.message = "Could not open library. Original archive kept.";
+          } else {
+            result.deleted = deleteCompletedArchive(completed, stopToken, result.message);
+            if (result.deleted && !session->DeleteArchiveRecords(completed.archivePath)) {
+              result.message = "Original archive deleted. Failed to refresh library.";
+            }
+          }
+        }
+        result.canRetry = !result.deleted && archiveIdentityMatches(completed);
+      } catch (...) {
+        result.message = result.deleted
+            ? "Original archive deleted. Failed to refresh library."
+            : "Could not delete archive. Original archive kept.";
+      }
+      std::lock_guard lock(mutex_);
+      libraryChangedPending_ = libraryChangedPending_ || result.deleted;
+      pendingDeleteResult_ = std::move(result);
+    });
+  } catch (...) {
+    inProgress_ = false;
     return false;
   }
-  const bool deleted = deleteCompletedArchive(*result_, {}, message);
-  if (deleted) {
-    if (!session->DeleteArchiveRecords(result_->archivePath)) {
-      message = "Original archive deleted. Failed to refresh library.";
-    }
+  return true;
+}
+
+std::optional<ArchiveDeleteResult> ArchiveUnzipOperation::takeDeleteResult() {
+  std::optional<ArchiveDeleteResult> result;
+  {
+    std::lock_guard lock(mutex_);
+    result = std::exchange(pendingDeleteResult_, std::nullopt);
+  }
+  if (!result) {
+    return std::nullopt;
+  }
+  if (worker_.joinable()) {
+    worker_.join();
+  }
+  inProgress_ = false;
+  if (result->deleted || !result->canRetry) {
     result_.reset();
   }
-  return deleted;
+  return result;
 }
 
 void ArchiveUnzipOperation::keepArchive() { result_.reset(); }

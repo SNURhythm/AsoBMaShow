@@ -25,6 +25,12 @@ struct ArchiveUnzipResult {
   std::string message;
 };
 
+struct ArchiveDeleteResult {
+  bool deleted = false;
+  bool canRetry = false;
+  std::string message;
+};
+
 class ArchiveUnzipOperation final {
 public:
   explicit ArchiveUnzipOperation(ChartRepository &repository);
@@ -41,7 +47,8 @@ public:
   std::optional<ArchiveUnzipResult> takeResult();
   bool takeLibraryChanged();
   bool canDeleteArchive() const;
-  bool deleteArchive(std::string &message);
+  bool startDeleteArchive();
+  std::optional<ArchiveDeleteResult> takeDeleteResult();
   void keepArchive();
 
   static ArchiveUnzipResult
@@ -60,6 +67,7 @@ private:
   std::mutex mutex_;
   std::optional<archive_file::UnzipProgress> pendingProgress_;
   std::optional<ArchiveUnzipResult> pendingResult_;
+  std::optional<ArchiveDeleteResult> pendingDeleteResult_;
   std::optional<ArchiveUnzipResult> result_;
   bool libraryChangedPending_ = false;
   bool inProgress_ = false;

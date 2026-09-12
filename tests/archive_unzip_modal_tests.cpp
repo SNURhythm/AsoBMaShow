@@ -4,11 +4,15 @@
 #include "rendering/UniformCache.h"
 #include "view/Button.h"
 #include "view/TextView.h"
+#include "sqlite3.h"
 
 #include <archive_entry.h>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <iostream>
+#include <mutex>
+#include <string_view>
 #include <thread>
 
 namespace rendering {
@@ -30,6 +34,29 @@ int ui_view_height = design_height;
 }
 
 namespace {
+
+struct DeleteTraceGate {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool entered = false, released = false, timedOut = false;
+};
+
+DeleteTraceGate *deleteTraceGate = nullptr;
+
+int traceArchiveDelete(unsigned, void *context, void *statement, void *) {
+  const auto *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+  if (!sql || !std::string_view(sql).starts_with("DELETE FROM solid_archives")) return 0;
+  auto &gate = *static_cast<DeleteTraceGate *>(context);
+  std::unique_lock lock(gate.mutex);
+  gate.entered = true;
+  gate.condition.notify_all();
+  gate.timedOut = !gate.condition.wait_for(lock, std::chrono::seconds(3), [&] { return gate.released; });
+  return 0;
+}
+
+int installArchiveDeleteTrace(sqlite3 *database, char **, const sqlite3_api_routines *) {
+  return sqlite3_trace_v2(database, SQLITE_TRACE_STMT, traceArchiveDelete, deleteTraceGate);
+}
 
 Button *findButton(View *root, const std::string &label) {
   if (auto *button = dynamic_cast<Button *>(root); button && button->getVisible()) {
@@ -230,6 +257,116 @@ void emptyBatchDoesNotNotifyLibraryChange() {
   std::filesystem::remove_all(root);
 }
 
+void singleDeleteDoesNotBlockInputWhileLibraryIsBusy() {
+  const auto root = std::filesystem::temp_directory_path() /
+      ("archive-unzip-modal-delete-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::filesystem::create_directories(root);
+  {
+    ChartRepository repository(root / "library.db");
+    auto session = repository.OpenSession();
+    assert(session && session->EnsureSchema());
+    const auto archivePath = root / "single.zip";
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK);
+    const std::string contents = "#TITLE Delete\n#BPM 120\n#00111:01\n";
+    auto entry = std::unique_ptr<archive_entry, decltype(&archive_entry_free)>(
+        archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), "chart.bms");
+    archive_entry_set_size(entry.get(), contents.size());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+           static_cast<la_ssize_t>(contents.size()));
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+    auto batch = session->BeginScanBatch();
+    assert(batch && batch->UpsertSolidArchive({.path = archivePath}));
+    assert(batch->Commit());
+    batch.reset();
+    View parent(0, 0, rendering::window_width, rendering::window_height);
+    const auto uiThread = std::this_thread::get_id();
+    int changed = 0, finished = 0;
+    auto modal = ArchiveUnzipModal::Create(&parent, repository, {
+        .libraryChanged = [&] {
+          assert(std::this_thread::get_id() == uiThread);
+          ++changed;
+        },
+        .finished = [&](const ArchiveUnzipResult &result) {
+          assert(std::this_thread::get_id() == uiThread);
+          assert(result.success);
+          ++finished;
+        },
+    });
+    ChartMetaRecord record;
+    record.solidArchive = true;
+    record.meta.BmsPath = archivePath;
+    assert(modal->start(record));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (modal->inProgress() && std::chrono::steady_clock::now() < deadline) {
+      modal->update();
+      bgfx::frame();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(!modal->inProgress() && changed == 1 && finished == 1);
+    assert(findButton(modal->root(), "Delete Archive"));
+
+    DeleteTraceGate gate;
+    deleteTraceGate = &gate;
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)(void)>(installArchiveDeleteTrace)) == SQLITE_OK);
+    const auto clickedAt = std::chrono::steady_clock::now();
+    click(*modal, "Delete Archive");
+    const auto clickDuration = std::chrono::steady_clock::now() - clickedAt;
+    std::cout << "Delete Archive click: " <<
+        std::chrono::duration_cast<std::chrono::milliseconds>(clickDuration).count() << " ms\n";
+    {
+      std::unique_lock lock(gate.mutex);
+      assert(gate.condition.wait_for(lock, std::chrono::seconds(3), [&] { return gate.entered; }));
+      assert(!gate.timedOut);
+    }
+    assert(modal->inProgress());
+    assert(!findButton(modal->root(), "Delete Archive"));
+    assert(findButton(modal->root(), "Deleting..."));
+    assert(!modal->start(record) && !modal->startAll());
+    click(*modal, "Deleting...");
+    SDL_Event escape{};
+    escape.type = SDL_KEYDOWN;
+    escape.key.keysym.sym = SDLK_ESCAPE;
+    assert(!modal->handleEvents(escape));
+    modal->hide();
+    assert(modal->inProgress() && modal->isVisible());
+    assert(changed == 1 && finished == 1);
+    for (int frame = 0; frame < 3; ++frame) {
+      modal->update();
+      bgfx::frame();
+    }
+    assert(changed == 1 && finished == 1);
+    {
+      std::lock_guard lock(gate.mutex);
+      gate.released = true;
+    }
+    gate.condition.notify_all();
+    while (modal->inProgress() && std::chrono::steady_clock::now() < deadline) {
+      modal->update();
+      bgfx::frame();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(!modal->inProgress());
+    assert(!std::filesystem::exists(archivePath));
+    assert(session->CountSolidArchives() == 0 && session->CountAllChartMeta() == 1);
+    assert(changed == 2 && finished == 1);
+    assert(sqlite3_cancel_auto_extension(reinterpret_cast<void (*)(void)>(installArchiveDeleteTrace)) == 1);
+    deleteTraceGate = nullptr;
+    assert(findButton(modal->root(), "Close"));
+    modal->update();
+    assert(changed == 2 && finished == 1);
+    click(*modal, "Close");
+    assert(!modal->isVisible());
+  }
+  std::filesystem::remove_all(root);
+}
+
 }
 
 int main() {
@@ -241,6 +378,7 @@ int main() {
   preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(false);
   preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(true);
   emptyBatchDoesNotNotifyLibraryChange();
+  singleDeleteDoesNotBlockInputWhileLibraryIsBusy();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   std::cout << "archive_unzip_modal_tests passed\n";
