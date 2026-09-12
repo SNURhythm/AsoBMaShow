@@ -1,5 +1,6 @@
 #include "ArchiveFile.h"
 #include "ArchiveSourceIdentity.h"
+#include "FileExtensionResolver.h"
 
 #include "BmsMetadataText.h"
 #include "audio/ChartAssetExtensions.h"
@@ -4488,36 +4489,6 @@ const Entry *findIndexedEntry(const CachedIndex &index,
     return &index.entries[lowerIt->second];
   }
 
-  return nullptr;
-}
-
-// BMS charts reference audio by the name written in the chart (e.g.
-// `#PREVIEW music.wav`), but the archive can store that file under a different
-// audio extension (e.g. `music.ogg`). When the exact entry lookup misses,
-// substitute every supported audio extension for the referenced one and retry.
-// Returns nullptr when none of the candidates exist.
-const Entry *
-findIndexedEntryWithAudioExtensionFallback(const CachedIndex &index,
-                                           const std::filesystem::path &innerPath) {
-  const std::filesystem::path referencedExtension = innerPath.extension();
-  if (referencedExtension.empty()) {
-    return nullptr;
-  }
-  const std::filesystem::path base = innerPath;
-  const std::filesystem::path parentWithBase =
-      base.parent_path() / base.stem();
-  for (const std::string_view candidate : asobmshow::chart_assets::kAudioExtensions) {
-    if (candidate == referencedExtension.generic_string()) {
-      continue;
-    }
-    std::filesystem::path alternate = parentWithBase;
-    alternate += ".";
-    alternate += std::string(candidate);
-    if (const Entry *entry = findIndexedEntry(index, alternate);
-        entry != nullptr && !entry->directory) {
-      return entry;
-    }
-  }
   return nullptr;
 }
 
@@ -9896,15 +9867,14 @@ bool readFileBoundedWithCheckpoint(const std::filesystem::path &path,
       archivePath, errorMessage, keepReading);
   if (!pauseIfNeeded(keepReading, errorMessage)) return false;
   if (index == nullptr) return false;
-  const Entry *entry = findIndexedEntry(*index, innerPath);
-  if (entry == nullptr || entry->directory) {
-    // BMS references audio by the name written in the chart (e.g.
-    // `#PREVIEW music.wav`), but the archive may store the same file under a
-    // different audio extension (e.g. `music.ogg`). Retry the lookup with each
-    // supported audio extension substituted before concluding the entry is
-    // genuinely absent.
-    entry = findIndexedEntryWithAudioExtensionFallback(*index, innerPath);
-  }
+  const auto extensions = innerPath.has_extension()
+      ? std::span<const std::string_view>(asobmshow::chart_assets::kAudioExtensions)
+      : std::span<const std::string_view>();
+  const Entry *entry = file_extension_resolver::find(innerPath, extensions,
+      [&](const std::filesystem::path &candidate) {
+        const auto *found = findIndexedEntry(*index, candidate);
+        return found != nullptr && !found->directory ? found : nullptr;
+      });
   if (entry == nullptr || entry->directory) {
     // Diagnose: dump the target bytes and every indexed entry under the same
     // folder (name + bytes) so a name/encoding mismatch is visible on-device
@@ -10965,31 +10935,18 @@ findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions) {
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
-  if (!splitVirtualPath(basePath, archivePath, innerPath)) {
-    if (archive_file::exists(basePath)) {
-      return basePath;
-    }
-    for (std::string_view ext : extensions) {
-      std::filesystem::path candidate = basePath;
-      candidate.replace_extension(std::string(ext));
-      if (archive_file::exists(candidate)) {
-        return candidate;
-      }
-    }
-    return std::nullopt;
-  }
-
-  if (const auto resolved = resolveInnerPath(archivePath, innerPath)) {
-    return makeVirtualPath(archivePath, *resolved);
-  }
-  for (std::string_view ext : extensions) {
-    std::filesystem::path candidateInner = innerPath;
-    candidateInner.replace_extension(std::string(ext));
-    if (const auto resolved = resolveInnerPath(archivePath, candidateInner)) {
-      return makeVirtualPath(archivePath, *resolved);
-    }
-  }
-  return std::nullopt;
+  const bool archived = splitVirtualPath(basePath, archivePath, innerPath);
+  return file_extension_resolver::find(archived ? innerPath : basePath, extensions,
+      [&](const std::filesystem::path &candidate) -> std::optional<std::filesystem::path> {
+        if (archived) {
+          if (const auto resolved = resolveInnerPath(archivePath, candidate)) {
+            return makeVirtualPath(archivePath, *resolved);
+          }
+        } else if (archive_file::exists(candidate)) {
+          return candidate;
+        }
+        return std::nullopt;
+      });
 }
 
 std::optional<std::filesystem::path>

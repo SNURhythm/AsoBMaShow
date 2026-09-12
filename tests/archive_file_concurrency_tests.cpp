@@ -1083,6 +1083,41 @@ void testBoundedReadFallsBackToAlternativeAudioExtension() {
   assert(bytes == std::vector<unsigned char>(payload.begin(), payload.end()));
 }
 
+void testFileExtensionResolutionSharesPriorityAcrossStorage(bool archived) {
+  TempDirectory temporary;
+  const std::vector<std::string> files{
+      "exact.wav", "exact.flac", "preferred.mp3", "preferred.ogg",
+      "preferred.wav", "preferred.flac", "compressed.mp3", "compressed.ogg",
+      "last.mp3", "extensionless.ogg", "folder/deep.song.ogg", "image.png"};
+  const auto archivePath = temporary.path() / "extensions.zip";
+  if (archived) {
+    writeStoredZip(archivePath, files);
+  } else {
+    for (const auto &file : files) {
+      const auto path = temporary.path() / file;
+      std::filesystem::create_directories(path.parent_path());
+      std::ofstream(path) << "entry";
+    }
+  }
+  const auto storagePath = [&](const std::string &file) {
+    return archived ? archive_file::makeVirtualPath(archivePath, file)
+                    : temporary.path() / file;
+  };
+  const std::vector<std::string_view> extensions{"flac", "wav", "ogg", "mp3"};
+  for (const auto &[requested, expected] : std::vector<std::pair<std::string, std::string>>{
+           {"exact.wav", "exact.wav"}, {"preferred.aif", "preferred.flac"},
+           {"compressed.wav", "compressed.ogg"}, {"last.wav", "last.mp3"},
+           {"extensionless", "extensionless.ogg"},
+           {"folder/deep.song.wav", "folder/deep.song.ogg"}}) {
+    const auto resolved = archive_file::findFileWithExtensions(storagePath(requested), extensions);
+    assert(resolved == storagePath(expected));
+  }
+  assert(!archive_file::findFileWithExtensions(storagePath("missing.wav"), extensions));
+  assert(!archive_file::findFileWithExtensions(storagePath("compressed.wav"), {}));
+  assert(archive_file::findFileWithExtensions(storagePath("image.bmp"), {"png"}) ==
+         storagePath("image.png"));
+}
+
 void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "lied-central-dir.zip";
@@ -3075,6 +3110,8 @@ int main(int argc, char **argv) {
   testZipBoundedReadAcceptsEmptyStoredEntry();
   testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc();
   testBoundedReadFallsBackToAlternativeAudioExtension();
+  testFileExtensionResolutionSharesPriorityAcrossStorage(false);
+  testFileExtensionResolutionSharesPriorityAcrossStorage(true);
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
   testBoundedReadRejectsOversizedSevenZipEntry();
   testBzipZipFallbackStopsBeforeOversizedAllocation();

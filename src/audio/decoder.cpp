@@ -1,6 +1,8 @@
 #include "decoder.h"
 #include "../ArchiveFile.h"
+#include "../FileExtensionResolver.h"
 #include "../RAII.h"
+#include "ChartAssetExtensions.h"
 #include "SelectAudioDiagnostics.h"
 #include "SoundFileIO.h"
 #include <SDL2/SDL.h>
@@ -13,6 +15,13 @@
 #include <memory>
 #include <optional>
 namespace {
+std::filesystem::path resolveAudioFilePath(const std::filesystem::path &path) {
+  static const std::vector<std::string_view> extensions(
+      asobmshow::chart_assets::kAudioExtensions.begin(),
+      asobmshow::chart_assets::kAudioExtensions.end());
+  return archive_file::findFileWithExtensions(path, extensions).value_or(path);
+}
+
 struct MemoryAudioFile {
   const unsigned char *data = nullptr;
   sf_count_t size = 0;
@@ -153,15 +162,18 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
 // the encoded file exceeds maximumEncodedBytes.
 std::optional<std::vector<unsigned char>>
 readBundleAwareAudioBytes(const path_t &path, std::size_t maximumEncodedBytes) {
-  const std::string utf8Path = path_t_to_utf8(path);
-  SDL_RWops *input = SDL_RWFromFile(utf8Path.c_str(), "rb");
-  if (input == nullptr) {
-    return std::nullopt;
-  }
   struct RwCloser {
     void operator()(SDL_RWops *ops) const { SDL_RWclose(ops); }
   };
-  std::unique_ptr<SDL_RWops, RwCloser> owned(input);
+  auto owned = file_extension_resolver::find(
+      std::filesystem::path(path), asobmshow::chart_assets::kAudioExtensions,
+      [](const std::filesystem::path &candidate) {
+        const auto utf8Path = fspath_to_utf8(candidate);
+        return std::unique_ptr<SDL_RWops, RwCloser>(SDL_RWFromFile(utf8Path.c_str(), "rb"));
+      });
+  if (!owned) {
+    return std::nullopt;
+  }
   const Sint64 reportedSize = SDL_RWsize(owned.get());
   if (reportedSize >= 0) {
     const auto size = static_cast<std::uint64_t>(reportedSize);
@@ -278,7 +290,8 @@ bool decodeSkinSoundBundleAware(const path_t &displayPath,
     // (which cannot open iOS Files-app storage).
     std::string readError;
     std::vector<unsigned char> bytes;
-    if (archive_file::readFileBounded(fsPath, bytes,
+    const auto resolvedPath = resolveAudioFilePath(fsPath);
+    if (archive_file::readFileBounded(resolvedPath, bytes,
                                       limits.maximumEncodedBytes,
                                       &readError, stop) &&
         !bytes.empty() &&
@@ -311,6 +324,7 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
                              std::atomic<bool> &isCancelled,
                              AudioDecodeLimits limits, std::stop_token stop) {
   fileInfo = {};
+  if (stop.stop_requested() || isCancelled) return false;
   const std::filesystem::path fsPath(filePath);
   if (archive_file::isVirtualPath(fsPath)) {
     std::vector<unsigned char> bytes;
@@ -346,8 +360,9 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
                            limits.maximumPcmSamples);
   }
 
+  const auto resolvedPath = resolveAudioFilePath(fsPath);
   std::error_code sizeError;
-  const std::uintmax_t encodedBytes = std::filesystem::file_size(fsPath,
+  const std::uintmax_t encodedBytes = std::filesystem::file_size(resolvedPath,
                                                                  sizeError);
   if (!sizeError && encodedBytes > limits.maximumEncodedBytes) {
     SDL_Log("Encoded audio exceeds the byte limit for %s",
@@ -355,7 +370,7 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
     return false;
   }
 
-  SNDFILE *file = asobmashow::audio::openSoundFile(fsPath, SFM_READ, fileInfo);
+  SNDFILE *file = asobmashow::audio::openSoundFile(resolvedPath, SFM_READ, fileInfo);
   return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
                          limits.maximumPcmSamples);
 }
