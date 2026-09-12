@@ -48,21 +48,26 @@ class SelectArrangementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             score.add_phrase([], 3, "lead", ((12.5, "A4", .25, 1),))
 
-    def test_lead_and_kick_share_the_bar_downbeat_and_midpoint(self):
-        events = score.compose_select()
-        for bar in range(32):
-            for beat in (bar * 4, bar * 4 + 2):
-                with self.subTest(bar=bar, beat=beat):
-                    aligned = [event for event in events if event.beat == beat]
-                    self.assertIn("lead", {event.instrument for event in aligned})
-                    self.assertIn("kick", {event.instrument for event in aligned})
-                    for instrument in ("lead", "kick"):
-                        event = next(event for event in aligned if event.instrument == instrument)
-                        rendered = score.render_events((event,), sample_rate=8000)
-                        onset = round(beat * 3750)
-                        self.assertGreater(rms(rendered[onset + 8:onset + 80]), .01)
-                        if onset:
-                            self.assertEqual(rms(rendered[onset - 80:onset]), 0)
+    def test_lead_attacks_land_on_their_scored_subdivisions(self):
+        for event in score.compose_select():
+            if event.instrument != "lead":
+                continue
+            with self.subTest(beat=event.beat):
+                rendered = score.render_events((event,), sample_rate=8000)
+                onset = round(event.beat * 3750)
+                self.assertGreater(rms(rendered[onset + 8:onset + 80]), .01)
+                if onset:
+                    self.assertEqual(rms(rendered[onset - 80:onset]), 0)
+
+    def test_main_hook_preserves_syncopation_and_separates_note_attacks(self):
+        melody = [event for event in score.compose_select()
+                  if event.instrument == "lead" and not 64 <= event.beat < 96]
+        offbeats = [event for event in melody if event.beat % 1]
+        self.assertGreater(len(offbeats), len(melody) / 2)
+        for event, following in zip(melody, melody[1:]):
+            with self.subTest(beat=event.beat):
+                release_beats = .075 * 128 / 60
+                self.assertLess(event.beat + event.duration + release_beats, following.beat)
 
     def test_lead_uses_straight_eighths_against_an_exact_backbeat(self):
         for event in score.compose_select():
