@@ -1,6 +1,6 @@
 """Original 128 BPM arcade-funk cue: Signal Select, 32 bars in D minor.
 
-Eight-bar statements form A / A+ / bridge / A-final. A short rising pickup
+Eight-bar statements form A / A+ / bridge / A-final. A beat-anchored rising hook
 and a falling answer recur over voiced ninth chords; the bridge changes the
 harmony and register, not the identity of the tune. All event times are beats.
 Finite note releases and delay taps wrap around the score, not into silence.
@@ -65,39 +65,39 @@ BRIDGE_HARMONY = (
     ("A2", ("G3", "Bb3", "C#4", "E4")),
 )
 HOOK = (
-    ((0, "A4", .38, .94), (.75, "C5", .30, .82),
-     (1.5, "D5", .78, 1), (2.75, "E5", .30, .84), (3.25, "D5", .48, .88)),
-    ((.25, "B4", .55, .86), (1.25, "A4", .28, .70),
-     (1.75, "G4", .40, .83), (2.75, "A4", .28, .77), (3.25, "B4", .50, .88)),
-    ((0, "G4", .38, .89), (.75, "B4", .30, .78),
-     (1.5, "D5", .78, .98), (2.75, "E5", .30, .84), (3.25, "D5", .48, .85)),
-    ((.25, "C#5", .68, .86), (1.5, "B4", .28, .74),
-     (2, "A4", .65, .87), (3.5, "E5", .22, .67)),
-    ((0, "A4", .38, .95), (.75, "C5", .30, .82),
-     (1.5, "D5", .78, 1), (2.75, "F5", .30, .86), (3.25, "E5", .48, .88)),
-    ((.25, "D5", .55, .90), (1.25, "B4", .28, .73),
-     (1.75, "A4", .40, .83), (2.75, "G4", .28, .73), (3.25, "E4", .48, .78)),
-    ((0, "G4", .38, .88), (.75, "Bb4", .30, .80),
-     (1.5, "D5", .75, .96), (2.75, "F5", .30, .83), (3.25, "E5", .40, .80)),
-    ((.25, "C#5", .55, .89), (1.25, "B4", .25, .73),
-     (1.75, "A4", .65, .88), (3, "G4", .22, .68), (3.5, "C#5", .30, .77)),
+    ((0, "A4", .70, .94), (1, "C5", .65, .82),
+     (2, "D5", .70, 1), (3, "E5", .30, .84), (3.5, "D5", .35, .78)),
+    ((0, "B4", .70, .86), (1, "A4", .28, .80),
+     (1.5, "G4", .32, .70), (2, "A4", .65, .87), (3, "B4", .70, .88)),
+    ((0, "G4", .70, .89), (1, "B4", .65, .78),
+     (2, "D5", .70, .98), (3, "E5", .30, .84), (3.5, "D5", .35, .75)),
+    ((0, "C#5", .70, .86), (1, "B4", .65, .74),
+     (2, "A4", .70, .87), (3, "E5", .65, .77)),
+    ((0, "A4", .70, .95), (1, "C5", .65, .82),
+     (2, "D5", .70, 1), (3, "F5", .30, .86), (3.5, "E5", .35, .78)),
+    ((0, "D5", .70, .90), (1, "B4", .28, .83),
+     (1.5, "A4", .32, .70), (2, "G4", .65, .83), (3, "E4", .70, .78)),
+    ((0, "G4", .70, .88), (1, "Bb4", .65, .80),
+     (2, "D5", .70, .96), (3, "F5", .30, .83), (3.5, "E5", .35, .70)),
+    ((0, "C#5", .70, .89), (1, "B4", .65, .73),
+     (2, "A4", .70, .88), (3, "G4", .22, .78), (3.5, "C#5", .30, .67)),
 )
 BRIDGE = (
-    ((0, "F4", .4, .90), (.75, "A4", .3, .78), (1.5, "C5", 1.0, .91)),
-    ((.25, "B4", .20, .63), (.5, "A4", .40, .82),
-     (1.5, "G4", .65, .82), (2.75, "E4", .65, .74)),
-    ((0, "E4", .4, .83), (.75, "G4", .3, .75), (1.5, "B4", 1.0, .91)),
-    ((.25, "A4", .65, .84), (1.5, "F4", .35, .76),
-     (2.25, "E4", .3, .68), (2.75, "D4", .80, .83)),
-    ((0, "D5", .4, .88), (.75, "Bb4", .3, .78),
-     (1.5, "A4", .65, .86), (2.75, "G4", .65, .80)),
-    ((.25, "E4", .45, .82), (1, "G4", .3, .74),
-     (1.75, "A4", .75, .87), (3, "Bb4", .45, .81)),
-    ((0, "C5", .40, .90), (.75, "A4", .30, .80),
-     (1.5, "G4", .60, .82), (2.75, "E4", .55, .76)),
-    ((0, "E4", .38, .74), (.75, "G4", .30, .77),
-     (1.5, "A4", .38, .81), (2.25, "B4", .28, .80),
-     (2.75, "C#5", .28, .86), (3.5, "E5", .28, .92)),
+    ((0, "F4", .70, .90), (1, "A4", .65, .78), (2, "C5", 1.5, .91)),
+    ((0, "B4", .30, .83), (.5, "A4", .65, .72),
+     (2, "G4", .65, .82), (3, "E4", .65, .74)),
+    ((0, "E4", .70, .83), (1, "G4", .65, .75), (2, "B4", 1.5, .91)),
+    ((0, "A4", .65, .84), (1, "F4", .65, .76),
+     (2, "E4", .65, .78), (3, "D4", .70, .83)),
+    ((0, "D5", .70, .88), (1, "Bb4", .65, .78),
+     (2, "A4", .65, .86), (3, "G4", .65, .80)),
+    ((0, "E4", .70, .82), (1, "G4", .65, .74),
+     (2, "A4", .70, .87), (3, "Bb4", .65, .81)),
+    ((0, "C5", .70, .90), (1, "A4", .65, .80),
+     (2, "G4", .65, .82), (3, "E4", .65, .76)),
+    ((0, "E4", .30, .84), (.5, "G4", .30, .67),
+     (1, "A4", .65, .81), (2, "B4", .28, .90),
+     (2.5, "C#5", .28, .76), (3, "E5", .65, .92)),
 )
 
 
@@ -111,7 +111,7 @@ def compose_select():
         add_phrase(score, bar, "lead", phrase, .84 if bridge else 1.0)
         if section in (1, 3) and phrase_index % 2:
             answer = ((2.50, chord[-1], .18, .57),
-                      (3, chord[-2], .18, .45), (3.75, chord[1], .16, .40))
+                      (3, chord[-2], .18, .45), (3.5, chord[1], .16, .40))
             add_phrase(score, bar, "bell", answer)
         root_note = midi_note(root)
         next_root = midi_note(harmony[(bar + 1) % BAR_COUNT][0])
@@ -135,17 +135,17 @@ def compose_select():
             for voice_index, note in enumerate(chord):
                 score.append(Event("keys", bar * 4 + offset + voice_index * .012,
                                    midi_note(note), duration, velocity))
-        kicks = (0, 1.75, 2.5) if bar % 2 == 0 else (0, .75, 2, 2.75)
+        kicks = (0, 1, 2, 3)
         if bridge and phrase_index < 4:
-            kicks = (0, 2.5)
+            kicks = (0, 2)
         for offset in kicks:
             score.append(Event("kick", bar * 4 + offset, 0, .25, 1))
         for offset in (1, 3):
-            score.append(Event("snare", bar * 4 + offset + .012, 0, .25, .86))
+            score.append(Event("snare", bar * 4 + offset, 0, .25, .86))
             if not bridge or phrase_index >= 4:
-                score.append(Event("clap", bar * 4 + offset + .018, 0, .25, .35))
+                score.append(Event("clap", bar * 4 + offset, 0, .25, .35))
         for step in range(8):
-            offset = step * .5 + (.035 if step % 2 else 0)
+            offset = step * .5
             score.append(Event("hat", bar * 4 + offset, 0, .12,
                                .42 if step % 2 else .26))
         if section != 2 or phrase_index >= 4:
@@ -153,7 +153,7 @@ def compose_select():
                 score.append(Event("open_hat", bar * 4 + offset, 0, .20, .28))
             if bar % 2:
                 for offset in (2.25, 3.25):
-                    score.append(Event("hat", bar * 4 + offset + .025, 0, .12, .18))
+                    score.append(Event("hat", bar * 4 + offset, 0, .12, .18))
         if bar % 4 == 2:
             score.append(Event("rim", bar * 4 + 3.25, 0, .12, .32))
         if phrase_index == 7:
@@ -271,11 +271,11 @@ def render_select(sample_rate=44100):
             gain = 1 - .28 * (1 - math.exp(-time / .002)) * math.exp(-time / .07)
             destination = (onset + index) % len(duck)
             duck[destination] = min(duck[destination], gain)
-    delay = .75 * 60 / BPM
+    delay = .5 * 60 / BPM
     output = array("f", [0]) * len(drums)
     for index in range(len(output)):
         lead = melody[index] + delayed_sample(melody, index, sample_rate,
-                                              ((delay, .18), (delay * 2, .065)))
+                                              ((delay, .10), (delay * 2, .035)))
         chords = keys[index] + delayed_sample(keys, index, sample_rate,
                                               ((.113, .075), (.173, .045)))
         mix = .64 * drums[index] + duck[index] * (.33 * bass[index] + .15 * chords)

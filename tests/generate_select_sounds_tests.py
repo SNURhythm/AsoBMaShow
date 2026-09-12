@@ -48,6 +48,30 @@ class SelectArrangementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             score.add_phrase([], 3, "lead", ((12.5, "A4", .25, 1),))
 
+    def test_lead_and_kick_share_the_bar_downbeat_and_midpoint(self):
+        events = score.compose_select()
+        for bar in range(32):
+            for beat in (bar * 4, bar * 4 + 2):
+                with self.subTest(bar=bar, beat=beat):
+                    aligned = [event for event in events if event.beat == beat]
+                    self.assertIn("lead", {event.instrument for event in aligned})
+                    self.assertIn("kick", {event.instrument for event in aligned})
+                    for instrument in ("lead", "kick"):
+                        event = next(event for event in aligned if event.instrument == instrument)
+                        rendered = score.render_events((event,), sample_rate=8000)
+                        onset = round(beat * 3750)
+                        self.assertGreater(rms(rendered[onset + 8:onset + 80]), .01)
+                        if onset:
+                            self.assertEqual(rms(rendered[onset - 80:onset]), 0)
+
+    def test_lead_uses_straight_eighths_against_an_exact_backbeat(self):
+        for event in score.compose_select():
+            with self.subTest(instrument=event.instrument, beat=event.beat):
+                if event.instrument == "lead":
+                    self.assertEqual(event.beat * 2, round(event.beat * 2))
+                elif event.instrument == "snare":
+                    self.assertIn(event.beat % 4, (1, 3))
+
     def test_note_releases_wrap_into_next_lap(self):
         samples = score.render_events((score.Event("lead", 3.9, 69, .3, 1),),
                                       total_beats=4, sample_rate=synth.SR)
