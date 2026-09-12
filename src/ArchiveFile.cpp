@@ -22,6 +22,7 @@
 #include <clocale>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <cwchar>
 #include <deque>
@@ -8656,17 +8657,54 @@ bool unzipMarkerMatches(const std::filesystem::path &markerPath,
 bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
                               const char *markerName,
                               const std::filesystem::path &archivePath,
-                              const std::string &key) {
-  std::error_code error;
+                              const std::string &key,
+                              std::error_code *readError = nullptr) {
+  std::error_code localError;
+  auto &error = readError != nullptr ? *readError : localError;
+  error.clear();
   if (!std::filesystem::is_directory(std::filesystem::symlink_status(folder, error)) || error)
     return false;
   const auto markerPath = folder / markerName;
   if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(markerPath, error)) || error)
     return false;
-  std::ifstream marker(markerPath, std::ios::binary);
+  errno = 0;
+  std::unique_ptr<FILE, decltype(&std::fclose)> marker(
+#ifdef _WIN32
+      _wfopen(markerPath.c_str(), L"rb"),
+#else
+      std::fopen(markerPath.c_str(), "rb"),
+#endif
+      &std::fclose);
+  if (!marker) {
+    error = errno != 0 ? std::error_code(errno, std::generic_category())
+                       : std::make_error_code(std::errc::io_error);
+    return false;
+  }
   std::array<char, 64 * 1024> line{};
-  if (!marker.getline(line.data(), line.size()) || key != line.data()) return false;
-  if (!marker.getline(line.data(), line.size())) return false;
+  const auto readLine = [&] {
+    std::size_t length = 0;
+    while (true) {
+      errno = 0;
+      const int character = std::fgetc(marker.get());
+      if (character == EOF) {
+        if (std::ferror(marker.get())) {
+          error = errno != 0 ? std::error_code(errno, std::generic_category())
+                             : std::make_error_code(std::errc::io_error);
+          return false;
+        }
+        line[length] = '\0';
+        return length != 0;
+      }
+      if (character == '\n') {
+        line[length] = '\0';
+        return true;
+      }
+      if (character == '\0' || length + 1 >= line.size()) return false;
+      line[length++] = static_cast<char>(character);
+    }
+  };
+  if (!readLine() || key != line.data()) return false;
+  if (!readLine()) return false;
   const auto recordedPath = std::filesystem::absolute(utf8_to_path_t(line.data()), error);
   if (error) return false;
   const auto sourcePath = std::filesystem::absolute(archivePath, error);
@@ -8681,9 +8719,10 @@ std::filesystem::path archiveCacheRoot() {
 
 bool unzipFolderHasMatchingIncompleteMarker(
     const std::filesystem::path &outputFolder,
-    const std::filesystem::path &archivePath, const std::string &archiveKey) {
+    const std::filesystem::path &archivePath, const std::string &archiveKey,
+    std::error_code *readError) {
   return unzipFolderMarkerMatches(outputFolder, ".asobmashow_unzip_incomplete",
-                                  archivePath, archiveKey);
+                                  archivePath, archiveKey, readError);
 }
 
 bool unzipFolderHasMatchingCompleteMarker(

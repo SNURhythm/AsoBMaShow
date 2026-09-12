@@ -275,7 +275,8 @@ SourcePreference sourcePreferenceForPath(const std::filesystem::path &path);
 std::string cacheKeyForPath(const std::filesystem::path &path);
 bool unzipFolderHasMatchingIncompleteMarker(
     const std::filesystem::path &outputFolder,
-    const std::filesystem::path &archivePath, const std::string &archiveKey);
+    const std::filesystem::path &archivePath, const std::string &archiveKey,
+    std::error_code *readError = nullptr);
 bool unzipFolderHasMatchingCompleteMarker(
     const std::filesystem::path &outputFolder,
     const std::filesystem::path &archivePath, const std::string &archiveKey);

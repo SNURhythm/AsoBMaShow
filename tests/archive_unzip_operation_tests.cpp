@@ -237,6 +237,72 @@ void partialExtractionIsNotIndexedByOrdinaryStartupScan() {
   assert(!std::filesystem::exists(folder));
 }
 
+void unreadableOwnedMarkerDoesNotPublishPartialCharts() {
+#ifndef _WIN32
+  if (geteuid() == 0) return;
+  Fixture fixture;
+  const auto root = fixture.root / "library";
+  const auto folder = root / "partial";
+  std::filesystem::create_directories(folder);
+  std::ofstream(folder / "chart.bms") << "#TITLE Partial\n#BPM 120\n#00111:01\n";
+  const ArchiveUnzipRecoveryRecord record{
+      .archivePath = fixture.root / "source.zip", .outputFolder = folder, .archiveKey = "key"};
+  const auto marker = folder / ".asobmashow_unzip_incomplete";
+  std::ofstream(marker) << record.archiveKey << '\n' << fspath_to_utf8(record.archivePath) << '\n';
+  auto session = fixture.repository.OpenSession();
+  assert(session->SaveUnzipRecovery(record));
+  const auto permissions = std::filesystem::status(marker).permissions();
+  std::filesystem::permissions(marker, std::filesystem::perms::none);
+  ChartLibraryScanner scanner;
+  const auto scan = scanner.ScanAddedWithResult(
+      *session, {root}, nullptr, nullptr, nullptr, nullptr, nullptr, true);
+  std::filesystem::permissions(marker, permissions);
+  assert(!scan.completed && !scan.committed);
+  assert(session->CountAllChartMeta() == 0);
+  assert(session->LoadUnzipRecovery()->size() == 1);
+  const auto retry = scanner.ScanAddedWithResult(*session, {root});
+  assert(retry.completed);
+  assert(session->CountAllChartMeta() == 0);
+#endif
+}
+
+void nestedMarkerFilenameDoesNotHideExtractedChartsAfterDeletion() {
+  Fixture fixture;
+  const auto archivePath = fixture.root / "nested.zip";
+  auto writer = makeArchiveWriteHandle();
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK);
+  for (const auto &[name, contents] : std::vector<std::pair<std::string, std::string>>{
+           {"songs/.asobmashow_unzip_incomplete", "ordinary archive metadata\n"},
+           {"songs/chart.bms", "#TITLE Nested Marker\n#BPM 120\n#00111:01\n"}}) {
+    auto entry = std::unique_ptr<archive_entry, decltype(&archive_entry_free)>(
+        archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), name.c_str());
+    archive_entry_set_size(entry.get(), contents.size());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), contents.data(), contents.size()) ==
+           static_cast<la_ssize_t>(contents.size()));
+  }
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  auto session = fixture.repository.OpenSession();
+  auto batch = session->BeginScanBatch();
+  assert(batch && batch->UpsertSolidArchive({.path = archivePath}));
+  assert(batch->Commit());
+  batch.reset();
+  const auto result = runAll(fixture.repository, true);
+  assert(result.success && result.scanCommitted && result.deletedCount == 1);
+  assert(!std::filesystem::exists(archivePath));
+  assert(session->CountAllChartMeta() == 1);
+  assert(session->CountSolidArchives() == 0);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(std::filesystem::exists(fixture.root / "nested/songs/.asobmashow_unzip_incomplete"));
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {fixture.root}).completed);
+  assert(session->CountAllChartMeta() == 1);
+}
+
 void mixedEncryptionDeleteModePreservesOriginal(bool warmCache) {
   Fixture fixture;
   const auto path = fixture.root / "mixed.7z";
@@ -1966,6 +2032,8 @@ int main(int argc, char **argv) {
   journalNormalizesPathAliasesForRecoveryAndAcknowledgement();
   unexpectedExitPreservesRecoveryWork();
   partialExtractionIsNotIndexedByOrdinaryStartupScan();
+  unreadableOwnedMarkerDoesNotPublishPartialCharts();
+  nestedMarkerFilenameDoesNotHideExtractedChartsAfterDeletion();
   for (const auto &phase : {"complete", "after-delete", "before-index", "during-index"}) {
     restartRecoversEveryCompletedCrashBoundary(phase);
   }

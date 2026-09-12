@@ -63,15 +63,34 @@ bool isFindBmsPrivateStorageDirectory(const std::filesystem::path &path) {
          asobmshow::bms_search::kFindBmsTransactionDirectoryName;
 }
 
-bool isIncompleteUnzipFolder(const std::filesystem::path &path) {
+std::optional<bool> isIncompleteUnzipFolder(
+    const std::filesystem::path &path, ChartRepository::Session &session) {
   std::error_code error;
-  return std::filesystem::exists(path / ".asobmashow_unzip_incomplete", error);
+  const auto marker = std::filesystem::symlink_status(
+      path / ".asobmashow_unzip_incomplete", error);
+  if (error && error != std::errc::no_such_file_or_directory &&
+      error != std::errc::not_a_directory) return std::nullopt;
+  if (!std::filesystem::is_regular_file(marker)) return false;
+  const auto pending = session.LoadUnzipRecovery();
+  if (!pending) return std::nullopt;
+  for (const auto &record : *pending) {
+    error.clear();
+    if (std::filesystem::equivalent(path, record.outputFolder, error) && !error) {
+      const bool matches = archive_file::unzipFolderHasMatchingIncompleteMarker(
+          record.outputFolder, record.archivePath, record.archiveKey, &error);
+      if (error) return std::nullopt;
+      if (matches) return true;
+    }
+  }
+  return false;
 }
 
-bool hasIncompleteUnzipParent(std::filesystem::path path) {
+std::optional<bool> hasIncompleteUnzipParent(
+    std::filesystem::path path, ChartRepository::Session &session) {
   path = path.lexically_normal();
   while (!path.empty()) {
-    if (isIncompleteUnzipFolder(path)) return true;
+    const auto incomplete = isIncompleteUnzipFolder(path, session);
+    if (!incomplete || *incomplete) return incomplete;
     const auto parent = path.parent_path();
     if (parent == path) break;
     path = parent;
@@ -1620,8 +1639,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
 
     std::error_code rootTypeError;
-    if (hasIncompleteUnzipParent(root)) {
-      if (requireReadableStorage) traversalHealthy = false;
+    const auto incompleteRoot = hasIncompleteUnzipParent(root, session);
+    if (!incompleteRoot || *incompleteRoot) {
+      if (!incompleteRoot || requireReadableStorage) traversalHealthy = false;
       ++scannedRootCount;
       continue;
     }
@@ -1656,7 +1676,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
       std::error_code directoryTypeError;
       if (iterator->is_directory(directoryTypeError) && !directoryTypeError) {
-        if (isIncompleteUnzipFolder(iterator->path())) {
+        const auto incomplete = isIncompleteUnzipFolder(iterator->path(), session);
+        if (!incomplete || *incomplete) {
+          if (!incomplete || requireReadableStorage) traversalHealthy = false;
           iterator.disable_recursion_pending();
           continue;
         }

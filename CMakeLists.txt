@@ -5583,7 +5583,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 $<TARGET_FILE:find_bms_metadata_transport_tests>)
     set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
         TIMEOUT 55 RUN_SERIAL TRUE)
+    add_test(NAME android_metadata_post_cancellation_tests
+        COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
+    set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
     if(APPLE AND NOT IOS)
+        add_test(NAME unzip_marker_io_tests
+            COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
+        set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)
         add_custom_command(
             OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/transport_native_methods.inc
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_extract.py

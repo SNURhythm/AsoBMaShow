@@ -348,7 +348,9 @@ std::optional<std::string> postUrlText(
 #if TARGET_OS_ANDROID
   (void)maximumResponseBytes;
   std::string body;
-  const bool success = PostURLTextAndroid(url, body, errorMessage);
+  const bool success = PostURLTextAndroid(
+      url, body, errorMessage,
+      [&] { return cancelled == nullptr || !cancelled->load(); });
   if (cancelled != nullptr && cancelled->load()) {
     errorMessage = "Lookup cancelled.";
     return std::nullopt;

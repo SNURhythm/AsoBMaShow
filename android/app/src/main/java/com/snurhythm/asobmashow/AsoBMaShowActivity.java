@@ -1068,14 +1068,43 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
-    public String postUrlText(String urlText) {
+    public String postUrlText(String urlText, long checkpointToken) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             return ERROR_PREFIX + "Network request cannot block the UI thread.";
         }
 
-        HttpURLConnection connection = null;
+        AtomicReference<HttpURLConnection> activeConnection = new AtomicReference<>();
+        AtomicBoolean monitorFinished = new AtomicBoolean(false);
+        AtomicBoolean cancellationObserved = new AtomicBoolean(false);
+        Thread cancellationMonitor = null;
+        if (checkpointToken != 0) {
+            cancellationMonitor = new Thread(() -> {
+                while (!monitorFinished.get()) {
+                    if (!nativeDownloadUrlTextCheckpoint(checkpointToken)) {
+                        cancellationObserved.set(true);
+                        HttpURLConnection connection = activeConnection.get();
+                        if (connection != null) {
+                            connection.disconnect();
+                        }
+                    }
+                    try {
+                        Thread.sleep(50);
+                    } catch (InterruptedException ignored) {
+                        return;
+                    }
+                }
+            }, "MetadataPostCancellationMonitor");
+            cancellationMonitor.setDaemon(true);
+            cancellationMonitor.start();
+        }
+
         try {
-            connection = openHttpConnection(urlText, "POST", 8);
+            if (checkpointToken != 0 &&
+                    !nativeDownloadUrlTextCheckpoint(checkpointToken)) {
+                return ERROR_PREFIX + "Lookup cancelled.";
+            }
+            HttpURLConnection connection = openHttpConnection(
+                    urlText, "POST", 8, activeConnection, cancellationObserved);
 
             int statusCode = connection.getResponseCode();
             if (statusCode >= 400) {
@@ -1083,16 +1112,41 @@ public class AsoBMaShowActivity extends SDLActivity {
             }
 
             try (InputStream input = connection.getInputStream()) {
-                return readTextResponse(input, 0);
+                String response = readTextResponse(input, checkpointToken);
+                if (checkpointToken != 0 &&
+                        !nativeDownloadUrlTextCheckpoint(checkpointToken)) {
+                    return ERROR_PREFIX + "Lookup cancelled.";
+                }
+                return response;
             }
         } catch (Exception e) {
+            if (cancellationObserved.get() || (checkpointToken != 0 &&
+                    !nativeDownloadUrlTextCheckpoint(checkpointToken))) {
+                return ERROR_PREFIX + "Lookup cancelled.";
+            }
             String message = e.getMessage();
             return ERROR_PREFIX + (message == null || message.isEmpty()
                     ? e.getClass().getSimpleName()
                     : message);
         } finally {
+            monitorFinished.set(true);
+            HttpURLConnection connection = activeConnection.getAndSet(null);
             if (connection != null) {
                 connection.disconnect();
+            }
+            if (cancellationMonitor != null) {
+                cancellationMonitor.interrupt();
+                boolean interrupted = false;
+                while (cancellationMonitor.isAlive()) {
+                    try {
+                        cancellationMonitor.join();
+                    } catch (InterruptedException ignored) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
         }
     }
