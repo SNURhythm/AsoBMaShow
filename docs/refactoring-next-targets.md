@@ -287,6 +287,14 @@ constructor fails the retained-callback assertion without invoking a dangling
 reference. Normal and startup-failure tests share their controller sources in
 `cmake/InputCaptureTests.cmake`.
 
+## 17. Obsolete application thread registry — completed
+
+The unused `ApplicationContext::threads` list, its empty shutdown join/log loop,
+and the corresponding thread include were removed. Repository-wide searches
+and independent review found no registrations or consumers. Actual background
+workers remain owned and stopped by their subsystem services; their existing
+shutdown order is unchanged.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

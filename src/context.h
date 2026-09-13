@@ -19,7 +19,6 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <thread>
 #include <utility>
 #include <vector>
 #include <SDL2/SDL.h>
@@ -271,8 +270,6 @@ public:
   std::function<void()> requestRebuildChartLibrary;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
 
-  // string: annotation, thread: thread
-  std::vector<std::pair<std::string, std::thread>> threads;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<skin::SkinStorageRoots> skinStorageRoots;
   std::unique_ptr<skin::SkinAliasDetector> skinAliasDetector;
@@ -1528,13 +1525,6 @@ public:
     chart_library_platform::clearFolderAccess();
     std::string musicStopError;
     musicPlayer.Stop(musicStopError);
-    std::cout << "Waiting for threads to join..." << std::endl;
-    for (auto &thread : threads) {
-      if (thread.second.joinable()) {
-        std::cout << "Joining thread: " << thread.first << std::endl;
-        thread.second.join();
-      }
-    }
     uiBatchRenderer.shutdown();
     if (irSubmissionService) {
       irSubmissionService->stop();

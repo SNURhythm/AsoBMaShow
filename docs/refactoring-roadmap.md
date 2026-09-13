@@ -671,3 +671,18 @@ Both focused tests passed, followed by the all-target build and all 385 tests
 in 111.57 seconds in the parallel suite. `git diff --check` passed. Registry
 failure behavior is controlled in this fixture; the existing normal target
 continues to exercise the real registry and native backend stack.
+
+## Follow-up: Remove the obsolete application thread list
+
+`ApplicationContext` no longer declares an unused generic thread list or logs
+and iterates over it during shutdown. No code registers a worker there; the
+real workers already belong to explicit subsystem owners. Repository-wide
+searches and independent review confirmed the dead boundary. The surrounding
+service shutdown order is unchanged, and other application diagnostics remain.
+
+Desktop and all-target builds passed. The first full suite passed 384/385 tests;
+the ledger's unchanged Lua runtime runner failed a callback visibility assertion
+without reporting its underlying diagnostic. That ledger passed in isolation,
+then the unchanged full suite passed all 385 tests in 100.59 seconds. Its tight
+callback wall-time budget is a possible cause, not a confirmed diagnosis. No Lua
+policy or test limits were changed. `git diff --check` passed.
