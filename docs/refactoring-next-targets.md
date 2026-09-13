@@ -321,6 +321,18 @@ on POSIX, preservation of an external symlink target's contents and permissions.
 The old destructor failed the removal assertion. Production snapshot policy
 and other test fixtures are unchanged.
 
+## 20. Replay task launch rollback — completed
+
+`ReplayRecordTask::start` reuses `cancelAndWait` if thread construction throws,
+then propagates the exception. This releases active ownership and rejects late
+completion publication. Joining prior work and allocating a replacement token
+retain their existing order and failure behavior.
+
+The direct test runner fails one real startup allocation only after the task
+becomes active. The old implementation failed both idle-state and late-publish
+assertions. The regression also checks capture release, no execution of failed
+work, a fresh cancellation token on retry, and exactly-once completion.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

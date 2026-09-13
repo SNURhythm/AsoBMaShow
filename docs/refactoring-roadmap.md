@@ -733,3 +733,22 @@ snapshot writer's attribute policy but was not executed on this macOS host.
 The all-target build and all 391 tests passed (97.34 seconds). Comparing the
 runner's temporary-directory prefix before and after the full suite found zero
 new leftover fixtures. `git diff --check` passed.
+
+## Follow-up: Roll back replay task thread startup
+
+The shared replay/Records preparation task previously retained active ownership
+and accepted completion publication after worker construction failed. Its
+launch catch now invokes the existing cancellation cleanup before rethrowing.
+Normal worker execution and the join/token-allocation order before admission
+are unchanged.
+
+The existing direct runner arms an allocation failure on its requesting thread
+only after the real task reports active. This allows cancellation-token setup
+and fails actual `jthread` construction. The old source failed both idle-state
+and late-publication assertions. The fixed regression checks callback capture
+release, no failed-work execution, late-publication rejection, and a successful
+retry with a fresh token and one-time completion. Desktop and focused checks
+passed.
+
+Independent review, the all-target build, and all 391 tests passed (99.01
+seconds). `git diff --check` passed.

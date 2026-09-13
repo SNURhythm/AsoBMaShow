@@ -16,19 +16,24 @@ void ReplayRecordTask::start(Work work) {
     cancelled_ = cancelled;
   }
   active_.store(true, std::memory_order_release);
-  worker_ = std::jthread(
-      [this, work = std::move(work), cancelled](std::stop_token stop) mutable {
-        if (!stop.stop_requested() && !cancelled->load()) {
-          work(cancelled);
-        }
-        // Even a cooperative cancellation needs UI delivery to release the
-        // scene's busy state. cancelAndWait discards this notification.
-        std::lock_guard lock(completionMutex_);
-        if (!completionPublished_) {
-          pendingCompletion_ = [] {};
-          completionPublished_ = true;
-        }
-      });
+  try {
+    worker_ = std::jthread(
+        [this, work = std::move(work), cancelled](std::stop_token stop) mutable {
+          if (!stop.stop_requested() && !cancelled->load()) {
+            work(cancelled);
+          }
+          // Even a cooperative cancellation needs UI delivery to release the
+          // scene's busy state. cancelAndWait discards this notification.
+          std::lock_guard lock(completionMutex_);
+          if (!completionPublished_) {
+            pendingCompletion_ = [] {};
+            completionPublished_ = true;
+          }
+        });
+  } catch (...) {
+    cancelAndWait();
+    throw;
+  }
 }
 
 void ReplayRecordTask::publish(Completion completion) {

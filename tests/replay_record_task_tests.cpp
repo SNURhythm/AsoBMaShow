@@ -2,11 +2,33 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <semaphore>
 #include <thread>
+
+namespace replay_task_allocation_fault {
+thread_local const ReplayRecordTask *armedTask = nullptr;
+}
+
+void *operator new(std::size_t size) {
+  auto &armedTask = replay_task_allocation_fault::armedTask;
+  if (armedTask != nullptr && armedTask->active()) {
+    armedTask = nullptr;
+    throw std::bad_alloc();
+  }
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
 
 namespace {
 int failures = 0;
@@ -16,6 +38,49 @@ void expect(bool condition, const char *message) {
     std::cerr << "FAIL: " << message << '\n';
     ++failures;
   }
+}
+
+void testThreadStartupFailureReleasesAdmissionAndAllowsRetry() {
+  ReplayRecordTask task;
+  std::atomic_int calls = 0;
+  auto payload = std::make_shared<int>(7);
+  std::weak_ptr<int> retained = payload;
+  ReplayRecordTask::Work work = [&, payload](std::shared_ptr<std::atomic_bool>) {
+    ++calls;
+  };
+  payload.reset();
+  bool threw = false;
+  // Allow cancellation-token allocation, then fail real thread startup after
+  // the production task has claimed active ownership.
+  replay_task_allocation_fault::armedTask = &task;
+  try {
+    task.start(std::move(work));
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  replay_task_allocation_fault::armedTask = nullptr;
+  expect(threw, "thread startup allocation failure propagates to the caller");
+  expect(!task.active(), "thread startup failure releases active ownership");
+  expect(calls == 0 && retained.expired(),
+         "failed startup releases worker captures without executing work");
+  task.publish([&] { ++calls; });
+  expect(!task.takeCompletion(), "failed startup rejects later completion publication");
+
+  std::binary_semaphore published{0};
+  std::atomic_bool freshToken = false;
+  task.start([&](std::shared_ptr<std::atomic_bool> cancelled) {
+    freshToken = !cancelled->load();
+    task.publish([&] { ++calls; });
+    published.release();
+  });
+  published.acquire();
+  expect(task.active() && freshToken,
+         "retry owns fresh uncancelled work until completion is delivered");
+  auto completion = task.takeCompletion();
+  expect(static_cast<bool>(completion) && !task.active(),
+         "retry delivers completion and releases active ownership");
+  if (completion) completion();
+  expect(calls == 1 && !task.takeCompletion(), "retry delivers its completion exactly once");
 }
 
 void testCompletionIsDeliveredAfterWorkerExitOnTheCaller() {
@@ -182,6 +247,7 @@ void testDestructionCancelsBeforeReleasingWorkerAndMailboxStorage() {
 } // namespace
 
 int main() {
+  testThreadStartupFailureReleasesAdmissionAndAllowsRetry();
   testCompletionIsDeliveredAfterWorkerExitOnTheCaller();
   testPollingWithoutCompletionKeepsTheWorkerActive();
   testPreparationCanCancelWithoutPublishingAResult();
