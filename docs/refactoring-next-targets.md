@@ -609,6 +609,19 @@ comparison across all modes, difficulties, and sorts. The preceding timing
 consolidation established the full 391-test baseline; this structural change
 uses its affected workflow tests without adding helper-mirroring assertions.
 
+## 42. Share song clear-lamp conversion across selection and queries — completed
+
+Three Music Select components and the repository selector now share
+`beatorajaSongClearType`. Their four removed bodies were identical. Only the
+no-play sentinel maps to zero; other ranks retain their threshold buckets.
+Ranking's missing-rank fallback and Result Skin's exact-ID conversion remain
+separate because their policies differ.
+
+Independent review, desktop/focused builds, and all four affected projection,
+song-index, and repository-query test runners passed. The runtime paths still
+select the same rank and publish the same numeric lamp values. The shared-timing
+commit established the most recent full 391-test baseline.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

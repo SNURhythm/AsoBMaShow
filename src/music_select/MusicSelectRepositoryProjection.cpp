@@ -1,4 +1,5 @@
 #include "MusicSelectRepositoryProjection.h"
+#include "../BeatorajaClearType.h"
 
 #include "MusicSelectMode.h"
 
@@ -66,18 +67,6 @@ bool pathAtOrInside(const std::filesystem::path &path,
          *first != std::filesystem::path(".");
 }
 
-int beatorajaClearType(int rank) {
-  if (rank == kNoClearTypeRank) return 0;
-  if (rank >= kClearTypeFullComboRank) return 8;
-  if (rank >= kClearTypeExHardClearRank) return 7;
-  if (rank >= kClearTypeHardClearRank) return 6;
-  if (rank >= kClearTypeNormalClearRank) return 5;
-  if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
-  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
-  return 1;
-}
-
 int songFeatures(const ChartMetaRecord &record) {
   const auto &meta = record.meta;
   int features = 0;
@@ -132,7 +121,7 @@ void MusicSelectFolderStatusAccumulator::add(const bms_parser::ChartMeta &meta,
                         ? input_.clearFor(meta, input_.selectedLongNoteMode)
                         : best ? best->clearType : kNoClearTypeRank;
   checkCancelled();
-  ++frame_.folderLampCounts[static_cast<std::size_t>(beatorajaClearType(clear))];
+  ++frame_.folderLampCounts[static_cast<std::size_t>(beatorajaSongClearType(clear))];
   int rank = 0;
   if (best && best->maxScore > 0) {
     rank = static_cast<int>(std::clamp<std::int64_t>(
@@ -173,7 +162,7 @@ struct ProjectionBuilder {
     const int rank = input.clearFor
                          ? input.clearFor(record.meta, input.selectedLongNoteMode)
                          : best ? best->clearType : kNoClearTypeRank;
-    return beatorajaClearType(rank);
+    return beatorajaSongClearType(rank);
   }
 
   MusicSelectBarId addSong(const ChartMetaRecord &record,
@@ -737,7 +726,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
           for (const auto &score : scores) {
             if (score) rank = std::max(rank, score->clearType);
           }
-          grade.presentation.lamp = beatorajaClearType(rank);
+          grade.presentation.lamp = beatorajaSongClearType(rank);
           grade.score = scores.front();
 
           // GradeBar checks trophies from last to first against the normal,

@@ -1115,3 +1115,15 @@ The desktop and focused builds and all four affected CTest runners passed
 (2.36 seconds), including the eager/index matrix for every mode, difficulty, and
 sort. `git diff --check` passed. The preceding timing commit supplies the full
 391-test baseline.
+
+## Follow-up: Share song clear-lamp conversion across selection and queries
+
+The selector repository and three Music Select projections/indexes use one
+song-lamp conversion. All four removed bodies matched, preserving the no-play
+sentinel and threshold buckets. The ranking and Result Skin adapters retain
+their intentionally different fallback rules.
+
+Independent review, desktop/focused builds, and all four affected CTest runners
+passed (7.07 seconds), covering projections, indexing, and repository queries.
+`git diff --check` passed. The shared-timing commit supplies the latest full
+391-test baseline; the subsequent mode/lamp refactors used affected workflows.

@@ -1,4 +1,5 @@
 #include "MusicSelectPropertyProjection.h"
+#include "../BeatorajaClearType.h"
 
 #include "MusicSelectMode.h"
 
@@ -72,18 +73,6 @@ int beatorajaLnMode(std::string_view value) {
   if (value == long_note_mode::kCnId) return 1;
   if (value == long_note_mode::kHcnId) return 2;
   return 0;
-}
-
-int beatorajaClearType(int rank) {
-  if (rank == kNoClearTypeRank) return 0;
-  if (rank >= kClearTypeFullComboRank) return 8;
-  if (rank >= kClearTypeExHardClearRank) return 7;
-  if (rank >= kClearTypeHardClearRank) return 6;
-  if (rank >= kClearTypeNormalClearRank) return 5;
-  if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
-  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
-  return 1;
 }
 
 int selectableScorePoint(const ScoreBestSnapshot &score) {
@@ -490,7 +479,7 @@ void projectSelectedBar(Properties &out,
       song && (selected->score || selected->presentation.lamp != 0)
           ? std::optional<int>(selected->presentation.lamp)
           : selected->score
-          ? std::optional<int>(beatorajaClearType(selected->score->clearType))
+          ? std::optional<int>(beatorajaSongClearType(selected->score->clearType))
           : std::nullopt;
   constexpr std::array<int, 11> clearIds{
       100, 101, 1100, 1101, 102, 103, 104, 1102, 105, 1103, 1104};
