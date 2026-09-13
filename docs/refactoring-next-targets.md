@@ -1034,6 +1034,32 @@ reported zero leaked bytes. Independent review found no issues.
 Desktop and all-target builds and `git diff --check` passed. All 399 CTest
 entries passed (106.77 seconds). The commit remains local.
 
+## 65. Restore view ownership and layout depth after exceptions — completed
+
+Both View constructors now retain the Yoga node in a local owner until their
+initial layout request succeeds. Layout traversal restores its nesting depth
+on every exit, with the existing deferred-layout flush still occurring only
+after successful traversal.
+
+The batched-constructor allocation test reproduced a retained Yoga node, then
+passed both allocation failures for each constructor. A nested layout callback
+reproduced the stuck-depth failure: the next size change did not trigger layout.
+The regression now verifies recovery for that tree and an unrelated root.
+The focused fixture passed (0.47 seconds), native leak detection reported zero
+leaked bytes, and independent review found no issues.
+
+Desktop and all-target builds and `git diff --check` passed. All 399 CTest
+entries passed (99.84 seconds). The commit remains local.
+
+## Remaining optional cleanup
+
+The bounded memory-audio decoder can serve the unbounded entry point and the
+archive branch, replacing their duplicate virtual-I/O setup. This is a small
+consolidation candidate, not an unfinished item from the original roadmap.
+Further large structural changes need a concrete maintenance or runtime problem
+to justify them; the recent follow-ups have mostly addressed failure-path
+ownership and recovery.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

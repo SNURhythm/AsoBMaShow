@@ -8,14 +8,17 @@
 #include "scene/SettingsSceneInputRebuild.h"
 #include "scene/SettingsSceneProfileEditorState.h"
 #include "skin/SkinTypes.h"
+#include "support/AllocationLifetimeProbe.h"
 
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <cmath>
 #include <iostream>
+#include <new>
 #include <optional>
 #include <string_view>
+#include <utility>
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -36,6 +39,53 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+void testBatchedConstructorOwnership() {
+  for (const bool explicitFrame : {false, true}) {
+    const auto failures = test_support::checkAllocationFailures([&] {
+      View::LayoutBatchScope batch;
+      if (explicitFrame) {
+        View view(10, 20, 100, 50);
+      } else {
+        View view;
+      }
+    });
+    std::cout << (explicitFrame ? "Framed" : "Default")
+              << " batched view construction: " << failures
+              << " allocation failures passed\n";
+  }
+}
+
+class ThrowingLayoutView final : public View {
+public:
+  bool failNextLayout = false;
+  int layoutCalls = 0;
+
+  void onLayout() override {
+    ++layoutCalls;
+    if (std::exchange(failNextLayout, false)) throw std::bad_alloc{};
+  }
+};
+
+void testLayoutRecoversAfterCallbackFailure() {
+  View root(0, 0, 300, 100);
+  auto *child = new ThrowingLayoutView();
+  root.addView(child);
+  child->failNextLayout = true;
+  bool threw = false;
+  try { root.applyYogaLayout(); }
+  catch (const std::bad_alloc &) { threw = true; }
+  assert(threw);
+
+  const auto calls = child->layoutCalls;
+  child->setWidth(55);
+  assert(child->layoutCalls > calls);
+  assert(child->getWidth() == 55);
+
+  View unrelated(0, 0, 20, 20);
+  unrelated.setWidth(80);
+  assert(unrelated.getWidth() == 80);
+}
 
 static_assert(requires(ResultSkinData data) {
   data.showTimingAnalytics;
@@ -1038,6 +1088,8 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 } // namespace
 
 int main() {
+  testBatchedConstructorOwnership();
+  testLayoutRecoversAfterCallbackFailure();
   testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren();
   testViewSkipsZeroExtentPaintingWithoutVisibleOverflowBounds();
   testViewUsesVisibleOverflowBoundsForOwnPainting();

@@ -1408,3 +1408,15 @@ leaked bytes.
 
 Desktop and all-target builds, independent review, and `git diff --check` passed.
 All 399 CTest entries passed (106.77 seconds). The verified commit remains local.
+
+## Follow-up: Restore view construction and layout state on exceptions
+
+View constructors hold their Yoga nodes until the initial layout request
+succeeds. Layout traversal now restores its nesting counter on exceptional
+exits while preserving the normal flush order. Regression tests reproduced
+the leaked constructor node and a nested callback preventing later layouts.
+Both constructor allocation walks and subsequent layouts in affected and
+unrelated trees now pass. Native leak detection reported zero leaked bytes.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 399 CTest entries passed (99.84 seconds). The verified commit remains local.

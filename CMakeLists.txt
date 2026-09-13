@@ -5023,6 +5023,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(view_layout_tests
         tests/view_layout_tests.cpp
+        tests/support/AllocationLifetimeProbe.cpp
         src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
         src/view/View.cpp
