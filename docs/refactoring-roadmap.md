@@ -1088,3 +1088,18 @@ profile/picker tests passed (1.94 seconds). Both mobile branches are compiled
 against controlled native effects. `git diff --check` passed. The preceding
 Jukebox commit supplies the full 391-test baseline; this structural cleanup was
 verified with its affected workflows.
+
+## Follow-up: Share gameplay and result timing statistics
+
+Result Scene delegates to the existing Beatoraja score-metrics function used by
+gameplay. Its duplicate result type and calculation were removed after a
+normalized-body comparison confirmed equivalence. The same inputs and course
+suppression remain, and the sign-convention comment moved to the shared owner.
+
+The existing scene runner now links the production calculation. Two assertions
+about formula source text were replaced by numeric checks for histogram sign,
+truncation and filtering, judge penalties, and classic/charge long-note result
+counting. Those cases passed before and after consolidation. Independent review,
+focused CTest, and desktop main/all-target builds passed.
+
+All 391 tests passed (104.69 seconds). `git diff --check` passed.

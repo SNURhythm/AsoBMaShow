@@ -81,6 +81,8 @@ beatorajaResultTimingStatistics(const ReplayData *replay, int totalNotes,
          event.action == ReplayEventAction::Release) &&
         event.judgement != None && event.judgement != Kpoor &&
         event.diffMicros >= -rangeMicros && event.diffMicros <= rangeMicros;
+    // ReplayEvent stores input-minus-note, while AbstractResult's timing
+    // distribution uses Beatoraja's note-minus-input convention.
     const long long beatorajaDiffMicros = -event.diffMicros;
     if (timingEvent && countsInResult(event)) {
       const int millis = static_cast<int>(beatorajaDiffMicros / 1'000LL);

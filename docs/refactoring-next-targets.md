@@ -578,6 +578,23 @@ profile/picker tests passed. Both iOS and Android picker branches run with
 controlled native effects; this is not a native SDK build. The preceding
 Jukebox change established the full 391-test baseline.
 
+## 40. Share gameplay and result timing statistics — completed
+
+Result Scene now uses `beatorajaResultTimingStatistics`, already used during
+gameplay, instead of maintaining a second result type and calculation. The
+removed and shared bodies matched after stripping comments, whitespace, and
+type spelling. Replay selection, note count, chart metadata, and course-final
+suppression remain at the original scene call site. The timing-sign explanation
+now lives with the shared calculation.
+
+Two source-formula assertions became numerical checks against the production
+function in the existing result-scene runner. They cover sign reversal,
+millisecond truncation, event filtering, unplayed-note penalties, classic
+long-note tail selection and bad-head fallback, and independent charge-note
+ends. The checks passed before and after consolidation. Independent review,
+focused CTest, and desktop main/all-target builds passed.
+All 391 tests passed after consolidation.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

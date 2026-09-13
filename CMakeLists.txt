@@ -6921,6 +6921,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(remote_result_scene_tests
         tests/remote_result_scene_tests.cpp
+        src/BeatorajaScoreMetrics.cpp
         src/bms_parser.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
