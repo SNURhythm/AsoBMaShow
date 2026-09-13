@@ -1335,3 +1335,15 @@ shares the same test-only lifetime probe and still passes all 78 failures.
 The focused pair, desktop and all-target builds, independent review, and
 `git diff --check` passed. All 397 CTest entries passed (114.74 seconds).
 The verified commit remains local.
+
+## Follow-up: Retain profile database resources during error reporting
+
+Profile SQLite helpers own failed-open connections and execution-error strings
+before allocating diagnostic text. Public-API allocation walks reproduced both
+old leaks and now restore SQLite's memory baseline at every failure, with a
+successful snapshot and row-count retry afterward. Existing error text and
+return behavior are unchanged; connection cleanup uses the shared RAII helper.
+
+The focused runner, desktop and all-target builds, independent review, and
+`git diff --check` passed. All 398 CTest entries passed (92.29 seconds).
+The verified commit remains local.

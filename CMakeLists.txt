@@ -7928,6 +7928,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
     endfunction()
 
+    add_executable(profile_database_ownership_tests
+        tests/profile_database_ownership_tests.cpp
+        tests/support/AllocationFailure.cpp
+        src/ProfileDatabaseTools.cpp
+    )
+    target_include_directories(profile_database_ownership_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(profile_database_ownership_tests PRIVATE cxx_std_23)
+    target_link_libraries(profile_database_ownership_tests PRIVATE
+        SQLite3 Threads::Threads ${CMAKE_DL_LIBS})
+    asobmashow_register_test(profile_database_ownership_tests)
+
     add_executable(replay_export_job_tests
         tests/replay_export_job_tests.cpp
         tests/support/AllocationFailure.cpp

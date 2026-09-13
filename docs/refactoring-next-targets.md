@@ -920,6 +920,23 @@ The focused pair passed (0.41 seconds), desktop and all-target builds passed,
 and all 397 CTest entries passed (114.74 seconds). Independent review and
 `git diff --check` passed. The commit remains local.
 
+## 58. Own profile database error resources before formatting — completed
+
+Profile database helpers now adopt failed-open connections and execution-error
+strings immediately after SQLite returns them. Formatting a diagnostic can
+throw without leaking either resource. The connection deleter reuses the
+existing `UniqueResource` helper; return values and diagnostic text are unchanged.
+
+A public-API regression reproduced 1,488 retained SQLite bytes during failed-open
+reporting and 16 bytes during rejected-transaction reporting. It now walks all
+four and seven C++ allocations respectively, checking SQLite's warmed memory
+baseline after each attempt. The transaction authorizer is removed before
+verifying a successful snapshot, integrity check, and row-count retry.
+
+The focused runner passed (0.40 seconds), desktop and all-target builds passed,
+and all 398 CTest entries passed (92.29 seconds). Independent review and
+`git diff --check` passed. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
