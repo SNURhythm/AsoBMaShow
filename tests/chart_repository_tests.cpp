@@ -6,6 +6,7 @@
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
 #include "RepositorySqliteTestSupport.h"
+#include "support/AllocationFailure.h"
 #include "music_select/MusicSelectRepositoryProjection.h"
 #include "music_select/MusicSelectPropertyProjection.h"
 #include "music_select/MusicSelectPhysicalDirectory.h"
@@ -486,6 +487,86 @@ void testScanBatchReusesPreparedInsertAndTransaction() {
     }
   }
   assert(session->CountAllChartMeta() == 100);
+}
+
+struct SessionConnectionObservation {
+  int opened = 0, closed = 0;
+  bool pendingStatementsAtClose = false;
+  sqlite3 *live = nullptr;
+};
+SessionConnectionObservation *sessionConnectionObservation = nullptr;
+
+int observeSessionConnection(sqlite3 *database, char **,
+                              const sqlite3_api_routines *) {
+  auto *observation = sessionConnectionObservation;
+  assert(observation && !observation->live);
+  ++observation->opened;
+  observation->live = database;
+  // These callbacks do not allocate or throw across SQLite while a C++
+  // allocation failure is armed. CLOSE is reported before SQLite's busy check.
+  sqlite3_trace_v2(database, SQLITE_TRACE_CLOSE,
+      [](unsigned, void *context, void *database, void *) {
+        auto &observation = *static_cast<SessionConnectionObservation *>(context);
+        observation.pendingStatementsAtClose |=
+            sqlite3_next_stmt(static_cast<sqlite3 *>(database), nullptr) != nullptr;
+        ++observation.closed;
+        observation.live = nullptr;
+        return 0;
+      }, observation);
+  return SQLITE_OK;
+}
+
+void testSessionConstructionFailuresCloseTheConnection() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  { auto warm = repository.OpenSession(); assert(warm); }
+
+  SessionConnectionObservation observation;
+  assert(connectionCount == nullptr && sessionConnectionObservation == nullptr);
+  sessionConnectionObservation = &observation;
+  assert(sqlite3_auto_extension(
+      reinterpret_cast<void (*)()>(observeSessionConnection)) == SQLITE_OK);
+  const auto unregisterObserver = makeScopeExit([] {
+    sqlite3_cancel_auto_extension(reinterpret_cast<void (*)()>(observeSessionConnection));
+    sessionConnectionObservation = nullptr;
+  });
+  int leakedConnections = 0, rejectedOwnedConnections = 0;
+  bool reachedSuccess = false;
+  for (std::size_t index = 0; index < 128; ++index) {
+    observation = {};
+    std::optional<ChartRepository::Session> session;
+    bool threw = false;
+    {
+      test_support::FailAllocationAfter failure(index);
+      try { session = repository.OpenSession(); }
+      catch (const std::bad_alloc &) { threw = true; }
+    }
+    if (threw && observation.opened > 0) ++rejectedOwnedConnections;
+    if (!threw) assert(session && session->CountAllChartMeta() == 0);
+    session.reset();
+    if (observation.live) {
+      ++leakedConnections;
+      std::cerr << "Session allocation " << index << " leaked its SQLite connection\n";
+      // Clean the observed unowned test connection so the negative control can
+      // identify both allocation gaps without leaving resources behind.
+      const int closed = sqlite3_close(observation.live);
+      assert(closed == SQLITE_OK);
+    }
+    assert(observation.opened == observation.closed && !observation.pendingStatementsAtClose);
+    if (!threw) {
+      reachedSuccess = true;
+      break;
+    }
+    {
+      auto retry = repository.OpenSession();
+      assert(retry && retry->CountAllChartMeta() == 0);
+    }
+    assert(observation.opened == observation.closed && !observation.live &&
+           !observation.pendingStatementsAtClose);
+  }
+  assert(reachedSuccess && rejectedOwnedConnections >= 2);
+  assert(leakedConnections == 0 && "session construction must retain connection ownership");
 }
 
 void testSessionRoundTripAndReadinessCost() {
@@ -3832,6 +3913,10 @@ int main(int argc, char **argv) {
         testSelectorAllCountSkipsPerHashReviewsOnlyWhenNoneAreHidden();
         return 0;
       }
+      if (argc == 2 && std::string_view(argv[1]) == "--session-ownership-test") {
+        testSessionConstructionFailuresCloseTheConnection();
+        return 0;
+      }
       if (std::string_view(argv[1]) != "--benchmark-first-page") {
         throw std::invalid_argument("Unknown chart repository test argument");
       }
@@ -3872,6 +3957,7 @@ int main(int argc, char **argv) {
   testScanBatchRetainsSessionStorage();
   testScanBatchUpsertPreservesExistingAddDate();
   testScanBatchReusesPreparedInsertAndTransaction();
+  testSessionConstructionFailuresCloseTheConnection();
   testSessionRoundTripAndReadinessCost();
   testSelectChartMetaByPathsHydratesInInputOrder();
   testFavoriteToggleMaintainsSongReviewChartBit();

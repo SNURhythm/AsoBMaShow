@@ -1005,14 +1005,14 @@ static bool clearEntries(sqlite3 *database);
 ChartRepository::Impl::Impl(std::filesystem::path path)
     : databasePath(std::move(path)) {}
 
-ChartSessionStorage::ChartSessionStorage(sqlite3 *database)
-    : connection(database) {}
+ChartSessionStorage::ChartSessionStorage(SqliteConnectionHandle database)
+    : connection(std::move(database)) {}
 
 sqlite3 *ChartSessionStorage::database() const { return connection.get(); }
 
-ChartRepository::Session::Impl::Impl(sqlite3 *database,
+ChartRepository::Session::Impl::Impl(SqliteConnectionHandle database,
                                      ScoreRepository *scoresValue)
-    : storage(std::make_shared<ChartSessionStorage>(database)),
+    : storage(std::make_shared<ChartSessionStorage>(std::move(database))),
       scores(scoresValue) {}
 
 ScoreRepository &ChartRepository::Session::Impl::scoreRepository() {
@@ -1258,8 +1258,7 @@ ChartRepository::OpenSession(ScoreRepository *scores) {
               << *pragmaError << "\n";
   }
 
-  sqlite3 *database = connection.release();
-  return Session(std::make_unique<Session::Impl>(database, scores));
+  return Session(std::make_unique<Session::Impl>(std::move(connection), scores));
 }
 
 const std::filesystem::path &ChartRepository::DatabasePath() const {

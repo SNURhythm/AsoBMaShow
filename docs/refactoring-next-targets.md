@@ -881,6 +881,27 @@ app and all test targets built, and all 396 CTest entries passed (103.70
 seconds). Independent review and `git diff --check` passed. The commit remains
 local.
 
+## 56. Retain database ownership through chart-session construction — completed
+
+`ChartRepository::OpenSession` no longer releases its connection before
+allocating the session implementation. Both internal constructors accept
+`SqliteConnectionHandle` and move it into shared session storage, protecting
+the implementation allocation, storage allocation, and later construction
+failures. Scan batches still share the same storage owner.
+
+A public-session allocation walk found unclosed connections at the two old
+handoff allocations. The regression now observes balanced SQLite open/close
+events, checks that no statements remain at close, and verifies usable retries.
+Its C callbacks never allocate or throw while injection is armed. The negative
+control records and closes each unowned private test connection so both gaps
+can be identified in one run. The allocation injector is linked only into the
+repository runner.
+
+The focused regression, desktop app and all-target builds, independent review,
+and `git diff --check` passed. All 396 CTest entries passed (103.43 seconds),
+including repository round trips, retained scan-batch storage, and profile
+workflows. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

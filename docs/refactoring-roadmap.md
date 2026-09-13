@@ -1311,3 +1311,15 @@ found no issues. View/deferred-map ordering and callback scheduling are unchange
 
 All 396 CTest entries passed (103.70 seconds), including the regenerated native
 lifecycle fixtures. `git diff --check` passed. The commit remains local.
+
+## Follow-up: Retain SQLite ownership through chart-session construction
+
+Chart sessions pass the connection owner through both allocation boundaries
+into shared storage. The public-session allocation walk reproduced both old
+leaks and now verifies balanced open/close events, absence of pending statements
+at close, and usable retries. Shared storage still keeps scan batches alive
+after their originating session closes. The focused regression, desktop app
+and all-target builds, independent review, and `git diff --check` passed.
+
+All 396 CTest entries passed (103.43 seconds), including repository and profile
+workflows. The verified commit remains local.

@@ -3897,6 +3897,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
     endif()
     get_target_property(CHART_SELECTOR_QUERY_TEST_SOURCES chart_repository_tests SOURCES)
+    # Keep allocation injection local to the repository runner.
+    target_sources(chart_repository_tests PRIVATE tests/support/AllocationFailure.cpp)
     list(REMOVE_ITEM CHART_SELECTOR_QUERY_TEST_SOURCES tests/chart_repository_tests.cpp)
     add_executable(chart_selector_query_tests
         tests/chart_selector_query_tests.cpp
