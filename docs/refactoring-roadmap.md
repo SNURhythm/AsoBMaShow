@@ -546,3 +546,23 @@ and all-target compilation passed; review found no blocker.
 The full parallel suite passed all 379 tests in 106.15 seconds after all-target
 compilation. `git diff --check` passed. Verification used local desktop tests
 with controlled native effects; no deployment was performed.
+
+## Follow-up: Parallel work ownership and count width
+
+`ParallelWork.h` groups the active sizing/indexed-execution helpers behind the
+existing `Utils.h` include facade. The unused integer-range parallel API and
+thread wrapper were removed after a repository-wide caller search. Indexed
+execution retains callable borrowing, dynamic assignment, and sequential
+behavior; joining thread owners now outlive their work but die before the
+borrowed state during return or launch-failure unwinding.
+
+Worker sizing retains hardware fallback and render/audio headroom. It compares
+at `size_t` width before narrowing the bounded result, fixing the former wrap
+to zero for counts above `unsigned int`. Standalone tests cover deterministic
+policy boundaries, exactly-once execution, borrowed move-only work, and joining
+before return. The old-narrowing negative control fails its intended boundary
+assertion. Desktop compilation and focused tests passed; review found no blocker.
+
+After rebuilding all affected targets and checking the final incremental build,
+the full parallel suite passed all 380 tests in 132.28 seconds.
+`git diff --check` passed. Verification remained local to desktop builds/tests.

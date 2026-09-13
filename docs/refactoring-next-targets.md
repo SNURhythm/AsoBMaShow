@@ -197,21 +197,37 @@ release, and inactive/exited/cleaned ownership. Negative controls fail for both
 the former implicit destructor and an unconditional cleanup destructor. Native
 media and UI effects are controlled doubles.
 
-## 11. Shared parallel-work helpers
+## 11. Shared parallel-work helpers — completed
 
-`Utils` mixes filesystem/string utilities with parallel execution. The only
-active parallel operation is `parallel_for_each_index`; repository searches
-find no callers of the older integer-range `parallel_for` or `threadRAII`.
-The active operation manually joins a vector of raw threads, so ownership is
-not protected if a later thread construction throws.
+`src/utils/ParallelWork.h` now groups worker sizing and indexed execution;
+`Utils.h` retains the existing include facade. Unused `parallel_for` and
+`threadRAII` declarations/definitions were removed after a repository-wide
+caller search. Indexed work retains dynamic assignment and borrowed callable
+semantics, with joining thread owners whose lifetime ends before the index and
+callable references on normal return or partial launch unwinding.
 
-Group worker-count policy and indexed execution in a small dedicated header,
-retain the existing include facade for callers, and use joining thread owners.
-The sizing policy narrows `size_t` to `unsigned int` before bounding it, so a
-large count can wrap to zero. Compare at the wider width before narrowing the
-bounded result. Test deterministic hardware/count boundaries and real exactly-
-once index execution; preserve headroom, sequential behavior, and caller-owned
-work error handling.
+The sizing policy preserves hardware fallback/headroom and compares the wider
+item count before narrowing the bounded result. Standalone tests cover policy
+boundaries, counts above `unsigned int`, sequential execution, move-only work,
+exactly-once indices, and waiting for completion. A negative control using the
+old narrowing fails the large-count assertion. Callback exception policy is
+unchanged; partial launch safety follows the joining ownership structure.
+
+## 12. Music Player sleep-timer shutdown synchronization
+
+The sleep timer waits with a stop-token predicate under `sleepTimerMutex`, but
+shutdown requests stop under a different thread mutex. After shutdown's first
+notification, the worker can evaluate the idle predicate false, then miss the
+final stop notification before it enters the wait. Shutdown can then block in
+join. Source review confirms the missing synchronization and no inverse nested
+lock order that prevents protecting stop with the wait mutex.
+
+Characterize the predicate-to-wait gap deterministically before fixing it.
+Request stop while holding the wait mutex, notify after releasing it, and join
+outside both mutexes. Preserve timer replacement/clear behavior and the expiry
+callback's execution outside the timer mutex; also test shutdown while that
+callback is blocked. Only then consider a separate timer owner if it improves
+the service boundary beyond the synchronization fix.
 
 ## What the review does not justify
 
