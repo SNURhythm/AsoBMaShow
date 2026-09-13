@@ -1,5 +1,6 @@
 #include "ProfileDatabaseTools.h"
 
+#include "RAII.h"
 #include "sqlite3.h"
 
 #include <algorithm>
@@ -10,14 +11,7 @@
 #include <vector>
 
 namespace {
-struct ConnectionCloser {
-  void operator()(sqlite3 *database) const {
-    if (database != nullptr) {
-      sqlite3_close(database);
-    }
-  }
-};
-using Connection = std::unique_ptr<sqlite3, ConnectionCloser>;
+using Connection = UniqueResource<sqlite3, sqlite3_close>;
 
 std::string pathUtf8(const std::filesystem::path &path) {
 #ifdef _WIN32
@@ -43,21 +37,20 @@ Connection openDatabase(const std::filesystem::path &path, int flags,
   sqlite3 *raw = nullptr;
   const std::string encoded = pathUtf8(path);
   const int result = sqlite3_open_v2(encoded.c_str(), &raw, flags, nullptr);
+  Connection database(raw);
   if (result != SQLITE_OK) {
     setError(errorMessage, raw, "opening SQLite database", result);
-    if (raw != nullptr) {
-      sqlite3_close(raw);
-    }
     return {};
   }
   sqlite3_busy_timeout(raw, 1000);
-  return Connection(raw);
+  return database;
 }
 
 bool execute(sqlite3 *database, const char *sql, std::string &errorMessage,
              std::string_view operation) {
   char *rawError = nullptr;
   const int result = sqlite3_exec(database, sql, nullptr, nullptr, &rawError);
+  UniqueResource<char, sqlite3_free> error(rawError);
   if (result == SQLITE_OK) {
     return true;
   }
@@ -69,7 +62,6 @@ bool execute(sqlite3 *database, const char *sql, std::string &errorMessage,
     errorMessage += ": ";
     errorMessage += sqlite3_errmsg(database);
   }
-  sqlite3_free(rawError);
   return false;
 }
 

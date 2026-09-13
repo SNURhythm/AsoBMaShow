@@ -2,12 +2,16 @@
 
 #include <algorithm>
 #include <exception>
+#include <type_traits>
 #include <utility>
 
 namespace chart_library_tasks {
 
 namespace {
 constexpr std::size_t kMaximumTaskHistory = 24;
+static_assert(std::is_nothrow_move_constructible_v<TaskRequest>);
+static_assert(std::is_nothrow_move_constructible_v<TaskInfo>);
+static_assert(std::is_nothrow_move_assignable_v<TaskInfo>);
 }
 
 ChartLibraryTaskService::ChartLibraryTaskService(TaskRunner runner)
@@ -25,6 +29,10 @@ bool ChartLibraryTaskService::isActive(TaskStatus status) noexcept {
 
 void ChartLibraryTaskService::start() {
   std::lock_guard lifecycleLock(lifecycleMutex_);
+  startWorkerLocked();
+}
+
+void ChartLibraryTaskService::startWorkerLocked() {
   if (worker_.joinable()) {
     return;
   }
@@ -98,23 +106,30 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
 }
 
 std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
+  std::lock_guard lifecycleLock(lifecycleMutex_);
   std::uint64_t id = 0;
   {
     std::lock_guard lock(stateMutex_);
-    request.id = nextTaskId_++;
+    request.id = nextTaskId_;
     id = request.id;
-    const std::string title = request.title;
-    queue_.push_back(std::move(request));
-    tasks_.push_back(TaskInfo{
+    TaskInfo task{
         .id = id,
-        .title = title,
+        .title = request.title,
         .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued,
         .detail = gameplayPaused_ ? "Paused" : "Waiting",
-    });
+    };
+    startWorkerLocked();
+    tasks_.push_back(std::move(task));
+    try {
+      queue_.push_back(std::move(request));
+    } catch (...) {
+      tasks_.pop_back();
+      throw;
+    }
+    ++nextTaskId_;
     trimHistoryLocked();
     bumpRevisionLocked();
   }
-  start();
   workAvailable_.notify_one();
   return id;
 }
@@ -138,11 +153,15 @@ bool ChartLibraryTaskService::enqueueReserved(std::uint64_t id,
                                               TaskRequest request) {
   {
     std::lock_guard lock(stateMutex_);
+    if (findTaskLocked(id) == nullptr) return false;
+  }
+  std::lock_guard lifecycleLock(lifecycleMutex_);
+  {
+    std::lock_guard lock(stateMutex_);
     if (!enqueueReservedLocked(id, std::move(request))) {
       return false;
     }
   }
-  start();
   workAvailable_.notify_one();
   return true;
 }
@@ -154,13 +173,15 @@ bool ChartLibraryTaskService::enqueueReservedLocked(std::uint64_t id,
     return false;
   }
   request.id = id;
-  task->title = request.title;
-  task->status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued;
-  task->fraction = 0.0;
-  task->current = 0;
-  task->total = 0;
-  task->detail = gameplayPaused_ ? "Paused" : "Waiting";
+  TaskInfo queued{
+      .id = id,
+      .title = request.title,
+      .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued,
+      .detail = gameplayPaused_ ? "Paused" : "Waiting",
+  };
+  startWorkerLocked();
   queue_.push_back(std::move(request));
+  *task = std::move(queued);
   bumpRevisionLocked();
   return true;
 }
@@ -171,14 +192,20 @@ bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
   if (!acceptingAndroidImports_ || token.empty() || androidImports_.contains(token)) {
     return false;
   }
-  const std::uint64_t id = nextTaskId_++;
-  androidImports_.emplace(token, std::pair{id, folder});
+  const std::uint64_t id = nextTaskId_;
   tasks_.push_back(TaskInfo{
       .id = id,
       .title = folder ? "Import Folder" : "Import Archive",
       .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
       .detail = gameplayPaused_ ? "Paused" : "Copying selected charts",
   });
+  try {
+    androidImports_.emplace(token, std::pair{id, folder});
+  } catch (...) {
+    tasks_.pop_back();
+    throw;
+  }
+  ++nextTaskId_;
   trimHistoryLocked();
   bumpRevisionLocked();
   return true;
@@ -195,30 +222,44 @@ int ChartLibraryTaskService::androidImportCopyState(const std::string &token) co
 bool ChartLibraryTaskService::finishAndroidImport(
     const std::string &token, bool folder, const std::filesystem::path &path,
     const std::string &error) {
-  bool queued = false;
+  std::uint64_t id = 0;
   {
     std::lock_guard lock(stateMutex_);
     const auto found = androidImports_.find(token);
     if (found == androidImports_.end() || found->second.second != folder) {
       return false;
     }
-    const auto id = found->second.first;
-    androidImports_.erase(found);
+    id = found->second.first;
     if (!error.empty() || path.empty()) {
       setTaskStateLocked(id, TaskStatus::Failed, 0.0, 0, 0,
                          error.empty() ? "Import failed: selected path is empty."
                                        : error);
+      androidImports_.erase(found);
       trimHistoryLocked();
-    } else {
-      queued = enqueueReservedLocked(
-          id, {.kind = TaskKind::AndroidImport,
-               .title = folder ? "Import Folder" : "Import Archive",
-               .androidImportPath = path,
-               .androidImportFolder = folder});
+      return true;
+    }
+    if (findTaskLocked(id) == nullptr) {
+      androidImports_.erase(found);
+      return true;
     }
   }
+  std::lock_guard lifecycleLock(lifecycleMutex_);
+  bool queued = false;
+  {
+    std::lock_guard lock(stateMutex_);
+    const auto found = androidImports_.find(token);
+    if (found == androidImports_.end() || found->second.first != id ||
+        found->second.second != folder) {
+      return false;
+    }
+    queued = enqueueReservedLocked(
+        id, {.kind = TaskKind::AndroidImport,
+             .title = folder ? "Import Folder" : "Import Archive",
+             .androidImportPath = path,
+             .androidImportFolder = folder});
+    androidImports_.erase(found);
+  }
   if (queued) {
-    start();
     workAvailable_.notify_one();
   }
   return true;

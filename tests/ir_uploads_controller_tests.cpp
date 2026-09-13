@@ -1,4 +1,5 @@
 #include "scene/IrUploadsController.h"
+#include "scene/IrUploadPreparationTask.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -503,7 +504,16 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
 
 } // namespace
 
+#include "ir_upload_preparation_task_tests.h"
+#include "ir_upload_scene_fixture.h"
+
 int main() {
+  testScenePreparationLaunchGatesAndApplicationThreadCompletion();
+  testSceneStopRetainsCancelledSelectionUntilCompletion();
+  testPreparationTaskProgressPartialFailureAndCompletionJoining();
+  testPreparationTaskStopBeforeEnqueueRetainsCancellationUntilConsumed();
+  testPreparationTaskStopAfterEnqueueBeginsPreservesCommittedOutcome();
+  testPreparationTaskResetAndDestructorOwnCaptureLifetime();
   testSelectionSnapshotLockAndFinalSummary();
   testFailedRefreshPreservesPublishedCandidatesAndSelection();
   testPreparationContinuesAfterFailureAndBatchesOnce();

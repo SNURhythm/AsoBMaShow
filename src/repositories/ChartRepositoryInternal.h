@@ -19,7 +19,7 @@ struct ChartRepository::Impl {
 };
 
 struct ChartSessionStorage {
-  explicit ChartSessionStorage(sqlite3 *database);
+  explicit ChartSessionStorage(SqliteConnectionHandle database);
 
   sqlite3 *database() const;
 
@@ -27,7 +27,7 @@ struct ChartSessionStorage {
 };
 
 struct ChartRepository::Session::Impl {
-  Impl(sqlite3 *database, ScoreRepository *scoresValue);
+  Impl(SqliteConnectionHandle database, ScoreRepository *scoresValue);
 
   ScoreRepository &scoreRepository();
   sqlite3 *database() const;

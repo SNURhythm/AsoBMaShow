@@ -59,14 +59,22 @@ InputCaptureController::InputCaptureController(InputDeviceRegistry &registry,
                        considerCandidate(event);
                      }}) {
   resolver_.setMode(InputBindingResolver::Mode::Capture);
-  inputSubscription_ =
-      registry_.subscribeInput([this](const input::PhysicalInputEvent &event) {
-        resolver_.consume(event);
-      });
-  deviceSubscription_ = registry_.subscribeDevices(
-      [this](const input::InputDeviceSnapshot &device) {
-        observeDevice(device);
-      });
+  try {
+    inputSubscription_ =
+        registry_.subscribeInput([this](const input::PhysicalInputEvent &event) {
+          resolver_.consume(event);
+        });
+    deviceSubscription_ = registry_.subscribeDevices(
+        [this](const input::InputDeviceSnapshot &device) {
+          observeDevice(device);
+        });
+  } catch (...) {
+    // Device registration can fail after the input listener is installed.
+    if (inputSubscription_ != 0) {
+      registry_.unsubscribe(inputSubscription_);
+    }
+    throw;
+  }
 }
 
 InputCaptureController::~InputCaptureController() {

@@ -1,10 +1,12 @@
 #include "music_select/MusicSelectFolderStatusLoader.h"
+#include "support/AllocationFailure.h"
 
 #include <cassert>
 #include <atomic>
 #include <chrono>
 #include <future>
 #include <memory>
+#include <new>
 #include <stdexcept>
 
 using namespace std::chrono_literals;
@@ -25,6 +27,61 @@ std::vector<MusicSelectFolderStatusLoader::Result> waitForResults(
   }
   assert(results.size() == count);
   return results;
+}
+
+void testAllocationFailuresAllowIdenticalRequestRetry() {
+  const std::string id = "startup-" + std::string(80, 'x');
+  std::size_t failures = 0;
+  bool completedWithoutFailure = false;
+  // Walk actual caller allocations until request succeeds without reaching
+  // the fault. This covers row copies, processor ownership, and thread startup
+  // without relying on a standard library's allocation count.
+  for (std::size_t allocation = 0; allocation < 64; ++allocation) {
+    std::atomic_int calls{0};
+    MusicSelectFolderStatusLoader loader;
+    auto payload = std::make_shared<int>(7);
+    const std::weak_ptr<int> retained = payload;
+    MusicSelectFolderStatusLoader::Processor process =
+        [&, payload](const MusicSelectBar &, std::stop_token) {
+          ++calls;
+          return skin::MusicSelectBarFrame{};
+        };
+    payload.reset();
+    auto bars = std::vector{folder(id)};
+    std::string mode = "ALL";
+    bool threw = false;
+    bool admitted = false;
+    {
+      test_support::FailAllocationAfter fault(allocation);
+      try {
+        admitted = loader.request(std::move(bars), std::move(mode), 1,
+                                  std::move(process));
+      } catch (const std::bad_alloc &) {
+        threw = true;
+      }
+    }
+    if (threw) {
+      ++failures;
+      assert(calls == 0 && retained.expired());
+      assert(loader.takeResults().empty());
+      admitted = loader.request({folder(id)}, "ALL", 1,
+          [&](const MusicSelectBar &, std::stop_token) {
+            ++calls;
+            return skin::MusicSelectBarFrame{};
+          });
+      assert(admitted && "an identical request retries after allocation failure");
+    }
+    assert(admitted);
+    const auto results = waitForResults(loader, 1);
+    assert(results.front().id.value == id && results.front().error.empty());
+    assert(calls == 1);
+    loader.cancel();
+    if (!threw) {
+      completedWithoutFailure = true;
+      break;
+    }
+  }
+  assert(completedWithoutFailure && failures >= 3);
 }
 
 void testSupersessionInterruptsActiveProcessor() {
@@ -121,16 +178,41 @@ void testPersistentFailureIsBoundedAndSameDirectoryCanRetryLater() {
   std::this_thread::sleep_for(1100ms);
   assert(attempts == 2);
   assert(loader.retryReady());
-  assert(loader.request({folder("retry")}, "ALL", 1,
-      [](const MusicSelectBar &) { return skin::MusicSelectBarFrame{}; }));
+  bool admitted = false;
+  std::atomic_int recoveryCalls{0};
+  for (std::size_t allocation = 0; allocation < 64; ++allocation) {
+    auto bars = std::vector{folder("retry")};
+    std::string mode = "ALL";
+    MusicSelectFolderStatusLoader::Processor process =
+        [&](const MusicSelectBar &, std::stop_token) {
+          ++recoveryCalls;
+          return skin::MusicSelectBarFrame{};
+        };
+    bool threw = false;
+    {
+      test_support::FailAllocationAfter fault(allocation);
+      try {
+        admitted = loader.request(std::move(bars), std::move(mode), 1,
+                                  std::move(process));
+      } catch (const std::bad_alloc &) {
+        threw = true;
+      }
+    }
+    if (!threw) break;
+    assert(loader.retryReady() && recoveryCalls == 0);
+    assert(loader.takeResults().empty());
+  }
+  assert(admitted);
   const auto recovered = waitForResults(loader, 1);
-  assert(recovered.front().error.empty());
+  assert(recovered.front().id.value == "retry" && recovered.front().error.empty());
+  assert(recoveryCalls == 1);
   assert(!loader.retryReady());
 }
 
 }
 
 int main() {
+  testAllocationFailuresAllowIdenticalRequestRetry();
   {
     MusicSelectFolderStatusLoader loader;
     assert(loader.request({}, "ALL", 1, {}));

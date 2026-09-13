@@ -33,6 +33,7 @@ public:
       SceneReturnTarget returnTarget =
           SceneReturnTarget::Registered("MainMenu"))
       : Scene(context), returnTarget_(std::move(returnTarget)) {}
+  ~MusicPlayerScene() override;
 
   void init() override;
   EventHandleResult handleEvents(SDL_Event &event) override;

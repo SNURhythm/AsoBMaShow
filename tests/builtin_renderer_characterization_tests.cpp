@@ -1468,6 +1468,32 @@ Json touchBoundsJson(const ScenarioResult &scenario) {
   };
 }
 
+void canonicalizeNoteSubmissionOrder(Json &submissions) {
+  // The main view uses bgfx::ViewMode::DepthAscending. Long-note lookahead
+  // collection uses pointer-keyed unordered storage, so CPU recording order
+  // between distinct depths is not render order. Preserve equal-depth order
+  // and every nontexture pass boundary while comparing texture-note runs.
+  const auto isTextureNote = [](const Json &entry) {
+    const auto &kind = entry.at("kind");
+    return entry.at("view") == "main" &&
+           (kind == "normal" || kind == "mine" || kind == "longBody" ||
+            kind == "longTail" || kind == "longHead");
+  };
+  auto begin = submissions.begin();
+  while (begin != submissions.end()) {
+    begin = std::find_if(begin, submissions.end(), isTextureNote);
+    const auto end = std::find_if_not(begin, submissions.end(), isTextureNote);
+    std::stable_sort(begin, end, [](const Json &left, const Json &right) {
+      return left.at("depth").get<std::uint32_t>() <
+             right.at("depth").get<std::uint32_t>();
+    });
+    begin = end;
+  }
+  for (std::size_t index = 0; index < submissions.size(); ++index) {
+    submissions[index]["sequence"] = index;
+  }
+}
+
 Json scenarioJson(const ScenarioResult &scenario) {
   expect(scenario.recorder.frames.size() == 1,
          "each independent characterization scenario records one frame");
@@ -1512,6 +1538,7 @@ Json scenarioJson(const ScenarioResult &scenario) {
     submissions.push_back(std::move(item));
   }
 
+  canonicalizeNoteSubmissionOrder(submissions);
   return {
       {"name", scenario.coverPercent == kBeforeCoverPercent ? "cover0"
                                                             : "cover24"},
@@ -1542,6 +1569,50 @@ Json scenarioJson(const ScenarioResult &scenario) {
       {"hud", hudJson(scenario.state)},
       {"touchBounds", touchBoundsJson(scenario)},
   };
+}
+
+void verifyNoteTraceComparisonPreservesRenderSemantics(const ScenarioResult &scenario) {
+  const Json original = scenarioJson(scenario).at("submissions");
+  const auto indexOf = [&](std::string_view kind, int lane) {
+    const auto found = std::ranges::find_if(original, [&](const auto &entry) {
+      return entry.at("kind") == kind && entry.at("lane") == lane;
+    });
+    expect(found != original.end(), "the real trace contains the note-order probe");
+    return static_cast<std::size_t>(std::distance(original.begin(), found));
+  };
+  const auto body4 = indexOf("longBody", 4);
+  const auto body6 = indexOf("longBody", 6);
+  const auto tail4 = indexOf("longTail", 4);
+  const auto head4 = indexOf("longHead", 4);
+  if (body4 == original.size() || body6 == original.size() ||
+      tail4 == original.size() || head4 == original.size()) {
+    return;
+  }
+  const auto equivalent = [&](Json changed) {
+    Json expected = original;
+    canonicalizeNoteSubmissionOrder(expected);
+    canonicalizeNoteSubmissionOrder(changed);
+    return expected == changed;
+  };
+  Json changed = original;
+  std::swap(changed[body4], changed[body6]);
+  expect(equivalent(changed),
+         "different-depth note collection order does not change the rendered trace");
+  changed = original;
+  std::swap(changed[tail4], changed[head4]);
+  expect(!equivalent(changed), "equal-depth note ordering remains observable");
+  changed = original;
+  changed[body4]["rect"][0] = original[body4]["rect"][0].get<double>() + 1.0;
+  expect(!equivalent(changed), "note geometry changes remain observable");
+  changed = original;
+  changed.erase(changed.begin() + body4);
+  expect(!equivalent(changed), "missing note primitives remain observable");
+  changed = original;
+  changed.insert(changed.begin() + body4, original[body4]);
+  expect(!equivalent(changed), "duplicate note primitives remain observable");
+  changed = original;
+  std::swap(changed[0], changed[body4]);
+  expect(!equivalent(changed), "moving a note across a pass boundary remains observable");
 }
 
 std::optional<float> submittedY(const ScenarioResult &scenario,
@@ -1690,7 +1761,13 @@ void verifyCapturedOverloadEquivalence(const ScenarioResult &legacy,
          "legacy, immutable state, and projection share a nonzero frame serial");
   expect(captured.state.notes.size() == captured.chart.at("notes").size(),
          "the immutable render state includes every modeled note state");
-  expect(scenarioJson(legacy) == scenarioJson(captured),
+  const auto legacyTrace = scenarioJson(legacy);
+  const auto capturedTrace = scenarioJson(captured);
+  if (legacyTrace != capturedTrace) {
+    std::cerr << "Captured trace differences: "
+              << Json::diff(legacyTrace, capturedTrace).dump(2) << '\n';
+  }
+  expect(legacyTrace == capturedTrace,
          "captured-state overload matches the legacy characterization trace");
 
   expect(!legacy.rgba.empty() && legacy.rgba.size() == captured.rgba.size(),
@@ -1738,8 +1815,20 @@ void verifyOrUpdateJson(const Json &actual) {
                              std::istreambuf_iterator<char>());
   expect(input.good() || input.eof(),
          "committed timing characterization can be read");
-  expect(expected == serialized,
-         "legacy renderer timing characterization remains byte-exact");
+  auto expectedJson = Json::parse(expected, nullptr, false);
+  if (!expectedJson.is_discarded()) {
+    for (auto &frame : expectedJson.at("frames")) {
+      canonicalizeNoteSubmissionOrder(frame.at("submissions"));
+    }
+  }
+  const bool matches = !expectedJson.is_discarded() &&
+                       expectedJson.dump(2) + "\n" == serialized;
+  if (!matches && !expectedJson.is_discarded()) {
+    std::cerr << "Golden trace differences: "
+              << Json::diff(expectedJson, actual).dump(2) << '\n';
+  }
+  expect(matches,
+         "legacy renderer depth-ordered characterization remains exact");
 }
 
 void verifyOrUpdatePng(std::span<const std::uint8_t> actual) {
@@ -1893,6 +1982,7 @@ int main() {
           renderScenario(target, kBeforeCoverPercent, false);
       const auto after = renderScenario(target, kAfterCoverPercent, true);
       verifyBehavioralCoverage(before, after);
+      verifyNoteTraceComparisonPreservesRenderSemantics(after);
       verifyOrUpdateJson(buildCharacterization(before, after));
       verifyOrUpdatePng(after.rgba);
 

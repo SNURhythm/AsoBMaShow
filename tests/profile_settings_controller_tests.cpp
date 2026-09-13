@@ -1,5 +1,11 @@
 #include "scene/ProfileSettingsController.h"
 #include "scene/ProfileRuntimeReapply.h"
+#include "scene/ProfileArchiveWorker.h"
+
+#include <chrono>
+#include <future>
+#include <memory>
+#include <thread>
 
 #include <cstdlib>
 #include <filesystem>
@@ -867,9 +873,16 @@ void testImportRetainsSkinBarrierUntilMainThreadCompletionOrAbandon() {
     REQUIRE(!std::get<1>(fake.skinMutationFinishes[0]));
   }
 }
+#include "profile_archive_worker_tests.h"
+#include "profile_archive_scene_fixture.h"
+
 } // namespace
 
 int main() {
+  profile_archive_scene_fixture::run();
+  testProfileArchiveWorkerCompletionAndAdmission();
+  testProfileArchiveWorkerStopWaitsForCleanup(false);
+  testProfileArchiveWorkerStopWaitsForCleanup(true);
   testAuthoritativeRefreshKeepsStableUuidState();
   testEligibilityAndConfirmationStayBoundToUuid();
   testMutationResultsRefreshAndSelectWithoutActivating();

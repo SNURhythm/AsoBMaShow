@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ThreadCompat.h"
+#include "archive/TemporaryCacheTypes.h"
+#include "archive/UnzipTypes.h"
 #include "bms_parser.hpp"
 #include "path.h"
 
@@ -112,7 +114,6 @@ struct UnzipProgress {
 using UnzipProgressCallback = std::function<void(const UnzipProgress &)>;
 using UnzipPrepareCallback = std::function<bool(
     const std::filesystem::path &outputFolder, const std::string &archiveKey)>;
-using PauseCallback = std::function<bool()>;
 using CachePathNormalizer = std::function<void(std::filesystem::path &)>;
 using FileDataCallback = std::function<bool(FileData &&)>;
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
@@ -129,51 +130,8 @@ struct UnzipArchiveResult {
   bool reusedCompletedFolder = false;
 };
 
-struct UnzipLimits {
-  std::uint64_t maximumArchiveBytes = 256ull * 1024 * 1024 * 1024;
-  std::uint64_t maximumTotalBytes = 1024ull * 1024 * 1024 * 1024;
-  std::uint64_t reservedFreeBytes = 512ull * 1024 * 1024;
-  std::size_t maximumConcurrentArchives = 0;
-  std::size_t maximumWorkers = 0;
-  std::uint64_t maximumMemoryBytes = 0;
-  std::uint64_t maximumArchiveEntries = 100000;
-  std::uint64_t maximumTotalEntries = 1000000;
-};
-
-struct UnzipExecutionPlan {
-  std::size_t archiveWorkers = 1;
-  std::size_t workersPerArchive = 1;
-  std::uint64_t memoryPerArchive = 0;
-};
-
 UnzipExecutionPlan unzipExecutionPlan(const UnzipLimits &limits,
                                      std::size_t archiveCount = 1);
-
-struct UnzipBudget {
-  UnzipLimits limits;
-  std::uint64_t writtenBytes = 0;
-  std::atomic_bool exhausted = false;
-  std::mutex mutex;
-  std::uint64_t pendingWriteBytes = 0;
-  std::string failureMessage;
-  std::size_t concurrentArchives = 1;
-  std::uint64_t admittedEntries = 0;
-};
-
-struct TemporaryCacheCleanupResult {
-  std::filesystem::path path;
-  bool cacheExisted = false;
-  std::uint64_t removedEntries = 0;
-  std::uint64_t removedBytes = 0;
-  std::uint64_t skippedEntries = 0;
-};
-
-struct TemporaryCacheUsageResult {
-  std::filesystem::path path;
-  bool cacheExisted = false;
-  std::uint64_t entries = 0;
-  std::uint64_t bytes = 0;
-};
 
 bool isArchiveSupportAvailable();
 bool hasSupportedArchiveExtension(const std::filesystem::path &path);

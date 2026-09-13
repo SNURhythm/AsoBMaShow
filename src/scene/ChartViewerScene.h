@@ -69,6 +69,7 @@ public:
       std::optional<practice::LaunchRequest> launchRequest = std::nullopt,
       SceneReturnTarget returnTarget =
           SceneReturnTarget::Registered("MainMenu"));
+  ~ChartViewerScene() override;
 
   void init() override;
   void onResume() override;

@@ -1,11 +1,15 @@
 #include "library/ChartLibraryTaskTypes.h"
 #include "library/ChartLibraryTaskService.h"
+#include "support/AllocationFailure.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
+#include <future>
 #include <iostream>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string_view>
 #include <thread>
@@ -71,6 +75,224 @@ void testSnapshotCarriesQueueAndProgressAsValues() {
   snapshot.tasks.front().title = "Changed";
   expect(snapshot.tasks.front().title == "Changed",
          "snapshot task values are independently mutable");
+}
+
+void testQueueAdmissionFailuresPreserveWorkOwnership() {
+  using namespace chart_library_tasks;
+  const std::string title = "queued-" + std::string(80, 'x');
+  for (const bool reserved : {false, true}) {
+    std::size_t failureCount = 0;
+    bool completedWithoutFailure = false;
+    for (std::size_t allocation = 0; allocation < 64; ++allocation) {
+      const std::string context = (reserved ? "reserved" : "new") +
+          std::string(" admission allocation ") + std::to_string(allocation) + ": ";
+      std::vector<TaskRequest> received;
+      ChartLibraryTaskService service([&](const auto &request, const auto &, auto, auto) {
+        received.push_back(request);
+        return TaskRunResult{};
+      });
+      service.setGameplayPaused(true);
+      std::uint64_t id = reserved ? service.reserve("copying", "Copying source") : 0;
+      const auto before = service.snapshot();
+      TaskRequest request{.title = title};
+      bool threw = false;
+      bool admitted = false;
+      {
+        test_support::FailAllocationAfter fault(allocation);
+        try {
+          if (reserved) admitted = service.enqueueReserved(id, std::move(request));
+          else admitted = (id = service.enqueue(std::move(request))) != 0;
+        } catch (const std::bad_alloc &) {
+          threw = true;
+        }
+      }
+      if (threw) {
+        ++failureCount;
+        const auto after = service.snapshot();
+        expect(after.revision == before.revision &&
+                   after.activeCount == before.activeCount &&
+                   after.tasks.size() == before.tasks.size(),
+               context + "failure preserves admission state");
+        if (reserved && after.tasks.size() == 1) {
+          expect(after.tasks.front().id == id &&
+                     after.tasks.front().title == before.tasks.front().title &&
+                     after.tasks.front().detail == before.tasks.front().detail &&
+                     after.tasks.front().status == before.tasks.front().status,
+                 context + "failure preserves the copy reservation");
+        }
+        if (reserved) admitted = service.enqueueReserved(id, {.title = title});
+        else admitted = (id = service.enqueue({.title = title})) != 0;
+      }
+      expect(admitted, context + "retry admits the request");
+      service.setGameplayPaused(false);
+      expect(waitUntil([&] { return service.snapshot().activeCount == 0; }),
+             context + "admitted work finishes");
+      service.shutdown();
+      expect(received.size() == 1 && received.front().id == id &&
+                 received.front().title == title,
+             context + "only the admitted request reaches the worker");
+      if (!threw) {
+        completedWithoutFailure = true;
+        break;
+      }
+    }
+    expect(completedWithoutFailure && failureCount >= 2,
+           "queue admission exercises allocation failures through success");
+  }
+}
+
+void testAndroidAdmissionFailuresPreserveImportOwnership() {
+  using namespace chart_library_tasks;
+  const std::string token = "copy-" + std::string(80, 'x');
+  const std::filesystem::path path = "copied-" + std::string(80, 'x') + ".zip";
+  for (const bool completing : {false, true}) {
+    std::size_t failureCount = 0;
+    bool completedWithoutFailure = false;
+    for (std::size_t allocation = 0; allocation < 64; ++allocation) {
+      const std::string context = (completing ? "finish" : "begin") +
+          std::string(" import allocation ") + std::to_string(allocation) + ": ";
+      std::vector<TaskRequest> received;
+      ChartLibraryTaskService service([&](const auto &request, const auto &, auto, auto) {
+        received.push_back(request);
+        return TaskRunResult{};
+      });
+      service.setGameplayPaused(true);
+      if (completing) {
+        expect(service.beginAndroidImport(token, false), context + "copy starts");
+      }
+      const auto before = service.snapshot();
+      bool threw = false;
+      bool admitted = false;
+      const auto admit = [&] {
+        return completing ? service.finishAndroidImport(token, false, path, "")
+                          : service.beginAndroidImport(token, false);
+      };
+      {
+        test_support::FailAllocationAfter fault(allocation);
+        try {
+          admitted = admit();
+        } catch (const std::bad_alloc &) {
+          threw = true;
+        }
+      }
+      if (threw) {
+        ++failureCount;
+        const auto after = service.snapshot();
+        expect(after.revision == before.revision &&
+                   after.activeCount == before.activeCount &&
+                   after.tasks.size() == before.tasks.size(),
+               context + "failure preserves task publication");
+        expect(service.androidImportCopyState(token) == (completing ? 0 : -1),
+               context + "failure preserves token ownership");
+        if (completing && after.tasks.size() == 1) {
+          expect(after.tasks.front().title == before.tasks.front().title &&
+                     after.tasks.front().detail == before.tasks.front().detail &&
+                     after.tasks.front().status == before.tasks.front().status,
+                 context + "failure preserves copy progress");
+        }
+        admitted = admit();
+      }
+      expect(admitted, context + "the same import retries");
+      if (admitted) {
+        if (!completing) {
+          expect(service.finishAndroidImport(token, false, path, ""),
+                 context + "the admitted copy enters the queue");
+        }
+        const auto queued = service.snapshot();
+        expect(queued.tasks.size() == 1, context + "one task is published");
+        service.setGameplayPaused(false);
+        expect(waitUntil([&] { return service.snapshot().activeCount == 0; }),
+               context + "the admitted import finishes");
+        service.shutdown();
+        expect(received.size() == 1 && queued.tasks.size() == 1 &&
+                   received.front().id == queued.tasks.front().id &&
+                   received.front().androidImportPath == path &&
+                   !received.front().androidImportFolder,
+               context + "one matching import reaches the worker");
+      }
+      if (!threw) {
+        completedWithoutFailure = true;
+        break;
+      }
+    }
+    expect(completedWithoutFailure && failureCount >= 2,
+           "Android admission exercises allocation failures through success");
+  }
+}
+
+void testAndroidErrorAllocationFailureKeepsCopyReservation() {
+  using namespace chart_library_tasks;
+  ChartLibraryTaskService service([](const auto &, const auto &, auto, auto) {
+    return TaskRunResult{};
+  });
+  const std::string token = "copy-error";
+  const std::string error = "copy failure: " + std::string(80, 'x');
+  expect(service.beginAndroidImport(token, true), "error fixture reserves a copy");
+  const auto before = service.snapshot();
+  bool threw = false;
+  {
+    test_support::FailNextAllocation fault;
+    try {
+      service.finishAndroidImport(token, true, {}, error);
+    } catch (const std::bad_alloc &) {
+      threw = true;
+    }
+  }
+  expect(threw && service.androidImportCopyState(token) == 1 &&
+             service.snapshot().revision == before.revision,
+         "failed error publication leaves the copy reservation intact");
+  expect(service.finishAndroidImport(token, true, {}, error),
+         "copy error publication retries");
+  const auto after = service.snapshot();
+  expect(after.tasks.size() == 1 && after.tasks.front().status == TaskStatus::Failed &&
+             after.tasks.front().detail == error && !service.active(),
+         "copy error completes without creating a worker");
+}
+
+void testRejectedAdmissionsRemainAvailableDuringShutdown() {
+  using namespace chart_library_tasks;
+  std::promise<void> entered;
+  std::atomic_bool rejected{false};
+  ChartLibraryTaskService service([&](const auto &, const auto &token, auto, auto) {
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    std::unique_lock lock(mutex);
+    entered.set_value();
+    changed.wait(lock, token, [] { return false; });
+    rejected = !service.enqueueReserved(0, {}) &&
+               !service.finishAndroidImport("missing", false, {}, "Cancelled");
+    return TaskRunResult{.disposition = TaskRunDisposition::Paused};
+  });
+  service.enqueue({.title = "wait for shutdown"});
+  expect(entered.get_future().wait_for(std::chrono::seconds(5)) ==
+             std::future_status::ready,
+         "shutdown fixture enters the worker");
+  auto stopped = std::async(std::launch::async, [&] { service.shutdown(); });
+  if (stopped.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+    expect(false, "invalid admission must not wait on shutdown's lifecycle lock");
+    std::exit(EXIT_FAILURE);
+  }
+  stopped.get();
+  expect(rejected, "invalid admissions still return while shutdown joins the worker");
+}
+
+void testTrimmedAndroidReservationIsConsumedWithoutStartingWorker() {
+  using namespace chart_library_tasks;
+  ChartLibraryTaskService service([](const auto &, const auto &, auto, auto) {
+    return TaskRunResult{};
+  });
+  expect(service.beginAndroidImport("trimmed", false), "trimmed fixture reserves a copy");
+  const auto id = service.snapshot().tasks.front().id;
+  service.failReserved(id, "failed copy");
+  for (int index = 0; index < 25; ++index) {
+    const auto other = service.reserve("history", "finished");
+    service.failReserved(other, "finished");
+  }
+  expect(taskFor(service.snapshot(), id) == nullptr && !service.active(),
+         "history trims the terminal row while retaining its platform token");
+  expect(service.finishAndroidImport("trimmed", false, "copied.zip", "") &&
+             service.androidImportCopyState("trimmed") == -1 && !service.active(),
+         "a result for a trimmed row consumes its token without queuing work");
 }
 
 void testWorkerRunsQueuedTasksOnceInOrder() {
@@ -370,6 +592,9 @@ void testReservedPlatformCopyTaskCanBeQueuedOrFailed() {
         return chart_library_tasks::TaskRunResult{};
       });
 
+  expect(!service.enqueueReserved(0, {}) && !service.active(),
+         "an unknown reservation does not start a worker");
+
   const auto queuedId = service.reserve("Import Archive", "Copying archive");
   const auto reserved = service.snapshot();
   expect(taskFor(reserved, queuedId) != nullptr &&
@@ -421,12 +646,14 @@ void testAndroidImportsKeepOriginAcrossInterleavedResults() {
   const auto folderId = reserved.tasks.at(1).id;
   expect(!service.finishAndroidImport("cancelled-picker", true, "", "Cancelled"),
          "a cancelled picker without a copy cannot consume another reservation");
+  expect(!service.active(), "an unknown import does not start a worker");
   expect(!service.beginAndroidImport("shared-zip", false),
          "duplicate request tokens cannot replace a reservation");
   expect(service.beginAndroidImport("unsupported-external-file", false) &&
              service.finishAndroidImport("unsupported-external-file", false, "",
                                          "Unsupported archive"),
          "an external validation error completes only its own reservation");
+  expect(!service.active(), "an import error does not start a worker");
   const auto withError = service.snapshot();
   expect(withError.tasks.at(0).id == archiveId &&
              withError.tasks.at(0).status == chart_library_tasks::TaskStatus::Running &&
@@ -436,6 +663,7 @@ void testAndroidImportsKeepOriginAcrossInterleavedResults() {
          "non-task and external-error results leave valid copy origins untouched");
   expect(!service.finishAndroidImport("shared-zip", true, "wrong", ""),
          "a mismatched result type cannot consume an import reservation");
+  expect(!service.active(), "a mismatched import type does not start a worker");
   expect(service.finishAndroidImport("shared-zip", false, "shared.zip", ""),
          "shared archive completion matches its originating token");
   expect(service.finishAndroidImport("manual-folder", true, "BMS/folder", ""),
@@ -494,6 +722,11 @@ void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
 
 int main() {
   testSnapshotCarriesQueueAndProgressAsValues();
+  testQueueAdmissionFailuresPreserveWorkOwnership();
+  testAndroidAdmissionFailuresPreserveImportOwnership();
+  testAndroidErrorAllocationFailureKeepsCopyReservation();
+  testRejectedAdmissionsRemainAvailableDuringShutdown();
+  testTrimmedAndroidReservationIsConsumedWithoutStartingWorker();
   testWorkerRunsQueuedTasksOnceInOrder();
   testPausedRebuildRetriesOnlyPendingInitializationBeforeNextTask();
   testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume();

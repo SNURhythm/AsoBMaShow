@@ -1,0 +1,1075 @@
+# Workflow refactoring follow-ups
+
+These entries record completed follow-ups to the initial ownership roadmap,
+including the findings and checks behind each change. Further work should
+follow concrete ownership, state-transition, or readability problems and
+address one workflow at a time.
+
+## 1. Settings archive-cache maintenance jobs — completed
+
+`SettingsCacheMaintenance` now owns both jobs, admission, generation handling,
+typed completion publication, and shutdown. `SettingsScene` supplies the real
+archive-cache operations and keeps message/color/layout presentation. Its
+cleanup and destructor explicitly join the controller; fallback controller
+destruction also joins before its callback dependencies or mailbox disappear.
+
+The existing asymmetry is preserved: cleanup resolves the jukebox's active
+materialized paths on the worker and may finish its filesystem operation after
+stop is requested; measurement accepts a stop token. Measurement cannot start
+while cleanup is running, but cleanup may overlap an existing measurement.
+Shutdown stops/joins cleanup before stopping/joining measurement.
+
+Generation admission and result publication now share a mutex, and a new
+request discards an older queued result. This closes the previous gap between
+the generation check and status publication and prevents stale status from
+replacing new progress. Tests cover both cases, real protected cleanup and
+measurement in private directories, failures, repeated requests, cancellation,
+restart, and destruction with work in flight. A compiled scene fixture checks
+the complete production UI methods with the real controller and cache.
+
+Pacemaker best-replay loading, archive index-build coordination, and Settings
+library-job ownership are also completed below.
+
+## 2. Pacemaker best-replay loading — completed
+
+`GamePlayScene` now reuses `ReplayRecordTask` to own its best-replay worker,
+cancellation, completion, and joining. `src/scene/play/BestReplayLoad` supplies
+the small asynchronous loading function; `BestReplayResolver` retains exact
+attempt resolution and the shared replay consumer boundary. No second worker
+class was needed.
+
+The loading function explicitly cancels/joins before replacement because the
+shared task's `start` alone joins without cancelling. Resolver construction
+remains on the worker, including runtime profile-root resolution. Successful
+loads queue a scene callback; consuming it joins the worker before updating
+the personal-best ghost on the application thread. Missing/unreadable results
+consume the shared task's no-op completion and retain the fallback target.
+The selected pacemaker target keeps its proportional score behavior.
+
+Tests exercise exact attempt/path forwarding, blocked replacement, late results
+after cancellation, missing/mismatched/unreadable replays, callback/resource
+release on destruction, and application-thread handoff. A compiled fixture
+executes complete production scene methods with the real task, resolver, and
+pacemaker policy, including absent chart/best state and chart replacement after
+stop. Existing resolver and shared-task tests remain intact.
+
+## 3. Archive index-build coordination — completed
+
+`archive_file::IndexBuildCoordinator` replaces four parallel state maps and
+`IndexBuildScope` with one active record per key and a movable builder lease.
+Abandoning the builder completes its flight with failure and wakes waiters.
+Each waiter retains the flight it joined, so a later retry cannot overwrite
+that waiter's outcome. Cancellation and checkpoint exceptions affect only
+the waiting caller; checkpoints run outside the coordinator mutex.
+
+`ArchiveFile` retains source identity validation, memory/disk cache lookup,
+backend selection, live-manifest promotion, and retry policy. It rechecks the
+cache after admission and after waiting, including independently published
+usable data following a failed flight. Completed flights leave the admission
+map immediately; the existing index-cache retention policy is unchanged.
+
+Eight direct tests cover per-key admission, old-flight failure across a newer
+success, waiter cancellation, unlocked/reentrant checkpoints, exception
+completion, retry competition, and moved builder ownership. Existing archive
+concurrency regressions retain backend-level cancellation and promotion checks.
+
+## 4. Settings library-job ownership — completed
+
+`SettingsLibraryTask` owns the exclusive table/folder worker, running state,
+and typed table status, folder status, import progress, and accumulated reload
+requests. Its publisher is borrowed only during synchronous work. The five
+scene operations capture the externally owned repository and request values;
+workers no longer capture the scene. The scene consumes updates outside the
+owner mutex and retains colors, modal presentation, and URL completion.
+
+Admission remains exclusive until work returns and joins previous completed
+work before reuse. Completed updates survive a new admission until consumed,
+matching the original handoff; stop joins uncancellable operations and clears
+queued/late updates. Normal cleanup and direct destruction explicitly stop the
+owner before scene members die. Its own destructor provides a final join.
+Scanner cancellation, iOS folder-access lifetime, the delegated background
+rebuild path, and table/folder repository operations are preserved.
+
+Direct owner tests cover exclusive admission, coalesced channels, accumulated
+reload, completion retention, stop/restart, and destruction. Compiled production
+scene fixtures exercise import progress, success/failure and URL edits,
+update/delete confirmation, absent views, and application-thread delivery.
+The earlier destructor regression now uses the real owner.
+
+## 5. Main Menu Find BMS job ownership — completed
+
+`FindBmsTask` owns lookup/download/artifact worker lifetime, the service's
+cancellation flag, bounded progress events, and result handoff. Scene worker
+lambdas capture request values only. Nonblocking cancellation retains the
+service outcome, including a pending artifact; shutdown/replacement joins
+uncancellable artifact work and discards queued data. The latest 160 progress
+events remain ordered. Selection generation and indexing stay in Main Menu.
+
+A result awaiting application keeps the task busy and prevents new admission.
+This closes a fast-completion race discovered during review: refreshing after
+launch could otherwise re-enable old Keep/Delete actions before consuming the
+completed transaction. A deterministic test observes publication through
+worker-capture destruction, then checks real dialog policy, the complete
+production artifact-launch method, and exactly-once indexing. Direct owner and
+compiled scene tests also cover request forwarding, cancellation, progress,
+candidate bounds, artifact decisions, and destructor joining.
+
+## 6. IR upload preparation ownership — completed
+
+`ir_uploads::PreparationTask` groups worker lifetime, `DurableEnqueueGate`, and
+progress/completion data. It reuses `prepareSelectedCandidates`; the scene
+captures the external application context for driver/submission dependencies
+and retains selection, presentation, and controller updates. Consuming a
+completion joins before returning it to the scene.
+
+Stop requests gate cancellation before signaling the thread and joining. A
+batch already inside durable enqueue keeps its outcome. Shutdown preserves
+completion for consumption; initialization/cleanup reset discards explicitly.
+Admission rejects owned work and unconsumed completion. Direct tests cover
+partial failure, progress, cancellation on both sides of enqueue, retained
+outcomes, restart, and destruction. Complete production scene methods run with
+the real task, controller, and batch mapper against controlled effects.
+
+## 7. Music Select direct-destruction lifecycle — completed
+
+The derived destructor now calls the existing guarded `Scene::cleanup()` while
+its callback dependencies remain alive. This joins launch/preload, Records,
+skin preparation, and export work and unregisters input before member teardown.
+It also covers the owning-pointer failure path when `SceneManager::changeScene`
+catches a failed `init()`. Normal scene cleanup remains the same path; its guard
+prevents repeated resource release during later destruction.
+
+A compiled fixture executes the complete production destructor and cleanup,
+selected cancellation helpers, and base cleanup/view-destruction methods.
+It uses the real Records/export owners and controlled other resources to check
+active direct destruction, exception unwinding, already-cleaned destruction,
+never-initialized state, deferred capture disposal, and resource ordering. Lua
+preparation and iOS scoped-access branches run against doubles; this is a local
+lifecycle test, not physical-device validation.
+
+## 8. Settings profile archive worker ownership — completed
+
+`ProfileArchiveWorker` owns execution of the controller's existing one-shot
+`ProfileArchiveTask`, its typed completion, and joining. The scene's supplied
+post-execution callback retains temporary-import cleanup and warning policy.
+The worker waits through both operation and callback on stop and discards the
+completion. Taking a result joins before returning it; owned work, including
+unconsumed completion, prevents a second admission.
+
+Settings retains generation/controller decisions, picker state, launch-failure
+recovery, and export staging ownership. Direct tests cover admission, exception
+mapping, completion/capture lifetime, stop, restart, and destruction. Compiled
+production launch/apply/stop methods use the real controller and owner with
+controlled document effects to verify cleanup success/failure, both launch
+exception paths, picker rejection, controller pipeline release, and native
+export source retention. The existing controller test target now groups these
+checks in `cmake/ProfileSettingsTests.cmake`.
+
+## 9. Chart Viewer direct-destruction audio lifetime — completed
+
+The viewer's explicit destructor now calls the existing guarded cleanup before
+members disappear. Active, loaded, or retained listening state stops the shared
+jukebox before chart release. An unused/inactive viewer does not stop audio;
+normal cleanup followed by destruction does not repeat the stop.
+
+A compiled fixture runs the complete production destructor/cleanup and actual
+base cleanup/view disposal across every listening-flag combination, including
+direct destruction, normal cleanup, exception unwinding, and unused state.
+It checks exactly-once audio/chart/view ordering and deferred capture disposal.
+The former default-destructor negative control fails the expected lifetime
+assertion. Geometry and lifecycle targets are grouped in
+`cmake/ChartViewerTests.cmake` with existing geometry registration preserved.
+
+## 10. Music Player direct-destruction video lifetime — completed
+
+The destructor enters existing guarded cleanup only while fullscreen, loaded
+video, or visual-restoration state belongs to the scene. That covers partial
+acquisition while protecting shared BGA state after fullscreen exit or normal
+cleanup, and when an unused scene is destroyed. Release restores the previous
+visuals setting and unloads owned visuals without stopping native music or
+refreshing UI during destruction.
+
+The generated fixture executes complete production acquisition, fullscreen
+exit, cleanup, and destructor methods with base cleanup/view disposal. It
+covers prior visuals enabled/disabled, BGA and artwork fallback, partial
+acquisition exceptions on both sides of entering fullscreen, deferred capture
+release, and inactive/exited/cleaned ownership. Negative controls fail for both
+the former implicit destructor and an unconditional cleanup destructor. Native
+media and UI effects are controlled doubles.
+
+## 11. Shared parallel-work helpers — completed
+
+`src/utils/ParallelWork.h` now groups worker sizing and indexed execution;
+`Utils.h` retains the existing include facade. Unused `parallel_for` and
+`threadRAII` declarations/definitions were removed after a repository-wide
+caller search. Indexed work retains dynamic assignment and borrowed callable
+semantics, with joining thread owners whose lifetime ends before the index and
+callable references on normal return or partial launch unwinding.
+
+The sizing policy preserves hardware fallback/headroom and compares the wider
+item count before narrowing the bounded result. Standalone tests cover policy
+boundaries, counts above `unsigned int`, sequential execution, move-only work,
+exactly-once indices, and waiting for completion. A negative control using the
+old narrowing fails the large-count assertion. Callback exception policy is
+unchanged; partial launch safety follows the joining ownership structure.
+
+## 12. Music Player sleep-timer shutdown synchronization — completed
+
+Shutdown now requests stop while holding `sleepTimerMutex`, serializing the
+predicate change with entry into the worker's wait. Final notification and
+joining remain outside both mutexes. This closes a lost-wake gap that could
+leave destruction waiting indefinitely for an idle timer.
+
+The compiled production-method fixture holds the worker between a false
+predicate and wait registration. The old implementation fails its early-stop
+notification assertion; the fixed implementation joins successfully. Further
+cases cover replacement, clear, restart, expiry status, and joining a blocked
+expiry callback while keeping the timer mutex available. No additional timer
+abstraction was needed to fix the synchronization boundary.
+
+## 13. Local archive and scanner thread-batch ownership — completed
+
+The direct ZIP, random-access RAR, parallel RAR5, and individual-chart parsing
+batches now store joining thread owners. Existing launch loops, work assignment,
+cancellation checkpoints, memory budgets, and explicit joins remain intact.
+If a later thread launch throws, already-started threads finish before the
+borrowed local state is destroyed, instead of terminating during unwinding.
+
+All four vectors follow their captured state in declaration order. Their
+workers accept no stop token and need no full-pool barrier, so automatic joining
+does not add a new cancellation protocol or require every launch to succeed.
+Exceptions escaping worker callbacks retain their existing behavior.
+
+## 14. Persistent worker-pool construction rollback — completed
+
+`chart_scan::WorkScheduler` and `ImageDecodeCoordinator` now retire already
+started workers if a later reserve/launch operation throws. Each constructor
+calls its existing cancel/shutdown method from a body-local catch, then
+rethrows. All members still exist during rollback, and the idle workers receive
+their normal stop predicate and notification before joining.
+
+A direct regression links both real implementations and sweeps the constructing
+thread's allocation points, disabling fault injection before cleanup. Both old
+implementations terminated while unwinding; both fixed implementations propagate
+all eleven injected failures observed on this runtime and permit subsequent
+construction/destruction. Normal pool tests and the two bounded failure modes
+are grouped in `cmake/WorkerPoolTests.cmake`. No production test hook was added.
+
+## 15. Intro scene input-subscription lifetime — completed
+
+The explicit Intro destructor calls guarded cleanup while derived state remains
+alive. Existing stop logic removes both registry subscriptions before resetting
+the adapter; base cleanup then releases views and deferred captures. This also
+handles initialization unwinding after only the input subscription succeeds.
+Unused and already-cleaned scenes remain safe, with no repeated teardown.
+
+The compiled fixture executes full production registration, stop, cleanup, and
+destruction against the real registry and a controlled backend. Observed adapter
+and view effects check exact teardown ordering, queued-event cancellation, and
+retention of an unrelated listener. The former implicit destructor fails the
+live-subscription assertion. Navigation and lifecycle targets are grouped in
+`cmake/IntroSceneTests.cmake` under the original feature gate.
+
+## 16. Input capture construction rollback — completed
+
+`InputCaptureController` now removes a successfully acquired input listener if
+device registration throws during construction. Its destructor cannot run in
+that case, so rollback occurs before resolver/member destruction and preserves
+the original exception. Ordinary startup, callback delivery, and teardown are
+unchanged; the other post-construction subscription callers need no shared
+replacement abstraction.
+
+The regression links the real controller, resolver, and profile/configuration
+implementations against a registry boundary that fails either registration.
+It verifies no callback is retained, unrelated listeners survive, saved callback
+captures are released, and a normal input reaches the actual resolver. The old
+constructor fails the retained-callback assertion without invoking a dangling
+reference. Normal and startup-failure tests share their controller sources in
+`cmake/InputCaptureTests.cmake`.
+
+## 17. Obsolete application thread registry — completed
+
+The unused `ApplicationContext::threads` list, its empty shutdown join/log loop,
+and the corresponding thread include were removed. Repository-wide searches
+and independent review found no registrations or consumers. Actual background
+workers remain owned and stopped by their subsystem services; their existing
+shutdown order is unchanged.
+
+## 18. Library picker admission and startup rollback — completed
+
+All four mobile picker launch paths now release their active admission if
+joining or creating a worker throws, then propagate the original exception.
+The sound-set picker claims active ownership before checking result readiness,
+so a completion published during admission cannot be replaced by another pick.
+Native routing, bookmarks, stop checks, and direct/import behavior remain intact.
+
+Generated fixtures compile complete picker methods in both iOS and Android
+branches with controlled native/database effects. Real thread allocation fails
+once on the requesting thread to verify rollback and retry. An observed atomic
+exchange pauses admission while the previous worker publishes through real
+atomics, verifying first-result retention, one-time consumption, and reopening
+admission. All six old-code modes failed their intended assertions; the fixed
+modes pass. These are local branch tests, not native dialog/device execution.
+
+## 19. Play-skin snapshot fixture cleanup — completed
+
+The session runner's temporary-directory owner now restores permissions before
+removing immutable snapshots and reports cleanup failures. Traversal inspects
+entries without following symlinks; Windows regular files also regain write
+permission. A same-runner regression verifies nested read-only removal and,
+on POSIX, preservation of an external symlink target's contents and permissions.
+The old destructor failed the removal assertion. Production snapshot policy
+and other test fixtures are unchanged.
+
+## 20. Replay task launch rollback — completed
+
+`ReplayRecordTask::start` reuses `cancelAndWait` if thread construction throws,
+then propagates the exception. This releases active ownership and rejects late
+completion publication. Joining prior work and allocating a replacement token
+retain their existing order and failure behavior.
+
+The direct test runner fails one real startup allocation only after the task
+becomes active. The old implementation failed both idle-state and late-publish
+assertions. The regression also checks capture release, no execution of failed
+work, a fresh cancellation token on retry, and exactly-once completion.
+
+## 21. Preload worker launch rollback — completed
+
+`ChartPreloadWorker::request` cancels its pending request before propagating a
+worker-launch exception. Previously, the queued chart survived without a worker
+and an identical retry returned through deduplication without launching work.
+Successful admission, debounce, and idle callbacks retain their existing order.
+
+The direct runner measures a warmed request's caller-thread allocations and
+fails the final startup allocation. The old implementation failed queued-state,
+identical-retry, and processing-count assertions. The fixed regression verifies
+no failed-work execution, pending-state release, and exactly-once processing
+after the same chart is requested again.
+
+## 22. Obsolete music-select catalog rebuild — completed
+
+Removed the unused `MusicSelectSkinSession::refreshResources` method, whose
+always-false guard made its full catalog rebuild unreachable. Its duplicate
+device/counter owners and unused preparation stop token were removed from the
+session and private constructor. The resource and movie catalogs retain their
+own lifetime dependencies. The compatibility query `requiresResourceRefresh`
+and active image/font patch paths remain unchanged.
+
+## 23. Replay export startup failure delivery — completed
+
+Worker-construction exceptions now use `ReplayExportJob`'s result channel,
+matching export/preparation failures. A shared publication method retains
+admission until `takeResult`, including when no worker exists. This lets both
+scene consumers finish the already-started UI handoff and report the error.
+
+One-shot allocation failure exercises real thread construction in the direct
+job runner and both existing scene fixtures. The old job and scenes failed
+their result-delivery assertions. Regressions cover released captures, no work,
+retained admission, one-time diagnostic delivery, retry, Main Menu preview
+restoration, and Records recovery with or without a modal. The allocation hook
+is shared by those test executables and is never linked into the application.
+
+## 24. Shared session/benchmark snapshot cleanup — completed
+
+The loading benchmark also left immutable snapshots behind: its isolated test
+passed while creating two leftover directories. `ReadOnlyTreeCleanup` now
+shares the session fixture's permission restoration and non-following traversal
+with that benchmark. Removal is attempted after permission errors, and callers
+report the removal error or the earlier traversal/permission error.
+
+Benchmark work now runs inside an owning helper so all fixture destructors
+finish before `main` checks failures or announces success. The existing session
+regression continues to cover nested read-only trees and external symlinks.
+Both focused runners left zero new fixture directories, and default/cold/warm,
+invalid-argument, and missing-input CLI checks preserved their output/status.
+
+## 25. Skin lifecycle/settings/commit fixture cleanup — completed
+
+Four passing runners still left 51 immutable fixture roots behind per isolated
+group run: lifecycle (30), settings (13), commit coordination (7), and package
+operations (1). Their temporary owners now use `ReadOnlyTreeCleanup` and their
+existing failure-reporting mechanisms. Resource destruction and death-test
+parent ownership remain intact; cleanup finishes before final test reporting.
+The corrected focused group passed with zero new directories for all four
+prefixes. Global and skin-specific test helper namespaces are explicit where
+both occur in one runner.
+
+## 26. Consolidate remaining snapshot cleanup loops — completed
+
+The archive importer, tree snapshotter, package store, and Lua filesystem
+fixtures now use `ReadOnlyTreeCleanup` instead of four duplicate permission
+loops. Cleanup avoids changing permissions through symlinks, restores directory
+access before traversal, and reports failures through the existing test runners.
+Constructors and resource teardown order are unchanged. All four focused tests
+passed with zero new fixture roots; independent review found no issues.
+
+## 27. Claim snapshot test roots exclusively — completed
+
+The tree snapshotter fixture now retries `create_directory` until it owns a
+new root. Previously, each process started at the same serial path and
+`create_directories` silently accepted an existing directory, which teardown
+then deleted. An isolated executable check demonstrated deletion of a
+pre-existing sentinel despite a passing runner. The fixed runner preserves that
+sentinel; three pairs of concurrent runs also passed without leftover roots.
+The rebuilt focused CTest passed, and independent review found no issues.
+
+## 28. Gameplay worker launch rollback — completed
+
+`RealtimeGameplayWorker::start` restores stopped state before propagating a
+thread-construction exception. Previously, the admission flag remained set,
+`running()` returned true without a thread, and an immediate retry was rejected.
+The failure remains an exception rather than a gameplay simulation fault.
+
+The existing runner now uses the shared test-only allocation hook to fail real
+thread startup after constructing all fixtures. The old implementation failed
+the stopped-state assertion. The regression also verifies no audio execution,
+immediate retry, duplicate-start rejection, exactly one audio commit from real
+gameplay input, and clean shutdown. Focused tests and independent review passed.
+
+## 29. Image probe path failure containment — completed
+
+The `noexcept` BMS image-availability probe now constructs its resource path
+inside the existing startup exception handler. Previously, allocation failure
+in `parent_path` or path joining could terminate the process before that handler.
+Failure now uses the established completed/unavailable result.
+
+The decoder runner preconstructs every argument, then fails the next body
+allocation through the shared test-only hook. The old implementation aborted
+with uncaught `bad_alloc`; the fixed regression checks completion without
+decoding and a successful retry. Focused CTest and independent review passed.
+
+## 30. Bound the Unix socket fixture path — completed
+
+The snapshotter runner checks the socket path length before copying into
+`sockaddr_un::sun_path`, reserving space for its terminating zero. An earlier
+isolated run under a long temporary parent exposed the unchecked copy. An
+unsupported path now reports a fixture failure before opening a descriptor or
+writing beyond the buffer; it does not skip validation or truncate the path.
+
+Normal focused CTest passed. An intentionally long private temporary parent
+produced exactly the expected diagnostic and exit status 1, with no leftover
+fixture roots. Independent review found no issues.
+
+## 31. Prepare folder-status ownership before admission — completed
+
+The folder-status loader now prepares its shared processor and worker before
+committing deduplication state or consuming failed rows. Previously, allocation
+failure could reject an identical fresh retry or clear delayed-retry readiness.
+The duplicate-request fast path remains unchanged. Prepared callback ownership
+outlives the request lock so startup failure destroys captures after unlocking.
+
+The shared test allocation hook can now fail after a chosen number of ordinary
+caller-thread allocations; existing next-allocation users retain their behavior.
+The runner walks actual allocation points until successful admission, checking
+capture release, no failed work/results, identical retry, and one result/call.
+Its delayed-retry case also checks retained readiness and row delivery. Old-code
+runs failed both admission and retry-readiness assertions; focused tests,
+independent review, desktop builds, and all 391 tests passed.
+
+## 32. Prepare directory workers before request ownership — completed
+
+The directory loader creates its worker before committing the pending request,
+generation, or result changes. Previously, failed thread startup retained the
+rejected callback. The worker still waits on the request lock until admission
+finishes; exception unwinding releases that lock before callback captures.
+
+A regression walks actual caller allocation failures through successful
+admission, checking capture release, no failed work/results, and an immediate
+retry that delivers one matching identity/generation and one callback call.
+The old implementation failed the capture-release assertion. Focused CTest,
+independent review, desktop builds, and all 391 tests passed.
+
+## 33. Claim catalog test directories exclusively — completed
+
+The resource-catalog and movie-catalog runners now retry `create_directory`
+until they own a fresh root. Their deterministic serial names previously used
+`create_directories`, which reused existing directories and later deleted them.
+Both old binaries passed while deleting a preseeded sentinel in a private
+temporary parent. The fixed binaries preserve it, pass focused CTest and paired
+concurrent runs, and leave no owned roots. Independent review passed.
+
+An isolated audit of 19 other skin fixture runners found no cleanup leftovers;
+that evidence did not justify extending read-only cleanup to those fixtures.
+
+## 34. Deliver cache-operation exceptions as failures — completed
+
+`SettingsCacheMaintenance` now catches operation exceptions and publishes the
+existing failed completion. Previously, an exception from cleanup or measurement
+escaped its worker and terminated the process. Named errors retain their message;
+empty or unknown exceptions receive a fallback. The same running-state reset,
+generation filtering, and stop suppression apply to all operation outcomes.
+
+The old direct runner aborted on a thrown operation. New tests cover both jobs,
+named/empty/unknown failures, same-operation recovery, and superseded/stopped
+failure suppression. The compiled scene fixture checks failure presentation,
+button reset, and recovery through complete production methods. Focused CTest,
+independent review, desktop builds, and all 391 tests passed.
+
+## 35. Exclude linked targets from cache byte totals — completed
+
+Cache traversal now classifies entries without following symbolic links, and
+cleanup's byte helper does not traverse a top-level link target. A private-root
+probe with 7 owned bytes previously reported 35 bytes used and 49 bytes removed,
+although the linked 14-byte file remained intact. Link entries still count;
+root resolution, protected-entry identity, and removal behavior are unchanged.
+
+The POSIX regression covers top-level/nested file and directory links, a dangling
+link, protected-link cleanup, outside contents, and an explicitly linked cache
+root. The old runner failed its byte-total assertion. Both focused cache runners
+and independent review passed. Desktop builds and the full 391-test recheck
+passed; the first run hit an unrelated artwork-load deadline. Measurement
+remains a best-effort observation.
+
+## 36. Release IR service admission after startup failure — completed
+
+IR submission startup now restores its inactive admission state when profile
+preparation or worker creation throws. Previously, the early `started` flag
+remained set and every later `start` returned without creating a worker. Pending
+attempts remain stored, and a retry reloads profile state before processing them.
+
+The direct runner injects caller allocation failure before preparation and,
+through its existing wake hook, immediately before real thread construction.
+Both old-code cases preserved the pending attempt but failed all retry/delivery
+checks. The fixed cases propagate the exception, preserve pending work, and
+deliver once after same-instance retry. Focused CTest, independent review,
+desktop builds, and all 391 tests passed. This restores admission without
+rolling back repository maintenance or partial profile preparation.
+
+## 37. Commit library admission with its worker and metadata — completed
+
+Library task admission now holds the lifecycle lock through worker preparation
+and state publication, preserving lifecycle-to-state lock order. New task rows
+are rolled back if queue/token insertion fails; reserved rows are replaced only
+after queue insertion. Android tokens are consumed after successful queue or
+error publication, and final validation also checks the original reservation ID.
+Invalid/error-only calls retain their state-only paths during shutdown.
+
+Caller allocation walks reproduced duplicate work, changed reservations, and
+lost tokens in the old runner (47 failures). The fixed tests keep workers paused
+during injection, verify unchanged admission state, retry, and one matching
+worker request. They also cover error publication, invalid calls from a worker
+during shutdown, and results whose task row was trimmed. Focused CTest,
+independent review, desktop builds, and all 391 tests passed. Failed admission
+may leave an idle prepared worker.
+
+## 38. Centralize Jukebox lifecycle state bindings — completed
+
+Ten lifecycle operations now obtain their borrowed state from one private
+`makeLifecycleState()` helper. The helper binds the same playback flags,
+stopwatch, mutexes, cursors, and image atomics at each original call site.
+It stores no state and performs no locking or allocation. Future lifecycle
+state additions therefore need one binding update in Jukebox.
+
+Independent review confirmed identical bindings, lock placement, and lifetimes.
+Existing lifecycle, restore, scheduler, and BGA tests provide behavior coverage;
+no helper-mirroring test was added for this structural change.
+Desktop main/all-target builds and all 391 tests passed.
+
+## 39. Reuse shared scope cleanup in profile and picker workflows — completed
+
+Profile settings uses the shared `ScopeExit` for its three membership-mutation
+barriers, and library/sound-folder pickers use it for four active-flag resets.
+This removes one local template and four local reset structs. Callback placement,
+reference/pointer lifetimes, and default atomic store ordering remain unchanged.
+The existing mobile extraction fixture includes the same production utility.
+
+Desktop and focused fixture builds, independent review, and all eight relevant
+profile/picker tests passed. Both iOS and Android picker branches run with
+controlled native effects; this is not a native SDK build. The preceding
+Jukebox change established the full 391-test baseline.
+
+## 40. Share gameplay and result timing statistics — completed
+
+Result Scene now uses `beatorajaResultTimingStatistics`, already used during
+gameplay, instead of maintaining a second result type and calculation. The
+removed and shared bodies matched after stripping comments, whitespace, and
+type spelling. Replay selection, note count, chart metadata, and course-final
+suppression remain at the original scene call site. The timing-sign explanation
+now lives with the shared calculation.
+
+Two source-formula assertions became numerical checks against the production
+function in the existing result-scene runner. They cover sign reversal,
+millisecond truncation, event filtering, unplayed-note penalties, classic
+long-note tail selection and bad-head fallback, and independent charge-note
+ends. The checks passed before and after consolidation. Independent review,
+focused CTest, and desktop main/all-target builds passed.
+All 391 tests passed after consolidation.
+
+## 41. Share Music Select mode conversion and filtering — completed
+
+The repository projection, bar manager, song index, and property projection now
+use `MusicSelectMode.h`. It replaces four identical chart-mode conversions and
+two identical filter predicates. Unknown-mode wildcard behavior, double-play
+forms, keyboard mode encodings, and filter order are unchanged. The differing
+clear-lamp adapters remain separate.
+
+Independent review verified the extracted bodies and call sites. The desktop
+build and four affected test runners passed, including the existing eager/index
+comparison across all modes, difficulties, and sorts. The preceding timing
+consolidation established the full 391-test baseline; this structural change
+uses its affected workflow tests without adding helper-mirroring assertions.
+
+## 42. Share song clear-lamp conversion across selection and queries — completed
+
+Three Music Select components and the repository selector now share
+`beatorajaSongClearType`. Their four removed bodies were identical. Only the
+no-play sentinel maps to zero; other ranks retain their threshold buckets.
+Ranking's missing-rank fallback and Result Skin's exact-ID conversion remain
+separate because their policies differ.
+
+Independent review, desktop/focused builds, and all four affected projection,
+song-index, and repository-query test runners passed. The runtime paths still
+select the same rank and publish the same numeric lamp values. The shared-timing
+commit established the most recent full 391-test baseline.
+
+## 43. Share export and audio-cache filename sanitization — completed
+
+Result-image, replay-video, and chart-music cache naming now use one sanitizer.
+Their local wrappers retain the `result`/`replay`/`music` fallbacks and 80/80/64
+limits. The three original algorithms matched after substituting those two
+parameters. Unsigned-byte filtering, punctuation replacement, trailing-underscore
+trimming before truncation, and fallback behavior remain unchanged; path assembly
+stays with each workflow.
+
+Independent review, desktop/focused builds, and all four affected image-export,
+audio-renderer, terminal-scene, and replay UI contract tests passed. The
+all-target build also passed. Similar exporter render-access helpers were
+reviewed but retained because their restoration behavior differs.
+The full run passed 390/391; an unchanged Jukebox paused-stop deadline failed
+and passed in isolation. The wake synchronization fix is recorded below.
+
+## 44. Preserve Jukebox scheduler notifications before waits — completed
+
+The prior full-suite paused-stop failure exposed an unprotected condition-variable
+notification window. The scheduler now captures a notification generation before
+reading playback state or computing deadlines, and both paused and active waits
+observe that generation. Notification publication and predicate evaluation share
+one mutex; readiness predicates only read atomics, preserving lifecycle lock order.
+The existing 250 ms fallback and 150 ms resume/stop checks remain unchanged.
+
+New tests cover notifications before waiting, already-ready state, unchanged
+generations, and notification contention at the predicate/wait boundary. The last
+case checks completion independently of the longer fallback timeout. Independent
+review and desktop main/all-target builds passed. All 392 tests passed in parallel
+(94.70 seconds), including the real Jukebox paused/resume/stop regression.
+
+An earlier run passed 391/392 with an unrelated archive collision assertion; that
+runner passed unchanged in isolation and in the final full run. Failure-only
+archive diagnostics were reviewed separately. Disk sampling observed a transient
+361 MiB available, below the existing 512 MiB unzip reserve; the earlier assertion
+had no error text, so its exact cause remains unconfirmed. No resource limits or
+test deadlines were relaxed.
+
+## 45. Share stable identity hashing and hexadecimal formatting — completed
+
+Archive caches, Android tree paths, PortAudio/MIDI device identities, and native
+queue entries now use one unsigned-byte FNV-1a implementation. Their six identical
+16-digit lowercase hexadecimal formatters also share an owner, including the
+chart-music cache. Key assembly, prefixes, ordinals, extensions, and fallbacks
+stay with the existing callers. The chart-music cache's delimiter-bearing append
+algorithm remains unchanged and local.
+
+Before migration, the six original hashes and six original formatters were
+compiled and compared over 1,025 binary strings and boundary values; the shared
+implementation matched all of them. Permanent golden-vector tests cover empty,
+ASCII, embedded-NUL, high-byte, all-byte, and bounded-view inputs plus hexadecimal
+padding/order. Independent review, desktop/focused builds, and all three affected
+hash/audio-renderer/audio-wrapper runners passed (1.69 seconds).
+
+The scheduler commit supplies the full 392-test baseline. This change used focused
+verification as free disk space fell to roughly 200 MiB. The desktop build includes
+CoreMIDI and PortAudio; Android and Windows native builds were not run. Their
+original pure helpers participated in the compiled compatibility comparison.
+
+## 46. Prepare Jukebox scheduler resources before audio playback — completed
+
+A test backend armed an allocation failure immediately after starting audio.
+The real Jukebox left audio, its clock, and its playback snapshot active when
+scheduler construction threw. LLDB confirmed the failing allocation was inside
+`std::thread` construction after audio startup.
+
+The scheduler thread is now prepared before staging/starting audio. A scoped
+startup gate releases on success, failure, or exception; the worker only reads
+committed session state after that gate opens and exits if startup stayed
+inactive. Its gate rechecks after every notification, including StartPlayback's
+early wake. The previous scheduling body moved unchanged into a private entry
+method. Existing audio/visual callback exception policies are unchanged.
+
+The original failure probe, a pre-start allocation failure with zero new backend
+starts and successful retry, existing failed-start/restore cases, and all six
+related Jukebox/audio/BGA/visual/feature-off test runners passed (4.84 seconds).
+Desktop main and focused builds, independent review, body-equivalence comparison,
+and `git diff --check` passed. Verification remained focused with approximately
+166 MiB free; the scheduler-notification commit supplies the full 392-test baseline.
+
+## 47. Publish selected-chart analysis only after worker admission — completed
+
+Music Select marked analysis as started before copying its input and published
+its mailbox before constructing the detached worker. Rejected thread admission
+therefore left an unfinished mailbox and blocked retries. The method now commits
+the mailbox and started flag only after worker admission succeeds, using a
+non-allocating shared-pointer move and boolean assignment. Detached execution,
+exception propagation, debounce, cancellation, and generation checks are unchanged.
+
+The existing extracted-method fixture now injects rejection at its thread adapter.
+The old implementation failed the retryable-state assertion; the revised method
+preserves prior publication/generation, retries exactly one real graph worker, and
+publishes its result. Desktop/fixture builds, the complete graph-selector runner
+(including debounce, both cancellation boundaries, and generation mismatch),
+independent review, and `git diff --check` passed. The full-suite baseline remains
+the 392-test notification fix; this change used its affected workflow.
+
+## 48. Match Android fallback stop-request behavior — completed
+
+The pinned Android NDK 28.2.13676358 provides native `jthread` when the app's
+`_LIBCPP_ENABLE_EXPERIMENTAL` definition is applied. Without that opt-in it
+selects `ThreadCompat.h`'s fallback, even in C++23. The fallback's
+`jthread::request_stop()` returned true for repeated requests,
+and destruction/move assignment requested cancellation after join or detach.
+The fallback now atomically accepts only the first request and requests stop
+during cleanup only while joinable, matching the
+[C++ stop-request contract](https://eel.is/c++draft/stoptoken.concepts) and
+[jthread cleanup contract](https://eel.is/c++draft/thread.jthread.cons).
+
+One shared test source runs against native C++23 threads and the actual fallback
+under host C++17. Fallback selection is scoped after loading its system headers.
+Native tests passed while each old fallback behavior failed its regression.
+Both final runners passed (0.69 seconds), covering repeated/concurrent requests,
+empty/moved/joined ownership, and joined/detached/joinable cleanup. Independent
+review and `git diff --check` passed. The same source also cross-compiled for
+Android arm64/API 23 using the pinned NDK, both with the application's native
+opt-in and without it for the fallback; it was not executed on Android.
+With about 149 MiB free, validation used these small affected targets rather
+than a full application build. This fixes the tested contract subset; it does
+not claim full standard-library conformance for the existing fallback.
+
+## 49. Preserve background silence after an uncached launch fails — completed
+
+The uncached song worker's deferred failure callback resumed selector music
+even if the application entered the background while the result was queued.
+It now checks the current background flag before resuming, matching course
+launches while still clearing the launch flag and decide overlay.
+
+The real-worker fixture reproduced the unwanted resume before the change and
+now verifies both background suppression and foreground recovery. The selector
+translation unit compiled, both complete error-flow and export/preload suites
+passed (84.44 seconds), independent review found no issues, and
+`git diff --check` passed. With disk space near 138 MiB, validation used the
+affected translation unit and suites rather than relinking the application.
+
+## 50. Keep preloaded charts owned through gameplay setup — completed
+
+The old preload helper released its chart into an owning raw output pointer.
+Both callers performed further setup before adopting it, so an exception could
+leak the chart. `takePreloadedChart` now returns `unique_ptr`; immediate and
+pending launch paths retain it until moving ownership into gameplay. Cache
+identity checks, chart modifiers, long-note handling, and exception propagation
+are unchanged.
+
+A real-method regression throws during pending-launch option setup after the
+chart leaves the cache. Its lifetime check failed before the change and now
+passes. Both complete selector error-flow/export-preload suites passed (77.36
+seconds). The gameplay terminal target rebuilt, and its affected `dp-flip
+preloaded` case passed with real charts, flip/mirror combinations, and rejection
+of a second take. Independent review and `git diff --check` passed.
+
+The production selector passed syntax checking with its actual compile flags.
+Two object-output attempts failed with `No space left on device`. Removing 49
+obsolete object files absent from the current Ninja graph reclaimed 43 MiB;
+the next attempt successfully regenerated the selector object. The broader
+gameplay runner encountered database disk I/O errors on both attempts, so no
+complete application build or broad gameplay pass is claimed for this slice.
+
+## 51. Own profile-export directory streams through failure — completed
+
+Two POSIX staging scans released duplicated descriptors before `fdopendir`
+succeeded and closed successful streams manually after throwing operations.
+They now retain the descriptor until stream admission succeeds, then use the
+existing `UniqueResource` owner to close the stream on every exit. Enumeration
+error capture, identity checks, no-follow traversal, and lease policy remain
+unchanged.
+
+A public-Sweep allocation walk reproduced a leaked descriptor at allocation
+31. The complete staging runner now passes all 128 failure positions and
+successful sweeps, checking descriptor counts and preservation of an active
+staging lifetime (0.51 seconds). This directly tests listing failure cleanup;
+existing staging cases cover ordinary recursive cleanup and security refusals.
+The test target and production staging translation unit built, independent
+review and `git diff --check` passed. Validation ran on macOS; Windows code is
+unchanged, and no full application relink was performed.
+
+## 52. Own settings-preview chart parts until insertion succeeds — completed
+
+The settings sample-chart recipe now lives in `SettingsPreviewChart`, separate
+from preview playback and rendering. Its timeline and measure owners survive
+vector insertion; previously, releasing before `push_back` leaked the objects
+when insertion allocation failed. The existing sample notes, timing, long-note
+links, and shared eight-second loop are unchanged.
+
+The new test links the real parser constructors and destructors, characterizes
+the complete sample recipe, and rejects each construction allocation in turn.
+It reproduced both the timeline and measure leaks before the fixes and now
+passes without live allocations. The production app and all test targets
+built, the focused test passed (0.40 seconds), and independent review and
+`git diff --check` passed. After local build artifacts were manually cleaned,
+the full suite passed all 396 tests in 132.88 seconds. This also supplies a
+fresh broad baseline for the preceding slices, including the gameplay runner
+previously blocked by database disk I/O errors.
+
+## 53. Recover selector UI when launch-worker creation fails — completed
+
+Song and course starts set their busy state, decide overlay, and preview
+silence before constructing a worker. If capture copying or `jthread`
+construction threw, no worker remained to restore the selector. Both starts
+now catch assignment failures, run the shared `resetFailedLaunch` UI cleanup,
+and rethrow. Deferred worker failures call the same cleanup on the UI thread.
+Current-generation, active-scene, and foreground-audio checks are preserved.
+
+Allocation walks over the real worker construction reproduced the old busy
+state in both paths. They now verify no worker or gameplay handoff after
+rejection, immediate UI recovery, foreground/background music policy, advanced
+generation, and successful retry. The song fixture supplies the initial launch
+UI state and executes the production worker boundary; the course fixture
+executes the complete production launch method. Earlier launch preparation and
+exceptions inside a running worker are outside this change.
+
+The focused regressions passed (2.30 seconds), the desktop app and all test
+targets built, and independent review and `git diff --check` passed. Both
+complete selector suites passed (78.82 seconds); the remaining 394 CTest cases
+passed separately (54.58 seconds), covering all 396 entries without repeating
+the selector runs. The commit remains local.
+
+## 54. Release discarded replay completions outside the mailbox mutex — completed
+
+`ReplayRecordTask` previously released queued callback captures while holding
+its completion mutex during cancellation, restart, and replacement. A captured
+resource's destructor could wait for another worker to publish, which needed
+the same mutex. The task now swaps discarded completion ownership out under
+lock and releases it after unlocking. Restart completes that cleanup before
+launching replacement work; delivery swaps into an empty local owner before
+joining the worker.
+
+A real-controller regression exercises all three discard paths. Its bounded
+capture destructor waits for an observing worker's public `publish` call, so
+the old code fails without hanging the runner. The fixed test verifies unlocked
+cleanup, restart ordering, rejection after cancellation, and retention of the
+latest accepted callback. Cancellation flags, joins, and exactly-once terminal
+notification policy are unchanged. The contract concerns released ownership;
+it does not promise that arbitrary callable special members never execute
+while `std::function` swaps its targets.
+
+The focused runner passed (0.49 seconds), the desktop app and all test targets
+built, and all 396 CTest entries passed (101.73 seconds). Independent review
+and `git diff --check` passed. The commit remains local.
+
+## 55. Release posted scene callbacks after unlocking — completed
+
+Scene reuse and view teardown now share `clearPostedDeferred`, which swaps the
+posted callback vector into a local owner under its mutex and releases it after
+unlocking. This prevents captured-resource cleanup from holding the queue lock
+while another worker posts. Existing view/deferred-map cleanup order and frame
+scheduling are unchanged. Posts accepted after the swap belong to the new queue.
+
+The actual-header fixture reproduced lock contention in both reuse and cleanup.
+Its bounded capture destructor now observes successful worker publication, with
+observers joined before the scene dies. New posts run once after reuse clearing;
+the next preparation discards posts accepted during cleanup. Existing scene
+teardown extractors include the shared production helper.
+
+The focused deferred/destruction fixtures passed (3.44 seconds), the desktop
+app and all test targets built, and all 396 CTest entries passed (103.70
+seconds). Independent review and `git diff --check` passed. The commit remains
+local.
+
+## 56. Retain database ownership through chart-session construction — completed
+
+`ChartRepository::OpenSession` no longer releases its connection before
+allocating the session implementation. Both internal constructors accept
+`SqliteConnectionHandle` and move it into shared session storage, protecting
+the implementation allocation, storage allocation, and later construction
+failures. Scan batches still share the same storage owner.
+
+A public-session allocation walk found unclosed connections at the two old
+handoff allocations. The regression now observes balanced SQLite open/close
+events, checks that no statements remain at close, and verifies usable retries.
+Its C callbacks never allocate or throw while injection is armed. The negative
+control records and closes each unowned private test connection so both gaps
+can be identified in one run. The allocation injector is linked only into the
+repository runner.
+
+The focused regression, desktop app and all-target builds, independent review,
+and `git diff --check` passed. All 396 CTest entries passed (103.43 seconds),
+including repository round trips, retained scan-batch storage, and profile
+workflows. The commit remains local.
+
+## 57. Own synthetic lane-summary chart parts through insertion — completed
+
+`laneOrderForPlayOption` now keeps its synthetic measure and timeline in local
+owners until their respective owning-vector insertions succeed. Allocation
+failure during setup no longer leaks either object. Parser sources and lane
+randomization behavior are unchanged.
+
+The actual helper/parser fixture reproduced the old leak, then passed all 29
+allocation failures for each DP player. It also checks SP/DP mirror orders,
+normal and unknown-option fallback, random seed requirements and repeatability,
+and empty lane metadata. Its allocation-lifetime probe is shared with the
+settings-preview fixture, which retains its recipe checks and passes all 78
+construction failures. The probe is limited to synchronous test runners; entry
+65 also reuses it for view-construction checks.
+
+The focused pair passed (0.41 seconds), desktop and all-target builds passed,
+and all 397 CTest entries passed (114.74 seconds). Independent review and
+`git diff --check` passed. The commit remains local.
+
+## 58. Own profile database error resources before formatting — completed
+
+Profile database helpers now adopt failed-open connections and execution-error
+strings immediately after SQLite returns them. Formatting a diagnostic can
+throw without leaking either resource. The connection deleter reuses the
+existing `UniqueResource` helper; return values and diagnostic text are unchanged.
+
+A public-API regression reproduced 1,488 retained SQLite bytes during failed-open
+reporting and 16 bytes during rejected-transaction reporting. It now walks all
+four and seven C++ allocations respectively, checking SQLite's warmed memory
+baseline after each attempt. The transaction authorizer is removed before
+verifying a successful snapshot, integrity check, and row-count retry.
+
+The focused runner passed (0.40 seconds), desktop and all-target builds passed,
+and all 398 CTest entries passed (92.29 seconds). Independent review and
+`git diff --check` passed. The commit remains local.
+
+## 59. Share the viewer and replay lane-summary formatter — completed
+
+Chart Viewer now calls `play_options::formatLaneOrderSummary`, removing its
+39-line byte-identical copy. The existing preparation fixture calls the shared
+function as well, so it no longer extracts a second formatter. The viewer's
+option eligibility and combined-lane calculation remain local and unchanged.
+
+The desktop build and all three relevant runners passed: actual gameplay/viewer
+preparation, replay-summary text, and play-option lane orders (6.78 seconds).
+Independent review confirmed identical function bodies; `git diff --check`
+passed. The preceding full-suite baseline was 398 passing tests. This mechanical
+deduplication adds no new tests, and the commit remains local.
+
+## 60. Keep fixture database creation in test support — completed
+
+The general `openSqliteDatabase` function had no production callers. Its two
+fixture callers now use `repository_test::openDatabase` in the existing shared
+test header, while production repositories retain their validated open paths.
+The test helper preserves create/open, timeout, and diagnostic behavior and
+returns an owning connection. The selector fixture closes that owner before
+removing its files; chart repository tests no longer need a custom deleter.
+
+The desktop build and both affected test runners passed (6.72 seconds).
+Independent review, a source/test reference audit, and `git diff --check` passed.
+No new tests were added for this relocation. The commit remains local.
+
+## 61. Own legacy-migration diagnostics through logging — completed
+
+Legacy replay migration now stores SQLite execution errors in the existing
+`SqliteErrorMessageHandle`. Constructing the logging context can throw without
+leaking SQLite's error string; migration SQL and diagnostics are unchanged.
+
+The actual migration fixture rejects the first summary-table creation and walks
+all 16 C++ allocation failures through that path. It reproduced a retained
+16-byte SQLite error allocation in the old helper. Each attempt now restores
+SQLite's warmed memory baseline after connection teardown, leaves the database
+family unchanged, and permits a subsequent normal schema migration.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 398 CTest entries passed (111.32 seconds), including the existing migration
+fault matrices. The commit remains local.
+
+## 62. Release WebP custom-I/O buffers after decoding — completed
+
+The WebP decoder now frees the current `AVIOContext::buffer` before freeing the
+context, as required by FFmpeg's custom-I/O contract. Probing can replace the
+initial allocation, so cleanup uses the context's final buffer. The format
+context is also adopted before checking cancellation at the decoding handoff.
+Decode limits, scaling, and file/memory dispatch are unchanged.
+
+The existing real image-decoder fixture reproduced five leaks totaling 25,600
+bytes, all from FFmpeg buffer reallocation during WebP decoding. Rebuilding and
+running the same fixture under macOS `leaks` reported zero leaks and exited
+successfully. The reproduction command is:
+
+```sh
+MallocStackLogging=1 leaks --fullStacks --atExit -- cmake-build-debug/image_file_decoder_tests
+```
+
+The installed FFmpeg header and its [custom-I/O example](https://ffmpeg.org/doxygen/7.1/avio_read_callback_8c-example.html)
+document this ownership requirement. Desktop and all-target builds, independent
+review, and `git diff --check` passed. All 398 CTest entries passed (97.95
+seconds). The commit remains local.
+
+## 63. Release cached text fonts without allocating lookup keys — completed
+
+TextView's font cache now uses structured path/size/style keys with borrowed
+tuple lookups. Font release no longer allocates a formatted string inside the
+view destructor. Newly opened fonts also remain in a local owner until cache
+insertion succeeds. Cache identity and SDL_ttf operation-lock ordering are
+preserved.
+
+The actual headless TextView fixture reproduced destructor termination when
+the next C++ allocation failed. It now releases both shared and final references
+under that injection, verifies surviving shared-font usability, distinguishes
+size/style variants, and returns the runtime count to zero. The focused fixture
+passed (0.55 seconds), and a native leak check reported zero leaked bytes.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 399 CTest entries passed (106.65 seconds). The commit remains local.
+
+## 64. Roll back text-font ownership when construction fails — completed
+
+TextView now shares font cleanup between its destructor and a constructor
+rollback guard. A font acquired from the cache remains locally guarded until
+the view's font-face list accepts it. Failed construction releases fonts before
+the SDL_ttf runtime reference, and preserves existing shared fonts.
+
+The real view fixture reproduced a retained runtime reference at constructor
+allocation 26. It now passes every allocation failure for fresh fonts (30) and
+shared fonts (28), checks the surviving font, and successfully retries after
+each attempt. The focused test passed (0.58 seconds), and the native leak check
+reported zero leaked bytes. Independent review found no issues.
+
+Desktop and all-target builds and `git diff --check` passed. All 399 CTest
+entries passed (106.77 seconds). The commit remains local.
+
+## 65. Restore view ownership and layout depth after exceptions — completed
+
+Both View constructors now retain the Yoga node in a local owner until their
+initial layout request succeeds. Layout traversal restores its nesting depth
+on every exit, with the existing deferred-layout flush still occurring only
+after successful traversal.
+
+The batched-constructor allocation test reproduced a retained Yoga node, then
+passed both allocation failures for each constructor. A nested layout callback
+reproduced the stuck-depth failure: the next size change did not trigger layout.
+The regression now verifies recovery for that tree and an unrelated root.
+The focused fixture passed (0.47 seconds), native leak detection reported zero
+leaked bytes, and independent review found no issues.
+
+Desktop and all-target builds and `git diff --check` passed. All 399 CTest
+entries passed (99.84 seconds). The commit remains local.
+
+## 66. Share the bounded memory-audio decoder — completed
+
+The unbounded memory entry point and the archive branch now delegate to the
+existing bounded memory decoder. This removes two copies of virtual-I/O setup
+and file opening, keeping one implementation for memory-backed audio. Encoded
+archive limits, PCM limits, cancellation, and synchronous resource lifetime
+remain unchanged.
+
+The desktop app and both affected native test targets built successfully.
+The existing bundle/file/archive decode and chart-audio rendering tests passed
+(2.36 seconds), including size-limit and cancellation coverage. Independent
+review and `git diff --check` passed. The commit remains local.
+
+## What the review does not justify
+
+The skin document loader, resource upload plans, and session activation graph
+already provide meaningful decoding/rendering boundaries. No replacement
+architecture is proposed. Likewise, file length alone does not justify moving
+remaining archive adapters or gameplay methods into arbitrary files. Keep
+future changes tied to a specific workflow, with subsystem-local CMake changes
+and the existing full-suite baseline.

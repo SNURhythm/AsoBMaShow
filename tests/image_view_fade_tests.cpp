@@ -145,7 +145,8 @@ int main() {
       ready = thumbnail.setImageAsync(imagePath, true);
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    require(ready && thumbnail.imageWidth() == 1 && thumbnail.imageHeight() == 1,
+    require(ready, "one-pixel thumbnail finishes loading within the test deadline");
+    require(thumbnail.imageWidth() == 1 && thumbnail.imageHeight() == 1,
             "shared artwork does not collide with a one-pixel thumbnail cache key");
     artwork.onLayout();
     require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,

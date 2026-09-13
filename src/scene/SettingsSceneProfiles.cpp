@@ -157,9 +157,6 @@ void SettingsScene::ensureProfileController() {
   if (profileController == nullptr) {
     profileController = std::make_unique<ProfileSettingsController>(context);
   }
-  if (profileArchiveMailbox == nullptr) {
-    profileArchiveMailbox = std::make_shared<SettingsProfileArchiveMailbox>();
-  }
 }
 
 void SettingsScene::invalidateProfileLayout() { lastLayoutWidth = -1; }
@@ -168,8 +165,8 @@ bool SettingsScene::startProfileArchiveTask(
     ProfileArchiveTask task,
     std::optional<PlatformDocumentHandoffResult> temporaryDocument) {
   ensureProfileController();
-  if (profileController == nullptr || profileArchiveMailbox == nullptr ||
-      profileArchiveGeneration != 0 || profileArchiveThread.joinable()) {
+  if (profileController == nullptr || profileArchiveGeneration != 0 ||
+      profileArchiveWorker.hasWorker()) {
     if (temporaryDocument) {
       cleanupProfileImportTemporaryDocument(
           *temporaryDocument,
@@ -185,41 +182,29 @@ bool SettingsScene::startProfileArchiveTask(
   }
 
   profileArchiveGeneration = task.generation();
-  const auto mailbox = profileArchiveMailbox;
   std::shared_ptr<PlatformDocumentHandoffResult> temporaryDocumentHolder;
   try {
     if (temporaryDocument) {
       temporaryDocumentHolder = std::make_shared<PlatformDocumentHandoffResult>(
           std::move(*temporaryDocument));
     }
-    profileArchiveThread =
-        std::jthread([mailbox, task = std::move(task),
-                      temporaryDocument = temporaryDocumentHolder](
-                         const std::stop_token &stopToken) mutable {
-          SettingsProfileArchiveCompletion completion{.kind = task.kind(),
-                                                      .generation =
-                                                          task.generation(),
-                                                      .result = task.execute()};
+    profileArchiveWorker.start(std::move(task),
+        [temporaryDocument = temporaryDocumentHolder](ProfileArchiveResult &result) {
           const bool temporaryCleanupFailed =
               temporaryDocument &&
               !cleanupProfileImportTemporaryDocument(
                   *temporaryDocument,
                   "Profile import temporary archive cleanup is deferred; "
                   "ownership cleanup will retry.");
-          if (temporaryCleanupFailed && completion.result.ok()) {
+          if (temporaryCleanupFailed && result.ok()) {
             const std::string cleanupWarning =
                 "Profile imported; temporary cleanup is pending.";
-            if (completion.result.message.empty()) {
-              completion.result.message = cleanupWarning;
+            if (result.message.empty()) {
+              result.message = cleanupWarning;
             } else {
-              completion.result.message += "; " + cleanupWarning;
+              result.message += "; " + cleanupWarning;
             }
           }
-          if (stopToken.stop_requested()) {
-            return;
-          }
-          std::lock_guard<std::mutex> lock(mailbox->mutex);
-          mailbox->completion = std::move(completion);
         });
   } catch (const std::exception &error) {
     if (temporaryDocumentHolder) {
@@ -345,21 +330,9 @@ void SettingsScene::startProfileExportPreparation(std::string_view profileId) {
 }
 
 void SettingsScene::applyPendingProfileArchiveCompletion() {
-  if (profileArchiveMailbox == nullptr || profileController == nullptr) {
-    return;
-  }
-  std::optional<SettingsProfileArchiveCompletion> completion;
-  {
-    std::lock_guard<std::mutex> lock(profileArchiveMailbox->mutex);
-    if (!profileArchiveMailbox->completion) {
-      return;
-    }
-    completion = std::move(profileArchiveMailbox->completion);
-    profileArchiveMailbox->completion.reset();
-  }
-  if (profileArchiveThread.joinable()) {
-    profileArchiveThread.join();
-  }
+  if (profileController == nullptr) return;
+  auto completion = profileArchiveWorker.takeCompletion();
+  if (!completion) return;
 
   if (completion->kind == ProfileArchiveTaskKind::Export &&
       completion->result.ok()) {
@@ -488,10 +461,7 @@ void SettingsScene::stopProfileArchiveWork() {
        profileController->phase() == ProfileSettingsPhase::PickingExport)) {
     profileController->cancelPicker();
   }
-  if (profileArchiveThread.joinable()) {
-    profileArchiveThread.request_stop();
-    profileArchiveThread.join();
-  }
+  profileArchiveWorker.stopAndWait();
   if (profileController != nullptr && profileArchiveGeneration != 0) {
     profileController->abandonArchive(profileArchiveGeneration);
   }
@@ -500,12 +470,7 @@ void SettingsScene::stopProfileArchiveWork() {
   preparedProfileExportResult.reset();
   profileExportSourceLifetime.reset();
   profileExportStagingFile.clear();
-  if (profileArchiveMailbox != nullptr) {
-    std::lock_guard<std::mutex> lock(profileArchiveMailbox->mutex);
-    profileArchiveMailbox->completion.reset();
-  }
   profileController.reset();
-  profileArchiveMailbox.reset();
 }
 
 void SettingsScene::activateProfile(std::string_view profileId) {

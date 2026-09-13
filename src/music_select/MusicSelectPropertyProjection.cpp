@@ -1,4 +1,7 @@
 #include "MusicSelectPropertyProjection.h"
+#include "../BeatorajaClearType.h"
+
+#include "MusicSelectMode.h"
 
 #include "../AssistOptionUtils.h"
 #include "../LongNoteModeUtils.h"
@@ -69,29 +72,6 @@ int beatorajaGaugeAutoShift(GaugeAutoShiftMode value) {
 int beatorajaLnMode(std::string_view value) {
   if (value == long_note_mode::kCnId) return 1;
   if (value == long_note_mode::kHcnId) return 2;
-  return 0;
-}
-
-int beatorajaClearType(int rank) {
-  if (rank == kNoClearTypeRank) return 0;
-  if (rank >= kClearTypeFullComboRank) return 8;
-  if (rank >= kClearTypeExHardClearRank) return 7;
-  if (rank >= kClearTypeHardClearRank) return 6;
-  if (rank >= kClearTypeNormalClearRank) return 5;
-  if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
-  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
-  return 1;
-}
-
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
   return 0;
 }
 
@@ -499,7 +479,7 @@ void projectSelectedBar(Properties &out,
       song && (selected->score || selected->presentation.lamp != 0)
           ? std::optional<int>(selected->presentation.lamp)
           : selected->score
-          ? std::optional<int>(beatorajaClearType(selected->score->clearType))
+          ? std::optional<int>(beatorajaSongClearType(selected->score->clearType))
           : std::nullopt;
   constexpr std::array<int, 11> clearIds{
       100, 101, 1100, 1101, 102, 103, 104, 1102, 105, 1103, 1104};
@@ -580,7 +560,7 @@ void projectSelectedBar(Properties &out,
   for (int index = 0; index < 5; ++index) {
     out.booleans[180 + index] = judge == index;
   }
-  const int mode = songMode(meta);
+  const int mode = musicSelectSongMode(meta);
   out.booleans[160] = mode == 7;
   out.booleans[161] = mode == 5;
   out.booleans[162] = mode == 14;

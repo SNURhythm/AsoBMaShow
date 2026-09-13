@@ -1,10 +1,13 @@
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <set>
+#include <semaphore>
 #include <thread>
 #include <vector>
 
@@ -32,7 +35,47 @@ struct TestScene : Scene {
   void submit(std::function<bool()> callback) { SUBMIT_CALLBACK; }
 };
 
+bool testPostedCaptureRelease(bool forReuse) {
+  ApplicationContext context;
+  TestScene scene(context);
+  std::binary_semaphore destroying{0}, postReturned{0};
+  std::atomic_bool mailboxUnlocked = false;
+  int discardedCalls = 0, newlyPostedCalls = 0;
+  struct Capture {
+    std::binary_semaphore &destroying, &postReturned;
+    std::atomic_bool &mailboxUnlocked;
+    ~Capture() {
+      destroying.release();
+      mailboxUnlocked = postReturned.try_acquire_for(std::chrono::seconds(2));
+    }
+  };
+  std::jthread observer([&] {
+    destroying.acquire();
+    scene.postDeferred([&] { ++newlyPostedCalls; return true; });
+    postReturned.release();
+  });
+  auto capture = std::make_shared<Capture>(destroying, postReturned, mailboxUnlocked);
+  scene.postDeferred([capture, &discardedCalls] { ++discardedCalls; return true; });
+  capture.reset();
+  if (forReuse) scene.prepareForUse();
+  else scene.cleanup();
+  // The scene remains alive until its observer has finished posting.
+  observer.join();
+  if (!forReuse) scene.prepareForUse();
+  scene.handleDeferred();
+  ++context.currentFrame;
+  scene.handleDeferred();
+  assert(discardedCalls == 0);
+  assert(newlyPostedCalls == (forReuse ? 1 : 0) &&
+         "new posts survive reuse clearing but are discarded by the next preparation after cleanup");
+  return mailboxUnlocked.load();
+}
+
 int main() {
+  const bool reuseUnlocked = testPostedCaptureRelease(true);
+  const bool cleanupUnlocked = testPostedCaptureRelease(false);
+  assert(reuseUnlocked && cleanupUnlocked &&
+         "posted capture cleanup must release the mailbox mutex before destroying resources");
   ApplicationContext context;
   TestScene scene(context);
   const auto uiThread = std::this_thread::get_id();

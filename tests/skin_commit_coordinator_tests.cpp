@@ -3,6 +3,7 @@
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "support/SkinActivationCommitStoreFake.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <atomic>
 #include <chrono>
@@ -53,10 +54,10 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::permissions(root_, fs::perms::owner_all, fs::perm_options::add,
-                    ignored);
-    fs::remove_all(root_, ignored);
+    const auto error = ::test_support::removeReadOnlyTree(root_);
+    if (error) {
+      expect(false, "commit fixture cleanup failed: " + error.message());
+    }
   }
 
   const fs::path &root() const noexcept { return root_; }
@@ -233,7 +234,7 @@ struct Fixture {
   SkinPackageCatalog catalog;
   NoAliases aliases;
   FakeProfileOwner owner;
-  test_support::SkinActivationCommitStoreFake store;
+  skin::test_support::SkinActivationCommitStoreFake store;
   SkinCommitCoordinator coordinator;
 };
 

@@ -1,7 +1,9 @@
 #include "repositories/ReplayRepository.h"
+#include "repositories/ReplayRepositoryLegacyMigration.h"
 #include "repositories/ReplayRepositoryMigrationTestAccess.h"
 #include "repositories/SqliteRAII.h"
 #include "ScoreProvenance.h"
+#include "support/AllocationFailure.h"
 
 #include "nlohmann/json.hpp"
 
@@ -10,9 +12,11 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <new>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -1611,9 +1615,67 @@ void testVersion15OwnershipMigrationRollbackFaultMatrix() {
                              [](bool exercised) { return exercised; }));
 }
 
+int denySummaryCreation(void *context, int action, const char *name,
+                        const char *, const char *, const char *) noexcept {
+  if (action == SQLITE_CREATE_TABLE && name &&
+      std::strcmp(name, "legacy_chart_result_summaries") == 0) {
+    *static_cast<bool *>(context) = true;
+    return SQLITE_DENY;
+  }
+  return SQLITE_OK;
+}
+
+void testMigrationErrorMessageOwnership() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "error-ownership.db";
+  createVersion13Fixture(path);
+  const auto original = snapshotDatabaseFamily(path);
+  const auto attempt = [&](std::optional<std::size_t> failAt) {
+    auto database = openDatabase(path);
+    bool denied = false;
+    assert(sqlite3_set_authorizer(database.get(), denySummaryCreation, &denied) == SQLITE_OK);
+    bool threw = false;
+    {
+      std::optional<test_support::FailAllocationAfter> failure;
+      if (failAt) failure.emplace(*failAt);
+      try {
+        assert(!replay_repository_legacy::migrateToSummarySchema(database.get(), 13));
+        assert(denied);
+      } catch (const std::bad_alloc &) {
+        threw = true;
+      }
+    }
+    return threw;
+  };
+  assert(!attempt(std::nullopt));
+  const auto baseline = sqlite3_memory_used();
+  std::size_t failures = 0;
+  for (; failures < 512; ++failures) {
+    const bool threw = attempt(failures);
+    const auto retained = sqlite3_memory_used() - baseline;
+    if (retained != 0) {
+      std::cerr << "Migration diagnostic allocation " << failures
+                << " retained " << retained << " SQLite bytes\n";
+      std::abort();
+    }
+    if (!threw) break;
+  }
+  assert(failures > 0 && failures < 512);
+  assert(snapshotDatabaseFamily(path) == original);
+  auto database = openDatabase(path);
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
+  assert(tableExists(database.get(), "legacy_chart_result_summaries"));
+  std::cout << "Migration diagnostic cleanup passed " << failures
+            << " allocation failures\n";
+}
+
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  assert(sqlite3_config(SQLITE_CONFIG_MEMSTATUS, 1) == SQLITE_OK);
+  testMigrationErrorMessageOwnership();
+  if (argc > 1 && std::strcmp(argv[1], "--error-ownership") == 0) return 0;
   static_assert(ReplayRepository::kCurrentSchemaVersion == 18);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();

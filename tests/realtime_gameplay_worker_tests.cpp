@@ -5,11 +5,13 @@
 #include "scene/play/RealtimeGameplayInputBridge.h"
 #include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/Judge.h"
+#include "support/AllocationFailure.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <iostream>
+#include <new>
 #include <thread>
 
 namespace {
@@ -186,6 +188,41 @@ template <typename Predicate> bool waitUntil(Predicate predicate) {
     std::this_thread::sleep_for(1ms);
   }
   return predicate();
+}
+
+void testWorkerLaunchFailureReleasesAdmission() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeRapidDefinition(),
+                                           makeConfig(clock, audio));
+  bool threw = false;
+  {
+    test_support::FailNextAllocation failure;
+    try {
+      worker.start();
+    } catch (const std::bad_alloc &) {
+      threw = true;
+    }
+  }
+  require(threw, "worker launch allocation failure propagates to its caller");
+  require(!worker.running(), "failed worker launch restores stopped state");
+  require(worker.fault() == gameplay::RealtimeGameplayFault::None,
+          "worker launch failure does not invent a gameplay fault");
+  require(audio.commitCount.load() == 0,
+          "failed worker launch does not execute gameplay audio");
+  require(worker.start(), "worker launch can retry without explicit stop");
+  require(!worker.start(), "successful retry retains single-worker admission");
+  require(worker.enqueueInput({.epoch = 7,
+                               .type = gameplay::RealtimeGameplayInputType::Press,
+                               .lane = 1,
+                               .compensateLane = 1,
+                               .steadyTimestampMicros = 1'000'000}),
+          "retry admits gameplay input");
+  require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+          "retry processes gameplay input");
+  worker.stop();
+  require(!worker.running() && audio.commitCount.load() == 1,
+          "retry stops after exactly one audio commit");
 }
 
 void testRapidInputsCommitStateAndSoundWithoutFramePump() {
@@ -1458,6 +1495,7 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 } // namespace
 
 int main() {
+  testWorkerLaunchFailureReleasesAdmission();
   testRapidInputsCommitStateAndSoundWithoutFramePump();
   testRealtimeSnapshotPublishesFlatGaugeSamplesWithoutInput();
   testRealtimeWorkerJudgesPhysicalLanesBeyondLegacyCapacity();

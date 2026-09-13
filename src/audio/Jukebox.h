@@ -4,12 +4,12 @@
 #include "ClubBeat.h"
 #include "AudioWrapper.h"
 #include "GameplayBgaFrame.h"
+#include "JukeboxSchedulerWake.h"
 #include <algorithm>
 #include <array>
 #include <thread>
 #include <unordered_map>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -25,6 +25,10 @@
 
 #include "../AppSettings.h"
 #include <cassert>
+
+namespace jukebox_lifecycle {
+struct SessionState;
+}
 
 namespace rendering {
 class BgfxVertexLayoutRegistration;
@@ -284,6 +288,7 @@ public:
   void leavePlaybackStopped() override;
 
 private:
+  [[nodiscard]] jukebox_lifecycle::SessionState makeLifecycleState() noexcept;
   [[nodiscard]] bgfx::ProgramHandle
   prepareGameplayBgaProgram(const char *vertexShader,
                             const char *fragmentShader) noexcept;
@@ -297,8 +302,8 @@ private:
   std::mutex seekLock;
   // playthread lock
   std::mutex playThreadLock;
-  std::mutex schedulerWaitMutex;
-  std::condition_variable schedulerWakeCv;
+  JukeboxSchedulerWake schedulerWake;
+  void runVisualScheduler();
   void loadSounds(bms_parser::Chart &chart,
                   const ChartResourceTable &wavTable,
                   std::atomic_bool &isCancelled);
@@ -410,6 +415,7 @@ private:
   BgaRect calculateBgaRect(int sourceWidth, int sourceHeight) const;
   std::atomic_bool isPlaying = false;
   std::atomic_bool schedulerActive = false;
+  std::atomic_bool schedulerStarting = false;
   std::thread playThread;
   Stopwatch *stopwatch;
   AudioWrapper audio;

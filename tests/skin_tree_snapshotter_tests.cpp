@@ -3,6 +3,7 @@
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "skin/SkinProfileSettings.h"
 #include "skin/SkinStoragePaths.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <algorithm>
 #include <atomic>
@@ -44,23 +45,15 @@ class TempDirectory {
 public:
   TempDirectory() {
     static std::atomic_uint64_t serial{0};
-    root_ = fs::temp_directory_path() /
-            ("asobmashow-snapshot-test-" + std::to_string(++serial));
-    fs::create_directories(root_);
+    do {
+      root_ = fs::temp_directory_path() /
+              ("asobmashow-snapshot-test-" + std::to_string(++serial));
+    } while (!fs::create_directory(root_));
   }
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::permissions(root_, fs::perms::owner_all, fs::perm_options::add,
-                    ignored);
-    for (fs::recursive_directory_iterator iterator(root_, ignored), end;
-         !ignored && iterator != end; ++iterator) {
-      if (iterator->is_directory(ignored)) {
-        fs::permissions(iterator->path(), fs::perms::owner_all,
-                        fs::perm_options::add, ignored);
-      }
+    if (const auto error = ::test_support::removeReadOnlyTree(root_)) {
+      expect(false, "tree snapshotter fixture cleanup failed: " + error.message());
     }
-    ignored.clear();
-    fs::remove_all(root_, ignored);
   }
   const fs::path &root() const { return root_; }
 
@@ -391,11 +384,16 @@ void testSymbolicHardAndNonRegularNodesFollowSourceFilesystemSemantics() {
     const fs::path source = temp.root() / "source";
     fs::create_directories(source);
     const fs::path socketPath = source / "socket";
-    const int descriptor = ::socket(AF_UNIX, SOCK_STREAM, 0);
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     const std::string native = socketPath.string();
+    const bool pathFits = native.size() < sizeof(address.sun_path);
+    expect(pathFits, "socket fixture path exceeds the Unix-domain socket limit");
+    if (!pathFits) {
+      return;
+    }
     std::copy(native.begin(), native.end(), address.sun_path);
+    const int descriptor = ::socket(AF_UNIX, SOCK_STREAM, 0);
     expect(descriptor >= 0 &&
                ::bind(descriptor, reinterpret_cast<sockaddr *>(&address),
                       sizeof(address)) == 0,

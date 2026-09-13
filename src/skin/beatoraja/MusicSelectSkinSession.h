@@ -179,7 +179,6 @@ public:
   [[nodiscard]] bool render(RenderContext &, const MusicSelectSkinFrame &);
   [[nodiscard]] bool
   requiresResourceRefresh(const MusicSelectSkinFrame &) const;
-  [[nodiscard]] bool refreshResources(const MusicSelectSkinFrame &);
   void suspendAudio() noexcept;
   void resumeAudio() noexcept;
   [[nodiscard]] MusicSelectSkinPointerTarget
@@ -213,10 +212,8 @@ private:
       ValidatedBeatorajaSkinModel, BeatorajaSkinConfiguration,
       std::unique_ptr<LuaSkinRuntime>, std::unique_ptr<SkinResourceCatalog>,
       std::unique_ptr<SkinMovieCatalog>, SkinStorageRoots,
-      SkinResourcePreparationService &, std::shared_ptr<SkinTextureDevice>,
-      SkinBuiltinImageReader, std::shared_ptr<SkinLiveResourceCounters>,
+      SkinResourcePreparationService &, SkinBuiltinImageReader,
       rendering::SkinQuadBatchBackend *, SkinSafetyPolicy, ViewportSettings,
-      std::stop_token,
       std::map<SkinObjectId, std::vector<std::string>>,
       std::map<int, std::filesystem::path>);
 
@@ -246,12 +243,9 @@ private:
   std::unique_ptr<SkinMovieCatalog> movies_;
   SkinStorageRoots storageRoots_;
   SkinResourcePreparationService *resourcePreparation_ = nullptr;
-  std::shared_ptr<SkinTextureDevice> textureDevice_;
   SkinBuiltinImageReader builtinImageReader_;
-  std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters_;
   SkinSafetyPolicy safetyPolicy_{};
   ViewportSettings viewportSettings_{};
-  std::stop_token stop_;
   Skin2DRenderer renderer_;
   std::unique_ptr<rendering::SkinQuadBatchRenderer> quadRenderer_;
   std::optional<SkinInteractionLayout> publishedInteractionLayout_;

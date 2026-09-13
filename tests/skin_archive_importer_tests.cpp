@@ -1,5 +1,6 @@
 #include "skin/package/SkinArchiveImporter.h"
 #include "skin/package/SkinPathPolicy.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -61,18 +62,9 @@ public:
     fs::create_directories(root_);
   }
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::permissions(root_, fs::perms::owner_all, fs::perm_options::add,
-                    ignored);
-    for (fs::recursive_directory_iterator iterator(root_, ignored), end;
-         !ignored && iterator != end; ++iterator) {
-      if (iterator->is_directory(ignored)) {
-        fs::permissions(iterator->path(), fs::perms::owner_all,
-                        fs::perm_options::add, ignored);
-      }
+    if (const auto error = ::test_support::removeReadOnlyTree(root_)) {
+      expect(false, "archive importer fixture cleanup failed: " + error.message());
     }
-    ignored.clear();
-    fs::remove_all(root_, ignored);
   }
   const fs::path &root() const { return root_; }
 

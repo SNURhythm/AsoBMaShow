@@ -7,6 +7,8 @@ repository = (root / "src/repositories/ReplayRepositoryModernResults.cpp").read_
 header = (root / "src/scene/MainMenuScene.h").read_text()
 menu = (root / "src/scene/MainMenuScene.cpp").read_text()
 modal = (root / "src/scene/ReplayRecordsModal.cpp").read_text()
+shared_loader = (root / "src/scene/ResultRecordsLoader.cpp").read_text()
+selector = (root / "src/scene/MusicSelectSceneRecords.cpp").read_text()
 result_view = (root / "src/view/ResultRecordListView.h").read_text()
 
 observer_start = menu.index("void MainMenuScene::observeReplayIrServiceRevisions()")
@@ -35,7 +37,7 @@ required = {
         "std::unique_ptr<ReplayRecordsModal> recordsModal_",
     ],
     "menu": [
-        "recordActivityFor(ir::IrActiveRequestKind activeRequest)",
+        "replay_records::recordActivity(status.activeRequest)",
         "observeReplayIrServiceRevisions()",
         "activeReplayIrServerOrigin()",
     ],
@@ -47,10 +49,19 @@ required = {
         "recordsModal_->reloadRecords(true)",
     ],
     "loader": [
+        "loadResultRecords(context.replayRepository, record, options)",
+        "options.attemptActivity",
+    ],
+    "selector": [
+        "loadResultRecords(context.replayRepository, record, options)",
+        "replay_records::recordActivity(status.activeRequest)",
+        "recordsModal_->reloadRecords(true)",
+    ],
+    "shared_loader": [
         "ListIrUploadRecordsForChart(",
         "irRecordsByAttempt",
         "resolvedState(",
-        "recordActivityFor(serviceStatus.activeRequest)",
+        "options.attemptActivity(modern.result.attemptId)",
     ],
     "modal_reload": [
         "previousScrollOffset",
@@ -77,6 +88,8 @@ texts = {
     "menu": menu,
     "observer": observer,
     "loader": loader,
+    "shared_loader": shared_loader,
+    "selector": selector,
     "modal_reload": modal_reload,
     "filter_restore": filter_restore,
     "result_view": result_view,

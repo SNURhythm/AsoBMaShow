@@ -1,6 +1,7 @@
 #include "ChartLibraryPlatform.h"
 
 #include "ChartLibraryTaskService.h"
+#include "../RAII.h"
 #include "../path.h"
 #include "../targets.h"
 
@@ -124,26 +125,28 @@ struct FolderActionService::Impl {
 #if TARGET_OS_ANDROID
   void requestImport(bool folder) {
     if (pickerActive.exchange(true)) return;
-    if (pickerThread.joinable()) pickerThread.join();
-    pickerThread = std::jthread(
-        [this, folder](const std::stop_token &) {
-          struct Reset {
-            std::atomic_bool &active;
-            ~Reset() { active.store(false); }
-          } reset{pickerActive};
-          std::filesystem::path path;
-          std::string error;
-          const bool picked = folder
-                                  ? PickAndroidFolderForImport(path, error)
-                                  : PickAndroidArchiveForImport(path, error);
-          if (!picked) {
-            if (!error.empty()) {
-              SDL_Log("Failed to pick Android %s: %s",
-                      folder ? "folder" : "archive", error.c_str());
+    try {
+      if (pickerThread.joinable()) pickerThread.join();
+      pickerThread = std::jthread(
+          [this, folder](const std::stop_token &) {
+            ScopeExit reset([this] { pickerActive.store(false); });
+            std::filesystem::path path;
+            std::string error;
+            const bool picked = folder
+                                    ? PickAndroidFolderForImport(path, error)
+                                    : PickAndroidArchiveForImport(path, error);
+            if (!picked) {
+              if (!error.empty()) {
+                SDL_Log("Failed to pick Android %s: %s",
+                        folder ? "folder" : "archive", error.c_str());
+              }
+              return;
             }
-            return;
-          }
-        });
+          });
+    } catch (...) {
+      pickerActive.store(false, std::memory_order_release);
+      throw;
+    }
   }
 #endif
 };
@@ -175,50 +178,54 @@ void FolderActionService::requestAddFolder() {
   if (!impl_) return;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (impl_->pickerActive.exchange(true)) return;
-  if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
-  impl_->pickerThread = std::jthread(
-      [state = impl_.get()](const std::stop_token &stopToken) {
-        struct Reset {
-          std::atomic_bool &active;
-          ~Reset() { active.store(false); }
-        } reset{state->pickerActive};
-        std::string folder;
-        std::string bookmark;
-        std::string error;
-        if (!PickIOSFolder(folder, bookmark, error)) {
-          if (!error.empty()) {
-            SDL_Log("Failed to pick iOS library folder: %s", error.c_str());
-          }
-          return;
-        }
-        if (!stopToken.stop_requested()) {
-          state->enqueueFolder(std::filesystem::path(folder), bookmark);
-        }
-      });
-#elif TARGET_OS_ANDROID
-  if (AndroidBuildHasManageExternalStorage()) {
-    if (impl_->pickerActive.exchange(true)) return;
+  try {
     if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
     impl_->pickerThread = std::jthread(
         [state = impl_.get()](const std::stop_token &stopToken) {
-          struct Reset {
-            std::atomic_bool &active;
-            ~Reset() { active.store(false); }
-          } reset{state->pickerActive};
-          std::filesystem::path folder;
-          std::string treeUri;
+          ScopeExit reset([state] { state->pickerActive.store(false); });
+          std::string folder;
+          std::string bookmark;
           std::string error;
-          if (!PickAndroidChartFolder(folder, treeUri, error, stopToken)) {
+          if (!PickIOSFolder(folder, bookmark, error)) {
             if (!error.empty()) {
-              SDL_Log("Failed to pick Android library folder: %s",
-                      error.c_str());
+              SDL_Log("Failed to pick iOS library folder: %s", error.c_str());
             }
             return;
           }
           if (!stopToken.stop_requested()) {
-            state->enqueueFolder(folder, treeUri);
+            state->enqueueFolder(std::filesystem::path(folder), bookmark);
           }
         });
+  } catch (...) {
+    impl_->pickerActive.store(false, std::memory_order_release);
+    throw;
+  }
+#elif TARGET_OS_ANDROID
+  if (AndroidBuildHasManageExternalStorage()) {
+    if (impl_->pickerActive.exchange(true)) return;
+    try {
+      if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
+      impl_->pickerThread = std::jthread(
+          [state = impl_.get()](const std::stop_token &stopToken) {
+            ScopeExit reset([state] { state->pickerActive.store(false); });
+            std::filesystem::path folder;
+            std::string treeUri;
+            std::string error;
+            if (!PickAndroidChartFolder(folder, treeUri, error, stopToken)) {
+              if (!error.empty()) {
+                SDL_Log("Failed to pick Android library folder: %s",
+                        error.c_str());
+              }
+              return;
+            }
+            if (!stopToken.stop_requested()) {
+              state->enqueueFolder(folder, treeUri);
+            }
+          });
+    } catch (...) {
+      impl_->pickerActive.store(false, std::memory_order_release);
+      throw;
+    }
   } else {
     impl_->requestImport(true);
   }
@@ -247,10 +254,7 @@ struct SoundSetFolderPicker::Impl {
   SoundSetFolderPick pendingResult;
 
   void pickOnBackgroundThread(const std::stop_token &stopToken) {
-    struct Reset {
-      std::atomic_bool &active;
-      ~Reset() { active.store(false); }
-    } reset{pickerActive};
+    ScopeExit reset([this] { pickerActive.store(false); });
     SoundSetFolderPick result;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
     std::string error;
@@ -297,17 +301,26 @@ SoundSetFolderPicker::~SoundSetFolderPicker() {
 void SoundSetFolderPicker::request() {
   if (impl_ == nullptr) return;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
-  if (impl_->resultReady.load(std::memory_order_acquire) ||
-      impl_->pickerActive.exchange(true)) {
+  if (impl_->pickerActive.exchange(true)) {
     return;
   }
-  if (impl_->pickerThread.joinable()) {
-    impl_->pickerThread.join();
+  // Acquire active ownership before checking the previous worker's publication.
+  if (impl_->resultReady.load(std::memory_order_acquire)) {
+    impl_->pickerActive.store(false, std::memory_order_release);
+    return;
   }
-  impl_->pickerThread = std::jthread(
-      [state = impl_.get()](const std::stop_token &stopToken) {
-        state->pickOnBackgroundThread(stopToken);
-      });
+  try {
+    if (impl_->pickerThread.joinable()) {
+      impl_->pickerThread.join();
+    }
+    impl_->pickerThread = std::jthread(
+        [state = impl_.get()](const std::stop_token &stopToken) {
+          state->pickOnBackgroundThread(stopToken);
+        });
+  } catch (...) {
+    impl_->pickerActive.store(false, std::memory_order_release);
+    throw;
+  }
 #endif
 }
 

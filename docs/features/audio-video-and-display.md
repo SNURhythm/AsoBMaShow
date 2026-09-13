@@ -25,11 +25,17 @@ state through portable interfaces, and risky reconfiguration has rollback or
 recovery behavior. Memory-pressure handling may evict idle media and decoded
 artwork but preserves active playback resources according to their lifecycle.
 
+Music Player releases fullscreen video and restores its prior visual settings
+before scene destruction while it owns those overrides. Unused and already-
+exited scenes leave shared BGA policy unchanged. This teardown does not stop
+native music playback or refresh the UI.
+
 ## Verification
 
 Use `audio_*_tests`, `jukebox_restore_tests`, `video_*_tests`,
 `frame_pacer_tests`, `sdl_display_backend_tests`, `display_settings_manager_tests`,
-and renderer/view tests. Compile shaders through the documented shader workflow.
+`music_player_video_lifecycle_tests`, and renderer/view tests. Compile shaders
+through the documented shader workflow.
 
 ## Related pages
 

@@ -2,6 +2,7 @@
 
 #if defined(_WIN32)
 
+#include "../StableHash.h"
 #include "NativeCallbackLifetime.h"
 #include "QueuedMidiInputBackend.h"
 
@@ -73,25 +74,6 @@ std::string utf8FromWide(std::wstring_view value) {
   return result;
 }
 
-std::uint64_t fnv1a64(std::string_view value) {
-  std::uint64_t hash = 14695981039346656037ULL;
-  for (const unsigned char byte : value) {
-    hash ^= byte;
-    hash *= 1099511628211ULL;
-  }
-  return hash;
-}
-
-std::string hex64(std::uint64_t value) {
-  constexpr char digits[] = "0123456789abcdef";
-  std::string result(16, '0');
-  for (std::size_t index = result.size(); index > 0; --index) {
-    result[index - 1] = digits[value & 0xFU];
-    value >>= 4U;
-  }
-  return result;
-}
-
 std::size_t shortMessageLength(std::uint8_t status) {
   if (status < 0x80U) {
     return 0;
@@ -149,8 +131,8 @@ std::vector<WinMidiDeviceDescriptor> enumerateDevices() {
   result.reserve(candidates.size());
   for (auto &candidate : candidates) {
     const std::size_t ordinal = ordinals[candidate.fingerprint]++;
-    std::string stableId =
-        "midi:winmm:" + hex64(fnv1a64(candidate.fingerprint));
+    std::string stableId = "midi:winmm:" +
+        stable_hash::hex64(stable_hash::fnv1a64(candidate.fingerprint));
     if (totals[candidate.fingerprint] > 1U) {
       stableId += ":" + std::to_string(ordinal + 1U);
     }

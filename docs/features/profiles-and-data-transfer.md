@@ -13,6 +13,8 @@ even when filesystem, archive, or database validation fails.
   at the `src/` root and in settings/repository domains.
 - `src/scene/ProfileSettingsController.*`, profile runtime-reapply code, and
   settings scenes own user interactions and application of an active profile.
+- `src/scene/ProfileArchiveWorker.*` owns asynchronous execution and typed
+  completion of controller-issued archive tasks.
 - Document-handoff services bridge import/export URIs across desktop and mobile
   platforms.
 - Repositories and replay lifecycle code provide the profile-scoped durable
@@ -27,11 +29,19 @@ or integrity checks, and atomic replacement so active data remains recoverable.
 Profile switching rebuilds runtime services through explicit reapply hooks;
 scenes do not retain stale profile-owned resources.
 
+Profile archive execution is not interruptible. Worker shutdown waits for the
+transaction and import temporary-document cleanup, then discards completion.
+Consuming completion joins before the scene applies it. Settings retains picker
+state, generation decisions, and export staging lifetime; native export work
+keeps its source owner after the scene releases its own reference.
+
 ## Verification
 
 Use `player_profile_manager_tests`, `profile_switch_tests`,
 `profile_archive_tests`, `profile_export_staging_tests`,
-`profile_runtime_reapply_tests`, and profile settings/controller tests.
+`profile_runtime_reapply_tests`, and profile settings/controller tests. The
+controller target also exercises actual archive worker lifetime and compiled
+production scene launch/completion/shutdown with controlled document effects.
 
 ## Related pages
 

@@ -23,6 +23,8 @@ def records_fixture():
         "void MainMenuScene::queueReplayLoadCompletion(",
         "void MainMenuScene::applyReplayLoadCompletion()",
         "void MainMenuScene::stopReplayLoadWorker()",
+        "void MainMenuScene::stopReplayAndPreviewWork()",
+        "MainMenuScene::~MainMenuScene()",
         "bool MainMenuScene::beginReplayExport(",
         "void MainMenuScene::applyReplayExportResult()",
         "void MainMenuScene::finishReplayResultRecallFailure(",
@@ -72,7 +74,7 @@ def records_fixture():
         callbacks.append(f"callbacks.{name} = [this]({signature}) " +
                          fixture_tools.function_body(source, f"callbacks.{name} =") + ";")
     fixture = (ROOT / "tests/main_menu_records_lifecycle_fixture.cpp").read_text()
-    return (fixture.replace("OWNER_METHODS", "\n".join(methods))
+    return (fixture.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace("OWNER_METHODS", "\n".join(methods))
             .replace("MODAL_METHODS", "\n".join(modal_methods))
             .replace("OWNER_CALLBACKS", "\n".join(callbacks)))
 
@@ -80,7 +82,7 @@ def records_fixture():
 class MainMenuRecordsLifecycleTests(unittest.TestCase):
     def test_actual_owner_callbacks_release_records_on_return_and_cancel(self):
         try:
-            fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(records_fixture())
+            fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(records_fixture(), [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp", ROOT / "src/scene/FindBmsTask.cpp", ROOT / "tests/support/AllocationFailure.cpp"])
         except subprocess.CalledProcessError as error:
             self.fail(error.stderr)
 

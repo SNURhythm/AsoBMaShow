@@ -1,4 +1,5 @@
 #include "ReplayVideoExporter.h"
+#include "ExportFileName.h"
 #include "replay/CourseReplayConsumer.h"
 #include "replay/ReplayOption.h"
 
@@ -772,24 +773,7 @@ std::string makeTimestamp() {
 }
 
 std::string sanitizeFileNamePart(const std::string &value) {
-  std::string result;
-  result.reserve(value.size());
-  for (const unsigned char ch : value) {
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
-      result.push_back(static_cast<char>(ch));
-    } else if (ch == ' ' || ch == '.' || ch == '[' || ch == ']') {
-      result.push_back('_');
-    }
-  }
-
-  while (!result.empty() && result.back() == '_') {
-    result.pop_back();
-  }
-  if (result.empty()) {
-    return "replay";
-  }
-  return result.substr(0, 80);
+  return sanitizeExportFileNamePart(value, "replay", 80);
 }
 
 std::string replayExportPlayOptionLabel(const ReplayData &replay) {

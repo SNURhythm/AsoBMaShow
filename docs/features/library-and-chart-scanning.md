@@ -15,10 +15,21 @@ application thread owns visible progress and database updates.
   persistence.
 - `src/ChartLibraryScanner*`, `src/ChartScanWorkScheduler*`, and archive
   helpers implement bounded discovery, parsing, ordering, and cancellation.
+- `src/archive/TemporaryCache.*` owns materialized archive-media storage and
+  protected cleanup; `ArchiveFile.*` supplies the current root and identities.
+- `src/scene/SettingsCacheMaintenance.*` owns asynchronous Settings cleanup and
+  measurement; the scene consumes typed results and formats their presentation.
+- `src/archive/UnzipOutput.*` owns extraction budgets, bounded output buffering,
+  and writer lifetime independently of backend decoding.
+- `src/archive/IndexBuildCoordinator.*` owns per-key build admission and waiter
+  outcomes; the archive facade retains cache validation and retry policy.
 - `src/scene/MainMenuLibrary.*`, `MainMenuScene.*`, and chart-list views
   present the catalogue.
-- Difficulty-table import and URL completion live in `src/scene/` and the
-  repository layer.
+- `MainMenuPreviewController.*` owns preview scheduling and deferred release;
+  `ChartPreloadWorker.*` supplies the shared debounced, latest-request worker.
+- `SettingsLibraryTask.*` owns the exclusive table/folder job and typed updates.
+  Difficulty-table import and URL completion retain their existing operation
+  and repository boundaries.
 
 ## Boundaries and invariants
 
@@ -31,15 +42,48 @@ queued work before the scene discards its lifecycle owner.
 Chart metadata is shared across profiles; player settings, scores, and replay
 data are not part of the library database contract.
 
+Main Menu keeps the selected chart because normal Start can reuse it. Preview
+cancellation returns promptly; deferred media release runs after loading on the
+worker. A replacement preview withdraws pending release. A handoff joins preview
+work without unconditionally releasing the selected chart. Cleanup and
+destruction join replay/export preparation before preview work, while callback
+dependencies remain alive.
+
+Temporary media writes and cleanup share one mutation lock. Cleanup uses the
+current platform path normalizer to protect active top-level cache entries;
+usage measurement remains best-effort and does not block writes or cleanup.
+Full extraction shares byte, entry, and free-space budgets across archive
+writers. Output streams remain owned until queued writes finish; the pipeline
+joins before its guard and cancellation dependencies are released. The archive
+workflow retains path reservations, recovery markers, and output publication.
+
+Index-build waiters retain the outcome of the build they joined even when a
+later request starts another build for the same key. Cancelling one waiter does
+not cancel the builder or other waiters. Builder abandonment publishes failure,
+and cache publication precedes successful completion. Checkpoints run outside
+the coordinator mutex; data-cache locks remain outside the coordinator.
+
 ## Verification
 
 Start with `chart_library_scanner_tests`, `chart_scan_work_scheduler_tests`,
 `chart_repository_tests`, `chart_filter_sort_panel_view_tests`, and
-`difficulty_table_*_tests`. For the scheduler's detailed operating model, see
+`difficulty_table_*_tests`. Preview ownership is covered by
+`chart_preload_worker_tests`, `main_menu_preview_controller_tests`, and the
+Main Menu preview/Records lifecycle fixtures. For the scheduler's detailed operating model, see
 [`src/ChartScanWorkScheduler.md`](../../src/ChartScanWorkScheduler.md).
+Temporary-media storage is covered by `temporary_archive_cache_tests` and the
+private-root integration case in `archive_file_concurrency_tests`.
+`settings_cache_maintenance_tests` covers the Settings job lifecycle, stale
+completion rejection, and application-thread handoff using the real cache.
+`unzip_output_tests` directly covers output policy, cancellation, failures,
+backpressure, and destructor joining; backend extraction/recovery cases remain
+in the archive concurrency tests.
 
 ## Related pages
 
 - [Find BMS and downloads](find-bms-and-downloads.md)
 - [Results, records, and persistence](results-records-and-persistence.md)
 - [Settings and user interface](settings-and-user-interface.md)
+
+`archive_index_build_coordinator_tests` directly covers admission, per-flight
+outcomes, cancellation, exceptions, retries, and builder ownership.

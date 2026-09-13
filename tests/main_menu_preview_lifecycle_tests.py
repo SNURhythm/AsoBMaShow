@@ -49,14 +49,10 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
         fixture = (ROOT / "tests/main_menu_preview_lifecycle_fixture.cpp").read_text()
         fixture = fixture.replace("PREVIEW_STATE_FIELDS", "\n".join(
             line for line in header.splitlines()
-            if "pendingStopAndClearSelectedChartAfterPreview =" in line
-            or "std::mutex preview" in line
+            if "std::mutex preview" in line
         ))
         fixture = fixture.replace("SELECTION_CALLBACK", callback_body(
             source, "recyclerView->onSelected = [this, &context]"
-        ))
-        fixture = fixture.replace("IDLE_CALLBACK", callback_body(
-            source, "previewWorker_->setOnIdle([this]()"
         ))
         compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
         frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
@@ -69,6 +65,7 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
             program.write_text(fixture)
             sources = [str(program),
                 str(ROOT / "src/scene/ChartPreloadWorker.cpp"),
+                str(ROOT / "src/scene/MainMenuPreviewController.cpp"),
                 str(ROOT / "src/path.cpp")]
             if msvc:
                 command = [compiler, "/nologo", "/std:c++latest", "/EHsc",

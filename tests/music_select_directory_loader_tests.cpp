@@ -1,10 +1,12 @@
 #include "music_select/MusicSelectDirectoryLoader.h"
+#include "support/AllocationFailure.h"
 
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <future>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
@@ -42,6 +44,57 @@ Loader::Processor completedProcessor(std::promise<void> &completed) {
   return [lifetime = std::move(lifetime)](std::stop_token) {
     return content("child");
   };
+}
+
+void testAllocationFailuresReleaseRequestAndAllowRetry() {
+  const std::string id = "startup-" + std::string(80, 'x');
+  std::size_t failures = 0;
+  bool completedWithoutFailure = false;
+  // Walk caller allocations through successful admission to cover stop-state
+  // and thread startup without assuming a library-specific allocation count.
+  for (std::size_t allocation = 0; allocation < 64; ++allocation) {
+    std::atomic_int calls{0};
+    Loader loader;
+    auto payload = std::make_shared<int>(7);
+    const std::weak_ptr<int> retained = payload;
+    Loader::Processor process = [&, payload](std::stop_token) {
+      ++calls;
+      return Loader::Content{};
+    };
+    payload.reset();
+    MusicSelectBarId requestId{id};
+    bool threw = false;
+    std::uint64_t generation = 0;
+    {
+      test_support::FailAllocationAfter fault(allocation);
+      try {
+        generation = loader.request(std::move(requestId), std::move(process));
+      } catch (const std::bad_alloc &) {
+        threw = true;
+      }
+    }
+    if (threw) {
+      ++failures;
+      assert(calls == 0 && retained.expired());
+      assert(loader.takeResults().empty());
+      generation = loader.request({id}, [&](std::stop_token) {
+        ++calls;
+        return Loader::Content{};
+      });
+    }
+    assert(generation != 0);
+    const auto results = waitForResults(loader);
+    assert(results.size() == 1);
+    assert(results.front().id.value == id);
+    assert(results.front().generation == generation);
+    assert(results.front().error.empty() && calls == 1);
+    loader.cancel();
+    if (!threw) {
+      completedWithoutFailure = true;
+      break;
+    }
+  }
+  assert(completedWithoutFailure && failures >= 2);
 }
 
 void testContentIdentityGenerationAndDrain() {
@@ -341,6 +394,7 @@ void testDestructorIsTerminalForReentrantStopCallback() {
 }
 
 int main() {
+  testAllocationFailuresReleaseRequestAndAllowRetry();
   testContentIdentityGenerationAndDrain();
   testReplacementDoesNotJoinAndOnlyLatestPendingRuns();
   testCancelDoesNotJoinAndSuppressesLateFailure();

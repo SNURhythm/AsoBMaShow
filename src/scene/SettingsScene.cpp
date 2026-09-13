@@ -69,27 +69,35 @@ SettingsScene::SettingsScene(ApplicationContext &context,
     : Scene(context), returnTarget_(std::move(returnTarget)),
       activeTab(destination == SettingsDestination::Ir ? SettingsTab::Ir
                                                        : SettingsTab::Profile),
+      archiveCacheMaintenance(
+          [&jukebox = context.jukebox](auto &result, auto &error) {
+            const auto protectedPaths = jukebox.activeMaterializedVideoPaths();
+            return archive_file::cleanupTemporaryCache(result, protectedPaths, &error);
+          },
+          [](auto &result, auto &error, const std::stop_token &token) {
+            return archive_file::measureTemporaryCache(result, &error, &token);
+          }),
       lastLaidOutTab(activeTab) {}
 
-void SettingsScene::requestArchiveCacheCleanupStatus(const std::string &text,
-                                                     const SDL_Color &color) {
-  std::lock_guard<std::mutex> lock(archiveCacheCleanupStatusMutex);
-  pendingArchiveCacheCleanupStatus = true;
-  pendingArchiveCacheCleanupStatusText = text;
-  pendingArchiveCacheCleanupStatusColor = color;
-}
-
 void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
-  bool changed = false;
-  {
-    std::lock_guard<std::mutex> lock(archiveCacheCleanupStatusMutex);
-    if (!pendingArchiveCacheCleanupStatus) {
-      return;
-    }
-    archiveCacheCleanupStatusMessage = pendingArchiveCacheCleanupStatusText;
-    archiveCacheCleanupStatusColor = pendingArchiveCacheCleanupStatusColor;
-    pendingArchiveCacheCleanupStatus = false;
-    changed = true;
+  const auto completion = archiveCacheMaintenance.takeCompletion();
+  if (!completion) {
+    return;
+  }
+  const bool cleanup =
+      completion->operation == SettingsCacheMaintenance::Operation::Cleanup;
+  if (!completion->succeeded) {
+    archiveCacheCleanupStatusMessage = cleanup ? "Archive cache cleanup failed"
+                                               : "Archive cache measurement failed";
+    archiveCacheCleanupStatusMessage +=
+        completion->error.empty() ? "." : ": " + completion->error;
+    archiveCacheCleanupStatusColor = {255, 177, 170, 255};
+  } else if (cleanup) {
+    archiveCacheCleanupStatusMessage = formatCacheCleanupResult(completion->cleanup);
+    archiveCacheCleanupStatusColor = {181, 228, 165, 255};
+  } else {
+    archiveCacheCleanupStatusMessage = formatCacheUsageResult(completion->usage);
+    archiveCacheCleanupStatusColor = {157, 177, 200, 255};
   }
 
   if (archiveCacheCleanupStatusText != nullptr) {
@@ -98,27 +106,19 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   }
   if (archiveCacheCleanupButtonText != nullptr) {
     archiveCacheCleanupButtonText->setText(
-        archiveCacheCleanupRunning.load() ? "Cleaning..." : "Clean Up");
+        archiveCacheMaintenance.cleanupRunning() ? "Cleaning..." : "Clean Up");
   }
-  if (changed && rootLayout != nullptr) {
+  if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
   }
-  if (changed && scrollView != nullptr) {
+  if (scrollView != nullptr) {
     scrollView->refreshContentLayout();
   }
 }
 
 void SettingsScene::cleanupTemporaryArchiveCache() {
-  bool expected = false;
-  if (!archiveCacheCleanupRunning.compare_exchange_strong(expected, true)) {
+  if (!archiveCacheMaintenance.startCleanup()) {
     return;
-  }
-
-  const std::uint64_t generation =
-      archiveCacheStatusGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
-
-  if (archiveCacheCleanupThread.joinable()) {
-    archiveCacheCleanupThread.join();
   }
 
   archiveCacheCleanupStatusMessage = "Cleaning temporary archive cache...";
@@ -130,55 +130,11 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
   if (archiveCacheCleanupButtonText != nullptr) {
     archiveCacheCleanupButtonText->setText("Cleaning...");
   }
-
-  archiveCacheCleanupThread =
-      std::jthread([this, generation](const std::stop_token &token) {
-        archive_file::TemporaryCacheCleanupResult result;
-        std::string errorMessage;
-        const std::vector<std::filesystem::path> protectedPaths =
-            context.jukebox.activeMaterializedVideoPaths();
-        const bool cleaned = archive_file::cleanupTemporaryCache(
-            result, protectedPaths, &errorMessage);
-
-        if (token.stop_requested()) {
-          archiveCacheCleanupRunning = false;
-          return;
-        }
-
-        archiveCacheCleanupRunning = false;
-        if (archiveCacheStatusGeneration.load(std::memory_order_relaxed) !=
-            generation) {
-          return;
-        }
-        if (!cleaned) {
-          requestArchiveCacheCleanupStatus(
-              errorMessage.empty()
-                  ? "Archive cache cleanup failed."
-                  : "Archive cache cleanup failed: " + errorMessage,
-              {255, 177, 170, 255});
-          return;
-        }
-
-        requestArchiveCacheCleanupStatus(formatCacheCleanupResult(result),
-                                         {181, 228, 165, 255});
-      });
 }
 
 void SettingsScene::measureTemporaryArchiveCache() {
-  if (archiveCacheCleanupRunning.load(std::memory_order_relaxed)) {
+  if (!archiveCacheMaintenance.startMeasure()) {
     return;
-  }
-
-  bool expected = false;
-  if (!archiveCacheMeasureRunning.compare_exchange_strong(expected, true)) {
-    return;
-  }
-
-  const std::uint64_t generation =
-      archiveCacheStatusGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
-
-  if (archiveCacheMeasureThread.joinable()) {
-    archiveCacheMeasureThread.join();
   }
 
   archiveCacheCleanupStatusMessage = "Measuring temporary archive cache...";
@@ -187,36 +143,6 @@ void SettingsScene::measureTemporaryArchiveCache() {
     archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
-
-  archiveCacheMeasureThread =
-      std::jthread([this, generation](const std::stop_token &token) {
-        archive_file::TemporaryCacheUsageResult result;
-        std::string errorMessage;
-        const bool measured =
-            archive_file::measureTemporaryCache(result, &errorMessage, &token);
-
-        if (token.stop_requested()) {
-          archiveCacheMeasureRunning = false;
-          return;
-        }
-
-        archiveCacheMeasureRunning = false;
-        if (archiveCacheStatusGeneration.load(std::memory_order_relaxed) !=
-            generation) {
-          return;
-        }
-        if (!measured) {
-          requestArchiveCacheCleanupStatus(
-              errorMessage.empty()
-                  ? "Archive cache measurement failed."
-                  : "Archive cache measurement failed: " + errorMessage,
-              {255, 177, 170, 255});
-          return;
-        }
-
-        requestArchiveCacheCleanupStatus(formatCacheUsageResult(result),
-                                         {157, 177, 200, 255});
-      });
 }
 
 void SettingsScene::init() {
@@ -235,11 +161,10 @@ void SettingsScene::init() {
       return "Confirm or revert the pending display preview before switching "
              "profiles.";
     }
-    if (difficultyTableJobRunning.load(std::memory_order_acquire)) {
+    if (libraryTask.running()) {
       return "A difficulty table library update is active.";
     }
-    if (archiveCacheCleanupRunning.load(std::memory_order_acquire) ||
-        archiveCacheMeasureRunning.load(std::memory_order_acquire)) {
+    if (archiveCacheMaintenance.running()) {
       return "Archive cache maintenance is active.";
     }
     return std::nullopt;
@@ -392,21 +317,8 @@ void SettingsScene::cleanupScene() {
     }
     audioVideoSession.reset();
   }
-  if (difficultyTableJobThread.joinable()) {
-    SDL_Log("Joining difficultyTableJobThread");
-    difficultyTableJobThread.request_stop();
-    difficultyTableJobThread.join();
-  }
-  if (archiveCacheCleanupThread.joinable()) {
-    SDL_Log("Joining archiveCacheCleanupThread");
-    archiveCacheCleanupThread.request_stop();
-    archiveCacheCleanupThread.join();
-  }
-  if (archiveCacheMeasureThread.joinable()) {
-    SDL_Log("Joining archiveCacheMeasureThread");
-    archiveCacheMeasureThread.request_stop();
-    archiveCacheMeasureThread.join();
-  }
+  libraryTask.stopAndWait();
+  archiveCacheMaintenance.stopAndWait();
   pendingDeleteChartEntryPath.clear();
   difficultyTableImportModalVisible = false;
   difficultyTableImportFinished = false;

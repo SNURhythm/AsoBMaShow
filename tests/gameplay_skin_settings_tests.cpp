@@ -1,4 +1,5 @@
 #include "scene/GameplaySkinSettingsController.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPackageCatalog.h"
@@ -60,8 +61,10 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::remove_all(root_, ignored);
+    const auto error = ::test_support::removeReadOnlyTree(root_);
+    if (error) {
+      expect(false, "settings fixture cleanup failed: " + error.message());
+    }
   }
 
   const fs::path &root() const noexcept { return root_; }

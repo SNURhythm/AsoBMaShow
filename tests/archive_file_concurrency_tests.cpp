@@ -2356,6 +2356,12 @@ void testFullUnzipOutputCollisions(const std::string &extension, std::size_t wor
       }
     } else {
       const std::size_t payloadSize = extension == ".rar" ? 1024 * 1024 : 1024;
+      if (!result) {
+        std::cerr << "Full unzip failed: " << error << '\n';
+      } else if (result->fileCount != expectedFiles.size()) {
+        std::cerr << "Full unzip file count: " << result->fileCount
+                  << " expected=" << expectedFiles.size() << '\n';
+      }
       assert(result && result->fileCount == expectedFiles.size());
       assert(budget.writtenBytes == payloadSize * expectedFiles.size());
       assert(std::filesystem::exists(result->outputFolder / ".asobmashow_unzip_complete"));
@@ -3218,9 +3224,77 @@ void testDebugLogRetainsNewestThousandLines() {
   assert(logLines.back().find("retention-marker-1000") != std::string::npos);
 }
 
+void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
+  TempDirectory temporary;
+  struct TemporaryRootEnvironment {
+    std::array<const char *, 3> names{"TMPDIR", "TMP", "TEMP"};
+    std::array<std::optional<std::string>, 3> previous;
+    static void set(const char *name, const std::optional<std::string> &value) {
+#ifdef _WIN32
+      assert(_putenv_s(name, value ? value->c_str() : "") == 0);
+#else
+      assert((value ? setenv(name, value->c_str(), 1) : unsetenv(name)) == 0);
+#endif
+    }
+    explicit TemporaryRootEnvironment(const std::filesystem::path &root) {
+      for (std::size_t index = 0; index < names.size(); ++index) {
+        if (const char *value = std::getenv(names[index])) previous[index] = value;
+        set(names[index], root.string());
+      }
+    }
+    ~TemporaryRootEnvironment() {
+      for (std::size_t index = 0; index < names.size(); ++index) set(names[index], previous[index]);
+    }
+  } environment(temporary.path());
+  // Never run cache cleanup unless the facade is confined to our owned root.
+  assert(std::filesystem::equivalent(std::filesystem::temp_directory_path(), temporary.path()));
+  const auto root = temporary.path() / "AsoBMaShowArchiveCache";
+  const auto source = temporary.path() / "source.wav";
+  const std::vector<unsigned char> bytes{'a', 'b'};
+  std::string error;
+  const auto output = archive_file::materializeFileBytes(source, bytes, &error);
+  assert(output && output->parent_path() == root);
+  assert(*output == archive_file::materializedFileCachePath(source));
+  const auto other = archive_file::materializeFileBytes(temporary.path() / "other.wav", {'x', 'y', 'z'}, &error);
+  assert(other && other != output && other->parent_path() == root);
+
+  const auto alias = temporary.path() / "protected-alias";
+  archive_file::setCachePathNormalizer([&](std::filesystem::path &path) {
+    if (path == alias) path = *output;
+  });
+  struct ResetNormalizer {
+    ~ResetNormalizer() { archive_file::setCachePathNormalizer({}); }
+  } reset;
+  archive_file::TemporaryCacheUsageResult usage;
+  assert(archive_file::measureTemporaryCache(usage, &error));
+  assert(usage.path == root && usage.bytes == 5 && usage.entries == 2);
+  std::stop_source cancellation;
+  cancellation.request_stop();
+  const auto token = cancellation.get_token();
+  assert(!archive_file::measureTemporaryCache(usage, &error, &token));
+  assert(error == "Archive cache measurement cancelled.");
+
+  archive_file::TemporaryCacheCleanupResult cleaned;
+  assert(archive_file::cleanupTemporaryCache(cleaned, {alias}, &error));
+  assert(cleaned.path == root && cleaned.removedEntries == 1 && cleaned.removedBytes == 3 && cleaned.skippedEntries == 1);
+  assert(std::filesystem::exists(*output) && !std::filesystem::exists(*other));
+  std::vector<unsigned char> retained;
+  assert(archive_file::readFile(*output, retained, &error) && retained == bytes);
+  assert(archive_file::cleanupTemporaryCache(cleaned, {}, &error));
+  assert(cleaned.removedEntries == 1 && cleaned.removedBytes == 2 && !std::filesystem::exists(root));
+  assert(archive_file::measureTemporaryCache(usage, &error, &token) && !usage.cacheExisted);
+  std::atomic_bool cancelled = true;
+  assert(!archive_file::materializeFileBytes(source, bytes, &error, &cancelled));
+  assert(error == "Materialize cancelled." && !std::filesystem::exists(root));
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--temporary-cache") {
+    testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity();
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--output-reservations") {
     testFullUnzipKeepsReservedOutputIdentities(".zip", 4);
     return 0;
@@ -3253,6 +3327,7 @@ int main(int argc, char **argv) {
     testMixedEncryptionSevenZipRejectsFullUnzip(argv[2]);
     return 0;
   }
+  testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity();
   testZipIndexAmortizesPausePolling();
   testZipIndexPreservesFilenameBeyondEmbeddedStatBuffer();
   testGameplayBmsResourceAvailabilityPublishesLoaderResult();

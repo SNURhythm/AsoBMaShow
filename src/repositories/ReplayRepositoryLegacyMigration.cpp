@@ -33,17 +33,16 @@ constexpr const char *kReceiptRemoteScoreIndexSql =
     "ir_submission_receipts(provider_id, server_origin, remote_score_id)";
 
 bool run(sqlite3 *database, std::string_view sql, std::string_view context) {
-  char *rawError = nullptr;
+  SqliteErrorMessageHandle error;
   const std::string statement(sql);
   const int rc =
-      sqlite3_exec(database, statement.c_str(), nullptr, nullptr, &rawError);
+      sqlite3_exec(database, statement.c_str(), nullptr, nullptr, error.out());
   if (rc == SQLITE_OK) {
     return true;
   }
   SDL_Log("Replay summary migration failed while %s: %s",
           std::string(context).c_str(),
-          rawError != nullptr ? rawError : sqlite3_errmsg(database));
-  sqlite3_free(rawError);
+          error.get() != nullptr ? error.get() : sqlite3_errmsg(database));
   return false;
 }
 

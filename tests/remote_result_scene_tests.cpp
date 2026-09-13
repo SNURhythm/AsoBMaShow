@@ -1,6 +1,8 @@
 #include "scene/ResultScene.h"
 #include "scene/RemoteResultRecallController.h"
+#include "BeatorajaScoreMetrics.h"
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -91,11 +93,11 @@ void testRemoteSourceOwnsOnlyValidatedRemoteData() {
   static_assert(!HasReplayData<ResultRemoteOptions>);
   static_assert(!HasRhythmState<ResultRemoteOptions>);
   static_assert(!HasScoreProvenance<ResultRemoteOptions>);
-  static_assert(!HasPreviousScenePointer<ResultRemoteOptions>);
+  static_assert(HasPreviousScenePointer<ResultRemoteOptions>);
   static_assert(!HasReplayData<RemoteResultSource>);
   static_assert(!HasRhythmState<RemoteResultSource>);
   static_assert(!HasScoreProvenance<RemoteResultSource>);
-  static_assert(!HasPreviousScenePointer<RemoteResultSource>);
+  static_assert(HasPreviousScenePointer<RemoteResultSource>);
 
   auto score = remoteScore("bms-14k");
   const auto ranking = makeRemoteResultRankingQuery(score);
@@ -119,6 +121,16 @@ void testRemoteSourceOwnsOnlyValidatedRemoteData() {
               source.presentation.title == score.title &&
               source.presentation.gaugeSeries.size() == 1,
           "remote source owns its immutable presentation model");
+
+  // The retained owner is navigation context; the remote result still has no
+  // local chart, replay, provenance, or persistence authority.
+  auto *owner = reinterpret_cast<Scene *>(std::uintptr_t{0x1234});
+  const auto retained = makeResultRemoteSource({.score = score,
+      .rankingQuery = makeRemoteResultRankingQuery(score),
+      .providerId = std::string(ir::kTachiProviderId),
+      .serverOrigin = std::string(ir::kDefaultTachiServerOrigin),
+      .returnScene = owner});
+  require(retained.returnScene == owner, "remote result preserves its originating Records scene");
 
   const RemoteResultSource customOrigin =
       makeResultRemoteSource({.score = score,
@@ -414,6 +426,83 @@ void testLocalRegressionContractsRemainPresent() {
   }
 }
 
+void testResultTimingStatisticsUseBeatorajaConventions() {
+  ReplayData replay;
+  require(!beatorajaResultTimingStatistics(nullptr, 1, nullptr) &&
+              !beatorajaResultTimingStatistics(&replay, 0, nullptr),
+          "timing statistics require a replay and a positive note count");
+  const auto empty = beatorajaResultTimingStatistics(&replay, 1, nullptr);
+  require(empty && !empty->hasTimingSamples && empty->timingSampleCount == 0 &&
+              empty->averageJudgeMicros == 1'000'000,
+          "unplayed notes retain the one-second judge penalty without samples");
+  replay.events = {
+      {.judgement = PGreat, .diffMicros = 1'999},
+      {.judgement = Great, .diffMicros = -2'999},
+      {.action = ReplayEventAction::MultiBad, .judgement = Bad, .diffMicros = 4'000},
+      {.action = ReplayEventAction::Release, .judgement = Good, .diffMicros = -5'000},
+      {.judgement = Poor, .diffMicros = 6'000},
+      {.judgement = Kpoor, .diffMicros = 1'000},
+      {.action = ReplayEventAction::Miss, .judgement = Poor, .diffMicros = 7'000},
+      {.judgement = None, .diffMicros = 8'000},
+      {.judgement = Great, .diffMicros = 150'001},
+  };
+  const auto timing = beatorajaResultTimingStatistics(&replay, 6, nullptr);
+  require(timing && timing->hasTimingSamples && timing->timingSampleCount == 5 &&
+              timing->distribution.size() == 301 &&
+              timing->distribution[149] == 1 && timing->distribution[152] == 1 &&
+              timing->distribution[146] == 1 && timing->distribution[155] == 1 &&
+              timing->distribution[144] == 1,
+          "result timing reverses input sign and truncates to millisecond bins");
+  require(std::abs(timing->averageMillis + 0.8) < 0.00001 &&
+              std::abs(timing->standardDeviationMillis - std::sqrt(15.76)) <
+                  0.00001 && timing->averageJudgeMicros == 193'999,
+          "result timing separates histogram samples from judged-note penalties");
+}
+
+void testResultTimingStatisticsCountLongNoteResultsOnce() {
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure();
+  chart.Measures.push_back(measure);
+  auto *headTimeline = new bms_parser::TimeLine(8, false);
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  measure->TimeLines = {headTimeline, tailTimeline};
+  headTimeline->Timing = 100'000;
+  tailTimeline->Timing = 200'000;
+  auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote);
+  auto *tail = new bms_parser::LongNote(1, bms_parser::LongNoteType::LongNote);
+  head->Tail = tail;
+  tail->Head = head;
+  headTimeline->SetNote(0, head);
+  tailTimeline->SetNote(0, tail);
+  ReplayData replay;
+  replay.events = {
+      {.lane = 0, .noteTimeMicros = 100'000, .judgement = PGreat, .diffMicros = 1'000},
+      {.action = ReplayEventAction::Release, .lane = 0, .noteTimeMicros = 200'000,
+       .judgement = Great, .diffMicros = 2'000},
+  };
+  for (const auto judgement : {PGreat, Bad}) {
+    replay.events[0].judgement = judgement;
+    const auto classic = beatorajaResultTimingStatistics(&replay, 1, &chart);
+    require(classic && classic->timingSampleCount == 1 &&
+                classic->distribution[148] == 1 && classic->averageJudgeMicros == 2'000,
+            "classic long notes use their tail result instead of counting both ends");
+  }
+  replay.events[0].judgement = PGreat;
+  head->SetType(bms_parser::LongNoteType::ChargeNote);
+  const auto charge = beatorajaResultTimingStatistics(&replay, 2, &chart);
+  require(charge && charge->timingSampleCount == 2 &&
+              charge->distribution[149] == 1 && charge->distribution[148] == 1 &&
+              charge->averageJudgeMicros == 1'500,
+          "charge notes retain independent head and tail timing results");
+  head->SetType(bms_parser::LongNoteType::LongNote);
+  replay.events[0].judgement = Bad;
+  replay.events.resize(1);
+  const auto missedHead = beatorajaResultTimingStatistics(&replay, 1, &chart);
+  require(missedHead && missedHead->timingSampleCount == 1 &&
+              missedHead->averageJudgeMicros == 1'000,
+          "a classic bad head remains a result when no tail result exists");
+}
+
 void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   const std::string result = readSource("src/scene/ResultScene.cpp");
   const std::string gameplay =
@@ -450,7 +539,7 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
       "Beatoraja's calculated clear rank");
   requireContains(result,
                   "const auto timing = isCourseFinalResult()\n"
-                  "                            ? std::optional<ResultTimingStatistics>{}",
+                  "                            ? std::optional<BeatorajaResultTimingStatistics>{}",
                   "course results retain Beatoraja's empty timing distribution "
                   "instead of combining MusicResult replay timing data");
   requireContains(session,
@@ -531,12 +620,8 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.",
                   "course result graph retains the source-sampled stage gauge logs");
-  requireContains(mainMenu,
-                  "auto replay = consumer.load(*exact.record,",
-                  "saved course result recall loads its retained replay when available");
-  requireContains(mainMenu,
-                  "session->resultBrowseReplayData = std::move(resultBrowseReplayData);",
-                  "saved course result recall retains its replay for later result timing");
+  // Shared course loading and graph ownership are exercised by the real
+  // repository fixtures in course_record_actions_tests.
   requireContains(mainMenu,
                   "const ReplayData *firstReplay = session->resultBrowseStageReplay(0);",
                   "the initially displayed saved course stage receives its retained replay");
@@ -544,12 +629,6 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "ResultTableContext{}, first.gameplayGraph,",
                   "the initially displayed replay-less saved course stage receives "
                   "its prepared chart graph");
-  requireContains(mainMenu,
-                  "*replayChart, *stageReplay, stage.state",
-                  "saved course graph reconstruction uses the replay-prepared chart");
-  requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
-                 "*replayChart, *stageReplay, stage.state",
-                 "saved course graph reconstruction occurs before ResultScene uses it");
   requireContains(result,
                   "} else if (isCourseStageResult()) {",
                   "saved modern course stages project durable setup provenance");
@@ -604,19 +683,10 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "data.irOnline = !context.irAccountNameSnapshot().empty();",
                   "result IR selector state requires an authenticated runtime account");
   requireContains(result,
-                  "const long long beatorajaDiffMicros = -event.diffMicros;",
-                  "replay timing samples use Beatoraja's result-sign convention");
-  requireContains(
-      result,
-      "const int timingMillis = static_cast<int>(index) - 150;\n"
-      "    timingSampleCount += count;\n"
-      "    timingSum += static_cast<long long>(count) * timingMillis;",
-      "replay timing statistics use Beatoraja's integer-millisecond distribution");
-  requireContains(mainMenu,
-                  "replay_result::BuildSkinGameplayChartGraphState(\n"
-                  "                      *stage.chart, stage.state)",
-                  "replay-less saved course stages preserve authored graph data without "
-                  "synthetic judgement samples");
+                  ": beatorajaResultTimingStatistics(\n"
+                  "                                  timingReplay, local->meta.TotalNotes,\n"
+                  "                                  local->reusableRetryChart);",
+                  "local result timing uses the shared replay and long-note calculation");
   requireContains(
       mainMenu,
       "const SkinGameplayGraphState gameplayGraph =\n"
@@ -693,6 +763,8 @@ int main() {
   testRemoteRecallRejectsStaleSelectionBeforeAndAfterLookup();
   testResultTableContextRestoresRetryLaunchOptions();
   testLocalRegressionContractsRemainPresent();
+  testResultTimingStatisticsUseBeatorajaConventions();
+  testResultTimingStatisticsCountLongNoteResultsOnce();
   testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent();
   std::cout << "remote result scene tests passed\n";
   return 0;

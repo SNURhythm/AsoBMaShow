@@ -9,13 +9,16 @@ target_sources(main PRIVATE
     DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
     FindBmsProgressPresentation.cpp
+    FindBmsTask.cpp
     IrUploadsController.cpp
+    IrUploadPreparationTask.cpp
     IrUploadsScene.cpp
     IntroScene.cpp
     LibraryTasksScene.cpp
     PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuPlayOptionsModal.cpp
+    MainMenuPreviewController.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
     MusicSelectScene.cpp
@@ -24,6 +27,7 @@ target_sources(main PRIVATE
     PracticeAnalyticsPresentation.cpp
     PracticeAnalyticsView.cpp
     ProfileSettingsController.cpp
+    ProfileArchiveWorker.cpp
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
     RemoteResultRecallController.cpp
@@ -35,6 +39,9 @@ target_sources(main PRIVATE
     ResultScene.cpp
     SettingsScene.cpp
     SettingsAudioVideoModel.cpp
+    SettingsCacheMaintenance.cpp
+    SettingsLibraryTask.cpp
+    SettingsPreviewChart.cpp
     SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
     SettingsSceneSkins.cpp

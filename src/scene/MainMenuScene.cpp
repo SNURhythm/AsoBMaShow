@@ -1,4 +1,8 @@
 #include "MainMenuScene.h"
+#include "ResultRecordsLoader.h"
+#include "ChartRecordActions.h"
+#include "RecordsIrActions.h"
+#include "RecordsDiagnostics.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
 #include "../BmsChartFile.h"
@@ -34,7 +38,7 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
-#include "ChartPreloadWorker.h"
+#include "MainMenuPreviewController.h"
 #include "DecideLoadingOverlay.h"
 #include "../view/PlayOptionsPanelView.h"
 #include "../view/TextView.h"
@@ -113,7 +117,6 @@ constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr auto kPreviewDebounceDelay = std::chrono::milliseconds(100);
 constexpr size_t kFindBmsMaxLogLines = 120;
-constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
 // Keep this below the modal's nominal width because row padding and the
 // scrollbar gutter reduce the usable text area.
 constexpr size_t kParseLogRowMaxColumns = 88;
@@ -125,28 +128,6 @@ constexpr uint32_t kIconFileLines = 0xf15c;
 constexpr uint32_t kIconCalculator = 0xf1ec;
 constexpr uint32_t kIconShare = 0xf1e0;
 constexpr uint32_t kIconTrash = 0xf1f8;
-
-std::string replayDiagnosticOr(std::string_view diagnostic,
-                               std::string_view fallback) {
-  std::string result = ir::sanitizeDiagnostic(diagnostic);
-  if (result.empty()) {
-    result = ir::sanitizeDiagnostic(fallback);
-  }
-  return result;
-}
-
-ir::IrRecordActivity
-recordActivityFor(ir::IrActiveRequestKind activeRequest) noexcept {
-  switch (activeRequest) {
-  case ir::IrActiveRequestKind::None:
-    return ir::IrRecordActivity::None;
-  case ir::IrActiveRequestKind::Submit:
-    return ir::IrRecordActivity::Submitting;
-  case ir::IrActiveRequestKind::Poll:
-    return ir::IrRecordActivity::Polling;
-  }
-  return ir::IrRecordActivity::None;
-}
 
 std::string formatGaugeTotal(const bms_parser::ChartMeta &meta,
                              GameplayRuleset ruleset) {
@@ -869,16 +850,31 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   return Scene::handleEvents(event);
 }
 
+MainMenuScene::MainMenuScene(ApplicationContext &context) : Scene(context) {}
+
+MainMenuScene::~MainMenuScene() {
+  stopReplayAndPreviewWork();
+  findBmsTask.stopAndWait();
+}
+
+void MainMenuScene::stopReplayAndPreviewWork() {
+  // Preparation workers can join the preview worker themselves. Join those
+  // owners first, while all callbacks still have live scene dependencies.
+  stopReplayLoadWorker();
+  replayExportJob_.cancelAndWait();
+  if (previewWorker_ != nullptr) previewWorker_->stop();
+}
+
 void MainMenuScene::init() {
   // Initialize the scene
   chartSession =
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
-    if (replayExportInProgress.load(std::memory_order_acquire)) {
+    if (replayExportJob_.inProgress()) {
       return "A replay export is active.";
     }
     if (archiveUnzipInProgress() ||
-        findBmsJobRunning.load(std::memory_order_acquire)) {
+        findBmsTask.running()) {
       return "A chart archive operation is active.";
     }
     if (willStart.load(std::memory_order_acquire)) {
@@ -905,6 +901,10 @@ void MainMenuScene::init() {
 }
 
 void MainMenuScene::onPause() {
+  if (replayLoadTask_.active()) {
+    stopReplayLoadWorker();
+    willStart.store(false);
+  }
   onApplicationBackgroundChanged(true);
   if (revealContextMenu != nullptr) {
     revealContextMenu->dismiss();
@@ -1197,25 +1197,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
   readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
-  pendingReplayExportResult.reset();
-  pendingReplayExportProgress.reset();
+  replayExportJob_.reset();
   pendingSelectChartPath.reset();
   {
     std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
     pendingFindBmsSelectionHandoff.reset();
   }
   suppressPreviewForChartPath.reset();
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
+  findBmsTask.stopAndWait();
   chartSelectionGeneration = 0;
   findBmsSelectionGenerationAtDownloadStart = 0;
-  replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
   tasksModalOpenRequested = false;
-  findBmsJobRunning = false;
-  findBmsCancelled = false;
   findBmsResult = {};
   findBmsPendingDecision.reset();
   findBmsProgressMessage.clear();
@@ -1325,19 +1320,15 @@ void MainMenuScene::initView(ApplicationContext &context) {
     refreshPlayOptionButtons();
     refreshLongNoteModeButtons();
     refreshAssistOptionButtons();
-    if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+    if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
       replayStatusText->setText("");
     }
     if (item.courseStart) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = true;
-      }
       if (previewWorker_ != nullptr) {
-        previewWorker_->cancel();
+        previewWorker_->cancelAndReleaseWhenIdle();
       }
       clearSelectedChart();
       jacketView->freeImage();
@@ -1351,12 +1342,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
         item.unavailable && !item.solidArchive &&
         (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = true;
-    }
     if (previewWorker_ != nullptr) {
-      previewWorker_->cancel();
+      previewWorker_->cancelAndReleaseWhenIdle();
     }
     clearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {
@@ -1365,7 +1352,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     if (item.solidArchive) {
       jacketView->freeImage();
-      if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
         replayStatusText->setText(
             "Skipped solid archive. Estimated unzip: " +
             formatFindBmsBytes(item.archiveUncompressedSize));
@@ -1385,7 +1372,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
     if (archiveVirtualPath && !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
-      if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
         replayStatusText->setText("Archive preview disabled");
       }
       archive_file::appendDebugLogLine(
@@ -1408,7 +1395,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       jacketView->freeImage();
     }
     if (suppressPreview) {
-      if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+      if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
         replayStatusText->setText("Unzipped chart selected");
       }
       archive_file::appendDebugLogLine(
@@ -1418,10 +1405,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = false;
-    }
     if (previewWorker_ != nullptr) {
       ChartMetaRecord previewRecord;
       previewRecord.meta = std::move(meta);
@@ -1497,21 +1480,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       0, 0, rendering::window_width, rendering::window_height, {});
   decideOverlay_->setVisible(false);
   overlayPortal->present(decideOverlay_);
-  previewWorker_ = new ChartPreloadWorker(kPreviewDebounceDelay);
-  previewWorker_->setOnIdle([this]() {
-    bool shouldStopPreviewAudio = false;
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      if (pendingStopAndClearSelectedChartAfterPreview) {
-        pendingStopAndClearSelectedChartAfterPreview = false;
-        shouldStopPreviewAudio = true;
-      }
-    }
-    if (shouldStopPreviewAudio) {
-      stopAndClearSelectedChart();
-    }
-  });
-  previewWorker_->configure(
+  previewWorker_ = std::make_unique<MainMenuPreviewController>(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
         const auto &meta = request.meta;
         const auto isCancelled = [&cancelled, this, &meta]() {
@@ -1571,7 +1540,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
             this->context.jukebox.play();
           }
         }
-      });
+      }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay);
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -1687,10 +1656,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       if (previewWorker_ != nullptr) {
         previewWorker_->stop();
       }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
-      }
       stopAndClearSelectedChart();
       context.sceneManager->changeScene(
           std::make_unique<MusicPlayerScene>(
@@ -1711,10 +1676,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     if (context.sceneManager != nullptr) {
       if (previewWorker_ != nullptr) {
         previewWorker_->stop();
-      }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
       }
       stopAndClearSelectedChart();
       context.sceneManager->changeScene(
@@ -1988,7 +1949,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                           ui_theme::successActionPressed,
                           ui_theme::accentBorder);
   replayButton->setOnClickListener([this]() {
-    if (willStart.load() || replayExportInProgress.load()) {
+    if (willStart.load() || replayExportJob_.inProgress()) {
       return;
     }
     const auto selectedMeta = selectedRecordSnapshot();
@@ -2144,15 +2105,11 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                           ui_theme::dangerActionPressed,
                           ui_theme::accentBorder);
   settingsButton->setOnClickListener([this, &context]() {
-    if (willStart.load() || replayExportInProgress.load()) {
+    if (willStart.load() || replayExportJob_.inProgress()) {
       return;
     }
     if (previewWorker_ != nullptr) {
       previewWorker_->stop();
-    }
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = false;
     }
     stopAndClearSelectedChart();
     context.sceneManager->changeScene(
@@ -3919,35 +3876,11 @@ MainMenuScene::courseValidationForActiveFolder() {
 std::optional<MainMenuScene::CurrentCourseSelection>
 MainMenuScene::currentCourseSelectionFor(
     const result_persistence::ModernCourseResult &result) {
-  if (activeFolder.type != LibraryFolderItem::Type::Course ||
-      activeFolder.courseKey != result.courseKey || result.totalCharts <= 0) {
+  if (activeFolder.type != LibraryFolderItem::Type::Course) {
     return std::nullopt;
   }
-  const auto &validation = courseValidationForActiveFolder();
-  if (result.stages.size() > validation.records.size() ||
-      std::ranges::any_of(
-          validation.records.begin(),
-          validation.records.begin() +
-              static_cast<std::ptrdiff_t>(result.stages.size()),
-          [](const auto &record) {
-            return record.solidArchive || record.unavailable ||
-                   record.meta.BmsPath.empty();
-          })) {
-    return std::nullopt;
-  }
-  CurrentCourseSelection selection{
-      .records = validation.records,
-      .completeCourse =
-          validation.records.size() ==
-              static_cast<std::size_t>(result.totalCharts) &&
-          validation.firstMissingIndex < 0,
-  };
-  selection.completedChartPaths.reserve(result.stages.size());
-  for (std::size_t index = 0; index < result.stages.size(); ++index) {
-    selection.completedChartPaths.push_back(
-        selection.records[index].meta.BmsPath);
-  }
-  return selection;
+  return course_records::currentCourseSelectionFor(
+      activeFolder.courseKey, courseValidationForActiveFolder().records, result);
 }
 
 void MainMenuScene::refreshStartButtonForActiveFolder() {
@@ -4086,10 +4019,6 @@ void MainMenuScene::startCourseDirect(
         };
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
-        }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
         }
         clearSelectedChart();
 
@@ -4270,10 +4199,6 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
         }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
-        }
 
         bms_parser::Chart *readyChart = nullptr;
         if (canReusePreviewForStart) {
@@ -4395,7 +4320,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
 }
 
 void MainMenuScene::openChartViewerForSelection() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
@@ -4416,7 +4341,7 @@ void MainMenuScene::openChartViewerForSelection() {
 }
 
 void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
     return;
@@ -4427,10 +4352,6 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
 
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   archive_file::appendDebugLogLine(
       "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
@@ -4450,7 +4371,7 @@ void MainMenuScene::toggleRevealContextMenu() {
     revealContextMenu->dismiss();
     return;
   }
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr) {
     return;
   }
@@ -4478,7 +4399,7 @@ void MainMenuScene::toggleRevealContextMenu() {
 }
 
 void MainMenuScene::showSelectedChartFolder() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr) {
     return;
   }
@@ -4538,7 +4459,7 @@ bool MainMenuScene::clearSameFolderScope() {
 }
 
 void MainMenuScene::revealSelectedChartInFileManager() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr || revealButton == nullptr) {
     return;
   }
@@ -4681,7 +4602,7 @@ void MainMenuScene::refreshUnzipButtonForSelection(
 }
 
 void MainMenuScene::startUnzipSelectedArchiveFolder() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
@@ -4699,7 +4620,7 @@ void MainMenuScene::startUnzipSelectedArchiveFolder() {
 }
 
 void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
       context.chartLibraryFoldersReloadRequested.load() ||
@@ -4710,10 +4631,6 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
   }
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   stopAndClearSelectedChart();
   const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
@@ -4759,14 +4676,14 @@ void MainMenuScene::buildUnzipProgressModal() {
 }
 
 void MainMenuScene::startLibraryRefresh() {
-  if (willStart.load() || replayExportInProgress.load()) {
+  if (willStart.load() || replayExportJob_.inProgress()) {
     return;
   }
   enqueueLibraryRefreshTask("Refresh Library");
 }
 
 void MainMenuScene::startLibraryRebuild() {
-  if (willStart.load() || replayExportInProgress.load()) {
+  if (willStart.load() || replayExportJob_.inProgress()) {
     return;
   }
   enqueueLibraryRefreshTask("Rebuild Library", std::filesystem::path(), "",
@@ -4787,7 +4704,7 @@ void MainMenuScene::setFindBmsButtonVisible(bool visible) {
 }
 
 void MainMenuScene::openFindBmsForSelection() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr) {
     return;
   }
@@ -5307,7 +5224,7 @@ void MainMenuScene::refreshMusicModal() {
 }
 
 void MainMenuScene::playSelectedChartAsMusic() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr) {
     return;
   }
@@ -5330,10 +5247,6 @@ void MainMenuScene::playSelectedChartAsMusic() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 
   MusicTrackRecord musicRecord{.representativeChart = record.meta,
@@ -5347,7 +5260,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
 }
 
 void MainMenuScene::addSelectedChartToMusicPlaylist() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr) {
     return;
   }
@@ -5378,7 +5291,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
 }
 
 void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
-  if (willStart.load() || replayExportInProgress.load() ||
+  if (willStart.load() || replayExportJob_.inProgress() ||
       recyclerView == nullptr) {
     return;
   }
@@ -5412,10 +5325,6 @@ void MainMenuScene::playSavedMusicPlaylist() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -5441,10 +5350,6 @@ void MainMenuScene::clearSavedMusicPlaylist() {
 void MainMenuScene::playRandomMusicLibrary() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
 
@@ -5502,10 +5407,6 @@ void MainMenuScene::playNextMusicTrack() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -5517,10 +5418,6 @@ void MainMenuScene::playNextMusicTrack() {
 void MainMenuScene::playPreviousMusicTrack() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
 
@@ -5899,17 +5796,14 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() {
-    const bool wasRunning = findBmsJobRunning.load();
+    const bool wasRunning = findBmsTask.running();
     applyFindBmsUpdates();
-    const bool running = wasRunning || findBmsJobRunning.load();
+    const bool running = wasRunning || findBmsTask.running();
     if (!findBmsDialogPolicy(running, findBmsResult).showCloseOrCancel) {
       return;
     }
     if (running) {
-      findBmsCancelled = true;
-      if (findBmsThread.joinable()) {
-        findBmsThread.request_stop();
-      }
+      findBmsTask.requestCancel();
       refreshFindBmsModal();
       return;
     }
@@ -5953,11 +5847,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   if (findBmsModalRoot == nullptr) {
     return;
   }
-  if (findBmsThread.joinable()) {
-    findBmsCancelled = true;
-    findBmsThread.request_stop();
-    findBmsThread.join();
-  }
+  findBmsTask.stopAndWait();
 
   findBmsModalChart = record;
   findBmsResult = {};
@@ -5976,55 +5866,31 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   findBmsProgressFraction = 0.02;
   findBmsProgressLog.clear();
   findBmsProgressLog.push_back("Preparing lookup");
-  findBmsCancelled = false;
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
   findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
-  findBmsJobRunning = true;
   findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->setVisible(true);
-  refreshFindBmsModal();
-
-  findBmsThread = std::jthread([this, record, downloadRoot, downloadOptions](
-                                   const std::stop_token &stopToken) {
+  findBmsTask.start([record, downloadRoot, downloadOptions](
+                        std::atomic_bool &cancelled,
+                        BmsSearchDownloadProgressCallback progress) {
     BmsSearchService service;
-    auto progressCallback = [this](const BmsSearchDownloadProgress &progress) {
-      std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsProgressEvents.push_back(progress);
-      while (pendingFindBmsProgressEvents.size() >
-             kFindBmsMaxPendingProgressEvents) {
-        pendingFindBmsProgressEvents.pop_front();
-      }
-    };
-    if (stopToken.stop_requested()) {
-      findBmsCancelled = true;
-    }
-    auto result = service.findAndDownload(
-        record.meta.SHA256, record.meta.MD5, downloadRoot, findBmsCancelled,
-        progressCallback, record.meta.Title, record.meta.Artist,
+    return service.findAndDownload(
+        record.meta.SHA256, record.meta.MD5, downloadRoot, cancelled,
+        std::move(progress), record.meta.Title, record.meta.Artist,
         downloadOptions);
-    {
-      std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsResult = std::move(result);
-      findBmsJobRunning = false;
-    }
   });
+  refreshFindBmsModal();
 }
 
 void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
-  if (findBmsJobRunning.load() ||
+  if (findBmsTask.running() ||
       candidateIndex >= findBmsResult.candidates.size()) {
     return;
   }
-  if (findBmsThread.joinable()) {
-    findBmsThread.join();
-  }
-
   const BmsSearchCandidate candidate = findBmsResult.candidates[candidateIndex];
   const ChartMetaRecord record = findBmsModalChart;
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
@@ -6040,49 +5906,23 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsProgressFraction = 0.09;
   findBmsProgressLog.clear();
   findBmsProgressLog.push_back("Preparing Horie archive download");
-  findBmsCancelled = false;
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
   findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
-  findBmsJobRunning = true;
+  findBmsTask.start([candidate, record, downloadRoot, downloadOptions](
+                        std::atomic_bool &cancelled,
+                        BmsSearchDownloadProgressCallback progress) {
+    BmsSearchService service;
+    return service.downloadCandidate(
+        candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
+        cancelled, std::move(progress), downloadOptions);
+  });
   refreshFindBmsModal();
-
-  findBmsThread = std::jthread(
-      [this, candidate, record, downloadRoot, downloadOptions](
-          const std::stop_token &stopToken) {
-        BmsSearchService service;
-        auto progressCallback =
-            [this](const BmsSearchDownloadProgress &progress) {
-              std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-              pendingFindBmsProgressEvents.push_back(progress);
-              while (pendingFindBmsProgressEvents.size() >
-                     kFindBmsMaxPendingProgressEvents) {
-                pendingFindBmsProgressEvents.pop_front();
-              }
-            };
-        if (stopToken.stop_requested()) {
-          findBmsCancelled = true;
-        }
-        auto result = service.downloadCandidate(
-            candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
-            findBmsCancelled, progressCallback, downloadOptions);
-        {
-          std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-          pendingFindBmsResult = std::move(result);
-          findBmsJobRunning = false;
-        }
-      });
 }
 
 void MainMenuScene::startFindBmsPendingArtifactResolution(
     BmsSearchPendingArtifactDecision decision) {
-  if (findBmsJobRunning.load() || !findBmsResult.pendingArtifact) {
+  if (findBmsTask.running() || !findBmsResult.pendingArtifact) {
     return;
   }
-  if (findBmsThread.joinable()) {
-    findBmsThread.join();
-  }
-
   BmsSearchResult result = findBmsResult;
   findBmsPendingDecision = decision;
   findBmsProgressMessage =
@@ -6092,27 +5932,18 @@ void MainMenuScene::startFindBmsPendingArtifactResolution(
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.95;
   findBmsProgressLog.push_back(findBmsProgressMessage);
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
-  findBmsJobRunning = true;
+  findBmsTask.start([result = std::move(result), decision](
+                        std::atomic_bool &, BmsSearchDownloadProgressCallback) mutable {
+    BmsSearchService service;
+    return service.resolvePendingArtifact(std::move(result), decision);
+  });
   refreshFindBmsModal();
-
-  findBmsThread = std::jthread(
-      [this, result = std::move(result), decision](
-          const std::stop_token &) mutable {
-        BmsSearchService service;
-        auto resolved =
-            service.resolvePendingArtifact(std::move(result), decision);
-        std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-        pendingFindBmsResult = std::move(resolved);
-        findBmsJobRunning = false;
-      });
 }
 
 void MainMenuScene::hideFindBmsModal() {
-  const bool wasRunning = findBmsJobRunning.load();
+  const bool wasRunning = findBmsTask.running();
   applyFindBmsUpdates();
-  const bool running = wasRunning || findBmsJobRunning.load();
+  const bool running = wasRunning || findBmsTask.running();
   if (findBmsModalRoot == nullptr ||
       !findBmsDialogPolicy(running, findBmsResult).canDismiss) {
     return;
@@ -6125,9 +5956,9 @@ void MainMenuScene::refreshFindBmsModal() {
     return;
   }
 
-  const bool running = findBmsJobRunning.load();
+  const bool running = findBmsTask.running();
   const auto policy =
-      findBmsDialogPolicy(findBmsJobRunning.load(), findBmsResult);
+      findBmsDialogPolicy(findBmsTask.running(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
     findBmsModalTitleText->setText("Find BMS");
   }
@@ -6335,15 +6166,9 @@ void MainMenuScene::refreshFindBmsModal() {
 }
 
 void MainMenuScene::applyFindBmsUpdates() {
-  std::deque<BmsSearchDownloadProgress> progressEvents;
-  std::optional<BmsSearchResult> result;
-  {
-    std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-    progressEvents = std::move(pendingFindBmsProgressEvents);
-    result = std::move(pendingFindBmsResult);
-    pendingFindBmsProgressEvents.clear();
-    pendingFindBmsResult.reset();
-  }
+  auto updates = findBmsTask.takeUpdates();
+  auto &progressEvents = updates.progress;
+  auto &result = updates.result;
 
   auto appendLogLine = [this](const std::string &logLine) {
     if (logLine.empty()) {
@@ -6372,7 +6197,6 @@ void MainMenuScene::applyFindBmsUpdates() {
     shouldRefresh = true;
   }
   if (result) {
-    findBmsJobRunning = false;
     findBmsResult = std::move(*result);
     findBmsPendingDecision.reset();
     const bool keptMismatchedFiles =
@@ -6507,305 +6331,81 @@ void MainMenuScene::openReplayRecordsForSelection() {
 
 std::vector<ResultRecordSummary>
 MainMenuScene::loadRecordsForModal(const ChartMetaRecord &record) {
-  const bool courseReplayList =
-      record.courseStart &&
+  ResultRecordsLoadOptions options;
+  if (record.courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
-      (!activeFolder.courseKey.empty() || activeFolder.courseId > 0);
-  std::vector<ReplaySummary> syntheticRecords;
-  std::vector<ResultRecordSummary> modernSummaries;
-  if (courseReplayList) {
-    const auto legacy = context.replayRepository.ListLegacyCourseSummaries(
-        {.courseKey = activeFolder.courseKey,
-         .legacyCourseId = activeFolder.courseId},
-        kMaximumLegacyResultSummaryRows);
-    modernSummaries.reserve(legacy.size());
-    for (const LegacyCourseResultSummary &summary : legacy) {
-      modernSummaries.push_back(makeLegacyCourseResultRecord(summary));
-    }
+      (!activeFolder.courseKey.empty() || activeFolder.courseId > 0)) {
+    options.course = CourseReplayLookup{.courseKey = activeFolder.courseKey,
+                                        .legacyCourseId = activeFolder.courseId};
   } else {
-    syntheticRecords.push_back(autoPlayReplaySummary(record));
-    const auto legacy = context.replayRepository.ListLegacyChartSummaries(
-        record.meta, kMaximumLegacyResultSummaryRows);
-    modernSummaries.reserve(legacy.size());
-    for (const LegacyChartResultSummary &summary : legacy) {
-      modernSummaries.push_back(makeLegacyChartResultRecord(summary));
+    options.autoPlay = autoPlayReplaySummary(record);
+  }
+  options.irServerOrigin = activeReplayIrServerOrigin();
+  const auto provider = context.settings.irProviders.find(
+      std::string(ir::kTachiProviderId));
+  options.irEnabled = provider != context.settings.irProviders.end() &&
+                      provider->second.enabled;
+  options.attemptActivity = [this](std::string_view attemptId) {
+    const auto status = context.irSubmissionService != nullptr
+                            ? context.irSubmissionService->status(
+                                  ir::kTachiProviderId, attemptId)
+                            : ir::IrAttemptStatusSnapshot{};
+    return replay_records::recordActivity(status.activeRequest);
+  };
+  auto loaded = loadResultRecords(context.replayRepository, record, options);
+  for (const auto &diagnostic : loaded.diagnostics) {
+    if (diagnostic.message != publishedResultRecordDiagnostic) {
+      publishedResultRecordDiagnostic = diagnostic.message;
+      SDL_Log("%s", diagnostic.message.c_str());
+      archive_file::appendDebugLogLine(diagnostic.message);
     }
   }
-
-  const std::optional<std::string> irServerOrigin =
-      activeReplayIrServerOrigin();
-  std::unordered_map<std::string, ir::IrUploadRecord> irRecordsByAttempt;
-  bool modernIrReadSucceeded = courseReplayList;
-  if (!courseReplayList && irServerOrigin.has_value() &&
-      !record.meta.SHA256.empty()) {
-    auto records = context.replayRepository.ListIrUploadRecordsForChart(
-        ir::kTachiProviderId, *irServerOrigin, record.meta.SHA256,
-        kMaximumModernChartHistoryRows);
-    std::string irReadDiagnostic;
-    if (records.status != ir::IrUploadRecordReadStatus::Loaded) {
-      irReadDiagnostic =
-          records.diagnostic.empty()
-              ? "Modern IR Records unavailable: state could not be read"
-              : std::string("Modern IR Records unavailable: ") +
-                    records.diagnostic;
-    } else {
-      irRecordsByAttempt.reserve(records.records.size());
-      for (auto &irRecord : records.records) {
-        irRecordsByAttempt.emplace(irRecord.attemptId, std::move(irRecord));
-      }
-      irReadDiagnostic = std::move(records.diagnostic);
-    }
-    modernIrReadSucceeded = irReadDiagnostic.empty();
-    if (!irReadDiagnostic.empty()) {
-      const std::string diagnostic =
-          ir::sanitizeDiagnostic(irReadDiagnostic);
-      if (diagnostic != publishedResultRecordDiagnostic) {
-        publishedResultRecordDiagnostic = diagnostic;
-        SDL_Log("%s", diagnostic.c_str());
-        archive_file::appendDebugLogLine(diagnostic);
-      }
-    }
-  } else if (!courseReplayList && !irServerOrigin.has_value()) {
-    const std::string diagnostic =
-        "Modern IR Records unavailable: provider origin is invalid";
-    if (diagnostic != publishedResultRecordDiagnostic) {
-      publishedResultRecordDiagnostic = diagnostic;
-      SDL_Log("%s", diagnostic.c_str());
-      archive_file::appendDebugLogLine(diagnostic);
-    }
-  } else if (!courseReplayList) {
-    modernIrReadSucceeded = true;
+  if (loaded.complete) {
+    publishedResultRecordDiagnostic.clear();
   }
+  return std::move(loaded.records);
+}
 
-  bool modernHistoryReadSucceeded = true;
-  if (courseReplayList && !activeFolder.courseKey.empty()) {
-    const auto history = context.replayRepository.ListModernCourseResults(
-        activeFolder.courseKey, kMaximumModernCourseHistoryRows);
-    if (history.status == ModernCourseHistoryReadStatus::Loaded) {
-      modernSummaries.reserve(modernSummaries.size() + history.records.size());
-      replay::ReplayFileActionService replayActions(context.replayRepository);
-      for (const ModernCourseResultRecord &modern : history.records) {
-        const auto inspected = replayActions.probe(modern.replayFile);
-        modernSummaries.push_back(
-            makeModernCourseResultRecord(
-                modern, replay::replayStateForFileAction(inspected.state)));
-      }
-    } else {
-      modernHistoryReadSucceeded = false;
-      const std::string diagnostic = ir::sanitizeDiagnostic(
-          history.diagnostic.empty()
-              ? "Modern Course Records unavailable: history could not be read"
-              : std::string("Modern Course Records unavailable: ") +
-                    history.diagnostic);
-      if (diagnostic != publishedResultRecordDiagnostic) {
-        publishedResultRecordDiagnostic = diagnostic;
-        SDL_Log("%s", diagnostic.c_str());
-        archive_file::appendDebugLogLine(diagnostic);
-      }
-    }
-  } else if (!courseReplayList && !record.meta.SHA256.empty()) {
-    const auto history = context.replayRepository.ListModernChartResults(
-        record.meta.SHA256, kMaximumModernChartHistoryRows);
-    if (history.status == ModernChartHistoryReadStatus::Loaded) {
-      modernSummaries.reserve(modernSummaries.size() + history.records.size());
-      replay::ReplayFileActionService replayActions(context.replayRepository);
-      for (const ModernChartResultRecord &modern : history.records) {
-        const auto inspected = replayActions.probe(modern.replayFile);
-        ir::IrRecordState irState = ir::IrRecordState::Hidden;
-        std::optional<IrRemoteRecordId> linkedRemote;
-        const auto storedIr = irRecordsByAttempt.find(modern.result.attemptId);
-        if (storedIr != irRecordsByAttempt.end()) {
-          const auto serviceStatus =
-              context.irSubmissionService != nullptr
-                  ? context.irSubmissionService->status(
-                        ir::kTachiProviderId, modern.result.attemptId)
-                  : ir::IrAttemptStatusSnapshot{};
-          irState = storedIr->second.resolvedState(
-              recordActivityFor(serviceStatus.activeRequest));
-          if (storedIr->second.receiptRemoteScoreId && irServerOrigin) {
-            linkedRemote = IrRemoteRecordId{
-                .providerId = std::string(ir::kTachiProviderId),
-                .serverOrigin = *irServerOrigin,
-                .remoteScoreId = *storedIr->second.receiptRemoteScoreId,
-            };
-          }
-        }
-        modernSummaries.push_back(makeModernChartResultRecord(
-            modern, replay::replayStateForFileAction(inspected.state),
-            irState, std::move(linkedRemote)));
-      }
-    } else {
-      modernHistoryReadSucceeded = false;
-      const std::string diagnostic = ir::sanitizeDiagnostic(
-          history.diagnostic.empty()
-              ? "Modern Records unavailable: history could not be read"
-              : std::string("Modern Records unavailable: ") +
-                    history.diagnostic);
-      if (diagnostic != publishedResultRecordDiagnostic) {
-        publishedResultRecordDiagnostic = diagnostic;
-        SDL_Log("%s", diagnostic.c_str());
-        archive_file::appendDebugLogLine(diagnostic);
-      }
-    }
+void MainMenuScene::shareReplayFile(const replay::ReplayFileActionRequest &request) {
+  if (replayExportJob_.inProgress() || replayLoadTask_.active() ||
+      replayResultRecallInProgress || replayIrUploadInProgress ||
+      (recordFileActions_ && recordFileActions_->active())) return;
+  if (!recordFileActions_) {
+    recordFileActions_ = std::make_unique<RecordFileActions>(context.replayRepository);
   }
-
-  std::vector<ir::IrRemoteScore> remoteScores;
-  std::string mergeOrigin;
-  bool remoteReadSucceeded = false;
-  if (!courseReplayList) {
-    const auto providerSettings = context.settings.irProviders.find(
-        std::string(ir::kTachiProviderId));
-    if (providerSettings == context.settings.irProviders.end() ||
-        !providerSettings->second.enabled) {
-      remoteReadSucceeded = true;
-    } else if (irServerOrigin.has_value()) {
-      mergeOrigin = *irServerOrigin;
-      auto loaded = context.replayRepository.ListIrRemoteScoresForChart(
-          ir::kTachiProviderId, mergeOrigin, record.meta.MD5,
-          record.meta.SHA256);
-      if (loaded.status == ir::IrRemoteScoreReadOutcome::Status::Loaded) {
-        remoteScores = std::move(loaded.scores);
-        remoteReadSucceeded = true;
-      } else {
-        std::string diagnostic = ir::sanitizeDiagnostic(
-            std::string("IR Records unavailable: ") +
-            (loaded.diagnostic.empty()
-                 ? "remote score history could not be read"
-                 : loaded.diagnostic));
-        if (diagnostic != publishedResultRecordDiagnostic) {
-          publishedResultRecordDiagnostic = diagnostic;
-          SDL_Log("%s", diagnostic.c_str());
-          archive_file::appendDebugLogLine(diagnostic);
-        }
-      }
-    } else {
-      const std::string diagnostic =
-          "IR Records unavailable: provider origin is invalid";
-      if (diagnostic != publishedResultRecordDiagnostic) {
-        publishedResultRecordDiagnostic = diagnostic;
-        SDL_Log("%s", diagnostic.c_str());
-        archive_file::appendDebugLogLine(diagnostic);
-      }
-    }
-  } else {
-    remoteReadSucceeded = true;
-  }
-
-  try {
-    auto merged = mergeResultRecords(
-        syntheticRecords, modernSummaries,
-        remoteReadSucceeded
-            ? std::span<const ir::IrRemoteScore>(remoteScores)
-            : std::span<const ir::IrRemoteScore>{},
-        ir::kTachiProviderId, mergeOrigin);
-    if (remoteReadSucceeded && modernHistoryReadSucceeded &&
-        modernIrReadSucceeded) {
-      publishedResultRecordDiagnostic.clear();
-    }
-    return merged;
-  } catch (...) {
-    auto merged = mergeResultRecords(
-        syntheticRecords, modernSummaries,
-        std::span<const ir::IrRemoteScore>{}, ir::kTachiProviderId,
-        std::string_view{});
-    const std::string diagnostic =
-        "IR Records unavailable: remote score projection is invalid";
-    if (diagnostic != publishedResultRecordDiagnostic) {
-      publishedResultRecordDiagnostic = diagnostic;
-      SDL_Log("%s", diagnostic.c_str());
-      archive_file::appendDebugLogLine(diagnostic);
-    }
-    return merged;
+  const auto feedback = recordFileActions_->share(request);
+  if (feedback.failed) SDL_Log("Replay share: %s", feedback.message.c_str());
+  if (recordsModal_) {
+    recordsModal_->setDocumentHandoffActive(recordFileActions_->active());
+    if (feedback.reloadRecords) recordsModal_->reloadRecords(true);
+    recordsModal_->setStatus(feedback.message);
   }
 }
 
-void MainMenuScene::shareReplayFile(
-    const replay::ReplayFileActionRequest &request) {
-  if (replayFileDocumentHandoff || replayExportInProgress.load() ||
-      replayResultRecallInProgress || replayIrUploadInProgress) {
-    return;
+void MainMenuScene::removeReplayFile(const replay::ReplayFileActionRequest &request) {
+  if (replayExportJob_.inProgress() || replayLoadTask_.active() ||
+      replayResultRecallInProgress || replayIrUploadInProgress ||
+      (recordFileActions_ && recordFileActions_->active())) return;
+  if (!recordFileActions_) {
+    recordFileActions_ = std::make_unique<RecordFileActions>(context.replayRepository);
   }
-
-  replay::ReplayFileActionService actions(context.replayRepository);
-  auto prepared = actions.prepareShare(request);
-  if (prepared.state != replay::ReplayFileActionState::Verified ||
-      !prepared.share) {
-    const std::string diagnostic = prepared.diagnostic.empty()
-                                       ? "Replay file is unavailable to share."
-                                       : prepared.diagnostic;
-    SDL_Log("Replay share unavailable: %s", diagnostic.c_str());
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setStatus(diagnostic);
-      recordsModal_->reloadRecords(true);
-    }
-    return;
-  }
-
-  PlatformDocumentExportRequest exportRequest{
-      .localPath = prepared.share->sourcePath,
-      .mimeType = "application/gzip",
-      .suggestedName = prepared.share->suggestedFilename,
-      .maxBytes = replay::kReplayLimits.maxCompressedBytes,
-      .sourceLifetime = std::move(prepared.share->sourceLifetime)};
-  replayFileDocumentHandoff =
-      platform_document_handoff::ExportDocumentAsync(std::move(exportRequest));
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setDocumentHandoffActive(true);
-    if (!replayFileDocumentHandoff) {
-      recordsModal_->setStatus("Unable to open replay sharing.");
-    } else {
-      recordsModal_->setStatus("Choose where to share the BRD replay.");
-    }
-  }
-}
-
-void MainMenuScene::removeReplayFile(
-    const replay::ReplayFileActionRequest &request) {
-  if (replayFileDocumentHandoff || replayExportInProgress.load() ||
-      replayResultRecallInProgress || replayIrUploadInProgress) {
-    return;
-  }
-
-  replay::ReplayFileActionService actions(context.replayRepository);
-  const auto removed = actions.remove(request);
-  if (removed.state == replay::ReplayFileActionState::UserDeleted) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setStatus(
-          removed.cleanupPending
-              ? "Replay hidden; file cleanup will retry at startup."
-              : "Replay file deleted. Result history was kept.");
-      recordsModal_->reloadRecords(true);
-    }
-  } else {
-    const std::string diagnostic = removed.diagnostic.empty()
-                                       ? "Replay file could not be deleted."
-                                       : removed.diagnostic;
-    SDL_Log("Replay delete failed: %s", diagnostic.c_str());
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setStatus(diagnostic);
-    }
+  const auto feedback = recordFileActions_->remove(request);
+  if (feedback.failed) SDL_Log("Replay delete: %s", feedback.message.c_str());
+  if (recordsModal_) {
+    if (feedback.reloadRecords) recordsModal_->reloadRecords(true);
+    recordsModal_->setStatus(feedback.message);
   }
 }
 
 void MainMenuScene::applyReplayFileDocumentHandoff() {
-  if (!replayFileDocumentHandoff || !replayFileDocumentHandoff.ready()) {
-    return;
-  }
-  auto result = replayFileDocumentHandoff.takeResult();
-  replayFileDocumentHandoff.close();
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setDocumentHandoffActive(false);
-    if (result) {
-      if (result->ok()) {
-        recordsModal_->setStatus("Replay BRD shared.");
-      } else if (result->cancelled()) {
-        recordsModal_->setStatus("Replay sharing cancelled.");
-      } else {
-        recordsModal_->setStatus(result->message.empty()
-                                     ? "Replay sharing failed."
-                                     : result->message);
-      }
-    }
+  if (!recordFileActions_) return;
+  const auto feedback = recordFileActions_->poll();
+  if (!feedback) return;
+  if (feedback->failed) SDL_Log("Replay share: %s", feedback->message.c_str());
+  if (recordsModal_) {
+    recordsModal_->setDocumentHandoffActive(recordFileActions_->active());
+    if (feedback->reloadRecords) recordsModal_->reloadRecords(true);
+    recordsModal_->setStatus(feedback->message);
   }
 }
 
@@ -6858,7 +6458,10 @@ ReplayRecordsModalCallbacks MainMenuScene::makeRecordsModalCallbacks() {
       };
   callbacks.exportAutoPlay =
       [this](const ChartMetaRecord &record, ReplayVideoExportOptions options) {
-        options.pacemakerTarget = pacemaker::kTargetOff;
+        if (options.pacemakerTarget.empty()) {
+          options.pacemakerTarget =
+              pacemaker::normalizeTargetId(profileSelections.pacemakerTarget);
+        }
         startAutoPlayVideoExport(record, options);
       };
   callbacks.share = [this](const replay::ReplayFileActionRequest &request) {
@@ -6904,13 +6507,13 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
     const ChartMetaRecord &record,
     std::unique_ptr<bms_parser::Chart> &preparedChart,
     play_options::PlayOptionReplayInfo &playInfo,
-    std::atomic_bool &parseCancelled) const {
+    std::atomic_bool &parseCancelled,
+    const main_menu_profile::Selections &selections,
+    const SelectedChartRandomInfo &chartRandomInfo) const {
   if (record.solidArchive || record.unavailable || record.meta.BmsPath.empty()) {
     return false;
   }
 
-  const SelectedChartRandomInfo chartRandomInfo =
-      selectedChartRandomInfoForPath(record.meta.BmsPath);
   try {
     preparedChart = play_options::parseChart(
         record.meta.BmsPath, chartRandomInfo.seed, chartRandomInfo.prng,
@@ -6927,91 +6530,78 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
   }
 
   playInfo = play_options::applySelectedPlayOptions(
-      *preparedChart, profileSelections.playOption);
+      *preparedChart, selections.playOption);
   applyEffectiveLongNoteModeToChart(
       *preparedChart,
-      long_note_mode::valueFromId(profileSelections.longNoteMode));
+      long_note_mode::valueFromId(selections.longNoteMode));
   return true;
 }
 
 void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
-  if (record.courseStart || willStart.load()) {
-    return;
-  }
-
+  if (record.courseStart || willStart.load()) return;
   willStart.store(true);
-  if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
+  if (previewWorker_) previewWorker_->cancel();
+  if (recordsModal_) recordsModal_->setLoadInProgress(true);
+  const auto selections = profileSelections;
+  const auto randomInfo = selectedChartRandomInfoForPath(record.meta.BmsPath);
   const audio::PlaybackRate autoPlayPlayback{
       .percent = context.settings.selectedPlaybackRatePercent,
-      .mode = context.settings.selectedPlaybackMode,
-  };
-  const GameplayRuleset autoPlayRuleset = profileSelections.ruleset;
-  defer(
-      [this, record, autoPlayPlayback, autoPlayRuleset]() {
-        auto failReplayLoad = [this]() {
-          resetReplayWatchLoadingUi();
-          return true;
-        };
-        if (previewWorker_ != nullptr) {
-          previewWorker_->stop();
-        }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
-        }
-
-        std::atomic_bool parseCancelled = false;
-        std::unique_ptr<bms_parser::Chart> autoPlayChart;
-        play_options::PlayOptionReplayInfo playInfo;
-        if (!prepareAutoPlayChartForRecord(record, autoPlayChart, playInfo,
-                                           parseCancelled)) {
-          return failReplayLoad();
-        }
-
-        context.jukebox.stop();
-        context.jukebox.loadChart(*autoPlayChart, true, parseCancelled);
-        if (parseCancelled) {
-          return failReplayLoad();
-        }
-
-        auto *chart = setSelectedChart(std::move(autoPlayChart), true, false);
-        if (chart == nullptr) {
-          return failReplayLoad();
-        }
-
-        if (recordsModal_ != nullptr) {
-          recordsModal_->setLoadInProgress(false);
-          recordsModal_->hide();
-        }
+      .mode = context.settings.selectedPlaybackMode};
+  const auto autoPlayRuleset = selections.ruleset;
+  startReplayLoadWorker([this, record, selections, randomInfo, autoPlayPlayback,
+                         autoPlayRuleset](std::shared_ptr<std::atomic_bool> cancelled) {
+    if (previewWorker_) previewWorker_->stop();
+    std::unique_ptr<bms_parser::Chart> autoPlayChart;
+    play_options::PlayOptionReplayInfo playInfo;
+    if (!prepareAutoPlayChartForRecord(record, autoPlayChart, playInfo,
+                                      *cancelled, selections, randomInfo)) {
+      if (!cancelled->load()) {
+        queueReplayLoadCompletion([this] {
+          (void)finishReplayLoadFailure("AutoPlay failed", {}, "Autoplay chart could not be prepared.");
+        });
+      }
+      return;
+    }
+    context.jukebox.stop();
+    context.jukebox.loadChart(*autoPlayChart, true, *cancelled);
+    if (cancelled->load()) return;
+    auto preparedChart = std::make_shared<std::unique_ptr<bms_parser::Chart>>(std::move(autoPlayChart));
+    queueReplayLoadCompletion([this, preparedChart, playInfo, selections,
+                               autoPlayPlayback, autoPlayRuleset]() mutable {
+      auto *chart = setSelectedChart(std::move(*preparedChart), true, false);
+      if (!chart) {
+        (void)finishReplayLoadFailure("AutoPlay failed", {}, "Prepared autoplay chart is unavailable.");
+        return;
+      }
+      if (recordsModal_) {
+        recordsModal_->setLoadInProgress(false);
+        recordsModal_->hide();
+      }
         changeToGameplayScene(
             chart, {
                          .startPosition = 0,
                          .autoKeySound = true,
                          .autoPlay = true,
-                         .gaugeType = profileSelections.gaugeType,
-                         .gaugeAutoShift = profileSelections.gaugeAutoShift,
+                         .gaugeType = selections.gaugeType,
+                         .gaugeAutoShift = selections.gaugeAutoShift,
                          .gaugeAutoShiftLowerBound =
-                             profileSelections.gaugeAutoShiftLowerBound,
+                             selections.gaugeAutoShiftLowerBound,
                          .playOption = playInfo.option,
                          .playOptionSeed = playInfo.seed,
                          .playOption2 = playInfo.option2,
                          .playOption2Seed = playInfo.seed2,
                          .longNoteMode = long_note_mode::valueFromId(
-                             profileSelections.longNoteMode),
-                         .assistOption = profileSelections.assistOption,
+                             selections.longNoteMode),
+                         .assistOption = selections.assistOption,
                          .pacemakerTarget = pacemaker::kTargetOff,
                          .playback = autoPlayPlayback,
                          .touchVisualizationEnabled = false,
                          .replayGhostRenderingEnabled = false,
                          .ruleset = autoPlayRuleset,
                    });
-        willStart.store(false);
-        return true;
-      },
-      0, true);
+      willStart.store(false);
+    });
+  });
 }
 
 void MainMenuScene::startModernReplayPlayback(
@@ -7032,11 +6622,7 @@ void MainMenuScene::startModernReplayPlayback(
   const bool renderGhosts =
       recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), pacemakerTarget,
@@ -7045,10 +6631,6 @@ void MainMenuScene::startModernReplayPlayback(
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
@@ -7145,11 +6727,7 @@ void MainMenuScene::startModernGBattlePlayback(
   };
 
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), gaugeType, gaugeAutoShift,
@@ -7158,10 +6736,6 @@ void MainMenuScene::startModernGBattlePlayback(
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
@@ -7265,28 +6839,21 @@ void MainMenuScene::startModernCourseReplayPlayback(
     previewWorker_->cancel();
   }
   if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
+  const auto pacemakerTarget = profileSelections.pacemakerTarget;
   const bool renderTouchPoints =
       recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
   const bool renderGhosts =
       recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, modern = std::move(modern), chartPaths = std::move(chartPaths),
-       renderTouchPoints,
+       renderTouchPoints, pacemakerTarget,
        renderGhosts](std::shared_ptr<std::atomic_bool> cancelled) mutable {
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
 
           auto consumer =
@@ -7316,13 +6883,29 @@ void MainMenuScene::startModernCourseReplayPlayback(
             });
             return;
           }
+          auto stageReplay = session->currentCourseReplayStageReplay();
+          auto chart = session->takePreparedCourseChart(session->currentIndex);
+          if (!stageReplay || !chart) {
+            queueReplayLoadCompletion([this] {
+              (void)finishReplayLoadFailure("course Watch failed", {},
+                                           "Prepared course replay chart is unavailable.");
+            });
+            return;
+          }
+          session->applyReplayStagePlayOptions(*stageReplay);
+          context.jukebox.stop();
+          context.jukebox.loadChart(*chart, true, *cancelled);
+          if (cancelled->load()) return;
+          StartOptions options = makeCourseReplayStageStartOptions(session, stageReplay);
+          options.pacemakerTarget = pacemakerTarget;
+          options.returnScene = this;
+          auto preparedChart = std::make_shared<std::unique_ptr<bms_parser::Chart>>(std::move(chart));
           queueReplayLoadCompletion(
-              [this, session = std::move(session), warning]() mutable {
-                if (!warning.empty()) {
-                  publishReplayLoadDiagnostic("course Watch warning", warning);
-                }
-                if (recordsModal_ != nullptr) recordsModal_->hide();
-                startCourseReplayDirect(std::move(session));
+              [this, preparedChart, options = std::move(options), warning]() mutable {
+                if (!warning.empty()) publishReplayLoadDiagnostic("course Watch warning", warning);
+                if (recordsModal_) recordsModal_->hide();
+                context.sceneManager->changeScene(std::make_unique<GamePlayScene>(
+                    context, std::move(*preparedChart), std::move(options)), true);
                 willStart.store(false);
               });
         } catch (...) {
@@ -7333,47 +6916,6 @@ void MainMenuScene::startModernCourseReplayPlayback(
           });
         }
       });
-}
-
-void MainMenuScene::startCourseReplayDirect(
-    std::shared_ptr<CoursePlaySession> session) {
-  if (session == nullptr ||
-      !session->hasCourseReplayStage(session->currentIndex)) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-
-  auto stageReplay = session->currentCourseReplayStageReplay();
-  if (stageReplay == nullptr) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-  session->applyReplayStagePlayOptions(*stageReplay);
-  std::atomic_bool parseCancelled = false;
-  auto replayChart = session->takePreparedCourseChart(session->currentIndex);
-  if (replayChart == nullptr) {
-    replayChart = play_options::prepareReplayChart(
-        stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
-  }
-  if (replayChart == nullptr || parseCancelled) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-
-  context.jukebox.stop();
-  context.jukebox.loadChart(*replayChart, true, parseCancelled);
-  if (parseCancelled) {
-    resetReplayWatchLoadingUi();
-    return;
-  }
-
-  StartOptions options = makeCourseReplayStageStartOptions(session, stageReplay);
-
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(replayChart),
-                                      std::move(options)),
-      true);
-  willStart.store(false);
 }
 
 bms_parser::Chart *
@@ -7461,7 +7003,7 @@ void MainMenuScene::publishReplayLoadDiagnostic(
 bool MainMenuScene::finishReplayLoadFailure(const char *action,
                                             std::string diagnostic,
                                             const char *fallback) {
-  const std::string safeDiagnostic = replayDiagnosticOr(diagnostic, fallback);
+  const std::string safeDiagnostic = replay_records::diagnosticOr(diagnostic, fallback);
   publishReplayLoadDiagnostic(action, safeDiagnostic);
   resetReplayWatchLoadingUi();
   if (recordsModal_ != nullptr) {
@@ -7476,68 +7018,44 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
 
 void MainMenuScene::startReplayLoadWorker(
     std::function<void(std::shared_ptr<std::atomic_bool>)> work) {
-  if (replayLoadThread.joinable()) {
-    replayLoadThread.join();
-  }
-  {
-    std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
-    pendingReplayLoadCompletion = {};
-  }
-  auto cancelled = std::make_shared<std::atomic_bool>(false);
-  replayLoadCancelToken = cancelled;
-  replayLoadInProgress.store(true, std::memory_order_release);
-  replayLoadThread = std::jthread(
-      [work = std::move(work), cancelled](std::stop_token stopToken) mutable {
-        if (stopToken.stop_requested() || cancelled->load()) {
-          return;
-        }
-        work(std::move(cancelled));
+  replayLoadTask_.start([this, work = std::move(work)](std::shared_ptr<std::atomic_bool> cancelled) {
+    try {
+      work(cancelled);
+    } catch (const std::exception &error) {
+      const auto diagnostic = replay_records::diagnosticOr(error.what(), "Records preparation failed.");
+      queueReplayLoadCompletion([this, diagnostic] {
+        (void)finishReplayLoadFailure("preparation failed", diagnostic, "Records preparation failed.");
       });
+    } catch (...) {
+      queueReplayLoadCompletion([this] {
+        (void)finishReplayLoadFailure("preparation failed", {}, "Records preparation failed.");
+      });
+    }
+  });
 }
 
 void MainMenuScene::queueReplayLoadCompletion(
     std::function<void()> completion) {
-  std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
-  if (replayLoadCancelToken == nullptr || replayLoadCancelToken->load()) {
-    return;
-  }
-  pendingReplayLoadCompletion = std::move(completion);
+  replayLoadTask_.publish(std::move(completion));
 }
 
 void MainMenuScene::applyReplayLoadCompletion() {
-  std::function<void()> completion;
-  {
-    std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
-    completion = std::move(pendingReplayLoadCompletion);
-    pendingReplayLoadCompletion = {};
+  if (context.appInBackground.load()) return;
+  if (auto completion = replayLoadTask_.takeCompletion()) {
+    resetReplayWatchLoadingUi();
+    replayResultRecallInProgress = false;
+    if (recordsModal_) recordsModal_->setResultRecallInProgress(false);
+    completion();
   }
-  if (!completion) {
-    return;
-  }
-  if (replayLoadThread.joinable()) {
-    replayLoadThread.join();
-  }
-  replayLoadInProgress.store(false, std::memory_order_release);
-  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(false);
-  completion();
 }
 
 void MainMenuScene::stopReplayLoadWorker() {
-  if (replayLoadCancelToken != nullptr) {
-    replayLoadCancelToken->store(true, std::memory_order_release);
-  }
-  if (replayLoadThread.joinable()) {
-    replayLoadThread.request_stop();
-    replayLoadThread.join();
-  }
-  replayLoadInProgress.store(false, std::memory_order_release);
+  replayLoadTask_.cancelAndWait();
   replayResultRecallInProgress = false;
   if (recordsModal_ != nullptr) {
     recordsModal_->setLoadInProgress(false);
     recordsModal_->setResultRecallInProgress(false);
   }
-  std::lock_guard<std::mutex> lock(replayLoadCompletionMutex);
-  pendingReplayLoadCompletion = {};
 }
 
 void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
@@ -7553,11 +7071,8 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
 bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
                                       const std::string &progressMessage,
                                       const std::string &statusMessage) {
-  if (replayExportInProgress.exchange(true)) {
+  if (!replayExportJob_.tryBegin()) {
     return false;
-  }
-  if (replayExportThread.joinable()) {
-    replayExportThread.join();
   }
 
   willStart.store(true);
@@ -7566,10 +7081,6 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
   }
   selectedChartMediaReady.store(false);
   selectedChartReusableForStart.store(false);
-  {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    pendingReplayExportProgress.reset();
-  }
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(true);
     recordsModal_->showExportProgress(progressTitle, progressMessage);
@@ -7581,14 +7092,11 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
   return true;
 }
 
-void MainMenuScene::queueReplayExportResult(
-    const ReplayVideoExportResult &result) {
-  std::lock_guard<std::mutex> lock(replayExportResultMutex);
-  pendingReplayExportResult = PendingReplayExportResult{
-      .success = result.success,
-      .outputPath = result.outputPath,
-      .message = result.message,
-  };
+void MainMenuScene::preparePreviewForReplayExport() {
+  if (previewWorker_ != nullptr) {
+    previewWorker_->stop();
+  }
+  context.jukebox.stop();
 }
 
 void MainMenuScene::startAutoPlayVideoExport(
@@ -7598,119 +7106,58 @@ void MainMenuScene::startAutoPlayVideoExport(
     return;
   }
 
-#if TARGET_OS_ANDROID
-  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->updateExportProgress(progress.fraction, progress.message);
-    }
-  };
-#else
-  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    pendingReplayExportProgress = PendingReplayExportProgress{
-        .fraction = progress.fraction,
-        .message = progress.message,
-    };
-  };
-#endif
-
-  auto complete = [this](const ReplayVideoExportResult &result) {
-    queueReplayExportResult(result);
-  };
-  const GaugeType autoPlayGaugeType = profileSelections.gaugeType;
-  const GaugeAutoShiftMode autoPlayGaugeAutoShift =
-      profileSelections.gaugeAutoShift;
-  const GaugeType autoPlayGaugeAutoShiftLowerBound =
-      profileSelections.gaugeAutoShiftLowerBound;
-  const std::string autoPlayAssistOption = profileSelections.assistOption;
-  const std::string autoPlayOption = profileSelections.playOption;
-  const audio::PlaybackRate autoPlayPlayback{
+  const auto selections = profileSelections;
+  const audio::PlaybackRate playback{
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
   };
-  const bool autoPlayClubMode = context.settings.gameplayClubModeEnabled;
-  const GameplayRuleset autoPlayRuleset = profileSelections.ruleset;
-  const int autoPlayLongNoteMode =
-      long_note_mode::valueFromId(profileSelections.longNoteMode);
-  const SelectedChartRandomInfo autoPlayRandomInfo =
+  const bool clubMode = context.settings.gameplayClubModeEnabled;
+  const SelectedChartRandomInfo randomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
 
-  auto runExport = [this, record, options, complete,
-                    autoPlayGaugeType, autoPlayGaugeAutoShift,
-                    autoPlayGaugeAutoShiftLowerBound,
-                    autoPlayAssistOption, autoPlayOption, autoPlayPlayback,
-                    autoPlayClubMode, autoPlayRuleset, autoPlayLongNoteMode,
-                    autoPlayRandomInfo](const std::stop_token *stopToken) {
-    try {
-      if (previewWorker_ != nullptr) {
-        previewWorker_->stop();
-      }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
-      }
-      context.jukebox.stop();
-      if (stopToken != nullptr && stopToken->stop_requested()) {
-        complete({.success = false, .message = "Replay export cancelled"});
-        return;
-      }
+  replayExportJob_.start(std::move(options),
+      [this, record, selections, playback, clubMode, randomInfo](
+          const ReplayVideoExportOptions &options,
+          std::atomic_bool &cancelled) -> ReplayVideoExportResult {
+        preparePreviewForReplayExport();
+        if (cancelled) {
+          return {.success = false, .message = "Replay export cancelled"};
+        }
 
-      std::atomic_bool parseCancelled = false;
-      std::unique_ptr<bms_parser::Chart> chart;
-      try {
-        chart = play_options::parseChart(
-            record.meta.BmsPath, autoPlayRandomInfo.seed,
-            autoPlayRandomInfo.prng, autoPlayRandomInfo.values,
-            parseCancelled, "autoplay export");
-      } catch (const std::exception &e) {
-        SDL_Log("Error parsing %s for autoplay export: %s",
-                fspath_to_utf8(record.meta.BmsPath).c_str(), e.what());
-        archive_file::appendDebugLogLine(
-            "Autoplay export parse exception: " +
-            fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
-      }
-      if (chart == nullptr || parseCancelled) {
-        complete({.success = false, .message = "No Chart"});
-        return;
-      }
-      if (stopToken != nullptr && stopToken->stop_requested()) {
-        complete({.success = false, .message = "Replay export cancelled"});
-        return;
-      }
+        std::unique_ptr<bms_parser::Chart> chart;
+        try {
+          chart = play_options::parseChart(
+              record.meta.BmsPath, randomInfo.seed, randomInfo.prng,
+              randomInfo.values, cancelled, "autoplay export");
+        } catch (const std::exception &error) {
+          SDL_Log("Error parsing %s for autoplay export: %s",
+                  fspath_to_utf8(record.meta.BmsPath).c_str(), error.what());
+          archive_file::appendDebugLogLine(
+              "Autoplay export parse exception: " +
+              fspath_to_utf8(record.meta.BmsPath) + ": " + error.what());
+        }
+        if (chart == nullptr || cancelled) {
+          return {.success = false, .message = "No Chart"};
+        }
+        if (options.stop.stop_requested()) {
+          return {.success = false, .message = "Replay export cancelled"};
+        }
 
-      play_options::PlayOptionReplayInfo playInfo =
-          play_options::applySelectedPlayOptions(*chart, autoPlayOption);
-      applyEffectiveLongNoteModeToChart(*chart, autoPlayLongNoteMode);
-      ReplayData replay = replay_autoplay::BuildReplayData(
-          *chart, autoPlayGaugeType, autoPlayGaugeAutoShift, autoPlayPlayback,
-          playInfo.option, playInfo.seed, playInfo.option2, playInfo.seed2,
-          autoPlayAssistOption, autoPlayClubMode,
-          autoPlayGaugeAutoShiftLowerBound, autoPlayRuleset);
-      ReplayVideoExportOptions exportOptions = options;
-      if (stopToken != nullptr) {
-        exportOptions.stop = *stopToken;
-      }
-      exportOptions.renderTouchPoints = false;
-      exportOptions.renderReplayGhosts = false;
-      exportOptions.pacemakerTarget = pacemaker::kTargetOff;
-      complete(ReplayVideoExporter::Export(context, chart.get(), replay,
-                                           exportOptions));
-    } catch (const std::exception &e) {
-      complete({.success = false, .message = e.what()});
-    } catch (...) {
-      complete({.success = false, .message = "Unexpected replay export failure"});
-    }
-  };
-
-#if TARGET_OS_ANDROID
-  runExport(nullptr);
-  applyReplayExportResult();
-#else
-  replayExportThread = std::jthread(
-      [runExport = std::move(runExport)](const std::stop_token &stopToken) {
-        runExport(&stopToken);
+        const auto playInfo =
+            play_options::applySelectedPlayOptions(*chart, selections.playOption);
+        applyEffectiveLongNoteModeToChart(
+            *chart, long_note_mode::valueFromId(selections.longNoteMode));
+        ReplayData replay = replay_autoplay::BuildReplayData(
+            *chart, selections.gaugeType, selections.gaugeAutoShift, playback,
+            playInfo.option, playInfo.seed, playInfo.option2, playInfo.seed2,
+            selections.assistOption, clubMode, selections.gaugeAutoShiftLowerBound,
+            selections.ruleset);
+        ReplayVideoExportOptions exportOptions = options;
+        exportOptions.renderTouchPoints = false;
+        exportOptions.renderReplayGhosts = false;
+        return ReplayVideoExporter::Export(context, chart.get(), replay,
+                                            exportOptions);
       });
-#endif
 }
 
 void MainMenuScene::startModernReplayVideoExport(
@@ -7721,90 +7168,36 @@ void MainMenuScene::startModernReplayVideoExport(
     return;
   }
 
-#if TARGET_OS_ANDROID
-  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->updateExportProgress(progress.fraction, progress.message);
-    }
-  };
-#else
-  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    pendingReplayExportProgress = PendingReplayExportProgress{
-        .fraction = progress.fraction,
-        .message = progress.message,
-    };
-  };
-#endif
-
-  auto complete = [this](const ReplayVideoExportResult &result) {
-    queueReplayExportResult(result);
-  };
-  auto runExport = [this, record, modern = std::move(modern), options,
-                    complete](const std::stop_token *stopToken) mutable {
-    try {
-      if (previewWorker_ != nullptr) {
-        previewWorker_->stop();
-      }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
-      }
-      context.jukebox.stop();
-      if (stopToken != nullptr && stopToken->stop_requested()) {
-        complete({.success = false, .message = "Replay export cancelled"});
-        return;
-      }
-
-      std::atomic_bool parseCancelled = false;
-      auto consumer = replay::makeRuntimeChartReplayConsumer(
-          context.replayRepository);
-      auto loaded = consumer.load(modern, record.meta.BmsPath,
-                                  parseCancelled);
-      if (parseCancelled) {
-        complete({.success = false,
-                  .message = "Replay export preparation was cancelled."});
-        return;
-      }
-      if (!loaded.ready()) {
-        complete({.success = false,
-                  .message = replayDiagnosticOr(
+  replayExportJob_.start(std::move(options),
+      [this, record, modern = std::move(modern)](
+          const ReplayVideoExportOptions &options,
+          std::atomic_bool &cancelled) -> ReplayVideoExportResult {
+        preparePreviewForReplayExport();
+        if (cancelled) {
+          return {.success = false, .message = "Replay export cancelled"};
+        }
+        auto consumer = replay::makeRuntimeChartReplayConsumer(
+            context.replayRepository);
+        auto loaded = consumer.load(modern, record.meta.BmsPath, cancelled);
+        if (cancelled) {
+          return {.success = false,
+                  .message = "Replay export preparation was cancelled."};
+        }
+        if (!loaded.ready()) {
+          return {.success = false,
+                  .message = replay_records::diagnosticOr(
                       loaded.diagnostic,
-                      "Replay export playback could not be prepared.")});
-        return;
-      }
-      if (!loaded.diagnostic.empty()) {
-        publishReplayLoadDiagnostic("video export warning",
-                                    loaded.diagnostic);
-      }
-      if (stopToken != nullptr && stopToken->stop_requested()) {
-        complete({.success = false, .message = "Replay export cancelled"});
-        return;
-      }
-
-      ReplayVideoExportOptions exportOptions = options;
-      if (stopToken != nullptr) {
-        exportOptions.stop = *stopToken;
-      }
-      complete(ReplayVideoExporter::Export(
-          context, loaded.chart.get(), *loaded.replayData, exportOptions));
-    } catch (const std::exception &e) {
-      complete({.success = false, .message = e.what()});
-    } catch (...) {
-      complete({.success = false,
-                .message = "Unexpected replay export failure"});
-    }
-  };
-
-#if TARGET_OS_ANDROID
-  runExport(nullptr);
-  applyReplayExportResult();
-#else
-  replayExportThread = std::jthread(
-      [runExport = std::move(runExport)](const std::stop_token &stopToken) mutable {
-        runExport(&stopToken);
+                      "Replay export playback could not be prepared.")};
+        }
+        if (!loaded.diagnostic.empty()) {
+          publishReplayLoadDiagnostic("video export warning", loaded.diagnostic);
+        }
+        if (options.stop.stop_requested()) {
+          return {.success = false, .message = "Replay export cancelled"};
+        }
+        return ReplayVideoExporter::Export(
+            context, loaded.chart.get(), *loaded.replayData, options);
       });
-#endif
 }
 
 void MainMenuScene::startModernCourseReplayVideoExport(
@@ -7819,89 +7212,37 @@ void MainMenuScene::startModernCourseReplayVideoExport(
     return;
   }
 
-#if TARGET_OS_ANDROID
-  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->updateExportProgress(progress.fraction, progress.message);
-    }
-  };
-#else
-  options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    pendingReplayExportProgress = PendingReplayExportProgress{
-        .fraction = progress.fraction,
-        .message = progress.message,
-    };
-  };
-#endif
-
-  auto complete = [this](const ReplayVideoExportResult &result) {
-    queueReplayExportResult(result);
-  };
-  auto runExport = [this, modern = std::move(modern), options, complete,
-                    chartPaths = std::move(chartPaths)](
-                       const std::stop_token *stopToken) mutable {
-    try {
-      if (previewWorker_ != nullptr) {
-        previewWorker_->stop();
-      }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
-      }
-      context.jukebox.stop();
-      if (stopToken != nullptr && stopToken->stop_requested()) {
-        complete({.success = false, .message = "Replay export cancelled"});
-        return;
-      }
-
-      std::atomic_bool cancelled = false;
-      auto consumer = replay::makeRuntimeCourseReplayConsumer(
-          context.replayRepository);
-      auto loaded = consumer.load(modern, chartPaths, cancelled);
-      if (cancelled) {
-        complete({.success = false,
-                  .message =
-                      "Course replay export preparation was cancelled."});
-        return;
-      }
-      if (!loaded.ready()) {
-        complete({.success = false,
-                  .message = replayDiagnosticOr(
+  replayExportJob_.start(std::move(options),
+      [this, modern = std::move(modern), chartPaths = std::move(chartPaths)](
+          const ReplayVideoExportOptions &options,
+          std::atomic_bool &cancelled) -> ReplayVideoExportResult {
+        preparePreviewForReplayExport();
+        if (cancelled) {
+          return {.success = false, .message = "Replay export cancelled"};
+        }
+        auto consumer = replay::makeRuntimeCourseReplayConsumer(
+            context.replayRepository);
+        auto loaded = consumer.load(modern, chartPaths, cancelled);
+        if (cancelled) {
+          return {.success = false,
+                  .message = "Course replay export preparation was cancelled."};
+        }
+        if (!loaded.ready()) {
+          return {.success = false,
+                  .message = replay_records::diagnosticOr(
                       loaded.diagnostic,
-                      "Course replay export playback could not be prepared.")});
-        return;
-      }
-      if (!loaded.diagnostic.empty()) {
-        publishReplayLoadDiagnostic("course video export warning",
-                                    loaded.diagnostic);
-      }
-      if (stopToken != nullptr && stopToken->stop_requested()) {
-        complete({.success = false, .message = "Replay export cancelled"});
-        return;
-      }
-      ReplayVideoExportOptions exportOptions = options;
-      if (stopToken != nullptr) {
-        exportOptions.stop = *stopToken;
-      }
-      complete(ReplayVideoExporter::ExportCourseReplay(
-          context, std::move(loaded), exportOptions));
-    } catch (const std::exception &e) {
-      complete({.success = false, .message = e.what()});
-    } catch (...) {
-      complete({.success = false,
-                .message = "Unexpected course replay export failure"});
-    }
-  };
-
-#if TARGET_OS_ANDROID
-  runExport(nullptr);
-  applyReplayExportResult();
-#else
-  replayExportThread = std::jthread(
-      [runExport = std::move(runExport)](
-          const std::stop_token &stopToken) mutable { runExport(&stopToken); });
-#endif
+                      "Course replay export playback could not be prepared.")};
+        }
+        if (!loaded.diagnostic.empty()) {
+          publishReplayLoadDiagnostic("course video export warning",
+                                      loaded.diagnostic);
+        }
+        if (options.stop.stop_requested()) {
+          return {.success = false, .message = "Replay export cancelled"};
+        }
+        return ReplayVideoExporter::ExportCourseReplay(
+            context, std::move(loaded), options);
+      });
 }
 
 std::optional<std::string>
@@ -7914,33 +7255,10 @@ MainMenuScene::activeReplayIrServerOrigin() const {
   return ir::normalizeServerOrigin(settings->second.serverOrigin);
 }
 
-void MainMenuScene::publishReplayIrStatusFeedback(
-    ir::IrRecordState state) {
-  const char *message = nullptr;
-  switch (state) {
-  case ir::IrRecordState::Queued:
-    message = "IR upload is queued.";
-    break;
-  case ir::IrRecordState::Uploading:
-    message = "IR upload is in progress.";
-    break;
-  case ir::IrRecordState::AwaitingRemote:
-    message = "IR is awaiting the remote result.";
-    break;
-  case ir::IrRecordState::Blocked:
-    message = "IR upload is blocked. Check Settings > IR.";
-    break;
-  case ir::IrRecordState::Uploaded:
-    message = "IR upload is complete.";
-    break;
-  case ir::IrRecordState::Hidden:
-  case ir::IrRecordState::Eligible:
-  case ir::IrRecordState::Failed:
-    return;
-  }
-
-  if (recordsModal_ != nullptr) {
-    recordsModal_->showIrFeedback(message);
+void MainMenuScene::publishReplayIrStatusFeedback(ir::IrRecordState state) {
+  const auto message = replay_records::irStatusFeedback(state);
+  if (!message.empty() && recordsModal_ != nullptr) {
+    recordsModal_->showIrFeedback(std::string(message));
   }
 }
 
@@ -7975,30 +7293,12 @@ void MainMenuScene::observeReplayIrServiceRevisions() {
 void MainMenuScene::startModernReplayIrUpload(
     ModernChartResultRecord modern) {
   if (replayIrUploadInProgress || replayResultRecallInProgress ||
-      replayExportInProgress.load()) {
+      replayExportJob_.inProgress()) {
     return;
   }
 
-  const auto providerSettings = context.settings.irProviders.find(
-      std::string(ir::kTachiProviderId));
-  if (providerSettings == context.settings.irProviders.end() ||
-      !providerSettings->second.enabled) {
-    finishReplayIrUpload(
-        modern.result.attemptId,
-        "Enable Bokutachi in Settings > IR before uploading.");
-    return;
-  }
-  const auto driver = context.irDrivers.find(ir::kTachiProviderId);
-  if (driver == nullptr) {
-    finishReplayIrUpload(modern.result.attemptId,
-                         "Bokutachi IR is unavailable.");
-    return;
-  }
-  const ir::IrDriverCapabilities capabilities = driver->capabilities();
-  if (capabilities.readOnly || !capabilities.scoreSubmission ||
-      context.irSubmissionService == nullptr) {
-    finishReplayIrUpload(modern.result.attemptId,
-                         "Bokutachi score submission is unavailable.");
+  if (const auto unavailable = replay_records::irUploadUnavailable(context)) {
+    finishReplayIrUpload(modern.result.attemptId, *unavailable);
     return;
   }
 
@@ -8017,43 +7317,9 @@ void MainMenuScene::startModernReplayIrUpload(
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
           }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
-          }
-          const auto snapshot =
-              context.replayRepository.LoadModernIrSubmissionSnapshot(
-                  modern.result.attemptId);
-          if (snapshot.status != ModernIrSnapshotReadStatus::Loaded ||
-              !snapshot.snapshot.has_value()) {
-            finishReplayIrUpload(
-                modern.result.attemptId,
-                "This saved result has no verified IR snapshot.");
-            return true;
-          }
-
-          const ir::IrSavedResultUploadDependencies dependencies{
-              .loadOutbox =
-                  [this](std::string_view provider,
-                         std::string_view attempt) {
-                    return context.replayRepository.LoadIrOutbox(provider,
-                                                                 attempt);
-                  },
-              .buildDraft = [this](const ir::IrSubmission &submission) {
-                return context.irDrivers.buildDraft(ir::kTachiProviderId,
-                                                    submission);
-              },
-              .enqueue = [this](const ir::IrOutboxDraft &draft) {
-                return context.irSubmissionService->enqueueManual(draft);
-              },
-              .retry = [this](std::int64_t rowId) {
-                return context.irSubmissionService->retry(rowId);
-              },
-          };
-          const auto action = ir::executeIrSavedResultUpload(
-              ir::kTachiProviderId, snapshot.snapshot->submission,
-              dependencies);
-          finishReplayIrUpload(modern.result.attemptId, action.message);
+          finishReplayIrUpload(
+              modern.result.attemptId,
+              replay_records::uploadSavedResult(context, modern.result.attemptId));
         } catch (...) {
           finishReplayIrUpload(modern.result.attemptId,
                                "IR upload could not be prepared.");
@@ -8082,18 +7348,14 @@ void MainMenuScene::finishReplayIrUpload(std::string attemptId,
 void MainMenuScene::startModernReplayResultRecall(
     const ChartMetaRecord &record, ModernChartResultRecord modern) {
   if (record.courseStart || replayResultRecallInProgress ||
-      replayExportInProgress.load() || replayIrUploadInProgress) {
+      replayExportJob_.inProgress() || replayIrUploadInProgress) {
     return;
   }
 
   replayResultRecallInProgress = true;
   if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern)](
@@ -8102,71 +7364,16 @@ void MainMenuScene::startModernReplayResultRecall(
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
           }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
-          }
-          const auto exact = context.replayRepository
-                                 .LoadModernChartResultByAttempt(
-                                     modern.result.attemptId);
-          if (exact.status != ModernChartResultReadStatus::Loaded ||
-              !exact.record.has_value()) {
-            const std::string diagnostic =
-                exact.diagnostic.empty() ? "saved result was not found"
-                                         : exact.diagnostic;
-            queueReplayLoadCompletion([this, diagnostic]() {
+          auto prepared = chart_records::prepareChartResult(
+              context.replayRepository, record, modern.result.attemptId, *cancelled);
+          if (cancelled->load()) return;
+          if (!prepared.completion) {
+            queueReplayLoadCompletion([this, diagnostic = std::move(prepared.diagnostic)] {
               finishReplayResultRecallFailure(diagnostic);
             });
             return;
           }
-
-          auto consumer = replay::makeRuntimeChartReplayConsumer(
-              context.replayRepository);
-          auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath,
-                                          *cancelled);
-          if (cancelled->load()) {
-            return;
-          }
-
-          std::shared_ptr<ReplayData> retryData;
-          result_recall::ModernChartLoader preparedChartLoader;
-          if (replayLoad.ready()) {
-            retryData = std::move(replayLoad.replayData);
-            auto preparedChart =
-                std::make_shared<std::unique_ptr<bms_parser::Chart>>(
-                    std::move(replayLoad.chart));
-            preparedChartLoader =
-                [preparedChart](const std::filesystem::path &,
-                                std::atomic_bool &) mutable {
-                  return std::move(*preparedChart);
-                };
-          }
-
-          const std::filesystem::path currentChartPath = record.meta.BmsPath;
-          auto recalled = result_recall::BuildChartResult(
-              exact.record->result, *cancelled, currentChartPath,
-              std::move(preparedChartLoader));
-          if (!recalled.value.has_value()) {
-            const std::string diagnostic =
-                recalled.diagnostic.empty() ? "saved result was not found"
-                                             : recalled.diagnostic;
-            queueReplayLoadCompletion([this, diagnostic]() {
-              finishReplayResultRecallFailure(diagnostic);
-            });
-            return;
-          }
-          if (cancelled->load()) {
-            return;
-          }
-
-          struct Completion {
-            result_recall::ModernChartResultView view;
-            std::shared_ptr<ReplayData> retryData;
-          };
-          auto completion = std::make_shared<Completion>(Completion{
-              .view = std::move(*recalled.value),
-              .retryData = std::move(retryData),
-          });
+          auto completion = std::move(prepared.completion);
           queueReplayLoadCompletion([this, completion]() mutable {
             auto &result = completion->view;
             auto chart = std::move(result.chart);
@@ -8206,7 +7413,7 @@ void MainMenuScene::startModernReplayResultRecall(
 
 void MainMenuScene::startModernCourseReplayResultRecall(
     ModernCourseResultRecord modern, bool retrySameAllowed) {
-  if (replayResultRecallInProgress || replayExportInProgress.load() ||
+  if (replayResultRecallInProgress || replayExportJob_.inProgress() ||
       replayIrUploadInProgress) {
     return;
   }
@@ -8216,11 +7423,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
   replayResultRecallInProgress = true;
   if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker([this, modern = std::move(modern), retrySameAllowed,
                          currentSelection = std::move(currentSelection)](
@@ -8230,138 +7433,19 @@ void MainMenuScene::startModernCourseReplayResultRecall(
       if (previewWorker_ != nullptr) {
         previewWorker_->stop();
       }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
+      auto prepared = course_records::prepareCourseResult(
+          context.replayRepository, modern.result.attemptId, currentSelection,
+          retrySameAllowed, *cancelled);
+      if (cancelled->load()) {
+        return;
       }
-      const auto exact =
-          context.replayRepository.LoadModernCourseResultByAttempt(
-              modern.result.attemptId);
-      if (exact.status != ModernCourseResultReadStatus::Loaded ||
-          !exact.record.has_value()) {
-        const std::string diagnostic = exact.diagnostic.empty()
-                                           ? "saved course result was not found"
-                                           : exact.diagnostic;
-        queueReplayLoadCompletion([this, diagnostic]() {
+      if (!prepared.session) {
+        queueReplayLoadCompletion([this, diagnostic = std::move(prepared.diagnostic)]() {
           finishReplayResultRecallFailure(diagnostic);
         });
         return;
       }
-      if (!currentSelection || currentSelection->completedChartPaths.size() !=
-                                   exact.record->result.stages.size()) {
-        queueReplayLoadCompletion([this]() {
-          finishReplayResultRecallFailure(
-              "current course charts are unavailable");
-        });
-        return;
-      }
-      auto recalled = result_recall::BuildCourseResult(
-          exact.record->result, *cancelled,
-          currentSelection->completedChartPaths);
-      if (cancelled->load()) {
-        return;
-      }
-      if (!recalled.value.has_value() ||
-          recalled.value->completedStages.empty()) {
-        const std::string diagnostic = recalled.diagnostic.empty()
-                                           ? "saved course result was not found"
-                                           : recalled.diagnostic;
-        queueReplayLoadCompletion([this, diagnostic]() {
-          finishReplayResultRecallFailure(diagnostic);
-        });
-        return;
-      }
-
-      auto view = std::move(*recalled.value);
-      std::shared_ptr<CourseReplayData> resultBrowseReplayData;
-      std::vector<std::shared_ptr<bms_parser::Chart>> resultBrowseReplayCharts;
-      if (exact.record->replayFile) {
-        auto consumer =
-            replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
-        auto replay = consumer.load(*exact.record,
-                                    currentSelection->completedChartPaths,
-                                    *cancelled);
-        if (replay.ready() && replay.replayData != nullptr &&
-            replay.replayData->stages.size() == view.completedStages.size() &&
-            replay.charts.size() == view.completedStages.size()) {
-          resultBrowseReplayData = std::move(replay.replayData);
-          resultBrowseReplayCharts.reserve(replay.charts.size());
-          for (auto &chart : replay.charts) {
-            resultBrowseReplayCharts.emplace_back(std::move(chart));
-          }
-        }
-      }
-      if (cancelled->load()) {
-        return;
-      }
-      auto session = std::make_shared<CoursePlaySession>();
-      session->courseId = view.result.legacyCourseId;
-      session->courseKey = view.result.courseKey;
-      session->courseName = view.result.courseName;
-      session->courseGroupName = view.result.courseGroupName;
-      session->constraintJson = view.result.constraintJson;
-      session->entries.resize(
-          static_cast<std::size_t>(view.result.totalCharts));
-      for (std::size_t index = 0; index < session->entries.size(); ++index) {
-        session->entries[index].meta.TotalNotes =
-            view.result.entryFacts[index].totalNotes;
-        session->entries[index].meta.PlayLength =
-            view.result.entryFacts[index].playLengthMicros;
-      }
-      for (std::size_t index = 0; index < currentSelection->records.size() &&
-                                  index < session->entries.size();
-           ++index) {
-        session->entries[index].meta = currentSelection->records[index].meta;
-      }
-      session->stageProvenance.resize(view.completedStages.size());
-      session->completedResults.reserve(view.completedStages.size());
-      session->ownedResultBrowseCharts.reserve(view.completedStages.size());
-      session->ownedResultBrowseReplayCharts =
-          std::move(resultBrowseReplayCharts);
-      session->resultBrowseReplayData = std::move(resultBrowseReplayData);
-      session->modernCourseChartPaths.reserve(view.completedStages.size());
-      for (std::size_t index = 0; index < view.completedStages.size();
-           ++index) {
-        auto &stage = view.completedStages[index];
-        session->entries[index].meta = stage.chart->Meta;
-        const ReplayData *stageReplay = session->resultBrowseStageReplay(index);
-        bms_parser::Chart *replayChart =
-            session->resultBrowseReplayChart(index);
-        session->completedResults.emplace_back(
-            stage.chart->Meta, stage.state,
-            stageReplay != nullptr && replayChart != nullptr
-                ? replay_result::BuildSkinGameplayGraphState(
-                      *replayChart, *stageReplay, stage.state)
-                : replay_result::BuildSkinGameplayChartGraphState(
-                      *stage.chart, stage.state));
-        session->ownedResultBrowseCharts.push_back(stage.chart);
-        session->stageProvenance[index] = stage.result.score.provenance;
-        session->modernCourseChartPaths.push_back(stage.chart->Meta.BmsPath);
-      }
-      session->modernCourseAttemptId = view.result.attemptId;
-      session->modernCoursePlayedAtUnixMillis = view.result.playedAtUnixMillis;
-      session->modernCourseResultBrowsing = true;
-      session->restoreFinalClearTypeForResult(view.result.clearType);
-      session->modernCourseRetrySameAllowed =
-          retrySameAllowed && currentSelection->completeCourse;
-      session->gaugeType = view.result.initialGaugeType;
-      session->gaugeProfile = view.result.gaugeProfile;
-      session->gaugeAutoShift = view.result.gaugeAutoShift;
-      session->gaugeAutoShiftLowerBound = view.result.gaugeAutoShiftLowerBound;
-      session->longNoteMode = view.result.longNoteMode;
-      session->requestedPlayOption = view.result.requestedPlayOption;
-      session->assistOption = view.result.assistOption;
-      session->constraints =
-          courseConstraintSettingsFromJson(view.result.constraintJson).rules;
-      session->maxCombo = view.result.maxCombo;
-      session->carriedGauge =
-          session->completedResults.back().state.gaugeSnapshot();
-      if (const auto ruleset =
-              gameplayRulesetFromId(view.result.provenance.ruleset.id)) {
-        session->ruleset = *ruleset;
-        session->rulesetDescriptor = view.result.provenance.ruleset;
-      }
-
+      auto session = std::move(prepared.session);
       queueReplayLoadCompletion([this, session = std::move(session)]() {
         context.jukebox.stop();
         const auto &first = session->completedResults.front();
@@ -8403,7 +7487,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
 
 void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
                                             std::string selectedStableKey) {
-  if (replayResultRecallInProgress || replayExportInProgress.load() ||
+  if (replayResultRecallInProgress || replayExportJob_.inProgress() ||
       replayIrUploadInProgress || identity.providerId.empty() ||
       identity.serverOrigin.empty() || identity.remoteScoreId.empty() ||
       selectedStableKey.empty()) {
@@ -8414,21 +7498,22 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
   if (previewWorker_ != nullptr) {
     previewWorker_->cancel();
   }
-  defer(
+  startReplayLoadWorker(
       [this, identity = std::move(identity),
-       selectedStableKey = std::move(selectedStableKey)]() {
+       selectedStableKey = std::move(selectedStableKey)](std::shared_ptr<std::atomic_bool> cancelled) {
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
-        }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
         }
 
         RemoteResultRecallRequest request{
             .identity = std::move(identity),
             .selectedStableKey = std::move(selectedStableKey),
         };
+        auto loaded = context.replayRepository.LoadIrRemoteScore(
+            request.identity.providerId, request.identity.serverOrigin,
+            request.identity.remoteScoreId);
+        if (cancelled->load()) return;
+        queueReplayLoadCompletion([this, request, loaded = std::move(loaded)]() mutable {
         RemoteResultRecallCallbacks callbacks{
             .selectionStillMatches = [this](const RemoteResultRecallRequest &request) {
               return remoteResultRecallSelectionMatches(
@@ -8436,13 +7521,10 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
                                            : std::optional<ResultRecordSummary>{},
                   request);
             },
-            .loadExact = [this](const IrRemoteRecordId &candidate) {
-              return context.replayRepository.LoadIrRemoteScore(
-                  candidate.providerId, candidate.serverOrigin,
-                  candidate.remoteScoreId);
-            },
+            .loadExact = [&loaded](const IrRemoteRecordId &) { return std::move(loaded); },
             .transition = [this](ResultRemoteOptions remote,
                                  bool retainCurrentScene) {
+              remote.returnScene = this;
               auto next =
                   std::make_unique<ResultScene>(context, std::move(remote));
               replayResultRecallInProgress = false;
@@ -8459,9 +7541,8 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
             },
         };
         (void)executeRemoteResultRecall(request, callbacks);
-        return true;
-      },
-      1, true);
+        });
+      });
 }
 
 void MainMenuScene::finishReplayResultRecallFailure(std::string diagnostic) {
@@ -8486,41 +7567,19 @@ void MainMenuScene::finishRemoteResultRecallFailure(std::string diagnostic) {
 }
 
 void MainMenuScene::applyReplayExportProgress() {
-  std::optional<PendingReplayExportProgress> progress;
-  {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    if (!pendingReplayExportProgress.has_value()) {
-      return;
-    }
-    progress = std::move(pendingReplayExportProgress);
-    pendingReplayExportProgress.reset();
-  }
-
-  if (recordsModal_ != nullptr) {
+  const auto progress = replayExportJob_.takeProgress();
+  if (progress && recordsModal_ != nullptr) {
     recordsModal_->updateExportProgress(progress->fraction, progress->message);
   }
 }
 
 void MainMenuScene::applyReplayExportResult() {
-  std::optional<PendingReplayExportResult> result;
-  {
-    std::lock_guard<std::mutex> lock(replayExportResultMutex);
-    if (!pendingReplayExportResult.has_value()) {
-      return;
-    }
-    result = std::move(pendingReplayExportResult);
-    pendingReplayExportResult.reset();
+  const auto result = replayExportJob_.takeResult();
+  if (!result) {
+    return;
   }
-
-  if (replayExportThread.joinable()) {
-    replayExportThread.join();
-  }
-  replayExportInProgress = false;
   willStart.store(false);
-  {
-    std::lock_guard<std::mutex> lock(replayExportProgressMutex);
-    pendingReplayExportProgress.reset();
-  }
+  (void)replayExportJob_.takeProgress();
 
   if (recyclerView != nullptr) {
     const int selected = recyclerView->selectedIndex;
@@ -8540,7 +7599,7 @@ void MainMenuScene::applyReplayExportResult() {
     } else if (result->message == "No Chart") {
       replayStatusText->setText("No Chart");
     } else {
-      replayStatusText->setText(replayDiagnosticOr(
+      replayStatusText->setText(replay_records::diagnosticOr(
           result->message, "Replay export failed."));
     }
   }
@@ -8551,7 +7610,7 @@ void MainMenuScene::applyReplayExportResult() {
             ? (result->message == "Saved to Photos" ? "Saved" : "Exported")
             : (result->message == "No Chart"
                    ? "No Chart"
-                   : replayDiagnosticOr(result->message,
+                   : replay_records::diagnosticOr(result->message,
                                         "Replay export failed.")));
   }
 
@@ -8566,7 +7625,7 @@ void MainMenuScene::applyReplayExportResult() {
 
   defer(
       [this]() {
-        if (!replayExportInProgress.load() && replayStatusText != nullptr) {
+        if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
           replayStatusText->setText("");
         }
         return true;
@@ -8684,30 +7743,17 @@ void MainMenuScene::cleanupScene() {
   revealContextMenu.reset();
   rankingsModal.reset();
   playOptionsModal.reset();
-  replayFileDocumentHandoff.close();
+  if (recordFileActions_) recordFileActions_->close();
   parseLogDocumentHandoff.close();
-  if (previewWorker_ != nullptr) {
-    previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
-  stopReplayLoadWorker();
+  stopReplayAndPreviewWork();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
-  if (replayExportThread.joinable()) {
+  if (replayExportJob_.hasWorker()) {
     SDL_Log("Joining replayExportThread");
-    replayExportThread.request_stop();
-    replayExportThread.join();
+    replayExportJob_.cancelAndWait();
   }
-  if (findBmsThread.joinable()) {
-    SDL_Log("Joining findBmsThread");
-    findBmsCancelled = true;
-    findBmsThread.request_stop();
-    findBmsThread.join();
-  }
+  findBmsTask.stopAndWait();
   archiveUnzipModal_.reset();
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
@@ -8722,10 +7768,7 @@ void MainMenuScene::cleanupScene() {
     delete decideOverlay_;
     decideOverlay_ = nullptr;
   }
-  if (previewWorker_ != nullptr) {
-    delete previewWorker_;
-    previewWorker_ = nullptr;
-  }
+  previewWorker_.reset();
   overlayPortal = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;
@@ -8824,24 +7867,19 @@ void MainMenuScene::cleanupScene() {
   readyPlayOptionsButton = nullptr;
   playOptionsCloseButton = nullptr;
   playOptionsCloseButtonText = nullptr;
-  pendingReplayExportResult.reset();
-  pendingReplayExportProgress.reset();
+  replayExportJob_.reset();
   pendingSelectChartPath.reset();
   {
     std::lock_guard<std::mutex> lock(findBmsSelectionHandoffMutex);
     pendingFindBmsSelectionHandoff.reset();
   }
   suppressPreviewForChartPath.reset();
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
+  findBmsTask.stopAndWait();
   chartSelectionGeneration = 0;
   findBmsSelectionGenerationAtDownloadStart = 0;
-  replayExportInProgress = false;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
-  findBmsJobRunning = false;
-  findBmsCancelled = false;
   findBmsResult = {};
   findBmsProgressMessage.clear();
   findBmsProgressCurrent = 0;

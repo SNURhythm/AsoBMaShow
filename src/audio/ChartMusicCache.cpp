@@ -1,4 +1,6 @@
 #include "ChartMusicCache.h"
+#include "../StableHash.h"
+#include "../ExportFileName.h"
 
 #include "../BmsMetadataText.h"
 #include "../PlayOptionUtils.h"
@@ -32,39 +34,13 @@ std::uint64_t fnv1a64Append(std::uint64_t hash, std::string_view value) {
   return hash;
 }
 
-std::string hex64(std::uint64_t value) {
-  constexpr char kHex[] = "0123456789abcdef";
-  std::string text(16, '0');
-  for (int i = 15; i >= 0; --i) {
-    text[static_cast<std::size_t>(i)] = kHex[value & 0xfu];
-    value >>= 4u;
-  }
-  return text;
-}
-
 std::string lowerTrimmed(std::string value) {
   return asobmshow::bms_metadata::lowerCopy(
       asobmshow::bms_metadata::trimCopy(value));
 }
 
 std::string sanitizeFileNamePart(const std::string &value) {
-  std::string result;
-  result.reserve(value.size());
-  for (const unsigned char ch : value) {
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
-      result.push_back(static_cast<char>(ch));
-    } else if (ch == ' ' || ch == '.' || ch == '[' || ch == ']') {
-      result.push_back('_');
-    }
-  }
-  while (!result.empty() && result.back() == '_') {
-    result.pop_back();
-  }
-  if (result.empty()) {
-    return "music";
-  }
-  return result.substr(0, 64);
+  return sanitizeExportFileNamePart(value, "music", 64);
 }
 
 std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {
@@ -79,7 +55,7 @@ std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {
   std::uint64_t hash = 14695981039346656037ull;
   hash = fnv1a64Append(hash, folder);
   hash = fnv1a64Append(hash, identity);
-  return hex64(hash);
+  return stable_hash::hex64(hash);
 }
 
 void excludeCacheFromBackup(const std::filesystem::path &path) {

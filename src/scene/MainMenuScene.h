@@ -11,7 +11,8 @@
 #include "../repositories/ReplayRepository.h"
 #include "../ReplayRecordFilters.h"
 #include "../ResultRecordSummary.h"
-#include "../ReplayVideoExporter.h"
+#include "../ReplayVideoExportTypes.h"
+#include "../replay/ReplayExportJob.h"
 #include "../PlatformDocumentHandoff.h"
 #include "../replay/ReplayFileActionSelection.h"
 #include "../repositories/ScoreRepository.h"
@@ -37,6 +38,10 @@
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include "ReplayRecordsModal.h"
+#include "CourseRecordActions.h"
+#include "RecordFileActions.h"
+#include "ReplayRecordTask.h"
+#include "FindBmsTask.h"
 #include "ArchiveUnzipModal.h"
 #include <array>
 #include <atomic>
@@ -53,7 +58,7 @@ class DropdownView;
 class OverlayPortal;
 class BlockingOverlayView;
 class DecideLoadingOverlay;
-class ChartPreloadWorker;
+class MainMenuPreviewController;
 class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
@@ -67,7 +72,8 @@ struct MainMenuParseLogRow {
 
 class MainMenuScene : public Scene {
 public:
-  inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
+  explicit MainMenuScene(ApplicationContext &context);
+  ~MainMenuScene() override;
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -89,20 +95,11 @@ private:
   // Preview chart loading runs on the shared ChartPreloadWorker (single
   // scene-lifetime thread, debounced and latest-wins) so a selection change
   // never spawns or joins a per-selection thread on the UI thread.
-  ChartPreloadWorker *previewWorker_ = nullptr;
+  std::unique_ptr<MainMenuPreviewController> previewWorker_;
   std::mutex previewJukeboxLoadMutex;
-  std::mutex previewCleanupMutex;
-  bool pendingStopAndClearSelectedChartAfterPreview = false;
-  std::jthread findBmsThread;
-  std::jthread replayLoadThread;
-  std::shared_ptr<std::atomic_bool> replayLoadCancelToken =
-      std::make_shared<std::atomic_bool>(false);
-  std::mutex replayLoadCompletionMutex;
-  std::function<void()> pendingReplayLoadCompletion;
-  std::atomic_bool replayLoadInProgress = false;
-  std::jthread replayExportThread;
+  FindBmsTask findBmsTask;
+  ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;
-  std::atomic_bool replayExportInProgress = false;
   bool replayResultRecallInProgress = false;
   bool replayIrUploadInProgress = false;
   std::unordered_map<std::string, std::uint64_t> replayIrObservedRevisions;
@@ -295,19 +292,7 @@ private:
   Button *readyPlayOptionsButton = nullptr;
   Button *playOptionsCloseButton = nullptr;
   TextView *playOptionsCloseButtonText = nullptr;
-  struct PendingReplayExportResult {
-    bool success = false;
-    std::filesystem::path outputPath;
-    std::string message;
-  };
-  std::mutex replayExportResultMutex;
-  std::optional<PendingReplayExportResult> pendingReplayExportResult;
-  struct PendingReplayExportProgress {
-    double fraction = 0.0;
-    std::string message;
-  };
-  std::mutex replayExportProgressMutex;
-  std::optional<PendingReplayExportProgress> pendingReplayExportProgress;
+  replay::ReplayExportJob replayExportJob_;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct PendingFindBmsSelectionHandoff {
     std::filesystem::path chartPath;
@@ -318,8 +303,6 @@ private:
   std::optional<PendingFindBmsSelectionHandoff>
       pendingFindBmsSelectionHandoff;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
-  std::atomic_bool findBmsJobRunning = false;
-  std::atomic_bool findBmsCancelled = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
@@ -328,9 +311,6 @@ private:
   std::uint64_t findBmsProgressTotal = 0;
   double findBmsProgressFraction = 0.0;
   std::deque<std::string> findBmsProgressLog;
-  std::mutex findBmsUpdateMutex;
-  std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
-  std::optional<BmsSearchResult> pendingFindBmsResult;
   std::uint64_t chartSelectionGeneration = 0;
   std::uint64_t findBmsSelectionGenerationAtDownloadStart = 0;
 
@@ -351,11 +331,7 @@ private:
     int firstMissingIndex = -1;
     std::vector<ChartMetaRecord> records;
   };
-  struct CurrentCourseSelection {
-    std::vector<ChartMetaRecord> records;
-    std::vector<std::filesystem::path> completedChartPaths;
-    bool completeCourse = false;
-  };
+  using CurrentCourseSelection = course_records::CurrentCourseSelection;
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
@@ -372,8 +348,7 @@ private:
   bool chartDifficultyMaxDropdownOpen = false;
   std::optional<int> chartDifficultyRangeTableId;
   std::string publishedResultRecordDiagnostic;
-  platform_document_handoff::PlatformDocumentHandoffOperation
-      replayFileDocumentHandoff;
+  std::unique_ptr<RecordFileActions> recordFileActions_;
   platform_document_handoff::PlatformDocumentHandoffOperation
       parseLogDocumentHandoff;
   main_menu_profile::Selections profileSelections;
@@ -577,7 +552,7 @@ private:
   bool beginReplayExport(const std::string &progressTitle,
                          const std::string &progressMessage,
                          const std::string &statusMessage);
-  void queueReplayExportResult(const ReplayVideoExportResult &result);
+  void preparePreviewForReplayExport();
   bms_parser::ChartMeta
   replayLoadMetaForRecord(const ChartMetaRecord &record) const;
   ReplaySummary autoPlayReplaySummary(const ChartMetaRecord &record) const;
@@ -585,7 +560,9 @@ private:
       const ChartMetaRecord &record,
       std::unique_ptr<bms_parser::Chart> &preparedChart,
       play_options::PlayOptionReplayInfo &playInfo,
-      std::atomic_bool &parseCancelled) const;
+      std::atomic_bool &parseCancelled,
+      const main_menu_profile::Selections &selections,
+      const SelectedChartRandomInfo &chartRandomInfo) const;
   void startAutoPlayPlayback(const ChartMetaRecord &record);
   void startModernReplayPlayback(const ChartMetaRecord &record,
                                  ModernChartResultRecord modern);
@@ -593,7 +570,6 @@ private:
                                        ModernCourseResultRecord modern);
   void startModernGBattlePlayback(const ChartMetaRecord &record,
                                   ModernChartResultRecord modern);
-  void startCourseReplayDirect(std::shared_ptr<CoursePlaySession> session);
   void startAutoPlayVideoExport(const ChartMetaRecord &record,
                                 ReplayVideoExportOptions options);
   void startModernReplayVideoExport(const ChartMetaRecord &record,
@@ -620,6 +596,7 @@ private:
   void queueReplayLoadCompletion(std::function<void()> completion);
   void applyReplayLoadCompletion();
   void stopReplayLoadWorker();
+  void stopReplayAndPreviewWork();
   void applyReplayExportProgress();
   void applyReplayExportResult();
   enum DiffType { Deleted, Added };

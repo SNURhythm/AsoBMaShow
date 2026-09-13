@@ -757,6 +757,7 @@ void View::renderBoxDecoration(RenderContext &context) const {
 void View::applyYogaLayoutImmediate() {
   const bool outermostLayout = layoutApplyDepth == 0;
   ++layoutApplyDepth;
+  auto restoreDepth = makeScopeExit([] { --layoutApplyDepth; });
 
   auto prevX = absoluteX;
   auto prevY = absoluteY;
@@ -795,7 +796,7 @@ void View::applyYogaLayoutImmediate() {
     onResize(newWidth, newHeight);
   }
 
-  --layoutApplyDepth;
+  restoreDepth.runNow();
   if (outermostLayout && layoutBatchDepth == 0) {
     flushLayoutBatches();
   }

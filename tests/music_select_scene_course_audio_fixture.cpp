@@ -1,4 +1,5 @@
 #include "REPOSITORY_ROOT/src/audio/AudioMix.h"
+#include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
 
 #include <atomic>
 #include <cassert>
@@ -206,6 +207,12 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  void resetFailedLaunch(std::uint64_t generation);
+  bool recordsResumeAudioPending_ = false;
+  struct FileActions { void close() {} };
+  FileActions *recordFileActions_ = nullptr;
+  struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
+  void finishRecordsLoading() {}
   struct UnzipModal { void cancelAndWait() {} };
   std::unique_ptr<UnzipModal> archiveUnzipModal_;
   SceneManager manager;
@@ -230,10 +237,15 @@ struct MusicSelectScene {
   std::mutex postedMutex;
   std::vector<std::function<bool()>> posted;
   bool preloadStopped = false;
+  std::function<void()> beforeLaunchWorker;
   Bars bars_;
   MusicSelectScene() { context.sceneManager = &manager; }
   ~MusicSelectScene() { cleanupScene(); }
-  void stopPreloadWorker() { assertUi(); preloadStopped = true; }
+  void stopPreloadWorker() {
+    assertUi();
+    preloadStopped = true;
+    if (beforeLaunchWorker) beforeLaunchWorker();
+  }
   void showDecideOverlay(const ChartMetaRecord &) { assertUi(); overlayVisible = true; }
   void hideDecideOverlay() { assertUi(); overlayVisible = false; }
   void stopInputListening() { assertUi(); }
@@ -498,6 +510,52 @@ void testCourseFailureWhileApplicationBackgrounded() {
   scene.launchCourse(course, false);
   scene.finish();
   assert(scene.manager.transitions == 1);
+}
+
+void testCourseWorkerAdmissionFailure() {
+  for (bool background : {false, true}) {
+    bool reachedSuccess = false;
+    std::size_t rejected = 0;
+    for (std::size_t index = 0; index < 16; ++index) {
+      resetGates();
+      std::optional<test_support::FailAllocationAfter> failure;
+      MusicSelectScene scene;
+      MusicSelectBar course;
+      course.courseCharts = {{{"first.bms"}}};
+      scene.context.jukebox.success = true;
+      scene.launchGeneration_ = 40;
+      // The hook runs after ordinary launch preparation. Rejection must come
+      // from copying the worker captures or constructing the real jthread.
+      scene.beforeLaunchWorker = [&] {
+        scene.context.appInBackground = background;
+        failure.emplace(index);
+      };
+      bool threw = false;
+      try { scene.launchCourse(course, false); }
+      catch (const std::bad_alloc &) { threw = true; }
+      failure.reset();
+      scene.beforeLaunchWorker = {};
+      if (!threw) {
+        scene.context.appInBackground = false;
+        scene.finish();
+        assert(scene.manager.transitions == 1);
+        reachedSuccess = true;
+        break;
+      }
+      ++rejected;
+      assert(scene.launchGeneration_ == 41 && !scene.launchThread_.joinable());
+      assert(!parseGate.entered && !audioGate.entered && scene.manager.transitions == 0);
+      assert(!scene.launching_ && !scene.overlayVisible);
+      assert(scene.previewAudio_->silenced == background);
+      assert(scene.previewAudio_->resumes == (background ? 0 : 1));
+      scene.context.appInBackground = false;
+      scene.launchCourse(course, false);
+      scene.finish();
+      assert(scene.launchGeneration_ == 42 && scene.manager.transitions == 1);
+      assert(scene.manager.gameplay->chart->Meta.BmsPath == "first.bms");
+    }
+    assert(rejected > 0 && reachedSuccess);
+  }
 }
 
 int main() {
