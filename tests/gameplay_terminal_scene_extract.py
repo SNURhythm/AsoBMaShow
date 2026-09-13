@@ -115,7 +115,6 @@ def main():
     viewer_source = (args.root / "src/scene/ChartViewerScene.cpp").read_text()
     preparation_methods += '\n' + '\n\n'.join(extract(viewer_source, signature) for signature in [
         'bool isLaneOrderSummaryOption(',
-        'std::optional<std::string>\nformatLaneOrderSummary(',
         'bool ChartViewerScene::applyViewerPlayOptions(',
     ]).replace('ChartViewerScene::', 'PreparedViewerFixture::')
     viewer_start = viewer_source.index('        std::atomic_bool parseCancelled = false;',

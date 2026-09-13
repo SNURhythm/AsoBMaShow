@@ -1347,3 +1347,11 @@ return behavior are unchanged; connection cleanup uses the shared RAII helper.
 The focused runner, desktop and all-target builds, independent review, and
 `git diff --check` passed. All 398 CTest entries passed (92.29 seconds).
 The verified commit remains local.
+
+## Follow-up: Share lane-summary formatting with Chart Viewer
+
+Chart Viewer and its preparation fixture use the existing play-option formatter,
+removing an independently verified byte-identical copy. Viewer eligibility and
+lane merging are unchanged. The desktop build and the three relevant existing
+fixtures passed (6.78 seconds); independent review and `git diff --check` passed.
+The preceding full-suite baseline was 398 passing tests. The commit remains local.

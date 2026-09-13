@@ -937,6 +937,19 @@ The focused runner passed (0.40 seconds), desktop and all-target builds passed,
 and all 398 CTest entries passed (92.29 seconds). Independent review and
 `git diff --check` passed. The commit remains local.
 
+## 59. Share the viewer and replay lane-summary formatter — completed
+
+Chart Viewer now calls `play_options::formatLaneOrderSummary`, removing its
+39-line byte-identical copy. The existing preparation fixture calls the shared
+function as well, so it no longer extracts a second formatter. The viewer's
+option eligibility and combined-lane calculation remain local and unchanged.
+
+The desktop build and all three relevant runners passed: actual gameplay/viewer
+preparation, replay-summary text, and play-option lane orders (6.78 seconds).
+Independent review confirmed identical function bodies; `git diff --check`
+passed. The preceding full-suite baseline was 398 passing tests. This mechanical
+deduplication adds no new tests, and the commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
