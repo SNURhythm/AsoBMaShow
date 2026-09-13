@@ -963,6 +963,22 @@ The desktop build and both affected test runners passed (6.72 seconds).
 Independent review, a source/test reference audit, and `git diff --check` passed.
 No new tests were added for this relocation. The commit remains local.
 
+## 61. Own legacy-migration diagnostics through logging — completed
+
+Legacy replay migration now stores SQLite execution errors in the existing
+`SqliteErrorMessageHandle`. Constructing the logging context can throw without
+leaking SQLite's error string; migration SQL and diagnostics are unchanged.
+
+The actual migration fixture rejects the first summary-table creation and walks
+all 16 C++ allocation failures through that path. It reproduced a retained
+16-byte SQLite error allocation in the old helper. Each attempt now restores
+SQLite's warmed memory baseline after connection teardown, leaves the database
+family unchanged, and permits a subsequent normal schema migration.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 398 CTest entries passed (111.32 seconds), including the existing migration
+fault matrices. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

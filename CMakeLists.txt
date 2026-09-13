@@ -3301,6 +3301,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_legacy_migration_tests
         tests/replay_legacy_migration_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp

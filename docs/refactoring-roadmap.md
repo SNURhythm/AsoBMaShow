@@ -1364,3 +1364,13 @@ preserves fixture opening behavior, leaving production repository policies in
 their existing paths. Desktop compilation and both affected test runners passed
 (6.72 seconds), as did independent review and `git diff --check`. The commit
 remains local.
+
+## Follow-up: Release legacy migration errors when diagnostic allocation fails
+
+Legacy replay migration uses the existing SQLite error owner during logging.
+Its real migration fixture reproduced the old 16-byte leak, then passed all
+16 injected allocation failures with balanced SQLite memory, unchanged source
+files, and a successful migration retry. SQL and diagnostic behavior are unchanged.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 398 CTest entries passed (111.32 seconds). The verified commit remains local.
