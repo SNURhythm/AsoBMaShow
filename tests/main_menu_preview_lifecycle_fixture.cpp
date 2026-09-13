@@ -43,7 +43,7 @@ struct MainMenuScene {
   int chartSelectionGeneration = 0;
   std::optional<ChartMetaRecord> selectedChartRecord;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
-  std::atomic_bool replayExportInProgress = false;
+  struct { bool inProgress() const { return false; } } replayExportJob_;
   View view;
   View *jacketView = &view;
   View *replayStatusText = nullptr;

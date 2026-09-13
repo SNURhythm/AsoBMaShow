@@ -1,3 +1,5 @@
+#include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
+#include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include <atomic>
 #include <cassert>
 #include <filesystem>
@@ -13,8 +15,10 @@
 void SDL_Log(const char *, ...) {}
 std::string fspath_to_utf8(const std::filesystem::path &path) { return path.string(); }
 namespace ir { std::string sanitizeDiagnostic(const std::string &value) { return value; } }
-std::string replayDiagnosticOr(const std::string &value, const char *fallback) {
+namespace replay_records {
+std::string diagnosticOr(const std::string &value, const char *fallback) {
   return value.empty() ? fallback : value;
+}
 }
 struct View {
   bool visible = true;
@@ -136,7 +140,7 @@ struct ResultCourseOptions {
   bool savedResultBrowsing;
 };
 struct ResultTableContext {};
-struct ResultRemoteOptions {};
+struct ResultRemoteOptions { void *returnScene = nullptr; };
 struct ResultScene { template<class... Arguments> ResultScene(Arguments &&...) {} };
 struct SceneManager {
   int transitions = 0;
@@ -166,7 +170,7 @@ void executeRemoteResultRecall(const RemoteResultRecallRequest &request, RemoteR
   callbacks.transition({}, true);
 }
 struct PreviewWorker { void cancel() {} void stop() {} };
-struct ReplayVideoExportResult { bool success; std::filesystem::path outputPath; std::string message; };
+
 struct Recycler {
   int selectedIndex = -1;
   int size() { return 0; }
@@ -192,6 +196,7 @@ struct MainMenuScene {
       void loadChart(bms_parser::Chart &, bool, std::atomic_bool &cancel) { cancel = cancelled; }
     } jukebox;
     SceneManager *sceneManager;
+    std::atomic_bool appInBackground = false;
   } context;
   ProfileSelections profileSelections;
   ReplayRecordsModal modal;
@@ -199,16 +204,10 @@ struct MainMenuScene {
   PreviewWorker *previewWorker_ = nullptr;
   std::mutex previewCleanupMutex;
   bool pendingStopAndClearSelectedChartAfterPreview = false;
-  std::atomic_bool willStart = false, replayExportInProgress = false;
+  std::atomic_bool willStart = false;
+  replay::ReplayExportJob replayExportJob_;
+  ReplayRecordTask replayLoadTask_;
   bool replayResultRecallInProgress = false, replayIrUploadInProgress = false;
-  std::atomic_bool replayLoadInProgress = false;
-  std::jthread replayLoadThread, replayExportThread;
-  std::shared_ptr<std::atomic_bool> replayLoadCancelToken = std::make_shared<std::atomic_bool>(false);
-  std::mutex replayLoadCompletionMutex, replayExportProgressMutex, replayExportResultMutex;
-  std::function<void()> pendingReplayLoadCompletion;
-  std::optional<int> pendingReplayExportProgress;
-  using PendingReplayExportResult = ReplayVideoExportResult;
-  std::optional<PendingReplayExportResult> pendingReplayExportResult;
   std::atomic_bool selectedChartMediaReady = true, selectedChartReusableForStart = true;
   Recycler *recyclerView = nullptr;
   View *replayStatusText = nullptr, *revealContextMenu = nullptr, *rankingsModal = nullptr;
@@ -233,7 +232,7 @@ struct MainMenuScene {
     for (auto &callback : callbacks) callback();
   }
   bool prepareAutoPlayChartForRecord(const ChartMetaRecord &, std::unique_ptr<bms_parser::Chart> &chart,
-                                    play_options::PlayOptionReplayInfo &, std::atomic_bool &) {
+                                    play_options::PlayOptionReplayInfo &, std::atomic_bool &, const ProfileSelections &, int) {
     if (preparationFails) return false;
     chart = std::make_unique<bms_parser::Chart>();
     return true;
@@ -257,6 +256,12 @@ struct MainMenuScene {
   void refreshLibraryIfNeeded() {}
   void reselectCurrentChart() {}
   Callbacks callbacks() { Callbacks callbacks; OWNER_CALLBACKS return callbacks; }
+  int selectedChartRandomInfoForPath(const std::filesystem::path &) const { return 0; }
+  bool finishReplayLoadFailure(const char *, std::string message, const char *fallback) {
+    resetReplayWatchLoadingUi();
+    modal.setStatus(message.empty() ? fallback : message);
+    return true;
+  }
   void startAutoPlayPlayback(const ChartMetaRecord &);
   void resetReplayWatchLoadingUi();
   void startModernReplayResultRecall(const ChartMetaRecord &, ModernChartResultRecord);
@@ -289,7 +294,7 @@ void testAutoPlay() {
     expect(scene.willStart && scene.modal.operationInProgress(), "AutoPlay entry must lock owner/modal");
     scene.modal.hide();
     expect(scene.modal.root.visible, "busy AutoPlay must block dismissal");
-    scene.drain();
+    while (scene.replayLoadTask_.active()) { scene.applyReplayLoadCompletion(); std::this_thread::yield(); }
     expect(!scene.willStart && !scene.modal.operationInProgress(), "AutoPlay completion must release owner/modal");
     expect(scene.manager.transitions == (outcome == 0), "AutoPlay must transition only on success");
     if (outcome == 0) {
@@ -323,10 +328,14 @@ void testRecall() {
         if (outcome == 2) scene.stopReplayLoadWorker();
         else {
           scene.releasePreparation = true;
-          scene.replayLoadThread.join();
-          scene.applyReplayLoadCompletion();
+          while (scene.replayLoadTask_.active()) {
+            scene.applyReplayLoadCompletion();
+            std::this_thread::yield();
+          }
         }
-      } else scene.drain();
+      } else {
+        while (scene.replayLoadTask_.active()) { scene.applyReplayLoadCompletion(); std::this_thread::yield(); }
+      }
       expect(!scene.replayResultRecallInProgress && !scene.modal.operationInProgress(), "recall success/failure/cancel must release both flags");
       expect(scene.manager.transitions == (outcome == 0), "recall must transition only on success");
       if (outcome == 0) scene.manager.returnToRetainedOwner();
@@ -342,12 +351,15 @@ void testExport() {
                              ReplayVideoExportResult{false, {}, "Cancelled"}}) {
     MainMenuScene scene;
     expect(scene.beginReplayExport("Export", "Preparing", "Exporting"), "export entry must succeed");
-    expect(scene.replayExportInProgress && scene.modal.operationInProgress(), "export must lock both owner/modal");
+    expect(scene.replayExportJob_.inProgress() && scene.modal.operationInProgress(), "export must lock both owner/modal");
     scene.modal.hide();
     expect(scene.modal.root.visible, "export in progress must block dismissal");
-    scene.pendingReplayExportResult = result;
-    scene.applyReplayExportResult();
-    expect(!scene.replayExportInProgress && !scene.willStart && scene.modal.canHide(), "export completion must release owner/modal");
+    scene.replayExportJob_.start({}, [result](const auto &, auto &) { return result; });
+    while (scene.replayExportJob_.inProgress()) {
+      scene.applyReplayExportResult();
+      std::this_thread::yield();
+    }
+    expect(!scene.replayExportJob_.inProgress() && !scene.willStart && scene.modal.canHide(), "export completion must release owner/modal");
     expect(!scene.modal.status.empty(), "export completion must publish status");
   }
 }

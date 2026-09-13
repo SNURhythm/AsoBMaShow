@@ -3569,9 +3569,11 @@ void ResultScene::exitResult() {
     return;
   }
   context.jukebox.stop();
-  if (remoteSource() != nullptr) {
-    (void)executeRemoteResultBack(
-        [this]() { context.sceneManager->changeScene("MainMenu"); });
+  if (const auto *remote = remoteSource()) {
+    (void)executeRemoteResultBack([this, remote]() {
+      if (remote->returnScene) context.sceneManager->changeScene(remote->returnScene, false);
+      else context.sceneManager->changeScene("MainMenu");
+    });
     return;
   }
   const auto *local = localSource();
@@ -3845,14 +3847,14 @@ void ResultScene::startCourseReplayStage(
         stageReplay->chartMeta.BmsPath, *stageReplay, parseCancelled);
   }
   if (replayChart == nullptr || parseCancelled) {
-    context.sceneManager->changeScene("MainMenu");
+    exitResult();
     return;
   }
 
   context.jukebox.stop();
   context.jukebox.loadChart(*replayChart, true, parseCancelled);
   if (parseCancelled) {
-    context.sceneManager->changeScene("MainMenu");
+    exitResult();
     return;
   }
 
@@ -3860,6 +3862,7 @@ void ResultScene::startCourseReplayStage(
       makeCourseReplayStageStartOptions(session, stageReplay);
   if (const auto *local = localSource(); local != nullptr) {
     options.returnScene = local->practiceOptions.returnScene;
+    options.pacemakerTarget = local->pacemakerTarget;
   }
 
   context.sceneManager->changeScene(

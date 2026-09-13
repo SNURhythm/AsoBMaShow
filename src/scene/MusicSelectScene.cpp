@@ -1,11 +1,6 @@
 #include "MusicSelectScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
-#include "MusicSelectRecords.h"
-#include "MusicSelectGhostBattle.h"
 #include "MusicSelectDirectoryRestore.h"
-#include "ResultScene.h"
-#include "../ModernResultRecallBuilder.h"
-#include "../ReplayResultStateBuilder.h"
 
 #include "../PlatformOpen.h"
 #include "../targets.h"
@@ -29,7 +24,6 @@
 #include "../CoursePlaySession.h"
 #include "../LongNoteModeUtils.h"
 #include "../PlayOptionUtils.h"
-#include "../ReplayAutoPlay.h"
 #include "../audio/Jukebox.h"
 #include "play/Pacemaker.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
@@ -41,9 +35,6 @@
 #include "../library/ChartLibraryTaskService.h"
 #include "../input/SDLPointerEvent.h"
 #include "../ResultRecordSummary.h"
-#include "../replay/ChartReplayConsumer.h"
-#include "../replay/CourseReplayConsumer.h"
-#include "../replay/ReplayFileActionService.h"
 #include "../rendering/common.h"
 #include "../repositories/LegacyResultSummary.h"
 #include "../view/Button.h"
@@ -650,6 +641,9 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  recordsResumeAudioPending_ = false;
+  recordsTask_.cancelAndWait();
+  finishRecordsLoading();
   if (archiveUnzipModal_) archiveUnzipModal_->cancelAndWait();
   cancelDirectoryLoad();
   if (folderStatusLoader_) folderStatusLoader_->cancel();
@@ -714,6 +708,9 @@ void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
     if (skinSession_) skinSession_->suspendAudio();
 #endif
     return;
+  }
+  if (sceneActive_ && !failed_ && launching_ && recordsTask_.active()) {
+    recordsResumeAudioPending_ = true;
   }
   if (!sceneActive_ || failed_ || launching_ ||
       context.appInBackground.load(std::memory_order_acquire)) {
@@ -2060,7 +2057,7 @@ void MusicSelectScene::closeDirectory() {
 
 void MusicSelectScene::startPreloadForSelection() {
   if (!sceneActive_ || context.appInBackground.load(std::memory_order_acquire) ||
-      launching_ || recordsExportInProgress_.load()) {
+      launching_ || recordsExportJob_.inProgress()) {
     return;
   }
   const auto snapshot = bars_.readView();
@@ -2664,61 +2661,10 @@ void MusicSelectScene::launchCourseReplay(
     return;
   }
 
-  std::vector<std::filesystem::path> chartPaths;
-  chartPaths.reserve(stored.record->result.stages.size());
-  for (std::size_t index = 0;
-       index < stored.record->result.stages.size(); ++index) {
-    if (index >= course.courseCharts.size()) return;
-    chartPaths.push_back(course.courseCharts[index].meta.BmsPath);
-  }
-
-  launching_ = true;
-  std::atomic_bool cancelled = false;
-  auto consumer =
-      replay::makeRuntimeCourseReplayConsumer(context.replayRepository);
-  auto loaded = consumer.load(*stored.record, chartPaths, cancelled);
-  if (!loaded.ready() || cancelled) {
-    SDL_Log("Unable to prepare course replay slot: %s",
-            loaded.diagnostic.c_str());
-    launching_ = false;
-    return;
-  }
-  auto session = replay::makeCourseReplayLaunchSession(
-      std::move(loaded), replay::CourseReplayLaunchMode::Watch);
-  if (session == nullptr ||
-      !session->hasCourseReplayStage(session->currentIndex)) {
-    launching_ = false;
-    return;
-  }
-  auto stageReplay = session->currentCourseReplayStageReplay();
-  if (stageReplay == nullptr) {
-    launching_ = false;
-    return;
-  }
-  session->applyReplayStagePlayOptions(*stageReplay);
-  auto chart = session->takePreparedCourseChart(session->currentIndex);
-  if (chart == nullptr) {
-    launching_ = false;
-    return;
-  }
-
-  stopPreloadWorker();
-  context.jukebox.stop();
-  const auto audioLoaded = context.jukebox.loadChart(*chart, true, cancelled);
-  if (!audioLoaded.success || cancelled) {
-    launching_ = false;
-    return;
-  }
-  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
-  StartOptions options =
-      makeCourseReplayStageStartOptions(session, stageReplay);
-  options.tableName = tableContext.name;
-  options.tableLevel = tableContext.level;
-  options.returnScene = this;
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(chart),
-                                      std::move(options)),
-      true);
+  recordsCourse_ = course;
+  ChartMetaRecord record;
+  record.courseStart = true;
+  launchCourseReplay(record, *stored.record);
 }
 
 void MusicSelectScene::launchSelectedReplay(int slot) {
@@ -2763,43 +2709,7 @@ void MusicSelectScene::launchSelectedReplay(int slot) {
     return;
   }
 
-  launching_ = true;
-  std::atomic_bool cancelled = false;
-  auto consumer =
-      replay::makeRuntimeChartReplayConsumer(context.replayRepository);
-  auto loaded = consumer.load(*stored.record, record.meta.BmsPath, cancelled);
-  if (!loaded.ready() || cancelled) {
-    SDL_Log("Unable to prepare replay slot: %s", loaded.diagnostic.c_str());
-    launching_ = false;
-    return;
-  }
-  stopPreloadWorker();
-  context.jukebox.stop();
-  const auto audioLoaded = context.jukebox.loadChart(*loaded.chart, true, cancelled);
-  if (!audioLoaded.success || cancelled) {
-    launching_ = false;
-    return;
-  }
-  const auto tableContext = musicSelectTableContextForLaunch(snapshot);
-  const auto selections =
-      main_menu_profile::Selections::fromSettings(context.settings);
-  StartOptions options{
-      .startPosition = 0,
-      .autoKeySound = false,
-      .autoPlay = false,
-      .gaugeType = loaded.replayData->initialGaugeType,
-      .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
-      .replayData = loaded.replayData,
-      .pacemakerTarget = selections.pacemakerTarget,
-      .tableName = tableContext.name,
-      .tableLevel = tableContext.level,
-      .returnScene = this,
-  };
-  applyReplayProvenanceToStartOptions(options, *loaded.replayData);
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(loaded.chart),
-                                      std::move(options)),
-      true);
+  launchChartReplay(record, *stored.record);
 }
 
 void MusicSelectScene::changeSelectedFavorite(bool song, int direction) {
@@ -2858,6 +2768,8 @@ void MusicSelectScene::consumeActions() {
     if (!sceneActive_ || failed_ ||
         context.appInBackground.load(std::memory_order_acquire)) return;
     if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) break;
+    if (recordsExportJob_.inProgress() || recordsTask_.active() ||
+        (recordsModal_ && recordsModal_->isVisible())) break;
     switch (action.kind) {
     case skin::MusicSelectSkinActionKind::Event:
       commitAudioSettings();
@@ -3325,7 +3237,16 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
-  if (failed_ || !sceneActive_) return;
+  if (failed_ || !sceneActive_ || context.appInBackground.load()) return;
+  if (auto completion = recordsTask_.takeCompletion()) {
+    finishRecordsLoading();
+    completion();
+    if (!sceneActive_) return;
+    if (recordsResumeAudioPending_) {
+      recordsResumeAudioPending_ = false;
+      onApplicationBackgroundChanged(false);
+    }
+  }
   tryCompletePendingPreloadLaunch();
   if (!sceneActive_) return;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -3369,9 +3290,10 @@ void MusicSelectScene::update(float) {
     recordsModal_->resize(rendering::window_width,
                           rendering::window_height);
     recordsModal_->update();
-    applyRecordsExportProgress();
-    applyRecordsExportResult();
   }
+  applyRecordsExportProgress();
+  applyRecordsExportResult();
+  updateRecordServices();
   if (archiveUnzipModal_) {
     archiveUnzipModal_->resize(rendering::window_width,
                                rendering::window_height);
@@ -3544,529 +3466,6 @@ void MusicSelectScene::openChartViewer() {
   context.sceneManager->changeScene(std::make_unique<ChartViewerScene>(
       context, *selected.chart, std::nullopt, std::nullopt, std::nullopt,
       std::nullopt, SceneReturnTarget::Retained(this)), true);
-}
-
-void MusicSelectScene::openChartRecords() {
-  const auto snapshot = bars_.readView();
-  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
-  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
-  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
-      selected.chart->solidArchive || selected.chart->unavailable ||
-      selected.chart->meta.BmsPath.empty()) {
-    return;
-  }
-  if (recordsModal_ == nullptr) {
-    recordsModal_ = ReplayRecordsModal::Create(modalLayer_,
-                                               makeRecordsModalCallbacks());
-  }
-  if (playOptionsModal_ != nullptr) playOptionsModal_->hide();
-  if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
-  recordsModal_->setTouchVisualizationEnabled(
-      context.settings.touchVisualizationEnabled);
-  recordsModal_->showChart(*selected.chart);
-}
-
-std::vector<ResultRecordSummary>
-MusicSelectScene::loadRecordsForSelector(const ChartMetaRecord &record) {
-  std::vector<ResultRecordSummary> projected;
-  const auto legacy = context.replayRepository.ListLegacyChartSummaries(
-      record.meta, kMaximumLegacyResultSummaryRows);
-  projected.reserve(legacy.size());
-  for (const LegacyChartResultSummary &summary : legacy) {
-    projected.push_back(makeLegacyChartResultRecord(summary));
-  }
-  if (!record.meta.SHA256.empty()) {
-    const auto history = context.replayRepository.ListModernChartResults(
-        record.meta.SHA256, kMaximumModernChartHistoryRows);
-    if (history.status == ModernChartHistoryReadStatus::Loaded) {
-      replay::ReplayFileActionService replayActions(context.replayRepository);
-      projected.reserve(projected.size() + history.records.size());
-      for (const ModernChartResultRecord &modern : history.records) {
-        const auto inspected = replayActions.probe(modern.replayFile);
-        projected.push_back(makeModernChartResultRecord(
-            modern, replay::replayStateForFileAction(inspected.state),
-            ir::IrRecordState::Hidden));
-      }
-    }
-  }
-  return musicSelectChartRecords(
-      record, main_menu_profile::Selections::fromSettings(context.settings),
-      {.percent = context.settings.selectedPlaybackRatePercent,
-       .mode = context.settings.selectedPlaybackMode}, projected);
-}
-
-void MusicSelectScene::launchChartReplay(
-    const ChartMetaRecord &record, const ModernChartResultRecord &modern,
-    bool ghostBattle) {
-  if (!sceneActive_ || failed_ ||
-      context.appInBackground.load(std::memory_order_acquire)) return;
-  if (launching_ || record.unavailable || record.solidArchive ||
-      record.meta.BmsPath.empty()) {
-    return;
-  }
-  launching_ = true;
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setLoadInProgress(true);
-  }
-  std::atomic_bool cancelled = false;
-  auto consumer =
-      replay::makeRuntimeChartReplayConsumer(context.replayRepository);
-  auto loaded = consumer.load(modern, record.meta.BmsPath, cancelled);
-  if (!loaded.ready() || loaded.chart == nullptr || cancelled) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setLoadInProgress(false);
-      recordsModal_->setStatus("Replay playback could not be prepared.");
-    }
-    launching_ = false;
-    return;
-  }
-  stopPreloadWorker();
-  context.jukebox.stop();
-  const auto audioLoaded = context.jukebox.loadChart(*loaded.chart, true, cancelled);
-  if (!audioLoaded.success || cancelled) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setLoadInProgress(false);
-    }
-    launching_ = false;
-    return;
-  }
-  const bool renderTouchPoints =
-      recordsModal_ != nullptr ? recordsModal_->renderTouchPoints() : false;
-  const bool renderGhosts =
-      recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
-  StartOptions options{
-      .startPosition = 0,
-      .autoKeySound = false,
-      .autoPlay = false,
-      .gaugeType = loaded.replayData->initialGaugeType,
-      .gaugeAutoShift = loaded.replayData->gaugeAutoShift,
-      .replayData = loaded.replayData,
-      .pacemakerTarget = pacemaker::kTargetOff,
-      .touchVisualizationEnabled = renderTouchPoints,
-      .replayGhostRenderingEnabled = renderGhosts,
-      .returnScene = this,
-  };
-  if (ghostBattle) {
-    options = musicSelectGhostBattleOptions(
-        loaded.replayData, modern.result.score,
-        main_menu_profile::Selections::fromSettings(context.settings),
-        !context.settings.inputKeysoundEnabled,
-        {.percent = context.settings.selectedPlaybackRatePercent,
-         .mode = context.settings.selectedPlaybackMode}, this);
-  } else {
-    applyReplayProvenanceToStartOptions(options, *loaded.replayData);
-  }
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setLoadInProgress(false);
-    recordsModal_->hide();
-  }
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(loaded.chart),
-                                      std::move(options)),
-      true);
-  launching_ = false;
-}
-
-void MusicSelectScene::launchChartGhostBattle(
-    const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
-  if (record.courseStart) return;
-  launchChartReplay(record, modern, true);
-}
-
-void MusicSelectScene::recallChartResult(
-    const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
-  if (launching_ || record.courseStart || recordsExportInProgress_.load()) return;
-  launching_ = true;
-  if (recordsModal_) recordsModal_->setResultRecallInProgress(true);
-  const auto fail = [this](const std::string &diagnostic) {
-    launching_ = false;
-    if (recordsModal_) {
-      recordsModal_->setResultRecallInProgress(false);
-      recordsModal_->setStatus(diagnostic.empty()
-                                  ? "Saved chart result could not be recalled."
-                                  : diagnostic);
-    }
-  };
-  stopPreloadWorker();
-  try {
-    const auto exact = context.replayRepository.LoadModernChartResultByAttempt(
-        modern.result.attemptId);
-    if (exact.status != ModernChartResultReadStatus::Loaded || !exact.record) {
-      fail(exact.diagnostic);
-      return;
-    }
-    std::atomic_bool cancelled = false;
-    auto consumer = replay::makeRuntimeChartReplayConsumer(context.replayRepository);
-    auto replayLoad = consumer.load(*exact.record, record.meta.BmsPath, cancelled);
-    std::shared_ptr<ReplayData> retryData;
-    result_recall::ModernChartLoader preparedChartLoader;
-    if (replayLoad.ready()) {
-      retryData = std::move(replayLoad.replayData);
-      auto preparedChart = std::make_shared<std::unique_ptr<bms_parser::Chart>>(
-          std::move(replayLoad.chart));
-      preparedChartLoader = [preparedChart](const std::filesystem::path &,
-                                            std::atomic_bool &) mutable {
-        return std::move(*preparedChart);
-      };
-    }
-    auto recalled = result_recall::BuildChartResult(
-        exact.record->result, cancelled, record.meta.BmsPath,
-        std::move(preparedChartLoader));
-    if (!recalled.value) {
-      fail(recalled.diagnostic);
-      return;
-    }
-    auto &result = *recalled.value;
-    const auto meta = result.chart->Meta;
-    const auto gameplayGraph = retryData
-        ? replay_result::BuildSkinGameplayGraphState(
-              *result.chart, *retryData, result.state)
-        : replay_result::BuildSkinGameplayChartGraphState(
-              *result.chart, result.state);
-    auto scene = std::make_unique<ResultScene>(
-        context, meta, result.state, result.result.score.provenance, nullptr,
-        ResultPersistenceOptions{}, retryData.get(),
-        ResultPracticeOptions{.returnScene = this}, false, ResultCourseOptions{},
-        main_menu_profile::Selections::fromSettings(context.settings).pacemakerTarget,
-        std::move(result.chart), nullptr, std::nullopt, retryData.get(),
-        result.result.attemptId, retryData != nullptr, ResultTableContext{},
-        gameplayGraph, result.result.playedAtUnixMillis);
-    if (recordsModal_) recordsModal_->setResultRecallInProgress(false);
-    context.sceneManager->changeScene(std::move(scene), true);
-    launching_ = false;
-  } catch (...) {
-    fail({});
-  }
-}
-
-void MusicSelectScene::launchCourseReplay(
-    const ChartMetaRecord &record, const ModernCourseResultRecord &modern) {
-  if (launching_) {
-    return;
-  }
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setStatus(
-        "Course replays are available from the Main Menu.");
-  }
-}
-
-void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
-  if (!sceneActive_ || failed_ ||
-      context.appInBackground.load(std::memory_order_acquire)) return;
-  if (launching_ || record.courseStart || record.unavailable ||
-      record.solidArchive || record.meta.BmsPath.empty()) {
-    return;
-  }
-  launching_ = true;
-  if (recordsModal_ != nullptr) recordsModal_->setLoadInProgress(true);
-  std::atomic_bool cancelled = false;
-  auto chart = play_options::parseChart(record.meta, cancelled, "autoplay");
-  if (!chart || cancelled) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setLoadInProgress(false);
-      recordsModal_->setStatus("Autoplay chart could not be prepared.");
-    }
-    launching_ = false;
-    return;
-  }
-  const auto selections =
-      main_menu_profile::Selections::fromSettings(context.settings);
-  const auto playInfo = play_options::applySelectedPlayOptions(
-      *chart, selections.playOption);
-  applyEffectiveLongNoteModeToChart(
-      *chart, long_note_mode::valueFromId(selections.longNoteMode));
-  stopPreloadWorker();
-  context.jukebox.stop();
-  const auto audioLoaded = context.jukebox.loadChart(*chart, true, cancelled);
-  if (!audioLoaded.success || cancelled) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setLoadInProgress(false);
-      recordsModal_->setStatus("Autoplay audio could not be prepared.");
-    }
-    launching_ = false;
-    return;
-  }
-  StartOptions options{
-      .startPosition = 0,
-      .autoKeySound = true,
-      .autoPlay = true,
-      .gaugeType = selections.gaugeType,
-      .gaugeAutoShift = selections.gaugeAutoShift,
-      .gaugeAutoShiftLowerBound = selections.gaugeAutoShiftLowerBound,
-      .playOption = playInfo.option,
-      .playOptionSeed = playInfo.seed,
-      .playOption2 = playInfo.option2,
-      .playOption2Seed = playInfo.seed2,
-      .longNoteMode = long_note_mode::valueFromId(selections.longNoteMode),
-      .assistOption = selections.assistOption,
-      .pacemakerTarget = pacemaker::kTargetOff,
-      .playback = {.percent = context.settings.selectedPlaybackRatePercent,
-                   .mode = context.settings.selectedPlaybackMode},
-      .ruleset = selections.ruleset,
-      .returnScene = this,
-  };
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setLoadInProgress(false);
-    recordsModal_->hide();
-  }
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::move(chart),
-                                      std::move(options)),
-      true);
-  launching_ = false;
-}
-
-void MusicSelectScene::launchChartReplayExport(
-    const ChartMetaRecord &record, const ModernChartResultRecord &modern,
-    ReplayVideoExportOptions options) {
-  if (recordsExportInProgress_.exchange(true)) {
-    return;
-  }
-  stopPreloadWorker();
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setExportInProgress(true);
-    recordsModal_->showExportProgress("Exporting Replay", "Preparing export");
-  }
-  if (recordsExportThread_.joinable()) {
-    recordsExportThread_.join();
-  }
-  {
-    std::lock_guard<std::mutex> lock(recordsExportProgressMutex_);
-    pendingRecordsExportProgress_.reset();
-  }
-  options.progressCallback =
-      [this](const ReplayVideoExportProgress &progress) {
-        std::lock_guard<std::mutex> lock(recordsExportProgressMutex_);
-        pendingRecordsExportProgress_ = PendingRecordsExportProgress{
-            .fraction = progress.fraction,
-            .message = progress.message,
-        };
-      };
-  recordsExportThread_ = std::jthread(
-      [this, record, modern = std::move(modern),
-       options](const std::stop_token &stop) mutable {
-        std::atomic_bool cancelled = false;
-        auto consumer = replay::makeRuntimeChartReplayConsumer(
-            context.replayRepository);
-        auto loaded = consumer.load(modern, record.meta.BmsPath, cancelled);
-        if (!loaded.ready() || loaded.chart == nullptr || cancelled) {
-          std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
-          pendingRecordsExportResult_ = ReplayVideoExportResult{
-              .success = false,
-              .message = "Replay export could not be prepared.",
-          };
-          return;
-        }
-        ReplayVideoExportOptions exportOptions = options;
-        exportOptions.stop = stop;
-        auto result = ReplayVideoExporter::Export(
-            context, loaded.chart.get(), *loaded.replayData, exportOptions);
-        std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
-        pendingRecordsExportResult_ = result;
-      });
-}
-
-void MusicSelectScene::launchCourseReplayExport(
-    const ModernCourseResultRecord &modern, ReplayVideoExportOptions options) {
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setStatus(
-        "Course replay export is available from the Main Menu.");
-  }
-}
-
-void MusicSelectScene::launchAutoPlayExport(const ChartMetaRecord &record,
-                                            ReplayVideoExportOptions options) {
-  if (recordsExportInProgress_.exchange(true)) {
-    return;
-  }
-  stopPreloadWorker();
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setExportInProgress(true);
-    recordsModal_->showExportProgress("Exporting Replay", "Preparing export");
-  }
-  if (recordsExportThread_.joinable()) {
-    recordsExportThread_.join();
-  }
-  {
-    std::lock_guard<std::mutex> lock(recordsExportProgressMutex_);
-    pendingRecordsExportProgress_.reset();
-  }
-  options.progressCallback =
-      [this](const ReplayVideoExportProgress &progress) {
-        std::lock_guard<std::mutex> lock(recordsExportProgressMutex_);
-        pendingRecordsExportProgress_ = PendingRecordsExportProgress{
-            .fraction = progress.fraction,
-            .message = progress.message,
-        };
-      };
-  const auto selections =
-      main_menu_profile::Selections::fromSettings(context.settings);
-  recordsExportThread_ = std::jthread(
-      [this, record, options,
-       selections](const std::stop_token &stop) mutable {
-        std::atomic_bool cancelled = false;
-        auto chart = play_options::parseChart(record.meta, cancelled,
-                                              "autoplay export");
-        if (!chart || cancelled) {
-          std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
-          pendingRecordsExportResult_ = ReplayVideoExportResult{
-              .success = false, .message = "Autoplay export failed."};
-          return;
-        }
-        const auto playInfo = play_options::applySelectedPlayOptions(
-            *chart, selections.playOption);
-        applyEffectiveLongNoteModeToChart(
-            *chart, long_note_mode::valueFromId(selections.longNoteMode));
-        ReplayData replay = replay_autoplay::BuildReplayData(
-            *chart, selections.gaugeType, selections.gaugeAutoShift,
-            {.percent = context.settings.selectedPlaybackRatePercent,
-             .mode = context.settings.selectedPlaybackMode},
-            playInfo.option, playInfo.seed, playInfo.option2, playInfo.seed2,
-            selections.assistOption, context.settings.gameplayClubModeEnabled,
-            selections.gaugeAutoShiftLowerBound, selections.ruleset);
-        ReplayVideoExportOptions exportOptions = options;
-        exportOptions.stop = stop;
-        exportOptions.renderTouchPoints = false;
-        exportOptions.renderReplayGhosts = false;
-        auto result = ReplayVideoExporter::Export(
-            context, chart.get(), replay, exportOptions);
-        std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
-        pendingRecordsExportResult_ = result;
-      });
-}
-
-void MusicSelectScene::applyRecordsExportProgress() {
-  std::optional<PendingRecordsExportProgress> progress;
-  {
-    std::lock_guard<std::mutex> lock(recordsExportProgressMutex_);
-    if (!pendingRecordsExportProgress_.has_value()) {
-      return;
-    }
-    progress = std::move(pendingRecordsExportProgress_);
-    pendingRecordsExportProgress_.reset();
-  }
-  if (recordsModal_ != nullptr) {
-    recordsModal_->updateExportProgress(progress->fraction, progress->message);
-  }
-}
-
-void MusicSelectScene::applyRecordsExportResult() {
-  std::optional<ReplayVideoExportResult> result;
-  {
-    std::lock_guard<std::mutex> lock(recordsExportResultMutex_);
-    if (!pendingRecordsExportResult_.has_value()) {
-      return;
-    }
-    result = std::move(pendingRecordsExportResult_);
-    pendingRecordsExportResult_.reset();
-  }
-  if (recordsExportThread_.joinable()) {
-    recordsExportThread_.join();
-  }
-  recordsExportInProgress_ = false;
-  if (recordsModal_ != nullptr) {
-    recordsModal_->setExportInProgress(false);
-    if (result->success) {
-      recordsModal_->returnToList(
-          result->message == "Saved to Photos" ? "Saved" : "Exported");
-    } else {
-      recordsModal_->returnToList(
-          result->message == "No Chart"
-              ? "No Chart"
-              : (result->message.empty() ? "Replay export failed."
-                                         : result->message));
-    }
-  }
-}
-
-ReplayRecordsModalCallbacks MusicSelectScene::makeRecordsModalCallbacks() {
-  ReplayRecordsModalCallbacks callbacks;
-  callbacks.loadRecords = [this](const ChartMetaRecord &record) {
-    return loadRecordsForSelector(record);
-  };
-  callbacks.watchModernChart =
-      [this](const ChartMetaRecord &record,
-             const ModernChartResultRecord &modern) {
-        launchChartReplay(record, modern);
-      };
-  callbacks.watchModernCourse =
-      [this](const ChartMetaRecord &record,
-             const ModernCourseResultRecord &modern) {
-        launchCourseReplay(record, modern);
-      };
-  callbacks.watchAutoPlay = [this](const ChartMetaRecord &record) {
-    launchAutoPlay(record);
-  };
-  callbacks.gbattle = [this](const ChartMetaRecord &record,
-                             const ModernChartResultRecord &modern) {
-    launchChartGhostBattle(record, modern);
-  };
-  callbacks.recallModernChart =
-      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern) {
-        recallChartResult(record, modern);
-      };
-  callbacks.recallModernCourse =
-      [this](const ModernCourseResultRecord &, bool) {
-        if (recordsModal_ != nullptr) {
-          recordsModal_->setStatus(
-              "Result recall is available from the Main Menu.");
-        }
-      };
-  callbacks.recallRemote =
-      [this](const IrRemoteRecordId &, const std::string &) {
-        if (recordsModal_ != nullptr) {
-          recordsModal_->setStatus(
-              "Result recall is available from the Main Menu.");
-        }
-      };
-  callbacks.exportModernChart =
-      [this](const ChartMetaRecord &record, const ModernChartResultRecord &modern,
-             ReplayVideoExportOptions options) {
-        launchChartReplayExport(record, modern, options);
-      };
-  callbacks.exportModernCourse =
-      [this](const ModernCourseResultRecord &modern,
-             ReplayVideoExportOptions options) {
-        launchCourseReplayExport(modern, options);
-      };
-  callbacks.exportAutoPlay =
-      [this](const ChartMetaRecord &record, ReplayVideoExportOptions options) {
-        launchAutoPlayExport(record, options);
-      };
-  callbacks.irUpload = [this](const ModernChartResultRecord &modern) {
-    if (recordsModal_ != nullptr) {
-      recordsModal_->setStatus(
-          "IR upload is available from the Main Menu.");
-    }
-  };
-  callbacks.irStatusFeedback = [this](ir::IrRecordState state) {
-    const char *message = nullptr;
-    switch (state) {
-    case ir::IrRecordState::Queued:
-      message = "IR upload is queued.";
-      break;
-    case ir::IrRecordState::Uploading:
-      message = "IR upload is in progress.";
-      break;
-    case ir::IrRecordState::AwaitingRemote:
-      message = "IR is awaiting the remote result.";
-      break;
-    case ir::IrRecordState::Blocked:
-      message = "IR upload is blocked. Check Settings > IR.";
-      break;
-    case ir::IrRecordState::Uploaded:
-      message = "IR upload is complete.";
-      break;
-    case ir::IrRecordState::Hidden:
-    case ir::IrRecordState::Eligible:
-    case ir::IrRecordState::Failed:
-      return;
-    }
-    if (recordsModal_ != nullptr) {
-      recordsModal_->showIrFeedback(message);
-    }
-  };
-  return callbacks;
 }
 
 void MusicSelectScene::revealChart() {
@@ -4603,6 +4002,8 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  recordsTask_.cancelAndWait();
+  if (recordFileActions_) recordFileActions_->close();
   sceneActive_ = false;
   archiveUnzipModal_.reset();
   ++launchGeneration_;
@@ -4670,10 +4071,9 @@ void MusicSelectScene::cleanupScene() {
   searchInput_ = nullptr;
   modalOverlayPortal_ = nullptr;
   modalLayer_ = nullptr;
-  if (recordsExportThread_.joinable()) {
+  if (recordsExportJob_.hasWorker()) {
     SDL_Log("Joining recordsExportThread");
-    recordsExportThread_.request_stop();
-    recordsExportThread_.join();
+    recordsExportJob_.cancelAndWait();
   }
   recordsModal_.reset();
   tasksModal_ = nullptr;

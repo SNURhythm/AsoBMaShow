@@ -103,6 +103,9 @@ struct PreviewAudio {
   void resumeDefaultBgm() { ++resumes; }
 };
 struct MusicSelectScene {
+  struct { void cancelAndWait() {} } recordsTask_;
+  struct FileActions { void close() {} };
+  FileActions *recordFileActions_ = nullptr;
   struct UnzipModal {};
   std::unique_ptr<UnzipModal> archiveUnzipModal_;
   struct Context {

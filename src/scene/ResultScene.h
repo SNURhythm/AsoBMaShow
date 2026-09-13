@@ -131,6 +131,7 @@ struct ResultRemoteOptions {
   std::optional<ir::IrChartQuery> rankingQuery;
   std::string providerId;
   std::string serverOrigin;
+  Scene *returnScene = nullptr;
 };
 
 struct ResultSceneActionAvailability {
@@ -234,6 +235,7 @@ struct RemoteResultSource {
   const std::string providerId;
   const std::string serverOrigin;
   const ResultPresentationModel presentation;
+  Scene *const returnScene = nullptr;
 };
 
 [[nodiscard]] inline RemoteResultSource
@@ -258,7 +260,8 @@ makeResultRemoteSource(ResultRemoteOptions remote) {
           .rankingQuery = std::move(remote.rankingQuery),
           .providerId = std::move(remote.providerId),
           .serverOrigin = std::move(remote.serverOrigin),
-          .presentation = std::move(presentation)};
+          .presentation = std::move(presentation),
+          .returnScene = remote.returnScene};
 }
 
 class TextView;

@@ -91,11 +91,11 @@ void testRemoteSourceOwnsOnlyValidatedRemoteData() {
   static_assert(!HasReplayData<ResultRemoteOptions>);
   static_assert(!HasRhythmState<ResultRemoteOptions>);
   static_assert(!HasScoreProvenance<ResultRemoteOptions>);
-  static_assert(!HasPreviousScenePointer<ResultRemoteOptions>);
+  static_assert(HasPreviousScenePointer<ResultRemoteOptions>);
   static_assert(!HasReplayData<RemoteResultSource>);
   static_assert(!HasRhythmState<RemoteResultSource>);
   static_assert(!HasScoreProvenance<RemoteResultSource>);
-  static_assert(!HasPreviousScenePointer<RemoteResultSource>);
+  static_assert(HasPreviousScenePointer<RemoteResultSource>);
 
   auto score = remoteScore("bms-14k");
   const auto ranking = makeRemoteResultRankingQuery(score);
@@ -119,6 +119,16 @@ void testRemoteSourceOwnsOnlyValidatedRemoteData() {
               source.presentation.title == score.title &&
               source.presentation.gaugeSeries.size() == 1,
           "remote source owns its immutable presentation model");
+
+  // The retained owner is navigation context; the remote result still has no
+  // local chart, replay, provenance, or persistence authority.
+  auto *owner = reinterpret_cast<Scene *>(std::uintptr_t{0x1234});
+  const auto retained = makeResultRemoteSource({.score = score,
+      .rankingQuery = makeRemoteResultRankingQuery(score),
+      .providerId = std::string(ir::kTachiProviderId),
+      .serverOrigin = std::string(ir::kDefaultTachiServerOrigin),
+      .returnScene = owner});
+  require(retained.returnScene == owner, "remote result preserves its originating Records scene");
 
   const RemoteResultSource customOrigin =
       makeResultRemoteSource({.score = score,
@@ -531,12 +541,8 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
   requireContains(result,
                   "SkinGaugeGraphObject concatenates each stage's 500 ms gauge log.",
                   "course result graph retains the source-sampled stage gauge logs");
-  requireContains(mainMenu,
-                  "auto replay = consumer.load(*exact.record,",
-                  "saved course result recall loads its retained replay when available");
-  requireContains(mainMenu,
-                  "session->resultBrowseReplayData = std::move(resultBrowseReplayData);",
-                  "saved course result recall retains its replay for later result timing");
+  // Shared course loading and graph ownership are exercised by the real
+  // repository fixtures in course_record_actions_tests.
   requireContains(mainMenu,
                   "const ReplayData *firstReplay = session->resultBrowseStageReplay(0);",
                   "the initially displayed saved course stage receives its retained replay");
@@ -544,12 +550,6 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "ResultTableContext{}, first.gameplayGraph,",
                   "the initially displayed replay-less saved course stage receives "
                   "its prepared chart graph");
-  requireContains(mainMenu,
-                  "*replayChart, *stageReplay, stage.state",
-                  "saved course graph reconstruction uses the replay-prepared chart");
-  requireOrdered(mainMenu, "auto view = std::move(*recalled.value);",
-                 "*replayChart, *stageReplay, stage.state",
-                 "saved course graph reconstruction occurs before ResultScene uses it");
   requireContains(result,
                   "} else if (isCourseStageResult()) {",
                   "saved modern course stages project durable setup provenance");
@@ -612,11 +612,6 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
       "    timingSampleCount += count;\n"
       "    timingSum += static_cast<long long>(count) * timingMillis;",
       "replay timing statistics use Beatoraja's integer-millisecond distribution");
-  requireContains(mainMenu,
-                  "replay_result::BuildSkinGameplayChartGraphState(\n"
-                  "                      *stage.chart, stage.state)",
-                  "replay-less saved course stages preserve authored graph data without "
-                  "synthetic judgement samples");
   requireContains(
       mainMenu,
       "const SkinGameplayGraphState gameplayGraph =\n"

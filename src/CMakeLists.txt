@@ -67,4 +67,5 @@ target_sources(main PRIVATE
     scene/ResultRecordsLoader.cpp
     scene/RecordFileActions.cpp
     scene/RecordsIrActions.cpp
+    scene/MusicSelectSceneRecords.cpp
 )

@@ -38,7 +38,8 @@ struct Rows {
 };
 
 struct MainMenuScene {
-  std::atomic_bool willStart = false, replayExportInProgress = false;
+  std::atomic_bool willStart = false;
+  struct { bool inProgress() const { return false; } } replayExportJob_;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct {
     std::atomic_bool chartLibraryListReloadRequested = false;

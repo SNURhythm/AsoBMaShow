@@ -4,8 +4,12 @@
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include "ReplayRecordsModal.h"
+#include "ReplayRecordTask.h"
+#include "CourseRecordActions.h"
+#include "RecordFileActions.h"
 #include "ArchiveUnzipModal.h"
-#include "../ReplayVideoExporter.h"
+#include "../ReplayVideoExportTypes.h"
+#include "../replay/ReplayExportJob.h"
 #include "Scene.h"
 #include "../audio/SkinSystemSoundService.h"
 #include "../music_select/MusicSelectBarManager.h"
@@ -147,6 +151,7 @@ private:
   void launchCourseReplay(const ChartMetaRecord &,
                           const ModernCourseResultRecord &);
   void launchAutoPlay(const ChartMetaRecord &);
+  bool beginRecordsExport(const std::string &title);
   void launchChartReplayExport(const ChartMetaRecord &,
                                const ModernChartResultRecord &,
                                ReplayVideoExportOptions);
@@ -198,18 +203,7 @@ private:
   std::shared_ptr<const MusicSelectRepositoryMetadata> repositoryMetadata_;
   MusicSelectBarManager bars_;
   MusicSelectInputProcessor inputProcessor_{{}};
-  std::atomic_bool recordsExportInProgress_{false};
-  struct PendingRecordsExportProgress {
-    double fraction = 0.0;
-    std::string message;
-  };
-  std::mutex recordsExportProgressMutex_;
-  std::optional<PendingRecordsExportProgress> pendingRecordsExportProgress_;
-  std::mutex recordsExportResultMutex_;
-  std::optional<ReplayVideoExportResult> pendingRecordsExportResult_;
-  // Declared after the mutexes and result state it guards so reverse-order
-  // member destruction joins the worker before those guards are torn down.
-  std::jthread recordsExportThread_;
+  replay::ReplayExportJob recordsExportJob_;
   MusicSelectPreviewController previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
   std::unique_ptr<skin::SkinSystemSoundService> systemSound_;
@@ -280,6 +274,29 @@ private:
   OverlayPortal *modalOverlayPortal_ = nullptr;
   std::unique_ptr<MainMenuPlayOptionsModal> playOptionsModal_;
   std::unique_ptr<ReplayRecordsModal> recordsModal_;
+  std::optional<MusicSelectBar> recordsCourse_;
+  ReplayRecordTask recordsTask_;
+  std::unique_ptr<RecordFileActions> recordFileActions_;
+  std::string recordsDiagnostic_;
+  bool recordsResumeAudioPending_ = false;
+  std::unordered_map<std::string, std::uint64_t> recordsIrRevisions_;
+  std::uint64_t recordsIrAccountRevision_ = 0;
+  std::uint64_t recordsIrReconciliationRevision_ = 0;
+
+  bool beginRecordsOperation(bool resultRecall);
+  void startRecordsWork(ReplayRecordTask::Work work, std::string fallback);
+  void finishRecordsLoading();
+  void finishRecordsFailure(const std::string &diagnostic);
+  void publishRecordsDiagnostic(const std::string &diagnostic) const;
+  std::optional<course_records::CurrentCourseSelection> currentRecordsCourseSelection(
+      const result_persistence::ModernCourseResult &result) const;
+  void recallCourseResult(const ModernCourseResultRecord &modern, bool retrySameAllowed);
+  void recallRemoteResult(IrRemoteRecordId identity, std::string stableKey);
+  void uploadRecord(const ModernChartResultRecord &modern);
+  void shareRecord(const replay::ReplayFileActionRequest &request);
+  void removeRecord(const replay::ReplayFileActionRequest &request);
+  void updateRecordServices();
+
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;

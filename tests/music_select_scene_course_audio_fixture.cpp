@@ -206,6 +206,11 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  bool recordsResumeAudioPending_ = false;
+  struct FileActions { void close() {} };
+  FileActions *recordFileActions_ = nullptr;
+  struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
+  void finishRecordsLoading() {}
   struct UnzipModal { void cancelAndWait() {} };
   std::unique_ptr<UnzipModal> archiveUnzipModal_;
   SceneManager manager;

@@ -4360,6 +4360,10 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
 
   StartOptions nextOptions =
       makeCourseReplayStageStartOptions(session, stageReplay);
+  nextOptions.returnScene = options.returnScene;
+  nextOptions.pacemakerTarget = options.pacemakerTarget;
+  nextOptions.tableName = options.tableName;
+  nextOptions.tableLevel = options.tableLevel;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(replayChart),

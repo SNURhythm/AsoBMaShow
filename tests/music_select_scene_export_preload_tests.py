@@ -9,12 +9,13 @@ ROOT = scene_fixture.ROOT
 
 def export_preload_fixture(source=None):
     if source is None:
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = scene_fixture.read_music_select_scene()
     signatures = [
         "void MusicSelectScene::stopPreloadWorker()",
         "void MusicSelectScene::startPreloadForSelection()",
         "bool MusicSelectScene::reusePreloadedChart(",
         "void MusicSelectScene::refreshRepositoryRevisions()",
+        "bool MusicSelectScene::beginRecordsExport(",
         "void MusicSelectScene::launchChartReplayExport(",
         "void MusicSelectScene::launchAutoPlayExport(",
         "void MusicSelectScene::applyRecordsExportResult()",
@@ -31,14 +32,14 @@ def export_preload_fixture(source=None):
     worker_header = (ROOT / "src/scene/ChartPreloadWorker.h").read_text()
     worker_source = (ROOT / "src/scene/ChartPreloadWorker.cpp").read_text()
     fixture = (ROOT / "tests/music_select_scene_export_preload_fixture.cpp").read_text()
-    return (fixture.replace("SCENE_METHODS", "\n".join(methods))
+    return (fixture.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace("SCENE_METHODS", "\n".join(methods))
             .replace("WORKER_DECLARATION", worker_header[worker_header.index("class ChartPreloadWorker"):])
             .replace("WORKER_METHODS", worker_source.replace('#include "ChartPreloadWorker.h"', "")))
 
 
 class MusicSelectExportPreloadTests(unittest.TestCase):
     def test_real_published_batch_stops_at_pause_and_rejects_inactive_launch(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = scene_fixture.read_music_select_scene()
         fixture = export_preload_fixture(source)
         fixture = fixture.replace(
             "void consumeActions() { ++inputConsumptions; if (actionHandoff) actionHandoff(); }",
@@ -149,6 +150,20 @@ int main() {
   manager.pause = [&] { scene.onPause(); };
   PublishedActions published;
   scene.skinSession_ = &published;
+  expect(scene.recordsExportJob_.tryBegin(), "fixture reserves exporter ownership");
+  published.actions = {skin::Action{}};
+  scene.consumeActions();
+  expect(scene.eventsDispatched == 0 && published.actions.empty(),
+         "published skin navigation is discarded while an export owns shared resources");
+  scene.recordsExportJob_.reset();
+  Modal records;
+  records.visible = true;
+  scene.recordsModal_ = &records;
+  published.actions = {skin::Action{}};
+  scene.consumeActions();
+  expect(scene.eventsDispatched == 0 && published.actions.empty(),
+         "published skin navigation cannot bypass a visible Records modal");
+  scene.recordsModal_ = nullptr;
   scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
   scene.preloadedPath_ = scene.preloadedChart_->Meta.BmsPath;
   published.actions = {skin::Action{}, skin::Action{}};
@@ -239,7 +254,7 @@ int main() {
 
     def run_fixture(self, fixture):
         try:
-            scene_fixture.MusicSelectSceneBehaviorTests().compile_and_run(fixture)
+            scene_fixture.MusicSelectSceneBehaviorTests().compile_and_run(fixture, [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp"])
         except subprocess.CalledProcessError as error:
             self.fail(error.stderr)
 

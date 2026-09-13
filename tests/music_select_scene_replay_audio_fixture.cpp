@@ -1,5 +1,8 @@
 #include "REPOSITORY_ROOT/src/audio/AudioMix.h"
+#include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cassert>
 #include <filesystem>
 #include <fstream>
@@ -9,8 +12,16 @@
 #include <vector>
 
 void SDL_Log(const char *, ...) {}
+struct FixtureMeta {
+  std::filesystem::path BmsPath = "chart.bms";
+  std::optional<unsigned> RandomSeed;
+  std::optional<std::string> RandomPrng;
+  std::vector<int> RandomValues;
+};
+auto fspath_to_path_t(const std::filesystem::path &path) { return path; }
 namespace bms_parser {
 struct Chart {
+  FixtureMeta Meta;
   inline static int alive = 0;
   Chart() { ++alive; }
   ~Chart() { --alive; }
@@ -18,7 +29,7 @@ struct Chart {
 };
 }
 struct ChartMetaRecord {
-  struct { std::filesystem::path BmsPath = "chart.bms"; } meta;
+  FixtureMeta meta;
   bool unavailable = false, solidArchive = false;
   bool courseStart = false;
 };
@@ -103,7 +114,7 @@ struct Consumer {
 Consumer makeRuntimeChartReplayConsumer(ReplayRepository &) { return {}; }
 Consumer makeRuntimeCourseReplayConsumer(ReplayRepository &) { return {}; }
 enum class CourseReplayLaunchMode { Watch };
-auto makeCourseReplayLaunchSession(Loaded, CourseReplayLaunchMode) {
+auto makeCourseReplayLaunchSession(Loaded, CourseReplayLaunchMode, bool, bool) {
   return std::make_shared<CourseSession>();
 }
 }
@@ -118,6 +129,7 @@ struct Selections {
 };
 }
 bool parseAvailable = true;
+FixtureMeta parsedMeta;
 namespace play_options {
 struct PlayOptionReplayInfo {
   std::string option;
@@ -125,7 +137,8 @@ struct PlayOptionReplayInfo {
   std::string option2;
   int seed2;
 };
-auto parseChart(const auto &, std::atomic_bool &, const char *) {
+auto parseChart(const auto &meta, std::atomic_bool &, const char *) {
+  parsedMeta = meta;
   return parseAvailable ? std::make_unique<bms_parser::Chart>() : nullptr;
 }
 PlayOptionReplayInfo applySelectedPlayOptions(bms_parser::Chart &, const std::string &option) {
@@ -134,7 +147,8 @@ PlayOptionReplayInfo applySelectedPlayOptions(bms_parser::Chart &, const std::st
 }
 void applyEffectiveLongNoteModeToChart(bms_parser::Chart &chart, int mode) { chart.longNoteMode = mode; }
 namespace pacemaker { constexpr int kTargetOff = -1; }
-struct Playback { int percent, mode; };
+namespace audio { struct PlaybackRate { int percent, mode; }; }
+using Playback = audio::PlaybackRate;
 struct StartOptions {
   int startPosition = 0;
   bool autoKeySound = false, autoPlay = false;
@@ -148,9 +162,10 @@ struct StartOptions {
   int pacemakerTarget = 0;
   std::string tableName, tableLevel;
   Playback playback;
-  bool touchVisualizationEnabled = false, replayGhostRenderingEnabled = false;
-  int ruleset = 0;
+  bool clubMode = false;
   void *returnScene = nullptr;
+  bool touchVisualizationEnabled = true, replayGhostRenderingEnabled = true;
+  int ruleset = 0;
   int provenance = 0;
   bool ghost = false;
   std::shared_ptr<CourseSession> courseSession;
@@ -177,10 +192,12 @@ struct GamePlayScene {
 };
 struct SceneManager {
   int transitions = 0;
+  std::function<void()> pause;
   std::unique_ptr<GamePlayScene> gameplay;
   void changeScene(std::unique_ptr<GamePlayScene> scene, bool retained) {
     assert(retained);
     ++transitions;
+    if (pause) pause();
     gameplay = std::move(scene);
   }
 };
@@ -188,6 +205,9 @@ struct RecordsModal {
   bool loading = false, visible = true;
   std::string status;
   void setLoadInProgress(bool value) { loading = value; }
+  void setResultRecallInProgress(bool) {}
+  void setIrUploadInProgress(bool) {}
+  void reloadRecords(bool) {}
   void setStatus(const std::string &value) { status = value; }
   bool renderTouchPoints() { return true; }
   bool renderReplayGhosts() { return false; }
@@ -196,20 +216,26 @@ struct RecordsModal {
 struct Jukebox {
   bool success = false, cancel = false;
   int loads = 0;
+  std::thread::id loadThread;
   void stop() {}
   audio::playback::BackendOperationResult loadChart(
       bms_parser::Chart &, bool, std::atomic_bool &cancelled) {
     ++loads;
+    loadThread = std::this_thread::get_id();
     cancelled = cancel;
     return {.success = success, .diagnostic = "Audio unavailable"};
   }
 };
+namespace replay_records {
+std::string diagnosticOr(const std::string &message, const std::string &fallback) { return message.empty() ? fallback : message; }
+}
 struct MusicSelectScene {
   SceneManager manager;
   struct {
     struct {
       int selectedLnMode = 1, selectedPlaybackRatePercent = 100, selectedPlaybackMode = 0;
-      bool inputKeysoundEnabled = true;
+      bool inputKeysoundEnabled = true, gameplayClubModeEnabled = false;
+      int selectedPacemakerTarget = 43;
     } settings;
     ReplayRepository replayRepository;
     Jukebox jukebox;
@@ -219,14 +245,57 @@ struct MusicSelectScene {
   bool launching_ = false;
   bool sceneActive_ = true, failed_ = false;
   int preloadStops = 0;
+  std::mutex preloadMutex_;
+  std::filesystem::path preloadedPath_;
+  std::unique_ptr<bms_parser::Chart> preloadedChart_;
   Bars bars_;
   RecordsModal modal;
   RecordsModal *recordsModal_ = &modal;
-  MusicSelectScene() { context.sceneManager = &manager; }
-  void stopPreloadWorker() { ++preloadStops; }
+  ReplayRecordTask recordsTask_;
+  struct { bool inProgress() const { return false; } } recordsExportJob_;
+  struct FileActions { bool active() const { return false; } };
+  std::unique_ptr<FileActions> recordFileActions_;
+  struct Preload { void cancel() {} };
+  Preload *preloadWorker_ = nullptr;
+  std::optional<MusicSelectBar> recordsCourse_;
+  struct Selection { std::vector<std::filesystem::path> completedChartPaths{"a", "b"}; };
+  std::optional<Selection> currentRecordsCourseSelection(const auto &) const { return Selection{}; }
+  bool beginRecordsOperation(bool);
+  void startRecordsWork(ReplayRecordTask::Work, std::string);
+  void finishRecordsLoading();
+  void finishRecordsFailure(const std::string &message) {
+    finishRecordsLoading(); modal.status = message;
+  }
+  void publishRecordsDiagnostic(const std::string &) const {}
+  void update(float);
+  void drainRecords() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (recordsTask_.active() && std::chrono::steady_clock::now() < deadline) {
+      update(0);
+      std::this_thread::yield();
+    }
+    assert(!recordsTask_.active() && "record preparation must terminate");
+  }
+  bool recordsResumeAudioPending_ = false;
+  int soundResumes = 0;
+  struct Unzip { void cancelAndWait() {} };
+  Unzip *archiveUnzipModal_ = nullptr;
+  struct Preview { void reset() {} void silence() {} void resumeDefaultBgm() {} } previewController_;
+  Preview *previewAudio_ = nullptr;
+  void cancelDirectoryLoad() {}
+  void configureSoundServices() { ++soundResumes; }
+  void continueDirectoryRestore() {}
+  void selectedBarMoved() {}
+  void onApplicationBackgroundChanged(bool);
+  MusicSelectScene() {
+    context.sceneManager = &manager;
+    manager.pause = [this] { sceneActive_ = false; recordsResumeAudioPending_ = false; };
+  }
+  void stopPreloadWorker() { ++preloadStops; preloadedChart_.reset(); preloadedPath_.clear(); }
   void launchCourseReplay(const MusicSelectBar &, int, const MusicSelectBarManagerReadView &);
   void launchSelectedReplay(int);
-  void launchChartReplay(const ChartMetaRecord &, const ModernChartResultRecord &, bool);
+  void launchChartReplay(const ChartMetaRecord &, const ModernChartResultRecord &, bool = false);
+  void launchCourseReplay(const ChartMetaRecord &, const ModernCourseResultRecord &);
   void launchAutoPlay(const ChartMetaRecord &);
   auto watchAutoPlay() {
     return [this](const ChartMetaRecord &record) AUTOPLAY_CALLBACK;
@@ -237,85 +306,117 @@ SCENE_METHODS
 
 void testReplayAudio(int path) {
   std::ofstream("slot.json") << "fixture";
-  MusicSelectScene scene;
-  if (path == 1) scene.bars_.snapshot.rows.front().kind = skin::MusicSelectBarKind::Grade;
-  const auto launch = [&] {
-    if (path >= 2) scene.launchChartReplay({}, {}, path == 3);
-    else scene.launchSelectedReplay(0);
-  };
-  for (int blocked = 0; blocked < 3; ++blocked) {
-    scene.sceneActive_ = blocked != 0;
-    scene.failed_ = blocked == 1;
-    scene.context.appInBackground = blocked == 2;
-    launch();
-    assert(scene.context.jukebox.loads == 0 && scene.preloadStops == 0 &&
-           scene.manager.transitions == 0);
-  }
-  scene.sceneActive_ = true;
-  scene.failed_ = false;
-  scene.context.appInBackground = false;
-  for (bool cancel : {false, true}) {
-    scene.context.jukebox.success = cancel;
-    scene.context.jukebox.cancel = cancel;
-    launch();
-    assert(scene.manager.transitions == 0 && "failed or cancelled replay audio must not launch");
-    assert(!scene.launching_ && "replay audio failure must permit retry");
-    assert(bms_parser::Chart::alive == 0 && "rejected replay must release prepared chart");
-    assert(!scene.modal.loading && scene.modal.visible);
-  }
-  scene.context.jukebox.success = true;
-  scene.context.jukebox.cancel = false;
-  launch();
-  assert(scene.manager.transitions == 1 && scene.preloadStops == 3);
-  const auto &options = scene.manager.gameplay->options;
-  assert(options.returnScene == &scene && options.replayData);
-  assert(options.provenance == (path == 3 ? 78 : 77));
-  assert(options.ghost == (path == 3));
-  if (path < 2) {
-    assert(options.tableName == "Table" && options.tableLevel == "12");
-    assert(options.gaugeType == 8 && options.gaugeAutoShift == 9);
-    if (path == 0) assert(options.pacemakerTarget == 43);
-    else assert(options.courseSession && options.courseSession->applied);
-  } else {
-    assert(!scene.modal.loading && !scene.modal.visible);
-    if (path == 2) {
-      assert(options.touchVisualizationEnabled && !options.replayGhostRenderingEnabled);
-      assert(options.pacemakerTarget == pacemaker::kTargetOff);
+  for (int outcome = 0; outcome < 3; ++outcome) {
+    MusicSelectScene scene;
+    if (path == 1) scene.bars_.snapshot.rows.front().kind = skin::MusicSelectBarKind::Grade;
+    const auto launch = [&] {
+      if (path >= 2) scene.launchChartReplay({}, {}, path == 3);
+      else scene.launchSelectedReplay(0);
+    };
+    for (int blocked = 0; blocked < 3; ++blocked) {
+      scene.sceneActive_ = blocked != 0;
+      scene.failed_ = blocked == 1;
+      scene.context.appInBackground = blocked == 2;
+      launch();
+      assert(scene.context.jukebox.loads == 0 && scene.preloadStops == 0 && scene.manager.transitions == 0);
     }
+    scene.sceneActive_ = true;
+    scene.failed_ = false;
+    scene.context.appInBackground = false;
+    scene.context.settings.gameplayClubModeEnabled = outcome == 0;
+    scene.context.jukebox.success = outcome == 0;
+    scene.context.jukebox.cancel = outcome == 2;
+    launch();
+    assert(scene.launching_ && scene.modal.loading && scene.manager.transitions == 0);
+    // Background preparation must never perform the transition itself.
+    scene.context.appInBackground = true;
+    scene.onApplicationBackgroundChanged(true);
+    scene.update(0);
+    assert(scene.manager.transitions == 0 && scene.recordsTask_.active());
+    scene.context.appInBackground = false;
+    scene.onApplicationBackgroundChanged(false);
+    scene.drainRecords();
+    assert(!scene.launching_ && !scene.modal.loading);
+    assert(scene.context.jukebox.loadThread != std::this_thread::get_id());
+    if (outcome == 2) {
+      assert(scene.manager.transitions == 0 && scene.modal.visible);
+      assert(scene.soundResumes == 1 && !scene.recordsResumeAudioPending_);
+      assert(bms_parser::Chart::alive == 0 && "cancelled preparation releases the chart");
+      continue;
+    }
+    assert(scene.manager.transitions == 1 && "audio failure without cancellation must still launch");
+    assert(scene.soundResumes == 0 && "gameplay handoff must not revive selector audio");
+    const auto &options = scene.manager.gameplay->options;
+    assert(options.returnScene == &scene && options.replayData);
+    assert(options.provenance == (path == 3 ? 78 : 77));
+    assert(options.ghost == (path == 3));
+    if (path == 3) assert(options.clubMode == (outcome == 0));
+    if (path != 3) {
+      assert(options.tableName == "Table" && options.tableLevel == "12");
+      assert(options.gaugeType == 8 && options.gaugeAutoShift == 9);
+      assert(options.pacemakerTarget == 43);
+    }
+    if (path == 1) assert(options.courseSession && options.courseSession->applied);
+    if (path == 2) assert(options.touchVisualizationEnabled && !options.replayGhostRenderingEnabled);
+    assert(!scene.modal.visible);
   }
 }
 
 void testAutoPlayAudio() {
-  MusicSelectScene scene;
-  scene.sceneActive_ = false;
-  scene.launchAutoPlay({});
-  assert(scene.context.jukebox.loads == 0 && scene.preloadStops == 0);
-  scene.sceneActive_ = true;
-  for (int failure = 0; failure < 3; ++failure) {
-    parseAvailable = failure != 0;
-    scene.context.jukebox.success = failure == 2;
-    scene.context.jukebox.cancel = failure == 2;
-    scene.modal.loading = true;
-    scene.watchAutoPlay()({});
-    assert(scene.manager.transitions == 0 && "failed or cancelled AutoPlay audio must not launch");
-    assert(!scene.launching_ && !scene.modal.loading && scene.modal.visible &&
-           "AutoPlay rejection must restore recoverable Records state");
-    assert(bms_parser::Chart::alive == 0 && "rejected AutoPlay must release its chart");
+  for (int outcome = 0; outcome < 4; ++outcome) {
+    MusicSelectScene scene;
+    scene.sceneActive_ = false;
+    scene.launchAutoPlay({});
+    assert(scene.context.jukebox.loads == 0 && scene.preloadStops == 0);
+    scene.sceneActive_ = true;
+    parseAvailable = outcome != 2;
+    scene.context.settings.gameplayClubModeEnabled = outcome == 0;
+    scene.context.jukebox.success = outcome == 0;
+    scene.context.jukebox.cancel = outcome == 3;
+    ChartMetaRecord record;
+    record.meta.RandomSeed = 1;
+    record.meta.RandomPrng = "stored";
+    record.meta.RandomValues = {1};
+    scene.preloadedPath_ = record.meta.BmsPath;
+    scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
+    scene.preloadedChart_->Meta.RandomSeed = 77;
+    scene.preloadedChart_->Meta.RandomPrng = "prepared";
+    scene.preloadedChart_->Meta.RandomValues = {2, 3};
+    if (outcome == 1) scene.preloadedChart_->Meta.BmsPath = "other.bms";
+    scene.watchAutoPlay()(record);
+    assert(scene.manager.transitions == 0 && scene.modal.loading);
+    scene.context.appInBackground = true;
+    scene.onApplicationBackgroundChanged(true);
+    scene.update(0);
+    scene.context.appInBackground = false;
+    scene.onApplicationBackgroundChanged(false);
+    scene.drainRecords();
+    assert(!scene.launching_ && !scene.modal.loading);
+    if (outcome >= 2) {
+      assert(scene.manager.transitions == 0 && scene.modal.visible);
+      assert(scene.soundResumes == 1);
+      assert(bms_parser::Chart::alive == 0);
+      continue;
+    }
+    assert(scene.manager.transitions == 1 && !scene.modal.visible);
+    const auto &options = scene.manager.gameplay->options;
+    assert(options.autoPlay && options.autoKeySound && options.returnScene == &scene);
+    assert(options.clubMode == (outcome == 0));
+    assert(!options.touchVisualizationEnabled && !options.replayGhostRenderingEnabled);
+    if (outcome == 0) {
+      assert(parsedMeta.RandomSeed == 77 && parsedMeta.RandomPrng == "prepared");
+      assert((parsedMeta.RandomValues == std::vector<int>{2, 3}));
+    } else {
+      assert(!parsedMeta.RandomSeed && !parsedMeta.RandomPrng && parsedMeta.RandomValues.empty());
+    }
+    assert(options.playOption == "RANDOM" && options.playOptionSeed == 12);
+    assert(options.playOption2 == "MIRROR" && options.playOption2Seed == 34);
+    assert(options.gaugeType == 3 && options.gaugeAutoShift == 4 && options.gaugeAutoShiftLowerBound == 5);
+    assert(options.longNoteMode == 2 && options.assistOption == 6 && options.ruleset == 7);
+    assert(options.pacemakerTarget == pacemaker::kTargetOff && options.playback.percent == 100);
+    assert(scene.manager.gameplay->chart->longNoteMode == 2 && bms_parser::Chart::alive == 1);
+    assert(scene.context.jukebox.loadThread != std::this_thread::get_id());
   }
-  scene.context.jukebox.success = true;
-  scene.context.jukebox.cancel = false;
-  scene.modal.loading = true;
-  scene.watchAutoPlay()({});
-  assert(scene.manager.transitions == 1 && !scene.launching_);
-  assert(!scene.modal.loading && !scene.modal.visible);
-  const auto &options = scene.manager.gameplay->options;
-  assert(options.autoPlay && options.autoKeySound && options.returnScene == &scene);
-  assert(options.playOption == "RANDOM" && options.playOptionSeed == 12);
-  assert(options.playOption2 == "MIRROR" && options.playOption2Seed == 34);
-  assert(options.gaugeType == 3 && options.gaugeAutoShift == 4 && options.gaugeAutoShiftLowerBound == 5);
-  assert(options.longNoteMode == 2 && options.assistOption == 6 && options.ruleset == 7);
-  assert(options.pacemakerTarget == pacemaker::kTargetOff && options.playback.percent == 100);
-  assert(scene.manager.gameplay->chart->longNoteMode == 2 && bms_parser::Chart::alive == 1);
 }
 
 int main() { SCENE_TEST; }
