@@ -86,8 +86,8 @@ public:
   }
 
   ~jthread() {
-    request_stop();
     if (joinable()) {
+      request_stop();
       join();
     }
   }
@@ -101,8 +101,8 @@ public:
     if (this == &other) {
       return *this;
     }
-    request_stop();
     if (joinable()) {
+      request_stop();
       join();
     }
     thread_ = std::move(other.thread_);
@@ -123,11 +123,8 @@ public:
   }
 
   bool request_stop() noexcept {
-    if (stopRequested_ == nullptr) {
-      return false;
-    }
-    stopRequested_->store(true, std::memory_order_release);
-    return true;
+    return stopRequested_ != nullptr &&
+           !stopRequested_->exchange(true, std::memory_order_acq_rel);
   }
 
   stop_token get_stop_token() const noexcept {

@@ -1199,3 +1199,16 @@ Desktop/fixture builds, all graph-selector cases, independent review, and
 `git diff --check` passed. Existing debounce, cancellation, generation checks, and
 exception propagation are unchanged. Validation used the affected workflow, with
 the preceding notification fix supplying the full 392-test baseline.
+
+## Follow-up: Align Android fallback stop requests and cleanup
+
+The pinned NDK uses the local thread fallback. It now reports only the first
+successful stop request and requests stop during destruction/replacement only
+for joinable threads. Shared native/fallback tests reproduced both previous
+mismatches and now pass, including concurrent requests and joined/detached/live
+cleanup (0.69 seconds).
+
+Independent review, both small host builds, pinned-NDK arm64/API 23 cross-compile,
+and `git diff --check` passed. Android execution and a full application rebuild
+were not performed; disk space was about 149 MiB. The tested subset does not
+establish full fallback conformance.
