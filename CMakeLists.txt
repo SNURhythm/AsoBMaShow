@@ -5273,20 +5273,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE iconv)
     endif()
 
-    add_executable(ir_uploads_controller_tests
-        tests/ir_uploads_controller_tests.cpp
-        src/scene/IrUploadsController.cpp
-        src/ir/IrOutboxModels.cpp
-        src/ScoreProvenance.cpp
-        src/scene/play/GameplayGaugeRules.cpp
-        src/scene/play/GameplayJudgeRules.cpp
-        src/scene/play/Judge.cpp
-        src/Uuid.cpp
-    )
-    target_include_directories(ir_uploads_controller_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(ir_uploads_controller_tests PRIVATE cxx_std_23)
+    include(cmake/IrUploadTests.cmake)
 
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp

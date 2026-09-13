@@ -12,6 +12,7 @@ root = (
 ).resolve()
 main_menu_path = root / "src/scene/MainMenuScene.cpp"
 uploads_scene_path = root / "src/scene/IrUploadsScene.cpp"
+preparation_task_path = root / "src/scene/IrUploadPreparationTask.cpp"
 music_select_path = root / "src/scene/MusicSelectScene.cpp"
 
 main_menu = (
@@ -20,6 +21,11 @@ main_menu = (
 uploads_scene = (
     uploads_scene_path.read_text(encoding="utf-8")
     if uploads_scene_path.is_file()
+    else ""
+)
+preparation_task = (
+    preparation_task_path.read_text(encoding="utf-8")
+    if preparation_task_path.is_file()
     else ""
 )
 music_select = (
@@ -125,8 +131,17 @@ require(
     "Open IR Settings must be a clickable direct navigation action",
 )
 require(
-    "request_stop()" in uploads_scene and ".join()" in uploads_scene,
+    "preparationTask.stopAndWait()" in uploads_scene
+    and uploads_scene.count("stopPreparation();") >= 3,
     "Back and cleanup must stop and join local preparation",
+)
+shutdown = preparation_task[preparation_task.find("void PreparationTask::stopAndWait()") :]
+gate_cancel = shutdown.find("enqueueGate_->requestCancellation()")
+thread_stop = shutdown.find("worker_.request_stop()")
+thread_join = shutdown.find("worker_.join()")
+require(
+    0 <= gate_cancel < thread_stop < thread_join,
+    "preparation shutdown must cancel the durable gate before stopping and joining the worker",
 )
 
 if failures:

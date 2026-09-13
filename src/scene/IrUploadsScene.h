@@ -1,13 +1,13 @@
 #pragma once
 
 #include "IrUploadsController.h"
+#include "IrUploadPreparationTask.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -16,12 +16,6 @@ class Button;
 class IrUploadCandidateListView;
 class TextView;
 class View;
-
-struct IrUploadsSceneMailbox {
-  std::mutex mutex;
-  std::optional<std::pair<std::size_t, std::size_t>> progress;
-  std::optional<ir_uploads::PreparationOutcome> completion;
-};
 
 class IrUploadsScene final : public Scene {
 public:
@@ -44,7 +38,7 @@ private:
   void refreshUi();
   void refreshProviderState();
   void observeRemoteRevisions();
-  void applyMailbox();
+  void applyPreparationUpdates();
   void startUpload();
   void stopPreparation();
   void goBack();
@@ -66,9 +60,7 @@ private:
   IrUploadCandidateListView *candidateList = nullptr;
 
   ir_uploads::Controller controller;
-  std::shared_ptr<ir_uploads::DurableEnqueueGate> enqueueGate;
-  std::shared_ptr<IrUploadsSceneMailbox> mailbox;
-  std::jthread preparationThread;
+  ir_uploads::PreparationTask preparationTask;
   std::string loadError;
   std::string loadDiagnostic;
   bool providerCanSubmit = false;

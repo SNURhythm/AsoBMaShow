@@ -114,22 +114,37 @@ production artifact-launch method, and exactly-once indexing. Direct owner and
 compiled scene tests also cover request forwarding, cancellation, progress,
 candidate bounds, artifact decisions, and destructor joining.
 
-## 6. IR upload preparation ownership
+## 6. IR upload preparation ownership — completed
 
-`IrUploadsScene` coordinates a preparation thread, shared progress/completion
-mailbox, and `DurableEnqueueGate` around the existing
-`prepareSelectedCandidates` domain function. Worker lambdas capture the scene
-to reach external driver/submission dependencies. These objects currently have
-safe member ordering; this is an ownership/readability candidate, not a
-confirmed teardown defect.
+`ir_uploads::PreparationTask` groups worker lifetime, `DurableEnqueueGate`, and
+progress/completion data. It reuses `prepareSelectedCandidates`; the scene
+captures the external application context for driver/submission dependencies
+and retains selection, presentation, and controller updates. Consuming a
+completion joins before returning it to the scene.
 
-Group the preparation worker, gate, and data handoff into one owner. Preserve
-application-thread controller updates, selection locking, partial failures,
-progress coalescing, and completion joining. Cancellation before durable enqueue
-must suppress it, while an enqueue already begun must retain its outcome.
-Reuse the tested preparation function and gate rather than introducing a new
-submission protocol. Characterize stop/consume/restart and gate lifetime with
-controlled verification and enqueue dependencies before integrating the scene.
+Stop requests gate cancellation before signaling the thread and joining. A
+batch already inside durable enqueue keeps its outcome. Shutdown preserves
+completion for consumption; initialization/cleanup reset discards explicitly.
+Admission rejects owned work and unconsumed completion. Direct tests cover
+partial failure, progress, cancellation on both sides of enqueue, retained
+outcomes, restart, and destruction. Complete production scene methods run with
+the real task, controller, and batch mapper against controlled effects.
+
+## 7. Music Select direct-destruction lifecycle
+
+Music Select cancels launch/preload work, unregisters input, and releases skin
+and sound resources in normal `cleanupScene`, but has no explicit destructor.
+The base `Scene` destructor destroys views without invoking derived cleanup.
+The raw preload-worker pointer and scene-capturing launch callbacks therefore
+need an audit of direct destruction and initialization failure paths.
+
+First characterize destructor behavior with actual production cleanup and the
+base cleanup-once guard, including already-cleaned and never-initialized scenes.
+Prefer one owned shutdown path over another duplicated list of teardown calls.
+Preserve cancellation-before-join, Records/preview ordering, input detachment,
+security-scoped sound access, and Lua preparation cancellation. Only then assess
+whether launch preparation would benefit from reuse of the existing scene task
+boundary; file length alone does not justify moving its gameplay policy.
 
 ## What the review does not justify
 

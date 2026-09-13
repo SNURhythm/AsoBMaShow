@@ -90,7 +90,7 @@ TextView *makeText(const std::string &text, int fontSize,
 
 void IrUploadsScene::init() {
   context.jukebox.stop();
-  mailbox = std::make_shared<IrUploadsSceneMailbox>();
+  preparationTask.reset();
   lastLayoutWidth = rendering::window_width;
   lastLayoutHeight = rendering::window_height;
   observedAccountEvidenceRevision =
@@ -114,7 +114,7 @@ EventHandleResult IrUploadsScene::handleEvents(SDL_Event &event) {
 }
 
 void IrUploadsScene::update(float) {
-  applyMailbox();
+  applyPreparationUpdates();
   observeRemoteRevisions();
   if (reloadRequested && !controller.selectionLocked()) {
     reloadRequested = false;
@@ -151,7 +151,7 @@ void IrUploadsScene::cleanupScene() {
   clearButton = nullptr;
   uploadButton = nullptr;
   candidateList = nullptr;
-  mailbox.reset();
+  preparationTask.reset();
   controller = {};
   loadError.clear();
   loadDiagnostic.clear();
@@ -504,31 +504,16 @@ void IrUploadsScene::observeRemoteRevisions() {
   reloadRequested = reloadRequested || changed;
 }
 
-void IrUploadsScene::applyMailbox() {
-  if (mailbox == nullptr) {
-    return;
+void IrUploadsScene::applyPreparationUpdates() {
+  auto updates = preparationTask.takeUpdates();
+  if (updates.progress) {
+    controller.setPreparationProgress(updates.progress->first, updates.progress->second);
   }
-  std::optional<std::pair<std::size_t, std::size_t>> progress;
-  std::optional<ir_uploads::PreparationOutcome> completion;
-  {
-    std::lock_guard lock(mailbox->mutex);
-    progress = mailbox->progress;
-    mailbox->progress.reset();
-    completion = std::move(mailbox->completion);
-    mailbox->completion.reset();
-  }
-  if (progress.has_value()) {
-    controller.setPreparationProgress(progress->first, progress->second);
-  }
-  if (completion.has_value()) {
-    if (preparationThread.joinable()) {
-      preparationThread.join();
-    }
-    enqueueGate.reset();
-    controller.completePreparation(*completion);
+  if (updates.completion) {
+    controller.completePreparation(*updates.completion);
     reloadRequested = true;
   }
-  if (progress.has_value() || completion.has_value()) {
+  if (updates.progress || updates.completion) {
     refreshUi();
   }
 }
@@ -547,69 +532,40 @@ void IrUploadsScene::startUpload() {
     refreshUi();
     return;
   }
-  if (preparationThread.joinable()) {
-    preparationThread.join();
-  }
-  if (mailbox == nullptr) {
-    mailbox = std::make_shared<IrUploadsSceneMailbox>();
-  }
-  const auto workerMailbox = mailbox;
-  enqueueGate = std::make_shared<ir_uploads::DurableEnqueueGate>();
-  const auto workerEnqueueGate = enqueueGate;
   refreshUi();
 
-  preparationThread = std::jthread([this, workerMailbox, workerEnqueueGate,
-                                    candidates = std::move(candidates)](
-                                       const std::stop_token &stopToken) {
-    ir_uploads::PreparationDependencies dependencies;
-    dependencies.verify = [](const ir::IrUploadCandidate &candidate,
-                             const std::stop_token &) {
-      std::string diagnostic;
-      auto submission =
-          ir::submissionForIrUploadCandidate(candidate, diagnostic);
-      return ir_uploads::VerificationOutcome{
-          .submission = std::move(submission),
-          .diagnostic = std::move(diagnostic)};
-    };
-    dependencies.enqueueBatch =
-        [this](std::span<const ir::IrSubmission> submissions) {
-          return ir::executeIrSavedResultBatchUpload(
-              ir::kTachiProviderId, submissions,
-              {.buildDraft =
-                   [this](const ir::IrSubmission &submission) {
-                     return context.irDrivers.buildDraft(ir::kTachiProviderId,
-                                                         submission);
-                   },
-               .enqueueBatch =
-                   [this](std::span<const ir::IrOutboxDraft> drafts) {
-                     return context.irSubmissionService->enqueueManualBatch(
-                         drafts);
-                   }});
-        };
-    dependencies.progress = [workerMailbox](std::size_t completed,
-                                            std::size_t total) {
-      std::lock_guard lock(workerMailbox->mutex);
-      workerMailbox->progress = {completed, total};
-    };
-    auto outcome = ir_uploads::prepareSelectedCandidates(
-        candidates, stopToken, dependencies, workerEnqueueGate);
-    std::lock_guard lock(workerMailbox->mutex);
-    workerMailbox->completion = std::move(outcome);
-  });
+  ir_uploads::PreparationDependencies dependencies;
+  dependencies.verify = [](const ir::IrUploadCandidate &candidate,
+                           const std::stop_token &) {
+    std::string diagnostic;
+    auto submission = ir::submissionForIrUploadCandidate(candidate, diagnostic);
+    return ir_uploads::VerificationOutcome{
+        .submission = std::move(submission), .diagnostic = std::move(diagnostic)};
+  };
+  dependencies.enqueueBatch =
+      [&application = context](std::span<const ir::IrSubmission> submissions) {
+        return ir::executeIrSavedResultBatchUpload(
+            ir::kTachiProviderId, submissions,
+            {.buildDraft =
+                 [&application](const ir::IrSubmission &submission) {
+                   return application.irDrivers.buildDraft(ir::kTachiProviderId,
+                                                            submission);
+                 },
+             .enqueueBatch =
+                 [&application](std::span<const ir::IrOutboxDraft> drafts) {
+                   return application.irSubmissionService->enqueueManualBatch(drafts);
+                 }});
+      };
+  preparationTask.start(std::move(candidates), std::move(dependencies));
 }
 
 void IrUploadsScene::stopPreparation() {
-  if (!preparationThread.joinable()) {
+  if (!preparationTask.hasWorker()) {
     return;
   }
   controller.markCancellationRequested();
   refreshUi();
-  if (enqueueGate != nullptr) {
-    enqueueGate->requestCancellation();
-  }
-  preparationThread.request_stop();
-  preparationThread.join();
-  enqueueGate.reset();
+  preparationTask.stopAndWait();
 }
 
 void IrUploadsScene::goBack() {

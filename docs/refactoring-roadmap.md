@@ -434,3 +434,32 @@ The corrected archive fixture passed 20 consecutive runs. After rebuilding all
 targets, the full parallel suite passed all 377 tests in 103.95 seconds. Review
 found no remaining blocker and `git diff --check` passed. Verification stayed
 local to the desktop build; no deployment or physical-device checks were run.
+
+## Follow-up: IR upload preparation task ownership
+
+`ir_uploads::PreparationTask` now owns preparation worker lifetime, the existing
+durable-enqueue gate, and typed progress/completion storage. The scene captures
+the external application context for verification/draft/enqueue dependencies;
+workers no longer capture the scene. `prepareSelectedCandidates`, durable
+batch mapping, and controller selection/failure policy are unchanged.
+
+Stop enters gate cancellation before requesting thread stop and joining. This
+preserves cancellation before enqueue and the outcome of a batch already
+started. Stopped completion remains available; scene initialization and cleanup
+explicitly reset it. Consuming completion joins before returning updates, and
+admission rejects existing work or an unconsumed outcome.
+
+Tests exercise progress/partial failure, cancellation before enqueue with zero
+batch calls, cancellation after enqueue begins with a retained queued outcome,
+stop/consume/restart, explicit reset, and destruction while verification runs.
+Generated fixtures compile complete production launch/apply/stop methods with
+the real owner, controller, and batch mapper, checking provider/selection gates,
+one batch, application-thread progress/completion, and retained cancelled
+selection. Existing domain tests remain intact, grouped with this fixture in
+`cmake/IrUploadTests.cmake`. Focused tests and desktop compilation passed;
+independent review found no remaining blocker.
+
+The flow audit now follows the scene's stop delegation into the owner and checks
+cancellation-before-stop-before-join ordering there. After rebuilding all
+targets, the full parallel suite passed all 377 tests in 97.20 seconds.
+`git diff --check` passed. Verification stayed local to the desktop build.
