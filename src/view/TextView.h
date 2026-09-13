@@ -122,4 +122,7 @@ protected:
   void invalidateTexture();
   void updateTextMetrics(bool markDirty = true, int requestedWrapWidth = -1);
   void createTexture();
+
+private:
+  void releaseFontResources();
 };

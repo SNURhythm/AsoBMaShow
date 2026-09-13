@@ -1388,7 +1388,7 @@ All 398 CTest entries passed (97.95 seconds). The verified commit remains local.
 ## Follow-up: Make text-font cache release allocation-free
 
 Structured font-cache keys support borrowed tuple lookup during release,
-preventing diagnostic-free view teardown from allocating a string. Cache
+preventing view teardown from allocating a string. Cache
 insertion retains ownership of a newly opened font until it succeeds. The real
 view fixture reproduced the old destructor termination and now verifies shared
 and final release, cache identity, survivor usability, and runtime shutdown.
@@ -1396,3 +1396,15 @@ and final release, cache identity, survivor usability, and runtime shutdown.
 The focused fixture and native leak check passed, along with desktop/all-target
 builds, independent review, and `git diff --check`. All 399 CTest entries passed
 (106.65 seconds). The verified commit remains local.
+
+## Follow-up: Roll back text-font acquisition on construction failure
+
+TextView now retains every acquired font reference until the font-face list
+accepts it, and shares font/runtime release between normal destruction and
+constructor rollback. The real fixture reproduced the old runtime-reference
+leak and now passes 30 fresh-font and 28 shared-font allocation failures, with
+survivor checks and successful retries. Native leak detection reported zero
+leaked bytes.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 399 CTest entries passed (106.77 seconds). The verified commit remains local.

@@ -304,6 +304,7 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   primaryFontPath_ = fontPath;
   fallbackFontPaths = fontFallbackPaths(fontPath);
   ttfInitialized = text_runtime::acquire();
+  auto rollback = makeScopeExit([this] { releaseFontResources(); });
   if (ttfInitialized) {
     while (nextFallbackFontPath < fallbackFontPaths.size()) {
       const bool required = nextFallbackFontPath == 0;
@@ -324,13 +325,17 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   rect = {0, 0, 0, 0};
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
   YGNodeSetMeasureFunc(getNode(), measureFunc);
+  rollback.dismiss();
 }
 
 TextView::~TextView() {
   if (bgfx::isValid(texture)) {
     bgfx::destroy(texture);
   }
+  releaseFontResources();
+}
 
+void TextView::releaseFontResources() {
   for (auto &face : fontFaces) {
     if (face.font != nullptr) {
       releaseFontCandidate(face.path, fontRasterSize, fontStyle_, face.font);
@@ -340,6 +345,7 @@ TextView::~TextView() {
   font = nullptr;
   if (ttfInitialized) {
     text_runtime::release();
+    ttfInitialized = false;
   }
 }
 
@@ -506,10 +512,14 @@ TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
     return nullptr;
   }
 
+  auto rollback = makeScopeExit([&] {
+    releaseFontCandidate(path, fontRasterSize, fontStyle_, opened);
+  });
+  fontFaces.push_back({opened, path});
+  rollback.dismiss();
   if (font == nullptr) {
     font = opened;
   }
-  fontFaces.push_back({opened, path});
   includeFontMetrics(opened);
   return opened;
 }

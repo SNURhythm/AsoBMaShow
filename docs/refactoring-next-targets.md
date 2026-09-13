@@ -1018,6 +1018,22 @@ passed (0.55 seconds), and a native leak check reported zero leaked bytes.
 Desktop and all-target builds, independent review, and `git diff --check` passed.
 All 399 CTest entries passed (106.65 seconds). The commit remains local.
 
+## 64. Roll back text-font ownership when construction fails — completed
+
+TextView now shares font cleanup between its destructor and a constructor
+rollback guard. A font acquired from the cache remains locally guarded until
+the view's font-face list accepts it. Failed construction releases fonts before
+the SDL_ttf runtime reference, and preserves existing shared fonts.
+
+The real view fixture reproduced a retained runtime reference at constructor
+allocation 26. It now passes every allocation failure for fresh fonts (30) and
+shared fonts (28), checks the surviving font, and successfully retries after
+each attempt. The focused test passed (0.58 seconds), and the native leak check
+reported zero leaked bytes. Independent review found no issues.
+
+Desktop and all-target builds and `git diff --check` passed. All 399 CTest
+entries passed (106.77 seconds). The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

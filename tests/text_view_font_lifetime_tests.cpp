@@ -4,7 +4,10 @@
 #include "support/AllocationFailure.h"
 
 #include <cassert>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
+#include <new>
 #include <string>
 
 namespace rendering {
@@ -33,6 +36,46 @@ public:
     return fontFaces.front().font;
   }
 };
+
+void testConstructorRollback(const std::string &path) {
+  for (const bool shareExisting : {false, true}) {
+    std::unique_ptr<FontProbeView> survivor;
+    if (shareExisting) survivor = std::make_unique<FontProbeView>(path, 16);
+    const auto baseline = text_runtime::activeReferencesForTesting();
+    const auto construct = [&] {
+      auto view = std::make_unique<FontProbeView>(path, 16);
+      assert(view->primaryFont());
+      if (survivor) assert(view->primaryFont() == survivor->primaryFont());
+    };
+    construct();
+    std::size_t failures = 0;
+    for (; failures < 256; ++failures) {
+      bool threw = false;
+      {
+        test_support::FailAllocationAfter failure(failures);
+        try { construct(); }
+        catch (const std::bad_alloc &) { threw = true; }
+      }
+      const auto references = text_runtime::activeReferencesForTesting();
+      if (references != baseline) {
+        std::cerr << "Constructor allocation " << failures << " retained "
+                  << references - baseline << " runtime references\n";
+        std::abort();
+      }
+      if (survivor) {
+        text_runtime::OperationGuard operation;
+        assert(TTF_FontHeight(survivor->primaryFont()) > 0);
+      }
+      construct();
+      assert(text_runtime::activeReferencesForTesting() == baseline);
+      if (!threw) break;
+    }
+    assert(failures > 0 && failures < 256);
+    std::cout << (shareExisting ? "Shared" : "Fresh") << " font construction: "
+              << failures << " allocation failures passed\n";
+  }
+  assert(text_runtime::activeReferencesForTesting() == 0);
+}
 
 int main() {
   bgfx::Init init;
@@ -67,6 +110,7 @@ int main() {
   }
   assert(text_runtime::activeReferencesForTesting() == 0);
   assert(TTF_WasInit() == 0);
+  testConstructorRollback(path);
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
 }
