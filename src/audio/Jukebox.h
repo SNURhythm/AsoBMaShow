@@ -4,12 +4,12 @@
 #include "ClubBeat.h"
 #include "AudioWrapper.h"
 #include "GameplayBgaFrame.h"
+#include "JukeboxSchedulerWake.h"
 #include <algorithm>
 #include <array>
 #include <thread>
 #include <unordered_map>
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -302,8 +302,7 @@ private:
   std::mutex seekLock;
   // playthread lock
   std::mutex playThreadLock;
-  std::mutex schedulerWaitMutex;
-  std::condition_variable schedulerWakeCv;
+  JukeboxSchedulerWake schedulerWake;
   void loadSounds(bms_parser::Chart &chart,
                   const ChartResourceTable &wavTable,
                   std::atomic_bool &isCancelled);

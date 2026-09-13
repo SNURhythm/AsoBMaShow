@@ -1145,3 +1145,17 @@ exceeded its 150 ms paused-stop deadline by waiting roughly its 250 ms scheduler
 idle interval; that runner does not link these filename implementations. It
 passed alone (1.45 seconds). Scheduler wake synchronization is being investigated
 as the next change. `git diff --check` passed.
+
+## Follow-up: Preserve scheduler wakeups across state and deadline work
+
+Jukebox now records notifications with a mutex-protected generation captured
+before each scheduling iteration. Both wait paths detect notifications received
+before sleeping, and their atomic readiness predicates also handle a stop that
+preceded capture. Existing idle and responsiveness limits remain unchanged.
+
+Independent review, new notification-boundary tests, desktop main/all-target
+builds, and all 392 parallel tests passed (94.70 seconds). An earlier unrelated
+archive assertion passed on isolated and full rechecks; separate failure-only
+diagnostics improve its next failure report. Observed transient disk space fell
+below the unzip reserve, but the earlier assertion did not expose its cause.
+`git diff --check` passed.

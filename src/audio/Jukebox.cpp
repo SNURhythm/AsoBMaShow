@@ -3543,7 +3543,7 @@ void Jukebox::ensureClubBeatSoundsLoaded() {
   wavTableAbs[kClubClapWav] = kClubClapPath;
 }
 
-void Jukebox::wakeScheduler() { schedulerWakeCv.notify_all(); }
+void Jukebox::wakeScheduler() { schedulerWake.notify(); }
 
 void Jukebox::syncVisualClockToAudio() {
   std::lock_guard<std::mutex> positionLock(seekLock);
@@ -3801,11 +3801,11 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
     auto prevTimestamp = Clock::now();
     auto lifecycleState = makeLifecycleState();
     while (schedulerActive.load(std::memory_order_acquire)) {
+      const auto wakeGeneration = schedulerWake.capture();
       if (!isPlaying.load(std::memory_order_acquire) ||
           !stopwatch->isRunning()) {
-        std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
-        schedulerWakeCv.wait_for(
-            waitLock,
+        schedulerWake.waitFor(
+            wakeGeneration,
             std::chrono::microseconds(kSchedulerMaxIdleSleepMicros),
             [this] {
               // End the idle sleep when the scheduler is told to stop (so a
@@ -3899,9 +3899,10 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
         sleepMicros = audio::playback::SchedulerWaitMicrosForChartDelta(
             untilNextMicros, playbackRate(), kSchedulerMaxIdleSleepMicros);
       }
-      std::unique_lock<std::mutex> waitLock(schedulerWaitMutex);
-      schedulerWakeCv.wait_for(waitLock,
-                               std::chrono::microseconds(sleepMicros));
+      schedulerWake.waitFor(
+          wakeGeneration, std::chrono::microseconds(sleepMicros), [this] {
+            return !schedulerActive.load(std::memory_order_acquire);
+          });
     }
 #ifdef _WIN32
     // Clean up MMCS handle

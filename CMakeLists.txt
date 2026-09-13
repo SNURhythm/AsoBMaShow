@@ -7926,6 +7926,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     include(cmake/WorkerPoolTests.cmake)
     include(cmake/LibraryPickerTests.cmake)
     include(cmake/MusicPlayerTests.cmake)
+    include(cmake/JukeboxSchedulerTests.cmake)
     include(cmake/ArchiveStorageTests.cmake)
     include(cmake/FindBmsTaskTests.cmake)
 

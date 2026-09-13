@@ -636,7 +636,29 @@ audio-renderer, terminal-scene, and replay UI contract tests passed. The
 all-target build also passed. Similar exporter render-access helpers were
 reviewed but retained because their restoration behavior differs.
 The full run passed 390/391; an unchanged Jukebox paused-stop deadline failed
-and passed in isolation. Its wake synchronization is the next investigation.
+and passed in isolation. The wake synchronization fix is recorded below.
+
+## 44. Preserve Jukebox scheduler notifications before waits — completed
+
+The prior full-suite paused-stop failure exposed an unprotected condition-variable
+notification window. The scheduler now captures a notification generation before
+reading playback state or computing deadlines, and both paused and active waits
+observe that generation. Notification publication and predicate evaluation share
+one mutex; readiness predicates only read atomics, preserving lifecycle lock order.
+The existing 250 ms fallback and 150 ms resume/stop checks remain unchanged.
+
+New tests cover notifications before waiting, already-ready state, unchanged
+generations, and notification contention at the predicate/wait boundary. The last
+case checks completion independently of the longer fallback timeout. Independent
+review and desktop main/all-target builds passed. All 392 tests passed in parallel
+(94.70 seconds), including the real Jukebox paused/resume/stop regression.
+
+An earlier run passed 391/392 with an unrelated archive collision assertion; that
+runner passed unchanged in isolation and in the final full run. Failure-only
+archive diagnostics were reviewed separately. Disk sampling observed a transient
+361 MiB available, below the existing 512 MiB unzip reserve; the earlier assertion
+had no error text, so its exact cause remains unconfirmed. No resource limits or
+test deadlines were relaxed.
 
 ## What the review does not justify
 

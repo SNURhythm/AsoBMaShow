@@ -1,0 +1,6 @@
+add_executable(jukebox_scheduler_wake_tests tests/jukebox_scheduler_wake_tests.cpp)
+target_include_directories(jukebox_scheduler_wake_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(jukebox_scheduler_wake_tests PRIVATE cxx_std_23)
+target_link_libraries(jukebox_scheduler_wake_tests PRIVATE Threads::Threads)
+asobmashow_register_test(jukebox_scheduler_wake_tests)
+set_tests_properties(jukebox_scheduler_wake_tests PROPERTIES TIMEOUT 10)
