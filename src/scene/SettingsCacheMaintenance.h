@@ -12,6 +12,7 @@
 // Dependencies supplied through operations must outlive this owner. Cleanup
 // intentionally has no stop token: cancellation suppresses its completion but
 // lets protected filesystem cleanup finish. Measurement is cooperatively stopped.
+// Operation exceptions are delivered through the same failed completion as errors.
 class SettingsCacheMaintenance final {
 public:
   enum class Operation { Cleanup, Measure };

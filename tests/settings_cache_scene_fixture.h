@@ -99,4 +99,32 @@ void testSceneShowsOperationErrorsAndHandlesAbsentViews() {
   scene.applyPendingArchiveCacheCleanupStatus();
   assert(scene.archiveCacheCleanupStatusMessage.find("empty") != std::string::npos);
 }
+
+void testSceneShowsThrownOperationErrorsAndAllowsRetry() {
+  CacheFixture fixture;
+  bool fail = true;
+  SettingsScene scene([&](auto &result, auto &error) {
+    if (fail) throw std::runtime_error("cache cleanup exception");
+    return fixture.cleanup()(result, error);
+  }, [&](auto &, auto &, const auto &) -> bool {
+    throw std::runtime_error("cache measurement exception");
+  });
+  scene.cleanupTemporaryArchiveCache();
+  waitIdle(scene.archiveCacheMaintenance);
+  assert(scene.button.text == "Cleaning...");
+  scene.applyPendingArchiveCacheCleanupStatus();
+  assert(scene.status.text == "Archive cache cleanup failed: cache cleanup exception");
+  assert(scene.button.text == "Clean Up" && scene.status.color.r > scene.status.color.g);
+  scene.measureTemporaryArchiveCache();
+  waitIdle(scene.archiveCacheMaintenance);
+  scene.applyPendingArchiveCacheCleanupStatus();
+  assert(scene.status.text == "Archive cache measurement failed: cache measurement exception");
+  fail = false;
+  scene.cleanupTemporaryArchiveCache();
+  waitIdle(scene.archiveCacheMaintenance);
+  scene.applyPendingArchiveCacheCleanupStatus();
+  assert(scene.status.text.find("empty") != std::string::npos);
+  assert(scene.status.color.g > scene.status.color.r);
+  assert(scene.layout.layouts == 3 && scene.layout.refreshes == 3);
+}
 } // namespace

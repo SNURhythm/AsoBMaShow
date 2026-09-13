@@ -1,5 +1,6 @@
 #include "SettingsCacheMaintenance.h"
 
+#include <exception>
 #include <utility>
 
 SettingsCacheMaintenance::SettingsCacheMaintenance(Cleanup cleanup, Measure measure)
@@ -44,8 +45,15 @@ void SettingsCacheMaintenance::run(Operation operation, std::uint64_t generation
   Completion result;
   result.operation = operation;
   const bool cleanup = operation == Operation::Cleanup;
-  result.succeeded = cleanup ? cleanup_(result.cleanup, result.error)
-                             : measure_(result.usage, result.error, token);
+  try {
+    result.succeeded = cleanup ? cleanup_(result.cleanup, result.error)
+                               : measure_(result.usage, result.error, token);
+  } catch (const std::exception &error) {
+    result.error = error.what();
+    if (result.error.empty()) result.error = "Unknown archive cache error";
+  } catch (...) {
+    result.error = "Unknown archive cache error";
+  }
   std::lock_guard lock(mutex_);
   (cleanup ? cleanupRunning_ : measureRunning_) = false;
   if (!token.stop_requested() && generation == generation_) {

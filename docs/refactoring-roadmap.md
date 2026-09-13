@@ -983,3 +983,19 @@ this change only adjusts the two fixture constructors.
 
 Separately, all 19 audited skin fixture runners passed isolated cleanup checks
 with zero leftover roots, so no broad read-only cleanup migration was made.
+
+## Follow-up: Deliver cache-operation exceptions as failures
+
+Cache cleanup and measurement exceptions now use the owner's existing typed
+failure result instead of escaping the worker. Named exceptions retain their
+message, while empty/unknown exceptions receive a fallback. Running-state reset,
+generation filtering, and stop suppression remain shared with ordinary outcomes.
+
+The old runner aborted on an operation exception. The direct regression covers
+both operations, three exception forms, same-operation retry, and late failure
+suppression after supersession or stop. A compiled scene regression checks
+failure text/colors, cleanup-button reset, and successful recovery on the
+application thread. Focused CTest and independent review passed.
+
+Desktop main/all-target builds and all 391 tests passed (102.81 seconds).
+`git diff --check` passed.

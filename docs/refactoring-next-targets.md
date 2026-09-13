@@ -491,6 +491,20 @@ concurrent runs, and leave no owned roots. Independent review passed.
 An isolated audit of 19 other skin fixture runners found no cleanup leftovers;
 that evidence did not justify extending read-only cleanup to those fixtures.
 
+## 34. Deliver cache-operation exceptions as failures — completed
+
+`SettingsCacheMaintenance` now catches operation exceptions and publishes the
+existing failed completion. Previously, an exception from cleanup or measurement
+escaped its worker and terminated the process. Named errors retain their message;
+empty or unknown exceptions receive a fallback. The same running-state reset,
+generation filtering, and stop suppression apply to all operation outcomes.
+
+The old direct runner aborted on a thrown operation. New tests cover both jobs,
+named/empty/unknown failures, same-operation recovery, and superseded/stopped
+failure suppression. The compiled scene fixture checks failure presentation,
+button reset, and recovery through complete production methods. Focused CTest,
+independent review, desktop builds, and all 391 tests passed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

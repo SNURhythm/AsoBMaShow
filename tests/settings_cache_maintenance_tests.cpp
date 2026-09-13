@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <fstream>
 #include <future>
+#include <stdexcept>
 
 using namespace std::chrono_literals;
 using Maintenance = SettingsCacheMaintenance;
@@ -149,6 +150,81 @@ void testFilesystemFailuresAreDeliveredForBothOperations() {
   assert(result->operation == Maintenance::Operation::Cleanup);
 }
 
+void testOperationExceptionsAreDeliveredAndAllowRetry() {
+  for (const bool cleanup : {false, true}) {
+    for (int failure = 0; failure < 3; ++failure) {
+      CacheFixture fixture;
+      fixture.write("unused.mov", "remove");
+      bool fail = true;
+      auto throwFailure = [&] {
+        if (!fail) return;
+        if (failure == 0) throw std::runtime_error("cache callback failure");
+        if (failure == 1) throw std::runtime_error("");
+        throw 7;
+      };
+      Maintenance jobs([&](auto &result, auto &error) {
+        throwFailure();
+        return fixture.cleanup()(result, error);
+      }, [&](auto &result, auto &error, const auto &token) {
+        throwFailure();
+        return fixture.measure()(result, error, token);
+      });
+      assert(cleanup ? jobs.startCleanup() : jobs.startMeasure());
+      waitIdle(jobs);
+      auto result = jobs.takeCompletion();
+      assert(result && !result->succeeded);
+      assert(result->operation == (cleanup ? Maintenance::Operation::Cleanup
+                                          : Maintenance::Operation::Measure));
+      assert(result->error == (failure == 0 ? "cache callback failure"
+                                           : "Unknown archive cache error"));
+      assert(!jobs.cleanupRunning() && !jobs.takeCompletion());
+      fail = false;
+      assert(cleanup ? jobs.startCleanup() : jobs.startMeasure());
+      waitIdle(jobs);
+      result = jobs.takeCompletion();
+      assert(result && result->succeeded && result->error.empty());
+      assert(cleanup ? result->cleanup.removedBytes == 6
+                     : result->usage.bytes == 6);
+    }
+  }
+}
+
+void testSupersededAndStoppedExceptionsAreDiscarded() {
+  CacheFixture fixture;
+  Gate measure;
+  Maintenance superseded(fixture.cleanup(), [&](auto &, auto &, const auto &) -> bool {
+    measure.block();
+    throw std::runtime_error("stale measurement");
+  });
+  assert(superseded.startMeasure());
+  measure.wait();
+  assert(superseded.startCleanup());
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (superseded.cleanupRunning() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  assert(!superseded.cleanupRunning());
+  measure.release.set_value();
+  waitIdle(superseded);
+  const auto result = superseded.takeCompletion();
+  assert(result && result->operation == Maintenance::Operation::Cleanup);
+  assert(result->succeeded && !superseded.takeCompletion());
+
+  std::promise<void> entered;
+  Maintenance stopped(fixture.cleanup(), [&](auto &, auto &, const auto &token) -> bool {
+    std::mutex mutex;
+    std::condition_variable_any changed;
+    std::unique_lock lock(mutex);
+    entered.set_value();
+    changed.wait(lock, token, [] { return false; });
+    throw std::runtime_error("stopped measurement");
+  });
+  assert(stopped.startMeasure());
+  assert(entered.get_future().wait_for(5s) == std::future_status::ready);
+  stopped.stopAndWait();
+  assert(!stopped.running() && !stopped.takeCompletion());
+}
+
 void testStopSignalsMeasurementAndAllowsRestart() {
   CacheFixture fixture;
   std::promise<void> entered;
@@ -199,10 +275,13 @@ void testDestructionJoinsCleanupBeforeItsDependenciesDie() {
 int main() {
   testSceneAppliesTypedResultsOnTheApplicationThread();
   testSceneShowsOperationErrorsAndHandlesAbsentViews();
+  testSceneShowsThrownOperationErrorsAndAllowsRetry();
   testRealCacheMeasurementCleanupAndRepeatedRequests();
   testOverlapRejectsDuplicatesAndDiscardsLateMeasurement();
   testNewRequestDiscardsAnAlreadyQueuedCompletion();
   testFilesystemFailuresAreDeliveredForBothOperations();
+  testOperationExceptionsAreDeliveredAndAllowRetry();
+  testSupersededAndStoppedExceptionsAreDiscarded();
   testStopSignalsMeasurementAndAllowsRestart();
   testDestructionJoinsCleanupBeforeItsDependenciesDie();
 }
