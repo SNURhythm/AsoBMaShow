@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../src/RAII.h"
+#include "../src/path.h"
 #include "../src/sqlite3.h"
 
 #include <array>
@@ -14,6 +16,25 @@
 #include <vector>
 
 namespace repository_test {
+
+using Database = UniqueResource<sqlite3, sqlite3_close>;
+
+// Fixture setup may create a database; production repositories use their own
+// validated opening policies.
+inline Database openDatabase(const std::filesystem::path &path,
+                              std::string &errorMessage,
+                              int busyTimeoutMs = 1000) {
+  sqlite3 *raw = nullptr;
+  const std::string pathText = fspath_to_utf8(path);
+  const int result = sqlite3_open(pathText.c_str(), &raw);
+  Database database(raw);
+  if (database) sqlite3_busy_timeout(database.get(), busyTimeoutMs);
+  if (result != SQLITE_OK) {
+    errorMessage = database ? sqlite3_errmsg(database.get()) : "unknown error";
+    return {};
+  }
+  return database;
+}
 
 struct RawDatabaseFamilySnapshot {
   std::array<std::optional<std::string>, 4> files;

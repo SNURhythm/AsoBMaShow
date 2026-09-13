@@ -950,6 +950,19 @@ Independent review confirmed identical function bodies; `git diff --check`
 passed. The preceding full-suite baseline was 398 passing tests. This mechanical
 deduplication adds no new tests, and the commit remains local.
 
+## 60. Keep fixture database creation in test support — completed
+
+The general `openSqliteDatabase` function had no production callers. Its two
+fixture callers now use `repository_test::openDatabase` in the existing shared
+test header, while production repositories retain their validated open paths.
+The test helper preserves create/open, timeout, and diagnostic behavior and
+returns an owning connection. The selector fixture closes that owner before
+removing its files; chart repository tests no longer need a custom deleter.
+
+The desktop build and both affected test runners passed (6.72 seconds).
+Independent review, a source/test reference audit, and `git diff --check` passed.
+No new tests were added for this relocation. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

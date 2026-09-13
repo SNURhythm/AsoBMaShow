@@ -290,25 +290,6 @@ inline bool ensureSqliteTableColumnLogged(sqlite3 *db, const char *tableName,
          executeSqliteLogged(db, alterQuery, alterContext, logSqlError);
 }
 
-inline sqlite3 *openSqliteDatabase(const std::filesystem::path &path,
-                                   std::string &errorMessage,
-                                   int busyTimeoutMs = 1000) {
-  sqlite3 *db = nullptr;
-  const std::string pathText = fspath_to_utf8(path);
-  const int rc = sqlite3_open(pathText.c_str(), &db);
-  if (db != nullptr) {
-    sqlite3_busy_timeout(db, busyTimeoutMs);
-  }
-  if (rc != SQLITE_OK) {
-    errorMessage = db != nullptr ? sqlite3_errmsg(db) : "unknown error";
-    if (db != nullptr) {
-      closeSqliteDatabase(db);
-    }
-    return nullptr;
-  }
-  return db;
-}
-
 struct SqliteDatabaseFamilyFileState {
   bool exists = false;
   std::uintmax_t size = 0;

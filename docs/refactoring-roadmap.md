@@ -1355,3 +1355,12 @@ removing an independently verified byte-identical copy. Viewer eligibility and
 lane merging are unchanged. The desktop build and the three relevant existing
 fixtures passed (6.78 seconds); independent review and `git diff --check` passed.
 The preceding full-suite baseline was 398 passing tests. The commit remains local.
+
+## Follow-up: Move fixture database opening out of production headers
+
+The two test-only callers of the generic database opener now use the shared
+repository test support header. The helper returns an owned connection and
+preserves fixture opening behavior, leaving production repository policies in
+their existing paths. Desktop compilation and both affected test runners passed
+(6.72 seconds), as did independent review and `git diff --check`. The commit
+remains local.

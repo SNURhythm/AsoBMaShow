@@ -66,17 +66,12 @@ private:
   std::filesystem::path path_;
 };
 
-struct DatabaseCloser {
-  void operator()(sqlite3 *database) const {
-    closeSqliteDatabase(database);
-  }
-};
-using Database = std::unique_ptr<sqlite3, DatabaseCloser>;
+using Database = repository_test::Database;
 
 Database openDatabase(const std::filesystem::path &path) {
   std::filesystem::create_directories(path.parent_path());
   std::string error;
-  return Database(openSqliteDatabase(path, error));
+  return repository_test::openDatabase(path, error);
 }
 
 bool execute(sqlite3 *database, const std::string &sql) {

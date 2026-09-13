@@ -58,7 +58,7 @@ struct Fixture {
           std::chrono::steady_clock::now().time_since_epoch().count()));
   ChartRepository repository{root / "charts.db"};
   std::optional<ChartRepository::Session> session;
-  sqlite3 *database = nullptr;
+  repository_test::Database database;
   sqlite3 *sessionDatabase = nullptr;
 
   Fixture() {
@@ -66,7 +66,7 @@ struct Fixture {
     assert(repository.EnsureReady());
     reopen();
     std::string error;
-    database = openSqliteDatabase(root / "charts.db", error);
+    database = repository_test::openDatabase(root / "charts.db", error);
     assert(database);
   }
 
@@ -87,14 +87,14 @@ struct Fixture {
   }
 
   ~Fixture() {
-    sqlite3_close(database);
+    database.reset();
     session.reset();
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
   }
 
   void execute(const std::string &sql) {
-    const auto error = executeSqlite(database, sql.c_str());
+    const auto error = executeSqlite(database.get(), sql.c_str());
     if (error) throw std::runtime_error(*error);
   }
 
