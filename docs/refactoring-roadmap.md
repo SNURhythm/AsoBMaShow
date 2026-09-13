@@ -970,3 +970,16 @@ independent review passed.
 
 Desktop main/all-target builds and all 391 tests passed (101.55 seconds).
 `git diff --check` passed.
+
+## Follow-up: Claim catalog test directories exclusively
+
+Resource-catalog and movie-catalog fixtures now claim deterministic serial roots
+with `create_directory`, retrying occupied names. Both old runners passed but
+deleted a preseeded sentinel in a private temporary parent. Both rebuilt runners
+preserve that sentinel in single and paired concurrent runs without leaving
+owned roots. Focused CTest, independent review, and `git diff --check` passed.
+The preceding directory-loader change established the 391-test baseline;
+this change only adjusts the two fixture constructors.
+
+Separately, all 19 audited skin fixture runners passed isolated cleanup checks
+with zero leftover roots, so no broad read-only cleanup migration was made.

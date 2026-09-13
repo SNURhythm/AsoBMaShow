@@ -24,9 +24,11 @@ int failures = 0;
 void expect(bool value, std::string_view message) { if (!value) { std::cerr << "FAIL: " << message << '\n'; ++failures; } }
 
 struct TemporaryDirectory {
-  TemporaryDirectory() : root(std::filesystem::temp_directory_path() /
-                              ("asobmashow-movie-types-" + std::to_string(++serial))) {
-    std::filesystem::create_directories(root);
+  TemporaryDirectory() {
+    do {
+      root = std::filesystem::temp_directory_path() /
+             ("asobmashow-movie-types-" + std::to_string(++serial));
+    } while (!std::filesystem::create_directory(root));
   }
   ~TemporaryDirectory() { std::error_code error; std::filesystem::remove_all(root, error); }
   std::filesystem::path root;

@@ -479,6 +479,18 @@ retry that delivers one matching identity/generation and one callback call.
 The old implementation failed the capture-release assertion. Focused CTest,
 independent review, desktop builds, and all 391 tests passed.
 
+## 33. Claim catalog test directories exclusively — completed
+
+The resource-catalog and movie-catalog runners now retry `create_directory`
+until they own a fresh root. Their deterministic serial names previously used
+`create_directories`, which reused existing directories and later deleted them.
+Both old binaries passed while deleting a preseeded sentinel in a private
+temporary parent. The fixed binaries preserve it, pass focused CTest and paired
+concurrent runs, and leave no owned roots. Independent review passed.
+
+An isolated audit of 19 other skin fixture runners found no cleanup leftovers;
+that evidence did not justify extending read-only cleanup to those fixtures.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
