@@ -240,6 +240,21 @@ workers accept no stop token and need no full-pool barrier, so automatic joining
 does not add a new cancellation protocol or require every launch to succeed.
 Exceptions escaping worker callbacks retain their existing behavior.
 
+## 14. Persistent worker-pool construction rollback — completed
+
+`chart_scan::WorkScheduler` and `ImageDecodeCoordinator` now retire already
+started workers if a later reserve/launch operation throws. Each constructor
+calls its existing cancel/shutdown method from a body-local catch, then
+rethrows. All members still exist during rollback, and the idle workers receive
+their normal stop predicate and notification before joining.
+
+A direct regression links both real implementations and sweeps the constructing
+thread's allocation points, disabling fault injection before cleanup. Both old
+implementations terminated while unwinding; both fixed implementations propagate
+all eleven injected failures observed on this runtime and permit subsequent
+construction/destruction. Normal pool tests and the two bounded failure modes
+are grouped in `cmake/WorkerPoolTests.cmake`. No production test hook was added.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

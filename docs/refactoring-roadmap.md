@@ -603,3 +603,28 @@ Desktop and all-target compilation passed, followed by all 381 parallel CTest
 entries in 116.54 seconds. `git diff --check` passed. Partial-launch cleanup for
 these local batches was checked by ownership review; backend concurrency and
 scanner behavior were exercised by the existing suite.
+
+## Follow-up: Persistent worker pools roll back partial construction
+
+The chart-scan scheduler and image-decode coordinator now call existing shutdown
+logic before propagating a constructor-body reserve or launch exception. Idle
+workers are stopped, notified, and joined while all captured members remain
+alive. Ordinary enqueue, prioritization, cancellation, and decode behavior is
+unchanged.
+
+The direct fault-injection target links the real implementations and replaces
+scalar allocation only in that isolated test executable. It measures successful
+construction and fails each allocation on the constructing thread in turn,
+leaving worker and cleanup allocations alone. Both old implementations terminated
+on the sweep; both fixed implementations propagate all eleven allocation failures
+observed per pool on this runtime. Fresh pools construct and destroy after every
+failure. These checks cover allocation failure, not an injected OS thread error.
+
+The existing normal tests and two failure modes are grouped in
+`cmake/WorkerPoolTests.cmake`, preserving original normal-test definitions and
+registration. Failure modes have explicit timeouts. Desktop compilation and
+independent review passed.
+
+All four focused tests passed after rebuilding the affected desktop/test
+targets. The all-target build and full parallel suite then passed all 383 tests
+in 115.13 seconds. `git diff --check` passed.

@@ -3911,15 +3911,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     get_target_property(CHART_SELECTOR_QUERY_TEST_LIBRARIES chart_repository_tests LINK_LIBRARIES)
     target_link_libraries(chart_selector_query_tests PRIVATE ${CHART_SELECTOR_QUERY_TEST_LIBRARIES})
 
-    add_executable(chart_scan_work_scheduler_tests
-        tests/chart_scan_work_scheduler_tests.cpp
-        src/ChartScanWorkScheduler.cpp
-    )
-    target_include_directories(chart_scan_work_scheduler_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(chart_scan_work_scheduler_tests PRIVATE cxx_std_23)
-
     add_executable(archive_asset_pipeline_tests
         tests/archive_asset_pipeline_tests.cpp
     )
@@ -4666,16 +4657,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(decoded_image_cache_tests PRIVATE cxx_std_23)
-
-    add_executable(image_decode_coordinator_tests
-        tests/image_decode_coordinator_tests.cpp
-        src/view/DecodedImageCache.cpp
-        src/view/ImageDecodeCoordinator.cpp
-    )
-    target_include_directories(image_decode_coordinator_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
 
     add_executable(image_file_decoder_tests
         tests/image_file_decoder_tests.cpp
@@ -7965,6 +7946,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(replay_export_job_tests PRIVATE cxx_std_23)
     asobmashow_register_test(replay_export_job_tests)
     include(cmake/UtilityTests.cmake)
+    include(cmake/WorkerPoolTests.cmake)
     include(cmake/MusicPlayerTests.cmake)
     include(cmake/ArchiveStorageTests.cmake)
     include(cmake/FindBmsTaskTests.cmake)
