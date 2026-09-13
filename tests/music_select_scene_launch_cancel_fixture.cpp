@@ -112,6 +112,7 @@ struct MusicSelectScene {
     struct { int skinPlayer2RandomOption = 0; } settings;
     Jukebox jukebox;
     SceneManager *sceneManager;
+    std::atomic_bool appInBackground = false;
   } context;
   SceneManager manager;
   std::atomic_bool launchCancelled_ = false;
@@ -234,6 +235,28 @@ void testQueuedCompletionAfterResume(bool oldSuccess) {
   audioGate.block = false;
 }
 
+void testFailedLaunchWhileBackgrounded() {
+  parseGate.block = audioGate.block = false;
+  MusicSelectScene scene;
+  scene.context.jukebox.success = false;
+  scene.launch();
+  scene.launchThread_.join();
+  scene.context.appInBackground = true;
+  scene.drain();
+  assert(!scene.launching_ && !scene.overlayVisible && scene.manager.launches == 0);
+  assert(scene.previewAudio_->resumes == 0 &&
+         "a deferred failure must preserve background audio suppression");
+
+  scene.context.appInBackground = false;
+  scene.launching_ = scene.overlayVisible = true;
+  scene.launch();
+  scene.launchThread_.join();
+  scene.drain();
+  assert(!scene.launching_ && !scene.overlayVisible && scene.manager.launches == 0);
+  assert(scene.previewAudio_->resumes == 1 &&
+         "a foreground failure must still restore selector music");
+}
+
 int main() {
   testCancellation(false);
   testCancellation(true);
@@ -242,4 +265,5 @@ int main() {
   testActiveCompletionAndFailure();
   testQueuedCompletionAfterResume(false);
   testQueuedCompletionAfterResume(true);
+  testFailedLaunchWhileBackgrounded();
 }

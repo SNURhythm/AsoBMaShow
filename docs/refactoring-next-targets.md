@@ -743,6 +743,20 @@ With about 149 MiB free, validation used these small affected targets rather
 than a full application build. This fixes the tested contract subset; it does
 not claim full standard-library conformance for the existing fallback.
 
+## 49. Preserve background silence after an uncached launch fails — completed
+
+The uncached song worker's deferred failure callback resumed selector music
+even if the application entered the background while the result was queued.
+It now checks the current background flag before resuming, matching course
+launches while still clearing the launch flag and decide overlay.
+
+The real-worker fixture reproduced the unwanted resume before the change and
+now verifies both background suppression and foreground recovery. The selector
+translation unit compiled, both complete error-flow and export/preload suites
+passed (84.44 seconds), independent review found no issues, and
+`git diff --check` passed. With disk space near 138 MiB, validation used the
+affected translation unit and suites rather than relinking the application.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

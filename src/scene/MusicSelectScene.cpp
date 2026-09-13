@@ -2382,8 +2382,11 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
             launching_ = false;
             hideDecideOverlay();
             // The launch aborted before gameplay began; lift the silence that
-            // launchSelected set so the selector's preview/BGM can play again.
-            if (previewAudio_) previewAudio_->resumeDefaultBgm();
+            // launchSelected set when the selector is still in the foreground.
+            if (previewAudio_ &&
+                !context.appInBackground.load(std::memory_order_acquire)) {
+              previewAudio_->resumeDefaultBgm();
+            }
             return true;
           });
         };

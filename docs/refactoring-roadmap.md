@@ -1215,3 +1215,15 @@ with and without the application flag,
 and `git diff --check` passed. Android execution and a full application rebuild
 were not performed; disk space was about 149 MiB. The tested subset does not
 establish full fallback conformance.
+
+## Follow-up: Keep background silence after an uncached launch failure
+
+The deferred song-launch failure now checks current application background
+state before restoring selector music, as the course path already does.
+Its regression failed on the old callback and passes with both background
+suppression and foreground recovery covered.
+
+The production selector translation unit compiled, both complete selector
+error-flow and export/preload suites passed (84.44 seconds), and independent
+review and `git diff --check` passed. Limited disk space kept validation to
+the affected translation unit and suites; no application relink was performed.
