@@ -4653,6 +4653,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(image_file_decoder_tests
         tests/image_file_decoder_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/MinizBridge.c
         src/path.cpp
         src/view/DecodedImageCache.cpp

@@ -904,3 +904,19 @@ test executable. Focused CTest and independent review passed.
 
 Desktop main and all-target builds passed, followed by all 391 tests (90.98
 seconds). `git diff --check` passed.
+
+## Follow-up: Contain image probe path preparation failures
+
+The BMS image-availability probe declared `start` as `noexcept` but constructed
+its resource path before entering the startup exception handler. Moving that
+construction inside the handler preserves the existing completed/unavailable
+failure result when path allocation fails.
+
+A regression in the image decoder runner preconstructs all arguments before
+arming the shared allocation hook. The old implementation terminated with
+uncaught `bad_alloc`; the fix completes without calling the decoder and allows
+a successful retry. Focused CTest and independent review passed. Caller-side
+argument construction remains outside the method's exception boundary.
+
+Desktop main and all-target builds passed, followed by all 391 tests (102.93
+seconds). `git diff --check` passed.

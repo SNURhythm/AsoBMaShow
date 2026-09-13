@@ -426,6 +426,18 @@ the stopped-state assertion. The regression also verifies no audio execution,
 immediate retry, duplicate-start rejection, exactly one audio commit from real
 gameplay input, and clean shutdown. Focused tests and independent review passed.
 
+## 29. Image probe path failure containment — completed
+
+The `noexcept` BMS image-availability probe now constructs its resource path
+inside the existing startup exception handler. Previously, allocation failure
+in `parent_path` or path joining could terminate the process before that handler.
+Failure now uses the established completed/unavailable result.
+
+The decoder runner preconstructs every argument, then fails the next body
+allocation through the shared test-only hook. The old implementation aborted
+with uncaught `bad_alloc`; the fixed regression checks completion without
+decoding and a successful retry. Focused CTest and independent review passed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

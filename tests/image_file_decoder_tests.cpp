@@ -1,5 +1,6 @@
 #include "view/ImageFileDecoder.h"
 #include "scene/play/GameplayBmsResourceAvailability.h"
+#include "support/AllocationFailure.h"
 
 #include <array>
 #include <atomic>
@@ -10,7 +11,9 @@
 #include <fstream>
 #include <iostream>
 #include <stop_token>
+#include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -145,6 +148,29 @@ bool waitForProbe(const gameplay::BmsResourceImageAvailabilityProbe &probe) {
   return probe.complete();
 }
 
+void testGameplayBmsResourceProbeHandlesPathAllocationFailure() {
+  bms_parser::ChartMeta meta;
+  meta.BmsPath = std::filesystem::path("charts") /
+                 std::string(128, 'a') / "chart.bms";
+  const std::filesystem::path declaredPath = "stage.png";
+  std::atomic_int decodeCalls{0};
+  const auto decode = [&](const std::filesystem::path &, std::stop_token) {
+    ++decodeCalls;
+    return true;
+  };
+  gameplay::BmsResourceImageAvailabilityProbe::Decode failedDecode = decode;
+  gameplay::BmsResourceImageAvailabilityProbe probe;
+  {
+    test_support::FailNextAllocation failure;
+    probe.start(meta, declaredPath, std::move(failedDecode));
+  }
+  expect(probe.complete() && !probe.available() && decodeCalls.load() == 0,
+         "path allocation failure completes the probe without decoding");
+  probe.start(meta, declaredPath, decode);
+  expect(waitForProbe(probe) && probe.available() && decodeCalls.load() == 1,
+         "a probe can retry after path allocation failure");
+}
+
 void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
   const auto resources = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
                          "tests/fixtures/beatoraja_skin/resources";
@@ -226,6 +252,7 @@ void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
 }
 
 int main() {
+  testGameplayBmsResourceProbeHandlesPathAllocationFailure();
   const auto resources = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
                          "tests/fixtures/beatoraja_skin/resources";
   const auto png = resources / "fixture.png";
