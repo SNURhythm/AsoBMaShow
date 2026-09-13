@@ -27,8 +27,9 @@ application thread owns visible progress and database updates.
   present the catalogue.
 - `MainMenuPreviewController.*` owns preview scheduling and deferred release;
   `ChartPreloadWorker.*` supplies the shared debounced, latest-request worker.
-- Difficulty-table import and URL completion live in `src/scene/` and the
-  repository layer.
+- `SettingsLibraryTask.*` owns the exclusive table/folder job and typed updates.
+  Difficulty-table import and URL completion retain their existing operation
+  and repository boundaries.
 
 ## Boundaries and invariants
 

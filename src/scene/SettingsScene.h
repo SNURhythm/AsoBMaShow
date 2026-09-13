@@ -7,6 +7,7 @@
 #include "ProfileSettingsController.h"
 #include "SettingsAudioVideoModel.h"
 #include "SettingsCacheMaintenance.h"
+#include "SettingsLibraryTask.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
@@ -305,7 +306,7 @@ private:
   SettingsTab activeTab = SettingsTab::Profile;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
-  std::jthread difficultyTableJobThread;
+  SettingsLibraryTask libraryTask;
   SettingsCacheMaintenance archiveCacheMaintenance;
   std::jthread profileArchiveThread;
   std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
@@ -346,23 +347,6 @@ private:
   bool profileExportStagingSwept = false;
   std::string profileCreateNameText;
   settings_scene::ProfileInlineEditorState profileInlineEditor;
-  std::atomic_bool difficultyTableJobRunning = false;
-  std::mutex difficultyTableStatusMutex;
-  bool pendingDifficultyTableStatus = false;
-  bool pendingChartFolderStatus = false;
-  bool pendingDifficultyTableReload = false;
-  bool pendingDifficultyTableImportProgress = false;
-  bool pendingDifficultyTableImportFinished = false;
-  bool pendingDifficultyTableImportSucceeded = false;
-  int pendingDifficultyTableImportCurrent = 0;
-  int pendingDifficultyTableImportTotal = 0;
-  std::string pendingDifficultyTableImportName;
-  std::string pendingDifficultyTableImportSubmittedUrl;
-  std::string pendingDifficultyTableImportStatusText;
-  std::string pendingDifficultyTableStatusText;
-  std::string pendingChartFolderStatusText;
-  SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
-  SDL_Color pendingChartFolderStatusColor{157, 177, 200, 255};
   std::string difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string chartFolderStatusMessage;
@@ -461,17 +445,6 @@ private:
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();
-  void requestDifficultyTableStatus(const std::string &text,
-                                    const SDL_Color &color,
-                                    bool reloadTables = false);
-  void requestChartFolderStatus(const std::string &text, const SDL_Color &color,
-                                bool reloadTables = false);
-  void requestDifficultyTableImportProgress(int current, int total,
-                                            const std::string &tableName,
-                                            const std::string &statusText,
-                                            bool finished,
-                                            bool succeeded,
-                                            const std::string &submittedUrl);
   void applyPendingDifficultyTableUpdates();
   void applyPendingArchiveCacheCleanupStatus();
   void refreshTablesIfLibraryChanged();

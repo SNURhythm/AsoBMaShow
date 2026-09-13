@@ -353,3 +353,32 @@ joining an operation that finishes after cancellation. Idle and previously
 joined destruction also pass. The desktop build and both Settings worker
 fixtures passed; independent review found no blocker. The preceding full-suite
 baseline was 374/374; this bounded fix adds the focused lifecycle regression.
+
+## Follow-up: Settings table/folder task ownership
+
+`SettingsLibraryTask` now owns the single table/folder worker, running state,
+and typed optional status/progress updates with accumulated reload requests.
+The scene's five operations capture repository and request data instead of the
+scene. UI messages retain their wording; colors, URL completion, modal state,
+and reload/layout work remain on the application thread after consuming data
+outside the owner mutex.
+
+The owner holds admission until work returns, joins prior completed work before
+reuse, and preserves queued completion across admission. Stop suppresses late
+updates, joins operations that cannot be interrupted, and clears queued data.
+Both explicit scene shutdown paths and owner destruction join before callback
+dependencies disappear. Importer progress callbacks are synchronous on the
+worker, so their borrowed publisher stays valid. Scanner stop tokens, iOS
+security-scoped folder handles, and delegated background rebuild are unchanged.
+
+Direct tests exercise admission, channel coalescing, reload accumulation,
+completion retention, cancellation, restart, and capture lifetime. Generated
+fixtures compile complete production scene methods with the real task and URL
+policy to check progress, success/failure, edited URLs, table update/delete
+confirmation, absent views, and application-thread delivery. The production
+destructor fixture now uses the real task. Focused tests passed, and independent
+review found no remaining behavior, lifetime, or build-wiring blocker.
+
+The desktop app and all-target builds passed, followed by all 376 parallel
+CTest entries in 102.45 seconds. `git diff --check` passed. No deployment or
+physical-device verification was performed.

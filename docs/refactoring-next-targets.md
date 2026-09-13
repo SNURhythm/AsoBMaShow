@@ -73,24 +73,44 @@ success, waiter cancellation, unlocked/reentrant checkpoints, exception
 completion, retry competition, and moved builder ownership. Existing archive
 concurrency regressions retain backend-level cancellation and promotion checks.
 
-## 4. Settings library-job ownership
+## 4. Settings library-job ownership — completed
 
-`SettingsSceneTables.cpp` runs table import/update/delete, fallback library
-rebuild, and folder removal through one scene-owned thread. Worker lambdas
-capture the scene and publish through a mutex plus parallel pending flags,
-strings, colors, and import progress fields. Both normal cleanup and direct destruction now explicitly stop/join this
-thread before its callback dependencies are destroyed. A compiled production
-destructor fixture reproduced the previous gap and checks stop signaling,
-joining an operation that finishes after cancellation, and idle/prior cleanup.
+`SettingsLibraryTask` owns the exclusive table/folder worker, running state,
+and typed table status, folder status, import progress, and accumulated reload
+requests. Its publisher is borrowed only during synchronous work. The five
+scene operations capture the externally owned repository and request values;
+workers no longer capture the scene. The scene consumes updates outside the
+owner mutex and retains colors, modal presentation, and URL completion.
 
-Then group admission, worker lifetime, and data publication in one owner while
-keeping repository/import/scanner operations and application-thread UI
-presentation distinct. Preserve exclusive job admission, uncancellable table
-operations with suppressed late results, scanner stop tokens, import URL
-completion, reload requests, and the existing delegated background rebuild
-path. Keep iOS security-scoped folder handles alive throughout fallback scans.
-The global chart-library task service has different queue/history semantics;
-do not route these jobs through it solely to reuse a worker.
+Admission remains exclusive until work returns and joins previous completed
+work before reuse. Completed updates survive a new admission until consumed,
+matching the original handoff; stop joins uncancellable operations and clears
+queued/late updates. Normal cleanup and direct destruction explicitly stop the
+owner before scene members die. Its own destructor provides a final join.
+Scanner cancellation, iOS folder-access lifetime, the delegated background
+rebuild path, and table/folder repository operations are preserved.
+
+Direct owner tests cover exclusive admission, coalesced channels, accumulated
+reload, completion retention, stop/restart, and destruction. Compiled production
+scene fixtures exercise import progress, success/failure and URL edits,
+update/delete confirmation, absent views, and application-thread delivery.
+The earlier destructor regression now uses the real owner.
+
+## 5. Main Menu Find BMS job ownership
+
+Find BMS lookup, candidate download, and pending-artifact resolution share a
+scene thread, two cancellation mechanisms, a bounded progress deque, a result
+mailbox, and running state. Normal cleanup joins that worker, while the current
+destructor joins replay/preview work only. The Find BMS state follows the thread
+in declaration order and can therefore die before implicit joining. Extend the
+existing compiled Main Menu lifecycle fixture to characterize that boundary
+and fix teardown before extracting this ownership protocol.
+
+Preserve explicit atomic cancellation for the search/download APIs, bounded
+progress history, completed-result delivery, replacement joining, and the
+uncancellable pending-artifact keep/delete transaction. Selection generation
+and chart-selection handoff are application policy and should remain outside
+the worker owner.
 
 ## What the review does not justify
 

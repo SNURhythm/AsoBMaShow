@@ -174,10 +174,7 @@ previewNoteSources(const bms_parser::Chart &chart) {
 
 SettingsScene::~SettingsScene() {
   context.profileSwitchBlockers.scene = nullptr;
-  if (difficultyTableJobThread.joinable()) {
-    difficultyTableJobThread.request_stop();
-    difficultyTableJobThread.join();
-  }
+  libraryTask.stopAndWait();
   archiveCacheMaintenance.stopAndWait();
   stopProfileArchiveWork();
   inputProfileReplacementRegistration.reset();

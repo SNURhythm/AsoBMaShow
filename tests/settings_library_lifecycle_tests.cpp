@@ -1,4 +1,4 @@
-#include "ThreadCompat.h"
+#include "scene/SettingsLibraryTask.h"
 
 #include <cassert>
 #include <chrono>
@@ -16,7 +16,7 @@ struct WorkerDependencies {
   Lifetime &lifetime;
   ~WorkerDependencies() {
     // The production status fields follow the worker in SettingsScene.h, so
-    // implicit jthread destruction cannot protect them from a late worker.
+    // The owner must still be stopped explicitly before these dependencies die.
     assert(lifetime.workerFinished.load());
     lifetime.dependenciesAlive = false;
   }
@@ -35,7 +35,7 @@ public:
     struct { SettingsScene *scene = nullptr; } profileSwitchBlockers;
   } context;
   // Match the production declaration order: worker before callback state.
-  std::jthread difficultyTableJobThread;
+  SettingsLibraryTask libraryTask;
   WorkerDependencies dependencies;
   NoopOwner archiveCacheMaintenance;
   NoopOwner inputProfileReplacementRegistration;
@@ -49,7 +49,7 @@ void testDirectDestructionJoinsBeforeCallbackDependenciesDie() {
   std::promise<void> entered, stopped, release;
   auto released = release.get_future().share();
   auto scene = std::make_unique<SettingsScene>(lifetime);
-  scene->difficultyTableJobThread = std::jthread([&](std::stop_token token) {
+  scene->libraryTask.start([&](std::stop_token token, const auto &) {
     entered.set_value();
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (!token.stop_requested() && std::chrono::steady_clock::now() < deadline) {
@@ -82,8 +82,8 @@ void testIdleAndPreviouslyJoinedDestruction() {
   Lifetime finished;
   {
     SettingsScene scene(finished);
-    scene.difficultyTableJobThread = std::jthread([&] { finished.workerFinished = true; });
-    scene.difficultyTableJobThread.join();
+    scene.libraryTask.start([&](const auto &, const auto &) { finished.workerFinished = true; });
+    scene.libraryTask.stopAndWait();
   }
   assert(!finished.dependenciesAlive);
 }

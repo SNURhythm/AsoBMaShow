@@ -174,105 +174,52 @@ void SettingsScene::toggleChartEntryICloudBackup(
 #endif
 }
 
-void SettingsScene::requestDifficultyTableStatus(const std::string &text,
-                                                 const SDL_Color &color,
-                                                 bool reloadTables) {
-  std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
-  pendingDifficultyTableStatus = true;
-  pendingDifficultyTableStatusText = text;
-  pendingDifficultyTableStatusColor = color;
-  pendingDifficultyTableReload = pendingDifficultyTableReload || reloadTables;
-}
-
-void SettingsScene::requestChartFolderStatus(const std::string &text,
-                                             const SDL_Color &color,
-                                             bool reloadTables) {
-  std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
-  pendingChartFolderStatus = true;
-  pendingChartFolderStatusText = text;
-  pendingChartFolderStatusColor = color;
-  pendingDifficultyTableReload = pendingDifficultyTableReload || reloadTables;
-}
-
-void SettingsScene::requestDifficultyTableImportProgress(
-    int current, int total, const std::string &tableName,
-    const std::string &statusText, bool finished, bool succeeded,
-    const std::string &submittedUrl) {
-  std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
-  pendingDifficultyTableImportProgress = true;
-  pendingDifficultyTableImportCurrent = current;
-  pendingDifficultyTableImportTotal = total;
-  pendingDifficultyTableImportName = tableName;
-  pendingDifficultyTableImportStatusText = statusText;
-  pendingDifficultyTableImportFinished = finished;
-  pendingDifficultyTableImportSucceeded = finished && succeeded;
-  if (finished) {
-    pendingDifficultyTableImportSubmittedUrl = submittedUrl;
-  }
-}
-
 void SettingsScene::applyPendingDifficultyTableUpdates() {
-  bool shouldReload = false;
-  bool shouldRefreshImportModal = false;
-  bool completedImportFinished = false;
-  bool completedImportSucceeded = false;
-  std::string completedImportSubmittedUrl;
-  {
-    std::lock_guard<std::mutex> lock(difficultyTableStatusMutex);
-    if (pendingDifficultyTableStatus) {
-      difficultyTableStatusMessage = pendingDifficultyTableStatusText;
-      difficultyTableStatusColor = pendingDifficultyTableStatusColor;
-      if (difficultyTableStatusText != nullptr) {
-        difficultyTableStatusText->setText(difficultyTableStatusMessage);
-        difficultyTableStatusText->setColor(difficultyTableStatusColor);
-      }
-      pendingDifficultyTableStatus = false;
+  auto pending = libraryTask.takeUpdates();
+  if (pending.tableStatus) {
+    difficultyTableStatusMessage = std::move(pending.tableStatus->text);
+    difficultyTableStatusColor = pending.tableStatus->succeeded
+                                     ? SDL_Color{181, 228, 165, 255}
+                                     : SDL_Color{255, 177, 170, 255};
+    if (difficultyTableStatusText != nullptr) {
+      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setColor(difficultyTableStatusColor);
     }
-    if (pendingChartFolderStatus) {
-      chartFolderStatusMessage = pendingChartFolderStatusText;
-      chartFolderStatusColor = pendingChartFolderStatusColor;
-      if (chartFolderStatusText != nullptr) {
-        chartFolderStatusText->setText(chartFolderStatusMessage);
-        chartFolderStatusText->setColor(chartFolderStatusColor);
-      }
-      pendingChartFolderStatus = false;
+  }
+  if (pending.folderStatus) {
+    chartFolderStatusMessage = std::move(pending.folderStatus->text);
+    chartFolderStatusColor = pending.folderStatus->succeeded
+                                ? SDL_Color{181, 228, 165, 255}
+                                : SDL_Color{255, 177, 170, 255};
+    if (chartFolderStatusText != nullptr) {
+      chartFolderStatusText->setText(chartFolderStatusMessage);
+      chartFolderStatusText->setColor(chartFolderStatusColor);
     }
-    if (pendingDifficultyTableImportProgress) {
-      difficultyTableImportCurrent = pendingDifficultyTableImportCurrent;
-      difficultyTableImportTotal = pendingDifficultyTableImportTotal;
-      difficultyTableImportName = pendingDifficultyTableImportName;
-      difficultyTableImportStatusMessage =
-          pendingDifficultyTableImportStatusText;
-      difficultyTableImportFinished = pendingDifficultyTableImportFinished;
-      difficultyTableImportSucceeded = pendingDifficultyTableImportSucceeded;
-      completedImportFinished = pendingDifficultyTableImportFinished;
-      completedImportSucceeded = pendingDifficultyTableImportSucceeded;
-      if (pendingDifficultyTableImportFinished) {
-        completedImportSubmittedUrl =
-            pendingDifficultyTableImportSubmittedUrl;
-        pendingDifficultyTableImportSubmittedUrl.clear();
-      }
-      difficultyTableImportModalVisible = true;
-      pendingDifficultyTableImportProgress = false;
-      shouldRefreshImportModal = true;
-    }
-    shouldReload = pendingDifficultyTableReload;
-    pendingDifficultyTableReload = false;
+  }
+  if (pending.importProgress) {
+    const auto &progress = *pending.importProgress;
+    difficultyTableImportCurrent = progress.current;
+    difficultyTableImportTotal = progress.total;
+    difficultyTableImportName = progress.tableName;
+    difficultyTableImportStatusMessage = progress.statusText;
+    difficultyTableImportFinished = progress.finished;
+    difficultyTableImportSucceeded = progress.succeeded;
+    difficultyTableImportModalVisible = true;
   }
 
-  if (shouldReload) {
+  if (pending.reload) {
     loadDifficultyTables();
     loadChartEntries();
     observedLibraryRevision = context.chartRepository.GetLibraryRevision();
     lastLayoutWidth = -1;
   }
-  const bool clearedUrl = settings_ui::applyDifficultyTableUrlCompletion(
-      completedImportFinished, completedImportSucceeded,
-      completedImportSubmittedUrl, tableUrlText);
-  if (clearedUrl && tableUrlInput != nullptr) {
-    tableUrlInput->setEditingText(tableUrlText);
-  }
-  if (shouldRefreshImportModal) {
+  if (pending.importProgress) {
+    const auto &progress = *pending.importProgress;
+    const bool clearedUrl = settings_ui::applyDifficultyTableUrlCompletion(
+        progress.finished, progress.succeeded, progress.submittedUrl, tableUrlText);
+    if (clearedUrl && tableUrlInput != nullptr) {
+      tableUrlInput->setEditingText(tableUrlText);
+    }
     refreshDifficultyTableImportModal();
   }
 }
@@ -364,7 +311,7 @@ void SettingsScene::refreshDifficultyTableImportModal() {
 }
 
 void SettingsScene::hideDifficultyTableImportModal() {
-  if (difficultyTableJobRunning.load() && !difficultyTableImportFinished) {
+  if (libraryTask.running() && !difficultyTableImportFinished) {
     return;
   }
   difficultyTableImportModalVisible = false;
@@ -372,7 +319,7 @@ void SettingsScene::hideDifficultyTableImportModal() {
 }
 
 void SettingsScene::addDifficultyTableFromUrl() {
-  if (difficultyTableJobRunning) {
+  if (libraryTask.running()) {
     return;
   }
 
@@ -388,11 +335,6 @@ void SettingsScene::addDifficultyTableFromUrl() {
     return;
   }
 
-  if (difficultyTableJobThread.joinable()) {
-    difficultyTableJobThread.join();
-  }
-
-  difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = "Adding table...";
@@ -410,65 +352,54 @@ void SettingsScene::addDifficultyTableFromUrl() {
   }
   refreshDifficultyTableImportModal();
 
-  difficultyTableJobThread = std::jthread([this,
-                                           url](const std::stop_token &token) {
-    auto session = context.chartRepository.OpenSession();
+  libraryTask.start([&repository = context.chartRepository, url](
+                        const std::stop_token &token,
+                        const SettingsLibraryTask::Publisher &updates) {
+    auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        difficultyTableJobRunning = false;
-        requestDifficultyTableImportProgress(
-            0, 1, url, "Could not open chart database.", true, false, url);
-        requestDifficultyTableStatus("Could not open chart database.",
-                                     {255, 177, 170, 255});
+        updates.importProgress({
+            0, 1, url, "Could not open chart database.", true, false, url});
+        updates.tableStatus("Could not open chart database.", false);
       }
       return;
     }
 
     std::string errorMessage;
     DifficultyTableImportProgress lastProgress{0, 1, url};
-    auto progressCallback = [this, &lastProgress, &token](
+    auto progressCallback = [&updates, &lastProgress, &token](
                                 const DifficultyTableImportProgress &progress) {
       if (token.stop_requested()) {
         return;
       }
       lastProgress = progress;
-      requestDifficultyTableImportProgress(
+      updates.importProgress({
           progress.current, progress.total, progress.tableName,
-          "Downloading and importing tables...", false, false, {});
+          "Downloading and importing tables...", false, false, {}});
     };
     DifficultyTableImporter importer;
     const bool imported = importer.ImportFromUrl(
         *session, url, &errorMessage, progressCallback);
 
     if (token.stop_requested()) {
-      difficultyTableJobRunning = false;
       return;
     }
 
-    difficultyTableJobRunning = false;
     const std::string finalMessage =
         imported ? (errorMessage.empty() ? "Table added." : errorMessage)
                  : (errorMessage.empty() ? "Add failed." : errorMessage);
-    requestDifficultyTableImportProgress(
+    updates.importProgress({
         lastProgress.current, lastProgress.total, lastProgress.tableName,
-        finalMessage, true, imported, url);
-    requestDifficultyTableStatus(finalMessage,
-                                 imported ? SDL_Color{181, 228, 165, 255}
-                                          : SDL_Color{255, 177, 170, 255},
-                                 imported);
+        finalMessage, true, imported, url});
+    updates.tableStatus(finalMessage, imported, imported);
   });
 }
 
 void SettingsScene::updateDifficultyTableFromSource(int tableId) {
-  if (difficultyTableJobRunning || tableId <= 0) {
+  if (libraryTask.running() || tableId <= 0) {
     return;
   }
 
-  if (difficultyTableJobThread.joinable()) {
-    difficultyTableJobThread.join();
-  }
-
-  difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
   difficultyTableStatusMessage = "Updating table...";
@@ -478,14 +409,13 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
 
-  difficultyTableJobThread = std::jthread([this, tableId](
-                                              const std::stop_token &token) {
-    auto session = context.chartRepository.OpenSession();
+  libraryTask.start([&repository = context.chartRepository, tableId](
+                        const std::stop_token &token,
+                        const SettingsLibraryTask::Publisher &updates) {
+    auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        requestDifficultyTableStatus("Could not open chart database.",
-                                     {255, 177, 170, 255});
-        difficultyTableJobRunning = false;
+        updates.tableStatus("Could not open chart database.", false);
       }
       return;
     }
@@ -496,21 +426,18 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
         importer.UpdateFromSourceUrl(*session, tableId, &errorMessage);
 
     if (token.stop_requested()) {
-      difficultyTableJobRunning = false;
       return;
     }
 
-    requestDifficultyTableStatus(
+    updates.tableStatus(
         updated ? "Table updated."
                 : (errorMessage.empty() ? "Update failed." : errorMessage),
-        updated ? SDL_Color{181, 228, 165, 255} : SDL_Color{255, 177, 170, 255},
-        updated);
-    difficultyTableJobRunning = false;
+        updated, updated);
   });
 }
 
 void SettingsScene::deleteDifficultyTable(int tableId) {
-  if (difficultyTableJobRunning || tableId <= 0) {
+  if (libraryTask.running() || tableId <= 0) {
     return;
   }
 
@@ -523,11 +450,6 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     return;
   }
 
-  if (difficultyTableJobThread.joinable()) {
-    difficultyTableJobThread.join();
-  }
-
-  difficultyTableJobRunning = true;
   pendingDeleteDifficultyTableId = 0;
   difficultyTableStatusMessage = "Deleting table...";
   difficultyTableStatusColor = {239, 244, 251, 255};
@@ -536,14 +458,13 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
 
-  difficultyTableJobThread = std::jthread([this, tableId](
-                                              const std::stop_token &token) {
-    auto session = context.chartRepository.OpenSession();
+  libraryTask.start([&repository = context.chartRepository, tableId](
+                        const std::stop_token &token,
+                        const SettingsLibraryTask::Publisher &updates) {
+    auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        requestDifficultyTableStatus("Could not open chart database.",
-                                     {255, 177, 170, 255});
-        difficultyTableJobRunning = false;
+        updates.tableStatus("Could not open chart database.", false);
       }
       return;
     }
@@ -551,25 +472,17 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     const bool deleted = session->DeleteDifficultyTable(tableId);
 
     if (token.stop_requested()) {
-      difficultyTableJobRunning = false;
       return;
     }
 
-    requestDifficultyTableStatus(deleted ? "Table deleted." : "Delete failed.",
-                                 deleted ? SDL_Color{181, 228, 165, 255}
-                                         : SDL_Color{255, 177, 170, 255},
-                                 deleted);
-    difficultyTableJobRunning = false;
+    updates.tableStatus(deleted ? "Table deleted." : "Delete failed.",
+                        deleted, deleted);
   });
 }
 
 void SettingsScene::refreshChartLibrary() {
-  if (difficultyTableJobRunning) {
+  if (libraryTask.running()) {
     return;
-  }
-
-  if (difficultyTableJobThread.joinable()) {
-    difficultyTableJobThread.join();
   }
 
   pendingDeleteDifficultyTableId = 0;
@@ -585,7 +498,6 @@ void SettingsScene::refreshChartLibrary() {
     return;
   }
 
-  difficultyTableJobRunning = true;
   chartFolderStatusMessage = "Rebuilding chart list...";
   chartFolderStatusColor = {239, 244, 251, 255};
   if (chartFolderStatusText != nullptr) {
@@ -593,14 +505,14 @@ void SettingsScene::refreshChartLibrary() {
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
-  difficultyTableJobThread =
-      std::jthread([this](const std::stop_token &token) {
-        auto session = context.chartRepository.OpenSession();
+  libraryTask.start(
+      [&repository = context.chartRepository](
+          const std::stop_token &token,
+          const SettingsLibraryTask::Publisher &updates) {
+        auto session = repository.OpenSession();
         if (!session.has_value()) {
           if (!token.stop_requested()) {
-            requestChartFolderStatus("Could not open chart database.",
-                                     {255, 177, 170, 255});
-            difficultyTableJobRunning = false;
+            updates.folderStatus("Could not open chart database.", false);
           }
           return;
         }
@@ -611,10 +523,9 @@ void SettingsScene::refreshChartLibrary() {
           std::error_code errorCode;
           if (!Utils::EnsureDirectoryExists(defaultPath, errorCode)) {
             if (!token.stop_requested()) {
-              requestChartFolderStatus("Could not create default BMS folder: " +
+              updates.folderStatus("Could not create default BMS folder: " +
                                            errorCode.message(),
-                                       {255, 177, 170, 255});
-              difficultyTableJobRunning = false;
+                                       false);
             }
             return;
           }
@@ -654,7 +565,6 @@ void SettingsScene::refreshChartLibrary() {
                        : -1);
 
         if (token.stop_requested()) {
-          difficultyTableJobRunning = false;
           return;
         }
 
@@ -670,12 +580,7 @@ void SettingsScene::refreshChartLibrary() {
           statusText = "Chart list refreshed. Updated " +
                        std::to_string(changedCount) + " chart entries.";
         }
-        requestChartFolderStatus(
-            statusText,
-            succeeded ? SDL_Color{181, 228, 165, 255}
-                      : SDL_Color{255, 177, 170, 255},
-            true);
-        difficultyTableJobRunning = false;
+        updates.folderStatus(statusText, succeeded, true);
       });
 }
 
@@ -705,7 +610,7 @@ void SettingsScene::setFindBmsDownloadEntry(
 }
 
 void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
-  if (difficultyTableJobRunning || entryPathText.empty()) {
+  if (libraryTask.running() || entryPathText.empty()) {
     return;
   }
 
@@ -730,11 +635,6 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
     return;
   }
 
-  if (difficultyTableJobThread.joinable()) {
-    difficultyTableJobThread.join();
-  }
-
-  difficultyTableJobRunning = true;
   pendingDeleteChartEntryPath.clear();
   chartFolderStatusMessage = "Removing folder...";
   chartFolderStatusColor = {239, 244, 251, 255};
@@ -743,14 +643,14 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
     chartFolderStatusText->setColor(chartFolderStatusColor);
   }
 
-  difficultyTableJobThread =
-      std::jthread([this, entryPathText](const std::stop_token &token) {
-        auto session = context.chartRepository.OpenSession();
+  libraryTask.start(
+      [&repository = context.chartRepository, entryPathText](
+          const std::stop_token &token,
+          const SettingsLibraryTask::Publisher &updates) {
+        auto session = repository.OpenSession();
         if (!session.has_value()) {
           if (!token.stop_requested()) {
-            requestChartFolderStatus("Could not open chart database.",
-                                     {255, 177, 170, 255});
-            difficultyTableJobRunning = false;
+            updates.folderStatus("Could not open chart database.", false);
           }
           return;
         }
@@ -764,12 +664,11 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
 
         if (entryIt == entries.end() || !entryIt->removable) {
           if (!token.stop_requested()) {
-            requestChartFolderStatus(
+            updates.folderStatus(
                 entryIt == entries.end()
                     ? "Folder entry was not found."
                     : "The default BMS folder is built in.",
-                                     {255, 177, 170, 255}, true);
-            difficultyTableJobRunning = false;
+                                     false, true);
           }
           return;
         }
@@ -780,7 +679,6 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
             entryPath, removedChartCount);
 
         if (token.stop_requested()) {
-          difficultyTableJobRunning = false;
           return;
         }
 
@@ -794,10 +692,7 @@ void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
         } else {
           statusText = "Remove failed.";
         }
-        requestChartFolderStatus(statusText,
-                                 removed ? SDL_Color{181, 228, 165, 255}
-                                         : SDL_Color{255, 177, 170, 255},
-                                 true);
-        difficultyTableJobRunning = false;
+        updates.folderStatus(statusText,
+                             removed, true);
       });
 }

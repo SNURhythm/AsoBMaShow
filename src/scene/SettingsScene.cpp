@@ -161,7 +161,7 @@ void SettingsScene::init() {
       return "Confirm or revert the pending display preview before switching "
              "profiles.";
     }
-    if (difficultyTableJobRunning.load(std::memory_order_acquire)) {
+    if (libraryTask.running()) {
       return "A difficulty table library update is active.";
     }
     if (archiveCacheMaintenance.running()) {
@@ -317,11 +317,7 @@ void SettingsScene::cleanupScene() {
     }
     audioVideoSession.reset();
   }
-  if (difficultyTableJobThread.joinable()) {
-    SDL_Log("Joining difficultyTableJobThread");
-    difficultyTableJobThread.request_stop();
-    difficultyTableJobThread.join();
-  }
+  libraryTask.stopAndWait();
   archiveCacheMaintenance.stopAndWait();
   pendingDeleteChartEntryPath.clear();
   difficultyTableImportModalVisible = false;

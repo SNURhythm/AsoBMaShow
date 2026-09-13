@@ -36,6 +36,7 @@ add_custom_command(
 )
 add_executable(settings_library_lifecycle_tests
     tests/settings_library_lifecycle_tests.cpp
+    src/scene/SettingsLibraryTask.cpp
     ${settings_library_lifecycle_methods}
 )
 target_include_directories(settings_library_lifecycle_tests PRIVATE
@@ -43,3 +44,25 @@ target_include_directories(settings_library_lifecycle_tests PRIVATE
 target_compile_features(settings_library_lifecycle_tests PRIVATE cxx_std_23)
 target_link_libraries(settings_library_lifecycle_tests PRIVATE Threads::Threads)
 asobmashow_register_test(settings_library_lifecycle_tests)
+
+set(settings_library_scene_methods
+    ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_library_scene_methods.inc)
+add_custom_command(
+    OUTPUT ${settings_library_scene_methods}
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/settings_library_scene_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${settings_library_scene_methods}
+    DEPENDS tests/settings_library_scene_extract.py
+            tests/gameplay_terminal_scene_extract.py src/scene/SettingsSceneTables.cpp
+    VERBATIM
+)
+add_executable(settings_library_task_tests
+    tests/settings_library_task_tests.cpp
+    ${settings_library_scene_methods}
+    src/scene/SettingsLibraryTask.cpp
+)
+target_include_directories(settings_library_task_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)
+target_compile_features(settings_library_task_tests PRIVATE cxx_std_23)
+target_link_libraries(settings_library_task_tests PRIVATE Threads::Threads)
+asobmashow_register_test(settings_library_task_tests)
