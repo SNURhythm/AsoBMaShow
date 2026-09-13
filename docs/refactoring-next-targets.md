@@ -333,6 +333,19 @@ becomes active. The old implementation failed both idle-state and late-publish
 assertions. The regression also checks capture release, no execution of failed
 work, a fresh cancellation token on retry, and exactly-once completion.
 
+## 21. Preload worker launch rollback — completed
+
+`ChartPreloadWorker::request` cancels its pending request before propagating a
+worker-launch exception. Previously, the queued chart survived without a worker
+and an identical retry returned through deduplication without launching work.
+Successful admission, debounce, and idle callbacks retain their existing order.
+
+The direct runner measures a warmed request's caller-thread allocations and
+fails the final startup allocation. The old implementation failed queued-state,
+identical-retry, and processing-count assertions. The fixed regression verifies
+no failed-work execution, pending-state release, and exactly-once processing
+after the same chart is requested again.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

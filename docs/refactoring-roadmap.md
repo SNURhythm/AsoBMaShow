@@ -765,3 +765,22 @@ ledger failure. Production policy, time budgets, and fixtures are unchanged.
 The runtime target rebuilt, and both its direct CTest case and the music-select
 ledger evidence contract passed (5.48 seconds). Independent review and
 `git diff --check` passed. Validation was scoped to these affected runners.
+
+## Follow-up: Allow identical preload retries after launch failure
+
+Preload admission stored its pending chart before starting a worker. If thread
+creation threw, the next request for that chart was discarded as a duplicate
+even though no worker existed. The request now invokes existing cancellation
+cleanup before rethrowing an `ensureWorker` exception. Successful request and
+debounce behavior is unchanged; pending idle notification follows the existing
+cancel/restart path.
+
+The direct runner warms and measures allocations on the requesting thread,
+then fails its final allocation in actual thread startup. The old source failed
+pending-state, identical-retry, and one-time-processing assertions. The fixed
+test checks exception propagation, no failed-work execution, cleared admission,
+and bounded successful processing of an identical retry. Desktop compilation,
+the focused runner, and independent review passed.
+
+The all-target build and all 391 tests passed (101.87 seconds).
+`git diff --check` passed.
