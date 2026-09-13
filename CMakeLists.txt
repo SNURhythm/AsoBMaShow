@@ -5067,6 +5067,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(text_view_font_lifetime_tests
+        tests/text_view_font_lifetime_tests.cpp
+        tests/support/AllocationFailure.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(text_view_font_lifetime_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(text_view_font_lifetime_tests PRIVATE cxx_std_23)
+    target_compile_definitions(text_view_font_lifetime_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(text_view_font_lifetime_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(checkbox_button_content_tests
         tests/checkbox_button_content_tests.cpp
         src/rendering/Color.cpp
@@ -7879,6 +7894,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         view_layout_tests
         button_enabled_tests
         text_input_box_tests
+        text_view_font_lifetime_tests
         checkbox_button_content_tests
         play_options_panel_view_tests
         replay_summary_list_view_tests
@@ -8490,6 +8506,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(TARGET skin_configuration_write_queue_tests)
         asobmashow_register_test(skin_configuration_write_queue_tests)
     endif()
+    asobmashow_register_test(text_view_font_lifetime_tests)
     asobmashow_register_test(play_option_summary_tests)
     asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)

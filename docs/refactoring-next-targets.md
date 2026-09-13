@@ -1001,6 +1001,23 @@ document this ownership requirement. Desktop and all-target builds, independent
 review, and `git diff --check` passed. All 398 CTest entries passed (97.95
 seconds). The commit remains local.
 
+## 63. Release cached text fonts without allocating lookup keys — completed
+
+TextView's font cache now uses structured path/size/style keys with borrowed
+tuple lookups. Font release no longer allocates a formatted string inside the
+view destructor. Newly opened fonts also remain in a local owner until cache
+insertion succeeds. Cache identity and SDL_ttf operation-lock ordering are
+preserved.
+
+The actual headless TextView fixture reproduced destructor termination when
+the next C++ allocation failed. It now releases both shared and final references
+under that injection, verifies surviving shared-font usability, distinguishes
+size/style variants, and returns the runtime count to zero. The focused fixture
+passed (0.55 seconds), and a native leak check reported zero leaked bytes.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 399 CTest entries passed (106.65 seconds). The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
