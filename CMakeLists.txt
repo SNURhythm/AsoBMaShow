@@ -1365,6 +1365,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(music_select_repository_projection_tests PRIVATE cxx_std_23)
         add_executable(music_select_folder_status_loader_tests
             tests/music_select_folder_status_loader_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/music_select/MusicSelectFolderStatusLoader.cpp
         )
         target_include_directories(music_select_folder_status_loader_tests PRIVATE

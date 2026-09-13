@@ -933,3 +933,24 @@ parent produced exactly one expected fixture diagnostic and exit status 1,
 without leaving roots behind. Independent review and `git diff --check` passed.
 The preceding image-probe fix established the unchanged 391-test application
 baseline.
+
+## Follow-up: Prepare folder-status ownership before admission
+
+The folder-status loader committed requested rows before allocating processor
+ownership and creating its worker. Failure could strand deduplication state or
+consume the delayed-retry state. Resource preparation now follows the duplicate
+fast return but precedes those state changes. The prepared callback is declared
+before the lock so exception unwinding unlocks before destroying its captures.
+
+The shared test-only allocation hook now supports an allocation countdown while
+preserving existing next-allocation callers. A new regression walks actual
+caller allocations, checking capture release, no failed work/results, identical
+retry, and one result/call. The existing delayed-retry test similarly verifies
+readiness survives failure and the retained row is eventually delivered once.
+The old implementation failed fresh admission and delayed readiness assertions.
+This change addresses startup preparation; it does not claim a strong exception
+guarantee for every later priority or completed-row mutation.
+
+Focused CTest, independent review, and desktop main/all-target builds passed.
+All 391 tests passed (102.78 seconds), including the existing priority/scene
+contracts and other allocation-hook consumers. `git diff --check` passed.

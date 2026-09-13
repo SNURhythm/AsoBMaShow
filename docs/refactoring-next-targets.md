@@ -450,6 +450,22 @@ Normal focused CTest passed. An intentionally long private temporary parent
 produced exactly the expected diagnostic and exit status 1, with no leftover
 fixture roots. Independent review found no issues.
 
+## 31. Prepare folder-status ownership before admission — completed
+
+The folder-status loader now prepares its shared processor and worker before
+committing deduplication state or consuming failed rows. Previously, allocation
+failure could reject an identical fresh retry or clear delayed-retry readiness.
+The duplicate-request fast path remains unchanged. Prepared callback ownership
+outlives the request lock so startup failure destroys captures after unlocking.
+
+The shared test allocation hook can now fail after a chosen number of ordinary
+caller-thread allocations; existing next-allocation users retain their behavior.
+The runner walks actual allocation points until successful admission, checking
+capture release, no failed work/results, identical retry, and one result/call.
+Its delayed-retry case also checks retained readiness and row delivery. Old-code
+runs failed both admission and retry-readiness assertions; focused tests,
+independent review, desktop builds, and all 391 tests passed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

@@ -17,20 +17,25 @@ bool MusicSelectFolderStatusLoader::request(std::vector<MusicSelectBar> bars,
   std::vector<MusicSelectBarId> rows;
   rows.reserve(bars.size());
   for (const auto &bar : bars) rows.push_back(bar.id);
+  std::shared_ptr<Processor> sharedProcess;
   std::unique_lock lock(mutex_);
   const bool sameConfiguration = modeFilter == modeFilter_ &&
                                  longNoteMode == longNoteMode_;
   const bool sameRequest = rows == rows_ && sameConfiguration;
-  if (sameRequest) {
-    if (!retryAt_ || std::chrono::steady_clock::now() < *retryAt_) {
-      auto priorityStop = prioritizeLocked(priority);
-      lock.unlock();
-      if (priorityStop) priorityStop->request_stop();
-      condition_.notify_all();
-      return false;
-    }
-    bars = std::move(failedBars_);
+  if (sameRequest &&
+      (!retryAt_ || std::chrono::steady_clock::now() < *retryAt_)) {
+    auto priorityStop = prioritizeLocked(priority);
+    lock.unlock();
+    if (priorityStop) priorityStop->request_stop();
+    condition_.notify_all();
+    return false;
   }
+  // Prepare throwing resources before committing rows used for deduplication.
+  sharedProcess = std::make_shared<Processor>(std::move(process));
+  if (!worker_.joinable()) {
+    worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
+  }
+  if (sameRequest) bars = std::move(failedBars_);
   const auto included = [&](const MusicSelectBarId &id) {
     return std::ranges::find(rows, id) != rows.end();
   };
@@ -59,11 +64,7 @@ bool MusicSelectFolderStatusLoader::request(std::vector<MusicSelectBar> bars,
   longNoteMode_ = longNoteMode;
   std::optional<Request> discarded;
   pending_.swap(discarded);
-  pending_ = Request{std::move(bars),
-                     std::make_shared<Processor>(std::move(process)), generation_};
-  if (!worker_.joinable()) {
-    worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
-  }
+  pending_ = Request{std::move(bars), std::move(sharedProcess), generation_};
   auto priorityStop = prioritizeLocked(priority);
   lock.unlock();
   if (!preserveActive) previousStop.request_stop();
