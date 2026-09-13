@@ -1238,7 +1238,8 @@ proves chart destruction after setup throws.
 Both selector suites passed (77.36 seconds), the gameplay terminal target
 rebuilt, its affected real-chart preload/DP preparation case passed, and
 independent review and `git diff --check` passed. Production syntax checking
-passed with actual compile flags. Object generation remained blocked by disk
-space and removed the old selector object; a normal build must regenerate it.
-The broader gameplay runner failed during score-schema setup with disk I/O
-error, so that runner and a complete app build are not reported as passing.
+passed with actual compile flags. After two disk-space failures, removing only
+obsolete objects absent from the current Ninja graph freed 43 MiB and allowed
+the selector object to regenerate successfully. The broader gameplay runner
+encountered database disk I/O errors on both attempts, so that runner and a
+complete app build are not reported as passing.

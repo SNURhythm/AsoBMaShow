@@ -774,11 +774,11 @@ preloaded` case passed with real charts, flip/mirror combinations, and rejection
 of a second take. Independent review and `git diff --check` passed.
 
 The production selector passed syntax checking with its actual compile flags.
-Both object-output attempts failed with `No space left on device`; the failed
-compiler removed the old selector object, which a future normal build must
-regenerate. The broader gameplay runner failed during score-schema setup with
-a disk I/O error. Disk space was roughly 122–138 MiB. No complete application
-build or broad gameplay pass is claimed for this slice.
+Two object-output attempts failed with `No space left on device`. Removing 49
+obsolete object files absent from the current Ninja graph reclaimed 43 MiB;
+the next attempt successfully regenerated the selector object. The broader
+gameplay runner encountered database disk I/O errors on both attempts, so no
+complete application build or broad gameplay pass is claimed for this slice.
 
 ## What the review does not justify
 
