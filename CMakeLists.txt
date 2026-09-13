@@ -670,6 +670,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
             src/ArchiveFile.cpp
+            src/archive/TemporaryCache.cpp
             src/MinizBridge.c
             src/audio/GameplayBgaMissStateTracker.cpp
             src/bms_parser.cpp
@@ -3014,6 +3015,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Uuid.cpp
         src/Utils.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/bms_parser.cpp
         src/MinizBridge.c
         src/repositories/ChartStorageIdentity.cpp
@@ -3815,6 +3817,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartStorageIdentity.cpp
@@ -3851,6 +3854,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/ir/IrOutboxModels.cpp
@@ -3941,6 +3945,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(archive_file_concurrency_tests
         tests/archive_file_concurrency_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4005,6 +4010,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4091,6 +4097,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4217,6 +4224,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/modern_result_recall_tests.cpp
         src/ModernResultRecallBuilder.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/ModernResult.cpp
         src/FileChecksum.cpp
@@ -4334,6 +4342,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4458,6 +4467,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/ReplayKeysoundSchedule.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/Uuid.cpp
@@ -4504,6 +4514,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/skin_sound_bundle_decode_tests.cpp
         src/audio/decoder.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/bms_parser.cpp
@@ -4527,6 +4538,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(jukebox_restore_tests
         tests/jukebox_restore_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
@@ -4878,6 +4890,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4917,6 +4930,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4948,6 +4962,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UiBatchRenderer.cpp
         src/rendering/UniformCache.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -5217,6 +5232,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -5647,6 +5663,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/FindBmsDialogPolicy.cpp
         src/scene/FindBmsProgressPresentation.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/Uuid.cpp
@@ -5787,6 +5804,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
@@ -6085,6 +6103,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
             src/ArchiveFile.cpp
+            src/archive/TemporaryCache.cpp
             src/MinizBridge.c
             src/FileChecksum.cpp
             src/Utils.cpp
@@ -6245,6 +6264,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(replay_playfield_presentation_tests
             tests/replay_playfield_presentation_tests.cpp
             src/ArchiveFile.cpp
+            src/archive/TemporaryCache.cpp
             src/AtomicFile.cpp
             src/FileChecksum.cpp
             src/MinizBridge.c
@@ -6550,6 +6570,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/settings/AudioVideoSettings.cpp
         src/AtomicFile.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/MinizBridge.c
@@ -7113,6 +7134,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -7948,6 +7970,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_export_job_tests PRIVATE cxx_std_23)
     asobmashow_register_test(replay_export_job_tests)
+    add_executable(temporary_archive_cache_tests
+        tests/temporary_archive_cache_tests.cpp
+        src/archive/TemporaryCache.cpp
+        src/path.cpp
+    )
+    target_include_directories(temporary_archive_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(temporary_archive_cache_tests PRIVATE cxx_std_23)
+    target_link_libraries(temporary_archive_cache_tests PRIVATE Threads::Threads)
+    asobmashow_register_test(temporary_archive_cache_tests)
+
     add_executable(main_menu_preview_controller_tests
         tests/main_menu_preview_controller_tests.cpp
         src/scene/MainMenuPreviewController.cpp

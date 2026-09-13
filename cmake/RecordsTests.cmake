@@ -2,6 +2,7 @@
 # each executable supplies independent repository fixtures and assertions.
 add_library(records_test_support STATIC
     src/ArchiveFile.cpp
+    src/archive/TemporaryCache.cpp
     src/AtomicFile.cpp
     src/CourseIdentity.cpp
     src/FileChecksum.cpp

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ThreadCompat.h"
+#include "archive/TemporaryCacheTypes.h"
 #include "bms_parser.hpp"
 #include "path.h"
 
@@ -158,21 +159,6 @@ struct UnzipBudget {
   std::string failureMessage;
   std::size_t concurrentArchives = 1;
   std::uint64_t admittedEntries = 0;
-};
-
-struct TemporaryCacheCleanupResult {
-  std::filesystem::path path;
-  bool cacheExisted = false;
-  std::uint64_t removedEntries = 0;
-  std::uint64_t removedBytes = 0;
-  std::uint64_t skippedEntries = 0;
-};
-
-struct TemporaryCacheUsageResult {
-  std::filesystem::path path;
-  bool cacheExisted = false;
-  std::uint64_t entries = 0;
-  std::uint64_t bytes = 0;
 };
 
 bool isArchiveSupportAvailable();

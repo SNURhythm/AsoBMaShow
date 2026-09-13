@@ -15,6 +15,8 @@ application thread owns visible progress and database updates.
   persistence.
 - `src/ChartLibraryScanner*`, `src/ChartScanWorkScheduler*`, and archive
   helpers implement bounded discovery, parsing, ordering, and cancellation.
+- `src/archive/TemporaryCache.*` owns materialized archive-media storage and
+  protected cleanup; `ArchiveFile.*` supplies the current root and identities.
 - `src/scene/MainMenuLibrary.*`, `MainMenuScene.*`, and chart-list views
   present the catalogue.
 - `MainMenuPreviewController.*` owns preview scheduling and deferred release;
@@ -40,6 +42,10 @@ work without unconditionally releasing the selected chart. Cleanup and
 destruction join replay/export preparation before preview work, while callback
 dependencies remain alive.
 
+Temporary media writes and cleanup share one mutation lock. Cleanup uses the
+current platform path normalizer to protect active top-level cache entries;
+usage measurement remains best-effort and does not block writes or cleanup.
+
 ## Verification
 
 Start with `chart_library_scanner_tests`, `chart_scan_work_scheduler_tests`,
@@ -48,6 +54,8 @@ Start with `chart_library_scanner_tests`, `chart_scan_work_scheduler_tests`,
 `chart_preload_worker_tests`, `main_menu_preview_controller_tests`, and the
 Main Menu preview/Records lifecycle fixtures. For the scheduler's detailed operating model, see
 [`src/ChartScanWorkScheduler.md`](../../src/ChartScanWorkScheduler.md).
+Temporary-media storage is covered by `temporary_archive_cache_tests` and the
+private-root integration case in `archive_file_concurrency_tests`.
 
 ## Related pages
 
