@@ -586,3 +586,20 @@ deadline for loaded hosts. Native playback/status effects use controlled doubles
 After all-target compilation, the full parallel suite passed all 381 tests in
 108.74 seconds. The review-only positive deadline adjustment was rebuilt and
 its focused test passed again. `git diff --check` passed.
+
+## Follow-up: Local archive and scanner batches own joining workers
+
+Four remaining local worker vectors now use `std::jthread`: direct ZIP reads,
+random-access RAR reads, parallel RAR5 reads, and individual-chart parsing.
+Launch loops and explicit joins are unchanged. On partial launch failure, owned
+threads now join before local captures disappear and the exception propagates.
+
+Independent review confirmed declaration order, the absence of a full-pool
+barrier, and the no-stop-token invocation under both standard and Android
+compatibility thread owners. Work assignment, cancellation, memory admission,
+and exceptions escaping worker bodies retain their existing behavior.
+
+Desktop and all-target compilation passed, followed by all 381 parallel CTest
+entries in 116.54 seconds. `git diff --check` passed. Partial-launch cleanup for
+these local batches was checked by ownership review; backend concurrency and
+scanner behavior were exercised by the existing suite.

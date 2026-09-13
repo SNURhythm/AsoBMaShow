@@ -5924,7 +5924,7 @@ bool readZipEntriesByIndexConcurrent(
   };
 
   const auto start = Clock::now();
-  std::vector<std::thread> workers;
+  std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
     workers.emplace_back(worker);
@@ -6542,7 +6542,7 @@ bool readUnarrRarEntriesByOffsetConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
-  std::vector<std::thread> workers;
+  std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
     workers.emplace_back(worker);
@@ -7624,7 +7624,7 @@ bool readSevenZipEntriesByIndexConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
-  std::vector<std::thread> workers;
+  std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
     workers.emplace_back(worker);

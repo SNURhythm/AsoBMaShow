@@ -227,6 +227,19 @@ cases cover replacement, clear, restart, expiry status, and joining a blocked
 expiry callback while keeping the timer mutex available. No additional timer
 abstraction was needed to fix the synchronization boundary.
 
+## 13. Local archive and scanner thread-batch ownership — completed
+
+The direct ZIP, random-access RAR, parallel RAR5, and individual-chart parsing
+batches now store joining thread owners. Existing launch loops, work assignment,
+cancellation checkpoints, memory budgets, and explicit joins remain intact.
+If a later thread launch throws, already-started threads finish before the
+borrowed local state is destroyed, instead of terminating during unwinding.
+
+All four vectors follow their captured state in declaration order. Their
+workers accept no stop token and need no full-pool barrier, so automatic joining
+does not add a new cancellation protocol or require every launch to succeed.
+Exceptions escaping worker callbacks retain their existing behavior.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
