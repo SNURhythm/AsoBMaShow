@@ -4310,6 +4310,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(chart_library_task_service_tests
         tests/chart_library_task_service_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/library/ChartLibraryTaskService.cpp
     )
     target_include_directories(chart_library_task_service_tests PRIVATE

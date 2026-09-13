@@ -1,9 +1,9 @@
-# Next workflow refactoring targets
+# Workflow refactoring follow-ups
 
-These are structural findings from implementation review after the initial
-roadmap's ownership slices. Completed follow-ups are marked below; remaining
-candidates describe ownership improvements rather than confirmed correctness
-defects. Preserve product behavior and choose one workflow at a time.
+These entries record completed follow-ups to the initial ownership roadmap,
+including the findings and checks behind each change. Further work should
+follow concrete ownership, state-transition, or readability problems and
+address one workflow at a time.
 
 ## 1. Settings archive-cache maintenance jobs — completed
 
@@ -27,8 +27,8 @@ measurement in private directories, failures, repeated requests, cancellation,
 restart, and destruction with work in flight. A compiled scene fixture checks
 the complete production UI methods with the real controller and cache.
 
-Pacemaker best-replay loading and archive index-build coordination are also
-completed below. Settings library-job ownership is the next recommended slice.
+Pacemaker best-replay loading, archive index-build coordination, and Settings
+library-job ownership are also completed below.
 
 ## 2. Pacemaker best-replay loading — completed
 
@@ -535,11 +535,28 @@ deliver once after same-instance retry. Focused CTest, independent review,
 desktop builds, and all 391 tests passed. This restores admission without
 rolling back repository maintenance or partial profile preparation.
 
+## 37. Commit library admission with its worker and metadata — completed
+
+Library task admission now holds the lifecycle lock through worker preparation
+and state publication, preserving lifecycle-to-state lock order. New task rows
+are rolled back if queue/token insertion fails; reserved rows are replaced only
+after queue insertion. Android tokens are consumed after successful queue or
+error publication, and final validation also checks the original reservation ID.
+Invalid/error-only calls retain their state-only paths during shutdown.
+
+Caller allocation walks reproduced duplicate work, changed reservations, and
+lost tokens in the old runner (47 failures). The fixed tests keep workers paused
+during injection, verify unchanged admission state, retry, and one matching
+worker request. They also cover error publication, invalid calls from a worker
+during shutdown, and results whose task row was trimmed. Focused CTest,
+independent review, desktop builds, and all 391 tests passed. Failed admission
+may leave an idle prepared worker.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
 already provide meaningful decoding/rendering boundaries. No replacement
 architecture is proposed. Likewise, file length alone does not justify moving
-remaining archive adapters or gameplay methods into arbitrary files. Prefer
-the ownership and state-transition improvements above, with subsystem-local
-CMake changes and the existing full-suite baseline.
+remaining archive adapters or gameplay methods into arbitrary files. Keep
+future changes tied to a specific workflow, with subsystem-local CMake changes
+and the existing full-suite baseline.

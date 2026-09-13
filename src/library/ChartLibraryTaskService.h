@@ -50,6 +50,8 @@ public:
 private:
   static bool isPauseable(TaskStatus status) noexcept;
   static bool isActive(TaskStatus status) noexcept;
+  // Requires lifecycleMutex_; admission holds it through the state commit.
+  void startWorkerLocked();
   void run(const std::stop_token &stopToken);
   bool waitForResume(std::uint64_t id, const std::stop_token &stopToken);
   void publishProgress(std::uint64_t id, const ChartScanProgress &progress,
@@ -57,6 +59,7 @@ private:
   void setTaskStateLocked(std::uint64_t id, TaskStatus status, double fraction,
                           int current, int total, std::string detail);
   TaskInfo *findTaskLocked(std::uint64_t id);
+  // Requires lifecycleMutex_ and stateMutex_, acquired in that order.
   bool enqueueReservedLocked(std::uint64_t id, TaskRequest request);
   void bumpRevisionLocked();
   void trimHistoryLocked();

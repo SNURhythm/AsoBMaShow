@@ -1040,3 +1040,25 @@ after same-instance retry. Focused CTest passed.
 Independent review, desktop main/all-target builds, and all 391 tests passed
 (109.88 seconds). `git diff --check` passed. The recovery restores admission;
 it does not roll back completed repository maintenance or partial preparation.
+
+## Follow-up: Commit library admission with its worker and metadata
+
+Library admission now serializes worker preparation and state publication with
+shutdown, always acquiring lifecycle before state. Task metadata is prepared
+before queue insertion. A provisional new row is removed if queue/token insertion
+fails; this preserves vector growth behavior. Reserved rows move into place only
+after queue insertion, and Android tokens survive failed queue/error publication.
+Android completion revalidates the reservation ID alongside token/type after
+acquiring the lifecycle lock. Invalid/error-only calls retain their state-only
+paths, and a trimmed task still consumes its token without starting a worker.
+
+The old allocation runner reported 47 failures across new/reserved admission,
+Android copy begin/finish, and copy-error publication. The fixed regressions
+keep workers paused during caller allocation injection, check unchanged visible
+admission state, and verify one matching request after retry and shutdown. Further
+cases cover rejected calls from a worker during shutdown and trimmed task rows.
+Focused CTest and independent review passed. An idle worker may remain prepared
+after admission fails; no queued work or reservation mutation is published.
+
+Desktop main/all-target builds and all 391 tests passed (109.90 seconds).
+`git diff --check` passed.
