@@ -38,7 +38,10 @@ struct ChartMetaRecord {
   bool unavailable = false;
 };
 namespace bms_parser {
-struct Chart { Metadata Meta; };
+struct Chart {
+  Metadata Meta;
+  std::shared_ptr<int> lifetime = std::make_shared<int>(0);
+};
 }
 
 WORKER_DECLARATION
@@ -64,7 +67,11 @@ struct Selections {
   int assistOption = 0;
   int ruleset = 0;
   std::string pacemakerTarget = "A";
-  static Selections fromSettings(const Settings &) { return {}; }
+  inline static int callsUntilFailure = 0;
+  static Selections fromSettings(const Settings &) {
+    if (callsUntilFailure > 0 && --callsUntilFailure == 0) throw std::bad_alloc{};
+    return {};
+  }
 };
 }
 bool preparationAvailable = true;
@@ -419,8 +426,8 @@ struct MusicSelectScene {
   void refreshRepositoryRevisions();
   void startPreloadForSelection();
   void stopPreloadWorker();
-  bool reusePreloadedChart(const ChartMetaRecord &, bms_parser::Chart *&,
-                          play_options::PlayOptionReplayInfo &, int &);
+  std::unique_ptr<bms_parser::Chart> takePreloadedChart(
+      const ChartMetaRecord &, play_options::PlayOptionReplayInfo &, int &);
   void launchChartReplayExport(const ChartMetaRecord &, const ModernChartResultRecord &,
                                ReplayVideoExportOptions);
   void launchAutoPlayExport(const ChartMetaRecord &, ReplayVideoExportOptions);
@@ -505,12 +512,12 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
     expect(!modal.exporting && !modal.progressVisible && !modal.status.empty(),
            "all outcomes must restore records UI with a result");
   }
-  bms_parser::Chart *cached = nullptr;
   play_options::PlayOptionReplayInfo playInfo;
   int lnMode = 0;
-  expect(!scene.reusePreloadedChart(record, cached, playInfo, lnMode),
+  auto cached = scene.takePreloadedChart(record, playInfo, lnMode);
+  expect(!cached,
          "next same-selection play must not skip loading BGA after export");
-  delete cached;
+  cached.reset();
   worker.stop();
   scene.stopPreloadWorker();
   holdPreload = false;
@@ -520,10 +527,10 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
   scene.startPreloadForSelection();
   while (!preloadFinished.load()) std::this_thread::yield();
   expect(scene.context.visualsLoaded.load(), "preloading must recover and restore BGA after export");
-  cached = nullptr;
-  expect(scene.reusePreloadedChart(record, cached, playInfo, lnMode),
+  cached = scene.takePreloadedChart(record, playInfo, lnMode);
+  expect(cached != nullptr,
          "fresh post-export load must become reusable");
-  delete cached;
+  cached.reset();
   scene.stopPreloadWorker();
 }
 

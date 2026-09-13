@@ -137,7 +137,7 @@ std::unique_ptr<bms_parser::Chart> PreparedViewerFixture::freshLaunchChart(bool 
 }
 '''
     selector_source = (args.root / "src/scene/MusicSelectScene.cpp").read_text()
-    flip_methods = extract(selector_source, 'bool MusicSelectScene::reusePreloadedChart(')
+    flip_methods = extract(selector_source, 'std::unique_ptr<bms_parser::Chart> MusicSelectScene::takePreloadedChart(')
     flip_methods = (flip_methods.replace('MusicSelectScene::', 'PreparedSelectorFixture::')
                    .replace('ChartMetaRecord', 'PreparationChartRecord'))
     flip_methods += '\n' + extract(result_source, 'void ResultScene::startModernCourseRetrySame()').replace(

@@ -21,8 +21,8 @@ public:
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
   play_options::PlayOptionReplayInfo lastPlayInfo;
   int lastLnMode = 0;
-  bool reusePreloadedChart(const PreparationChartRecord &, bms_parser::Chart *&,
-                          play_options::PlayOptionReplayInfo &, int &);
+  std::unique_ptr<bms_parser::Chart> takePreloadedChart(
+      const PreparationChartRecord &, play_options::PlayOptionReplayInfo &, int &);
   std::unique_ptr<bms_parser::Chart> prepareSelected(const PreparationChartRecord &);
   std::unique_ptr<bms_parser::Chart> prepareCourse(const std::shared_ptr<CoursePlaySession> &);
 };
@@ -347,13 +347,12 @@ void testActualDoublePlayFlipPreparation(std::string_view pathToTest) {
       } else if (pathToTest == "preloaded") {
         selector.preloadedChart_ = parsePreparationFixture(path);
         selector.preloadedPath_ = path;
-        bms_parser::Chart *raw = nullptr;
-        require(selector.reusePreloadedChart({.meta = original->Meta}, raw,
+        prepared = selector.takePreloadedChart({.meta = original->Meta},
+                                               selector.lastPlayInfo, selector.lastLnMode);
+        require(prepared != nullptr,
+                "GAME02 actual selector consumes a matching owned preloaded chart");
+        require(!selector.takePreloadedChart({.meta = original->Meta},
                                              selector.lastPlayInfo, selector.lastLnMode),
-                "GAME02 actual selector consumes a matching raw preloaded chart");
-        prepared.reset(raw);
-        require(!selector.reusePreloadedChart({.meta = original->Meta}, raw,
-                                              selector.lastPlayInfo, selector.lastLnMode),
                 "GAME02 consumed preloaded chart cannot be transformed or launched twice");
       } else if (pathToTest == "course" || pathToTest == "course-next" ||
                  pathToTest == "course-in-game" || pathToTest == "course-menu") {

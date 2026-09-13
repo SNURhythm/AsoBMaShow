@@ -757,6 +757,29 @@ passed (84.44 seconds), independent review found no issues, and
 `git diff --check` passed. With disk space near 138 MiB, validation used the
 affected translation unit and suites rather than relinking the application.
 
+## 50. Keep preloaded charts owned through gameplay setup — completed
+
+The old preload helper released its chart into an owning raw output pointer.
+Both callers performed further setup before adopting it, so an exception could
+leak the chart. `takePreloadedChart` now returns `unique_ptr`; immediate and
+pending launch paths retain it until moving ownership into gameplay. Cache
+identity checks, chart modifiers, long-note handling, and exception propagation
+are unchanged.
+
+A real-method regression throws during pending-launch option setup after the
+chart leaves the cache. Its lifetime check failed before the change and now
+passes. Both complete selector error-flow/export-preload suites passed (77.36
+seconds). The gameplay terminal target rebuilt, and its affected `dp-flip
+preloaded` case passed with real charts, flip/mirror combinations, and rejection
+of a second take. Independent review and `git diff --check` passed.
+
+The production selector passed syntax checking with its actual compile flags.
+Both object-output attempts failed with `No space left on device`; the failed
+compiler removed the old selector object, which a future normal build must
+regenerate. The broader gameplay runner failed during score-schema setup with
+a disk I/O error. Disk space was roughly 122–138 MiB. No complete application
+build or broad gameplay pass is claimed for this slice.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

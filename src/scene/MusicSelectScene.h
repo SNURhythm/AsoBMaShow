@@ -100,8 +100,8 @@ private:
   void stopPreloadWorker();
   void showDecideOverlay(const ChartMetaRecord &record);
   void hideDecideOverlay();
-  [[nodiscard]] bool reusePreloadedChart(
-      const ChartMetaRecord &, bms_parser::Chart *&,
+  [[nodiscard]] std::unique_ptr<bms_parser::Chart> takePreloadedChart(
+      const ChartMetaRecord &,
       play_options::PlayOptionReplayInfo &, int &lnMode);
   void launchSelectedReplay(int slot);
   void launchCourseReplay(const MusicSelectBar &, int slot,

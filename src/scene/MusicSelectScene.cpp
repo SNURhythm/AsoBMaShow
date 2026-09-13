@@ -2124,11 +2124,11 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
   const PendingPreloadLaunch pending = std::move(*pendingLaunch_);
   pendingLaunch_.reset();
   const auto &record = pending.record;
-  bms_parser::Chart *preparedChartRaw = nullptr;
   play_options::PlayOptionReplayInfo preloadedPlayInfo;
   int preloadedLnMode = 0;
-  if (!reusePreloadedChart(record, preparedChartRaw, preloadedPlayInfo,
-                          preloadedLnMode)) {
+  auto preparedChart =
+      takePreloadedChart(record, preloadedPlayInfo, preloadedLnMode);
+  if (!preparedChart) {
     // If the worker is still loading this chart, keep waiting (the decide
     // overlay stays up) instead of re-entering launchSelected, which would
     // begin a fresh startup session every frame.
@@ -2180,16 +2180,14 @@ void MusicSelectScene::tryCompletePendingPreloadLaunch() {
       .returnScene = this,
       .ruleset = selections.ruleset};
   context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, std::unique_ptr<
-                                                  bms_parser::Chart>(
-                                                  preparedChartRaw),
-                                      std::move(options)),
+      std::make_unique<GamePlayScene>(
+          context, std::move(preparedChart), std::move(options)),
       true);
   launching_ = false;
 }
 
-bool MusicSelectScene::reusePreloadedChart(
-    const ChartMetaRecord &record, bms_parser::Chart *&chart,
+std::unique_ptr<bms_parser::Chart> MusicSelectScene::takePreloadedChart(
+    const ChartMetaRecord &record,
     play_options::PlayOptionReplayInfo &playInfo, int &lnMode) {
   std::unique_ptr<bms_parser::Chart> cached;
   {
@@ -2202,7 +2200,7 @@ bool MusicSelectScene::reusePreloadedChart(
             fspath_to_path_t(record.meta.BmsPath) ||
         fspath_to_path_t(preloadedChart_->Meta.BmsPath) !=
             fspath_to_path_t(record.meta.BmsPath)) {
-      return false;
+      return nullptr;
     }
     cached = std::move(preloadedChart_);
     preloadedPath_.clear();
@@ -2215,7 +2213,7 @@ bool MusicSelectScene::reusePreloadedChart(
   if (!play_options::applyPlayOptionModifier(
           *cached, selections.playOption, std::nullopt, 0, playInfo.option,
           playInfo.seed, "music-select")) {
-    return false;
+    return nullptr;
   }
   if (cached->Meta.IsDP) {
     const auto player2 = replay::beatorajaReplayOptionName(
@@ -2223,7 +2221,7 @@ bool MusicSelectScene::reusePreloadedChart(
     if (!player2 || !play_options::applyPlayOptionModifier(
                         *cached, std::string(*player2), std::nullopt, 1,
                         playInfo.option2, playInfo.seed2, "music-select")) {
-      return false;
+      return nullptr;
     }
   }
   lnMode = normalizeChartLongNoteModeValue(record.meta.LnMode);
@@ -2231,8 +2229,7 @@ bool MusicSelectScene::reusePreloadedChart(
     lnMode = long_note_mode::valueFromId(selections.longNoteMode);
   }
   applyEffectiveLongNoteModeToChart(*cached, lnMode);
-  chart = cached.release();
-  return true;
+  return cached;
 }
 
 void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
@@ -2307,11 +2304,10 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
 
   // Reuse the background-preloaded chart (parse + jukebox already done) so
   // Start is near-instant for a chart the user had selected while browsing.
-  bms_parser::Chart *preparedChartRaw = nullptr;
   play_options::PlayOptionReplayInfo preloadedPlayInfo;
   int preloadedLnMode = 0;
-  if (reusePreloadedChart(record, preparedChartRaw, preloadedPlayInfo,
-                          preloadedLnMode)) {
+  if (auto preparedChart =
+          takePreloadedChart(record, preloadedPlayInfo, preloadedLnMode)) {
     // Stop the preload worker before gameplay starts so it cannot keep
     // touching the jukebox while GamePlayScene uses it.
     stopPreloadWorker();
@@ -2340,10 +2336,8 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
           .returnScene = this,
           .ruleset = selections.ruleset};
       context.sceneManager->changeScene(
-          std::make_unique<GamePlayScene>(context, std::unique_ptr<
-                                                  bms_parser::Chart>(
-                                                  preparedChartRaw),
-                                          std::move(options)),
+          std::make_unique<GamePlayScene>(
+              context, std::move(preparedChart), std::move(options)),
           true);
       launching_ = false;
     }

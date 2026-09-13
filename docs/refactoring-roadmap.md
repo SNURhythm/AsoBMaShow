@@ -1227,3 +1227,18 @@ The production selector translation unit compiled, both complete selector
 error-flow and export/preload suites passed (84.44 seconds), and independent
 review and `git diff --check` passed. Limited disk space kept validation to
 the affected translation unit and suites; no application relink was performed.
+
+## Follow-up: Return owned charts from preload preparation
+
+`takePreloadedChart` returns a `unique_ptr` that both launch paths keep until
+gameplay takes ownership. This removes the raw-pointer gap around later setup.
+The real pending-launch failure regression failed before the change and now
+proves chart destruction after setup throws.
+
+Both selector suites passed (77.36 seconds), the gameplay terminal target
+rebuilt, its affected real-chart preload/DP preparation case passed, and
+independent review and `git diff --check` passed. Production syntax checking
+passed with actual compile flags. Object generation remained blocked by disk
+space and removed the old selector object; a normal build must regenerate it.
+The broader gameplay runner failed during score-schema setup with disk I/O
+error, so that runner and a complete app build are not reported as passing.
