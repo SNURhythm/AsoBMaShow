@@ -466,6 +466,19 @@ Its delayed-retry case also checks retained readiness and row delivery. Old-code
 runs failed both admission and retry-readiness assertions; focused tests,
 independent review, desktop builds, and all 391 tests passed.
 
+## 32. Prepare directory workers before request ownership — completed
+
+The directory loader creates its worker before committing the pending request,
+generation, or result changes. Previously, failed thread startup retained the
+rejected callback. The worker still waits on the request lock until admission
+finishes; exception unwinding releases that lock before callback captures.
+
+A regression walks actual caller allocation failures through successful
+admission, checking capture release, no failed work/results, and an immediate
+retry that delivers one matching identity/generation and one callback call.
+The old implementation failed the capture-release assertion. Focused CTest,
+independent review, desktop builds, and all 391 tests passed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

@@ -1501,6 +1501,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(music_select_sql_songs_tests PRIVATE cxx_std_23)
         add_executable(music_select_directory_loader_tests
             tests/music_select_directory_loader_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/music_select/MusicSelectDirectoryLoader.cpp
         )
         target_include_directories(music_select_directory_loader_tests PRIVATE

@@ -20,6 +20,9 @@ std::uint64_t MusicSelectDirectoryLoader::request(MusicSelectBarId id,
   std::vector<Result> discardedResults;
   std::unique_lock lock(mutex_);
   if (stopping_) return 0;
+  if (!worker_.joinable()) {
+    worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
+  }
   auto previousStop = activeStop_;
   activeStop_ = std::stop_source{};
   const auto generation = ++generation_;
@@ -27,9 +30,6 @@ std::uint64_t MusicSelectDirectoryLoader::request(MusicSelectBarId id,
   results_.swap(discardedResults);
   pending_ = Request{std::move(id), std::move(process), generation,
                      activeStop_.get_token()};
-  if (!worker_.joinable()) {
-    worker_ = std::jthread([this](std::stop_token stop) { run(stop); });
-  }
   lock.unlock();
   previousStop.request_stop();
   condition_.notify_all();

@@ -954,3 +954,19 @@ guarantee for every later priority or completed-row mutation.
 Focused CTest, independent review, and desktop main/all-target builds passed.
 All 391 tests passed (102.78 seconds), including the existing priority/scene
 contracts and other allocation-hook consumers. `git diff --check` passed.
+
+## Follow-up: Prepare directory workers before request ownership
+
+The directory loader previously stored its pending callback before creating
+the worker, retaining captures when startup failed. Worker preparation now
+precedes request-state changes under the same lock. The worker cannot consume
+an incomplete request, and exception unwinding unlocks before capture release.
+
+The direct runner walks caller allocation points until successful admission,
+checking failed-request capture release, no work/results, and an immediate
+retry with one matching identity/generation and one callback call. The old
+implementation failed the capture-release assertion. Focused CTest and
+independent review passed.
+
+Desktop main/all-target builds and all 391 tests passed (101.55 seconds).
+`git diff --check` passed.
