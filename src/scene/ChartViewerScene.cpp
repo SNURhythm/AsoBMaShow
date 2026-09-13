@@ -2379,6 +2379,11 @@ ChartViewerScene::ChartViewerScene(
   }
 }
 
+ChartViewerScene::~ChartViewerScene() {
+  // Release listening audio before the chart and other scene members disappear.
+  cleanup();
+}
+
 void ChartViewerScene::init() {
   initView();
   parseAndRefresh(selectedRandomValues.empty()

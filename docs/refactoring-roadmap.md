@@ -506,3 +506,23 @@ independent review found no blocker.
 The full parallel suite passed all 377 tests in 106.63 seconds after rebuilding
 all targets. `git diff --check` passed. Verification remained local; archive and
 document effects in the new scene fixture use controlled test dependencies.
+
+## Follow-up: Chart Viewer destruction releases listening audio
+
+The explicit Chart Viewer destructor now calls the base cleanup-once entry
+point while derived members remain alive. Existing cleanup still stops active,
+loaded, or retained listening state before chart release. Inactive/unused
+viewers leave the shared jukebox alone; practice handoff and normal cleanup
+policy are unchanged.
+
+The generated regression compiles complete production derived/base cleanup and
+checks all eight listening-flag combinations through direct destruction, prior
+cleanup, and exception unwinding, plus unused state and deferred capture
+release. A negative control using the former default destructor fails the
+stop-before-chart-release assertion. Existing geometry checks and the new
+lifecycle target are grouped in `cmake/ChartViewerTests.cmake`. Focused tests,
+desktop compilation, and all-target compilation passed; review found no blocker.
+
+After all-target compilation, the full parallel suite passed all 378 tests in
+104.72 seconds. `git diff --check` passed. Audio/view effects in the new fixture
+are controlled doubles; no platform deployment or physical-device test ran.

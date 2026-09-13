@@ -165,18 +165,35 @@ exception paths, picker rejection, controller pipeline release, and native
 export source retention. The existing controller test target now groups these
 checks in `cmake/ProfileSettingsTests.cmake`.
 
-## 9. Chart Viewer direct-destruction audio lifetime
+## 9. Chart Viewer direct-destruction audio lifetime — completed
 
-Chart Viewer owns its chart and borrows the shared jukebox for listening. Normal
-cleanup stops active, loaded, or retained listen resources before releasing the
-chart. Its implicit destructor does not call that cleanup path. Audit direct
-destruction and initialization failure with the base cleanup guard, checking
-stop-before-chart-release and preserving inactive and already-cleaned behavior.
+The viewer's explicit destructor now calls the existing guarded cleanup before
+members disappear. Active, loaded, or retained listening state stops the shared
+jukebox before chart release. An unused/inactive viewer does not stop audio;
+normal cleanup followed by destruction does not repeat the stop.
 
-Music Player's fullscreen video also has scene-managed jukebox flags, but its
-cleanup resets global state even without acquired video resources. That needs
-a separate ownership audit before adding a destructor; do not apply the Chart
-Viewer change mechanically across all scenes.
+A compiled fixture runs the complete production destructor/cleanup and actual
+base cleanup/view disposal across every listening-flag combination, including
+direct destruction, normal cleanup, exception unwinding, and unused state.
+It checks exactly-once audio/chart/view ordering and deferred capture disposal.
+The former default-destructor negative control fails the expected lifetime
+assertion. Geometry and lifecycle targets are grouped in
+`cmake/ChartViewerTests.cmake` with existing geometry registration preserved.
+
+## 10. Music Player direct-destruction video lifetime
+
+Music Player's fullscreen video owns jukebox visuals and temporary BGA policy
+overrides. Its implicit destructor skips their explicit scene cleanup. Unlike
+Chart Viewer, normal Music Player cleanup also resets global BGA state even
+without acquired video resources. Direct destruction must therefore enter that
+cleanup only when fullscreen, loaded-video, or visual-restoration state belongs
+to this scene. An unused/already-exited scene must leave another playback
+owner's state alone.
+
+Characterize acquisition, active and partially acquired overrides, prior
+normal cleanup, fullscreen exit, and unused destruction. Reuse the existing
+cleanup path and preserve the previous visuals setting; avoid introducing
+another copy of the release sequence or invoking UI refresh during destruction.
 
 ## What the review does not justify
 
