@@ -413,6 +413,19 @@ pre-existing sentinel despite a passing runner. The fixed runner preserves that
 sentinel; three pairs of concurrent runs also passed without leftover roots.
 The rebuilt focused CTest passed, and independent review found no issues.
 
+## 28. Gameplay worker launch rollback — completed
+
+`RealtimeGameplayWorker::start` restores stopped state before propagating a
+thread-construction exception. Previously, the admission flag remained set,
+`running()` returned true without a thread, and an immediate retry was rejected.
+The failure remains an exception rather than a gameplay simulation fault.
+
+The existing runner now uses the shared test-only allocation hook to fail real
+thread startup after constructing all fixtures. The old implementation failed
+the stopped-state assertion. The regression also verifies no audio execution,
+immediate retry, duplicate-start rejection, exactly one audio commit from real
+gameplay input, and clean shutdown. Focused tests and independent review passed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

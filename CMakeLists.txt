@@ -6731,6 +6731,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(realtime_gameplay_worker_tests
         tests/realtime_gameplay_worker_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/bms_parser.cpp
         src/ScoreProvenance.cpp
         src/input/InputBindingResolver.cpp

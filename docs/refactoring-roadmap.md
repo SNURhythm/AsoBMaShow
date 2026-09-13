@@ -888,3 +888,19 @@ runs with no leftover roots. These checks use a short owned temporary parent
 to stay within the existing Unix-socket fixture's path-length limit. Focused
 CTest and independent review passed. `git diff --check` passed. The preceding
 cleanup consolidation established the unchanged 391-test application baseline.
+
+## Follow-up: Restore gameplay worker state after launch failure
+
+The gameplay worker set its admission flag before constructing its thread. A
+launch exception left `running()` true and prevented immediate retry. Startup
+now releases admission before rethrowing the original exception; normal thread
+execution and gameplay fault reporting are unchanged.
+
+A one-shot allocation failure in the existing runner reproduced the old false
+running state. The fixed regression checks exception propagation, stopped state,
+no audio or gameplay fault, immediate retry, duplicate-start rejection, one
+actual input/audio transaction, and shutdown. The hook is linked only into the
+test executable. Focused CTest and independent review passed.
+
+Desktop main and all-target builds passed, followed by all 391 tests (90.98
+seconds). `git diff --check` passed.
