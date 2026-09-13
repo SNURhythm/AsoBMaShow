@@ -27,8 +27,8 @@ measurement in private directories, failures, repeated requests, cancellation,
 restart, and destruction with work in flight. A compiled scene fixture checks
 the complete production UI methods with the real controller and cache.
 
-Pacemaker best-replay loading is also completed below. The next recommended
-slice is archive index-build coordination.
+Pacemaker best-replay loading and archive index-build coordination are also
+completed below. Settings library-job ownership is the next recommended slice.
 
 ## 2. Pacemaker best-replay loading — completed
 
@@ -53,27 +53,43 @@ executes complete production scene methods with the real task, resolver, and
 pacemaker policy, including absent chart/best state and chart replacement after
 stop. Existing resolver and shared-task tests remain intact.
 
-## 3. Archive index-build coordination
+## 3. Archive index-build coordination — completed
 
-`ArchiveFile.cpp` has four parallel maps for active/done/failed/waiter state,
-their shared mutex/condition variable, and `IndexBuildScope` for exception
-completion. `cachedIndexForArchive` interleaves that protocol with source
-identity validation, memory/disk cache lookup, and backend selection. A reader
-must track several booleans and lock transitions to understand whether a
-caller builds, waits, cancels, consumes failure, or retries a mismatched result.
+`archive_file::IndexBuildCoordinator` replaces four parallel state maps and
+`IndexBuildScope` with one active record per key and a movable builder lease.
+Abandoning the builder completes its flight with failure and wakes waiters.
+Each waiter retains the flight it joined, so a later retry cannot overwrite
+that waiter's outcome. Cancellation and checkpoint exceptions affect only
+the waiting caller; checkpoints run outside the coordinator mutex.
 
-Extract an index-build coordinator with one per-key state record and an owned
-builder completion guard. Keep cached index data, persistent storage, source
-identity checks, and backend selection outside that coordinator. Preserve
-cancelled-waiter isolation, one shared failure for current waiters, later
-request retries, live-manifest promotion, and the recheck before claiming a
-new build. The current intentionally unbounded index cache is a separate
-product/performance policy and should not change as part of this refactor.
+`ArchiveFile` retains source identity validation, memory/disk cache lookup,
+backend selection, live-manifest promotion, and retry policy. It rechecks the
+cache after admission and after waiting, including independently published
+usable data following a failed flight. Completed flights leave the admission
+map immediately; the existing index-cache retention policy is unchanged.
 
-Retain the archive concurrency regressions for waiter cancellation and live
-manifest promotion. Add compiled coordinator tests with blocked builders,
-multiple waiters, builder exceptions, cancelled waiters, and mismatched-result
-retry before removing the old maps and guard.
+Eight direct tests cover per-key admission, old-flight failure across a newer
+success, waiter cancellation, unlocked/reentrant checkpoints, exception
+completion, retry competition, and moved builder ownership. Existing archive
+concurrency regressions retain backend-level cancellation and promotion checks.
+
+## 4. Settings library-job ownership
+
+`SettingsSceneTables.cpp` runs table import/update/delete, fallback library
+rebuild, and folder removal through one scene-owned thread. Worker lambdas
+capture the scene and publish through a mutex plus parallel pending flags,
+strings, colors, and import progress fields. Normal scene cleanup joins this
+thread, but the destructor does not explicitly join it before those later
+members are destroyed. First characterize and close that teardown gap.
+
+Then group admission, worker lifetime, and data publication in one owner while
+keeping repository/import/scanner operations and application-thread UI
+presentation distinct. Preserve exclusive job admission, uncancellable table
+operations with suppressed late results, scanner stop tokens, import URL
+completion, reload requests, and the existing delegated background rebuild
+path. Keep iOS security-scoped folder handles alive throughout fallback scans.
+The global chart-library task service has different queue/history semantics;
+do not route these jobs through it solely to reuse a worker.
 
 ## What the review does not justify
 

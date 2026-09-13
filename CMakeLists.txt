@@ -672,6 +672,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp
+            src/archive/IndexBuildCoordinator.cpp
             src/MinizBridge.c
             src/audio/GameplayBgaMissStateTracker.cpp
             src/bms_parser.cpp
@@ -3018,6 +3019,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/bms_parser.cpp
         src/MinizBridge.c
         src/repositories/ChartStorageIdentity.cpp
@@ -3821,6 +3823,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartStorageIdentity.cpp
@@ -3859,6 +3862,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/ir/IrOutboxModels.cpp
@@ -3951,6 +3955,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4017,6 +4022,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4105,6 +4111,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4233,6 +4240,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/ModernResult.cpp
         src/FileChecksum.cpp
@@ -4343,6 +4351,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4469,6 +4478,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/Uuid.cpp
@@ -4517,6 +4527,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/bms_parser.cpp
@@ -4542,6 +4553,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
@@ -4895,6 +4907,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4936,6 +4949,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4969,6 +4983,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -5240,6 +5255,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -5672,6 +5688,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/Uuid.cpp
@@ -5814,6 +5831,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
@@ -6114,6 +6132,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp
+            src/archive/IndexBuildCoordinator.cpp
             src/MinizBridge.c
             src/FileChecksum.cpp
             src/Utils.cpp
@@ -6276,6 +6295,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/ArchiveFile.cpp
             src/archive/TemporaryCache.cpp
             src/archive/UnzipOutput.cpp
+            src/archive/IndexBuildCoordinator.cpp
             src/AtomicFile.cpp
             src/FileChecksum.cpp
             src/MinizBridge.c
@@ -6583,6 +6603,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/MinizBridge.c
@@ -7151,6 +7172,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp

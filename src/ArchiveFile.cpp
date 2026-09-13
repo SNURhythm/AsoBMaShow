@@ -1,6 +1,7 @@
 #include "ArchiveFile.h"
 #include "archive/TemporaryCache.h"
 #include "archive/UnzipOutput.h"
+#include "archive/IndexBuildCoordinator.h"
 #include "ArchiveSourceIdentity.h"
 #include "FileExtensionResolver.h"
 
@@ -516,50 +517,11 @@ std::filesystem::path gArchiveIndexCacheDirectory;
 // for a key, concurrent requesters wait and reuse the finished index instead
 // of rebuilding it (a large library can otherwise index the same archive from
 // the scan and the prefetch/read workers at once).
-std::mutex gIndexBuildMutex;
-std::condition_variable gIndexBuildCv;
-std::unordered_map<std::string, bool> gIndexBuildActive;
-std::unordered_map<std::string, bool> gIndexBuildDone;
-std::unordered_map<std::string, bool> gIndexBuildFailed;
-std::unordered_map<std::string, std::uint32_t> gIndexBuildWaiters;
+IndexBuildCoordinator gIndexBuilds;
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
 #endif
-
-// RAII scope for the single-flight index builder: on ANY exit from the builder
-// body (including an exception thrown by a backend) it clears the in-flight
-// flag, records the outcome, and wakes every waiter, so a failing or aborted
-// build can never leave waiters blocked on the in-flight condition variable.
-class IndexBuildScope {
-public:
-  explicit IndexBuildScope(std::string key) : key_(std::move(key)) {}
-
-  ~IndexBuildScope() {
-    if (!finished_) {
-      complete(false);
-    }
-  }
-
-  void complete(bool success) {
-    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
-    gIndexBuildActive[key_] = false;
-    gIndexBuildDone[key_] = true;
-    gIndexBuildFailed[key_] = !success;
-    gIndexBuildCv.notify_all();
-    if (gIndexBuildWaiters[key_] == 0) {
-      gIndexBuildActive.erase(key_);
-      gIndexBuildDone.erase(key_);
-      gIndexBuildFailed.erase(key_);
-      gIndexBuildWaiters.erase(key_);
-    }
-    finished_ = true;
-  }
-
-private:
-  std::string key_;
-  bool finished_ = false;
-};
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
 constexpr std::uint8_t kArchiveIndexCacheVersion = 5;
@@ -3949,77 +3911,42 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     }
   }
 
-  // Single-flight: if another thread is already building this archive's index,
-  // wait for it and reuse the result instead of rebuilding. The first caller
-  // to reach here becomes the builder.
-  for (;;) {
-    std::unique_lock<std::mutex> buildLock(gIndexBuildMutex);
-    if (!gIndexBuildActive[key]) {
-      gIndexBuildActive[key] = true;
-      gIndexBuildDone[key] = false;
-      gIndexBuildFailed[key] = false;
-      break;
-    }
-    ++gIndexBuildWaiters[key];
+  // A lease either owns the build or waits for the exact generation it joined.
+  // Cache freshness and retry decisions remain here, outside coordination locks.
+  auto buildScope = gIndexBuilds.acquire(key);
+  while (!buildScope.isBuilder()) {
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     gSingleFlightWaiterCountForTesting.fetch_add(1, std::memory_order_relaxed);
 #endif
-    bool keepGoing = true;
-    do {
-      gIndexBuildCv.wait_for(buildLock, std::chrono::milliseconds(20),
-                            [&] { return !gIndexBuildActive[key]; });
-      buildLock.unlock();
-      keepGoing = pauseIfNeeded(pauseCallback, errorMessage);
-      buildLock.lock();
-    } while (keepGoing && gIndexBuildActive[key]);
-    const bool builtOk = gIndexBuildDone[key];
-    const bool builtFailed = gIndexBuildFailed[key];
-    if (--gIndexBuildWaiters[key] == 0 && !gIndexBuildActive[key]) {
-      gIndexBuildActive.erase(key);
-      gIndexBuildDone.erase(key);
-      gIndexBuildFailed.erase(key);
-      gIndexBuildWaiters.erase(key);
-    }
-    buildLock.unlock();
-    if (!keepGoing) {
+    const auto outcome = buildScope.wait([&] {
+      return pauseIfNeeded(pauseCallback, errorMessage);
+    });
+    if (outcome == IndexBuildCoordinator::WaitOutcome::Cancelled) {
       return nullptr;
     }
-    std::lock_guard<std::mutex> cacheLock(gIndexMutex);
-    const auto cacheIt = gIndexCache.find(key);
-    if (builtOk && cacheIt != gIndexCache.end() && usableIndex(cacheIt->second)) {
-      return boundedIndex(cacheIt->second);
+    {
+      std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+      const auto current = gIndexCache.find(key);
+      if (current != gIndexCache.end() && usableIndex(current->second)) {
+        return boundedIndex(current->second);
+      }
     }
-    if (builtFailed) {
-      // The in-flight build failed (corrupt archive, backend error, or a
-      // pause abort). Report the failure to this caller instead of retrying,
-      // so N concurrent waiters do not each run a full re-index back to
-      // back. A later request can rebuild normally.
+    if (outcome == IndexBuildCoordinator::WaitOutcome::Failed) {
+      // Share a failed build with its current waiters instead of having each
+      // run a full re-index. A later independent request can rebuild normally.
       if (errorMessage != nullptr) {
         *errorMessage = "Failed to index archive: " + pathForLog(archivePath);
       }
       return nullptr;
     }
-    // Re-acquire the build lock and re-check whether another waiter has
-    // claimed the builder role while this thread inspected the cache; if so,
-    // loop back and wait on that build instead of racing into a duplicate
-    // one. Reaching the fall-through otherwise means the in-flight result did
-    // not match (e.g. a completed build that was evicted) rather than
-    // returning a mismatched index.
-    buildLock.lock();
-    if (gIndexBuildActive[key]) {
-      buildLock.unlock();
-      continue;
-    }
-    gIndexBuildActive[key] = true;
-    gIndexBuildDone[key] = false;
-    gIndexBuildFailed[key] = false;
-    break;
+    // The completed index did not satisfy this caller (for example a live
+    // source manifest is required). Recheck admission so only one waiter can
+    // own the next build; all others join it before inspecting the cache again.
+    buildScope = gIndexBuilds.acquire(key);
   }
 
-  // Guard the entire builder body below: even if make_shared, buildIndexLookups,
-  // or a backend throws, the in-flight flag is cleared and every waiter wakes
-  // with a recorded failure instead of blocking forever.
-  IndexBuildScope buildScope(key);
+  // The builder lease covers every exit below, including backend exceptions.
+  // Recheck the cache after admission before starting expensive backend work.
   std::shared_ptr<const CachedIndex> completedIndex;
   {
     std::lock_guard cacheLock(gIndexMutex);
@@ -8461,13 +8388,6 @@ void clearArchiveIndexCacheForTesting() {
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     gIndexCache.clear();
-  }
-  {
-    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
-    gIndexBuildWaiters.clear();
-    gIndexBuildActive.clear();
-    gIndexBuildDone.clear();
-    gIndexBuildFailed.clear();
   }
   setArchiveIndexCacheDirectory({});
 }

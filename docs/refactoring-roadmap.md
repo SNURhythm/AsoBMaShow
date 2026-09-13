@@ -235,7 +235,8 @@ Further candidates are documented in
 [Next workflow refactoring targets](refactoring-next-targets.md), with concrete
 ownership problems, behavior constraints, and characterization requirements.
 Settings cache-maintenance jobs and pacemaker best-replay loading are completed
-as follow-ups below. Archive index-build coordination is the next slice.
+as follow-ups below, along with archive index-build coordination. Settings
+library-job ownership is the next slice.
 
 ## Follow-up: Settings cache-maintenance ownership
 
@@ -310,3 +311,29 @@ After rebuilding all targets with that fixture correction, the full parallel
 suite passed all 373 tests in 103.40 seconds. `git diff --check` passed.
 Verification was local to the desktop build; no deployment or physical-device
 checks were run.
+
+## Follow-up: Archive index-build coordination
+
+`IndexBuildCoordinator` now owns one active build record per archive key and
+movable builder/waiter leases. Builder destruction publishes failure unless
+explicitly completed; waiters retain their original flight through later
+retries. This removes the active/done/failed/waiter map protocol from the
+archive facade and prevents a newer build from replacing an older waiter's
+outcome. Cancellation and checkpoint exceptions remain local to the waiter.
+
+The facade still validates sources and cached indexes, handles persistent
+storage and backend decoding, and decides when a successful but mismatched
+result needs another build. It rechecks usable cache data after waiting,
+including after a failed flight, and after builder admission. Live-manifest
+promotion and the current cache-retention policy are unchanged. No cache lock
+is acquired while holding the coordinator's mutex.
+
+Eight direct cases cover admission, independent keys, retained failure across
+new success, cancellation, unlocked checkpoints, builder/waiter exceptions,
+retry competition, and move/abandonment ownership. Focused coordinator and
+archive concurrency tests passed together. Independent review found no
+remaining behavior, lifetime, or build-wiring blocker.
+
+The desktop app and all-target builds passed, followed by all 374 parallel
+CTest entries in 111.83 seconds. `git diff --check` passed. No deployment or
+physical-device verification was performed.

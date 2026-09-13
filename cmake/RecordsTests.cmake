@@ -4,6 +4,7 @@ add_library(records_test_support STATIC
     src/ArchiveFile.cpp
     src/archive/TemporaryCache.cpp
     src/archive/UnzipOutput.cpp
+    src/archive/IndexBuildCoordinator.cpp
     src/AtomicFile.cpp
     src/CourseIdentity.cpp
     src/FileChecksum.cpp

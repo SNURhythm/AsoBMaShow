@@ -21,6 +21,8 @@ application thread owns visible progress and database updates.
   measurement; the scene consumes typed results and formats their presentation.
 - `src/archive/UnzipOutput.*` owns extraction budgets, bounded output buffering,
   and writer lifetime independently of backend decoding.
+- `src/archive/IndexBuildCoordinator.*` owns per-key build admission and waiter
+  outcomes; the archive facade retains cache validation and retry policy.
 - `src/scene/MainMenuLibrary.*`, `MainMenuScene.*`, and chart-list views
   present the catalogue.
 - `MainMenuPreviewController.*` owns preview scheduling and deferred release;
@@ -54,6 +56,12 @@ writers. Output streams remain owned until queued writes finish; the pipeline
 joins before its guard and cancellation dependencies are released. The archive
 workflow retains path reservations, recovery markers, and output publication.
 
+Index-build waiters retain the outcome of the build they joined even when a
+later request starts another build for the same key. Cancelling one waiter does
+not cancel the builder or other waiters. Builder abandonment publishes failure,
+and cache publication precedes successful completion. Checkpoints run outside
+the coordinator mutex; data-cache locks remain outside the coordinator.
+
 ## Verification
 
 Start with `chart_library_scanner_tests`, `chart_scan_work_scheduler_tests`,
@@ -75,3 +83,6 @@ in the archive concurrency tests.
 - [Find BMS and downloads](find-bms-and-downloads.md)
 - [Results, records, and persistence](results-records-and-persistence.md)
 - [Settings and user interface](settings-and-user-interface.md)
+
+`archive_index_build_coordinator_tests` directly covers admission, per-flight
+outcomes, cancellation, exceptions, retries, and builder ownership.

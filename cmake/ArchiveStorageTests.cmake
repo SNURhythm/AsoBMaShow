@@ -42,3 +42,12 @@ target_include_directories(settings_cache_maintenance_tests PRIVATE
 target_compile_features(settings_cache_maintenance_tests PRIVATE cxx_std_23)
 target_link_libraries(settings_cache_maintenance_tests PRIVATE Threads::Threads)
 asobmashow_register_test(settings_cache_maintenance_tests)
+
+add_executable(archive_index_build_coordinator_tests
+    tests/archive_index_build_coordinator_tests.cpp
+    src/archive/IndexBuildCoordinator.cpp
+)
+target_include_directories(archive_index_build_coordinator_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(archive_index_build_coordinator_tests PRIVATE cxx_std_23)
+target_link_libraries(archive_index_build_coordinator_tests PRIVATE Threads::Threads)
+asobmashow_register_test(archive_index_build_coordinator_tests)
