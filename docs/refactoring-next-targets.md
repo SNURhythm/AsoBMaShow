@@ -1051,14 +1051,18 @@ leaked bytes, and independent review found no issues.
 Desktop and all-target builds and `git diff --check` passed. All 399 CTest
 entries passed (99.84 seconds). The commit remains local.
 
-## Remaining optional cleanup
+## 66. Share the bounded memory-audio decoder — completed
 
-The bounded memory-audio decoder can serve the unbounded entry point and the
-archive branch, replacing their duplicate virtual-I/O setup. This is a small
-consolidation candidate, not an unfinished item from the original roadmap.
-Further large structural changes need a concrete maintenance or runtime problem
-to justify them; the recent follow-ups have mostly addressed failure-path
-ownership and recovery.
+The unbounded memory entry point and the archive branch now delegate to the
+existing bounded memory decoder. This removes two copies of virtual-I/O setup
+and file opening, keeping one implementation for memory-backed audio. Encoded
+archive limits, PCM limits, cancellation, and synchronous resource lifetime
+remain unchanged.
+
+The desktop app and both affected native test targets built successfully.
+The existing bundle/file/archive decode and chart-audio rendering tests passed
+(2.36 seconds), including size-limit and cancellation coverage. Independent
+review and `git diff --check` passed. The commit remains local.
 
 ## What the review does not justify
 

@@ -200,22 +200,9 @@ bool decodeAudioBytesToPCM(const path_t &displayPath,
                            const std::vector<unsigned char> &bytes,
                            std::vector<short> &buffer, SF_INFO &fileInfo,
                            std::atomic<bool> &isCancelled) {
-  fileInfo = {};
-  MemoryAudioFile memoryFile{
-      .data = bytes.data(),
-      .size = static_cast<sf_count_t>(bytes.size()),
-      .offset = 0,
-  };
-  SF_VIRTUAL_IO io{
-      .get_filelen = memoryFileLength,
-      .seek = memoryFileSeek,
-      .read = memoryFileRead,
-      .write = memoryFileWrite,
-      .tell = memoryFileTell,
-  };
-  SNDFILE *file = sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile);
-  return decodeAudioFile(file, displayPath, buffer, fileInfo, isCancelled,
-                         std::numeric_limits<std::size_t>::max());
+  return decodeAudioBytesToPCMBounded(
+      displayPath, bytes, buffer, fileInfo, isCancelled,
+      std::numeric_limits<std::size_t>::max());
 }
 
 bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
@@ -314,21 +301,8 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
               path_t_to_utf8(filePath).c_str(), errorMessage.c_str());
       return false;
     }
-    MemoryAudioFile memoryFile{
-        .data = bytes.data(),
-        .size = static_cast<sf_count_t>(bytes.size()),
-        .offset = 0,
-    };
-    SF_VIRTUAL_IO io{
-        .get_filelen = memoryFileLength,
-        .seek = memoryFileSeek,
-        .read = memoryFileRead,
-        .write = memoryFileWrite,
-        .tell = memoryFileTell,
-    };
-    SNDFILE *file = sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile);
-    return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
-                           limits.maximumPcmSamples);
+    return decodeAudioBytesToPCMBounded(filePath, bytes, buffer, fileInfo,
+                                        isCancelled, limits.maximumPcmSamples);
   }
 
   const auto resolvedPath = resolveAudioFilePath(fsPath);

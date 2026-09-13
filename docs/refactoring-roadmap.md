@@ -1420,3 +1420,12 @@ unrelated trees now pass. Native leak detection reported zero leaked bytes.
 
 Desktop and all-target builds, independent review, and `git diff --check` passed.
 All 399 CTest entries passed (99.84 seconds). The verified commit remains local.
+
+## Follow-up: Share memory-audio decoding setup
+
+Unbounded byte decoding and archived audio now call the existing bounded
+memory decoder, removing duplicate virtual-I/O setup without changing limits
+or cancellation behavior. The desktop app and both affected test targets
+built, and the bundle/file/archive decode and chart-audio rendering tests
+passed (2.36 seconds). Independent review and `git diff --check` passed.
+The verified commit remains local.
