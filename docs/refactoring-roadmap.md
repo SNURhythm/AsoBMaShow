@@ -713,3 +713,23 @@ old play-skin test snapshots were not removed from the system temporary folder.
 After removing only stale generated fixtures, the unchanged full suite passed
 all 391 tests in 102.00 seconds. `git diff --check` passed. Fixture cleanup is a
 separate follow-up.
+
+## Follow-up: Remove read-only play-skin test snapshots
+
+The full-suite disk failure exposed a fixture lifecycle defect: the play-skin
+session runner ignored `remove_all` errors beneath immutable snapshot roots.
+Its temporary owner now grants owner permissions to directories before descent,
+adds file write permission on Windows, and reports traversal/removal failures.
+It uses non-following status and traversal so external symlink targets retain
+their permissions and data.
+
+A regression in the existing runner creates nested read-only directories and
+a read-only file, verifies destruction removes the owned root, and on POSIX
+checks an external symlink target before its separate owner cleans it up.
+The actual old destructor failed the root-removal assertion; the fixed runner
+passed. Independent review found no issues. Windows file handling follows the
+snapshot writer's attribute policy but was not executed on this macOS host.
+
+The all-target build and all 391 tests passed (97.34 seconds). Comparing the
+runner's temporary-directory prefix before and after the full suite found zero
+new leftover fixtures. `git diff --check` passed.

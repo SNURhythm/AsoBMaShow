@@ -311,6 +311,16 @@ atomics, verifying first-result retention, one-time consumption, and reopening
 admission. All six old-code modes failed their intended assertions; the fixed
 modes pass. These are local branch tests, not native dialog/device execution.
 
+## 19. Play-skin snapshot fixture cleanup — completed
+
+The session runner's temporary-directory owner now restores permissions before
+removing immutable snapshots and reports cleanup failures. Traversal inspects
+entries without following symlinks; Windows regular files also regain write
+permission. A same-runner regression verifies nested read-only removal and,
+on POSIX, preservation of an external symlink target's contents and permissions.
+The old destructor failed the removal assertion. Production snapshot policy
+and other test fixtures are unchanged.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
