@@ -9,12 +9,15 @@ void ReplayRecordTask::start(Work work) {
     worker_.join();
   }
   auto cancelled = std::make_shared<std::atomic_bool>(false);
+  Completion discarded;
   {
     std::lock_guard<std::mutex> lock(completionMutex_);
-    pendingCompletion_ = {};
+    discarded.swap(pendingCompletion_);
     completionPublished_ = false;
     cancelled_ = cancelled;
   }
+  // Release old captures before replacement work can publish a newer result.
+  discarded = {};
   active_.store(true, std::memory_order_release);
   try {
     worker_ = std::jthread(
@@ -41,7 +44,8 @@ void ReplayRecordTask::publish(Completion completion) {
   if (cancelled_ == nullptr || cancelled_->load()) {
     return;
   }
-  pendingCompletion_ = std::move(completion);
+  // The parameter retains the old completion until this lock has been released.
+  pendingCompletion_.swap(completion);
   completionPublished_ = true;
 }
 
@@ -49,8 +53,7 @@ ReplayRecordTask::Completion ReplayRecordTask::takeCompletion() {
   Completion completion;
   {
     std::lock_guard<std::mutex> lock(completionMutex_);
-    completion = std::move(pendingCompletion_);
-    pendingCompletion_ = {};
+    completion.swap(pendingCompletion_);
   }
   if (!completion) {
     return {};
@@ -74,8 +77,11 @@ void ReplayRecordTask::cancelAndWait() {
     worker_.join();
   }
   active_.store(false, std::memory_order_release);
-  std::lock_guard<std::mutex> lock(completionMutex_);
-  pendingCompletion_ = {};
+  Completion discarded;
+  {
+    std::lock_guard<std::mutex> lock(completionMutex_);
+    discarded.swap(pendingCompletion_);
+  }
 }
 
 bool ReplayRecordTask::active() const noexcept {

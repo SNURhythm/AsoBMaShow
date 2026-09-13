@@ -222,6 +222,80 @@ void testRestartReplacesOldCompletionAndCancellationAuthority() {
   expect(chosen == 4, "a new start delivers results after cancellation");
 }
 
+void testDiscardedCapturesAreDestroyedOutsideTheMailboxLock() {
+  enum class Discard { Cancel, Restart, Replace };
+  for (const auto action : {Discard::Cancel, Discard::Restart, Discard::Replace}) {
+    ReplayRecordTask task;
+    std::binary_semaphore queued{0}, replace{0}, replacementQueued{0};
+    std::binary_semaphore destroying{0}, publicationReturned{0};
+    std::atomic_bool mailboxUnlocked = false, captureDestroyed = false;
+    std::atomic_bool replacementSawCleanup = false;
+    int discardedCalls = 0, chosen = 0;
+    struct Capture {
+      std::binary_semaphore &destroying, &publicationReturned;
+      std::atomic_bool &mailboxUnlocked, &captureDestroyed;
+      ~Capture() {
+        // An external worker publishes during capture cleanup. A bounded wait
+        // detects a held mailbox lock without hanging the regression runner.
+        destroying.release();
+        mailboxUnlocked = publicationReturned.try_acquire_for(std::chrono::seconds(2));
+        captureDestroyed = true;
+      }
+    };
+    std::jthread observer([&] {
+      destroying.acquire();
+      task.publish([&] { chosen = 3; });
+      publicationReturned.release();
+    });
+    auto capture = std::make_shared<Capture>(destroying, publicationReturned,
+                                             mailboxUnlocked, captureDestroyed);
+    task.start([&, capture](std::shared_ptr<std::atomic_bool>) mutable {
+      task.publish([capture = std::move(capture), &discardedCalls] { ++discardedCalls; });
+      queued.release();
+      if (action == Discard::Replace) {
+        replace.acquire();
+        task.publish([&] { chosen = 2; });
+        replacementQueued.release();
+      }
+    });
+    queued.acquire();
+    capture.reset();
+    if (action == Discard::Cancel) {
+      task.cancelAndWait();
+    } else if (action == Discard::Restart) {
+      task.start([&](std::shared_ptr<std::atomic_bool>) {
+        replacementSawCleanup = captureDestroyed.load();
+        replace.acquire();
+        task.publish([&] { chosen = 2; });
+        replacementQueued.release();
+      });
+    } else {
+      replace.release();
+      replacementQueued.acquire();
+    }
+    observer.join();
+    expect(mailboxUnlocked,
+           "discarded completion capture cleanup must run outside the mailbox lock");
+    if (action == Discard::Restart) {
+      replace.release();
+      replacementQueued.acquire();
+      expect(replacementSawCleanup,
+             "restart releases old completion captures before new work begins");
+    }
+    auto completion = task.takeCompletion();
+    if (completion) completion();
+    expect(discardedCalls == 0, "discarding completion ownership never invokes the old action");
+    if (action == Discard::Cancel) {
+      expect(!completion && chosen == 0 && !task.active(),
+             "cancellation still rejects publication during capture cleanup");
+    } else {
+      expect(completion && chosen == (action == Discard::Restart ? 2 : 3),
+             "the latest accepted publication survives capture cleanup");
+    }
+    task.cancelAndWait();
+  }
+}
+
 void testDestructionCancelsBeforeReleasingWorkerAndMailboxStorage() {
   std::binary_semaphore entered{0};
   std::atomic_bool workerExited = false;
@@ -253,6 +327,7 @@ int main() {
   testPreparationCanCancelWithoutPublishingAResult();
   testCancellationDiscardsQueuedAndLateCompletions();
   testRestartReplacesOldCompletionAndCancellationAuthority();
+  testDiscardedCapturesAreDestroyedOutsideTheMailboxLock();
   testDestructionCancelsBeforeReleasingWorkerAndMailboxStorage();
   return failures == 0 ? 0 : 1;
 }

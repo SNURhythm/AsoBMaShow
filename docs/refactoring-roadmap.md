@@ -1287,3 +1287,15 @@ to earlier preparation or exceptions inside an admitted worker.
 All targets rebuilt. The two complete selector suites passed (78.82 seconds),
 followed by the remaining 394 CTest entries (54.58 seconds), giving current
 coverage of all 396 entries. `git diff --check` passed; the commit stays local.
+
+## Follow-up: Release replay completion captures outside the mailbox lock
+
+The shared replay preparation task now releases discarded callback ownership
+after unlocking. Restart releases old captures before creating the next worker;
+cancellation still rejects publication during cleanup, and replacement retains
+the latest accepted result. A three-path resource-destructor probe failed on
+the old mutex contention and now passes (0.49 seconds), including restart
+ordering. Desktop compilation and independent review passed.
+
+All test targets rebuilt and all 396 CTest entries passed (101.73 seconds).
+`git diff --check` passed. The verified commit remains local.

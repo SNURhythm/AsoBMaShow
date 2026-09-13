@@ -839,6 +839,29 @@ complete selector suites passed (78.82 seconds); the remaining 394 CTest cases
 passed separately (54.58 seconds), covering all 396 entries without repeating
 the selector runs. The commit remains local.
 
+## 54. Release discarded replay completions outside the mailbox mutex — completed
+
+`ReplayRecordTask` previously released queued callback captures while holding
+its completion mutex during cancellation, restart, and replacement. A captured
+resource's destructor could wait for another worker to publish, which needed
+the same mutex. The task now swaps discarded completion ownership out under
+lock and releases it after unlocking. Restart completes that cleanup before
+launching replacement work; delivery swaps into an empty local owner before
+joining the worker.
+
+A real-controller regression exercises all three discard paths. Its bounded
+capture destructor waits for an observing worker's public `publish` call, so
+the old code fails without hanging the runner. The fixed test verifies unlocked
+cleanup, restart ordering, rejection after cancellation, and retention of the
+latest accepted callback. Cancellation flags, joins, and exactly-once terminal
+notification policy are unchanged. The contract concerns released ownership;
+it does not promise that arbitrary callable special members never execute
+while `std::function` swaps its targets.
+
+The focused runner passed (0.49 seconds), the desktop app and all test targets
+built, and all 396 CTest entries passed (101.73 seconds). Independent review
+and `git diff --check` passed. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

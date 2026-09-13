@@ -11,6 +11,7 @@
 // Owns one replay/Records preparation worker and its deferred scene completion.
 // start, takeCompletion, cancelAndWait, and destruction belong to the scene
 // thread. Work may call publish, but must handle its action-specific failures.
+// Discarded completion ownership is released outside the mailbox mutex.
 class ReplayRecordTask final {
 public:
   using Work = std::function<void(std::shared_ptr<std::atomic_bool>)>;
