@@ -383,6 +383,17 @@ regression continues to cover nested read-only trees and external symlinks.
 Both focused runners left zero new fixture directories, and default/cold/warm,
 invalid-argument, and missing-input CLI checks preserved their output/status.
 
+## 25. Skin lifecycle/settings/commit fixture cleanup — completed
+
+Four passing runners still left 51 immutable fixture roots behind per isolated
+group run: lifecycle (30), settings (13), commit coordination (7), and package
+operations (1). Their temporary owners now use `ReadOnlyTreeCleanup` and their
+existing failure-reporting mechanisms. Resource destruction and death-test
+parent ownership remain intact; cleanup finishes before final test reporting.
+The corrected focused group passed with zero new directories for all four
+prefixes. Global and skin-specific test helper namespaces are explicit where
+both occur in one runner.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

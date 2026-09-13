@@ -843,3 +843,20 @@ tests the shared cleanup through its real temporary owner.
 The all-target build and all 391 tests passed (101.40 seconds). The full run
 left zero new directories under either tracked fixture prefix.
 `git diff --check` passed.
+
+## Follow-up: Clean immutable lifecycle and settings test roots
+
+Lifecycle, settings, commit-coordination, and package-operation tests passed
+while leaving 30, 13, 7, and 1 temporary roots behind respectively. Their
+temporary owners now share the established read-only cleanup and report errors
+through their existing runner mechanisms. Dependency teardown precedes cleanup,
+including parent-owned fixtures in the commit coordinator's fork/death tests.
+All cleanup completes before each runner evaluates its final status.
+
+The four rebuilt focused runners passed with zero new directories under their
+tracked prefixes. Review confirmed ownership/reporting order. Explicit namespace
+qualification distinguishes the general helper from skin-specific test fakes.
+
+The all-target build and all 391 tests passed (102.11 seconds). The full run
+left zero new directories under all four tracked prefixes.
+`git diff --check` passed.

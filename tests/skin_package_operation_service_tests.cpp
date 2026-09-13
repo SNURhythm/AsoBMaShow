@@ -1,4 +1,5 @@
 #include "skin/package/SkinPackageOperationService.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -57,8 +58,10 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::remove_all(root_, ignored);
+    const auto error = ::test_support::removeReadOnlyTree(root_);
+    if (error) {
+      expect(false, "operation fixture cleanup failed: " + error.message());
+    }
   }
 
   const fs::path &root() const noexcept { return root_; }
