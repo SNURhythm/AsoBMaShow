@@ -303,6 +303,7 @@ private:
   // playthread lock
   std::mutex playThreadLock;
   JukeboxSchedulerWake schedulerWake;
+  void runVisualScheduler();
   void loadSounds(bms_parser::Chart &chart,
                   const ChartResourceTable &wavTable,
                   std::atomic_bool &isCancelled);
@@ -414,6 +415,7 @@ private:
   BgaRect calculateBgaRect(int sourceWidth, int sourceHeight) const;
   std::atomic_bool isPlaying = false;
   std::atomic_bool schedulerActive = false;
+  std::atomic_bool schedulerStarting = false;
   std::thread playThread;
   Stopwatch *stopwatch;
   AudioWrapper audio;

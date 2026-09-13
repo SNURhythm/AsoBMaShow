@@ -3756,6 +3756,15 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
                              return event.first < targetMicros;
                            }))),
   };
+  // Thread allocation must succeed before starting the audio device. The
+  // worker cannot schedule until playback initialization has left this scope.
+  schedulerStarting.store(true, std::memory_order_release);
+  ScopeExit releaseScheduler([this] {
+    schedulerStarting.store(false, std::memory_order_release);
+    wakeScheduler();
+  });
+  playThread = std::thread(&Jukebox::runVisualScheduler, this);
+
   const auto started = jukebox_lifecycle::StartPlayback(
       audio, "Jukebox::play", lifecycleState, target,
       [this, firstAudio = target.audio] {
@@ -3785,135 +3794,152 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
   }
   SDL_Log("Jukebox visual scheduler is event-driven");
 
-  playThread = std::thread([this] {
-#ifdef _WIN32
-    // Set thread priority using MMCS for audio playback
-    HANDLE taskHandle = nullptr;
-    DWORD taskIndex = 0;
-    taskHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
-    if (taskHandle) {
-      // Set thread priority to high
-      AvSetMmThreadPriority(taskHandle, AVRT_PRIORITY_CRITICAL);
+  return {.success = true};
+}
+
+void Jukebox::runVisualScheduler() {
+  // StartPlayback can notify before its caller releases the startup gate.
+  // Recheck the gate after every notification before reading committed state.
+  for (;;) {
+    const auto generation = schedulerWake.capture();
+    if (!schedulerStarting.load(std::memory_order_acquire)) {
+      break;
     }
-    timeBeginPeriod(1);
+    schedulerWake.waitFor(
+        generation, std::chrono::microseconds(kSchedulerMaxIdleSleepMicros),
+        [this] { return !schedulerStarting.load(std::memory_order_acquire); });
+  }
+  if (!schedulerActive.load(std::memory_order_acquire)) {
+    return;
+  }
+
+#ifdef _WIN32
+  // Set thread priority using MMCS for audio playback
+  HANDLE taskHandle = nullptr;
+  DWORD taskIndex = 0;
+  taskHandle = AvSetMmThreadCharacteristicsW(L"Pro Audio", &taskIndex);
+  if (taskHandle) {
+    // Set thread priority to high
+    AvSetMmThreadPriority(taskHandle, AVRT_PRIORITY_CRITICAL);
+  }
+  timeBeginPeriod(1);
 #endif
-    using Clock = std::chrono::steady_clock;
-    auto prevTimestamp = Clock::now();
-    auto lifecycleState = makeLifecycleState();
-    while (schedulerActive.load(std::memory_order_acquire)) {
-      const auto wakeGeneration = schedulerWake.capture();
-      if (!isPlaying.load(std::memory_order_acquire) ||
-          !stopwatch->isRunning()) {
-        schedulerWake.waitFor(
-            wakeGeneration,
-            std::chrono::microseconds(kSchedulerMaxIdleSleepMicros),
-            [this] {
-              // End the idle sleep when the scheduler is told to stop (so a
-              // play/load join exits promptly) or playback resumes.
-              return !schedulerActive.load(std::memory_order_acquire) ||
-                     (isPlaying.load(std::memory_order_acquire) &&
-                      stopwatch->isRunning());
-            });
+  using Clock = std::chrono::steady_clock;
+  auto prevTimestamp = Clock::now();
+  auto lifecycleState = makeLifecycleState();
+  while (schedulerActive.load(std::memory_order_acquire)) {
+    const auto wakeGeneration = schedulerWake.capture();
+    if (!isPlaying.load(std::memory_order_acquire) ||
+        !stopwatch->isRunning()) {
+      schedulerWake.waitFor(
+          wakeGeneration,
+          std::chrono::microseconds(kSchedulerMaxIdleSleepMicros),
+          [this] {
+            // End the idle sleep when the scheduler is told to stop (so a
+            // play/load join exits promptly) or playback resumes.
+            return !schedulerActive.load(std::memory_order_acquire) ||
+                   (isPlaying.load(std::memory_order_acquire) &&
+                    stopwatch->isRunning());
+          });
+      prevTimestamp = Clock::now();
+      continue;
+    }
+
+    long long nextWakeMicros = std::numeric_limits<long long>::max();
+    {
+      // Keep scheduling state consistent with seek/reset.
+      std::lock_guard<std::mutex> lock(seekLock);
+      if (!jukebox_lifecycle::CanAdvanceSchedulerLocked(lifecycleState)) {
         prevTimestamp = Clock::now();
         continue;
       }
+      const long long positionMicro = audio.getTimeMicros();
+      const long long bgaPositionMicro = getBgaTimelineMicros(positionMicro);
+      stopwatch->seek(bgaPositionMicro);
+      auto scheduleNextWake = [&](long long targetMicros) {
+        nextWakeMicros =
+            std::min(nextWakeMicros, std::max(targetMicros, positionMicro));
+      };
 
-      long long nextWakeMicros = std::numeric_limits<long long>::max();
-      {
-        // Keep scheduling state consistent with seek/reset.
-        std::lock_guard<std::mutex> lock(seekLock);
-        if (!jukebox_lifecycle::CanAdvanceSchedulerLocked(lifecycleState)) {
-          prevTimestamp = Clock::now();
-          continue;
-        }
-        const long long positionMicro = audio.getTimeMicros();
-        const long long bgaPositionMicro = getBgaTimelineMicros(positionMicro);
-        stopwatch->seek(bgaPositionMicro);
-        auto scheduleNextWake = [&](long long targetMicros) {
-          nextWakeMicros =
-              std::min(nextWakeMicros, std::max(targetMicros, positionMicro));
-        };
-
-        if (onTickCb) {
-          onTickCb(positionMicro);
-          scheduleNextWake(positionMicro + kSchedulerTickMicros);
-        }
-
-        const bool shouldAdvanceVisuals =
-            visualsEnabled.load(std::memory_order_relaxed) &&
-            !visualsSuspended.load(std::memory_order_acquire);
-        if (shouldAdvanceVisuals) {
-          while (bmpCursor < bmpList.size()) {
-            auto &target = bmpList[bmpCursor];
-            if (bgaPositionMicro < target.first) {
-              break;
-            }
-            if (activateVisualAt(target.second, rendering::bga_view, 0)) {
-              currentBga.store(target.second, std::memory_order_relaxed);
-            }
-            bmpCursor++;
-          }
-          if (bmpCursor < bmpList.size()) {
-            scheduleNextWake(
-                getRawSongMicrosForBgaTarget(bmpList[bmpCursor].first));
-          }
-          while (bmpLayerCursor < bmpLayerList.size()) {
-            auto &target = bmpLayerList[bmpLayerCursor];
-            if (bgaPositionMicro < target.first) {
-              break;
-            }
-            if (activateVisualAt(target.second, rendering::bga_layer_view, 0)) {
-              currentBmpLayer.store(target.second, std::memory_order_relaxed);
-            }
-            bmpLayerCursor++;
-          }
-          if (bmpLayerCursor < bmpLayerList.size()) {
-            scheduleNextWake(getRawSongMicrosForBgaTarget(
-                bmpLayerList[bmpLayerCursor].first));
-          }
-        }
+      if (onTickCb) {
+        onTickCb(positionMicro);
+        scheduleNextWake(positionMicro + kSchedulerTickMicros);
       }
 
-      auto currentTimestamp = Clock::now();
-      size_t idx =
-          performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
-      const auto deltaMicros =
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              currentTimestamp - prevTimestamp)
-              .count();
-      performanceAnalytics.loopDeltaTimes[idx].store(
-          static_cast<uint32_t>(deltaMicros), std::memory_order_relaxed);
-      size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
-      performanceAnalytics.loopDeltaIndex.store(newIdx,
-                                                std::memory_order_relaxed);
-      prevTimestamp = currentTimestamp;
-
-      long long sleepMicros = kSchedulerMaxIdleSleepMicros;
-      if (nextWakeMicros != std::numeric_limits<long long>::max()) {
-        const long long currentSongMicros = audio.getTimeMicros();
-        const long long untilNextMicros = nextWakeMicros - currentSongMicros;
-        if (untilNextMicros <= 0) {
-          std::this_thread::yield();
-          continue;
+      const bool shouldAdvanceVisuals =
+          visualsEnabled.load(std::memory_order_relaxed) &&
+          !visualsSuspended.load(std::memory_order_acquire);
+      if (shouldAdvanceVisuals) {
+        while (bmpCursor < bmpList.size()) {
+          auto &target = bmpList[bmpCursor];
+          if (bgaPositionMicro < target.first) {
+            break;
+          }
+          if (activateVisualAt(target.second, rendering::bga_view, 0)) {
+            currentBga.store(target.second, std::memory_order_relaxed);
+          }
+          bmpCursor++;
         }
-        sleepMicros = audio::playback::SchedulerWaitMicrosForChartDelta(
-            untilNextMicros, playbackRate(), kSchedulerMaxIdleSleepMicros);
+        if (bmpCursor < bmpList.size()) {
+          scheduleNextWake(
+              getRawSongMicrosForBgaTarget(bmpList[bmpCursor].first));
+        }
+        while (bmpLayerCursor < bmpLayerList.size()) {
+          auto &target = bmpLayerList[bmpLayerCursor];
+          if (bgaPositionMicro < target.first) {
+            break;
+          }
+          if (activateVisualAt(target.second, rendering::bga_layer_view, 0)) {
+            currentBmpLayer.store(target.second, std::memory_order_relaxed);
+          }
+          bmpLayerCursor++;
+        }
+        if (bmpLayerCursor < bmpLayerList.size()) {
+          scheduleNextWake(getRawSongMicrosForBgaTarget(
+              bmpLayerList[bmpLayerCursor].first));
+        }
       }
-      schedulerWake.waitFor(
-          wakeGeneration, std::chrono::microseconds(sleepMicros), [this] {
-            return !schedulerActive.load(std::memory_order_acquire);
-          });
     }
+
+    auto currentTimestamp = Clock::now();
+    size_t idx =
+        performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
+    const auto deltaMicros =
+        std::chrono::duration_cast<std::chrono::microseconds>(
+            currentTimestamp - prevTimestamp)
+            .count();
+    performanceAnalytics.loopDeltaTimes[idx].store(
+        static_cast<uint32_t>(deltaMicros), std::memory_order_relaxed);
+    size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
+    performanceAnalytics.loopDeltaIndex.store(newIdx,
+                                              std::memory_order_relaxed);
+    prevTimestamp = currentTimestamp;
+
+    long long sleepMicros = kSchedulerMaxIdleSleepMicros;
+    if (nextWakeMicros != std::numeric_limits<long long>::max()) {
+      const long long currentSongMicros = audio.getTimeMicros();
+      const long long untilNextMicros = nextWakeMicros - currentSongMicros;
+      if (untilNextMicros <= 0) {
+        std::this_thread::yield();
+        continue;
+      }
+      sleepMicros = audio::playback::SchedulerWaitMicrosForChartDelta(
+          untilNextMicros, playbackRate(), kSchedulerMaxIdleSleepMicros);
+    }
+    schedulerWake.waitFor(
+        wakeGeneration, std::chrono::microseconds(sleepMicros), [this] {
+          return !schedulerActive.load(std::memory_order_acquire);
+        });
+  }
 #ifdef _WIN32
-    // Clean up MMCS handle
-    if (taskHandle) {
-      AvRevertMmThreadCharacteristics(taskHandle);
-    }
-    timeEndPeriod(1);
+  // Clean up MMCS handle
+  if (taskHandle) {
+    AvRevertMmThreadCharacteristics(taskHandle);
+  }
+  timeEndPeriod(1);
 #endif
-  });
-  return {.success = true};
 }
+
 void Jukebox::renderImage(ImageData &image, int viewId) {
 
   if (!bgfx::isValid(image.texture)) {

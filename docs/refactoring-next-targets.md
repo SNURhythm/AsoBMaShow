@@ -681,6 +681,27 @@ verification as free disk space fell to roughly 200 MiB. The desktop build inclu
 CoreMIDI and PortAudio; Android and Windows native builds were not run. Their
 original pure helpers participated in the compiled compatibility comparison.
 
+## 46. Prepare Jukebox scheduler resources before audio playback — completed
+
+A test backend armed an allocation failure immediately after starting audio.
+The real Jukebox left audio, its clock, and its playback snapshot active when
+scheduler construction threw. LLDB confirmed the failing allocation was inside
+`std::thread` construction after audio startup.
+
+The scheduler thread is now prepared before staging/starting audio. A scoped
+startup gate releases on success, failure, or exception; the worker only reads
+committed session state after that gate opens and exits if startup stayed
+inactive. Its gate rechecks after every notification, including StartPlayback's
+early wake. The previous scheduling body moved unchanged into a private entry
+method. Existing audio/visual callback exception policies are unchanged.
+
+The original failure probe, a pre-start allocation failure with zero new backend
+starts and successful retry, existing failed-start/restore cases, and all six
+related Jukebox/audio/BGA/visual/feature-off test runners passed (4.84 seconds).
+Desktop main and focused builds, independent review, body-equivalence comparison,
+and `git diff --check` passed. Verification remained focused with approximately
+166 MiB free; the scheduler-notification commit supplies the full 392-test baseline.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

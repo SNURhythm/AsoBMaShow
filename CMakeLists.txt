@@ -4532,6 +4532,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(jukebox_restore_tests
         tests/jukebox_restore_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
@@ -4574,7 +4575,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     get_target_property(VISUAL_CATCH_UP_SOURCES jukebox_restore_tests SOURCES)
     list(REMOVE_ITEM VISUAL_CATCH_UP_SOURCES
-        tests/jukebox_restore_tests.cpp src/video/VideoPlayer.cpp)
+        tests/jukebox_restore_tests.cpp tests/support/AllocationFailure.cpp
+        src/video/VideoPlayer.cpp)
     add_executable(visual_catch_up_tests
         tests/visual_catch_up_tests.cpp
         tests/visual_catch_up_video_fixture.cpp

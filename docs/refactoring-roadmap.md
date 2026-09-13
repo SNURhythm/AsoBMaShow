@@ -1173,3 +1173,17 @@ workflow runners passed (1.69 seconds). The preceding scheduler change provides
 the full 392-test baseline. Free disk space fell to about 200 MiB, so this change
 used focused tests. Android/Windows native builds were not performed; their pure
 helper bodies were included in compatibility testing. `git diff --check` passed.
+
+## Follow-up: Prepare the scheduler before committing audio startup
+
+A real-method allocation probe and debugger trace reproduced a thread-construction
+failure after audio had started, leaving playback active. Jukebox now prepares
+that thread first and releases its startup gate on every scope exit. The worker
+waits for committed state or exits after a failed startup. Its scheduling body is
+unchanged apart from moving to a private entry method.
+
+Both allocation probes, retry/restore cases, and all six related audio/BGA/visual
+and feature-off runners passed (4.84 seconds). Desktop/focused builds, independent
+review, body comparison, and `git diff --check` passed. With about 166 MiB free,
+verification used affected workflows; the notification fix provides the full
+392-test baseline.
