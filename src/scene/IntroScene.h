@@ -17,6 +17,7 @@ public:
       : Scene(context),
         navigation_(musicSelectKeyLayoutForConfig(
             context.settings.skinMusicSelectInput)) {}
+  ~IntroScene() override;
 
   void init() override;
   void update(float) override;

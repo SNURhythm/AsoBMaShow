@@ -41,6 +41,8 @@ Button *button(std::string label) {
 }
 } // namespace
 
+IntroScene::~IntroScene() { cleanup(); }
+
 void IntroScene::init() {
   navigation_.reset(
       musicSelectKeyLayoutForConfig(context.settings.skinMusicSelectInput));

@@ -628,3 +628,24 @@ independent review passed.
 All four focused tests passed after rebuilding the affected desktop/test
 targets. The all-target build and full parallel suite then passed all 383 tests
 in 115.13 seconds. `git diff --check` passed.
+
+## Follow-up: Intro destruction detaches its input listeners
+
+The Intro scene now invokes existing guarded cleanup from its explicit
+destructor. Both callbacks capturing the scene are removed before its adapter
+and views disappear, including unwinding after partial input registration.
+Normal SceneManager cleanup and navigation behavior remain unchanged.
+
+The generated fixture executes complete production start/stop, cleanup, and
+destructor methods with actual base cleanup/view disposal. The real input
+registry handles delivery and cancellation; a controlled backend and observed
+adapter/views verify ordering. Cases cover direct destruction, normal repeated
+cleanup, unused state, failure of the second registration, queued input/device
+events, unrelated listener retention, and deferred capture disposal. The old
+implicit destructor fails the expected live-subscription assertion.
+
+Desktop compilation, both focused tests, and independent review passed. After
+the all-target build, all 384 tests passed in 109.85 seconds in the parallel
+suite. `git diff --check` passed. The fixture controls adapter/view effects and
+uses application-thread registry delivery; it does not claim native callback
+concurrency coverage.

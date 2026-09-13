@@ -255,6 +255,21 @@ all eleven injected failures observed on this runtime and permit subsequent
 construction/destruction. Normal pool tests and the two bounded failure modes
 are grouped in `cmake/WorkerPoolTests.cmake`. No production test hook was added.
 
+## 15. Intro scene input-subscription lifetime — completed
+
+The explicit Intro destructor calls guarded cleanup while derived state remains
+alive. Existing stop logic removes both registry subscriptions before resetting
+the adapter; base cleanup then releases views and deferred captures. This also
+handles initialization unwinding after only the input subscription succeeds.
+Unused and already-cleaned scenes remain safe, with no repeated teardown.
+
+The compiled fixture executes full production registration, stop, cleanup, and
+destruction against the real registry and a controlled backend. Observed adapter
+and view effects check exact teardown ordering, queued-event cancellation, and
+retention of an unrelated listener. The former implicit destructor fails the
+live-subscription assertion. Navigation and lifecycle targets are grouped in
+`cmake/IntroSceneTests.cmake` under the original feature gate.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
