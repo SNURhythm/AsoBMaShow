@@ -1018,3 +1018,25 @@ Desktop main/all-target builds passed. The first full run passed 390/391 tests;
 `image_view_fade_tests` missed its 10-second thumbnail-load deadline while the
 load log recorded 14.6 seconds. That unchanged target passed in isolation, and
 the full 391-test recheck passed (103.65 seconds). `git diff --check` passed.
+
+The image-view runner subsequently split thumbnail readiness from dimension
+validation, so a load deadline reports its actual phase instead of a cache-key
+collision. Its focused rebuild/test and independent review passed; timing and
+cache behavior are unchanged.
+
+## Follow-up: Release IR service admission after startup failure
+
+IR submission startup now clears its started flag and pauses its profile when
+preparation or worker construction throws. The exception still propagates, and
+retry reloads profile state. Previously, the early started flag caused every
+retry to return without launching a worker, leaving pending attempts dormant.
+
+The direct regression injects caller allocation failure during preparation and
+uses the existing wake hook to fail actual thread construction after preparation.
+Both old cases preserved the queued attempt but failed retry, delivery, and
+single-call checks. The fixed cases preserve that attempt and deliver it once
+after same-instance retry. Focused CTest passed.
+
+Independent review, desktop main/all-target builds, and all 391 tests passed
+(109.88 seconds). `git diff --check` passed. The recovery restores admission;
+it does not roll back completed repository maintenance or partial preparation.

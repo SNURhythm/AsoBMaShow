@@ -1284,11 +1284,18 @@ void IrSubmissionService::start(IrActiveProfileConfig config) {
     impl_->started = true;
     impl_->stopped = false;
   }
-  impl_->prepareProfile(std::move(config));
-  impl_->worker =
-      std::jthread([implementation = impl_.get()](std::stop_token stopToken) {
-        implementation->workerMain(stopToken);
-      });
+  try {
+    impl_->prepareProfile(std::move(config));
+    impl_->worker =
+        std::jthread([implementation = impl_.get()](std::stop_token stopToken) {
+          implementation->workerMain(stopToken);
+        });
+  } catch (...) {
+    std::lock_guard lock(impl_->mutex);
+    impl_->started = false;
+    impl_->profilePaused = true;
+    throw;
+  }
   impl_->signal();
 }
 

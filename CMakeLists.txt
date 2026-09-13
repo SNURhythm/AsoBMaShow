@@ -3155,6 +3155,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(ir_submission_service_tests
         tests/ir_submission_service_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/AtomicFile.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp

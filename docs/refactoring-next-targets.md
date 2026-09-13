@@ -520,6 +520,21 @@ and independent review passed. Desktop builds and the full 391-test recheck
 passed; the first run hit an unrelated artwork-load deadline. Measurement
 remains a best-effort observation.
 
+## 36. Release IR service admission after startup failure — completed
+
+IR submission startup now restores its inactive admission state when profile
+preparation or worker creation throws. Previously, the early `started` flag
+remained set and every later `start` returned without creating a worker. Pending
+attempts remain stored, and a retry reloads profile state before processing them.
+
+The direct runner injects caller allocation failure before preparation and,
+through its existing wake hook, immediately before real thread construction.
+Both old-code cases preserved the pending attempt but failed all retry/delivery
+checks. The fixed cases propagate the exception, preserve pending work, and
+deliver once after same-instance retry. Focused CTest, independent review,
+desktop builds, and all 391 tests passed. This restores admission without
+rolling back repository maintenance or partial profile preparation.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

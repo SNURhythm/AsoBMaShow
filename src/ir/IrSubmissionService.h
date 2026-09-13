@@ -120,6 +120,7 @@ public:
   IrSubmissionService(const IrSubmissionService &) = delete;
   IrSubmissionService &operator=(const IrSubmissionService &) = delete;
 
+  // Startup failures leave the service inactive and allow retry on this instance.
   void start(IrActiveProfileConfig config);
   void pauseAndCancel();
   void activateProfile(IrActiveProfileConfig config);

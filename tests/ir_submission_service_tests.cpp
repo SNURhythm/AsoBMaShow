@@ -6,6 +6,7 @@
 #include "ir/IrSettingsPresentation.h"
 #include "ir/tachi/TachiDriver.h"
 #include "repositories/ReplayRepository.h"
+#include "support/AllocationFailure.h"
 
 #include <atomic>
 #include <chrono>
@@ -17,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -1080,6 +1082,57 @@ std::int64_t makeAwaiting(Harness &harness, int suffix,
                  .status == ir::IrOutboxMutationStatus::Updated,
          "deferred fixture stores job");
   return inserted.entry->id;
+}
+
+void testStartupFailuresAllowSameServiceRetry() {
+  for (const bool failWorkerLaunch : {false, true}) {
+    const auto caller = std::this_thread::get_id();
+    std::optional<test_support::FailNextAllocation> allocationFailure;
+    bool startupWakeObserved = false;
+    bool armAtWake = failWorkerLaunch;
+    Harness harness;
+    harness.setCredential("key");
+    expect(harness.enqueueReady(draft(200, harness.now.load()), true).entry.has_value(),
+           "startup failure fixture inserts a pending attempt");
+    harness.driver->pushSubmit({
+        .status = ir::DeliveryStatus::Succeeded,
+        .remoteUserId = 42,
+        .remoteScoreIds = {"startup-retry-score"},
+    });
+    harness.wakeHook = [&] {
+      if (std::this_thread::get_id() != caller) return;
+      startupWakeObserved = true;
+      if (armAtWake) {
+        armAtWake = false;
+        // Profile preparation ends with this wake. Its return path and the
+        // manual waiter do not allocate before the actual thread constructor.
+        allocationFailure.emplace();
+      }
+    };
+    auto config = profile(true, true, "https://boku.tachi.ac");
+    if (!failWorkerLaunch) allocationFailure.emplace();
+    bool threw = false;
+    try {
+      harness.service->start(std::move(config));
+    } catch (const std::bad_alloc &) {
+      threw = true;
+    }
+    allocationFailure.reset();
+    expect(threw && startupWakeObserved == failWorkerLaunch,
+           "startup allocation failure propagates from the expected phase");
+    expect(harness.driver->calls().empty() &&
+               load(harness, 200).state == ir::IrOutboxState::Pending,
+           "failed startup does not send or consume the pending attempt");
+
+    harness.service->start(profile(true, true, "https://boku.tachi.ac"));
+    expect(harness.driver->waitForCalls(1),
+           "the same service starts after a startup failure");
+    expect(harness.waitForState(attemptId(200), ir::IrOutboxState::Succeeded),
+           "startup retry delivers the pending attempt");
+    harness.service->stop();
+    expect(harness.driver->calls().size() == 1,
+           "startup retry sends exactly once");
+  }
 }
 
 void testDueAttemptsSubmitAsOneAtomicGroup() {
@@ -3707,6 +3760,7 @@ void testReconciliationRequestRejectsUnavailableServiceAndConfiguration() {
 
 int main() {
   static_assert(ir::kMaximumAttemptStatusSnapshots > 0);
+  testStartupFailuresAllowSameServiceRetry();
   testSessionRevalidatesAfterExternalSchemaChange();
   testDueAttemptsSubmitAsOneAtomicGroup();
   testCompactedSuccessfulScoreIdentitiesRemainUnbound();
