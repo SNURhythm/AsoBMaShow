@@ -721,8 +721,10 @@ the 392-test notification fix; this change used its affected workflow.
 
 ## 48. Match Android fallback stop-request behavior — completed
 
-The pinned Android NDK 28.2.13676358 selects `ThreadCompat.h`'s fallback even
-in C++23. Its `jthread::request_stop()` returned true for repeated requests,
+The pinned Android NDK 28.2.13676358 provides native `jthread` when the app's
+`_LIBCPP_ENABLE_EXPERIMENTAL` definition is applied. Without that opt-in it
+selects `ThreadCompat.h`'s fallback, even in C++23. The fallback's
+`jthread::request_stop()` returned true for repeated requests,
 and destruction/move assignment requested cancellation after join or detach.
 The fallback now atomically accepts only the first request and requests stop
 during cleanup only while joinable, matching the
@@ -735,7 +737,8 @@ Native tests passed while each old fallback behavior failed its regression.
 Both final runners passed (0.69 seconds), covering repeated/concurrent requests,
 empty/moved/joined ownership, and joined/detached/joinable cleanup. Independent
 review and `git diff --check` passed. The same source also cross-compiled for
-Android arm64/API 23 using the pinned NDK; it was not executed on Android.
+Android arm64/API 23 using the pinned NDK, both with the application's native
+opt-in and without it for the fallback; it was not executed on Android.
 With about 149 MiB free, validation used these small affected targets rather
 than a full application build. This fixes the tested contract subset; it does
 not claim full standard-library conformance for the existing fallback.

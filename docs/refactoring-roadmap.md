@@ -1202,13 +1202,16 @@ the preceding notification fix supplying the full 392-test baseline.
 
 ## Follow-up: Align Android fallback stop requests and cleanup
 
-The pinned NDK uses the local thread fallback. It now reports only the first
-successful stop request and requests stop during destruction/replacement only
+The local thread fallback now reports only the first successful stop request
+and requests stop during destruction/replacement only
 for joinable threads. Shared native/fallback tests reproduced both previous
 mismatches and now pass, including concurrent requests and joined/detached/live
 cleanup (0.69 seconds).
 
-Independent review, both small host builds, pinned-NDK arm64/API 23 cross-compile,
+The application's `_LIBCPP_ENABLE_EXPERIMENTAL` flag selects native `jthread`
+on the pinned NDK; the fallback is selected without that opt-in.
+Independent review, both small host builds, pinned-NDK arm64/API 23 cross-compiles
+with and without the application flag,
 and `git diff --check` passed. Android execution and a full application rebuild
 were not performed; disk space was about 149 MiB. The tested subset does not
 establish full fallback conformance.
