@@ -4,6 +4,19 @@ Improve the repository in independently reviewable workflow slices. The standard
 is code whose resource owner, thread boundaries, state transitions, completion,
 and failure handling are easy to identify. File length is a signal, not a goal.
 
+## Closing checkpoint — 2026-09-13
+
+The original roadmap and 66 follow-ups are complete. The broad sweep is closed
+at the user's request. The final desktop app/all-target build passed, followed
+by all 399 CTest entries in 102.29 seconds at source commit `383ec028`.
+
+A subsequent [proportionality review](reviews/2026-09-13-refactoring-follow-up-proportionality.md)
+assessed every follow-up's real or synthetic trigger and its runtime,
+maintenance, and test/build costs. It recommends retaining the changes, with
+the limits of fault-injection evidence and local measurements stated explicitly.
+No production changes resulted from that review. Commits remain local until
+the user requests a push; no deployment was performed.
+
 ## Sequence and progress
 
 1. **Trustworthy baseline — completed.** Build the app and affected native test

@@ -914,7 +914,8 @@ allocation failures for each DP player. It also checks SP/DP mirror orders,
 normal and unknown-option fallback, random seed requirements and repeatability,
 and empty lane metadata. Its allocation-lifetime probe is shared with the
 settings-preview fixture, which retains its recipe checks and passes all 78
-construction failures. The probe is limited to the two synchronous test runners.
+construction failures. The probe is limited to synchronous test runners; entry
+65 also reuses it for view-construction checks.
 
 The focused pair passed (0.41 seconds), desktop and all-target builds passed,
 and all 397 CTest entries passed (114.74 seconds). Independent review and
