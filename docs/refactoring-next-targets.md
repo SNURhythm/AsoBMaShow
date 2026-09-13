@@ -147,20 +147,36 @@ never-initialized state, deferred capture disposal, and resource ordering. Lua
 preparation and iOS scoped-access branches run against doubles; this is a local
 lifecycle test, not physical-device validation.
 
-## 8. Settings profile archive worker ownership
+## 8. Settings profile archive worker ownership — completed
 
-Settings still owns the profile archive thread and a separate shared completion
-mailbox. Launch, completion consumption, and shutdown each manipulate them in
-`SettingsSceneProfiles.cpp`. The existing `ProfileArchiveTask` already owns the
-domain operation; a narrow asynchronous owner could group only thread lifetime
-and typed result handoff, retaining that domain boundary.
+`ProfileArchiveWorker` owns execution of the controller's existing one-shot
+`ProfileArchiveTask`, its typed completion, and joining. The scene's supplied
+post-execution callback retains temporary-import cleanup and warning policy.
+The worker waits through both operation and callback on stop and discards the
+completion. Taking a result joins before returning it; owned work, including
+unconsumed completion, prevents a second admission.
 
-Characterize import temporary-document cleanup before completion, suppressed
-completion after stop, join-before-consume, rejected admission, and launch
-failure ownership. Profile transactions are not stop-token cancellable: stopping
-must wait for execution and temporary cleanup, then discard presentation data.
-Keep picker state, generation policy, export staging retention, and controller
-commit decisions in the existing scene/controller workflow.
+Settings retains generation/controller decisions, picker state, launch-failure
+recovery, and export staging ownership. Direct tests cover admission, exception
+mapping, completion/capture lifetime, stop, restart, and destruction. Compiled
+production launch/apply/stop methods use the real controller and owner with
+controlled document effects to verify cleanup success/failure, both launch
+exception paths, picker rejection, controller pipeline release, and native
+export source retention. The existing controller test target now groups these
+checks in `cmake/ProfileSettingsTests.cmake`.
+
+## 9. Chart Viewer direct-destruction audio lifetime
+
+Chart Viewer owns its chart and borrows the shared jukebox for listening. Normal
+cleanup stops active, loaded, or retained listen resources before releasing the
+chart. Its implicit destructor does not call that cleanup path. Audit direct
+destruction and initialization failure with the base cleanup guard, checking
+stop-before-chart-release and preserving inactive and already-cleaned behavior.
+
+Music Player's fullscreen video also has scene-managed jukebox flags, but its
+cleanup resets global state even without acquired video resources. That needs
+a separate ownership audit before adding a destructor; do not apply the Chart
+Viewer change mechanically across all scenes.
 
 ## What the review does not justify
 

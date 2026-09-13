@@ -3,8 +3,8 @@
 #include "../repositories/ChartRepository.h"
 #include "../ir/IrSettingsPresentation.h"
 #include "../PlatformDocumentHandoff.h"
-#include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
+#include "ProfileArchiveWorker.h"
 #include "SettingsAudioVideoModel.h"
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
@@ -13,14 +13,11 @@
 #include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -45,17 +42,6 @@ class InputCaptureController;
 namespace settings_scene {
 struct LayoutMetrics;
 }
-
-struct SettingsProfileArchiveCompletion {
-  ProfileArchiveTaskKind kind = ProfileArchiveTaskKind::Export;
-  std::uint64_t generation = 0;
-  ProfileArchiveResult result;
-};
-
-struct SettingsProfileArchiveMailbox {
-  std::mutex mutex;
-  std::optional<SettingsProfileArchiveCompletion> completion;
-};
 
 enum class SettingsProfileDocumentHandoffKind { None, Import, Export };
 
@@ -308,8 +294,7 @@ private:
   std::vector<ChartEntry> chartEntries;
   SettingsLibraryTask libraryTask;
   SettingsCacheMaintenance archiveCacheMaintenance;
-  std::jthread profileArchiveThread;
-  std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
+  ProfileArchiveWorker profileArchiveWorker;
   std::unique_ptr<ProfileSettingsController> profileController;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::GameplaySkinSettingsController>

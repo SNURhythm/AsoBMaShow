@@ -27,6 +27,7 @@ target_sources(main PRIVATE
     PracticeAnalyticsPresentation.cpp
     PracticeAnalyticsView.cpp
     ProfileSettingsController.cpp
+    ProfileArchiveWorker.cpp
     ProfileSettingsControllerContext.cpp
     ProfileRuntimeReapply.cpp
     RemoteResultRecallController.cpp

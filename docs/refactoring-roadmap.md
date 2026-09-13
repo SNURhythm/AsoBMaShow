@@ -482,3 +482,27 @@ passed; independent review found no blocker.
 
 After rebuilding all targets, all 377 tests passed in the parallel suite in
 107.87 seconds. `git diff --check` passed. No deployment was performed.
+
+## Follow-up: Profile archive worker ownership
+
+`ProfileArchiveWorker` owns the existing one-shot controller task's execution,
+completion mailbox, and thread. Settings passes an after-execution callback
+that retains import temporary-document cleanup and warning policy. Stop still
+waits for the non-interruptible operation and cleanup, then discards completion.
+Consuming completion joins outside the mailbox mutex before scene application;
+completed but unconsumed work remains unavailable for another admission.
+
+Generation/controller decisions, picker state, export staging retention, and
+launch-failure recovery remain in Settings. Direct tests use real controller
+tasks to cover admission, result/capture lifetime, stop/destruction through
+blocked cleanup, restart, and existing exception mapping. Compiled complete
+production scene methods cover cleanup warnings, both launch-failure catches,
+rejected admission/pickers, exactly-once application, controller release after
+joining, and native export source retention. Existing controller tests remain
+in the same registered target, grouped in `cmake/ProfileSettingsTests.cmake`.
+Focused tests, desktop compilation, and all-target compilation passed;
+independent review found no blocker.
+
+The full parallel suite passed all 377 tests in 106.63 seconds after rebuilding
+all targets. `git diff --check` passed. Verification remained local; archive and
+document effects in the new scene fixture use controlled test dependencies.

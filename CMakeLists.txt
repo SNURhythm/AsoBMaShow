@@ -7276,15 +7276,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(profile_archive_tests PRIVATE shell32 ole32 advapi32)
     endif()
 
-    add_executable(profile_settings_controller_tests
-        tests/profile_settings_controller_tests.cpp
-        src/scene/ProfileSettingsController.cpp
-        src/scene/ProfileRuntimeReapply.cpp
-    )
-    target_include_directories(profile_settings_controller_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(profile_settings_controller_tests PRIVATE cxx_std_23)
+    include(cmake/ProfileSettingsTests.cmake)
 
     add_executable(profile_runtime_reapply_tests
         tests/profile_runtime_reapply_tests.cpp
