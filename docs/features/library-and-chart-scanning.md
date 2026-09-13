@@ -17,6 +17,8 @@ application thread owns visible progress and database updates.
   helpers implement bounded discovery, parsing, ordering, and cancellation.
 - `src/archive/TemporaryCache.*` owns materialized archive-media storage and
   protected cleanup; `ArchiveFile.*` supplies the current root and identities.
+- `src/archive/UnzipOutput.*` owns extraction budgets, bounded output buffering,
+  and writer lifetime independently of backend decoding.
 - `src/scene/MainMenuLibrary.*`, `MainMenuScene.*`, and chart-list views
   present the catalogue.
 - `MainMenuPreviewController.*` owns preview scheduling and deferred release;
@@ -45,6 +47,10 @@ dependencies remain alive.
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;
 usage measurement remains best-effort and does not block writes or cleanup.
+Full extraction shares byte, entry, and free-space budgets across archive
+writers. Output streams remain owned until queued writes finish; the pipeline
+joins before its guard and cancellation dependencies are released. The archive
+workflow retains path reservations, recovery markers, and output publication.
 
 ## Verification
 
@@ -56,6 +62,9 @@ Main Menu preview/Records lifecycle fixtures. For the scheduler's detailed opera
 [`src/ChartScanWorkScheduler.md`](../../src/ChartScanWorkScheduler.md).
 Temporary-media storage is covered by `temporary_archive_cache_tests` and the
 private-root integration case in `archive_file_concurrency_tests`.
+`unzip_output_tests` directly covers output policy, cancellation, failures,
+backpressure, and destructor joining; backend extraction/recovery cases remain
+in the archive concurrency tests.
 
 ## Related pages
 

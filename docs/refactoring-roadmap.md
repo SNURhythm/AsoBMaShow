@@ -23,12 +23,13 @@ and failure handling are easy to identify. File length is a signal, not a goal.
    preserving nonblocking selection, supersession, media reuse, and
    gameplay/export handoff. The selected chart intentionally remains in the
    scene because it is also used by Start and result/replay preparation.
-4. **Archive handling — first ownership slice completed.** `TemporaryCache`
+4. **Archive handling — cache and extraction-output boundaries completed.** `TemporaryCache`
    owns materialized-media writes, protected cleanup, measurement, and mutation
    serialization. The facade retains backend/source identity and cache naming.
-   Backend mechanics versus extraction policy remain a subsequent slice;
-   preserve cancellation, resource budgets, staging/output ownership, and
-   recovery when choosing that boundary.
+   `UnzipWriteGuard` and `UnzipOutputPipeline` now separate shared extraction
+   budgets, bounded output buffering, cancellation checkpoints, and writer
+   lifetime from backend decoding. Existing path reservations, markers, and
+   recovery remain in the archive workflow.
 5. **Gameplay and skin boundaries — initial review completed.** Existing
    simulation, worker, document-loader, and resource-plan interfaces already
    separate substantial responsibilities. A subsequent gameplay slice now gives
@@ -188,3 +189,50 @@ The desktop app/all-target build and all 370 parallel CTest entries passed
 (104.12 seconds). Review also tightened a fixture callback's captured-state
 lifetime; the rebuilt terminal fixture and registration tests passed afterward.
 No deployment or physical-device verification is included in this slice.
+
+## Archive extraction-output slice
+
+`src/archive/UnzipOutput` contains the production byte/entry/free-space guard,
+shared cancellation checkpoint, and bounded writer pipeline previously embedded
+in `ArchiveFile.cpp`. Miniz, libarchive, unarr, and 7-Zip selection and decoding
+continue through the existing facade; extraction output policy no longer needs
+to be read or tested inside those adapters. Public limits, execution-plan, and
+shared-budget types remain available through `ArchiveFile.h` via `UnzipTypes.h`.
+
+One guard belongs to each archive and shares batch admission through the budget
+mutex. Stream writes are serialized per guard. One pipeline owns its staged
+chunk, queued stream references, capacity accounting, and optional writer
+thread. Backend producers finish before flush/destruction; destruction drains
+the staged tail and joins before the guard or cancellation dependencies die.
+Inline writes retain caller-owned checkpoint behavior. Worker cancellation,
+pause rejection, checkpoint exceptions, stream errors, first budget failure,
+and pending disk reservations retain their existing distinctions.
+
+Direct compiled tests cover exact/shared byte and entry limits, pending
+reservation release, missing destinations, reserved free-space rejection,
+stream failure accounting, checkpoint order, inline thresholds, file switching,
+output retention, sticky cancellation/failure, backpressure, and destructor
+joining. Existing backend regression fixtures retain coverage of extraction,
+active/reserved output protection, and recovery. Lightweight cache/output tests
+are grouped in `cmake/ArchiveStorageTests.cmake` without backend or media links.
+
+The desktop app and all-target builds passed. The output-policy and archive
+concurrency tests passed together, followed by all 371 parallel CTest entries
+in 124.91 seconds. Independent review found no remaining behavior, lifetime,
+or build-wiring blocker, and `git diff --check` passed. No deployment or
+physical-device verification was performed.
+
+## Roadmap completion and further work
+
+The initial sequence has delivered a verified baseline, shared replay-export
+and Records preparation ownership, explicit preview scheduling, independent
+archive cache/output policy, and the gameplay/skin boundary review with native
+input registration ownership. Tests and CMake organization changed alongside
+the workflows they support. The selected skin decoding/rendering boundaries
+were retained based on implementation evidence.
+
+Further candidates are documented in
+[Next workflow refactoring targets](refactoring-next-targets.md), with concrete
+ownership problems, behavior constraints, and characterization requirements.
+Start with Settings cache-maintenance jobs, then evaluate pacemaker best-replay
+loading and archive index-build coordination as separate slices.
