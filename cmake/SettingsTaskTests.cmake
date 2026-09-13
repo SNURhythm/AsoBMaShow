@@ -66,3 +66,13 @@ target_include_directories(settings_library_task_tests PRIVATE
 target_compile_features(settings_library_task_tests PRIVATE cxx_std_23)
 target_link_libraries(settings_library_task_tests PRIVATE Threads::Threads)
 asobmashow_register_test(settings_library_task_tests)
+
+# The fixed preview recipe uses real parser ownership without scene/rendering dependencies.
+add_executable(settings_preview_chart_tests
+    tests/settings_preview_chart_tests.cpp
+    src/scene/SettingsPreviewChart.cpp
+    src/bms_parser.cpp
+)
+target_include_directories(settings_preview_chart_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(settings_preview_chart_tests PRIVATE cxx_std_23)
+asobmashow_register_test(settings_preview_chart_tests)

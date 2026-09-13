@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SettingsScene.h"
+#include "SettingsPreviewChart.h"
 #include "../context.h"
 #include "../path.h"
 #include "../rendering/Color.h"
@@ -22,7 +23,6 @@
 #include <string>
 
 namespace settings_scene {
-inline constexpr long long kPreviewLoopMicros = 8000000LL;
 inline constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 
 struct SafeAreaInsets {

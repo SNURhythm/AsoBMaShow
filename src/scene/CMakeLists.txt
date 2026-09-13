@@ -41,6 +41,7 @@ target_sources(main PRIVATE
     SettingsAudioVideoModel.cpp
     SettingsCacheMaintenance.cpp
     SettingsLibraryTask.cpp
+    SettingsPreviewChart.cpp
     SettingsSceneAudioVideo.cpp
     SettingsSceneControls.cpp
     SettingsSceneSkins.cpp

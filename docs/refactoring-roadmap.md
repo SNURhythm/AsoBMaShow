@@ -1255,3 +1255,17 @@ The complete staging runner passed (0.51 seconds), both its target and the
 production translation unit built, and independent review and
 `git diff --check` passed. The fault probe covers listing; ordinary recursive
 cleanup and security refusals remain covered by existing staging cases.
+
+## Follow-up: Own settings-preview chart parts through insertion
+
+The extracted settings preview recipe retains timeline and measure ownership
+until their destination vectors accept them. Fault injection reproduced both
+old leaks; the new real-parser test checks every construction allocation and
+the unchanged sample recipe. The production application build, focused test
+(0.40 seconds), and independent review passed.
+
+After manual artifact cleanup restored disk space, every test target rebuilt
+and all 396 CTest cases passed (132.88 seconds), including the previously
+blocked gameplay runner. This refreshes broad validation for the preceding
+slices as well. `git diff --check` passed. Subsequent commits stay local per
+the user's instruction to avoid repeatedly triggering build CI.

@@ -798,6 +798,24 @@ The test target and production staging translation unit built, independent
 review and `git diff --check` passed. Validation ran on macOS; Windows code is
 unchanged, and no full application relink was performed.
 
+## 52. Own settings-preview chart parts until insertion succeeds — completed
+
+The settings sample-chart recipe now lives in `SettingsPreviewChart`, separate
+from preview playback and rendering. Its timeline and measure owners survive
+vector insertion; previously, releasing before `push_back` leaked the objects
+when insertion allocation failed. The existing sample notes, timing, long-note
+links, and shared eight-second loop are unchanged.
+
+The new test links the real parser constructors and destructors, characterizes
+the complete sample recipe, and rejects each construction allocation in turn.
+It reproduced both the timeline and measure leaks before the fixes and now
+passes without live allocations. The production app and all test targets
+built, the focused test passed (0.40 seconds), and independent review and
+`git diff --check` passed. After local build artifacts were manually cleaned,
+the full suite passed all 396 tests in 132.88 seconds. This also supplies a
+fresh broad baseline for the preceding slices, including the gameplay runner
+previously blocked by database disk I/O errors.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
