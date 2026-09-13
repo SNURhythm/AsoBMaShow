@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ReplayVideoUiBatchContracts(unittest.TestCase):
     def test_export_cancellation_is_externally_owned_before_skin_preflight(self) -> None:
-        header = (ROOT / "src/ReplayVideoExporter.h").read_text(encoding="utf-8")
+        header = (ROOT / "src/ReplayVideoExportTypes.h").read_text(encoding="utf-8")
         source = (ROOT / "src/ReplayVideoExporter.cpp").read_text(encoding="utf-8")
         self.assertIn("std::stop_token stop;", header)
         self.assertIn("resolved.stop = options.stop;", source)

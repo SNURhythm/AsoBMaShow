@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ReplayData.h"
+#include "ReplayVideoExportTypes.h"
 #include "context.h"
 
 #include <cstddef>
@@ -14,34 +15,6 @@
 namespace replay {
 struct CourseReplayConsumerOutcome;
 }
-
-struct ReplayVideoExportProgress {
-  double fraction = 0.0;
-  std::string message;
-  std::size_t frameIndex = 0;
-  std::size_t frameCount = 0;
-};
-
-using ReplayVideoExportProgressCallback =
-    std::function<void(const ReplayVideoExportProgress &)>;
-
-struct ReplayVideoExportOptions {
-  int width = 0;
-  int height = 0;
-  int fps = 0;
-  bool includeResultScreen = false;
-  bool renderTouchPoints = true;
-  bool renderReplayGhosts = true;
-  std::string pacemakerTarget;
-  ReplayVideoExportProgressCallback progressCallback;
-  std::stop_token stop;
-};
-
-struct ReplayVideoExportResult {
-  bool success = false;
-  std::filesystem::path outputPath;
-  std::string message;
-};
 
 // Keeps the normal export's selected-skin preflight ahead of every output
 // action. It is deliberately a tiny seam: the caller still owns all real

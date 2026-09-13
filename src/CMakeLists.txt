@@ -58,3 +58,8 @@ elseif (PLATFORM_ANDROID)
 elseif (PLATFORM_MACOS)
     target_sources(main PRIVATE MacNatives.mm)
 endif ()
+
+target_sources(main PRIVATE
+    replay/ReplayExportJob.cpp
+    scene/ReplayRecordTask.cpp
+)
