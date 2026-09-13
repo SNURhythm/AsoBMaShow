@@ -1,4 +1,5 @@
 #include "ArchiveFile.h"
+#include "StableHash.h"
 #include "archive/TemporaryCache.h"
 #include "archive/UnzipOutput.h"
 #include "archive/IndexBuildCoordinator.h"
@@ -3525,12 +3526,9 @@ void buildIndexLookups(CachedIndex &index) {
 // archive's size, mtime, and source identity still match.
 // ---------------------------------------------------------------------------
 
-std::string hex64(std::uint64_t value);
-std::uint64_t fnv1a64(const std::string &value);
-
 std::filesystem::path archiveIndexCacheFilePath(const std::string &key) {
   return archiveIndexCacheDirectory() /
-         ("archive-index-" + hex64(fnv1a64(key)) + ".idx");
+         ("archive-index-" + stable_hash::hex64(stable_hash::fnv1a64(key)) + ".idx");
 }
 
 // Internal implementation of pruneArchiveIndexCache; kept in the anonymous
@@ -3549,7 +3547,7 @@ std::size_t pruneArchiveIndexCacheImpl(
   for (const auto &path : liveArchivePaths) {
     const std::string key = archiveKey(path);
     liveArchiveKeys.insert(key);
-    liveArchiveHashes.insert(fnv1a64(key));
+    liveArchiveHashes.insert(stable_hash::fnv1a64(key));
   }
   const auto parseHashFromFileName = [](const std::string &fileName)
       -> std::optional<std::uint64_t> {
@@ -8158,25 +8156,6 @@ resolveInnerPath(const std::filesystem::path &archivePath,
   return std::nullopt;
 }
 
-std::uint64_t fnv1a64(const std::string &value) {
-  std::uint64_t hash = 14695981039346656037ull;
-  for (unsigned char c : value) {
-    hash ^= c;
-    hash *= 1099511628211ull;
-  }
-  return hash;
-}
-
-std::string hex64(std::uint64_t value) {
-  constexpr char digits[] = "0123456789abcdef";
-  std::string out(16, '0');
-  for (int i = 15; i >= 0; --i) {
-    out[i] = digits[value & 0xf];
-    value >>= 4;
-  }
-  return out;
-}
-
 bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
@@ -9812,7 +9791,8 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   }
 
   if (outputFolder.empty()) {
-    outputFolder = destinationRoot / (baseName + " " + hex64(fnv1a64(key)));
+    outputFolder = destinationRoot /
+                   (baseName + " " + stable_hash::hex64(stable_hash::fnv1a64(key)));
     outputChartPath = outputFolder / *chartRelative;
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
@@ -10428,7 +10408,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   for (int attempt = 0; attempt < (reuseCompletedFolder ? 101 : 100); ++attempt) {
     const std::string folderName =
         attempt == 0 ? baseName : baseName + " " +
-            (attempt == 100 ? hex64(fnv1a64(key)) : std::to_string(attempt + 1));
+            (attempt == 100 ? stable_hash::hex64(stable_hash::fnv1a64(key))
+                            : std::to_string(attempt + 1));
     const std::filesystem::path candidate = destinationRoot / folderName;
     const std::filesystem::path candidateMarker =
         candidate / ".asobmashow_unzip_complete";
@@ -10698,7 +10679,7 @@ std::filesystem::path
 materializedFileCachePath(const std::filesystem::path &path) {
   const std::string key = cacheKeyForPath(path);
   return archiveCacheRoot() /
-         (hex64(fnv1a64(key)) + path.extension().string());
+         (stable_hash::hex64(stable_hash::fnv1a64(key)) + path.extension().string());
 }
 
 bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,

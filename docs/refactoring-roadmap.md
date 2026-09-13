@@ -1159,3 +1159,17 @@ archive assertion passed on isolated and full rechecks; separate failure-only
 diagnostics improve its next failure report. Observed transient disk space fell
 below the unzip reserve, but the earlier assertion did not expose its cause.
 `git diff --check` passed.
+
+## Follow-up: Share stable ID and cache-name byte conversion
+
+Six FNV-1a implementations and six hexadecimal formatters now use one shared
+owner. Caller-specific key construction and the chart-music cache's delimited
+append remain unchanged. Compiled comparison against every removed implementation
+matched 1,025 binary inputs and hexadecimal boundaries; permanent golden vectors
+also passed.
+
+Independent review, desktop/focused builds, and all three affected hash/audio
+workflow runners passed (1.69 seconds). The preceding scheduler change provides
+the full 392-test baseline. Free disk space fell to about 200 MiB, so this change
+used focused tests. Android/Windows native builds were not performed; their pure
+helper bodies were included in compatibility testing. `git diff --check` passed.

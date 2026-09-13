@@ -660,6 +660,27 @@ archive diagnostics were reviewed separately. Disk sampling observed a transient
 had no error text, so its exact cause remains unconfirmed. No resource limits or
 test deadlines were relaxed.
 
+## 45. Share stable identity hashing and hexadecimal formatting — completed
+
+Archive caches, Android tree paths, PortAudio/MIDI device identities, and native
+queue entries now use one unsigned-byte FNV-1a implementation. Their six identical
+16-digit lowercase hexadecimal formatters also share an owner, including the
+chart-music cache. Key assembly, prefixes, ordinals, extensions, and fallbacks
+stay with the existing callers. The chart-music cache's delimiter-bearing append
+algorithm remains unchanged and local.
+
+Before migration, the six original hashes and six original formatters were
+compiled and compared over 1,025 binary strings and boundary values; the shared
+implementation matched all of them. Permanent golden-vector tests cover empty,
+ASCII, embedded-NUL, high-byte, all-byte, and bounded-view inputs plus hexadecimal
+padding/order. Independent review, desktop/focused builds, and all three affected
+hash/audio-renderer/audio-wrapper runners passed (1.69 seconds).
+
+The scheduler commit supplies the full 392-test baseline. This change used focused
+verification as free disk space fell to roughly 200 MiB. The desktop build includes
+CoreMIDI and PortAudio; Android and Windows native builds were not run. Their
+original pure helpers participated in the compiled compatibility comparison.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

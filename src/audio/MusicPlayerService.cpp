@@ -1,4 +1,5 @@
 #include "MusicPlayerService.h"
+#include "../StableHash.h"
 
 #include <algorithm>
 #include <chrono>
@@ -90,15 +91,6 @@ findPlaylistById(const std::vector<MusicPlaylistInfo> &playlists,
   return *it;
 }
 
-std::uint64_t fnv1a64(const std::string &value) {
-  std::uint64_t hash = 14695981039346656037ull;
-  for (const unsigned char c : value) {
-    hash ^= static_cast<std::uint64_t>(c);
-    hash *= 1099511628211ull;
-  }
-  return hash;
-}
-
 long long nativeQueueItemIdForTrack(
     const music_playlist::MusicTrack &track, std::size_t index) {
   const std::string identity = !track.trackId.empty() ? track.trackId
@@ -106,8 +98,8 @@ long long nativeQueueItemIdForTrack(
                                                         : track.title;
   const std::string key = identity + "\n" + std::to_string(index);
   std::uint64_t value =
-      fnv1a64(key) & static_cast<std::uint64_t>(
-                        std::numeric_limits<long long>::max());
+      stable_hash::fnv1a64(key) &
+      static_cast<std::uint64_t>(std::numeric_limits<long long>::max());
   if (value == 0) {
     value = 1;
   }
