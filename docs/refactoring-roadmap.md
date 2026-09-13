@@ -920,3 +920,16 @@ argument construction remains outside the method's exception boundary.
 
 Desktop main and all-target builds passed, followed by all 391 tests (102.93
 seconds). `git diff --check` passed.
+
+## Follow-up: Bound the Unix socket fixture path
+
+The snapshotter test copied a temporary path into `sockaddr_un::sun_path`
+without checking its size. It now requires room for the path and terminating
+zero before copying or creating a socket descriptor. An overlong path records
+a clear test failure and still cleans the owning temporary directory.
+
+The rebuilt normal focused test passed. A deliberately long private temporary
+parent produced exactly one expected fixture diagnostic and exit status 1,
+without leaving roots behind. Independent review and `git diff --check` passed.
+The preceding image-probe fix established the unchanged 391-test application
+baseline.

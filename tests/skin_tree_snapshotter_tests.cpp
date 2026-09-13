@@ -384,11 +384,16 @@ void testSymbolicHardAndNonRegularNodesFollowSourceFilesystemSemantics() {
     const fs::path source = temp.root() / "source";
     fs::create_directories(source);
     const fs::path socketPath = source / "socket";
-    const int descriptor = ::socket(AF_UNIX, SOCK_STREAM, 0);
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
     const std::string native = socketPath.string();
+    const bool pathFits = native.size() < sizeof(address.sun_path);
+    expect(pathFits, "socket fixture path exceeds the Unix-domain socket limit");
+    if (!pathFits) {
+      return;
+    }
     std::copy(native.begin(), native.end(), address.sun_path);
+    const int descriptor = ::socket(AF_UNIX, SOCK_STREAM, 0);
     expect(descriptor >= 0 &&
                ::bind(descriptor, reinterpret_cast<sockaddr *>(&address),
                       sizeof(address)) == 0,

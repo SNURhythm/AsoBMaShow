@@ -438,6 +438,18 @@ allocation through the shared test-only hook. The old implementation aborted
 with uncaught `bad_alloc`; the fixed regression checks completion without
 decoding and a successful retry. Focused CTest and independent review passed.
 
+## 30. Bound the Unix socket fixture path — completed
+
+The snapshotter runner checks the socket path length before copying into
+`sockaddr_un::sun_path`, reserving space for its terminating zero. An earlier
+isolated run under a long temporary parent exposed the unchecked copy. An
+unsupported path now reports a fixture failure before opening a descriptor or
+writing beyond the buffer; it does not skip validation or truncate the path.
+
+Normal focused CTest passed. An intentionally long private temporary parent
+produced exactly the expected diagnostic and exit status 1, with no leftover
+fixture roots. Independent review found no issues.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
