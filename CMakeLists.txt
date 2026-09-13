@@ -7956,6 +7956,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(replay_record_task_tests PRIVATE cxx_std_23)
     asobmashow_register_test(replay_record_task_tests)
 
+    include(cmake/RecordsTests.cmake)
+
     asobmashow_register_test(skin_package_store_tests)
     if (TARGET curl_redirect_policy_tests)
         asobmashow_register_test(curl_redirect_policy_tests)

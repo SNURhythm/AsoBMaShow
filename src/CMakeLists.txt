@@ -62,4 +62,9 @@ endif ()
 target_sources(main PRIVATE
     replay/ReplayExportJob.cpp
     scene/ReplayRecordTask.cpp
+    scene/ChartRecordActions.cpp
+    scene/CourseRecordActions.cpp
+    scene/ResultRecordsLoader.cpp
+    scene/RecordFileActions.cpp
+    scene/RecordsIrActions.cpp
 )
