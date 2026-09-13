@@ -2356,6 +2356,12 @@ void testFullUnzipOutputCollisions(const std::string &extension, std::size_t wor
       }
     } else {
       const std::size_t payloadSize = extension == ".rar" ? 1024 * 1024 : 1024;
+      if (!result) {
+        std::cerr << "Full unzip failed: " << error << '\n';
+      } else if (result->fileCount != expectedFiles.size()) {
+        std::cerr << "Full unzip file count: " << result->fileCount
+                  << " expected=" << expectedFiles.size() << '\n';
+      }
       assert(result && result->fileCount == expectedFiles.size());
       assert(budget.writtenBytes == payloadSize * expectedFiles.size());
       assert(std::filesystem::exists(result->outputFolder / ".asobmashow_unzip_complete"));
