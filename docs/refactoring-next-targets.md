@@ -295,6 +295,22 @@ and independent review found no registrations or consumers. Actual background
 workers remain owned and stopped by their subsystem services; their existing
 shutdown order is unchanged.
 
+## 18. Library picker admission and startup rollback — completed
+
+All four mobile picker launch paths now release their active admission if
+joining or creating a worker throws, then propagate the original exception.
+The sound-set picker claims active ownership before checking result readiness,
+so a completion published during admission cannot be replaced by another pick.
+Native routing, bookmarks, stop checks, and direct/import behavior remain intact.
+
+Generated fixtures compile complete picker methods in both iOS and Android
+branches with controlled native/database effects. Real thread allocation fails
+once on the requesting thread to verify rollback and retry. An observed atomic
+exchange pauses admission while the previous worker publishes through real
+atomics, verifying first-result retention, one-time consumption, and reopening
+admission. All six old-code modes failed their intended assertions; the fixed
+modes pass. These are local branch tests, not native dialog/device execution.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

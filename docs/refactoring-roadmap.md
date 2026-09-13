@@ -686,3 +686,30 @@ without reporting its underlying diagnostic. That ledger passed in isolation,
 then the unchanged full suite passed all 385 tests in 100.59 seconds. Its tight
 callback wall-time budget is a possible cause, not a confirmed diagnosis. No Lua
 policy or test limits were changed. `git diff --check` passed.
+
+## Follow-up: Picker launch rollback and pending-result admission
+
+The library and sound-set picker paths clear active ownership before rethrowing
+a join/thread-launch exception. Sound-set requests now claim active ownership
+before checking the previous worker's published result. This prevents a racing
+request from admitting a new native pick over an unconsumed result.
+
+Two generated executables compile the full production picker methods under iOS
+and Android branches. Native dialog and database effects are controlled, while
+worker creation and publication use real threads/atomics. One-shot allocation
+failure checks launch rollback/retry; a pause before the active exchange checks
+publication during admission. All six old-code modes failed the expected active
+leak or second-pick assertions. The fixed modes verify retry, pending-result
+retention, one-time consumption, later admission, and Android direct/import
+enqueue policy. Each has an explicit timeout, and fixture generation is shared.
+
+Desktop compilation, six focused cases, and independent review passed. Native
+picker calls, bookmarks, cancellation checks, and platform routes are unchanged.
+Validation is local simulation of those branches, with no deployment or native
+dialog operation.
+
+The all-target build passed. An initial full run exhausted disk space because
+old play-skin test snapshots were not removed from the system temporary folder.
+After removing only stale generated fixtures, the unchanged full suite passed
+all 391 tests in 102.00 seconds. `git diff --check` passed. Fixture cleanup is a
+separate follow-up.
