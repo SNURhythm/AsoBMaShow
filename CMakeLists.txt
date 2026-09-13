@@ -5094,6 +5094,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         cxx_std_23
     )
 
+    add_executable(play_option_summary_tests
+        tests/play_option_summary_tests.cpp
+        tests/support/AllocationLifetimeProbe.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(play_option_summary_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(play_option_summary_tests PRIVATE cxx_std_23)
+
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
         src/rendering/Color.cpp
@@ -8470,6 +8478,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(TARGET skin_configuration_write_queue_tests)
         asobmashow_register_test(skin_configuration_write_queue_tests)
     endif()
+    asobmashow_register_test(play_option_summary_tests)
     asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
     asobmashow_register_test(judgement_indicator_range_tests)

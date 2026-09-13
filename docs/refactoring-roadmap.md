@@ -1323,3 +1323,15 @@ and all-target builds, independent review, and `git diff --check` passed.
 
 All 396 CTest entries passed (103.43 seconds), including repository and profile
 workflows. The verified commit remains local.
+
+## Follow-up: Own lane-summary chart parts through insertion
+
+The lane-order helper retains its synthetic measure and timeline until the
+owning vectors accept them. The real helper/parser regression reproduced the
+old allocation leak and now passes 29 injected failures for each DP player,
+alongside lane-order and seed-policy checks. Settings-preview construction
+shares the same test-only lifetime probe and still passes all 78 failures.
+
+The focused pair, desktop and all-target builds, independent review, and
+`git diff --check` passed. All 397 CTest entries passed (114.74 seconds).
+The verified commit remains local.

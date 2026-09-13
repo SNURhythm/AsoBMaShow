@@ -902,6 +902,24 @@ and `git diff --check` passed. All 396 CTest entries passed (103.43 seconds),
 including repository round trips, retained scan-batch storage, and profile
 workflows. The commit remains local.
 
+## 57. Own synthetic lane-summary chart parts through insertion — completed
+
+`laneOrderForPlayOption` now keeps its synthetic measure and timeline in local
+owners until their respective owning-vector insertions succeed. Allocation
+failure during setup no longer leaks either object. Parser sources and lane
+randomization behavior are unchanged.
+
+The actual helper/parser fixture reproduced the old leak, then passed all 29
+allocation failures for each DP player. It also checks SP/DP mirror orders,
+normal and unknown-option fallback, random seed requirements and repeatability,
+and empty lane metadata. Its allocation-lifetime probe is shared with the
+settings-preview fixture, which retains its recipe checks and passes all 78
+construction failures. The probe is limited to the two synchronous test runners.
+
+The focused pair passed (0.41 seconds), desktop and all-target builds passed,
+and all 397 CTest entries passed (114.74 seconds). Independent review and
+`git diff --check` passed. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

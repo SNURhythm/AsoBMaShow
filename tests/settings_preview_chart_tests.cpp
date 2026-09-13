@@ -1,57 +1,11 @@
 #include "scene/SettingsPreviewChart.h"
 #include "bms_parser.hpp"
 
+#include "support/AllocationLifetimeProbe.h"
+
 #include <array>
 #include <cassert>
-#include <cstdlib>
 #include <iostream>
-#include <limits>
-#include <new>
-
-namespace {
-// The recipe is synchronous and uses ordinary allocations. Keep tracking
-// allocation-free so injected failures exercise the real chart constructors.
-std::array<void *, 512> liveAllocations{};
-std::size_t liveCount = 0, allocationCount = 0;
-std::size_t failAt = std::numeric_limits<std::size_t>::max();
-bool tracking = false;
-
-void *allocate(std::size_t size) {
-  if (tracking && allocationCount++ == failAt) throw std::bad_alloc{};
-  void *memory = std::malloc(size == 0 ? 1 : size);
-  if (!memory) throw std::bad_alloc{};
-  if (tracking) {
-    for (auto &slot : liveAllocations) {
-      if (!slot) {
-        slot = memory;
-        ++liveCount;
-        return memory;
-      }
-    }
-    std::abort();
-  }
-  return memory;
-}
-
-void release(void *memory) noexcept {
-  if (!memory) return;
-  for (auto &slot : liveAllocations) {
-    if (slot == memory) {
-      slot = nullptr;
-      --liveCount;
-      break;
-    }
-  }
-  std::free(memory);
-}
-} // namespace
-
-void *operator new(std::size_t size) { return allocate(size); }
-void *operator new[](std::size_t size) { return allocate(size); }
-void operator delete(void *memory) noexcept { release(memory); }
-void operator delete[](void *memory) noexcept { release(memory); }
-void operator delete(void *memory, std::size_t) noexcept { release(memory); }
-void operator delete[](void *memory, std::size_t) noexcept { release(memory); }
 
 void testRecipe() {
   const auto chart = settings_scene::makePreviewChart();
@@ -85,30 +39,9 @@ void testRecipe() {
 }
 
 void testEveryConstructionAllocation() {
-  tracking = true;
-  { const auto chart = settings_scene::makePreviewChart(); }
-  tracking = false;
-  assert(liveCount == 0);
-  const auto allocations = allocationCount;
-  assert(allocations > 0);
-  for (std::size_t index = 0; index < allocations; ++index) {
-    allocationCount = 0;
-    failAt = index;
-    tracking = true;
-    bool threw = false;
-    try {
-      const auto chart = settings_scene::makePreviewChart();
-    } catch (const std::bad_alloc &) {
-      threw = true;
-    }
-    tracking = false;
-    if (!threw || liveCount != 0) {
-      std::cerr << "Preview allocation " << index << ": threw=" << threw
-                << ", live allocations=" << liveCount << '\n';
-      std::abort();
-    }
-  }
-  failAt = std::numeric_limits<std::size_t>::max();
+  const auto allocations = test_support::checkAllocationFailures([] {
+    const auto chart = settings_scene::makePreviewChart();
+  });
   std::cout << "Preview construction passed " << allocations << " allocation failures\n";
 }
 

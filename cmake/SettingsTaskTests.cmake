@@ -70,6 +70,7 @@ asobmashow_register_test(settings_library_task_tests)
 # The fixed preview recipe uses real parser ownership without scene/rendering dependencies.
 add_executable(settings_preview_chart_tests
     tests/settings_preview_chart_tests.cpp
+    tests/support/AllocationLifetimeProbe.cpp
     src/scene/SettingsPreviewChart.cpp
     src/bms_parser.cpp
 )
