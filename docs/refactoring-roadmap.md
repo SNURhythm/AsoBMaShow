@@ -382,3 +382,19 @@ review found no remaining behavior, lifetime, or build-wiring blocker.
 The desktop app and all-target builds passed, followed by all 376 parallel
 CTest entries in 102.45 seconds. `git diff --check` passed. No deployment or
 physical-device verification was performed.
+
+## Follow-up: Main Menu Find BMS destructor safety
+
+The next teardown audit found the same declaration-order gap in Main Menu:
+normal cleanup cancelled/joined Find BMS, but the destructor stopped only
+replay/preview work. Find BMS status fields would die before the thread's
+implicit destructor joined, while its callback could still publish results.
+The destructor now sets the search API's atomic cancellation flag, requests
+thread stop, and joins before member destruction, preserving cleanup order.
+
+The existing fixture compiles the production destructor with a real Find BMS
+thread and a dependency sentinel. The added regression failed before the fix;
+afterward it verifies both cancellation signals and waits for an operation
+that finishes after cancellation. The desktop build and Main Menu lifecycle
+fixture passed, and independent review found no blocker. The preceding full
+suite passed 376/376; this bounded fix extends an existing test entry.

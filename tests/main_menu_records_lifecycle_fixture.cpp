@@ -4,6 +4,7 @@
 #include <cassert>
 #include <filesystem>
 #include <functional>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -189,6 +190,18 @@ struct Callbacks {
   std::function<void(const ModernCourseResultRecord &, bool)> recallModernCourse;
   std::function<void(const IrRemoteRecordId &, const std::string &)> recallRemote;
 };
+struct FindBmsLifetime {
+  std::atomic_bool workerFinished = false;
+  std::atomic_bool dependenciesAlive = true;
+};
+struct FindBmsDependencies {
+  FindBmsLifetime *lifetime = nullptr;
+  ~FindBmsDependencies() {
+    if (lifetime == nullptr) return;
+    assert(lifetime->workerFinished.load());
+    lifetime->dependenciesAlive = false;
+  }
+};
 struct MainMenuScene {
   void onApplicationBackgroundChanged(bool) {}
   SceneManager manager;
@@ -208,6 +221,10 @@ struct MainMenuScene {
   ReplayRecordsModal modal;
   ReplayRecordsModal *recordsModal_ = &modal;
   PreviewWorker *previewWorker_ = nullptr;
+  // Preserve the production ordering: Find BMS worker precedes its state.
+  std::jthread findBmsThread;
+  std::atomic_bool findBmsCancelled = false;
+  FindBmsDependencies findBmsDependencies;
   std::atomic_bool willStart = false;
   replay::ReplayExportJob replayExportJob_;
   ReplayRecordTask replayLoadTask_;
@@ -406,10 +423,43 @@ void testDestructionStopsPreparationBeforePreviewDependencies() {
   expect(previewStopped && loadStopped && exportStopped,
          "destruction must join playback work while its scene dependencies are alive");
 }
+void testDestructionStopsFindBmsBeforeStatusDependencies() {
+  using namespace std::chrono_literals;
+  FindBmsLifetime lifetime;
+  std::promise<void> entered, stopped, release;
+  auto released = release.get_future().share();
+  auto scene = std::make_unique<MainMenuScene>();
+  scene->findBmsDependencies.lifetime = &lifetime;
+  scene->findBmsThread = std::jthread(
+      [&, cancelled = &scene->findBmsCancelled](const std::stop_token &token) {
+        entered.set_value();
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while ((!token.stop_requested() || !cancelled->load()) &&
+               std::chrono::steady_clock::now() < deadline) {
+          std::this_thread::yield();
+        }
+        assert(token.stop_requested() && cancelled->load());
+        stopped.set_value();
+        assert(released.wait_for(5s) == std::future_status::ready);
+        // Pending artifact transactions can finish after cancellation.
+        assert(lifetime.dependenciesAlive.load());
+        lifetime.workerFinished = true;
+      });
+  assert(entered.get_future().wait_for(5s) == std::future_status::ready);
+  auto destroyed = std::async(std::launch::async, [&] { scene.reset(); });
+  assert(stopped.get_future().wait_for(5s) == std::future_status::ready);
+  assert(lifetime.dependenciesAlive.load());
+  assert(destroyed.wait_for(50ms) == std::future_status::timeout);
+  release.set_value();
+  assert(destroyed.wait_for(5s) == std::future_status::ready);
+  destroyed.get();
+  assert(lifetime.workerFinished && !lifetime.dependenciesAlive);
+}
 int main() {
   testAutoPlay();
   testRecall();
   testExport();
   testDestructionStopsPreparationBeforePreviewDependencies();
+  testDestructionStopsFindBmsBeforeStatusDependencies();
   return failures == 0 ? 0 : 1;
 }

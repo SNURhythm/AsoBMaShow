@@ -853,7 +853,14 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
 
 MainMenuScene::MainMenuScene(ApplicationContext &context) : Scene(context) {}
 
-MainMenuScene::~MainMenuScene() { stopReplayAndPreviewWork(); }
+MainMenuScene::~MainMenuScene() {
+  stopReplayAndPreviewWork();
+  if (findBmsThread.joinable()) {
+    findBmsCancelled = true;
+    findBmsThread.request_stop();
+    findBmsThread.join();
+  }
+}
 
 void MainMenuScene::stopReplayAndPreviewWork() {
   // Preparation workers can join the preview worker themselves. Join those

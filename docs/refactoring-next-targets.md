@@ -100,11 +100,10 @@ The earlier destructor regression now uses the real owner.
 
 Find BMS lookup, candidate download, and pending-artifact resolution share a
 scene thread, two cancellation mechanisms, a bounded progress deque, a result
-mailbox, and running state. Normal cleanup joins that worker, while the current
-destructor joins replay/preview work only. The Find BMS state follows the thread
-in declaration order and can therefore die before implicit joining. Extend the
-existing compiled Main Menu lifecycle fixture to characterize that boundary
-and fix teardown before extracting this ownership protocol.
+mailbox, and running state. Both normal cleanup and the destructor now join that worker while its
+state is still alive. The compiled Main Menu lifecycle fixture reproduced the
+previous destructor gap and verifies cancellation plus joining before callback
+dependencies die. The ownership protocol is the next extraction.
 
 Preserve explicit atomic cancellation for the search/download APIs, bounded
 progress history, completed-result delivery, replacement joining, and the
