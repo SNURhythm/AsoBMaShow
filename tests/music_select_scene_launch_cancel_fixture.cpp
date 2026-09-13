@@ -1,3 +1,4 @@
+#include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -34,6 +35,7 @@ struct LoadGate {
 };
 LoadGate parseGate;
 LoadGate audioGate;
+std::function<void()> beforeLaunchWorker;
 const auto uiThread = std::this_thread::get_id();
 
 namespace bms_parser {
@@ -58,6 +60,7 @@ bool applyPlayOptionModifier(bms_parser::Chart &, const auto &option, std::nullo
 namespace replay {
 std::optional<std::string> beatorajaReplayOptionName(int value) {
   assert(std::this_thread::get_id() == uiThread && "capture player-two settings before the worker");
+  if (beforeLaunchWorker) beforeLaunchWorker();
   return value == 0 ? "NORMAL" : "MIRROR";
 }
 }
@@ -103,6 +106,7 @@ struct PreviewAudio {
   void resumeDefaultBgm() { ++resumes; }
 };
 struct MusicSelectScene {
+  void resetFailedLaunch(std::uint64_t generation);
   struct { void cancelAndWait() {} } recordsTask_;
   struct FileActions { void close() {} };
   FileActions *recordFileActions_ = nullptr;
@@ -121,6 +125,7 @@ struct MusicSelectScene {
   bool sceneActive_ = true;
   bool failed_ = false;
   bool launching_ = true;
+  std::string launchTableName;
   bool overlayVisible = true;
   std::unique_ptr<PreviewAudio> previewAudio_ = std::make_unique<PreviewAudio>();
   std::unique_ptr<int> directoryLoader_, folderStatusLoader_;
@@ -151,13 +156,15 @@ struct MusicSelectScene {
     bool autoKeySound = false, doublePlayFlip = false;
     int playback = 100;
     bool clubMode = false, practice = false, autoplay = false;
-    struct { std::string name, level; } tableContext;
+    struct { std::string name, level; } tableContext{launchTableName, "12"};
     LAUNCH_WORKER
   }
   void cleanupScene() {
     CLEANUP_LAUNCH
   }
 };
+
+RESET_FAILED_LAUNCH
 
 void testCancellation(bool duringAudio) {
   parseGate.block = !duringAudio;
@@ -257,7 +264,52 @@ void testFailedLaunchWhileBackgrounded() {
          "a foreground failure must still restore selector music");
 }
 
+void testWorkerAdmissionFailure() {
+  for (bool background : {false, true}) {
+    bool reachedSuccess = false;
+    std::size_t rejected = 0;
+    for (std::size_t index = 0; index < 16; ++index) {
+      parseGate.block = audioGate.block = false;
+      parseGate.entered = audioGate.entered = false;
+      std::optional<test_support::FailAllocationAfter> failure;
+      MusicSelectScene scene;
+      scene.launchGeneration_ = 40;
+      scene.launchTableName = std::string(64, 'T');
+      beforeLaunchWorker = [&] {
+        scene.context.appInBackground = background;
+        failure.emplace(index);
+      };
+      bool threw = false;
+      try { scene.launch(); }
+      catch (const std::bad_alloc &) { threw = true; }
+      failure.reset();
+      beforeLaunchWorker = {};
+      if (!threw) {
+        scene.context.appInBackground = false;
+        scene.launchThread_.join();
+        scene.drain();
+        assert(scene.manager.launches == 1);
+        reachedSuccess = true;
+        break;
+      }
+      ++rejected;
+      assert(scene.launchGeneration_ == 41 && !scene.launchThread_.joinable());
+      assert(!parseGate.entered && !audioGate.entered && scene.manager.launches == 0);
+      assert(!scene.launching_ && !scene.overlayVisible);
+      assert(scene.previewAudio_->resumes == (background ? 0 : 1));
+      scene.context.appInBackground = false;
+      scene.launching_ = scene.overlayVisible = true;
+      scene.launch();
+      scene.launchThread_.join();
+      scene.drain();
+      assert(scene.launchGeneration_ == 42 && scene.manager.launches == 1);
+    }
+    assert(rejected > 0 && reachedSuccess);
+  }
+}
+
 int main() {
+  testWorkerAdmissionFailure();
   testCancellation(false);
   testCancellation(true);
   testQueuedCompletionAfterCleanup();

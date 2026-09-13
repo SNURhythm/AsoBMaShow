@@ -12,6 +12,7 @@ def export_preload_fixture(source=None):
         source = scene_fixture.read_music_select_scene()
     signatures = [
         "void MusicSelectScene::stopPreloadWorker()",
+        "void MusicSelectScene::resetFailedLaunch(std::uint64_t generation)",
         "void MusicSelectScene::startPreloadForSelection()",
         "std::unique_ptr<bms_parser::Chart> MusicSelectScene::takePreloadedChart(",
         "void MusicSelectScene::refreshRepositoryRevisions()",

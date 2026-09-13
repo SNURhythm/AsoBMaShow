@@ -816,6 +816,29 @@ the full suite passed all 396 tests in 132.88 seconds. This also supplies a
 fresh broad baseline for the preceding slices, including the gameplay runner
 previously blocked by database disk I/O errors.
 
+## 53. Recover selector UI when launch-worker creation fails — completed
+
+Song and course starts set their busy state, decide overlay, and preview
+silence before constructing a worker. If capture copying or `jthread`
+construction threw, no worker remained to restore the selector. Both starts
+now catch assignment failures, run the shared `resetFailedLaunch` UI cleanup,
+and rethrow. Deferred worker failures call the same cleanup on the UI thread.
+Current-generation, active-scene, and foreground-audio checks are preserved.
+
+Allocation walks over the real worker construction reproduced the old busy
+state in both paths. They now verify no worker or gameplay handoff after
+rejection, immediate UI recovery, foreground/background music policy, advanced
+generation, and successful retry. The song fixture supplies the initial launch
+UI state and executes the production worker boundary; the course fixture
+executes the complete production launch method. Earlier launch preparation and
+exceptions inside a running worker are outside this change.
+
+The focused regressions passed (2.30 seconds), the desktop app and all test
+targets built, and independent review and `git diff --check` passed. Both
+complete selector suites passed (78.82 seconds); the remaining 394 CTest cases
+passed separately (54.58 seconds), covering all 396 entries without repeating
+the selector runs. The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

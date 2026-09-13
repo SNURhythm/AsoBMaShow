@@ -151,10 +151,14 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_course_deferred_failure_does_not_revive_background_audio(self):
         self.run_course_audio_fixture("testCourseFailureWhileApplicationBackgrounded()")
 
+    def test_course_worker_admission_failure_restores_selector_and_allows_retry(self):
+        self.run_course_audio_fixture("testCourseWorkerAdmissionFailure()")
+
     def run_course_audio_fixture(self, test_name):
         source = read_music_select_scene()
         signatures = [
             "void MusicSelectScene::launchCourse(const MusicSelectBar &bar, bool autoplay)",
+            "void MusicSelectScene::resetFailedLaunch(std::uint64_t generation)",
             "void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory)",
             "void MusicSelectScene::onPause()",
             "void MusicSelectScene::onResume()",
@@ -168,7 +172,8 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
                              .replace("CLEANUP_LAUNCH", cleanup)
                              .replace("SCENE_METHODS", methods)
-                             .replace("SCENE_TEST", test_name))
+                             .replace("SCENE_TEST", test_name),
+                             [ROOT / "tests/support/AllocationFailure.cpp"])
 
     def test_runtime_error_keyboard_and_controller_settings_recovery(self):
         self.run_error_recovery_fixture("testSettingsRecovery")
@@ -210,8 +215,13 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         cleanup = function_body(source, "void MusicSelectScene::cleanupScene()")
         cleanup = cleanup[1:cleanup.index("stopPreloadWorker();")]
         fixture = (ROOT / "tests/music_select_scene_launch_cancel_fixture.cpp").read_text()
-        self.compile_and_run(fixture.replace("LAUNCH_WORKER", worker)
-                             .replace("CLEANUP_LAUNCH", cleanup))
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                             .replace("LAUNCH_WORKER", worker)
+                             .replace("CLEANUP_LAUNCH", cleanup)
+                             .replace("RESET_FAILED_LAUNCH",
+                                      "void MusicSelectScene::resetFailedLaunch(std::uint64_t generation)" +
+                                      function_body(source, "void MusicSelectScene::resetFailedLaunch(")),
+                             [ROOT / "tests/support/AllocationFailure.cpp"])
 
     def test_failed_fallback_audio_load_does_not_launch_gameplay(self):
         source = read_music_select_scene()

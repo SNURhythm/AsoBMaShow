@@ -48,7 +48,8 @@ and failure handling are easy to identify. File length is a signal, not a goal.
   ask the user to choose when they represent product policy.
 - Verify each slice with relevant tests, build the affected targets, and run the
   full parallel suite before completion. Commit cohesive verified changes to the
-  current branch and push its upstream. Deployment is a separate action.
+  current branch. Keep commits local until the user requests a push, avoiding
+  repeated build CI runs. Deployment is a separate action.
 
 ## Preview ownership slice
 
@@ -1269,3 +1270,20 @@ and all 396 CTest cases passed (132.88 seconds), including the previously
 blocked gameplay runner. This refreshes broad validation for the preceding
 slices as well. `git diff --check` passed. Subsequent commits stay local per
 the user's instruction to avoid repeatedly triggering build CI.
+
+## Follow-up: Recover selector state after launch-worker rejection
+
+Song and course starts now restore their busy/overlay/audio state when worker
+capture or construction fails, then propagate the original exception. Both
+immediate rejection and deferred failure reuse the same generation-aware UI
+cleanup. Background silence and stale-result rejection remain intact.
+
+Both allocation regressions failed on the old busy state and now pass, including
+same-scene retry after rejection. The song fixture exercises the worker boundary
+with prepared UI state; the course fixture executes the complete launch method.
+The desktop build and independent review passed. This does not broaden recovery
+to earlier preparation or exceptions inside an admitted worker.
+
+All targets rebuilt. The two complete selector suites passed (78.82 seconds),
+followed by the remaining 394 CTest entries (54.58 seconds), giving current
+coverage of all 396 entries. `git diff --check` passed; the commit stays local.

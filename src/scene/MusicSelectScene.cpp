@@ -2255,6 +2255,17 @@ void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
   if (previewAudio_) previewAudio_->silence();
 }
 
+void MusicSelectScene::resetFailedLaunch(std::uint64_t generation) {
+  if (!sceneActive_ || failed_ || generation != launchGeneration_) return;
+  launching_ = false;
+  hideDecideOverlay();
+  // Both rejected worker starts and deferred failures recover on the UI thread.
+  if (previewAudio_ &&
+      !context.appInBackground.load(std::memory_order_acquire)) {
+    previewAudio_->resumeDefaultBgm();
+  }
+}
+
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   if (!sceneActive_ || failed_ || selectorInputBlocked() ||
       context.appInBackground.load(std::memory_order_acquire)) return;
@@ -2364,23 +2375,14 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   const auto generation = ++launchGeneration_;
   const auto player2PlayOption = replay::beatorajaReplayOptionName(
       context.settings.skinPlayer2RandomOption);
-  launchThread_ = std::jthread(
+  try {
+    launchThread_ = std::jthread(
       [this, record, selections, autoKeySound, doublePlayFlip, playback,
        clubMode, practice, autoplay, tableContext, generation,
        player2PlayOption]() mutable {
         auto resetLaunching = [this, generation]() {
           postDeferred([this, generation]() {
-            if (!sceneActive_ || failed_ || generation != launchGeneration_) {
-              return true;
-            }
-            launching_ = false;
-            hideDecideOverlay();
-            // The launch aborted before gameplay began; lift the silence that
-            // launchSelected set when the selector is still in the foreground.
-            if (previewAudio_ &&
-                !context.appInBackground.load(std::memory_order_acquire)) {
-              previewAudio_->resumeDefaultBgm();
-            }
+            resetFailedLaunch(generation);
             return true;
           });
         };
@@ -2470,6 +2472,10 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
               return true;
             });
       });
+  } catch (...) {
+    resetFailedLaunch(generation);
+    throw;
+  }
 }
 
 void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
@@ -2512,20 +2518,13 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
   }
   launchCancelled_.store(false, std::memory_order_release);
   const auto generation = ++launchGeneration_;
-  launchThread_ = std::jthread(
+  try {
+    launchThread_ = std::jthread(
       [this, session = std::move(session), tableContext, clubMode, autoplay,
        generation]() mutable {
         auto resetLaunching = [this, generation]() {
           postDeferred([this, generation]() {
-            if (!sceneActive_ || failed_ || generation != launchGeneration_) {
-              return true;
-            }
-            launching_ = false;
-            hideDecideOverlay();
-            if (previewAudio_ &&
-                !context.appInBackground.load(std::memory_order_acquire)) {
-              previewAudio_->resumeDefaultBgm();
-            }
+            resetFailedLaunch(generation);
             return true;
           });
         };
@@ -2596,6 +2595,10 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
               return true;
             });
       });
+  } catch (...) {
+    resetFailedLaunch(generation);
+    throw;
+  }
 }
 
 void MusicSelectScene::launchSelectedDirectoryAutoplay() {

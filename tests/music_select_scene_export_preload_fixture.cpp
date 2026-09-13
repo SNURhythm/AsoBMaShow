@@ -324,6 +324,7 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  void resetFailedLaunch(std::uint64_t generation);
   bool recordsResumeAudioPending_ = false;
   Modal *archiveUnzipModal_ = nullptr;
   bool selectorInputBlocked() const { return launching_; }

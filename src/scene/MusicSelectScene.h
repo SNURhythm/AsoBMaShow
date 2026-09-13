@@ -92,6 +92,7 @@ private:
   void stopInputListening();
   void executeEvent(const skin::MusicSelectSkinAction &);
   void launchSelected(bool autoplay = false, bool practice = false);
+  void resetFailedLaunch(std::uint64_t generation);
   void startArchiveUnzip(const ChartMetaRecord &record);
   void tryCompletePendingPreloadLaunch();
   void launchCourse(const MusicSelectBar &, bool autoplay);
