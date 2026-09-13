@@ -394,6 +394,15 @@ The corrected focused group passed with zero new directories for all four
 prefixes. Global and skin-specific test helper namespaces are explicit where
 both occur in one runner.
 
+## 26. Consolidate remaining snapshot cleanup loops — completed
+
+The archive importer, tree snapshotter, package store, and Lua filesystem
+fixtures now use `ReadOnlyTreeCleanup` instead of four duplicate permission
+loops. Cleanup avoids changing permissions through symlinks, restores directory
+access before traversal, and reports failures through the existing test runners.
+Constructors and resource teardown order are unchanged. All four focused tests
+passed with zero new fixture roots; independent review found no issues.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

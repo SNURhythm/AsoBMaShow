@@ -3,6 +3,7 @@
 #include "skin/package/SkinPackageStore.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "FileChecksum.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <atomic>
 #include <chrono>
@@ -64,19 +65,9 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code ignored;
-    for (fs::recursive_directory_iterator iterator(root_, ignored), end;
-         !ignored && iterator != end; ++iterator) {
-      if (iterator->is_directory(ignored)) {
-        fs::permissions(iterator->path(), fs::perms::owner_all,
-                        fs::perm_options::add, ignored);
-      }
+    if (const auto error = ::test_support::removeReadOnlyTree(root_)) {
+      expect(false, "package store fixture cleanup failed: " + error.message());
     }
-    ignored.clear();
-    fs::permissions(root_, fs::perms::owner_all, fs::perm_options::add,
-                    ignored);
-    ignored.clear();
-    fs::remove_all(root_, ignored);
   }
 
   const fs::path &root() const noexcept { return root_; }

@@ -860,3 +860,17 @@ qualification distinguishes the general helper from skin-specific test fakes.
 The all-target build and all 391 tests passed (102.11 seconds). The full run
 left zero new directories under all four tracked prefixes.
 `git diff --check` passed.
+
+## Follow-up: Consolidate remaining snapshot cleanup loops
+
+Archive importer, tree snapshotter, package store, and Lua filesystem temporary
+owners now use the established read-only tree cleanup. This removes four
+permission loops that could follow symlinks when changing permissions and
+silently discarded cleanup errors. Existing runner failure counters now receive
+cleanup errors before final status; fixture construction and teardown order are
+preserved. All four rebuilt focused cases passed with zero new fixture roots.
+Independent review found no issues.
+
+The all-target build and all 391 tests passed (102.51 seconds). The full run
+left zero new directories under all four tracked prefixes.
+`git diff --check` passed.
