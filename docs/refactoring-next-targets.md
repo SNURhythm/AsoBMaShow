@@ -270,6 +270,23 @@ retention of an unrelated listener. The former implicit destructor fails the
 live-subscription assertion. Navigation and lifecycle targets are grouped in
 `cmake/IntroSceneTests.cmake` under the original feature gate.
 
+## 16. Input capture construction rollback — completed
+
+`InputCaptureController` now removes a successfully acquired input listener if
+device registration throws during construction. Its destructor cannot run in
+that case, so rollback occurs before resolver/member destruction and preserves
+the original exception. Ordinary startup, callback delivery, and teardown are
+unchanged; the other post-construction subscription callers need no shared
+replacement abstraction.
+
+The regression links the real controller, resolver, and profile/configuration
+implementations against a registry boundary that fails either registration.
+It verifies no callback is retained, unrelated listeners survive, saved callback
+captures are released, and a normal input reaches the actual resolver. The old
+constructor fails the retained-callback assertion without invoking a dangling
+reference. Normal and startup-failure tests share their controller sources in
+`cmake/InputCaptureTests.cmake`.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

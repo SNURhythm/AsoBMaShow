@@ -649,3 +649,25 @@ the all-target build, all 384 tests passed in 109.85 seconds in the parallel
 suite. `git diff --check` passed. The fixture controls adapter/view effects and
 uses application-thread registry delivery; it does not claim native callback
 concurrency coverage.
+
+## Follow-up: Input capture rolls back a partial subscription pair
+
+The capture controller removes its input subscription if device registration
+fails during construction, then rethrows the original exception. That closes
+the callback lifetime gap left when the constructor fails and its destructor
+cannot run. Normal registry delivery and teardown remain on the application
+thread.
+
+The failure test uses the actual controller, resolver, profile, and configuration
+sources with a controlled registry boundary. It checks first/second registration
+failure, retained callbacks without invoking dangling references, saved-callback
+capture disposal, unrelated listener survival, and successful resolver delivery.
+The old implementation failed the intended retained-callback assertion. Existing
+normal tests and the failure target share controller source definitions in
+`cmake/InputCaptureTests.cmake`; original native-backend setup is preserved.
+Desktop compilation and independent review passed.
+
+Both focused tests passed, followed by the all-target build and all 385 tests
+in 111.57 seconds in the parallel suite. `git diff --check` passed. Registry
+failure behavior is controlled in this fixture; the existing normal target
+continues to exercise the real registry and native backend stack.

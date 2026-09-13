@@ -5396,31 +5396,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(input_timestamp_tests PRIVATE cxx_std_23)
 
-    add_executable(input_capture_controller_tests
-        tests/input_capture_controller_tests.cpp
-        src/input/InputCaptureController.cpp
-        src/input/InputBindingResolver.cpp
-        src/input/InputDefaults.cpp
-        src/input/InputDeviceIdentity.cpp
-        src/input/InputDeviceRegistry.cpp
-        src/input/InputProfile.cpp
-        src/input/VirtualControllerConfig.cpp
-        src/input/SDLInputBackend.cpp
-    )
-    target_include_directories(input_capture_controller_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(input_capture_controller_tests PRIVATE cxx_std_23)
-    asobmashow_add_midi_backend(input_capture_controller_tests)
-    asobmashow_add_gyroscope_backend(input_capture_controller_tests)
-    asobmashow_add_windows_realtime_input_backend(input_capture_controller_tests)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(input_capture_controller_tests PRIVATE SDL2)
-    endif()
+    include(cmake/InputCaptureTests.cmake)
 
     add_executable(app_settings_store_tests
         tests/app_settings_store_tests.cpp
@@ -8494,6 +8470,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(ios_gyroscope_motion_adapter_tests foundation_input_gyroscope_ios_adapter)
     asobmashow_register_test(gyroscope_input_backend_core_tests foundation_input_gyroscope_backend)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
+    asobmashow_register_test(input_capture_startup_failure_tests)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(application_ui_state_store_tests)
