@@ -1,10 +1,12 @@
 #include "../src/replay/ReplayExportJob.h"
+#include "support/AllocationFailure.h"
 
 #include <chrono>
 #include <cstdlib>
 #include <future>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <thread>
 
@@ -34,6 +36,44 @@ ReplayVideoExportResult receive(replay::ReplayExportJob &job) {
   } while (std::chrono::steady_clock::now() < deadline);
   require(false, "export worker did not deliver a result");
   return {};
+}
+
+void startupFailureIsDeliveredBeforeAdmissionReopens() {
+  replay::ReplayExportJob job;
+  require(job.tryBegin(), "startup failure fixture must reserve export admission");
+  bool ran = false;
+  auto payload = std::make_shared<int>(7);
+  std::weak_ptr<int> retained = payload;
+  replay::ReplayExportJob::Work work = [&, payload](const auto &, auto &) {
+    ran = true;
+    return ReplayVideoExportResult{true, {}, "unexpected work"};
+  };
+  payload.reset();
+  ReplayVideoExportOptions options;
+  bool threw = false;
+  try {
+    const test_support::FailNextAllocation failure;
+    job.start(std::move(options), std::move(work));
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  require(!threw, "thread startup failure must use the export result channel");
+  require(!job.hasWorker() && !ran && retained.expired(),
+          "failed startup must release captures without running export work");
+  require(job.inProgress() && !job.tryBegin(),
+          "startup failure must retain admission until UI result delivery");
+  require(!job.takeProgress(), "failed startup must not invent progress");
+  const auto result = receive(job);
+  require(!result.success && result.outputPath.empty() && !result.message.empty(),
+          "startup failure must deliver its diagnostic without an output file");
+  require(!job.inProgress() && !job.takeResult(),
+          "startup failure must release admission and be delivered once");
+  require(job.tryBegin(), "delivered startup failure must allow a retry");
+  job.start({}, [](const auto &, auto &cancelled) {
+    require(!cancelled.load(), "retry must receive fresh cancellation state");
+    return ReplayVideoExportResult{true, "retry.mp4", "Exported"};
+  });
+  require(receive(job).success && !job.inProgress(), "retry must complete normally");
 }
 
 void completionOwnsAdmissionUntilDelivered() {
@@ -168,6 +208,7 @@ void exceptionsBecomeFailures() {
 } // namespace
 
 int main() {
+  startupFailureIsDeliveredBeforeAdmissionReopens();
   completionOwnsAdmissionUntilDelivered();
   progressIsLatestAndNewWorkClearsIt();
   cancellationJoinsWithoutDiscardingResult();

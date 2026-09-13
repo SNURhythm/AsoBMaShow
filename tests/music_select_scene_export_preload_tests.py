@@ -254,7 +254,7 @@ int main() {
 
     def run_fixture(self, fixture):
         try:
-            scene_fixture.MusicSelectSceneBehaviorTests().compile_and_run(fixture, [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp"])
+            scene_fixture.MusicSelectSceneBehaviorTests().compile_and_run(fixture, [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp", ROOT / "tests/support/AllocationFailure.cpp"])
         except subprocess.CalledProcessError as error:
             self.fail(error.stderr)
 

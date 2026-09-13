@@ -355,6 +355,20 @@ session and private constructor. The resource and movie catalogs retain their
 own lifetime dependencies. The compatibility query `requiresResourceRefresh`
 and active image/font patch paths remain unchanged.
 
+## 23. Replay export startup failure delivery — completed
+
+Worker-construction exceptions now use `ReplayExportJob`'s result channel,
+matching export/preparation failures. A shared publication method retains
+admission until `takeResult`, including when no worker exists. This lets both
+scene consumers finish the already-started UI handoff and report the error.
+
+One-shot allocation failure exercises real thread construction in the direct
+job runner and both existing scene fixtures. The old job and scenes failed
+their result-delivery assertions. Regressions cover released captures, no work,
+retained admission, one-time diagnostic delivery, retry, Main Menu preview
+restoration, and Records recovery with or without a modal. The allocation hook
+is shared by those test executables and is never linked into the application.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

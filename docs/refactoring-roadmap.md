@@ -800,3 +800,24 @@ deleting unreachable code.
 
 Desktop and all-target builds passed, independent review found no issues,
 and all 391 tests passed (93.71 seconds). `git diff --check` passed.
+
+## Follow-up: Deliver replay export startup failures to the scene
+
+Export admission occurs before scene preview/UI handoff. Thread-construction
+exceptions previously escaped without a result, leaving those scene flags
+busy. The job now publishes startup failure through the same result mailbox
+as export failures. Admission remains owned until the application thread
+consumes that terminal result; `takeResult` supports completion without a
+worker. A private publisher shares the mailbox lock with normal completion.
+
+A scoped one-shot allocation hook is linked only into the affected tests.
+Work/options are constructed before arming it, so the tests fail actual thread
+startup. Old source failed the direct result-channel assertion and both scene
+consumer assertions. The fixed direct case verifies capture release, no worker
+execution, retained admission, one-time diagnostic delivery, and retry. Existing
+compiled scene fixtures run complete production entry/result methods to verify
+Main Menu busy/status/preview recovery and selector Records recovery with or
+without a modal. Desktop compilation and all three focused cases passed.
+
+Independent review, the all-target build, and all 391 tests passed (101.92
+seconds). `git diff --check` passed.

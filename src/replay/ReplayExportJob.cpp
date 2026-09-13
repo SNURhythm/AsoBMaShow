@@ -16,25 +16,31 @@ void ReplayExportJob::start(ReplayVideoExportOptions options, Work work) {
     progress_.reset();
   }
   cancelled_ = false;
-  worker_ = std::jthread(
-      [this, options = std::move(options), work = std::move(work)](
-          const std::stop_token &stop) mutable {
-        ReplayVideoExportResult result;
-        try {
-          options.stop = stop;
-          options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
-            publishProgress(progress);
-          };
-          result = work(options, cancelled_);
-        } catch (const std::exception &error) {
-          result = {.success = false, .message = error.what()};
-        } catch (...) {
-          result = {.success = false,
-                    .message = "Unexpected replay export failure"};
-        }
-        std::lock_guard lock(resultMutex_);
-        result_ = std::move(result);
-      });
+  try {
+    worker_ = std::jthread(
+        [this, options = std::move(options), work = std::move(work)](
+            const std::stop_token &stop) mutable {
+          ReplayVideoExportResult result;
+          try {
+            options.stop = stop;
+            options.progressCallback = [this](const ReplayVideoExportProgress &progress) {
+              publishProgress(progress);
+            };
+            result = work(options, cancelled_);
+          } catch (const std::exception &error) {
+            result = {.success = false, .message = error.what()};
+          } catch (...) {
+            result = {.success = false,
+                      .message = "Unexpected replay export failure"};
+          }
+          publishResult(std::move(result));
+        });
+  } catch (const std::exception &error) {
+    publishResult({.success = false, .message = error.what()});
+  } catch (...) {
+    publishResult({.success = false,
+                   .message = "Unexpected replay export failure"});
+  }
 }
 
 void ReplayExportJob::cancelAndWait() {
@@ -62,6 +68,11 @@ void ReplayExportJob::publishProgress(
     const ReplayVideoExportProgress &progress) {
   std::lock_guard lock(progressMutex_);
   progress_ = progress;
+}
+
+void ReplayExportJob::publishResult(ReplayVideoExportResult result) {
+  std::lock_guard lock(resultMutex_);
+  result_ = std::move(result);
 }
 
 std::optional<ReplayVideoExportProgress> ReplayExportJob::takeProgress() {

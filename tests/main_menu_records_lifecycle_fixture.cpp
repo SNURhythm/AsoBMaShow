@@ -1,6 +1,7 @@
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include "REPOSITORY_ROOT/src/scene/FindBmsTask.h"
+#include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
 #include <atomic>
 #include <cassert>
 #include <filesystem>
@@ -9,6 +10,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <string>
 #include <thread>
@@ -181,7 +183,8 @@ struct PreviewWorker {
 
 struct Recycler {
   int selectedIndex = -1;
-  int size() { return 0; }
+  int itemCount = 0;
+  int size() { return itemCount; }
   ChartMetaRecord get(int) { return {}; }
   std::function<void(const ChartMetaRecord &, int)> onSelected;
 };
@@ -389,6 +392,44 @@ void testExport() {
     expect(!scene.modal.status.empty(), "export completion must publish status");
   }
 }
+void testExportStartupFailureRestoresRecordsAndPreview() {
+  std::atomic_bool ran = false;
+  int previewRestarts = 0;
+  Recycler recycler;
+  recycler.selectedIndex = 0;
+  recycler.itemCount = 1;
+  recycler.onSelected = [&](const auto &, int) { ++previewRestarts; };
+  View status;
+  MainMenuScene scene;
+  scene.recyclerView = &recycler;
+  scene.replayStatusText = &status;
+  expect(scene.beginReplayExport("Export", "Preparing", "Exporting"),
+         "startup failure fixture reserves the export and UI");
+  replay::ReplayExportJob::Work work = [&](const auto &, auto &) {
+    ran = true;
+    return ReplayVideoExportResult{};
+  };
+  ReplayVideoExportOptions options;
+  bool threw = false;
+  try {
+    const test_support::FailNextAllocation failure;
+    scene.replayExportJob_.start(std::move(options), std::move(work));
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  expect(!threw, "startup failure must reach the Main Menu result consumer");
+  if (threw) return;
+  expect(!ran && !scene.replayExportJob_.hasWorker() && scene.willStart &&
+             scene.modal.operationInProgress(),
+         "failed startup retains UI ownership until result consumption");
+  scene.applyReplayExportResult();
+  expect(!scene.replayExportJob_.inProgress() && !scene.willStart &&
+             scene.modal.canHide() && !scene.modal.status.empty() && !status.text.empty(),
+         "startup failure clears Main Menu busy state and publishes its diagnostic");
+  expect(previewRestarts == 1, "startup failure restores preview for the selected chart");
+  scene.applyReplayExportResult();
+  expect(previewRestarts == 1, "startup failure restores preview only once");
+}
 void testDestructionStopsPreparationBeforePreviewDependencies() {
   std::atomic_bool loadStopped = false, exportStopped = false;
   std::atomic_bool loadStarted = false, exportStarted = false;
@@ -457,6 +498,7 @@ void testDestructionStopsFindBmsBeforeStatusDependencies() {
   assert(lifetime.workerFinished && !lifetime.dependenciesAlive);
 }
 int main() {
+  testExportStartupFailureRestoresRecordsAndPreview();
   testAutoPlay();
   testRecall();
   testExport();

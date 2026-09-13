@@ -7910,6 +7910,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_export_job_tests
         tests/replay_export_job_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/replay/ReplayExportJob.cpp
     )
     target_compile_features(replay_export_job_tests PRIVATE cxx_std_23)

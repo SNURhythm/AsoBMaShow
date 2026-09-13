@@ -82,7 +82,7 @@ def records_fixture():
 class MainMenuRecordsLifecycleTests(unittest.TestCase):
     def test_actual_owner_callbacks_release_records_on_return_and_cancel(self):
         try:
-            fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(records_fixture(), [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp", ROOT / "src/scene/FindBmsTask.cpp"])
+            fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(records_fixture(), [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp", ROOT / "src/scene/FindBmsTask.cpp", ROOT / "tests/support/AllocationFailure.cpp"])
         except subprocess.CalledProcessError as error:
             self.fail(error.stderr)
 

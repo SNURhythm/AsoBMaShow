@@ -28,7 +28,7 @@ public:
   [[nodiscard]] bool hasWorker() const { return worker_.joinable(); }
 
   // Call after successful reservation and scene-specific preview/UI handoff.
-  // Preparation and export failures are delivered through takeResult().
+  // Worker startup, preparation, and export failures use takeResult().
   void start(ReplayVideoExportOptions options, Work work);
   void cancelAndWait();
   void reset();
@@ -40,6 +40,7 @@ public:
 
 private:
   void publishProgress(const ReplayVideoExportProgress &progress);
+  void publishResult(ReplayVideoExportResult result);
   std::atomic_bool active_ = false;
   std::atomic_bool cancelled_ = false;
   std::mutex progressMutex_;

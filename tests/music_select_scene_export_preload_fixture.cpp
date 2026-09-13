@@ -1,5 +1,6 @@
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
+#include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -11,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -525,7 +527,44 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
   scene.stopPreloadWorker();
 }
 
+void testExportStartupFailureRestoresRecords() {
+  for (bool withModal : {false, true}) {
+    caseName = withModal ? "startup-failure/modal" : "startup-failure/no-modal";
+    std::atomic_bool ran = false;
+    Modal modal;
+    MusicSelectScene scene;
+    if (withModal) scene.recordsModal_ = &modal;
+    expect(scene.beginRecordsExport("Export"), "startup failure reserves the export");
+    replay::ReplayExportJob::Work work = [&](const auto &, auto &) {
+      ran = true;
+      return ReplayVideoExportResult{};
+    };
+    ReplayVideoExportOptions options;
+    bool threw = false;
+    try {
+      const test_support::FailNextAllocation failure;
+      scene.recordsExportJob_.start(std::move(options), std::move(work));
+    } catch (const std::bad_alloc &) {
+      threw = true;
+    }
+    expect(!threw, "startup failure must reach the selector result consumer");
+    if (threw) continue;
+    expect(!ran && !scene.recordsExportJob_.hasWorker() &&
+               scene.recordsExportJob_.inProgress(),
+           "failed startup keeps export ownership until result consumption");
+    scene.applyRecordsExportResult();
+    expect(!scene.recordsExportJob_.inProgress(), "startup failure releases selector admission");
+    if (withModal) {
+      expect(!modal.exporting && !modal.progressVisible && !modal.status.empty(),
+             "startup failure restores Records with its diagnostic");
+    }
+    scene.applyRecordsExportResult();
+    expect(!scene.recordsExportJob_.takeResult(), "startup failure is consumed once");
+  }
+}
+
 int main() {
+  testExportStartupFailureRestoresRecords();
   for (bool autoplay : {false, true}) {
     for (bool active : {false, true}) {
       for (int outcome = 0; outcome < 4; ++outcome) {
