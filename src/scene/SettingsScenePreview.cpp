@@ -174,6 +174,7 @@ previewNoteSources(const bms_parser::Chart &chart) {
 
 SettingsScene::~SettingsScene() {
   context.profileSwitchBlockers.scene = nullptr;
+  archiveCacheMaintenance.stopAndWait();
   stopProfileArchiveWork();
   inputProfileReplacementRegistration.reset();
 }

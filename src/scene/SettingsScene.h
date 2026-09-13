@@ -6,6 +6,7 @@
 #include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
 #include "SettingsAudioVideoModel.h"
+#include "SettingsCacheMaintenance.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
@@ -305,8 +306,7 @@ private:
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
   std::jthread difficultyTableJobThread;
-  std::jthread archiveCacheCleanupThread;
-  std::jthread archiveCacheMeasureThread;
+  SettingsCacheMaintenance archiveCacheMaintenance;
   std::jthread profileArchiveThread;
   std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
   std::unique_ptr<ProfileSettingsController> profileController;
@@ -347,18 +347,13 @@ private:
   std::string profileCreateNameText;
   settings_scene::ProfileInlineEditorState profileInlineEditor;
   std::atomic_bool difficultyTableJobRunning = false;
-  std::atomic_bool archiveCacheCleanupRunning = false;
-  std::atomic_bool archiveCacheMeasureRunning = false;
-  std::atomic<std::uint64_t> archiveCacheStatusGeneration = 0;
   std::mutex difficultyTableStatusMutex;
-  std::mutex archiveCacheCleanupStatusMutex;
   bool pendingDifficultyTableStatus = false;
   bool pendingChartFolderStatus = false;
   bool pendingDifficultyTableReload = false;
   bool pendingDifficultyTableImportProgress = false;
   bool pendingDifficultyTableImportFinished = false;
   bool pendingDifficultyTableImportSucceeded = false;
-  bool pendingArchiveCacheCleanupStatus = false;
   int pendingDifficultyTableImportCurrent = 0;
   int pendingDifficultyTableImportTotal = 0;
   std::string pendingDifficultyTableImportName;
@@ -366,10 +361,8 @@ private:
   std::string pendingDifficultyTableImportStatusText;
   std::string pendingDifficultyTableStatusText;
   std::string pendingChartFolderStatusText;
-  std::string pendingArchiveCacheCleanupStatusText;
   SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
   SDL_Color pendingChartFolderStatusColor{157, 177, 200, 255};
-  SDL_Color pendingArchiveCacheCleanupStatusColor{157, 177, 200, 255};
   std::string difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string chartFolderStatusMessage;
@@ -479,8 +472,6 @@ private:
                                             bool finished,
                                             bool succeeded,
                                             const std::string &submittedUrl);
-  void requestArchiveCacheCleanupStatus(const std::string &text,
-                                        const SDL_Color &color);
   void applyPendingDifficultyTableUpdates();
   void applyPendingArchiveCacheCleanupStatus();
   void refreshTablesIfLibraryChanged();

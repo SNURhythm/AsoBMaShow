@@ -5,28 +5,29 @@ roadmap's ownership slices. They are candidates for subsequent work, not
 confirmed correctness defects. Preserve product behavior and choose one
 workflow at a time.
 
-## 1. Settings archive-cache maintenance jobs
+## 1. Settings archive-cache maintenance jobs — completed
 
-`SettingsScene::cleanupTemporaryArchiveCache` and
-`SettingsScene::measureTemporaryArchiveCache` each own a `jthread`, running
-flag, generation handling, completion formatting, and publication through the
-scene's status mutex. `SettingsScene::cleanup` separately requests stop and
-joins both. The filesystem work now has an explicit `TemporaryCache` owner,
-but the asynchronous UI workflow still lives across those scene methods and
-members.
+`SettingsCacheMaintenance` now owns both jobs, admission, generation handling,
+typed completion publication, and shutdown. `SettingsScene` supplies the real
+archive-cache operations and keeps message/color/layout presentation. Its
+cleanup and destructor explicitly join the controller; fallback controller
+destruction also joins before its callback dependencies or mailbox disappear.
 
-Extract a cache-maintenance controller that owns jobs and completion delivery.
-Keep message/color/layout presentation in the scene. Preserve the existing
-asymmetry: cleanup protects the jukebox's active materialized paths and may
-finish its filesystem operation after stop is requested; measurement accepts
-a stop token. Measurement is not started while cleanup is marked running, and
-workers check the shared generation before publishing their status.
+The existing asymmetry is preserved: cleanup resolves the jukebox's active
+materialized paths on the worker and may finish its filesystem operation after
+stop is requested; measurement accepts a stop token. Measurement cannot start
+while cleanup is running, but cleanup may overlap an existing measurement.
+Shutdown stops/joins cleanup before stopping/joining measurement.
 
-Characterize overlapping measurement/cleanup, stale completion, repeated
-requests, active-path protection, failed operations, and destruction with work
-in flight. Reuse the real cache interfaces and private temporary directories;
-do not test only status strings or thread-field names. This is the recommended
-next slice because it directly builds on the newly separated cache owner.
+Generation admission and result publication now share a mutex, and a new
+request discards an older queued result. This closes the previous gap between
+the generation check and status publication and prevents stale status from
+replacing new progress. Tests cover both cases, real protected cleanup and
+measurement in private directories, failures, repeated requests, cancellation,
+restart, and destruction with work in flight. A compiled scene fixture checks
+the complete production UI methods with the real controller and cache.
+
+The next recommended slice is pacemaker best-replay loading below.
 
 ## 2. Pacemaker best-replay loading
 

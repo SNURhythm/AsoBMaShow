@@ -17,6 +17,8 @@ application thread owns visible progress and database updates.
   helpers implement bounded discovery, parsing, ordering, and cancellation.
 - `src/archive/TemporaryCache.*` owns materialized archive-media storage and
   protected cleanup; `ArchiveFile.*` supplies the current root and identities.
+- `src/scene/SettingsCacheMaintenance.*` owns asynchronous Settings cleanup and
+  measurement; the scene consumes typed results and formats their presentation.
 - `src/archive/UnzipOutput.*` owns extraction budgets, bounded output buffering,
   and writer lifetime independently of backend decoding.
 - `src/scene/MainMenuLibrary.*`, `MainMenuScene.*`, and chart-list views
@@ -62,6 +64,8 @@ Main Menu preview/Records lifecycle fixtures. For the scheduler's detailed opera
 [`src/ChartScanWorkScheduler.md`](../../src/ChartScanWorkScheduler.md).
 Temporary-media storage is covered by `temporary_archive_cache_tests` and the
 private-root integration case in `archive_file_concurrency_tests`.
+`settings_cache_maintenance_tests` covers the Settings job lifecycle, stale
+completion rejection, and application-thread handoff using the real cache.
 `unzip_output_tests` directly covers output policy, cancellation, failures,
 backpressure, and destructor joining; backend extraction/recovery cases remain
 in the archive concurrency tests.

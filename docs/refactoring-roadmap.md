@@ -234,5 +234,36 @@ were retained based on implementation evidence.
 Further candidates are documented in
 [Next workflow refactoring targets](refactoring-next-targets.md), with concrete
 ownership problems, behavior constraints, and characterization requirements.
-Start with Settings cache-maintenance jobs, then evaluate pacemaker best-replay
-loading and archive index-build coordination as separate slices.
+Settings cache-maintenance jobs are now completed as the first follow-up below.
+Evaluate pacemaker best-replay loading and archive index-build coordination as
+the next separate slices.
+
+## Follow-up: Settings cache-maintenance ownership
+
+`SettingsCacheMaintenance` owns cleanup/measurement jobs, admission, running
+state, generation checks, typed completion storage, and cleanup-first joining.
+The scene supplies cache facade operations; cleanup captures the externally
+owned jukebox rather than the scene and reads its active materialized paths
+on the worker. Both scene cleanup and destruction stop/join the owner. Workers
+no longer format or publish UI strings through scene members.
+
+Cleanup still allows its filesystem operation to finish after cancellation;
+measurement still receives a stop token. Cleanup may overlap a prior
+measurement, measurement remains blocked during cleanup, and completed workers
+are joined before reuse. A targeted correctness improvement makes generation
+validation/publication atomic with admission and discards previously queued
+results when a newer request starts. An old measurement can no longer replace
+the newer cleanup status or progress.
+
+The compiled tests exercise real cache measurement/protected cleanup in private
+directories, duplicate admission, deterministically late measurement,
+previously queued completion, filesystem errors, stop/restart, and destruction
+while cleanup is blocked. Complete production scene methods run against this
+owner and small view doubles to check application-thread delivery, button
+restoration, errors, and layout refresh. Temporary mutations removing the
+generation guard or admission's completion reset each failed the corresponding
+regression test. Review found no remaining blocker.
+
+The desktop app and all-target builds passed, followed by all 372 parallel
+CTest entries in 101.71 seconds. `git diff --check` passed. Verification was
+local to the desktop build; no deployment or physical-device checks were run.

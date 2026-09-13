@@ -2205,7 +2205,7 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   cacheCleanupControls->setGap(metrics.compact ? 12.0f : 16.0f);
   cacheCleanupControls->setAlignItems(YGAlignFlexStart);
   archiveCacheCleanupButtonText =
-      makeText(archiveCacheCleanupRunning.load() ? "Cleaning..." : "Clean Up",
+      makeText(archiveCacheMaintenance.cleanupRunning() ? "Cleaning..." : "Clean Up",
                metrics.bodyTextSize + 4, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   archiveCacheCleanupButton =
