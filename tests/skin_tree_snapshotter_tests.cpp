@@ -45,9 +45,10 @@ class TempDirectory {
 public:
   TempDirectory() {
     static std::atomic_uint64_t serial{0};
-    root_ = fs::temp_directory_path() /
-            ("asobmashow-snapshot-test-" + std::to_string(++serial));
-    fs::create_directories(root_);
+    do {
+      root_ = fs::temp_directory_path() /
+              ("asobmashow-snapshot-test-" + std::to_string(++serial));
+    } while (!fs::create_directory(root_));
   }
   ~TempDirectory() {
     if (const auto error = ::test_support::removeReadOnlyTree(root_)) {

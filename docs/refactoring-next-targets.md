@@ -403,6 +403,16 @@ access before traversal, and reports failures through the existing test runners.
 Constructors and resource teardown order are unchanged. All four focused tests
 passed with zero new fixture roots; independent review found no issues.
 
+## 27. Claim snapshot test roots exclusively — completed
+
+The tree snapshotter fixture now retries `create_directory` until it owns a
+new root. Previously, each process started at the same serial path and
+`create_directories` silently accepted an existing directory, which teardown
+then deleted. An isolated executable check demonstrated deletion of a
+pre-existing sentinel despite a passing runner. The fixed runner preserves that
+sentinel; three pairs of concurrent runs also passed without leftover roots.
+The rebuilt focused CTest passed, and independent review found no issues.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

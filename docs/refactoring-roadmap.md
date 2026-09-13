@@ -874,3 +874,17 @@ Independent review found no issues.
 The all-target build and all 391 tests passed (102.51 seconds). The full run
 left zero new directories under all four tracked prefixes.
 `git diff --check` passed.
+
+## Follow-up: Claim snapshot test roots exclusively
+
+The snapshotter's deterministic temporary path could reuse another run's
+existing directory and delete it during teardown. A private temporary-parent
+check reproduced this: the old runner passed while removing a pre-existing
+sentinel. Construction now requires `create_directory` to claim a new path,
+matching the session and Lua fixture convention.
+
+The rebuilt runner preserved the sentinel and passed three paired concurrent
+runs with no leftover roots. These checks use a short owned temporary parent
+to stay within the existing Unix-socket fixture's path-length limit. Focused
+CTest and independent review passed. `git diff --check` passed. The preceding
+cleanup consolidation established the unchanged 391-test application baseline.
