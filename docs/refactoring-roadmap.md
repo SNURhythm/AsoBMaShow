@@ -1374,3 +1374,13 @@ files, and a successful migration retry. SQL and diagnostic behavior are unchang
 
 Desktop and all-target builds, independent review, and `git diff --check` passed.
 All 398 CTest entries passed (111.32 seconds). The verified commit remains local.
+
+## Follow-up: Release WebP buffers and adopt formats before cancellation
+
+The WebP decoder releases the final custom-I/O buffer before its FFmpeg context
+and adopts the format context before its cancellation check. The existing
+image-decoder fixture went from five native leaks totaling 25,600 bytes to zero
+under the same macOS leak check. Decode behavior is unchanged.
+
+Desktop and all-target builds, independent review, and `git diff --check` passed.
+All 398 CTest entries passed (97.95 seconds). The verified commit remains local.

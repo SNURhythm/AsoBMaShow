@@ -979,6 +979,28 @@ Desktop and all-target builds, independent review, and `git diff --check` passed
 All 398 CTest entries passed (111.32 seconds), including the existing migration
 fault matrices. The commit remains local.
 
+## 62. Release WebP custom-I/O buffers after decoding — completed
+
+The WebP decoder now frees the current `AVIOContext::buffer` before freeing the
+context, as required by FFmpeg's custom-I/O contract. Probing can replace the
+initial allocation, so cleanup uses the context's final buffer. The format
+context is also adopted before checking cancellation at the decoding handoff.
+Decode limits, scaling, and file/memory dispatch are unchanged.
+
+The existing real image-decoder fixture reproduced five leaks totaling 25,600
+bytes, all from FFmpeg buffer reallocation during WebP decoding. Rebuilding and
+running the same fixture under macOS `leaks` reported zero leaks and exited
+successfully. The reproduction command is:
+
+```sh
+MallocStackLogging=1 leaks --fullStacks --atExit -- cmake-build-debug/image_file_decoder_tests
+```
+
+The installed FFmpeg header and its [custom-I/O example](https://ffmpeg.org/doxygen/7.1/avio_read_callback_8c-example.html)
+document this ownership requirement. Desktop and all-target builds, independent
+review, and `git diff --check` passed. All 398 CTest entries passed (97.95
+seconds). The commit remains local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
