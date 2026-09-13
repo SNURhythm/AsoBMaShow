@@ -608,6 +608,13 @@ private:
 
 } // namespace
 
+MusicPlayerScene::~MusicPlayerScene() {
+  // Unused or already-exited players must not reset another owner's BGA state.
+  if (videoFullscreenActive || videoVisualsLoaded || videoRestoresVisualsEnabled) {
+    cleanup();
+  }
+}
+
 void MusicPlayerScene::init() {
   context.jukebox.stop();
   applySystemPlaybackPrivacy(false);

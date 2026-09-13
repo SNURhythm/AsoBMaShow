@@ -180,20 +180,38 @@ The former default-destructor negative control fails the expected lifetime
 assertion. Geometry and lifecycle targets are grouped in
 `cmake/ChartViewerTests.cmake` with existing geometry registration preserved.
 
-## 10. Music Player direct-destruction video lifetime
+## 10. Music Player direct-destruction video lifetime — completed
 
-Music Player's fullscreen video owns jukebox visuals and temporary BGA policy
-overrides. Its implicit destructor skips their explicit scene cleanup. Unlike
-Chart Viewer, normal Music Player cleanup also resets global BGA state even
-without acquired video resources. Direct destruction must therefore enter that
-cleanup only when fullscreen, loaded-video, or visual-restoration state belongs
-to this scene. An unused/already-exited scene must leave another playback
-owner's state alone.
+The destructor enters existing guarded cleanup only while fullscreen, loaded
+video, or visual-restoration state belongs to the scene. That covers partial
+acquisition while protecting shared BGA state after fullscreen exit or normal
+cleanup, and when an unused scene is destroyed. Release restores the previous
+visuals setting and unloads owned visuals without stopping native music or
+refreshing UI during destruction.
 
-Characterize acquisition, active and partially acquired overrides, prior
-normal cleanup, fullscreen exit, and unused destruction. Reuse the existing
-cleanup path and preserve the previous visuals setting; avoid introducing
-another copy of the release sequence or invoking UI refresh during destruction.
+The generated fixture executes complete production acquisition, fullscreen
+exit, cleanup, and destructor methods with base cleanup/view disposal. It
+covers prior visuals enabled/disabled, BGA and artwork fallback, partial
+acquisition exceptions on both sides of entering fullscreen, deferred capture
+release, and inactive/exited/cleaned ownership. Negative controls fail for both
+the former implicit destructor and an unconditional cleanup destructor. Native
+media and UI effects are controlled doubles.
+
+## 11. Shared parallel-work helpers
+
+`Utils` mixes filesystem/string utilities with parallel execution. The only
+active parallel operation is `parallel_for_each_index`; repository searches
+find no callers of the older integer-range `parallel_for` or `threadRAII`.
+The active operation manually joins a vector of raw threads, so ownership is
+not protected if a later thread construction throws.
+
+Group worker-count policy and indexed execution in a small dedicated header,
+retain the existing include facade for callers, and use joining thread owners.
+The sizing policy narrows `size_t` to `unsigned int` before bounding it, so a
+large count can wrap to zero. Compare at the wider width before narrowing the
+bounded result. Test deterministic hardware/count boundaries and real exactly-
+once index execution; preserve headroom, sequential behavior, and caller-owned
+work error handling.
 
 ## What the review does not justify
 

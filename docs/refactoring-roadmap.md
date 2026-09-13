@@ -526,3 +526,23 @@ desktop compilation, and all-target compilation passed; review found no blocker.
 After all-target compilation, the full parallel suite passed all 378 tests in
 104.72 seconds. `git diff --check` passed. Audio/view effects in the new fixture
 are controlled doubles; no platform deployment or physical-device test ran.
+
+## Follow-up: Music Player releases only its owned video state
+
+The explicit Music Player destructor calls guarded cleanup only when fullscreen,
+loaded-video, or visual-restoration state remains owned by the scene. Existing
+cleanup unloads visuals and restores the previous setting before chart/view
+release. Unused and already-exited scenes leave shared BGA state untouched;
+destruction does not refresh UI or stop native music playback.
+
+The generated fixture compiles complete production acquisition, fullscreen
+exit, cleanup, destructor, and base cleanup/view disposal. It exercises BGA and
+artwork fallback, both previous visuals values, partial acquisition exceptions,
+normal cleanup, unused/no-selection destruction, and shared-state changes after
+exit. Negative controls for default and unconditional-cleanup destructors both
+fail the expected ownership assertions. Focused tests, desktop compilation,
+and all-target compilation passed; review found no blocker.
+
+The full parallel suite passed all 379 tests in 106.15 seconds after all-target
+compilation. `git diff --check` passed. Verification used local desktop tests
+with controlled native effects; no deployment was performed.
