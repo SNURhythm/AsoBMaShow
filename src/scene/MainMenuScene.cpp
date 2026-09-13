@@ -117,7 +117,6 @@ constexpr int kLibraryControlWidth =
     kLibraryPanelWidth - (kLibraryPanelPadding * 2);
 constexpr auto kPreviewDebounceDelay = std::chrono::milliseconds(100);
 constexpr size_t kFindBmsMaxLogLines = 120;
-constexpr size_t kFindBmsMaxPendingProgressEvents = 160;
 // Keep this below the modal's nominal width because row padding and the
 // scrollbar gutter reduce the usable text area.
 constexpr size_t kParseLogRowMaxColumns = 88;
@@ -855,11 +854,7 @@ MainMenuScene::MainMenuScene(ApplicationContext &context) : Scene(context) {}
 
 MainMenuScene::~MainMenuScene() {
   stopReplayAndPreviewWork();
-  if (findBmsThread.joinable()) {
-    findBmsCancelled = true;
-    findBmsThread.request_stop();
-    findBmsThread.join();
-  }
+  findBmsTask.stopAndWait();
 }
 
 void MainMenuScene::stopReplayAndPreviewWork() {
@@ -879,7 +874,7 @@ void MainMenuScene::init() {
       return "A replay export is active.";
     }
     if (archiveUnzipInProgress() ||
-        findBmsJobRunning.load(std::memory_order_acquire)) {
+        findBmsTask.running()) {
       return "A chart archive operation is active.";
     }
     if (willStart.load(std::memory_order_acquire)) {
@@ -1209,16 +1204,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
     pendingFindBmsSelectionHandoff.reset();
   }
   suppressPreviewForChartPath.reset();
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
+  findBmsTask.stopAndWait();
   chartSelectionGeneration = 0;
   findBmsSelectionGenerationAtDownloadStart = 0;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
   tasksModalOpenRequested = false;
-  findBmsJobRunning = false;
-  findBmsCancelled = false;
   findBmsResult = {};
   findBmsPendingDecision.reset();
   findBmsProgressMessage.clear();
@@ -5804,17 +5796,14 @@ void MainMenuScene::buildFindBmsModal() {
   findBmsGoogleButton->setWidth(150);
   findBmsRefreshButton->setWidth(150);
   findBmsCloseButton->setOnClickListener([this]() {
-    const bool wasRunning = findBmsJobRunning.load();
+    const bool wasRunning = findBmsTask.running();
     applyFindBmsUpdates();
-    const bool running = wasRunning || findBmsJobRunning.load();
+    const bool running = wasRunning || findBmsTask.running();
     if (!findBmsDialogPolicy(running, findBmsResult).showCloseOrCancel) {
       return;
     }
     if (running) {
-      findBmsCancelled = true;
-      if (findBmsThread.joinable()) {
-        findBmsThread.request_stop();
-      }
+      findBmsTask.requestCancel();
       refreshFindBmsModal();
       return;
     }
@@ -5858,11 +5847,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   if (findBmsModalRoot == nullptr) {
     return;
   }
-  if (findBmsThread.joinable()) {
-    findBmsCancelled = true;
-    findBmsThread.request_stop();
-    findBmsThread.join();
-  }
+  findBmsTask.stopAndWait();
 
   findBmsModalChart = record;
   findBmsResult = {};
@@ -5881,55 +5866,31 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
   findBmsProgressFraction = 0.02;
   findBmsProgressLog.clear();
   findBmsProgressLog.push_back("Preparing lookup");
-  findBmsCancelled = false;
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
 
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
   const BmsSearchDownloadOptions downloadOptions{
       .skipUnarchivingForNonSolidArchives =
           context.settings.findBmsSkipUnarchivingForNonSolidArchives};
   findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
-  findBmsJobRunning = true;
   findBmsModalRoot->setSize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->setVisible(true);
-  refreshFindBmsModal();
-
-  findBmsThread = std::jthread([this, record, downloadRoot, downloadOptions](
-                                   const std::stop_token &stopToken) {
+  findBmsTask.start([record, downloadRoot, downloadOptions](
+                        std::atomic_bool &cancelled,
+                        BmsSearchDownloadProgressCallback progress) {
     BmsSearchService service;
-    auto progressCallback = [this](const BmsSearchDownloadProgress &progress) {
-      std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsProgressEvents.push_back(progress);
-      while (pendingFindBmsProgressEvents.size() >
-             kFindBmsMaxPendingProgressEvents) {
-        pendingFindBmsProgressEvents.pop_front();
-      }
-    };
-    if (stopToken.stop_requested()) {
-      findBmsCancelled = true;
-    }
-    auto result = service.findAndDownload(
-        record.meta.SHA256, record.meta.MD5, downloadRoot, findBmsCancelled,
-        progressCallback, record.meta.Title, record.meta.Artist,
+    return service.findAndDownload(
+        record.meta.SHA256, record.meta.MD5, downloadRoot, cancelled,
+        std::move(progress), record.meta.Title, record.meta.Artist,
         downloadOptions);
-    {
-      std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-      pendingFindBmsResult = std::move(result);
-      findBmsJobRunning = false;
-    }
   });
+  refreshFindBmsModal();
 }
 
 void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
-  if (findBmsJobRunning.load() ||
+  if (findBmsTask.running() ||
       candidateIndex >= findBmsResult.candidates.size()) {
     return;
   }
-  if (findBmsThread.joinable()) {
-    findBmsThread.join();
-  }
-
   const BmsSearchCandidate candidate = findBmsResult.candidates[candidateIndex];
   const ChartMetaRecord record = findBmsModalChart;
   const std::filesystem::path downloadRoot = preferredBmsDownloadRoot();
@@ -5945,49 +5906,23 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsProgressFraction = 0.09;
   findBmsProgressLog.clear();
   findBmsProgressLog.push_back("Preparing Horie archive download");
-  findBmsCancelled = false;
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
   findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;
-  findBmsJobRunning = true;
+  findBmsTask.start([candidate, record, downloadRoot, downloadOptions](
+                        std::atomic_bool &cancelled,
+                        BmsSearchDownloadProgressCallback progress) {
+    BmsSearchService service;
+    return service.downloadCandidate(
+        candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
+        cancelled, std::move(progress), downloadOptions);
+  });
   refreshFindBmsModal();
-
-  findBmsThread = std::jthread(
-      [this, candidate, record, downloadRoot, downloadOptions](
-          const std::stop_token &stopToken) {
-        BmsSearchService service;
-        auto progressCallback =
-            [this](const BmsSearchDownloadProgress &progress) {
-              std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-              pendingFindBmsProgressEvents.push_back(progress);
-              while (pendingFindBmsProgressEvents.size() >
-                     kFindBmsMaxPendingProgressEvents) {
-                pendingFindBmsProgressEvents.pop_front();
-              }
-            };
-        if (stopToken.stop_requested()) {
-          findBmsCancelled = true;
-        }
-        auto result = service.downloadCandidate(
-            candidate, record.meta.SHA256, record.meta.MD5, downloadRoot,
-            findBmsCancelled, progressCallback, downloadOptions);
-        {
-          std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-          pendingFindBmsResult = std::move(result);
-          findBmsJobRunning = false;
-        }
-      });
 }
 
 void MainMenuScene::startFindBmsPendingArtifactResolution(
     BmsSearchPendingArtifactDecision decision) {
-  if (findBmsJobRunning.load() || !findBmsResult.pendingArtifact) {
+  if (findBmsTask.running() || !findBmsResult.pendingArtifact) {
     return;
   }
-  if (findBmsThread.joinable()) {
-    findBmsThread.join();
-  }
-
   BmsSearchResult result = findBmsResult;
   findBmsPendingDecision = decision;
   findBmsProgressMessage =
@@ -5997,27 +5932,18 @@ void MainMenuScene::startFindBmsPendingArtifactResolution(
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.95;
   findBmsProgressLog.push_back(findBmsProgressMessage);
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
-  findBmsJobRunning = true;
+  findBmsTask.start([result = std::move(result), decision](
+                        std::atomic_bool &, BmsSearchDownloadProgressCallback) mutable {
+    BmsSearchService service;
+    return service.resolvePendingArtifact(std::move(result), decision);
+  });
   refreshFindBmsModal();
-
-  findBmsThread = std::jthread(
-      [this, result = std::move(result), decision](
-          const std::stop_token &) mutable {
-        BmsSearchService service;
-        auto resolved =
-            service.resolvePendingArtifact(std::move(result), decision);
-        std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-        pendingFindBmsResult = std::move(resolved);
-        findBmsJobRunning = false;
-      });
 }
 
 void MainMenuScene::hideFindBmsModal() {
-  const bool wasRunning = findBmsJobRunning.load();
+  const bool wasRunning = findBmsTask.running();
   applyFindBmsUpdates();
-  const bool running = wasRunning || findBmsJobRunning.load();
+  const bool running = wasRunning || findBmsTask.running();
   if (findBmsModalRoot == nullptr ||
       !findBmsDialogPolicy(running, findBmsResult).canDismiss) {
     return;
@@ -6030,9 +5956,9 @@ void MainMenuScene::refreshFindBmsModal() {
     return;
   }
 
-  const bool running = findBmsJobRunning.load();
+  const bool running = findBmsTask.running();
   const auto policy =
-      findBmsDialogPolicy(findBmsJobRunning.load(), findBmsResult);
+      findBmsDialogPolicy(findBmsTask.running(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
     findBmsModalTitleText->setText("Find BMS");
   }
@@ -6240,15 +6166,9 @@ void MainMenuScene::refreshFindBmsModal() {
 }
 
 void MainMenuScene::applyFindBmsUpdates() {
-  std::deque<BmsSearchDownloadProgress> progressEvents;
-  std::optional<BmsSearchResult> result;
-  {
-    std::lock_guard<std::mutex> lock(findBmsUpdateMutex);
-    progressEvents = std::move(pendingFindBmsProgressEvents);
-    result = std::move(pendingFindBmsResult);
-    pendingFindBmsProgressEvents.clear();
-    pendingFindBmsResult.reset();
-  }
+  auto updates = findBmsTask.takeUpdates();
+  auto &progressEvents = updates.progress;
+  auto &result = updates.result;
 
   auto appendLogLine = [this](const std::string &logLine) {
     if (logLine.empty()) {
@@ -6277,7 +6197,6 @@ void MainMenuScene::applyFindBmsUpdates() {
     shouldRefresh = true;
   }
   if (result) {
-    findBmsJobRunning = false;
     findBmsResult = std::move(*result);
     findBmsPendingDecision.reset();
     const bool keptMismatchedFiles =
@@ -7834,12 +7753,7 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining replayExportThread");
     replayExportJob_.cancelAndWait();
   }
-  if (findBmsThread.joinable()) {
-    SDL_Log("Joining findBmsThread");
-    findBmsCancelled = true;
-    findBmsThread.request_stop();
-    findBmsThread.join();
-  }
+  findBmsTask.stopAndWait();
   archiveUnzipModal_.reset();
   stopAndClearSelectedChart();
   selectedChartRecord.reset();
@@ -7960,15 +7874,12 @@ void MainMenuScene::cleanupScene() {
     pendingFindBmsSelectionHandoff.reset();
   }
   suppressPreviewForChartPath.reset();
-  pendingFindBmsProgressEvents.clear();
-  pendingFindBmsResult.reset();
+  findBmsTask.stopAndWait();
   chartSelectionGeneration = 0;
   findBmsSelectionGenerationAtDownloadStart = 0;
   replayResultRecallInProgress = false;
   replayIrUploadInProgress = false;
   replayIrObservedRevisions.clear();
-  findBmsJobRunning = false;
-  findBmsCancelled = false;
   findBmsResult = {};
   findBmsProgressMessage.clear();
   findBmsProgressCurrent = 0;

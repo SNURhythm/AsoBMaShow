@@ -398,3 +398,39 @@ afterward it verifies both cancellation signals and waits for an operation
 that finishes after cancellation. The desktop build and Main Menu lifecycle
 fixture passed, and independent review found no blocker. The preceding full
 suite passed 376/376; this bounded fix extends an existing test entry.
+
+## Follow-up: Find BMS task ownership and completed-result admission
+
+`FindBmsTask` owns the search/download/artifact worker, service cancellation,
+latest 160 progress events, and result handoff. Scene operations capture request
+values only; their service calls, selected-chart generation, indexing requests,
+progress formatting, and dialog policy retain their existing boundaries.
+Nonblocking cancellation still delivers the service outcome, including a pending
+artifact. Stop joins uncancellable transactions and discards queued updates.
+
+Review found a race in the initial extraction: refreshing after launch could
+observe a completed worker while the scene still held the previous pending
+artifact. Keep/Delete could be re-enabled before the first transaction's result
+was consumed. The owner now remains busy and rejects new admission while a
+result awaits delivery. Explicit replacement still stops/joins and discards.
+
+A deterministic regression waits for thread-callable capture destruction after
+publication, verifies the real dialog policy and complete production artifact
+launch reject a duplicate action, and checks exactly-once indexing. A temporary
+mutation restoring early-idle reporting fails that policy assertion. Other
+owner and compiled scene tests cover progress bounds/order, request values,
+cancellation with pending artifacts, replacement, candidate validation,
+keep/delete outcomes, UI handoff, and destruction. The archive-flow source audit
+now references the owner while retaining the tested dialog-policy requirement.
+
+The first full suite also exposed an unrelated archive worker-budget fixture
+assumption. Diagnostics reproduced successful extraction of two archives with
+two workers each but only three globally distinct thread IDs: an inner worker
+ID was reused after its first lifetime ended. The fixture now checks each
+archive's two-worker allocation directly. This preserves the shared-budget
+assertion without assuming thread IDs remain globally unique after exit.
+
+The corrected archive fixture passed 20 consecutive runs. After rebuilding all
+targets, the full parallel suite passed all 377 tests in 103.95 seconds. Review
+found no remaining blocker and `git diff --check` passed. Verification stayed
+local to the desktop build; no deployment or physical-device checks were run.

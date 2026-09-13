@@ -41,6 +41,7 @@
 #include "CourseRecordActions.h"
 #include "RecordFileActions.h"
 #include "ReplayRecordTask.h"
+#include "FindBmsTask.h"
 #include "ArchiveUnzipModal.h"
 #include <array>
 #include <atomic>
@@ -96,7 +97,7 @@ private:
   // never spawns or joins a per-selection thread on the UI thread.
   std::unique_ptr<MainMenuPreviewController> previewWorker_;
   std::mutex previewJukeboxLoadMutex;
-  std::jthread findBmsThread;
+  FindBmsTask findBmsTask;
   ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;
   bool replayResultRecallInProgress = false;
@@ -302,8 +303,6 @@ private:
   std::optional<PendingFindBmsSelectionHandoff>
       pendingFindBmsSelectionHandoff;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
-  std::atomic_bool findBmsJobRunning = false;
-  std::atomic_bool findBmsCancelled = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
@@ -312,9 +311,6 @@ private:
   std::uint64_t findBmsProgressTotal = 0;
   double findBmsProgressFraction = 0.0;
   std::deque<std::string> findBmsProgressLog;
-  std::mutex findBmsUpdateMutex;
-  std::deque<BmsSearchDownloadProgress> pendingFindBmsProgressEvents;
-  std::optional<BmsSearchResult> pendingFindBmsResult;
   std::uint64_t chartSelectionGeneration = 0;
   std::uint64_t findBmsSelectionGenerationAtDownloadStart = 0;
 

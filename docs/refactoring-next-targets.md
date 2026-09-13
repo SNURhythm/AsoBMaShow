@@ -96,20 +96,40 @@ scene fixtures exercise import progress, success/failure and URL edits,
 update/delete confirmation, absent views, and application-thread delivery.
 The earlier destructor regression now uses the real owner.
 
-## 5. Main Menu Find BMS job ownership
+## 5. Main Menu Find BMS job ownership — completed
 
-Find BMS lookup, candidate download, and pending-artifact resolution share a
-scene thread, two cancellation mechanisms, a bounded progress deque, a result
-mailbox, and running state. Both normal cleanup and the destructor now join that worker while its
-state is still alive. The compiled Main Menu lifecycle fixture reproduced the
-previous destructor gap and verifies cancellation plus joining before callback
-dependencies die. The ownership protocol is the next extraction.
+`FindBmsTask` owns lookup/download/artifact worker lifetime, the service's
+cancellation flag, bounded progress events, and result handoff. Scene worker
+lambdas capture request values only. Nonblocking cancellation retains the
+service outcome, including a pending artifact; shutdown/replacement joins
+uncancellable artifact work and discards queued data. The latest 160 progress
+events remain ordered. Selection generation and indexing stay in Main Menu.
 
-Preserve explicit atomic cancellation for the search/download APIs, bounded
-progress history, completed-result delivery, replacement joining, and the
-uncancellable pending-artifact keep/delete transaction. Selection generation
-and chart-selection handoff are application policy and should remain outside
-the worker owner.
+A result awaiting application keeps the task busy and prevents new admission.
+This closes a fast-completion race discovered during review: refreshing after
+launch could otherwise re-enable old Keep/Delete actions before consuming the
+completed transaction. A deterministic test observes publication through
+worker-capture destruction, then checks real dialog policy, the complete
+production artifact-launch method, and exactly-once indexing. Direct owner and
+compiled scene tests also cover request forwarding, cancellation, progress,
+candidate bounds, artifact decisions, and destructor joining.
+
+## 6. IR upload preparation ownership
+
+`IrUploadsScene` coordinates a preparation thread, shared progress/completion
+mailbox, and `DurableEnqueueGate` around the existing
+`prepareSelectedCandidates` domain function. Worker lambdas capture the scene
+to reach external driver/submission dependencies. These objects currently have
+safe member ordering; this is an ownership/readability candidate, not a
+confirmed teardown defect.
+
+Group the preparation worker, gate, and data handoff into one owner. Preserve
+application-thread controller updates, selection locking, partial failures,
+progress coalescing, and completion joining. Cancellation before durable enqueue
+must suppress it, while an enqueue already begun must retain its outcome.
+Reuse the tested preparation function and gate rather than introducing a new
+submission protocol. Characterize stop/consume/restart and gate lifetime with
+controlled verification and enqueue dependencies before integrating the scene.
 
 ## What the review does not justify
 

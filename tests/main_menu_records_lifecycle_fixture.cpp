@@ -1,5 +1,6 @@
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
+#include "REPOSITORY_ROOT/src/scene/FindBmsTask.h"
 #include <atomic>
 #include <cassert>
 #include <filesystem>
@@ -222,8 +223,7 @@ struct MainMenuScene {
   ReplayRecordsModal *recordsModal_ = &modal;
   PreviewWorker *previewWorker_ = nullptr;
   // Preserve the production ordering: Find BMS worker precedes its state.
-  std::jthread findBmsThread;
-  std::atomic_bool findBmsCancelled = false;
+  FindBmsTask findBmsTask;
   FindBmsDependencies findBmsDependencies;
   std::atomic_bool willStart = false;
   replay::ReplayExportJob replayExportJob_;
@@ -430,20 +430,21 @@ void testDestructionStopsFindBmsBeforeStatusDependencies() {
   auto released = release.get_future().share();
   auto scene = std::make_unique<MainMenuScene>();
   scene->findBmsDependencies.lifetime = &lifetime;
-  scene->findBmsThread = std::jthread(
-      [&, cancelled = &scene->findBmsCancelled](const std::stop_token &token) {
+  scene->findBmsTask.start(
+      [&](std::atomic_bool &cancelled, BmsSearchDownloadProgressCallback) {
         entered.set_value();
         const auto deadline = std::chrono::steady_clock::now() + 5s;
-        while ((!token.stop_requested() || !cancelled->load()) &&
+        while (!cancelled.load() &&
                std::chrono::steady_clock::now() < deadline) {
           std::this_thread::yield();
         }
-        assert(token.stop_requested() && cancelled->load());
+        assert(cancelled.load());
         stopped.set_value();
         assert(released.wait_for(5s) == std::future_status::ready);
         // Pending artifact transactions can finish after cancellation.
         assert(lifetime.dependenciesAlive.load());
         lifetime.workerFinished = true;
+        return BmsSearchResult{};
       });
   assert(entered.get_future().wait_for(5s) == std::future_status::ready);
   auto destroyed = std::async(std::launch::async, [&] { scene.reset(); });

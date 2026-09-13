@@ -7992,6 +7992,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(replay_export_job_tests PRIVATE cxx_std_23)
     asobmashow_register_test(replay_export_job_tests)
     include(cmake/ArchiveStorageTests.cmake)
+    include(cmake/FindBmsTaskTests.cmake)
 
     add_executable(main_menu_preview_controller_tests
         tests/main_menu_preview_controller_tests.cpp

@@ -9,6 +9,7 @@ target_sources(main PRIVATE
     DecideLoadingOverlay.cpp
     FindBmsDialogPolicy.cpp
     FindBmsProgressPresentation.cpp
+    FindBmsTask.cpp
     IrUploadsController.cpp
     IrUploadsScene.cpp
     IntroScene.cpp
