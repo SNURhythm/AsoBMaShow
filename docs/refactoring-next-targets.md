@@ -702,6 +702,23 @@ Desktop main and focused builds, independent review, body-equivalence comparison
 and `git diff --check` passed. Verification remained focused with approximately
 166 MiB free; the scheduler-notification commit supplies the full 392-test baseline.
 
+## 47. Publish selected-chart analysis only after worker admission — completed
+
+Music Select marked analysis as started before copying its input and published
+its mailbox before constructing the detached worker. Rejected thread admission
+therefore left an unfinished mailbox and blocked retries. The method now commits
+the mailbox and started flag only after worker admission succeeds, using a
+non-allocating shared-pointer move and boolean assignment. Detached execution,
+exception propagation, debounce, cancellation, and generation checks are unchanged.
+
+The existing extracted-method fixture now injects rejection at its thread adapter.
+The old implementation failed the retryable-state assertion; the revised method
+preserves prior publication/generation, retries exactly one real graph worker, and
+publishes its result. Desktop/fixture builds, the complete graph-selector runner
+(including debounce, both cancellation boundaries, and generation mismatch),
+independent review, and `git diff --check` passed. The full-suite baseline remains
+the 392-test notification fix; this change used its affected workflow.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

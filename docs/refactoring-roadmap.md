@@ -1187,3 +1187,15 @@ and feature-off runners passed (4.84 seconds). Desktop/focused builds, independe
 review, body comparison, and `git diff --check` passed. With about 166 MiB free,
 verification used affected workflows; the notification fix provides the full
 392-test baseline.
+
+## Follow-up: Commit chart-analysis state after worker admission
+
+Music Select now publishes its selected-chart analysis mailbox and started flag
+after the detached worker is admitted. A rejected start preserves retryable state.
+The extracted real-method regression failed before the change and now passes,
+including exactly one retried worker and publication of its generated graph.
+
+Desktop/fixture builds, all graph-selector cases, independent review, and
+`git diff --check` passed. Existing debounce, cancellation, generation checks, and
+exception propagation are unchanged. Validation used the affected workflow, with
+the preceding notification fix supplying the full 392-test baseline.

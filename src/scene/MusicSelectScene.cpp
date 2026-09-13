@@ -1171,13 +1171,11 @@ void MusicSelectScene::updateSelectedChartAnalysis() {
 
   // MusicSelector starts this BMS model load after notesGraphDuration and
   // does not retry it until another selected-bar transition.
-  selectedChartAnalysisStarted_ = true;
   const auto path = selected.chart->meta.BmsPath;
   const int longNoteMode =
       long_note_mode::valueFromId(context.settings.selectedLnMode);
   auto analysis = std::make_shared<SelectedChartAnalysis>();
   analysis->generation = selectedChartAnalysisGeneration_;
-  selectedChartAnalysis_ = analysis;
   // MusicSelector starts a detached model-load thread after its 350 ms
   // debounce. A later bar move must not wait for that previous model before
   // it can render the next selection; publication is gated by this mailbox's
@@ -1203,6 +1201,8 @@ void MusicSelectScene::updateSelectedChartAnalysis() {
     }
     analysis->finished.store(true, std::memory_order_release);
   }).detach();
+  selectedChartAnalysis_ = std::move(analysis);
+  selectedChartAnalysisStarted_ = true;
 }
 
 TextInputBox *MusicSelectScene::skinTextInputForSize(int requestedSize) {
