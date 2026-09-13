@@ -1075,3 +1075,16 @@ lifecycle, restore, scheduler, and BGA tests cover the surrounding behavior.
 
 Desktop main/all-target builds and all 391 tests passed (119.73 seconds).
 `git diff --check` passed.
+
+## Follow-up: Reuse shared profile and picker scope cleanup
+
+Profile settings' three mutation barriers and the library/sound-folder pickers'
+four active resets now use the existing `ScopeExit` utility. Five duplicate local
+guard implementations were removed without moving callback execution or changing
+atomic ordering. The picker fixture includes the production guard directly.
+
+Desktop and focused fixture builds, independent review, and all eight relevant
+profile/picker tests passed (1.94 seconds). Both mobile branches are compiled
+against controlled native effects. `git diff --check` passed. The preceding
+Jukebox commit supplies the full 391-test baseline; this structural cleanup was
+verified with its affected workflows.

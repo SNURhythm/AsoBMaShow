@@ -1,4 +1,5 @@
 #include "ThreadCompat.h"
+#include "RAII.h"
 
 #include <chrono>
 #include <cstdlib>

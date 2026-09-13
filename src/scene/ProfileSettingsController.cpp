@@ -1,5 +1,7 @@
 #include "ProfileSettingsController.h"
 
+#include "../RAII.h"
+
 #include <algorithm>
 #include <exception>
 #include <limits>
@@ -23,18 +25,6 @@ std::string exceptionMessage(const std::exception &error,
   return std::string(operation) + ": " + error.what();
 }
 
-template <typename Callback> class ScopeExit {
-public:
-  explicit ScopeExit(Callback callback) : callback_(std::move(callback)) {}
-  ScopeExit(const ScopeExit &) = delete;
-  ScopeExit &operator=(const ScopeExit &) = delete;
-  ~ScopeExit() noexcept { callback_(); }
-
-private:
-  Callback callback_;
-};
-
-template <typename Callback> ScopeExit(Callback) -> ScopeExit<Callback>;
 } // namespace
 
 ProfileSettingsController::ProfileSettingsController(

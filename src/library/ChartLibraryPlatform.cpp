@@ -1,6 +1,7 @@
 #include "ChartLibraryPlatform.h"
 
 #include "ChartLibraryTaskService.h"
+#include "../RAII.h"
 #include "../path.h"
 #include "../targets.h"
 
@@ -128,10 +129,7 @@ struct FolderActionService::Impl {
       if (pickerThread.joinable()) pickerThread.join();
       pickerThread = std::jthread(
           [this, folder](const std::stop_token &) {
-            struct Reset {
-              std::atomic_bool &active;
-              ~Reset() { active.store(false); }
-            } reset{pickerActive};
+            ScopeExit reset([this] { pickerActive.store(false); });
             std::filesystem::path path;
             std::string error;
             const bool picked = folder
@@ -184,10 +182,7 @@ void FolderActionService::requestAddFolder() {
     if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
     impl_->pickerThread = std::jthread(
         [state = impl_.get()](const std::stop_token &stopToken) {
-          struct Reset {
-            std::atomic_bool &active;
-            ~Reset() { active.store(false); }
-          } reset{state->pickerActive};
+          ScopeExit reset([state] { state->pickerActive.store(false); });
           std::string folder;
           std::string bookmark;
           std::string error;
@@ -212,10 +207,7 @@ void FolderActionService::requestAddFolder() {
       if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
       impl_->pickerThread = std::jthread(
           [state = impl_.get()](const std::stop_token &stopToken) {
-            struct Reset {
-              std::atomic_bool &active;
-              ~Reset() { active.store(false); }
-            } reset{state->pickerActive};
+            ScopeExit reset([state] { state->pickerActive.store(false); });
             std::filesystem::path folder;
             std::string treeUri;
             std::string error;
@@ -262,10 +254,7 @@ struct SoundSetFolderPicker::Impl {
   SoundSetFolderPick pendingResult;
 
   void pickOnBackgroundThread(const std::stop_token &stopToken) {
-    struct Reset {
-      std::atomic_bool &active;
-      ~Reset() { active.store(false); }
-    } reset{pickerActive};
+    ScopeExit reset([this] { pickerActive.store(false); });
     SoundSetFolderPick result;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
     std::string error;

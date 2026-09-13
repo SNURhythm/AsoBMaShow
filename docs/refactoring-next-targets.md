@@ -565,6 +565,19 @@ Existing lifecycle, restore, scheduler, and BGA tests provide behavior coverage;
 no helper-mirroring test was added for this structural change.
 Desktop main/all-target builds and all 391 tests passed.
 
+## 39. Reuse shared scope cleanup in profile and picker workflows — completed
+
+Profile settings uses the shared `ScopeExit` for its three membership-mutation
+barriers, and library/sound-folder pickers use it for four active-flag resets.
+This removes one local template and four local reset structs. Callback placement,
+reference/pointer lifetimes, and default atomic store ordering remain unchanged.
+The existing mobile extraction fixture includes the same production utility.
+
+Desktop and focused fixture builds, independent review, and all eight relevant
+profile/picker tests passed. Both iOS and Android picker branches run with
+controlled native effects; this is not a native SDK build. The preceding
+Jukebox change established the full 391-test baseline.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
