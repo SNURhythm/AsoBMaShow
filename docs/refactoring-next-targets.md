@@ -780,6 +780,24 @@ the next attempt successfully regenerated the selector object. The broader
 gameplay runner encountered database disk I/O errors on both attempts, so no
 complete application build or broad gameplay pass is claimed for this slice.
 
+## 51. Own profile-export directory streams through failure — completed
+
+Two POSIX staging scans released duplicated descriptors before `fdopendir`
+succeeded and closed successful streams manually after throwing operations.
+They now retain the descriptor until stream admission succeeds, then use the
+existing `UniqueResource` owner to close the stream on every exit. Enumeration
+error capture, identity checks, no-follow traversal, and lease policy remain
+unchanged.
+
+A public-Sweep allocation walk reproduced a leaked descriptor at allocation
+31. The complete staging runner now passes all 128 failure positions and
+successful sweeps, checking descriptor counts and preservation of an active
+staging lifetime (0.51 seconds). This directly tests listing failure cleanup;
+existing staging cases cover ordinary recursive cleanup and security refusals.
+The test target and production staging translation unit built, independent
+review and `git diff --check` passed. Validation ran on macOS; Windows code is
+unchanged, and no full application relink was performed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

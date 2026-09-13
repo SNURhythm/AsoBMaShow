@@ -1243,3 +1243,15 @@ obsolete objects absent from the current Ninja graph freed 43 MiB and allowed
 the selector object to regenerate successfully. The broader gameplay runner
 encountered database disk I/O errors on both attempts, so that runner and a
 complete app build are not reported as passing.
+
+## Follow-up: Retain profile-export stream ownership on failure
+
+POSIX staging scans now transfer descriptor ownership only after `fdopendir`
+succeeds and hold directory streams with the shared RAII owner. The old listing
+path leaked a descriptor under allocation failure; a 128-step public-Sweep probe
+now preserves descriptor counts and the active staging lifetime.
+
+The complete staging runner passed (0.51 seconds), both its target and the
+production translation unit built, and independent review and
+`git diff --check` passed. The fault probe covers listing; ordinary recursive
+cleanup and security refusals remain covered by existing staging cases.

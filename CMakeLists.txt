@@ -5349,6 +5349,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(profile_export_staging_tests
             tests/profile_export_staging_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/ProfileExportStaging.cpp
             src/PlatformDocumentHandoff.cpp
             src/skin/package/SkinPathPolicy.cpp
