@@ -1,5 +1,7 @@
 #include "MusicSelectPropertyProjection.h"
 
+#include "MusicSelectMode.h"
+
 #include "../AssistOptionUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../replay/ReplayOption.h"
@@ -82,17 +84,6 @@ int beatorajaClearType(int rank) {
   if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
   if (rank >= kClearTypeAssistedEasyClearRank) return 2;
   return 1;
-}
-
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
-  return 0;
 }
 
 int selectableScorePoint(const ScoreBestSnapshot &score) {
@@ -580,7 +571,7 @@ void projectSelectedBar(Properties &out,
   for (int index = 0; index < 5; ++index) {
     out.booleans[180 + index] = judge == index;
   }
-  const int mode = songMode(meta);
+  const int mode = musicSelectSongMode(meta);
   out.booleans[160] = mode == 7;
   out.booleans[161] = mode == 5;
   out.booleans[162] = mode == 14;

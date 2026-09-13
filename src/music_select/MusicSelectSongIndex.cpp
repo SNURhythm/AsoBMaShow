@@ -1,5 +1,7 @@
 #include "MusicSelectSongIndex.h"
 
+#include "MusicSelectMode.h"
+
 #include "../path.h"
 
 #include <algorithm>
@@ -25,19 +27,8 @@ void checkCancelled(std::stop_token stop) {
   if (stop.stop_requested()) throw std::runtime_error("song index cancelled");
 }
 
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
-  return 0;
-}
-
 std::uint16_t modeMask(const bms_parser::ChartMeta &meta) {
-  const int mode = songMode(meta);
+  const int mode = musicSelectSongMode(meta);
   if (mode == 0) return (1U << kModes.size()) - 1;
   std::uint16_t mask = 1;
   constexpr std::array modes{7, 14, 9, 5, 10, 25, 50};

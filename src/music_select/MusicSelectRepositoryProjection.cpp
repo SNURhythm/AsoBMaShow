@@ -1,5 +1,7 @@
 #include "MusicSelectRepositoryProjection.h"
 
+#include "MusicSelectMode.h"
+
 #include "../BmsMetadataText.h"
 #include "../CourseConstraintUtils.h"
 #include "../path.h"
@@ -76,31 +78,6 @@ int beatorajaClearType(int rank) {
   return 1;
 }
 
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
-  return 0;
-}
-
-bool modeMatches(std::string_view filter, int mode) {
-  if (mode == 0 || filter == "ALL") return true;
-  if (filter == "7KEY") return mode == 7;
-  if (filter == "14KEY") return mode == 14;
-  if (filter == "9KEY") return mode == 9;
-  if (filter == "5KEY") return mode == 5;
-  if (filter == "10KEY") return mode == 10;
-  if (filter == "24KEY") return mode == 25;
-  if (filter == "48KEY") return mode == 50;
-  if (filter == "SINGLE") return mode == 5 || mode == 7;
-  if (filter == "DOUBLE") return mode == 10 || mode == 14;
-  return false;
-}
-
 int songFeatures(const ChartMetaRecord &record) {
   const auto &meta = record.meta;
   int features = 0;
@@ -146,7 +123,7 @@ MusicSelectFolderStatusAccumulator::MusicSelectFolderStatusAccumulator(
 void MusicSelectFolderStatusAccumulator::add(const bms_parser::ChartMeta &meta,
                                             bool available) {
   checkCancelled();
-  if (!available || !modeMatches(input_.modeFilter, songMode(meta))) return;
+  if (!available || !musicSelectModeMatches(input_.modeFilter, musicSelectSongMode(meta))) return;
   const auto best = input_.scoreFor
                         ? input_.scoreFor(meta, input_.selectedLongNoteMode)
                         : std::nullopt;

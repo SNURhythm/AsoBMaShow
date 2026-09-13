@@ -595,6 +595,20 @@ ends. The checks passed before and after consolidation. Independent review,
 focused CTest, and desktop main/all-target builds passed.
 All 391 tests passed after consolidation.
 
+## 41. Share Music Select mode conversion and filtering — completed
+
+The repository projection, bar manager, song index, and property projection now
+use `MusicSelectMode.h`. It replaces four identical chart-mode conversions and
+two identical filter predicates. Unknown-mode wildcard behavior, double-play
+forms, keyboard mode encodings, and filter order are unchanged. The differing
+clear-lamp adapters remain separate.
+
+Independent review verified the extracted bodies and call sites. The desktop
+build and four affected test runners passed, including the existing eager/index
+comparison across all modes, difficulties, and sorts. The preceding timing
+consolidation established the full 391-test baseline; this structural change
+uses its affected workflow tests without adding helper-mirroring assertions.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

@@ -1103,3 +1103,15 @@ counting. Those cases passed before and after consolidation. Independent review,
 focused CTest, and desktop main/all-target builds passed.
 
 All 391 tests passed (104.69 seconds). `git diff --check` passed.
+
+## Follow-up: Share Music Select mode conversion and filtering
+
+Four Music Select components now use one chart-mode conversion, and both eager
+filtering paths share the matching predicate. Normalized-body comparison and
+independent review confirmed unchanged conversions, wildcard behavior, and call
+order. Clear-lamp mappings with distinct fallback rules remain separate.
+
+The desktop and focused builds and all four affected CTest runners passed
+(2.36 seconds), including the eager/index matrix for every mode, difficulty, and
+sort. `git diff --check` passed. The preceding timing commit supplies the full
+391-test baseline.
