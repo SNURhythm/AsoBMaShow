@@ -3206,10 +3206,8 @@ Jukebox::loadChartPreservingDevice(bms_parser::Chart &chart, bool scheduleNotes,
   return loadChartImpl(chart, scheduleNotes, isCancelled, !unsafeToPreserve);
 }
 
-audio::playback::BackendOperationResult
-Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
-                       std::atomic_bool &isCancelled, bool preserveDevice) {
-  jukebox_lifecycle::SessionState lifecycleState{
+jukebox_lifecycle::SessionState Jukebox::makeLifecycleState() noexcept {
+  return {
       .isPlaying = isPlaying,
       .schedulerActive = schedulerActive,
       .stopwatch = *stopwatch,
@@ -3221,6 +3219,12 @@ Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
       .currentBga = currentBga,
       .currentBmpLayer = currentBmpLayer,
   };
+}
+
+audio::playback::BackendOperationResult
+Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
+                       std::atomic_bool &isCancelled, bool preserveDevice) {
+  auto lifecycleState = makeLifecycleState();
   const auto stopped = preserveDevice
                            ? jukebox_lifecycle::StopSessionForTransitionKeepDevice(
                                  audio, "Jukebox::loadChart", lifecycleState,
@@ -3301,18 +3305,7 @@ bool Jukebox::hasLoadedResources() const {
 audio::playback::BackendOperationResult
 Jukebox::reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
                               std::atomic_bool &isCancelled) {
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   const auto stopped = jukebox_lifecycle::StopSessionForTransition(
       audio, "Jukebox::reloadChartResources", lifecycleState,
       [this] { wakeScheduler(); });
@@ -3453,18 +3446,7 @@ void Jukebox::appendScheduledAudioEvents(
 }
 
 void Jukebox::playKeySound(int wav) {
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   jukebox_lifecycle::PlayKeySoundIfPublished(lifecycleState, [this, wav] {
     if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
       audio.playSound(
@@ -3740,18 +3722,7 @@ audio::playback::BackendOperationResult Jukebox::play(long long startMicros) {
 audio::playback::BackendOperationResult
 Jukebox::playWithClockState(long long startMicros, bool paused) {
   std::lock_guard<std::mutex> lock(playThreadLock);
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   const auto stopped = jukebox_lifecycle::StopSessionForTransition(
       audio, "Jukebox::play", lifecycleState, [this] { wakeScheduler(); });
   if (!stopped.success) {
@@ -3828,18 +3799,7 @@ Jukebox::playWithClockState(long long startMicros, bool paused) {
 #endif
     using Clock = std::chrono::steady_clock;
     auto prevTimestamp = Clock::now();
-    jukebox_lifecycle::SessionState lifecycleState{
-        .isPlaying = isPlaying,
-        .schedulerActive = schedulerActive,
-        .stopwatch = *stopwatch,
-        .transitionMutex = playThreadLock,
-        .positionMutex = seekLock,
-        .audioCursor = audioCursor,
-        .bmpCursor = bmpCursor,
-        .bmpLayerCursor = bmpLayerCursor,
-        .currentBga = currentBga,
-        .currentBmpLayer = currentBmpLayer,
-    };
+    auto lifecycleState = makeLifecycleState();
     while (schedulerActive.load(std::memory_order_acquire)) {
       if (!isPlaying.load(std::memory_order_acquire) ||
           !stopwatch->isRunning()) {
@@ -4007,18 +3967,7 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
 }
 
 long long Jukebox::getTimeMicros() {
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   return jukebox_lifecycle::ReadPublishedTime(
       lifecycleState, [this] { return audio.getTimeMicros(); });
 }
@@ -4077,18 +4026,7 @@ bool Jukebox::restorePlayback(const audio::PlaybackSnapshot &snapshot,
     return false;
   }
   if (!snapshot.active) {
-    jukebox_lifecycle::SessionState lifecycleState{
-        .isPlaying = isPlaying,
-        .schedulerActive = schedulerActive,
-        .stopwatch = *stopwatch,
-        .transitionMutex = playThreadLock,
-        .positionMutex = seekLock,
-        .audioCursor = audioCursor,
-        .bmpCursor = bmpCursor,
-        .bmpLayerCursor = bmpLayerCursor,
-        .currentBga = currentBga,
-        .currentBmpLayer = currentBmpLayer,
-    };
+    auto lifecycleState = makeLifecycleState();
     return jukebox_lifecycle::RestoreInactivePlayback(
                lifecycleState,
                {.positionMicros = snapshot.positionMicros,
@@ -4119,18 +4057,7 @@ void Jukebox::leavePlaybackStopped() {
 
 audio::playback::BackendOperationResult Jukebox::stopKeepDevice() {
   std::lock_guard<std::mutex> playGuard(playThreadLock);
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   const auto stopped = jukebox_lifecycle::StopPlaybackKeepDevice(
       audio, "Jukebox::stopKeepDevice", lifecycleState,
       [this] { wakeScheduler(); });
@@ -4149,18 +4076,7 @@ audio::playback::BackendOperationResult Jukebox::stopKeepDevice() {
 
 audio::playback::BackendOperationResult Jukebox::stop() {
   std::lock_guard<std::mutex> playGuard(playThreadLock);
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   const auto stopped = jukebox_lifecycle::StopPlayback(
       audio, "Jukebox::stop", lifecycleState, [this] { wakeScheduler(); });
   if (!stopped.success) {
@@ -4177,18 +4093,7 @@ audio::playback::BackendOperationResult Jukebox::stop() {
 }
 
 audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
-  jukebox_lifecycle::SessionState lifecycleState{
-      .isPlaying = isPlaying,
-      .schedulerActive = schedulerActive,
-      .stopwatch = *stopwatch,
-      .transitionMutex = playThreadLock,
-      .positionMutex = seekLock,
-      .audioCursor = audioCursor,
-      .bmpCursor = bmpCursor,
-      .bmpLayerCursor = bmpLayerCursor,
-      .currentBga = currentBga,
-      .currentBmpLayer = currentBmpLayer,
-  };
+  auto lifecycleState = makeLifecycleState();
   const long long bgaTimelineMicro = getBgaTimelineMicros(micro);
   const jukebox_lifecycle::CursorPosition target{
       .audio = static_cast<size_t>(std::distance(

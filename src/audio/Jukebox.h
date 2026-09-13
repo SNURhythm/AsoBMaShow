@@ -26,6 +26,10 @@
 #include "../AppSettings.h"
 #include <cassert>
 
+namespace jukebox_lifecycle {
+struct SessionState;
+}
+
 namespace rendering {
 class BgfxVertexLayoutRegistration;
 }
@@ -284,6 +288,7 @@ public:
   void leavePlaybackStopped() override;
 
 private:
+  [[nodiscard]] jukebox_lifecycle::SessionState makeLifecycleState() noexcept;
   [[nodiscard]] bgfx::ProgramHandle
   prepareGameplayBgaProgram(const char *vertexShader,
                             const char *fragmentShader) noexcept;

@@ -1062,3 +1062,16 @@ after admission fails; no queued work or reservation mutation is published.
 
 Desktop main/all-target builds and all 391 tests passed (109.90 seconds).
 `git diff --check` passed.
+
+## Follow-up: Centralize Jukebox lifecycle state bindings
+
+Jukebox now builds its borrowed `SessionState` through one private helper instead
+of ten repeated aggregate initializers. Every call remains at its original
+construction point, including the scheduler lambda and already-locked stop
+paths. The helper binds references without retaining state, locking, or allocating.
+
+Independent review verified all ten bindings and unchanged lifetimes. Existing
+lifecycle, restore, scheduler, and BGA tests cover the surrounding behavior.
+
+Desktop main/all-target builds and all 391 tests passed (119.73 seconds).
+`git diff --check` passed.

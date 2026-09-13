@@ -552,6 +552,19 @@ during shutdown, and results whose task row was trimmed. Focused CTest,
 independent review, desktop builds, and all 391 tests passed. Failed admission
 may leave an idle prepared worker.
 
+## 38. Centralize Jukebox lifecycle state bindings — completed
+
+Ten lifecycle operations now obtain their borrowed state from one private
+`makeLifecycleState()` helper. The helper binds the same playback flags,
+stopwatch, mutexes, cursors, and image atomics at each original call site.
+It stores no state and performs no locking or allocation. Future lifecycle
+state additions therefore need one binding update in Jukebox.
+
+Independent review confirmed identical bindings, lock placement, and lifetimes.
+Existing lifecycle, restore, scheduler, and BGA tests provide behavior coverage;
+no helper-mirroring test was added for this structural change.
+Desktop main/all-target builds and all 391 tests passed.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
