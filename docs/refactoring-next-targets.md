@@ -346,6 +346,15 @@ identical-retry, and processing-count assertions. The fixed regression verifies
 no failed-work execution, pending-state release, and exactly-once processing
 after the same chart is requested again.
 
+## 22. Obsolete music-select catalog rebuild — completed
+
+Removed the unused `MusicSelectSkinSession::refreshResources` method, whose
+always-false guard made its full catalog rebuild unreachable. Its duplicate
+device/counter owners and unused preparation stop token were removed from the
+session and private constructor. The resource and movie catalogs retain their
+own lifetime dependencies. The compatibility query `requiresResourceRefresh`
+and active image/font patch paths remain unchanged.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

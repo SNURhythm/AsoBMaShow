@@ -784,3 +784,19 @@ the focused runner, and independent review passed.
 
 The all-target build and all 391 tests passed (101.87 seconds).
 `git diff --check` passed.
+
+## Follow-up: Remove the obsolete music-select catalog rebuild
+
+Repository-wide searches found no callers of `refreshResources`; its
+`requiresResourceRefresh` gate always returned false. Removed that unreachable
+catalog rebuild and the private device/counter owners and stop token used only
+by it. Initial upload/finalization still receives the same context, and the
+resource and movie catalogs independently retain their lifetime dependencies.
+The public compatibility query and active image/font patch paths are unchanged.
+
+Existing session tests cover incremental images, font patches, cancellation,
+resource ownership, and the compatibility query. No new test was added for
+deleting unreachable code.
+
+Desktop and all-target builds passed, independent review found no issues,
+and all 391 tests passed (93.71 seconds). `git diff --check` passed.
