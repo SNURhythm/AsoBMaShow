@@ -4290,16 +4290,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(score_provenance_db_tests PRIVATE SDL2)
     endif()
 
-    add_executable(best_replay_resolver_tests
-        tests/best_replay_resolver_tests.cpp
-        src/ScoreProvenance.cpp
-        src/replay/BestReplayResolver.cpp
-        src/scene/play/GameplayGaugeRules.cpp
-    )
-    target_include_directories(best_replay_resolver_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(best_replay_resolver_tests PRIVATE cxx_std_23)
+    include(cmake/ReplayLoadTests.cmake)
 
     add_executable(chart_record_filters_tests
         tests/chart_record_filters_tests.cpp
@@ -8144,6 +8135,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_replay_consumer_tests
         replay_playback_driver_tests
         best_replay_resolver_tests
+        best_replay_load_tests
         music_playlist_repository_tests
         chart_repository_tests
         chart_selector_query_tests

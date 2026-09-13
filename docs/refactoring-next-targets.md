@@ -1,9 +1,9 @@
 # Next workflow refactoring targets
 
 These are structural findings from implementation review after the initial
-roadmap's ownership slices. They are candidates for subsequent work, not
-confirmed correctness defects. Preserve product behavior and choose one
-workflow at a time.
+roadmap's ownership slices. Completed follow-ups are marked below; remaining
+candidates describe ownership improvements rather than confirmed correctness
+defects. Preserve product behavior and choose one workflow at a time.
 
 ## 1. Settings archive-cache maintenance jobs — completed
 
@@ -27,28 +27,31 @@ measurement in private directories, failures, repeated requests, cancellation,
 restart, and destruction with work in flight. A compiled scene fixture checks
 the complete production UI methods with the real controller and cache.
 
-The next recommended slice is pacemaker best-replay loading below.
+Pacemaker best-replay loading is also completed below. The next recommended
+slice is archive index-build coordination.
 
-## 2. Pacemaker best-replay loading
+## 2. Pacemaker best-replay loading — completed
 
-`GamePlayScene::startBestReplayLoad`, `applyPendingBestReplay`, and
-`stopBestReplayLoad` coordinate a thread, a shared atomic cancellation flag, a
-mutex, and a pending replay. `configurePacemakerTarget`, scene reset/cleanup,
-and destruction depend on that lifecycle. The scene captures itself in the
-worker even though `BestReplayResolver` already owns the replay-resolution
-operation.
+`GamePlayScene` now reuses `ReplayRecordTask` to own its best-replay worker,
+cancellation, completion, and joining. `src/scene/play/BestReplayLoad` supplies
+the small asynchronous loading function; `BestReplayResolver` retains exact
+attempt resolution and the shared replay consumer boundary. No second worker
+class was needed.
 
-Use a narrow owned task to return the loaded replay to the application thread.
-Evaluate reuse of `ReplayRecordTask` against its actual admission/completion
-semantics before adding another task abstraction. Keep pacemaker selection
-and target application in the scene. In particular, the persisted best replay
-updates the personal-best ghost; the selected pacemaker target deliberately
-keeps its current proportional score behavior.
+The loading function explicitly cancels/joins before replacement because the
+shared task's `start` alone joins without cancelling. Resolver construction
+remains on the worker, including runtime profile-root resolution. Successful
+loads queue a scene callback; consuming it joins the worker before updating
+the personal-best ghost on the application thread. Missing/unreadable results
+consume the shared task's no-op completion and retain the fallback target.
+The selected pacemaker target keeps its proportional score behavior.
 
-Characterize target replacement during a blocked load, cancellation and join,
-late completion after chart replacement, missing/unreadable replay, and scene
-destruction. Preserve `BestReplayResolver` tests and add direct task tests plus
-a small scene handoff check.
+Tests exercise exact attempt/path forwarding, blocked replacement, late results
+after cancellation, missing/mismatched/unreadable replays, callback/resource
+release on destruction, and application-thread handoff. A compiled fixture
+executes complete production scene methods with the real task, resolver, and
+pacemaker policy, including absent chart/best state and chart replacement after
+stop. Existing resolver and shared-task tests remain intact.
 
 ## 3. Archive index-build coordination
 

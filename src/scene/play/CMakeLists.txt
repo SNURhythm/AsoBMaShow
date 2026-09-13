@@ -1,4 +1,5 @@
 target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
+                            BestReplayLoad.cpp
                             BeatorajaHiSpeedChart.cpp
                             BuiltInPlayfieldPresentation.cpp
                             PlayfieldChartVisualModel.cpp

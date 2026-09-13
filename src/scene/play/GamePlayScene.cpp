@@ -3,6 +3,7 @@
 //
 
 #include "GamePlayScene.h"
+#include "BestReplayLoad.h"
 
 #include "../../BeatorajaScoreMetrics.h"
 #include "GameplayBmsResourceAvailability.h"
@@ -4243,32 +4244,23 @@ void GamePlayScene::configurePacemakerTarget() {
 
 void GamePlayScene::startBestReplayLoad(
     std::string attemptId, std::filesystem::path chartPath) {
-  auto cancelled = std::make_shared<std::atomic_bool>(false);
-  bestReplayLoadCancelled = cancelled;
-  bestReplayLoadThread = std::jthread(
-      [this, cancelled, attemptId = std::move(attemptId),
-       chartPath = std::move(chartPath)](std::stop_token stopToken) {
-        auto resolver = replay::makeRuntimeBestReplayResolver(
-            context.replayRepository);
-        auto loaded = resolver.load(attemptId, chartPath, *cancelled);
-        if (stopToken.stop_requested() || cancelled->load() ||
-            loaded == nullptr) {
-          return;
-        }
-        std::lock_guard<std::mutex> lock(bestReplayLoadMutex);
-        if (!cancelled->load()) {
-          pendingBestReplay = std::move(loaded);
-        }
-      });
+  replay::startBestReplayLoad(
+      bestReplayLoadTask,
+      [&repository = context.replayRepository] {
+        return replay::makeRuntimeBestReplayResolver(repository);
+      },
+      std::move(attemptId), std::move(chartPath),
+      [this](const ReplayData &loaded) { applyLoadedBestReplay(loaded); });
 }
 
 void GamePlayScene::applyPendingBestReplay() {
-  std::shared_ptr<ReplayData> loaded;
-  {
-    std::lock_guard<std::mutex> lock(bestReplayLoadMutex);
-    loaded = std::move(pendingBestReplay);
+  if (auto completion = bestReplayLoadTask.takeCompletion()) {
+    completion();
   }
-  if (loaded == nullptr || chart == nullptr) {
+}
+
+void GamePlayScene::applyLoadedBestReplay(const ReplayData &loaded) {
+  if (chart == nullptr) {
     return;
   }
 
@@ -4276,23 +4268,12 @@ void GamePlayScene::applyPendingBestReplay() {
     // The saved best maps to ScoreDataProperty.bestGhost.  This is the only
     // ghost BMSPlayer supplies to ScoreDataProperty during gameplay.
     activeBestScoreTarget =
-        pacemaker::targetFromBestSnapshot(*chart, *activePacemakerBest,
-                                          loaded.get());
+        pacemaker::targetFromBestSnapshot(*chart, *activePacemakerBest, &loaded);
   }
 }
 
 void GamePlayScene::stopBestReplayLoad() {
-  if (bestReplayLoadCancelled != nullptr) {
-    bestReplayLoadCancelled->store(true, std::memory_order_release);
-  }
-  if (bestReplayLoadThread.joinable()) {
-    bestReplayLoadThread.request_stop();
-    bestReplayLoadThread.join();
-  }
-  {
-    std::lock_guard<std::mutex> lock(bestReplayLoadMutex);
-    pendingBestReplay.reset();
-  }
+  bestReplayLoadTask.cancelAndWait();
 }
 
 void GamePlayScene::updatePacemakerStatus() {

@@ -234,9 +234,8 @@ were retained based on implementation evidence.
 Further candidates are documented in
 [Next workflow refactoring targets](refactoring-next-targets.md), with concrete
 ownership problems, behavior constraints, and characterization requirements.
-Settings cache-maintenance jobs are now completed as the first follow-up below.
-Evaluate pacemaker best-replay loading and archive index-build coordination as
-the next separate slices.
+Settings cache-maintenance jobs and pacemaker best-replay loading are completed
+as follow-ups below. Archive index-build coordination is the next slice.
 
 ## Follow-up: Settings cache-maintenance ownership
 
@@ -267,3 +266,47 @@ regression test. Review found no remaining blocker.
 The desktop app and all-target builds passed, followed by all 372 parallel
 CTest entries in 101.71 seconds. `git diff --check` passed. Verification was
 local to the desktop build; no deployment or physical-device checks were run.
+
+## Follow-up: Pacemaker best-replay task reuse
+
+`GamePlayScene` replaces its best-replay thread, shared cancellation flag,
+mutex, and pending replay with the existing `ReplayRecordTask`. A small
+`BestReplayLoad` function performs cancellation-before-replacement, constructs
+the resolver on the worker, and publishes only a successful uncancelled load.
+The resolver's runtime profile-root access remains on that worker. The
+scene callback is deferred until the application consumes it and the worker
+has been joined; it only updates the personal-best ghost. The selected target
+continues to use its existing proportional progression.
+
+Reuse was checked against the shared task's actual semantics: `start` joins
+without cancelling, so the loading function explicitly cancels first;
+completion remains active until consumed; failed/no-result work produces a
+no-op completion; cancellation discards queued and late callbacks. Existing
+configuration, cleanup, and destructor stop boundaries remain in place. No
+additional task class, mailbox, or cancellation authority was introduced.
+
+Direct tests use the production resolver and shared task to check exact
+attempt/path forwarding, worker construction, caller-thread completion,
+replacement during a blocked load, cancellation, missing/mismatched/unreadable
+results, and destruction. The scene fixture compiles complete production
+start/apply/stop methods with real pacemaker policy; it distinguishes the
+personal-best ghost's first-note score of 2 from the selected target's
+proportional score of 1 and verifies stopped loads cannot update a replacement
+chart. A temporary mutation removing cancellation-before-replacement failed
+the blocked-consumer regression. Independent review found no blocker.
+
+The first full suite passed 372/373 entries but exposed an intermittent
+renderer characterization mismatch, also reproduced in isolated repeats.
+Added JSON differences identified swapped long-note collection groups at
+distinct depths. The renderer's pointer-keyed lookahead map has no stable CPU
+iteration order; bgfx's main view orders their draws by depth. The fixture now
+stably orders contiguous main-view texture-note runs by depth for both saved
+and current trace comparison. Equal-depth order, nontexture pass boundaries,
+geometry, missing/duplicated primitives, and PNG checks remain covered.
+The golden files were not regenerated. The new ordering probe failed before
+the correction; afterward the renderer test passed 20 consecutive runs.
+
+After rebuilding all targets with that fixture correction, the full parallel
+suite passed all 373 tests in 103.40 seconds. `git diff --check` passed.
+Verification was local to the desktop build; no deployment or physical-device
+checks were run.

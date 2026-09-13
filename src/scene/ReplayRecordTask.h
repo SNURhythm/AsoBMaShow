@@ -8,7 +8,7 @@
 #include <mutex>
 #include <thread>
 
-// Owns one Records preparation worker and its deferred scene completion.
+// Owns one replay/Records preparation worker and its deferred scene completion.
 // start, takeCompletion, cancelAndWait, and destruction belong to the scene
 // thread. Work may call publish, but must handle its action-specific failures.
 class ReplayRecordTask final {
