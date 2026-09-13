@@ -16,6 +16,7 @@ target_sources(main PRIVATE GamePlayScene.cpp BMSRenderer.cpp
                             SkinGameplayGraphState.cpp
                             RealtimeGameplayAuthorityPolicy.cpp
                             RealtimeGameplayInputBridge.cpp
+                            RealtimeGameplayInputRegistration.cpp
                             RealtimeGameplayWorker.cpp
                             RealtimeTouchInputRouter.cpp
                             VirtualControllerLayout.cpp

@@ -3,6 +3,7 @@
 #include "scene/play/PracticeNoteFinalizer.h"
 #include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/RealtimeGameplayWorker.h"
+#include "scene/play/RealtimeGameplayInputRegistration.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
 #include "scene/play/StartSelectControl.h"
@@ -65,7 +66,11 @@ struct FixtureWorker {
     }
     return std::make_shared<gameplay::RealtimeGameplaySnapshot>(snapshot);
   }
-  void stop() { native->stop(); }
+  std::function<void()> beforeStop;
+  void stop() {
+    if (beforeStop) beforeStop();
+    native->stop();
+  }
   auto copyGaugeHistoryAfterStop() const { return native->copyGaugeHistoryAfterStop(); }
   auto copyGaugeHistoriesAfterStop() const { return native->copyGaugeHistoriesAfterStop(); }
   auto copyAcceptedReplayInputAfterStop() const { return native->copyAcceptedReplayInputAfterStop(); }
@@ -83,6 +88,8 @@ struct FixtureRealtimeSession {
   std::vector<bms_parser::Note *> notes;
   std::uint64_t appliedSnapshotGeneration = 0;
   std::uint64_t appliedTransactionSequence = 0;
+  std::atomic_bool acceptingNativeInput{false};
+  std::unique_ptr<gameplay::RealtimeGameplayInputRegistration> inputRegistration;
 };
 
 struct FixturePresentation {
@@ -179,7 +186,13 @@ public:
   }
   void applyPendingBestReplay() {}
   void drainRealtimeInputCommands() {}
-  void drainRealtimeTouchSamples() {}
+  std::function<void()> onIngressClosed;
+  std::function<void()> onTouchDrain;
+  void setRealtimeGameplayIngressEnabled(bool enabled) {
+    require(!enabled, "terminal fixture only closes ingress");
+    if (onIngressClosed) onIngressClosed();
+  }
+  void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
   void startPracticeAttemptFromMenu() { require(false, "unexpected practice menu"); }
   bool isReplayPlayback() const { return options.replayData != nullptr; }
@@ -884,6 +897,8 @@ template <typename Predicate> void requireWorkerState(Predicate predicate) {
 void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
   const long long abortTimeMicros = pastChartEnd ? 4'600'000 : 2'600'000;
   TerminalWorkerClock clock;
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  std::vector<std::string> teardown;
   GamePlayScene scene;
   scene.options.gaugeType = GaugeType::Hazard;
   scene.state->configureGauge(GaugeType::Hazard, GaugeAutoShiftMode::None);
@@ -908,6 +923,23 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
           .inputTriggeredKeysounds = false});
   auto &worker = *session.worker->native;
   require(worker.start(), "Hazard terminal worker starts");
+  scene.onIngressClosed = [&] { teardown.emplace_back("ingress closed"); };
+  scene.onTouchDrain = [&] {
+    if (!teardown.empty()) teardown.emplace_back("touches drained");
+  };
+  gameplay::RealtimeGameplayInputRegistration::Configuration registration;
+  registration.claimedClasses[static_cast<std::size_t>(input::DeviceClass::Keyboard)] = true;
+  registration.setLegacyClassEnabled = [&](auto, bool enabled) {
+    if (enabled) teardown.emplace_back("native detached");
+  };
+  session.inputRegistration = std::make_unique<gameplay::RealtimeGameplayInputRegistration>(
+      registry, session.acceptingNativeInput, std::move(registration));
+  require(session.inputRegistration->activate(), "terminal fixture native input activates");
+  session.worker->beforeStop = [&] {
+    require(teardown == std::vector<std::string>{"ingress closed", "native detached", "touches drained"},
+            "production shutdown closes ingress and native registration before draining and stopping");
+    require(!session.acceptingNativeInput, "native acceptance is closed before the worker stops");
+  };
   const replay::LogicalControl control{
       .kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1};
   for (const bool pressed : {true, false}) {

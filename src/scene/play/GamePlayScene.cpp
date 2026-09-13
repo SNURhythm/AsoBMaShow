@@ -36,6 +36,7 @@
 #include "RhythmLaneInputController.h"
 #include "RealtimeGameplayInputBridge.h"
 #include "RealtimeGameplayWorker.h"
+#include "RealtimeGameplayInputRegistration.h"
 #include "ReplayKeysoundSchedule.h"
 #include "RealtimeTouchInputRouter.h"
 #include "RealtimeTouchPresentation.h"
@@ -1061,11 +1062,7 @@ struct GamePlayScene::RealtimeGameplaySession {
                              kStartSelectInputCapacity>
       startSelectInputs;
   std::atomic_bool startSelectInputOverflow{false};
-  bool sdlInputWatchRegistered = false;
-  std::uint64_t realtimeInputSubscription = 0;
-  std::uint64_t realtimeDeviceSubscription = 0;
   std::array<bool, 6> registryRealtimeClasses{};
-  std::array<bool, 6> claimedRealtimeClasses{};
   gameplay::BoundedMpscQueue<gameplay::RealtimeTouchSample,
                              kAuxiliaryTouchCapacity>
       auxiliaryTouches;
@@ -1083,6 +1080,8 @@ struct GamePlayScene::RealtimeGameplaySession {
   gameplay::RealtimeTouchLayoutRefreshKey layoutRefreshKey;
   bool touchHitSnapshotDirty = true;
   bool touchIngressDesired = false;
+  // Detach native callbacks before any of their session dependencies die.
+  std::unique_ptr<gameplay::RealtimeGameplayInputRegistration> inputRegistration;
 
   void enqueueStartSelectInput(
       const gameplay::RealtimeGameplayInput &input) noexcept {
@@ -2091,13 +2090,13 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
             static_cast<unsigned long long>(realtimeGameplayEpoch));
     return true;
   }
+  gameplay::RealtimeGameplayInputRegistration::DeviceClasses claimedClasses{};
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   for (const auto deviceClass :
        {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
         input::DeviceClass::Joystick, input::DeviceClass::Midi,
         input::DeviceClass::Gyroscope}) {
-    activeSession
-        .claimedRealtimeClasses[static_cast<std::size_t>(deviceClass)] = true;
+    claimedClasses[static_cast<std::size_t>(deviceClass)] = true;
   }
   activeSession.registryRealtimeClasses[static_cast<std::size_t>(
       input::DeviceClass::Midi)] = true;
@@ -2107,43 +2106,35 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   for (const auto deviceClass :
        {input::DeviceClass::Keyboard, input::DeviceClass::GameController,
         input::DeviceClass::Midi}) {
-    activeSession
-        .claimedRealtimeClasses[static_cast<std::size_t>(deviceClass)] = true;
+    claimedClasses[static_cast<std::size_t>(deviceClass)] = true;
     activeSession
         .registryRealtimeClasses[static_cast<std::size_t>(deviceClass)] = true;
   }
 #endif
-  activeSession.realtimeInputSubscription =
-      context.inputDeviceRegistry.subscribeRealtimeInput(
-          [session = &activeSession](const auto &event) {
-            RealtimeGameplaySession::registryRealtimeInput(session, event);
-          });
-  activeSession.realtimeDeviceSubscription =
-      context.inputDeviceRegistry.subscribeRealtimeDevices(
-          [session = &activeSession](const auto &device) {
-            RealtimeGameplaySession::registryRealtimeDevice(session, device);
-          });
-  for (std::size_t index = 0;
-       index < activeSession.claimedRealtimeClasses.size(); ++index) {
-    if (!activeSession.claimedRealtimeClasses[index]) {
-      continue;
-    }
-    const auto deviceClass = static_cast<input::DeviceClass>(index);
-    inputHandler->setRegistryDeviceClassEnabled(deviceClass, false);
-  }
+  activeSession.inputRegistration =
+      std::make_unique<gameplay::RealtimeGameplayInputRegistration>(
+          context.inputDeviceRegistry, activeSession.acceptingNativeInput,
+          gameplay::RealtimeGameplayInputRegistration::Configuration{
+              .claimedClasses = claimedClasses,
+              .setLegacyClassEnabled = [this](input::DeviceClass deviceClass,
+                                               bool enabled) {
+                if (inputHandler != nullptr) {
+                  inputHandler->setRegistryDeviceClassEnabled(deviceClass, enabled);
+                }
+              },
+              .onInput = [session = &activeSession](const auto &event) {
+                RealtimeGameplaySession::registryRealtimeInput(session, event);
+              },
+              .onDevice = [session = &activeSession](const auto &device) {
+                RealtimeGameplaySession::registryRealtimeDevice(session, device);
+              },
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  SDL_AddEventWatch(&RealtimeGameplaySession::sdlInputWatch, &activeSession);
-  activeSession.sdlInputWatchRegistered = true;
+              .sdlWatch = &RealtimeGameplaySession::sdlInputWatch,
+              .sdlWatchContext = &activeSession,
 #endif
+          });
   setRealtimeGameplayIngressEnabled(true);
-  activeSession.acceptingNativeInput.store(true, std::memory_order_release);
-  for (std::size_t index = 0;
-       index < activeSession.claimedRealtimeClasses.size(); ++index) {
-    if (activeSession.claimedRealtimeClasses[index]) {
-      context.inputDeviceRegistry.setRealtimeInputClaimed(
-          static_cast<input::DeviceClass>(index), true);
-    }
-  }
+  (void)activeSession.inputRegistration->activate();
   SDL_Log("Realtime gameplay native input authority active (epoch %llu)",
           static_cast<unsigned long long>(realtimeGameplayEpoch));
   return true;
@@ -2678,29 +2669,8 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
   }
   auto &session = *realtimeGameplaySession;
   setRealtimeGameplayIngressEnabled(false);
-  session.acceptingNativeInput.store(false, std::memory_order_release);
-  if (session.sdlInputWatchRegistered) {
-    SDL_DelEventWatch(&RealtimeGameplaySession::sdlInputWatch, &session);
-    session.sdlInputWatchRegistered = false;
-  }
-  if (session.realtimeInputSubscription != 0) {
-    context.inputDeviceRegistry.unsubscribe(session.realtimeInputSubscription);
-    session.realtimeInputSubscription = 0;
-  }
-  if (session.realtimeDeviceSubscription != 0) {
-    context.inputDeviceRegistry.unsubscribe(session.realtimeDeviceSubscription);
-    session.realtimeDeviceSubscription = 0;
-  }
-  for (std::size_t index = 0; index < session.claimedRealtimeClasses.size();
-       ++index) {
-    if (!session.claimedRealtimeClasses[index]) {
-      continue;
-    }
-    const auto deviceClass = static_cast<input::DeviceClass>(index);
-    context.inputDeviceRegistry.setRealtimeInputClaimed(deviceClass, false);
-    if (inputHandler != nullptr) {
-      inputHandler->setRegistryDeviceClassEnabled(deviceClass, true);
-    }
+  if (session.inputRegistration != nullptr) {
+    session.inputRegistration->close();
   }
   drainRealtimeTouchSamples();
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR

@@ -6654,7 +6654,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests
     )
     target_compile_features(gameplay_terminal_scene_tests PRIVATE cxx_std_23)
-    target_link_libraries(gameplay_terminal_scene_tests PRIVATE ${COMMON_LIBS})
+    target_sources(gameplay_terminal_scene_tests PRIVATE
+        src/scene/play/RealtimeGameplayInputRegistration.cpp)
+    target_link_libraries(gameplay_terminal_scene_tests PRIVATE ${COMMON_LIBS}
+        input_registry_test_support)
     if(APPLE)
         target_link_libraries(gameplay_terminal_scene_tests PRIVATE iconv)
     endif()
@@ -7270,24 +7273,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(profile_runtime_reapply_tests PRIVATE cxx_std_23)
 
-    add_executable(input_device_registry_tests
-        tests/input_device_registry_tests.cpp
-        src/input/InputDeviceIdentity.cpp
-        src/input/InputDeviceRegistry.cpp
-        src/input/SDLInputBackend.cpp
-    )
-    target_include_directories(input_device_registry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(input_device_registry_tests PRIVATE cxx_std_23)
-    asobmashow_add_midi_backend(input_device_registry_tests)
-    asobmashow_add_gyroscope_backend(input_device_registry_tests)
-    asobmashow_add_windows_realtime_input_backend(input_device_registry_tests)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(input_device_registry_tests PRIVATE SDL2)
-    endif()
+    include(cmake/RealtimeInputTests.cmake)
 
     add_executable(logical_gameplay_input_tests
         tests/logical_gameplay_input_tests.cpp
@@ -8582,6 +8568,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
+    asobmashow_register_test(realtime_gameplay_input_registration_tests)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
     asobmashow_register_test(start_select_control_tests)
     asobmashow_register_test(beatoraja_hispeed_tests)

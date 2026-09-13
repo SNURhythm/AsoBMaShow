@@ -62,9 +62,8 @@ def main():
     methods += "\n" + sync_method.replace("syncRealtimeGameplaySnapshot()",
                                            "syncRealtimeGameplaySnapshotFromWorker()", 1)
     stop_method = extract(source, "void GamePlayScene::stopRealtimeGameplayAuthority(")
-    stop_tail = stop_method[stop_method.index("  session.worker->stop();"):]
-    methods += "\nvoid GamePlayScene::stopRealtimeGameplayAuthorityFromWorker(bool transferReplay) {\n"
-    methods += "  auto &session = *realtimeGameplaySession;\n" + stop_tail
+    methods += "\n" + stop_method.replace("stopRealtimeGameplayAuthority(",
+                                           "stopRealtimeGameplayAuthorityFromWorker(", 1)
     result_source = (args.root / "src/scene/ResultScene.cpp").read_text()
     result_method = extract(result_source, "void ResultScene::continueCourse()")
     result_prefix = result_method[:result_method.index("  std::atomic_bool parseCancelled")]

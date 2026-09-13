@@ -16,6 +16,8 @@ recording, gameplay practice, and visual-controller presentation.
 - `InputCaptureController.*` owns capture, thresholds, conflicts, and binding
   replacement; settings scenes only present its state.
 - Timestamp and callback-lifetime helpers protect cross-thread/native delivery.
+- `src/scene/play/RealtimeGameplayInputRegistration.*` owns gameplay's native
+  registry subscriptions, optional SDL watch, and device-class routing claims.
 
 ## Boundaries and invariants
 
@@ -25,11 +27,19 @@ backends must not invent alternate gameplay semantics. Persisted bindings use
 versioned profile data, and capture rules use canonical defaults so missing
 fields do not silently alter existing profiles.
 
+Gameplay registers native callbacks while delivery is gated, enables scene
+ingress, then activates backend claims. Shutdown closes ingress and detaches
+native registrations before draining touches and joining the simulation worker.
+Registration teardown waits for active callbacks and restores ordinary routing.
+
 ## Verification
 
 Use `input_binding_resolver_tests`, `input_capture_controller_tests`,
 `input_profile_tests`, `input_device_registry_tests`, `logical_gameplay_input_tests`,
 `midi_input_tests`, gyroscope tests, and platform-specific input targets.
+`realtime_gameplay_input_registration_tests` exercises the actual registry and
+SDL watches; the gameplay terminal fixture checks the registration-to-worker
+shutdown ordering and final replay transfer.
 
 ## Related pages
 

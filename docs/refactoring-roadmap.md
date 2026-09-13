@@ -31,9 +31,9 @@ and failure handling are easy to identify. File length is a signal, not a goal.
    recovery when choosing that boundary.
 5. **Gameplay and skin boundaries — initial review completed.** Existing
    simulation, worker, document-loader, and resource-plan interfaces already
-   separate substantial responsibilities. The next candidate is gameplay input
-   session lifetime, whose platform detach/drain/join sequence still lives in
-   the scene. See the evidence and constraints below before implementing it.
+   separate substantial responsibilities. A subsequent gameplay slice now gives
+   native input registration an explicit owner; the scene retains raw-touch
+   ingress, final drain, worker handoff, and replay/result policy.
 
 ## Supporting work
 
@@ -133,13 +133,12 @@ platform audit.
   could make this contract explicit while leaving navigation, presentation,
   and result policy in the scene.
 - That gameplay extraction needs characterization first. In
-  `tests/gameplay_terminal_scene_extract.py`, the worker-stop fixture takes
-  only the tail beginning at `session.worker->stop()`. Its passing replay and
-  terminal tests therefore do not establish platform detachment or the earlier
-  drain/cancellation sequence. A new compiled lifecycle boundary should cover
-  failed startup, repeated stop, callbacks in flight, touch-cancellation
-  failure invalidating replay transfer, and destruction. Keep the existing
-  scene fixture until equivalent terminal/navigation coverage is retained.
+  the original `tests/gameplay_terminal_scene_extract.py`, the worker-stop
+  fixture took only the tail beginning at `session.worker->stop()`. The native
+  registration slice below now exercises the full production method with a
+  compiled registration owner. Platform raw-touch cancellation and delayed
+  callback shutdown retain their existing implementations and tests; do not
+  claim desktop fixture coverage verifies those iOS-only branches.
 - `GameplaySkinDocumentLoader` already separates Lua/JSON/LR2 decoding and
   configuration admission from resource preparation. `PlaySkinSession::create`
   consumes its admitted document, then a `SkinResourcePreparationService`
@@ -155,3 +154,37 @@ platform audit.
   checkpoints, upload-thread destruction, and publication-after-success
   contract. Existing resource-catalog and play-skin-session tests should anchor
   that work; do not prescribe a new decoding/rendering architecture upfront.
+
+## Gameplay native input registration slice
+
+`RealtimeGameplayInputRegistration` owns both native registry subscriptions,
+the optional SDL event watch, and the selected device-class routing claims.
+Construction registers callbacks and disables selected legacy classes while
+native delivery remains gated. The scene enables raw ingress, then activates
+the registration; acceptance opens before backend claims can emit input.
+Autoplay still skips native registration, and each platform retains its
+existing claimed and registry-routed device classes.
+
+Close gates new delivery, removes the SDL watch, waits for registry callbacks
+to return during unsubscribe, and restores backend/legacy routing. Repeated
+activation and close are idempotent, a closed owner cannot reactivate, and
+partial construction/activation rolls back before propagating an exception.
+The owner is the session's final declared member, so fallback destruction
+detaches callbacks while all their dependencies remain alive. Ordinary scene
+shutdown still closes raw ingress before this owner and drains/cancels touches
+before joining the worker and transferring final replay evidence.
+
+Tests compile the production owner with the real registry and SDL event system.
+They cover staged/active/closed routing, destruction, partial startup and backend
+activation failure, and input/device/SDL callbacks in flight. The existing
+terminal fixture now invokes the full production shutdown method and asserts
+ingress closure, native detachment, and touch draining before real worker stop,
+while retaining its accepted-replay transfer and terminal/navigation checks.
+The two registry test targets share only their matching backend dependencies
+through `cmake/RealtimeInputTests.cmake`; the terminal fixture uses that support
+target for its real registration integration.
+
+The desktop app/all-target build and all 370 parallel CTest entries passed
+(104.12 seconds). Review also tightened a fixture callback's captured-state
+lifetime; the rebuilt terminal fixture and registration tests passed afterward.
+No deployment or physical-device verification is included in this slice.
