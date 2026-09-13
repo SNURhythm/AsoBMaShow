@@ -622,6 +622,22 @@ song-index, and repository-query test runners passed. The runtime paths still
 select the same rank and publish the same numeric lamp values. The shared-timing
 commit established the most recent full 391-test baseline.
 
+## 43. Share export and audio-cache filename sanitization — completed
+
+Result-image, replay-video, and chart-music cache naming now use one sanitizer.
+Their local wrappers retain the `result`/`replay`/`music` fallbacks and 80/80/64
+limits. The three original algorithms matched after substituting those two
+parameters. Unsigned-byte filtering, punctuation replacement, trailing-underscore
+trimming before truncation, and fallback behavior remain unchanged; path assembly
+stays with each workflow.
+
+Independent review, desktop/focused builds, and all four affected image-export,
+audio-renderer, terminal-scene, and replay UI contract tests passed. The
+all-target build also passed. Similar exporter render-access helpers were
+reviewed but retained because their restoration behavior differs.
+The full run passed 390/391; an unchanged Jukebox paused-stop deadline failed
+and passed in isolation. Its wake synchronization is the next investigation.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

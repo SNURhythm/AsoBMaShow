@@ -1,4 +1,5 @@
 #include "ChartMusicCache.h"
+#include "../ExportFileName.h"
 
 #include "../BmsMetadataText.h"
 #include "../PlayOptionUtils.h"
@@ -48,23 +49,7 @@ std::string lowerTrimmed(std::string value) {
 }
 
 std::string sanitizeFileNamePart(const std::string &value) {
-  std::string result;
-  result.reserve(value.size());
-  for (const unsigned char ch : value) {
-    if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-        (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
-      result.push_back(static_cast<char>(ch));
-    } else if (ch == ' ' || ch == '.' || ch == '[' || ch == ']') {
-      result.push_back('_');
-    }
-  }
-  while (!result.empty() && result.back() == '_') {
-    result.pop_back();
-  }
-  if (result.empty()) {
-    return "music";
-  }
-  return result.substr(0, 64);
+  return sanitizeExportFileNamePart(value, "music", 64);
 }
 
 std::string stableChartAudioKey(const bms_parser::ChartMeta &meta) {

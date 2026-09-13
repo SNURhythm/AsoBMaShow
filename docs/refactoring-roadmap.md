@@ -1127,3 +1127,21 @@ Independent review, desktop/focused builds, and all four affected CTest runners
 passed (7.07 seconds), covering projections, indexing, and repository queries.
 `git diff --check` passed. The shared-timing commit supplies the latest full
 391-test baseline; the subsequent mode/lamp refactors used affected workflows.
+
+## Follow-up: Share export and audio-cache filename sanitization
+
+Three filename helpers delegate their common character handling to one sanitizer
+while retaining local fallback names and length limits. Normalized-body comparison
+and independent review confirmed the same unsigned-byte rules, punctuation
+replacement, trim/truncate order, and owning fallback strings. Call sites and
+path construction are unchanged.
+
+Desktop/focused builds and all four affected workflow tests passed (8.19 seconds).
+The all-target build passed. Exporter render-access helpers keep their distinct
+restoration behavior.
+
+The full run passed 390/391 tests (107.10 seconds). The unchanged Jukebox runner
+exceeded its 150 ms paused-stop deadline by waiting roughly its 250 ms scheduler
+idle interval; that runner does not link these filename implementations. It
+passed alone (1.45 seconds). Scheduler wake synchronization is being investigated
+as the next change. `git diff --check` passed.
