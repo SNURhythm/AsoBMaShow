@@ -566,3 +566,23 @@ assertion. Desktop compilation and focused tests passed; review found no blocker
 After rebuilding all affected targets and checking the final incremental build,
 the full parallel suite passed all 380 tests in 132.28 seconds.
 `git diff --check` passed. Verification remained local to desktop builds/tests.
+
+## Follow-up: Sleep-timer shutdown cannot lose its wake
+
+Music Player shutdown now requests timer stop under the same mutex used to
+check the worker's wait predicate. The final notification and join still occur
+outside both timer and thread mutexes. This prevents the worker from missing
+the stop notification between predicate evaluation and wait registration.
+
+The generated fixture executes the complete production timer methods with a
+controlled scheduling pause in that gap. The old implementation failed the
+expected early-notification assertion; the fixed version passed. Additional
+cases cover timer replacement, clear, remaining time, repeated stop/restart,
+expiry messages, and shutdown joining an in-progress expiry callback while
+the timer mutex stays available. Desktop compilation and focused tests passed;
+independent review confirmed the lock order and improved one positive test
+deadline for loaded hosts. Native playback/status effects use controlled doubles.
+
+After all-target compilation, the full parallel suite passed all 381 tests in
+108.74 seconds. The review-only positive deadline adjustment was rebuilt and
+its focused test passed again. `git diff --check` passed.

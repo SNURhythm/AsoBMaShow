@@ -1711,7 +1711,11 @@ void MusicPlayerService::StopSleepTimerWorker() {
     if (!sleepTimerThread.joinable()) {
       return;
     }
-    sleepTimerThread.request_stop();
+    {
+      // Serialize the stop predicate with entry into the timer's wait.
+      std::lock_guard<std::mutex> timerLock(sleepTimerMutex);
+      sleepTimerThread.request_stop();
+    }
     threadToStop = std::move(sleepTimerThread);
   }
 

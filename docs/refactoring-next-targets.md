@@ -213,21 +213,19 @@ exactly-once indices, and waiting for completion. A negative control using the
 old narrowing fails the large-count assertion. Callback exception policy is
 unchanged; partial launch safety follows the joining ownership structure.
 
-## 12. Music Player sleep-timer shutdown synchronization
+## 12. Music Player sleep-timer shutdown synchronization — completed
 
-The sleep timer waits with a stop-token predicate under `sleepTimerMutex`, but
-shutdown requests stop under a different thread mutex. After shutdown's first
-notification, the worker can evaluate the idle predicate false, then miss the
-final stop notification before it enters the wait. Shutdown can then block in
-join. Source review confirms the missing synchronization and no inverse nested
-lock order that prevents protecting stop with the wait mutex.
+Shutdown now requests stop while holding `sleepTimerMutex`, serializing the
+predicate change with entry into the worker's wait. Final notification and
+joining remain outside both mutexes. This closes a lost-wake gap that could
+leave destruction waiting indefinitely for an idle timer.
 
-Characterize the predicate-to-wait gap deterministically before fixing it.
-Request stop while holding the wait mutex, notify after releasing it, and join
-outside both mutexes. Preserve timer replacement/clear behavior and the expiry
-callback's execution outside the timer mutex; also test shutdown while that
-callback is blocked. Only then consider a separate timer owner if it improves
-the service boundary beyond the synchronization fix.
+The compiled production-method fixture holds the worker between a false
+predicate and wait registration. The old implementation fails its early-stop
+notification assertion; the fixed implementation joins successfully. Further
+cases cover replacement, clear, restart, expiry status, and joining a blocked
+expiry callback while keeping the timer mutex available. No additional timer
+abstraction was needed to fix the synchronization boundary.
 
 ## What the review does not justify
 
