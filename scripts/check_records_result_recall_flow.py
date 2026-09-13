@@ -45,7 +45,6 @@ chart_recall_end = source.index(
     chart_recall_start)
 chart_recall = source[chart_recall_start:chart_recall_end]
 missing += ["chart-recall:" + token for token in [
-    "pendingStopAndClearSelectedChartAfterPreview = true;",
     "startReplayLoadWorker(",
     "queueReplayLoadCompletion(",
     "previewWorker_->stop();",
@@ -57,8 +56,6 @@ course_recall_end = source.index(
     "\nvoid MainMenuScene::startRemoteResultRecall", course_recall_start)
 course_recall = source[course_recall_start:course_recall_end]
 missing += ["course-recall:" + token for token in [
-    "previewWorker_->cancel();",
-    "pendingStopAndClearSelectedChartAfterPreview = true;",
     "startReplayLoadWorker(",
     "queueReplayLoadCompletion(",
     "previewWorker_->stop();",

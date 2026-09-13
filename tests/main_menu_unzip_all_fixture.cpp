@@ -53,8 +53,6 @@ struct MainMenuScene {
   Text *unzipButtonText = &button, *replayStatusText = &status;
   struct Preview { void stop() {} };
   Preview *previewWorker_ = nullptr;
-  std::mutex previewCleanupMutex;
-  bool pendingStopAndClearSelectedChartAfterPreview = false;
   bool buttonVisible = false;
   void stopAndClearSelectedChart() {}
   bool archiveUnzipInProgress() const { return modal.active; }

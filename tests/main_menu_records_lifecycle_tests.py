@@ -23,6 +23,8 @@ def records_fixture():
         "void MainMenuScene::queueReplayLoadCompletion(",
         "void MainMenuScene::applyReplayLoadCompletion()",
         "void MainMenuScene::stopReplayLoadWorker()",
+        "void MainMenuScene::stopReplayAndPreviewWork()",
+        "MainMenuScene::~MainMenuScene()",
         "bool MainMenuScene::beginReplayExport(",
         "void MainMenuScene::applyReplayExportResult()",
         "void MainMenuScene::finishReplayResultRecallFailure(",

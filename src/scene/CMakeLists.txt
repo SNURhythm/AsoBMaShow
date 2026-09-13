@@ -16,6 +16,7 @@ target_sources(main PRIVATE
     PracticePanelView.cpp
     MainMenuLibrary.cpp
     MainMenuPlayOptionsModal.cpp
+    MainMenuPreviewController.cpp
     MainMenuScene.cpp
     MusicPlayerScene.cpp
     MusicSelectScene.cpp

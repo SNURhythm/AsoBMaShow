@@ -38,7 +38,7 @@
 #include "../view/IconText.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
-#include "ChartPreloadWorker.h"
+#include "MainMenuPreviewController.h"
 #include "DecideLoadingOverlay.h"
 #include "../view/PlayOptionsPanelView.h"
 #include "../view/TextView.h"
@@ -851,6 +851,18 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   return Scene::handleEvents(event);
 }
 
+MainMenuScene::MainMenuScene(ApplicationContext &context) : Scene(context) {}
+
+MainMenuScene::~MainMenuScene() { stopReplayAndPreviewWork(); }
+
+void MainMenuScene::stopReplayAndPreviewWork() {
+  // Preparation workers can join the preview worker themselves. Join those
+  // owners first, while all callbacks still have live scene dependencies.
+  stopReplayLoadWorker();
+  replayExportJob_.cancelAndWait();
+  if (previewWorker_ != nullptr) previewWorker_->stop();
+}
+
 void MainMenuScene::init() {
   // Initialize the scene
   chartSession =
@@ -1316,12 +1328,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = true;
-      }
       if (previewWorker_ != nullptr) {
-        previewWorker_->cancel();
+        previewWorker_->cancelAndReleaseWhenIdle();
       }
       clearSelectedChart();
       jacketView->freeImage();
@@ -1335,12 +1343,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
         item.unavailable && !item.solidArchive &&
         (!meta.SHA256.empty() || !meta.MD5.empty() || !meta.Title.empty()));
     refreshStartButtonForActiveFolder();
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = true;
-    }
     if (previewWorker_ != nullptr) {
-      previewWorker_->cancel();
+      previewWorker_->cancelAndReleaseWhenIdle();
     }
     clearSelectedChart();
     if (item.unavailable || meta.BmsPath.empty()) {
@@ -1402,10 +1406,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     std::string musicStopError;
     context.musicPlayer.Stop(musicStopError);
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = false;
-    }
     if (previewWorker_ != nullptr) {
       ChartMetaRecord previewRecord;
       previewRecord.meta = std::move(meta);
@@ -1481,21 +1481,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       0, 0, rendering::window_width, rendering::window_height, {});
   decideOverlay_->setVisible(false);
   overlayPortal->present(decideOverlay_);
-  previewWorker_ = new ChartPreloadWorker(kPreviewDebounceDelay);
-  previewWorker_->setOnIdle([this]() {
-    bool shouldStopPreviewAudio = false;
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      if (pendingStopAndClearSelectedChartAfterPreview) {
-        pendingStopAndClearSelectedChartAfterPreview = false;
-        shouldStopPreviewAudio = true;
-      }
-    }
-    if (shouldStopPreviewAudio) {
-      stopAndClearSelectedChart();
-    }
-  });
-  previewWorker_->configure(
+  previewWorker_ = std::make_unique<MainMenuPreviewController>(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
         const auto &meta = request.meta;
         const auto isCancelled = [&cancelled, this, &meta]() {
@@ -1555,7 +1541,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
             this->context.jukebox.play();
           }
         }
-      });
+      }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay);
 
   auto nav = new View();
   nav->setFlexDirection(FlexDirection::Column);
@@ -1671,10 +1657,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
       if (previewWorker_ != nullptr) {
         previewWorker_->stop();
       }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
-      }
       stopAndClearSelectedChart();
       context.sceneManager->changeScene(
           std::make_unique<MusicPlayerScene>(
@@ -1695,10 +1677,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     if (context.sceneManager != nullptr) {
       if (previewWorker_ != nullptr) {
         previewWorker_->stop();
-      }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
       }
       stopAndClearSelectedChart();
       context.sceneManager->changeScene(
@@ -2133,10 +2111,6 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
     }
     if (previewWorker_ != nullptr) {
       previewWorker_->stop();
-    }
-    {
-      std::lock_guard<std::mutex> lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = false;
     }
     stopAndClearSelectedChart();
     context.sceneManager->changeScene(
@@ -4047,10 +4021,6 @@ void MainMenuScene::startCourseDirect(
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
         }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
-        }
         clearSelectedChart();
 
         const bms_parser::ChartMeta *firstMeta = session->currentMeta();
@@ -4230,10 +4200,6 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
         }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
-        }
 
         bms_parser::Chart *readyChart = nullptr;
         if (canReusePreviewForStart) {
@@ -4387,10 +4353,6 @@ void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
 
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   archive_file::appendDebugLogLine(
       "Open chart viewer: " + fspath_to_utf8(record.meta.BmsPath));
@@ -4670,10 +4632,6 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
   }
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   stopAndClearSelectedChart();
   const bool started = record.unzipAll ? archiveUnzipModal_->startAll()
@@ -5290,10 +5248,6 @@ void MainMenuScene::playSelectedChartAsMusic() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 
   MusicTrackRecord musicRecord{.representativeChart = record.meta,
@@ -5372,10 +5326,6 @@ void MainMenuScene::playSavedMusicPlaylist() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -5401,10 +5351,6 @@ void MainMenuScene::clearSavedMusicPlaylist() {
 void MainMenuScene::playRandomMusicLibrary() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
 
@@ -5462,10 +5408,6 @@ void MainMenuScene::playNextMusicTrack() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 
   std::string errorMessage;
@@ -5477,10 +5419,6 @@ void MainMenuScene::playNextMusicTrack() {
 void MainMenuScene::playPreviousMusicTrack() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
   }
   context.jukebox.stop();
 
@@ -6687,10 +6625,6 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
   startReplayLoadWorker([this, record, selections, randomInfo, autoPlayPlayback,
                          autoPlayRuleset](std::shared_ptr<std::atomic_bool> cancelled) {
     if (previewWorker_) previewWorker_->stop();
-    {
-      std::lock_guard lock(previewCleanupMutex);
-      pendingStopAndClearSelectedChartAfterPreview = false;
-    }
     std::unique_ptr<bms_parser::Chart> autoPlayChart;
     play_options::PlayOptionReplayInfo playInfo;
     if (!prepareAutoPlayChartForRecord(record, autoPlayChart, playInfo,
@@ -6762,11 +6696,7 @@ void MainMenuScene::startModernReplayPlayback(
   const bool renderGhosts =
       recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), pacemakerTarget,
@@ -6775,10 +6705,6 @@ void MainMenuScene::startModernReplayPlayback(
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
@@ -6875,11 +6801,7 @@ void MainMenuScene::startModernGBattlePlayback(
   };
 
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern), gaugeType, gaugeAutoShift,
@@ -6888,10 +6810,6 @@ void MainMenuScene::startModernGBattlePlayback(
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto consumer = replay::makeRuntimeChartReplayConsumer(
               context.replayRepository);
@@ -7001,11 +6919,7 @@ void MainMenuScene::startModernCourseReplayPlayback(
   const bool renderGhosts =
       recordsModal_ != nullptr ? recordsModal_->renderReplayGhosts() : true;
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, modern = std::move(modern), chartPaths = std::move(chartPaths),
@@ -7014,10 +6928,6 @@ void MainMenuScene::startModernCourseReplayPlayback(
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
 
           auto consumer =
@@ -7260,10 +7170,6 @@ void MainMenuScene::preparePreviewForReplayExport() {
   if (previewWorker_ != nullptr) {
     previewWorker_->stop();
   }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
   context.jukebox.stop();
 }
 
@@ -7485,10 +7391,6 @@ void MainMenuScene::startModernReplayIrUpload(
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
           }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
-          }
           finishReplayIrUpload(
               modern.result.attemptId,
               replay_records::uploadSavedResult(context, modern.result.attemptId));
@@ -7527,11 +7429,7 @@ void MainMenuScene::startModernReplayResultRecall(
   replayResultRecallInProgress = true;
   if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker(
       [this, record, modern = std::move(modern)](
@@ -7539,10 +7437,6 @@ void MainMenuScene::startModernReplayResultRecall(
         try {
           if (previewWorker_ != nullptr) {
             previewWorker_->stop();
-          }
-          {
-            std::lock_guard<std::mutex> lock(previewCleanupMutex);
-            pendingStopAndClearSelectedChartAfterPreview = false;
           }
           auto prepared = chart_records::prepareChartResult(
               context.replayRepository, record, modern.result.attemptId, *cancelled);
@@ -7603,11 +7497,7 @@ void MainMenuScene::startModernCourseReplayResultRecall(
   replayResultRecallInProgress = true;
   if (recordsModal_ != nullptr) recordsModal_->setResultRecallInProgress(true);
   if (previewWorker_ != nullptr) {
-    previewWorker_->cancel();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = true;
+    previewWorker_->cancelAndReleaseWhenIdle();
   }
   startReplayLoadWorker([this, modern = std::move(modern), retrySameAllowed,
                          currentSelection = std::move(currentSelection)](
@@ -7616,10 +7506,6 @@ void MainMenuScene::startModernCourseReplayResultRecall(
     try {
       if (previewWorker_ != nullptr) {
         previewWorker_->stop();
-      }
-      {
-        std::lock_guard<std::mutex> lock(previewCleanupMutex);
-        pendingStopAndClearSelectedChartAfterPreview = false;
       }
       auto prepared = course_records::prepareCourseResult(
           context.replayRepository, modern.result.attemptId, currentSelection,
@@ -7691,10 +7577,6 @@ void MainMenuScene::startRemoteResultRecall(IrRemoteRecordId identity,
        selectedStableKey = std::move(selectedStableKey)](std::shared_ptr<std::atomic_bool> cancelled) {
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
-        }
-        {
-          std::lock_guard<std::mutex> lock(previewCleanupMutex);
-          pendingStopAndClearSelectedChartAfterPreview = false;
         }
 
         RemoteResultRecallRequest request{
@@ -7937,15 +7819,7 @@ void MainMenuScene::cleanupScene() {
   playOptionsModal.reset();
   if (recordFileActions_) recordFileActions_->close();
   parseLogDocumentHandoff.close();
-  stopReplayLoadWorker();
-  replayExportJob_.cancelAndWait();
-  if (previewWorker_ != nullptr) {
-    previewWorker_->stop();
-  }
-  {
-    std::lock_guard<std::mutex> lock(previewCleanupMutex);
-    pendingStopAndClearSelectedChartAfterPreview = false;
-  }
+  stopReplayAndPreviewWork();
   context.profileSwitchBlockers.scene = nullptr;
   context.profileSwitchBlockers.background = nullptr;
   context.refreshProfileCaches = nullptr;
@@ -7973,10 +7847,7 @@ void MainMenuScene::cleanupScene() {
     delete decideOverlay_;
     decideOverlay_ = nullptr;
   }
-  if (previewWorker_ != nullptr) {
-    delete previewWorker_;
-    previewWorker_ = nullptr;
-  }
+  previewWorker_.reset();
   overlayPortal = nullptr;
   jacketView = nullptr;
   searchBox = nullptr;

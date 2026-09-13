@@ -7948,6 +7948,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(replay_export_job_tests PRIVATE cxx_std_23)
     asobmashow_register_test(replay_export_job_tests)
+    add_executable(main_menu_preview_controller_tests
+        tests/main_menu_preview_controller_tests.cpp
+        src/scene/MainMenuPreviewController.cpp
+        src/scene/ChartPreloadWorker.cpp
+        src/path.cpp
+    )
+    target_include_directories(main_menu_preview_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include
+    )
+    target_compile_features(main_menu_preview_controller_tests PRIVATE cxx_std_23)
+    target_link_libraries(main_menu_preview_controller_tests PRIVATE Threads::Threads)
+    asobmashow_register_test(main_menu_preview_controller_tests)
+
     add_executable(replay_record_task_tests
         tests/replay_record_task_tests.cpp
         src/scene/ReplayRecordTask.cpp

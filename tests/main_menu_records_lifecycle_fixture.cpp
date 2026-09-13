@@ -169,7 +169,13 @@ void executeRemoteResultRecall(const RemoteResultRecallRequest &request, RemoteR
   }
   callbacks.transition({}, true);
 }
-struct PreviewWorker { void cancel() {} void stop() {} };
+struct PreviewWorker {
+  std::function<void()> onStop;
+  int deferredReleases = 0;
+  void cancel() {}
+  void cancelAndReleaseWhenIdle() { ++deferredReleases; }
+  void stop() { if (onStop) onStop(); }
+};
 
 struct Recycler {
   int selectedIndex = -1;
@@ -202,8 +208,6 @@ struct MainMenuScene {
   ReplayRecordsModal modal;
   ReplayRecordsModal *recordsModal_ = &modal;
   PreviewWorker *previewWorker_ = nullptr;
-  std::mutex previewCleanupMutex;
-  bool pendingStopAndClearSelectedChartAfterPreview = false;
   std::atomic_bool willStart = false;
   replay::ReplayExportJob replayExportJob_;
   ReplayRecordTask replayLoadTask_;
@@ -224,7 +228,7 @@ struct MainMenuScene {
     manager.pause = [this] { onPause(); };
     manager.resume = [this] { onResume(); };
   }
-  ~MainMenuScene() { stopReplayLoadWorker(); }
+  ~MainMenuScene();
   void defer(std::function<bool()> callback, int, bool) { deferred.push_back(std::move(callback)); }
   void drain() {
     auto callbacks = std::move(deferred);
@@ -273,6 +277,7 @@ struct MainMenuScene {
   void queueReplayLoadCompletion(std::function<void()>);
   void applyReplayLoadCompletion();
   void stopReplayLoadWorker();
+  void stopReplayAndPreviewWork();
   bool beginReplayExport(const std::string &, const std::string &, const std::string &);
   void applyReplayExportResult();
   void onPause();
@@ -312,7 +317,9 @@ void testAutoPlay() {
 void testRecall() {
   for (int path = 0; path < 3; ++path) {
     for (int outcome = 0; outcome < 3; ++outcome) {
+      PreviewWorker preview;
       MainMenuScene scene;
+      scene.previewWorker_ = &preview;
       scene.preparationFails = outcome == 1;
       scene.context.replayRepository.available = outcome != 1;
       remoteSelectionMatches = outcome != 2;
@@ -320,6 +327,8 @@ void testRecall() {
       if (path == 0) callbacks.recallModernChart({}, {});
       if (path == 1) callbacks.recallModernCourse({}, true);
       if (path == 2) callbacks.recallRemote({}, "remote");
+      expect(preview.deferredReleases == (path < 2 ? 1 : 0),
+             "local result recall must defer preview release through its owner");
       expect(scene.replayResultRecallInProgress && scene.modal.operationInProgress(), "recall entry must lock owner/modal");
       scene.modal.hide();
       expect(scene.modal.root.visible, "recall must block dismissal until completion");
@@ -363,9 +372,44 @@ void testExport() {
     expect(!scene.modal.status.empty(), "export completion must publish status");
   }
 }
+void testDestructionStopsPreparationBeforePreviewDependencies() {
+  std::atomic_bool loadStopped = false, exportStopped = false;
+  std::atomic_bool loadStarted = false, exportStarted = false;
+  bool previewStopped = false;
+  PreviewWorker preview;
+  preview.onStop = [&] {
+    expect(loadStopped && exportStopped, "preview stop must follow both preparation owners");
+    previewStopped = true;
+  };
+  {
+    MainMenuScene scene;
+    scene.previewWorker_ = &preview;
+    scene.replayLoadTask_.start([&](std::shared_ptr<std::atomic_bool> cancelled) {
+      loadStarted = true;
+      while (!cancelled->load()) std::this_thread::yield();
+      loadStopped = true;
+    });
+    expect(scene.replayExportJob_.tryBegin(), "export worker reservation must succeed");
+    scene.replayExportJob_.start({}, [&](const auto &, std::atomic_bool &cancelled) {
+      exportStarted = true;
+      while (!cancelled.load()) std::this_thread::yield();
+      exportStopped = true;
+      return ReplayVideoExportResult{false, {}, "Cancelled"};
+    });
+    // Exercise teardown of in-flight work. A task cancelled before dispatch
+    // legitimately never enters its callback.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while ((!loadStarted || !exportStarted) && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    expect(loadStarted && exportStarted, "both preparation workers must reach the teardown barrier");
+  }
+  expect(previewStopped && loadStopped && exportStopped,
+         "destruction must join playback work while its scene dependencies are alive");
+}
 int main() {
   testAutoPlay();
   testRecall();
   testExport();
+  testDestructionStopsPreparationBeforePreviewDependencies();
   return failures == 0 ? 0 : 1;
 }

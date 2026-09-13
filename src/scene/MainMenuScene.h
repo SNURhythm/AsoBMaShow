@@ -57,7 +57,7 @@ class DropdownView;
 class OverlayPortal;
 class BlockingOverlayView;
 class DecideLoadingOverlay;
-class ChartPreloadWorker;
+class MainMenuPreviewController;
 class PlayOptionsPanelView;
 class ScrollView;
 struct CoursePlaySession;
@@ -71,7 +71,8 @@ struct MainMenuParseLogRow {
 
 class MainMenuScene : public Scene {
 public:
-  inline explicit MainMenuScene(ApplicationContext &context) : Scene(context) {}
+  explicit MainMenuScene(ApplicationContext &context);
+  ~MainMenuScene() override;
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -93,10 +94,8 @@ private:
   // Preview chart loading runs on the shared ChartPreloadWorker (single
   // scene-lifetime thread, debounced and latest-wins) so a selection change
   // never spawns or joins a per-selection thread on the UI thread.
-  ChartPreloadWorker *previewWorker_ = nullptr;
+  std::unique_ptr<MainMenuPreviewController> previewWorker_;
   std::mutex previewJukeboxLoadMutex;
-  std::mutex previewCleanupMutex;
-  bool pendingStopAndClearSelectedChartAfterPreview = false;
   std::jthread findBmsThread;
   ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;
@@ -601,6 +600,7 @@ private:
   void queueReplayLoadCompletion(std::function<void()> completion);
   void applyReplayLoadCompletion();
   void stopReplayLoadWorker();
+  void stopReplayAndPreviewWork();
   void applyReplayExportProgress();
   void applyReplayExportResult();
   enum DiffType { Deleted, Added };

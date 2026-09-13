@@ -1,4 +1,4 @@
-#include "scene/ChartPreloadWorker.h"
+#include "scene/MainMenuPreviewController.h"
 #include "targets.h"
 
 #include <future>
@@ -49,7 +49,7 @@ struct MainMenuScene {
   View *replayStatusText = nullptr;
   RecyclerView recycler;
   RecyclerView *recyclerView = &recycler;
-  ChartPreloadWorker *previewWorker_;
+  MainMenuPreviewController *previewWorker_ = nullptr;
   PREVIEW_STATE_FIELDS
   std::atomic_bool active = false;
   std::atomic_bool playing = true;
@@ -57,7 +57,6 @@ struct MainMenuScene {
   std::atomic_bool concurrentCleanup = false;
   std::atomic_bool cleanupOnSelectionThread = false;
   std::thread::id selectionThread;
-  std::function<void()> onIdle;
 
   void refreshRankingsButton() {}
   void refreshReplayAvailability(const ChartMetaRecord *) {}
@@ -76,11 +75,10 @@ struct MainMenuScene {
     clearSelectedChart();
   }
 
-  explicit MainMenuScene(ChartPreloadWorker &worker) : previewWorker_(&worker) {
+  MainMenuScene() {
     auto &context = this->context;
     recyclerView->onSelected = [this, &context](const ChartMetaRecord &record, int idx)
         SELECTION_CALLBACK;
-    onIdle = [this]() IDLE_CALLBACK;
   }
 };
 
@@ -93,15 +91,13 @@ void expect(bool condition, const std::string &message) {
 }
 
 void exerciseSelection(int kind, bool blocked) {
-  ChartPreloadWorker worker(std::chrono::milliseconds(0));
-  MainMenuScene scene(worker);
+  MainMenuScene scene;
   std::mutex gate;
   std::condition_variable cv;
   bool entered = false;
   bool release = !blocked;
   bool nextLoaded = false;
-  int idleCount = 0;
-  worker.configure([&](const ChartMetaRecord &record, std::atomic_bool &) {
+  MainMenuPreviewController worker([&](const ChartMetaRecord &record, std::atomic_bool &) {
     std::lock_guard loadLock(scene.previewJukeboxLoadMutex);
     scene.active = true;
     std::unique_lock lock(gate);
@@ -116,13 +112,12 @@ void exerciseSelection(int kind, bool blocked) {
     }
     scene.active = false;
     cv.notify_all();
-  });
-  worker.setOnIdle([&] {
-    scene.onIdle();
+  }, [&] {
+    scene.stopAndClearSelectedChart();
     std::lock_guard lock(gate);
-    ++idleCount;
     cv.notify_all();
-  });
+  }, std::chrono::milliseconds(0));
+  scene.previewWorker_ = &worker;
   ChartMetaRecord old;
   old.meta.Title = "old";
   old.meta.BmsPath = "/songs/old.bms";
@@ -130,7 +125,7 @@ void exerciseSelection(int kind, bool blocked) {
   {
     std::unique_lock lock(gate);
     expect(cv.wait_for(lock, std::chrono::seconds(2), [&] {
-      return blocked ? entered : idleCount > 0;
+      return entered;
     }), "initial preview reaches the test barrier");
   }
   ChartMetaRecord selected;
