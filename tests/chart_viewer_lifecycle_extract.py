@@ -14,7 +14,8 @@ def main():
     base = (args.root / "src/scene/Scene.h").read_text()
     fixture = (args.root / "tests/chart_viewer_lifecycle_fixture.cpp").read_text()
     fixture = fixture.replace("BASE_METHODS", "\n".join(extract(base, signature) for signature in (
-        "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()")))
+        "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()",
+        "void clearPostedDeferred()")))
     fixture = fixture.replace("VIEWER_METHODS", "\n".join(extract(scene, signature) for signature in (
         "ChartViewerScene::~ChartViewerScene()", "void ChartViewerScene::cleanupScene()")))
     args.output.parent.mkdir(parents=True, exist_ok=True)

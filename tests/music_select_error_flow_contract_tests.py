@@ -525,6 +525,7 @@ int main() {
             ("BASE_CLEANUP", "inline void cleanup()"),
             ("BASE_DESTRUCTOR", "virtual ~Scene()"),
             ("BASE_DESTROY_VIEWS", "void destroyOwnedViews()"),
+            ("BASE_CLEAR_POSTED", "void clearPostedDeferred()"),
         ):
             fixture = fixture.replace(marker, function_body(base, signature))
         self.compile_and_run(fixture.replace("SCENE_METHODS", methods)

@@ -862,6 +862,25 @@ The focused runner passed (0.49 seconds), the desktop app and all test targets
 built, and all 396 CTest entries passed (101.73 seconds). Independent review
 and `git diff --check` passed. The commit remains local.
 
+## 55. Release posted scene callbacks after unlocking — completed
+
+Scene reuse and view teardown now share `clearPostedDeferred`, which swaps the
+posted callback vector into a local owner under its mutex and releases it after
+unlocking. This prevents captured-resource cleanup from holding the queue lock
+while another worker posts. Existing view/deferred-map cleanup order and frame
+scheduling are unchanged. Posts accepted after the swap belong to the new queue.
+
+The actual-header fixture reproduced lock contention in both reuse and cleanup.
+Its bounded capture destructor now observes successful worker publication, with
+observers joined before the scene dies. New posts run once after reuse clearing;
+the next preparation discards posts accepted during cleanup. Existing scene
+teardown extractors include the shared production helper.
+
+The focused deferred/destruction fixtures passed (3.44 seconds), the desktop
+app and all test targets built, and all 396 CTest entries passed (103.70
+seconds). Independent review and `git diff --check` passed. The commit remains
+local.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

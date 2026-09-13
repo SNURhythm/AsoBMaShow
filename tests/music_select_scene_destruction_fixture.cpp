@@ -68,6 +68,7 @@ protected:
   ApplicationContext &context;
 private:
   void destroyOwnedViews() BASE_DESTROY_VIEWS
+  void clearPostedDeferred() BASE_CLEAR_POSTED
   std::mutex postedDeferredMutex_;
   std::vector<std::function<bool()>> postedDeferred_;
   bool isDead = false, isCleaned = false;

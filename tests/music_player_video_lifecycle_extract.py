@@ -15,7 +15,8 @@ def main():
     base = (args.root / "src/scene/Scene.h").read_text()
     fixture = (args.root / "tests/music_player_video_lifecycle_fixture.cpp").read_text()
     fixture = fixture.replace("BASE_METHODS", "\n".join(extract(base, signature) for signature in (
-        "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()")))
+        "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()",
+        "void clearPostedDeferred()")))
     cleanup = extract(source, "void MusicPlayerScene::cleanupScene()")
     # View implementations are controlled; keep every production cleanup handle.
     handles = re.findall(r"^  (\w+) = nullptr;", cleanup, re.MULTILINE)

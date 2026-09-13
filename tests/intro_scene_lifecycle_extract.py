@@ -14,7 +14,8 @@ def main():
     base = (args.root / "src/scene/Scene.h").read_text()
     fixture = (args.root / "tests/intro_scene_lifecycle_fixture.cpp").read_text()
     fixture = fixture.replace("BASE_METHODS", "\n".join(extract(base, signature) for signature in (
-        "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()")))
+        "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()",
+        "void clearPostedDeferred()")))
     # Preserve the original implicit destructor for the negative control.
     destructor = (extract(scene, "IntroScene::~IntroScene()")
                   if "IntroScene::~IntroScene()" in scene else "IntroScene::~IntroScene() = default;")

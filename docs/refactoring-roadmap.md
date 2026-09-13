@@ -1299,3 +1299,15 @@ ordering. Desktop compilation and independent review passed.
 
 All test targets rebuilt and all 396 CTest entries passed (101.73 seconds).
 `git diff --check` passed. The verified commit remains local.
+
+## Follow-up: Release posted scene callbacks after unlocking
+
+Scene reuse and teardown now share a queue-clearing helper that releases
+captured resources outside the posted-callback mutex. A bounded real-header
+probe reproduced the previous contention and now verifies both clear paths and
+later-post behavior. The focused deferred/destruction fixtures passed (3.44
+seconds), the desktop app and all test targets built, and independent review
+found no issues. View/deferred-map ordering and callback scheduling are unchanged.
+
+All 396 CTest entries passed (103.70 seconds), including the regenerated native
+lifecycle fixtures. `git diff --check` passed. The commit remains local.
