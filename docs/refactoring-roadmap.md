@@ -337,3 +337,19 @@ remaining behavior, lifetime, or build-wiring blocker.
 The desktop app and all-target builds passed, followed by all 374 parallel
 CTest entries in 111.83 seconds. `git diff --check` passed. No deployment or
 physical-device verification was performed.
+
+## Follow-up: Settings library-worker destructor safety
+
+Inspection of the next ownership candidate found a concrete teardown gap:
+`difficultyTableJobThread` was declared before its callback status fields, so
+implicit thread destruction joined only after those fields had died. Normal
+scene cleanup joined explicitly, but direct scene destruction did not.
+The destructor now requests stop and joins while all members remain alive.
+
+A fixture compiles the complete production destructor with a real thread and
+a dependency-lifetime sentinel in the same relative declaration order. It
+failed before the fix and passes afterward, checking both stop signaling and
+joining an operation that finishes after cancellation. Idle and previously
+joined destruction also pass. The desktop build and both Settings worker
+fixtures passed; independent review found no blocker. The preceding full-suite
+baseline was 374/374; this bounded fix adds the focused lifecycle regression.

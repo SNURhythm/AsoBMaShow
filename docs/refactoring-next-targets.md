@@ -78,9 +78,10 @@ concurrency regressions retain backend-level cancellation and promotion checks.
 `SettingsSceneTables.cpp` runs table import/update/delete, fallback library
 rebuild, and folder removal through one scene-owned thread. Worker lambdas
 capture the scene and publish through a mutex plus parallel pending flags,
-strings, colors, and import progress fields. Normal scene cleanup joins this
-thread, but the destructor does not explicitly join it before those later
-members are destroyed. First characterize and close that teardown gap.
+strings, colors, and import progress fields. Both normal cleanup and direct destruction now explicitly stop/join this
+thread before its callback dependencies are destroyed. A compiled production
+destructor fixture reproduced the previous gap and checks stop signaling,
+joining an operation that finishes after cancellation, and idle/prior cleanup.
 
 Then group admission, worker lifetime, and data publication in one owner while
 keeping repository/import/scanner operations and application-thread UI
