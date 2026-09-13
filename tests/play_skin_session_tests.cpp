@@ -4,6 +4,7 @@
 
 #include "ArchiveFile.h"
 #include "music_select_runtime_ledger_assertions.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
@@ -153,37 +154,9 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code error;
-    const auto makeWritable = [&error](const fs::path &path) {
-      const auto status = fs::symlink_status(path, error);
-      if (error) return;
-      if (fs::is_directory(status)) {
-        fs::permissions(path, fs::perms::owner_all,
-                        fs::perm_options::add | fs::perm_options::nofollow, error);
-      }
-#ifdef _WIN32
-      else if (fs::is_regular_file(status)) {
-        fs::permissions(path, fs::perms::owner_write,
-                        fs::perm_options::add | fs::perm_options::nofollow, error);
-      }
-#endif
-    };
-    if (fs::is_directory(fs::symlink_status(root_, error)) && !error) {
-      makeWritable(root_);
-      if (!error) {
-        for (fs::recursive_directory_iterator iterator(root_, error), end;
-             !error && iterator != end; iterator.increment(error)) {
-          makeWritable(iterator->path());
-          if (error) break;
-        }
-      }
-    }
+    const auto error = test_support::removeReadOnlyTree(root_);
     if (error) {
-      expect(false, "temporary fixture permission cleanup failed: " + error.message());
-    }
-    fs::remove_all(root_, error);
-    if (error) {
-      expect(false, "temporary fixture removal failed: " + error.message());
+      expect(false, "temporary fixture cleanup failed: " + error.message());
     }
   }
 

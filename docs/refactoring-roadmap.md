@@ -821,3 +821,25 @@ without a modal. Desktop compilation and all three focused cases passed.
 
 Independent review, the all-target build, and all 391 tests passed (101.92
 seconds). `git diff --check` passed.
+
+## Follow-up: Share read-only cleanup with the loading benchmark
+
+An isolated loading-benchmark test passed but left two temporary snapshot roots
+behind. Its owner now uses the same non-following permission restoration as the
+session fixture through a small test-only helper. Cleanup still attempts removal
+after a permission/traversal failure and reports errors to the owning runner.
+
+Review also found that benchmark fixture destruction occurred after `main`
+evaluated its exit code. Benchmark work now runs in an inner owning function;
+the final status and success message are decided after cleanup. Existing work
+failure and invalid-argument statuses are preserved, including JSON report modes.
+
+Both focused runners passed with zero new directories under either fixture
+prefix. Default, cold/warm JSON, invalid-argument, and missing-input CLI checks
+also preserved their expected results without leaving fixtures. Independent
+review found no issues. The existing nested read-only/external-link regression
+tests the shared cleanup through its real temporary owner.
+
+The all-target build and all 391 tests passed (101.40 seconds). The full run
+left zero new directories under either tracked fixture prefix.
+`git diff --check` passed.

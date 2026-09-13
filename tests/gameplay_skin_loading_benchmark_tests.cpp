@@ -15,6 +15,7 @@
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <nlohmann/json.hpp>
 
@@ -81,8 +82,10 @@ public:
     } while (!fs::create_directory(root_));
   }
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::remove_all(root_, ignored);
+    const auto error = test_support::removeReadOnlyTree(root_);
+    if (error) {
+      expect(false, "benchmark fixture cleanup failed: " + error.message());
+    }
   }
   const fs::path &root() const noexcept { return root_; }
 
@@ -909,33 +912,23 @@ std::uint64_t median(std::vector<std::uint64_t> values) {
   return values[values.size() / 2U];
 }
 
-} // namespace
-
-int main(int argc, char **argv) {
-  const auto options = parseOptions(argc, argv);
-  if (!options) {
-    std::cerr << "usage: gameplay_skin_loading_benchmark_tests "
-                 "[--benchmark --mode cold|warm --samples N] [--skin PATH] "
-                 "[--acceptance-report --skin PATH --entry PATH "
-                 "--entry-identity ID] [--acceptance-matrix --skin PATH]\n";
-    return 2;
-  }
-  BenchmarkFixture fixture(options->skin, options->format, options->entry);
+int runBenchmark(const BenchmarkOptions &options) {
+  BenchmarkFixture fixture(options.skin, options.format, options.entry);
   if (!fixture.ready()) {
     std::cerr << "gameplay skin loading benchmark fixture is unavailable\n";
     return 1;
   }
-  if (options->acceptanceReport) {
-    const auto report = fixture.acceptanceReport(*options->entryIdentity);
+  if (options.acceptanceReport) {
+    const auto report = fixture.acceptanceReport(*options.entryIdentity);
     if (!report) return 1;
     std::cout << report->dump() << '\n';
     return 0;
   }
-  if (options->acceptanceMatrix) {
+  if (options.acceptanceMatrix) {
     std::cout << fixture.acceptanceMatrix().dump() << '\n';
     return 0;
   }
-  if (!options->benchmark) {
+  if (!options.benchmark) {
     const auto cold = runSamples(fixture, false, 1);
     const auto warm = runSamples(fixture, true, 2);
     expect(cold && warm && cold->size() == 1 && warm->size() == 2 &&
@@ -955,14 +948,11 @@ int main(int argc, char **argv) {
                (*acceptance)["graphFamilies"]["hitErrorVisualizer"]["commands"] > 0,
            "acceptance reporter exercises production loading and all four "
            "gameplay graph command families");
-    if (failures == 0) {
-      std::cout << "Gameplay skin loading benchmark tests passed\n";
-    }
     return failures == 0 ? 0 : 1;
   }
-  const auto samples = runSamples(fixture, options->warm, options->samples);
+  const auto samples = runSamples(fixture, options.warm, options.samples);
   if (!samples) return 1;
-  std::cout << "{\"mode\":\"" << (options->warm ? "warm" : "cold")
+  std::cout << "{\"mode\":\"" << (options.warm ? "warm" : "cold")
             << "\",\"formats\":" << fixture.formatCount()
             << ",\"sampleCount\":" << samples->size()
             << ",\"medianMicros\":" << median(*samples)
@@ -972,5 +962,25 @@ int main(int argc, char **argv) {
     std::cout << (*samples)[index];
   }
   std::cout << "]}\n";
+  return 0;
+}
+
+} // namespace
+
+int main(int argc, char **argv) {
+  const auto options = parseOptions(argc, argv);
+  if (!options) {
+    std::cerr << "usage: gameplay_skin_loading_benchmark_tests "
+                 "[--benchmark --mode cold|warm --samples N] [--skin PATH] "
+                 "[--acceptance-report --skin PATH --entry PATH "
+                 "--entry-identity ID] [--acceptance-matrix --skin PATH]\n";
+    return 2;
+  }
+  const int status = runBenchmark(*options);
+  if (status != 0) return status;
+  if (failures != 0) return 1;
+  if (!options->benchmark && !options->acceptanceReport && !options->acceptanceMatrix) {
+    std::cout << "Gameplay skin loading benchmark tests passed\n";
+  }
   return 0;
 }

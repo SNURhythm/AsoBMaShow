@@ -369,6 +369,20 @@ retained admission, one-time diagnostic delivery, retry, Main Menu preview
 restoration, and Records recovery with or without a modal. The allocation hook
 is shared by those test executables and is never linked into the application.
 
+## 24. Shared session/benchmark snapshot cleanup — completed
+
+The loading benchmark also left immutable snapshots behind: its isolated test
+passed while creating two leftover directories. `ReadOnlyTreeCleanup` now
+shares the session fixture's permission restoration and non-following traversal
+with that benchmark. Removal is attempted after permission errors, and callers
+report the removal error or the earlier traversal/permission error.
+
+Benchmark work now runs inside an owning helper so all fixture destructors
+finish before `main` checks failures or announces success. The existing session
+regression continues to cover nested read-only trees and external symlinks.
+Both focused runners left zero new fixture directories, and default/cold/warm,
+invalid-argument, and missing-input CLI checks preserved their output/status.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph
