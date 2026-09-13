@@ -130,21 +130,37 @@ partial failure, progress, cancellation on both sides of enqueue, retained
 outcomes, restart, and destruction. Complete production scene methods run with
 the real task, controller, and batch mapper against controlled effects.
 
-## 7. Music Select direct-destruction lifecycle
+## 7. Music Select direct-destruction lifecycle — completed
 
-Music Select cancels launch/preload work, unregisters input, and releases skin
-and sound resources in normal `cleanupScene`, but has no explicit destructor.
-The base `Scene` destructor destroys views without invoking derived cleanup.
-The raw preload-worker pointer and scene-capturing launch callbacks therefore
-need an audit of direct destruction and initialization failure paths.
+The derived destructor now calls the existing guarded `Scene::cleanup()` while
+its callback dependencies remain alive. This joins launch/preload, Records,
+skin preparation, and export work and unregisters input before member teardown.
+It also covers the owning-pointer failure path when `SceneManager::changeScene`
+catches a failed `init()`. Normal scene cleanup remains the same path; its guard
+prevents repeated resource release during later destruction.
 
-First characterize destructor behavior with actual production cleanup and the
-base cleanup-once guard, including already-cleaned and never-initialized scenes.
-Prefer one owned shutdown path over another duplicated list of teardown calls.
-Preserve cancellation-before-join, Records/preview ordering, input detachment,
-security-scoped sound access, and Lua preparation cancellation. Only then assess
-whether launch preparation would benefit from reuse of the existing scene task
-boundary; file length alone does not justify moving its gameplay policy.
+A compiled fixture executes the complete production destructor and cleanup,
+selected cancellation helpers, and base cleanup/view-destruction methods.
+It uses the real Records/export owners and controlled other resources to check
+active direct destruction, exception unwinding, already-cleaned destruction,
+never-initialized state, deferred capture disposal, and resource ordering. Lua
+preparation and iOS scoped-access branches run against doubles; this is a local
+lifecycle test, not physical-device validation.
+
+## 8. Settings profile archive worker ownership
+
+Settings still owns the profile archive thread and a separate shared completion
+mailbox. Launch, completion consumption, and shutdown each manipulate them in
+`SettingsSceneProfiles.cpp`. The existing `ProfileArchiveTask` already owns the
+domain operation; a narrow asynchronous owner could group only thread lifetime
+and typed result handoff, retaining that domain boundary.
+
+Characterize import temporary-document cleanup before completion, suppressed
+completion after stop, join-before-consume, rejected admission, and launch
+failure ownership. Profile transactions are not stop-token cancellable: stopping
+must wait for execution and temporary cleanup, then discard presentation data.
+Keep picker state, generation policy, export staging retention, and controller
+commit decisions in the existing scene/controller workflow.
 
 ## What the review does not justify
 

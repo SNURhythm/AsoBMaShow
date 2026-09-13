@@ -58,6 +58,7 @@ class MusicSelectScene final : public Scene {
 public:
   MusicSelectScene(ApplicationContext &,
                    skin::GameplaySkinActivationRequest);
+  ~MusicSelectScene() override;
 
   void init() override;
   void onPause() override;

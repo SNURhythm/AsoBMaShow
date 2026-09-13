@@ -456,6 +456,12 @@ MusicSelectScene::MusicSelectScene(
       selectedSkinPath_(
           musicSelectSkinEntryPath(activationRequest_.activation.entry)) {}
 
+MusicSelectScene::~MusicSelectScene() {
+  // Join scene callbacks while their members are still alive. cleanup() also
+  // guards the normal SceneManager cleanup followed by destruction.
+  cleanup();
+}
+
 void MusicSelectScene::configureSoundServices() {
   if (previewAudio_ && systemSound_ &&
       soundSetPath_ == context.settings.skinSelectSoundSetPath &&

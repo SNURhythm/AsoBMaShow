@@ -497,6 +497,32 @@ int main() {
         self.compile_and_run(fixture.replace("SCENE_HEADER", header)
                              .replace("SUBMIT_CALLBACK", submit))
 
+    def test_direct_destruction_joins_workers_and_cleans_up_once(self):
+        source = read_music_select_scene()
+        methods = "\n".join(
+            signature + function_body(source, signature) for signature in (
+                "MusicSelectScene::~MusicSelectScene()",
+                "void MusicSelectScene::cleanupScene()",
+                "void MusicSelectScene::cancelDirectoryLoad()",
+                "void MusicSelectScene::stopPreloadWorker()",
+                "void MusicSelectScene::stopInputListening()",
+                "void MusicSelectScene::cancelSelectedChartAnalysis()",
+                "void MusicSelectScene::cancelSkinPreparation()",
+            ))
+        base = (ROOT / "src/scene/Scene.h").read_text()
+        fixture = (ROOT / "tests/music_select_scene_destruction_fixture.cpp").read_text()
+        for marker, signature in (
+            ("BASE_CLEANUP", "inline void cleanup()"),
+            ("BASE_DESTRUCTOR", "virtual ~Scene()"),
+            ("BASE_DESTROY_VIEWS", "void destroyOwnedViews()"),
+        ):
+            fixture = fixture.replace(marker, function_body(base, signature))
+        self.compile_and_run(fixture.replace("SCENE_METHODS", methods)
+                             .replace("REPOSITORY_ROOT", ROOT.as_posix()), [
+            ROOT / "src/scene/ReplayRecordTask.cpp",
+            ROOT / "src/replay/ReplayExportJob.cpp",
+        ])
+
     def test_failed_audio_preload_is_not_published(self):
         source = read_music_select_scene()
         signature = "[this](const ChartMetaRecord &request, std::atomic_bool &cancelled)"

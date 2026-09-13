@@ -463,3 +463,22 @@ The flow audit now follows the scene's stop delegation into the owner and checks
 cancellation-before-stop-before-join ordering there. After rebuilding all
 targets, the full parallel suite passed all 377 tests in 97.20 seconds.
 `git diff --check` passed. Verification stayed local to the desktop build.
+
+## Follow-up: Music Select destruction uses guarded cleanup
+
+`MusicSelectScene` now invokes `Scene::cleanup()` in its derived destructor, so
+scene-capturing workers and input subscriptions are stopped while their member
+dependencies remain alive. This covers direct destruction and owning-pointer
+unwinding after failed initialization. Normal SceneManager cleanup still uses
+the same implementation and its existing once guard.
+
+The regression compiles complete production destruction/cleanup and selected
+cancellation helpers, plus actual base cleanup and view disposal. Real Records
+and export owners run blocked work; other controlled resources check launch,
+preload, Lua preparation, input, preview, view, and scoped-access ordering.
+It exercises direct, already-cleaned, uninitialized, and exception-unwind cases,
+including deferred callback disposal. Focused tests and desktop compilation
+passed; independent review found no blocker.
+
+After rebuilding all targets, all 377 tests passed in the parallel suite in
+107.87 seconds. `git diff --check` passed. No deployment was performed.
