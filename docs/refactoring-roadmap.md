@@ -752,3 +752,16 @@ passed.
 
 Independent review, the all-target build, and all 391 tests passed (99.01
 seconds). `git diff --check` passed.
+
+## Follow-up: Explain private-arity visibility assertion failures
+
+The Lua runtime regression now identifies the safety policy and prints any
+runtime failure code/message before asserting private debug-library visibility.
+It also checks the returned boolean without throwing a variant-access error.
+This makes a future callback-budget failure distinguishable from the callback
+returning false; it does not establish the cause of the earlier intermittent
+ledger failure. Production policy, time budgets, and fixtures are unchanged.
+
+The runtime target rebuilt, and both its direct CTest case and the music-select
+ledger evidence contract passed (5.48 seconds). Independent review and
+`git diff --check` passed. Validation was scoped to these affected runners.

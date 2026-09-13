@@ -480,9 +480,11 @@ return {
   end
 }
 )lua");
-  for (const auto policy : {SkinSafetyLevel::Standard,
-                            SkinSafetyLevel::BeatorajaCompatibility,
-                            SkinSafetyLevel::Unrestricted}) {
+  for (const auto &[policyName, policy] :
+       std::array<std::pair<std::string_view, SkinSafetyLevel>, 3>{{
+           {"Standard", SkinSafetyLevel::Standard},
+           {"Beatoraja compatibility", SkinSafetyLevel::BeatorajaCompatibility},
+           {"Unrestricted", SkinSafetyLevel::Unrestricted}}}) {
     auto harness = makeHarness(LuaRuntimePurpose::Gameplay,
                                 "private-arity.luaskin", false, false, policy);
     if (!harness) continue;
@@ -506,8 +508,14 @@ return {
                harness->runtime->beginFrame(1).ok,
            "private arity fixture enters callback phase");
     const auto result = harness->runtime->invoke(visibility, {});
-    expect(result.value && std::get<bool>(*result.value),
-           "binding callbacks expose neither debug global nor loaded registry library");
+    const auto *hidden = result.value ? std::get_if<bool>(&*result.value) : nullptr;
+    if (result.failure) {
+      std::cerr << policyName << " private arity visibility diagnostic: "
+                << result.failure->code << ": " << result.failure->message << '\n';
+    }
+    expect(hidden && *hidden && !result.failure,
+           std::string(policyName) +
+               " binding callbacks expose neither debug global nor loaded registry library");
   }
 }
 
