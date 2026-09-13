@@ -505,6 +505,21 @@ failure suppression. The compiled scene fixture checks failure presentation,
 button reset, and recovery through complete production methods. Focused CTest,
 independent review, desktop builds, and all 391 tests passed.
 
+## 35. Exclude linked targets from cache byte totals — completed
+
+Cache traversal now classifies entries without following symbolic links, and
+cleanup's byte helper does not traverse a top-level link target. A private-root
+probe with 7 owned bytes previously reported 35 bytes used and 49 bytes removed,
+although the linked 14-byte file remained intact. Link entries still count;
+root resolution, protected-entry identity, and removal behavior are unchanged.
+
+The POSIX regression covers top-level/nested file and directory links, a dangling
+link, protected-link cleanup, outside contents, and an explicitly linked cache
+root. The old runner failed its byte-total assertion. Both focused cache runners
+and independent review passed. Desktop builds and the full 391-test recheck
+passed; the first run hit an unrelated artwork-load deadline. Measurement
+remains a best-effort observation.
+
 ## What the review does not justify
 
 The skin document loader, resource upload plans, and session activation graph

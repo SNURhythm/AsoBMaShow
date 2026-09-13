@@ -999,3 +999,22 @@ application thread. Focused CTest and independent review passed.
 
 Desktop main/all-target builds and all 391 tests passed (102.81 seconds).
 `git diff --check` passed.
+
+## Follow-up: Exclude linked targets from cache byte totals
+
+Cache byte accounting now ignores symbolic-link targets when visiting entries
+or sizing a top-level cleanup candidate. A private-root probe containing 7 owned
+bytes previously reported 35 bytes used and 49 bytes removed while its linked
+14-byte file remained intact. Link entries still count, and requested-root
+resolution, protection identity, and filesystem deletion remain unchanged.
+
+The POSIX regression covers top-level and nested file/directory links, a dangling
+link, protected-link removal in two passes, preserved outside contents, and a
+linked requested root. The old runner failed its byte-total assertion. Focused
+cache/maintenance CTest and independent review passed. This keeps the existing
+best-effort observation model rather than promising atomic filesystem accounting.
+
+Desktop main/all-target builds passed. The first full run passed 390/391 tests;
+`image_view_fade_tests` missed its 10-second thumbnail-load deadline while the
+load log recorded 14.6 seconds. That unchanged target passed in isolation, and
+the full 391-test recheck passed (103.65 seconds). `git diff --check` passed.

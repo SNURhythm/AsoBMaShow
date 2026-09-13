@@ -161,6 +161,43 @@ void testCleanupUsesCurrentPathIdentityForProtectedEntries() {
   assert(read(root / "active.mp4") == "video" && !std::filesystem::exists(root / "unused.wav"));
 }
 
+#ifndef _WIN32
+void testLinkedTargetsDoNotContributeToCacheBytes() {
+  TempDirectory temporary;
+  const auto root = temporary.path / "cache";
+  const auto external = temporary.path / "external";
+  write(external / "data", "external bytes");
+  write(root / "owned", "123");
+  write(root / "nested" / "owned", "4567");
+  const auto protectedLink = root / "file-link";
+  std::filesystem::create_symlink(external / "data", protectedLink);
+  std::filesystem::create_directory_symlink(external, root / "directory-link");
+  std::filesystem::create_symlink(external / "data", root / "nested" / "file-link");
+  std::filesystem::create_directory_symlink(external, root / "nested" / "directory-link");
+  std::filesystem::create_symlink(external / "missing", root / "dangling-link");
+
+  archive_file::TemporaryCache cache;
+  archive_file::TemporaryCacheUsageResult usage;
+  assert(cache.measure(root, usage));
+  assert(usage.bytes == 7 && usage.entries == 8);
+  const auto rootAlias = temporary.path / "cache-alias";
+  std::filesystem::create_directory_symlink(root, rootAlias);
+  assert(cache.measure(rootAlias, usage));
+  assert(usage.path == rootAlias && usage.bytes == 7 && usage.entries == 8);
+  archive_file::TemporaryCacheCleanupResult cleaned;
+  assert(cache.cleanup(root, cleaned, {protectedLink}, pathKey));
+  assert(cleaned.removedBytes == 7 && cleaned.removedEntries == 7);
+  assert(cleaned.skippedEntries == 1 && std::filesystem::is_symlink(protectedLink));
+  assert(read(external / "data") == "external bytes");
+  assert(cache.measure(root, usage));
+  assert(usage.bytes == 0 && usage.entries == 1);
+  assert(cache.cleanup(root, cleaned, {}, pathKey));
+  assert(cleaned.removedBytes == 0 && cleaned.removedEntries == 1);
+  assert(!std::filesystem::exists(root));
+  assert(read(external / "data") == "external bytes");
+}
+#endif
+
 void testMeasurementCancellationAndMissingCache() {
   TempDirectory temporary;
   const auto root = temporary.path / "cache";
@@ -230,6 +267,9 @@ int main() {
   testFilesystemErrorsPreserveExistingEntries();
   testMeasurementAndProtectedCleanupCountNestedEntries();
   testCleanupUsesCurrentPathIdentityForProtectedEntries();
+#ifndef _WIN32
+  testLinkedTargetsDoNotContributeToCacheBytes();
+#endif
   testMeasurementCancellationAndMissingCache();
   testMutationIsSerializedButMeasurementRemainsIndependent();
 }

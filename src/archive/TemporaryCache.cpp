@@ -56,7 +56,8 @@ bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
     }
     const std::filesystem::directory_entry &entry = *it;
     std::error_code entryError;
-    if (entry.is_regular_file(entryError) && !entryError) {
+    const auto status = entry.symlink_status(entryError);
+    if (std::filesystem::is_regular_file(status) && !entryError) {
       const std::uintmax_t size = entry.file_size(entryError);
       if (!entryError) {
         addClamped(bytes, clampFileSizeForResult(size));
@@ -70,6 +71,11 @@ bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
 
 std::uint64_t directoryByteSize(const std::filesystem::path &root,
                                 const std::stop_token *stopToken = nullptr) {
+  std::error_code error;
+  // Cleanup removes the link itself, so its target contributes no bytes.
+  if (std::filesystem::is_symlink(root, error) || error) {
+    return 0;
+  }
   std::uint64_t bytes = 0;
   std::uint64_t entries = 0;
   directoryStats(root, bytes, entries, stopToken);
