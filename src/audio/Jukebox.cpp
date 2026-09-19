@@ -914,7 +914,7 @@ bool readArchiveBatchEntries(
         batch.archivePath, batch.innerPaths, std::move(onFile), workerCount,
         kArchiveAssetMaxInFlightBytes, &concurrentError, [&isCancelled]() {
           return !isCancelled.load(std::memory_order_relaxed);
-        });
+        }, archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry);
     if (readOk && concurrentFiles.size() == batch.innerPaths.size()) {
       files = std::move(concurrentFiles);
       return true;

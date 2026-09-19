@@ -30,6 +30,16 @@ before scene destruction while it owns those overrides. Unused and already-
 exited scenes leave shared BGA policy unchanged. This teardown does not stop
 native music playback or refresh the UI.
 
+## Archived chart asset budgets
+
+Gameplay and audio export keep a 64 MiB concurrent extraction scheduling budget.
+Gameplay splits it between extraction and the decode queue when those stages
+run concurrently. Each stage admits one oversized asset when otherwise empty;
+other entries wait until capacity is available. Serial extraction also accepts
+oversized assets. The budget is not a maximum audio file or archive size, and
+it does not cap decoded PCM, decoder dictionaries, or consumer-retained data.
+Cancellation, consumer failure, and missing-entry-only retry remain enforced.
+
 ## Verification
 
 Use `audio_*_tests`, `jukebox_restore_tests`, `video_*_tests`,

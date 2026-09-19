@@ -35,13 +35,14 @@ public:
 
   bool push(archive_file::FileData &&file) {
     const auto bytes = std::max<std::uint64_t>(1, file.bytes.capacity());
-    if (bytes > maximumBytes_) {
+    if (maximumBytes_ == 0) {
       return false;
     }
     std::unique_lock lock(mutex_);
     while (!stopped() && !closed_ &&
            (residentFiles_ >= maximumFiles_ ||
-            residentBytes_ > maximumBytes_ - bytes)) {
+            (residentFiles_ != 0 &&
+             (bytes > maximumBytes_ || residentBytes_ > maximumBytes_ - bytes)))) {
       changed_.wait_for(lock, std::chrono::milliseconds(5));
     }
     if (stopped() || closed_) {

@@ -70,7 +70,8 @@ maximum chart size or archive size. Concurrent reads explicitly use
 `ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry`: one oversized entry
 can be extracted and parsed while all other entry reservations wait. Empty
 entries also hold a reservation until their callback finishes. The default
-`Strict` policy remains a hard entry-buffer limit for audio consumers.
+`Strict` policy remains available to callers requiring a hard entry-buffer limit.
+Chart audio loading also opts into the oversized-entry scheduling policy.
 
 | Archive family (including extension aliases) | Chart extraction path |
 | --- | --- |
@@ -84,7 +85,7 @@ entries also hold a reservation until their callback finishes. The default
 Serial chart parsing already admits a single oversized chart. Its queue
 budget and concurrent entry reservations exclude decoder dictionaries,
 parsed metadata, and memory retained by consumers. These are not process-wide
-memory caps. Full extraction and bounded asset reads retain their separate
+memory caps. Full extraction and explicitly bounded reads retain their separate
 limits.
 
 Regression coverage includes oversized stored/deflated ZIP, RAR4, small and
