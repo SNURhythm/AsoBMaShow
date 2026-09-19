@@ -1,4 +1,5 @@
 #include "../src/CourseIdentity.h"
+#include "../src/CourseConstraintUtils.h"
 #include "../src/CoursePlaySession.h"
 #include "../src/ResultPresentationUtils.h"
 #include "../src/repositories/ReplayRepository.h"
@@ -6,6 +7,7 @@
 #include "../src/repositories/ScoreRepository.h"
 #include "../src/repositories/ScoreRepositoryInternal.h"
 #include "../src/ScoreProvenance.h"
+#include "../src/ScoreHistoryTime.h"
 #include "../src/repositories/SqliteRAII.h"
 #include "../src/targets.h"
 #include "../yoga/lib/nlohmann/json.hpp"
@@ -29,6 +31,39 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+
+namespace result_history_fixture {
+struct ResultScene {
+  struct Context { ScoreRepository &scoreRepository; } context;
+  struct Local {
+    bms_parser::ChartMeta meta;
+    bool previousBestLoaded = false;
+    bool courseTransitionStarted = false;
+    std::optional<ResultPreviousBestData> previousBest, previousLampBest;
+    struct Persistence {
+      struct Attempt { result_persistence::ModernChartResult result; };
+      struct Outcome { bool durable() const { return true; } };
+      Attempt *chartAttempt = nullptr;
+      std::optional<Outcome> chartOutcome;
+    } persistenceOptions;
+    bool replayResult = false;
+    std::optional<ReplayData> retryData;
+    std::optional<std::string> modernReplayAttemptId;
+    std::optional<std::int64_t> currentScoreDateUnixSeconds;
+    struct Course { std::shared_ptr<CoursePlaySession> session; } courseOptions;
+  } local;
+  bool courseFinal = false;
+  Local *localSource() { return &local; }
+  bool isCourseFinalResult() const { return courseFinal; }
+  void loadPreviousBest();
+  void startCourseReplay();
+  std::shared_ptr<CoursePlaySession> restartedSession;
+  void startCourseReplayStage(std::shared_ptr<CoursePlaySession> session) {
+    restartedSession = std::move(session);
+  }
+};
+#include "result_history_scene_methods.h"
+} // namespace result_history_fixture
 
 namespace {
 
@@ -1988,6 +2023,76 @@ void testPreviousBestExcludesExactAttemptAtSameTimestamp(
   assert(legacyFallback->createdAt == sharedTimestamp);
 }
 
+void testReplayComparisonsStayBeforeTheRecordedAttempt(
+    const std::filesystem::path &root) {
+  const std::string chart = "historical-replay-best";
+  ScoreRepository scores(root / chart / "score.db");
+  const std::string time = "2026-07-14 05:06:07";
+  auto lamp = samplePendingScore(root, chart, 81, "2026-07-14 05:06:06", 20, 5);
+  lamp.score.comboBreak = 1;
+  lamp.score.clearType = kClearTypeHardClearRank;
+  auto best = samplePendingScore(root, chart, 82, time, 30, 5);
+  best.score.comboBreak = 1;
+  best.score.clearType = kClearTypeNormalClearRank;
+  auto current = samplePendingScore(root, chart, 83, time, 35, 5);
+  current.score.comboBreak = 1;
+  auto future = samplePendingScore(root, chart, 84, time, 40, 5);
+  future.score.comboBreak = 1;
+  future.score.clearType = kClearTypeExHardClearRank;
+  for (const auto &row : {lamp, best, current, future}) {
+    assert(scores.SaveProjectedScore(row).status ==
+           result_persistence::ProjectionStatus::Inserted);
+  }
+  const auto meta = sampleMeta(root, chart);
+  ReplayData replay;
+  replay.createdAt = time;
+  replay.resultAttemptId = current.attemptId;
+  const auto previousScore = result_presentation::previousBestForReplayChart(scores, meta, replay);
+  const auto previousLamp = result_presentation::previousLampBestForReplayChart(scores, meta, replay);
+  assert(previousScore && previousScore->attemptId == best.attemptId);
+  assert(previousLamp && previousLamp->attemptId == lamp.attemptId);
+  assert(scores.LoadBestScore(meta)->attemptId == future.attemptId);
+  // Record recall can have no replay file. Its durable attempt still owns the
+  // history boundary, even though replayResult is false in the real scene.
+  result_history_fixture::ResultScene scene{{scores}};
+  scene.local.meta = meta;
+  scene.local.modernReplayAttemptId = current.attemptId;
+  scene.loadPreviousBest();
+  assert(scene.local.previousBest && scene.local.previousBest->attemptId == best.attemptId);
+  assert(scene.local.previousLampBest && scene.local.previousLampBest->attemptId == lamp.attemptId);
+
+  result_history_fixture::ResultScene::Local::Persistence::Attempt attempt;
+  attempt.result.attemptId = current.attemptId;
+  scene.local.modernReplayAttemptId.reset();
+  scene.local.persistenceOptions.chartAttempt = &attempt;
+  scene.local.persistenceOptions.chartOutcome.emplace();
+  scene.local.previousBestLoaded = false;
+  scene.loadPreviousBest();
+  assert(scene.local.previousBest && scene.local.previousBest->attemptId == best.attemptId);
+  assert(scene.local.previousLampBest && scene.local.previousLampBest->attemptId == lamp.attemptId);
+
+  scene.local.previousBestLoaded = false;
+  scene.local.persistenceOptions.chartOutcome.reset();
+  scene.local.currentScoreDateUnixSeconds = 1'700'000'000;
+  scene.loadPreviousBest();
+  assert(scene.local.previousBest && scene.local.previousBest->attemptId == future.attemptId);
+  // A missing projection uses its known time rather than the latest best.
+  replay.resultAttemptId = "not-projected";
+  replay.createdAt = "2026-07-14 05:06:07";
+  const auto fallback = result_presentation::previousBestForReplayChart(scores, meta, replay);
+  assert(fallback && fallback->attemptId == lamp.attemptId);
+  replay.createdAt.clear();
+  assert(!result_presentation::previousBestForReplayChart(scores, meta, replay));
+  replay.resultAttemptId.reset();
+  assert(!result_presentation::previousLampBestForReplayChart(scores, meta, replay));
+  // Legacy replays retain their exclusive timestamp cutoff.
+  replay.createdAt = "2026-07-14 05:06:07";
+  assert(result_presentation::previousBestForReplayChart(scores, meta, replay)->attemptId == lamp.attemptId);
+  replay.resultAttemptId = lamp.attemptId;
+  assert(!result_presentation::previousBestForReplayChart(scores, meta, replay));
+  assert(!result_presentation::previousLampBestForReplayChart(scores, meta, replay));
+}
+
 void testBestClearScoreIsIndependentFromBestScore(
     const std::filesystem::path &root) {
   const auto path = root / "best-clear-separate-from-score" / "score.db";
@@ -2459,6 +2564,67 @@ void testLegacyClassicLongNoteLampFallback() {
   bestScores.snapshots[long_note_mode::kLnValue] =
       ScoreBestSnapshot{.score = 1234};
   assert(!bestScores.bestForMode(long_note_mode::kCnValue).has_value());
+}
+
+void testCourseRecallUsesHistoricalScoreAndLamp(const std::filesystem::path &root) {
+  const auto path = root / "course-history" / "score.db";
+  ScoreRepository scores(path);
+  assert(scores.EnsureSchema());
+  const auto key = course_identity::makeCourseKey(
+      std::vector<course_identity::ChartIdentity>{{.sha256 = std::string(kShaA)}}, "[]");
+  auto db = openDatabase(path);
+  insertCourseScoreRow(db.get(), 1, key, "Course", "Group", "[]", 1, 100, 1,
+                       kClearTypeHardClearRank, 1);
+  insertCourseScoreRow(db.get(), 1, key, "Course", "Group", "[]", 1, 200, 1,
+                       kClearTypeNormalClearRank, 1);
+  insertCourseScoreRow(db.get(), 1, key, "Course", "Group", "[]", 1, 250, 1,
+                       kClearTypeNormalClearRank, 1);
+  insertCourseScoreRow(db.get(), 1, key, "Course", "Group", "[]", 1, 300, 1,
+                       kClearTypeExHardClearRank, 1);
+  execOrAbort(db.get(), "UPDATE course_scores SET created_at='2026-07-14 05:06:07', "
+                        "attempt_id=CASE score WHEN 100 THEN 'lamp' WHEN 200 THEN 'best' "
+                        "WHEN 250 THEN 'current' ELSE 'future' END");
+  result_history_fixture::ResultScene scene{{scores}};
+  scene.courseFinal = true;
+  scene.local.courseOptions.session = std::make_shared<CoursePlaySession>();
+  auto &course = *scene.local.courseOptions.session;
+  course.courseKey = key;
+  course.courseId = 1;
+  course.longNoteMode = 1;
+  course.modernCourseAttemptId = "current";
+  course.modernCourseResultBrowsing = true;
+  scene.loadPreviousBest();
+  assert(scene.local.previousBest && scene.local.previousBest->score == 200);
+  assert(scene.local.previousLampBest && scene.local.previousLampBest->clearType == kClearTypeHardClearRank);
+  course.modernCoursePlayedAtUnixMillis = 1'700'000'000'123LL;
+  course.courseReplayData = std::make_shared<CourseReplayData>();
+  course.courseReplayData->stages.emplace_back();
+  course.courseReplayData->courseKey = key;
+  course.courseReplayData->courseId = 1;
+  course.courseReplayData->longNoteMode = 1;
+  course.courseReplayData->stages.front().replay.resultAttemptId = "current";
+  const auto exported = result_presentation::previousBestsForReplayCourse(
+      scores, *course.courseReplayData);
+  assert(exported.score && exported.score->score == 200);
+  assert(exported.lamp && exported.lamp->clearType == kClearTypeHardClearRank);
+  scene.startCourseReplay();
+  assert(scene.restartedSession && scene.restartedSession->modernCourseAttemptId == "current");
+  assert(scene.restartedSession->modernCoursePlayedAtUnixMillis == 1'700'000'000'123LL);
+  result_history_fixture::resetCourseForReplayRestart(scene.restartedSession.get());
+  assert(scene.restartedSession->modernCourseAttemptId == "current" &&
+         scene.restartedSession->modernCoursePlayedAtUnixMillis == 1'700'000'000'123LL);
+  scene.restartedSession->courseReplayPlayback = false;
+  result_history_fixture::resetCourseForReplayRestart(scene.restartedSession.get());
+  assert(scene.restartedSession->modernCourseAttemptId.empty() &&
+         scene.restartedSession->modernCoursePlayedAtUnixMillis == 0);
+  course.modernCoursePlayedAtUnixMillis = 0;
+  // A new live course has an allocated ID before its result exists. It must
+  // still compare against the current history, not an unknown past boundary.
+  scene.local.previousBestLoaded = false;
+  course.modernCourseAttemptId = "new-live-attempt";
+  course.modernCourseResultBrowsing = false;
+  scene.loadPreviousBest();
+  assert(scene.local.previousBest && scene.local.previousBest->score == 300);
 }
 
 void testCourseReadsAreKeyAndModeAuthoritative(
@@ -3618,6 +3784,7 @@ int main() {
   testBestScoreLoadsKpoorInclusiveBadPoints(root);
   testBestScoreCanFilterExactRuleset(root);
   testPreviousBestExcludesExactAttemptAtSameTimestamp(root);
+  testReplayComparisonsStayBeforeTheRecordedAttempt(root);
   testBestClearScoreIsIndependentFromBestScore(root);
   testBestClearScoreUsesPresentableLocalLamp(root);
   testProjectedScoreValidatesStoredTypesAndCanonicalProvenance(root);
@@ -3629,6 +3796,7 @@ int main() {
   testVersion7MigrationRepairsPopulatedScoreSummariesExactlyOnce(root);
   testLegacyClassicLongNoteLampFallback();
   testCourseWritesUseAuthoritativeKeysAndExactMode(root);
+  testCourseRecallUsesHistoricalScoreAndLamp(root);
   testCourseReadsAreKeyAndModeAuthoritative(root);
   testCourseLampCacheSeparatesKeysIdsAndModes(root);
   testCourseRecoveryUsesStrongestCommonEvidenceAndOwnsResult(root);

@@ -424,16 +424,8 @@ require(
     "course retry must use the same modern course persistence path",
 )
 
-previous_body = function_body(result_source, "ResultScene", "loadPreviousBest")
-require(
-    ordered(previous_body, "excludeAttemptId", "chartOutcome->durable()", "LoadBestScore("),
-    "previous best must exclude the receipt-proven modern attempt ID",
-)
-require(
-    "chartAttempt->result.attemptId" in previous_body
-    and "retryData->createdAt" in previous_body,
-    "modern attempt exclusion and legacy browse timestamp must remain distinct",
-)
+# Historical comparison boundaries are exercised against SQLite by
+# score_provenance_db_tests, using the production loadPreviousBest method.
 summary_body = function_body(result_source, "ResultScene", "refreshResultSummary")
 require(
     'findViewByName("resultSummary")' in summary_body

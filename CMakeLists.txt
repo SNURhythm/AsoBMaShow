@@ -4255,7 +4255,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(modern_result_recall_tests PRIVATE shell32 ole32)
     endif()
 
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/result_history_scene_methods.h
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/result_history_scene_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/result_history_scene_methods.h
+        DEPENDS tests/result_history_scene_extract.py src/scene/ResultScene.cpp
+                src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
     add_executable(score_provenance_db_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/result_history_scene_methods.h
         tests/score_provenance_db_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
@@ -4272,7 +4282,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/sqlite3.c
         src/scene/play/GameplayGaugeRules.cpp
     )
-    target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
     if(TARGET SDL2::SDL2)
         target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2)

@@ -96,6 +96,8 @@ struct ReplayData {
   int clearType = kClearTypeFailedRank;
   std::optional<long long> abortedAtSongTimeMicros;
   std::string createdAt;
+  // Runtime identity of the authenticated result, retained by materialization.
+  std::optional<std::string> resultAttemptId;
   std::vector<ReplayEvent> events;
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;

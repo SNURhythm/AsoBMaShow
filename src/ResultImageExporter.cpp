@@ -1044,9 +1044,11 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   const int clearRank = replay.clearType;
   clearLabelOverride = clearTypeRankToLabel(clearRank);
   clearRankOverride = clearRank;
+  const auto previous = result_presentation::previousBestsForReplayCourse(
+      context.scoreRepository, replay);
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
-      "Course", std::nullopt, std::nullopt, clearLabelOverride,
+      "Course", previous.score, previous.lamp, clearLabelOverride,
       clearRankOverride, "COURSE", std::nullopt,
       combineSkinGameplayGraphStates(stageGraphs), std::nullopt,
       outputDir / "course_result.png",

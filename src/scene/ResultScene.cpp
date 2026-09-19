@@ -13,6 +13,7 @@
 #include "../ResultImageExporter.h"
 #include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
+#include "../ScoreHistoryTime.h"
 #include "../repositories/ScoreRepository.h"
 #include "../path.h"
 #include "../practice/PracticeLaunchRequest.h"
@@ -1225,33 +1226,57 @@ void ResultScene::loadPreviousBest() {
   local->previousLampBest.reset();
 
   std::optional<std::string> beforeCreatedAt;
-  std::optional<std::string> excludeAttemptId;
+  std::optional<std::string> beforeAttemptId = local->modernReplayAttemptId;
+  if ((local->modernReplayAttemptId || local->replayResult) &&
+      local->currentScoreDateUnixSeconds) {
+    const auto time = scoreHistoryTime(*local->currentScoreDateUnixSeconds * 1000);
+    if (!time.empty()) beforeCreatedAt = time;
+  }
   if (persistenceOptions.chartAttempt != nullptr &&
       persistenceOptions.chartOutcome.has_value() &&
       persistenceOptions.chartOutcome->durable()) {
-    excludeAttemptId = persistenceOptions.chartAttempt->result.attemptId;
-  } else if (local->replayResult && local->retryData.has_value() &&
-             !local->retryData->autoPlay &&
-             !local->retryData->createdAt.empty()) {
-    beforeCreatedAt = local->retryData->createdAt;
+    beforeAttemptId = persistenceOptions.chartAttempt->result.attemptId;
+    const auto time = scoreHistoryTime(
+        persistenceOptions.chartAttempt->result.playedAtUnixMillis);
+    if (!time.empty()) beforeCreatedAt = time;
+  } else if (local->replayResult && local->retryData.has_value()) {
+    beforeAttemptId = local->retryData->resultAttemptId;
+    if (!local->retryData->createdAt.empty()) {
+      beforeCreatedAt = local->retryData->createdAt;
+    }
+    // An undated replay cannot establish a previous-record boundary.
+    if (!beforeAttemptId && !beforeCreatedAt) return;
+  }
+  if (const auto &session = local->courseOptions.session;
+      session != nullptr && !session->modernCourseAttemptId.empty() &&
+      (session->modernCourseResultBrowsing ||
+       session->modernCoursePlayedAtUnixMillis > 0)) {
+    beforeAttemptId = session->modernCourseAttemptId;
+    const auto time = scoreHistoryTime(session->modernCoursePlayedAtUnixMillis);
+    if (!time.empty()) beforeCreatedAt = time;
   }
 
   const auto best = isCourseFinalResult()
                         ? context.scoreRepository.LoadBestCourseScore(
-                              *local->courseOptions.session)
+                              *local->courseOptions.session, beforeCreatedAt,
+                              beforeAttemptId)
                         : context.scoreRepository.LoadBestScore(
-                              local->meta, beforeCreatedAt, excludeAttemptId);
+                              local->meta, beforeCreatedAt, std::nullopt, 0,
+                              beforeAttemptId);
   if (best.has_value()) {
     local->previousBest =
         result_presentation::previousBestDataFromSnapshot(*best);
   }
-  if (!isCourseFinalResult()) {
-    const auto bestLamp = context.scoreRepository.LoadBestClearScore(
-        local->meta, beforeCreatedAt, excludeAttemptId);
-    if (bestLamp.has_value()) {
-      local->previousLampBest =
-          result_presentation::previousBestDataFromSnapshot(*bestLamp);
-    }
+  const auto bestLamp = isCourseFinalResult()
+                           ? context.scoreRepository.LoadBestCourseClearScore(
+                                 *local->courseOptions.session, beforeCreatedAt,
+                                 beforeAttemptId)
+                           : context.scoreRepository.LoadBestClearScore(
+                                 local->meta, beforeCreatedAt, std::nullopt, 0,
+                                 beforeAttemptId);
+  if (bestLamp.has_value()) {
+    local->previousLampBest =
+        result_presentation::previousBestDataFromSnapshot(*bestLamp);
   }
 }
 
@@ -3716,6 +3741,10 @@ void ResultScene::startCourseReplay() {
   replaySession->assistOption = replayData->assistOption;
   replaySession->autoKeySound = false;
   replaySession->courseReplayPlayback = true;
+  replaySession->modernCourseAttemptId =
+      local->courseOptions.session->modernCourseAttemptId;
+  replaySession->modernCoursePlayedAtUnixMillis =
+      local->courseOptions.session->modernCoursePlayedAtUnixMillis;
   replaySession->courseReplayData = std::move(replayData);
   replaySession->replayTouchVisualizationEnabled =
       local->courseOptions.session->replayTouchVisualizationEnabled;

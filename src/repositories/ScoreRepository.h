@@ -113,11 +113,15 @@ public:
       const CoursePlaySession &session, const RhythmState &state,
       int completedCharts, int totalCharts,
       const ScoreProvenance &provenance = ScoreProvenance::Legacy());
+  // beforeAttemptId selects history strictly before that stored attempt,
+  // including earlier rows in the same second. If its projection is missing,
+  // beforeCreatedAt is the exclusive fallback; no fallback means no history.
   std::optional<ScoreBestSnapshot> LoadBestScore(
       const bms_parser::ChartMeta &chartMeta,
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
       const std::optional<std::string> &excludeAttemptId = std::nullopt,
-      int selectedLongNoteMode = 0);
+      int selectedLongNoteMode = 0,
+      const std::optional<std::string> &beforeAttemptId = std::nullopt);
   std::optional<ChartScoreHistorySnapshot> LoadChartScoreHistory(
       const bms_parser::ChartMeta &chartMeta,
       int selectedLongNoteMode = 0);
@@ -129,13 +133,20 @@ public:
       const bms_parser::ChartMeta &chartMeta,
       const std::optional<std::string> &beforeCreatedAt = std::nullopt,
       const std::optional<std::string> &excludeAttemptId = std::nullopt,
-      int selectedLongNoteMode = 0);
+      int selectedLongNoteMode = 0,
+      const std::optional<std::string> &beforeAttemptId = std::nullopt);
   std::optional<ScoreBestSnapshot>
   LoadBestScoreForRuleset(const bms_parser::ChartMeta &chartMeta,
       const RulesetDescriptor &requiredRuleset,
       int selectedLongNoteMode = 0);
   std::optional<ScoreBestSnapshot>
-  LoadBestCourseScore(const CoursePlaySession &session);
+  LoadBestCourseScore(const CoursePlaySession &session,
+      const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+      const std::optional<std::string> &beforeAttemptId = std::nullopt);
+  std::optional<ScoreBestSnapshot>
+  LoadBestCourseClearScore(const CoursePlaySession &session,
+      const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+      const std::optional<std::string> &beforeAttemptId = std::nullopt);
   CourseSelectorOptionScores LoadCourseSelectorOptionScores(
       std::string_view courseKey, int legacyCourseId, int longNoteMode,
       bool doublePlay);

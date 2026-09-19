@@ -3,6 +3,7 @@
 
 #include "../AssistOptionUtils.h"
 #include "../ReplayData.h"
+#include "../ScoreHistoryTime.h"
 #include "../ResultContracts.h"
 #include "../bms_parser.hpp"
 #include "../scene/play/GameplayCandidateSelection.h"
@@ -333,6 +334,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     return outcome;
   }
   ReplayData replay = std::move(*replayValue);
+  replay.resultAttemptId = savedResult.attemptId;
+  replay.createdAt = scoreHistoryTime(savedResult.playedAtUnixMillis);
   replay.chartMeta.BmsPath = savedResult.score.chartPath;
   replay.chartMeta.MD5 = savedResult.score.chartMd5;
   replay.chartMeta.SHA256 = savedResult.score.chartSha256;

@@ -2804,6 +2804,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resultSkinData.currentClearLabelOverride = "AUTO PLAY";
     }
     resultSkinData.previousBest = previousBest;
+    resultSkinData.previousLampBest =
+        result_presentation::previousLampBestForReplayChart(
+            context.scoreRepository, chart.Meta, replay);
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
             chart, replayResultState, replay, selectedPacemakerTarget,
@@ -3451,6 +3454,10 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         std::make_unique<View>(0, 0, rendering::window_width,
                                rendering::window_height);
     ResultSkinData data = {&courseState, &courseMeta, &context};
+    const auto previous = result_presentation::previousBestsForReplayCourse(
+        context.scoreRepository, replay);
+    data.previousBest = previous.score;
+    data.previousLampBest = previous.lamp;
     data.configuration = makeResultSkinConfiguration(settings);
     data.configuration->irAccountName = context.irAccountNameSnapshot();
     if (!stages.empty() && stages.back().chart != nullptr) {
@@ -3781,6 +3788,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.currentClearLabelOverride = "NO PLAY";
       data.currentClearRankOverride = kNoClearTypeRank;
       data.previousBest = previousBest;
+      data.previousLampBest =
+          result_presentation::previousLampBestForReplayChart(
+              context.scoreRepository, chart.Meta, stageReplay);
       DefaultSkin resultSkin;
       resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
       stageResultAnalytics =

@@ -4034,7 +4034,9 @@ bool GamePlayScene::restartCourseFromBeginning() {
   session->carriedCombo = 0;
   session->maxCombo = 0;
   session->courseScoreSaved = false;
-  session->resetModernCourseAttempt();
+  if (!session->courseReplayPlayback) {
+    session->resetModernCourseAttempt();
+  }
   session->playOption.reset();
   session->playOptionSeed.reset();
   session->playOption2.reset();
