@@ -116,6 +116,35 @@ void testExpandedToolbarWrapsWithinANarrowViewport() {
          "a narrower viewport reflows expanded controls within its bounds");
 }
 
+void testControlsFitInsideToolbar() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  for (const auto mode : {MusicSelectToolbarMode::Expanded,
+                          MusicSelectToolbarMode::Collapsed}) {
+    auto toolbar = MusicSelectToolbarView::Create(
+        {.mode = mode}, callbacks(actions, saved), 800, 400);
+    for (const int width : {800, 604, 606, 500, 260, 120, 118, 66}) {
+      toolbar->setViewportSize(width, 800);
+      toolbar->applyYogaLayout();
+      expect(toolbar->getWidth() <= width,
+             "toolbar including its border fits within the viewport");
+      for (const auto *child : toolbar->getChildren()) {
+        expect(child->getX() >= toolbar->getX() + 9 &&
+                   child->getY() >= toolbar->getY() + 9 &&
+                   child->getX() + child->getWidth() <=
+                       toolbar->getX() + toolbar->getWidth() - 9 &&
+                   child->getY() + child->getHeight() <=
+                       toolbar->getY() + toolbar->getHeight() - 9,
+               "each control fits inside the toolbar border and padding");
+        if (width == 800) {
+          expect(child->getY() == toolbar->getChildren().front()->getY(),
+                 "all controls stay on one row when the viewport is wide");
+        }
+      }
+    }
+  }
+}
+
 void testActionsModesAndDragPersist() {
   std::vector<std::string> actions;
   std::vector<MusicSelectToolbarState> saved;
@@ -216,6 +245,7 @@ int main() {
   testExpandedUsesOnlyExactFontAwesomeControls();
   testCollapsedAndHiddenShapes();
   testExpandedToolbarWrapsWithinANarrowViewport();
+  testControlsFitInsideToolbar();
   testActionsModesAndDragPersist();
   testPersistedSettingsStateAppliesToAnExistingToolbar();
   rendering::UniformCache::getInstance().destroyAll();

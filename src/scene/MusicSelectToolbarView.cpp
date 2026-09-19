@@ -14,6 +14,7 @@ namespace {
 constexpr float kControlSize = 48.0F;
 constexpr float kGap = 6.0F;
 constexpr float kPadding = 8.0F;
+constexpr int kBorderWidth = 1;
 constexpr float kDefaultPosition = 24.0F;
 
 std::uint32_t codepointFor(MusicSelectToolbarControl control) {
@@ -129,16 +130,18 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::Collapse,
                 MusicSelectToolbarControl::Hide};
 
+  // Yoga's declared size includes both padding and border.
+  const float inset = kPadding + kBorderWidth;
   const float availableWidth =
-      std::max(kControlSize, static_cast<float>(viewportWidth_) - kPadding * 2);
+      std::max(kControlSize, static_cast<float>(viewportWidth_) - inset * 2);
   const std::size_t columns = std::clamp<std::size_t>(
       static_cast<std::size_t>(
           std::floor((availableWidth + kGap) / (kControlSize + kGap))),
       1, layout.size());
   const std::size_t rows = (layout.size() + columns - 1) / columns;
-  setWidth(kPadding * 2.0F + kControlSize * columns +
+  setWidth(inset * 2.0F + kControlSize * columns +
            kGap * (columns - 1));
-  setHeight(kPadding * 2.0F + kControlSize * rows + kGap * (rows - 1));
+  setHeight(inset * 2.0F + kControlSize * rows + kGap * (rows - 1));
   setPadding(Edge::All, kPadding);
   setGap(kGap);
   setFlexDirection(FlexDirection::Row);
@@ -146,7 +149,7 @@ void MusicSelectToolbarView::rebuild() {
   setAlignItems(YGAlignCenter);
   setThemedBackgroundColor(ui_theme::panelStrong);
   setThemedBorderColor(ui_theme::hairlineStrong);
-  setBorderWidth(1);
+  setBorderWidth(kBorderWidth);
   setCornerRadius(ui_theme::controlRadius());
   setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
 
