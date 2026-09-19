@@ -8398,6 +8398,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(ui_batch_renderer_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
+    if(APPLE)
+        add_executable(ui_batch_metal_tests
+            tests/ui_batch_metal_tests.cpp
+            src/rendering/UiBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+        )
+        target_include_directories(ui_batch_metal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(ui_batch_metal_tests PRIVATE cxx_std_23)
+        target_link_libraries(ui_batch_metal_tests PRIVATE ${COMMON_LIBS} bgfx)
+        asobmashow_register_test(ui_batch_metal_tests)
+        set_tests_properties(ui_batch_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
+    endif()
     asobmashow_register_test(ui_batch_renderer_tests)
     if (TARGET skin_renderer_golden_tests)
         asobmashow_register_test(skin_renderer_golden_tests)

@@ -76,7 +76,8 @@ public:
         return false;
       }
 
-      BufferSlot *bufferSlot = nextBufferSlot(submission.format);
+      BufferSlot *bufferSlot = nextBufferSlot(
+          submission.format, vertexCount, submission.indices.size());
       if (bufferSlot == nullptr) {
         return false;
       }
@@ -151,9 +152,13 @@ private:
     bgfx::DynamicVertexBufferHandle colorVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle texturedVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicIndexBufferHandle indexBuffer = BGFX_INVALID_HANDLE;
+    std::size_t colorCapacity = 0;
+    std::size_t texturedCapacity = 0;
+    std::size_t indexCapacity = 0;
   };
 
-  BufferSlot *nextBufferSlot(UiBatchVertexFormat format) noexcept {
+  BufferSlot *nextBufferSlot(UiBatchVertexFormat format, std::size_t vertexCount,
+                             std::size_t indexCount) noexcept {
     if (nextBufferSlot_ == bufferSlots_.size()) {
       try {
         bufferSlots_.push_back({});
@@ -165,16 +170,34 @@ private:
     auto &vertexBuffer = format == UiBatchVertexFormat::Color
                              ? slot.colorVertexBuffer
                              : slot.texturedVertexBuffer;
-    if (!bgfx::isValid(vertexBuffer)) {
+    auto &capacity = format == UiBatchVertexFormat::Color
+                         ? slot.colorCapacity
+                         : slot.texturedCapacity;
+    // Automatic bgfx resizing corrupts mixed UI batches on Metal. Allocate
+    // sufficient storage before uploading and retire old handles through bgfx's
+    // deferred destruction, preserving storage referenced by queued draws.
+    if (!bgfx::isValid(vertexBuffer) || capacity < vertexCount) {
       const auto &layout = format == UiBatchVertexFormat::Color
                                ? PosColorVertex::ms_decl
                                : PosTexCoord0Vertex::ms_decl;
-      vertexBuffer = bgfx::createDynamicVertexBuffer(
-          1, layout, BGFX_BUFFER_ALLOW_RESIZE);
+      const auto newCapacity = std::max(vertexCount, std::min(
+          capacity * 2, UiBatchRenderer::kMaximumVertices));
+      const auto replacement = bgfx::createDynamicVertexBuffer(
+          static_cast<std::uint32_t>(newCapacity), layout);
+      if (!bgfx::isValid(replacement)) return nullptr;
+      if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
+      vertexBuffer = replacement;
+      capacity = newCapacity;
     }
-    if (!bgfx::isValid(slot.indexBuffer)) {
-      slot.indexBuffer =
-          bgfx::createDynamicIndexBuffer(1, BGFX_BUFFER_ALLOW_RESIZE);
+    if (!bgfx::isValid(slot.indexBuffer) || slot.indexCapacity < indexCount) {
+      const auto newCapacity = std::max(indexCount, std::min(
+          slot.indexCapacity * 2, UiBatchRenderer::kMaximumIndices));
+      const auto replacement = bgfx::createDynamicIndexBuffer(
+          static_cast<std::uint32_t>(newCapacity));
+      if (!bgfx::isValid(replacement)) return nullptr;
+      if (bgfx::isValid(slot.indexBuffer)) bgfx::destroy(slot.indexBuffer);
+      slot.indexBuffer = replacement;
+      slot.indexCapacity = newCapacity;
     }
     return bgfx::isValid(vertexBuffer) && bgfx::isValid(slot.indexBuffer)
                ? &slot
