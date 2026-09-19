@@ -1374,7 +1374,7 @@ if skin_config then
   "type": 7,
   "w": 1280,
   "h": 720,
-  "customEvents": [{"id": 1000, "action": 210, "condition": 50}]
+  "customEvents": [{"id": 1000, "action": 210, "condition": 50, "minInterval": 1000}]
 })json");
     }
 
@@ -7186,6 +7186,52 @@ void testStaticResultSessionRunsCustomBuiltinEvent() {
          "static result custom events evaluate built-in conditions and actions");
 }
 
+void testResultPhotoFramePreservesLiveEvents() {
+  {
+    ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
+    if (!fixture.ready()) return;
+    auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                             fixture.resultContext());
+    expect(created.session != nullptr, "photo event fixture creates a result session");
+    if (!created.session) return;
+    RenderContext context;
+    expect(created.session->renderForExport(context, {}, 1, 0) &&
+               created.session->takeQueuedBuiltinEventIds().empty(),
+           "photo frame does not execute condition-driven result events");
+    expect(created.session->render(context, {}, 2, 0) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "photo frame leaves automatic event timing available to the next live frame");
+    expect(created.session->render(context, {}, 3, 1000) &&
+               created.session->renderForExport(context, {}, 4, 2000) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "photo frame preserves already queued builtin actions without adding any");
+    expect(created.session->render(context, {}, 5, 2000) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "photo frame does not advance the live automatic event interval");
+    expect(!created.session->renderForExport(context, {}, 0, 3000) &&
+               created.session->render(context, {}, 6, 3000) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "failed photo capture restores live event dispatch");
+  }
+  {
+    ActivationFixture fixture({.skinType = 7, .resultNestedEventExec = true});
+    if (!fixture.ready()) return;
+    auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                             fixture.resultContext());
+    if (!created.session) return;
+    RenderContext context;
+    expect(created.session->render(context, {}, 1, 0) &&
+               created.session->takeQueuedBuiltinEventIds().empty(),
+           "live frame queues a deferred Lua event");
+    expect(created.session->renderForExport(context, {}, 2, 1) &&
+               created.session->takeQueuedBuiltinEventIds().empty(),
+           "photo frame suppresses timer host events and preserves queued Lua actions");
+    expect(created.session->render(context, {}, 3, 1) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "next live frame resumes the preserved Lua action exactly once");
+  }
+}
+
 void testResultSkinInputAvailabilityMatchesResultTimer() {
   expect(!resultSkinInputAvailable(1'000, 999'999) &&
              resultSkinInputAvailable(1'000, 1'000'000) &&
@@ -8699,6 +8745,7 @@ int main(int argc, char **argv) {
   testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
   testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
+  testResultPhotoFramePreservesLiveEvents();
   testResultSkinInputAvailabilityMatchesResultTimer();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

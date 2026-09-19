@@ -2987,7 +2987,7 @@ void ResultScene::exportPhoto() {
             appendResultSkinRenderDiagnostics();
             return false;
           }
-          const bool rendered = resultSkinSession->render(
+          const bool rendered = resultSkinSession->renderForExport(
               renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
           appendResultSkinRenderDiagnostics();
           return rendered;

@@ -70,6 +70,10 @@ public:
   [[nodiscard]] bool render(RenderContext &, const ResultSkinData &,
                             std::uint64_t frameSerial,
                             std::int64_t elapsedMillis);
+  // Capture visuals without dispatching events/writers or replacing live hit geometry.
+  [[nodiscard]] bool renderForExport(RenderContext &, const ResultSkinData &,
+                                     std::uint64_t frameSerial,
+                                     std::int64_t elapsedMillis);
   [[nodiscard]] bool
   requiresRuntimeStringRefresh(const ResultSkinData &) const;
   [[nodiscard]] bool refreshRuntimeStrings(const ResultSkinData &);
@@ -150,6 +154,7 @@ private:
   std::unordered_set<int> reportedUnsupportedEventIds_;
   std::vector<std::string> preparedRuntimeStrings_;
   std::int64_t currentEventMicros_ = 0;
+  bool suppressFrameActions_ = false;
 };
 
 } // namespace skin

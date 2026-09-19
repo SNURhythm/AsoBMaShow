@@ -23,6 +23,7 @@ struct ResultImageExportResult {
 struct ApplicationContext { std::uint64_t currentFrame = 17; };
 struct ResultSkinSession {
   int renders = 0;
+  int captures = 0;
   bool succeeds = true;
   bool controls = true;
   int graph = 0;
@@ -33,6 +34,11 @@ struct ResultSkinSession {
   int refreshes = 0;
   bool requiresRuntimeStringRefresh(const ResultSkinData &) const { return needsRefresh; }
   bool refreshRuntimeStrings(const ResultSkinData &) { ++refreshes; return refreshSucceeds; }
+  bool renderForExport(RenderContext &context, const ResultSkinData &data,
+                       std::uint64_t serial, long long time) {
+    ++captures;
+    return render(context, data, serial, time);
+  }
   bool render(RenderContext &, const ResultSkinData &data,
               std::uint64_t serial, long long time) {
     if (serial <= lastSerial) return false;
@@ -151,7 +157,8 @@ int main() {
     scene.exportPhoto();
     expect(ResultImageExporter::skinExports == 1 && ResultImageExporter::nativeExports == 0,
            "selected result skin must replace native export for local and remote results");
-    expect(scene.resultSkinSession->renders == 1 && !scene.resultSkinSession->controls &&
+    expect(scene.resultSkinSession->renders == 1 && scene.resultSkinSession->captures == 1 &&
+               !scene.resultSkinSession->controls &&
                scene.resultSkinSession->graph == 73 && scene.resultSkinSession->elapsed == 5000,
            "export draws the current skin data and animation without native controls");
     expect(!scene.resultPhotoExportInProgress && scene.status == ResultPhotoExportPresentation::Saved,

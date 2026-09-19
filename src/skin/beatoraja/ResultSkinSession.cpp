@@ -398,6 +398,18 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
   return result;
 }
 
+bool ResultSkinSession::renderForExport(RenderContext &renderContext,
+                                        const ResultSkinData &data,
+                                        std::uint64_t frameSerial,
+                                        std::int64_t elapsedMillis) {
+  struct RestoreActions {
+    bool &suppressed;
+    bool previous;
+    ~RestoreActions() { suppressed = previous; }
+  } restore{suppressFrameActions_, std::exchange(suppressFrameActions_, true)};
+  return render(renderContext, data, frameSerial, elapsedMillis);
+}
+
 bool ResultSkinSession::render(RenderContext &renderContext,
                                const ResultSkinData &data,
                                std::uint64_t frameSerial,
@@ -406,7 +418,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
                           std::make_move_iterator(pendingDiagnostics_.begin()),
                           std::make_move_iterator(pendingDiagnostics_.end()));
   pendingDiagnostics_.clear();
-  currentEventMicros_ = std::max<std::int64_t>(0, elapsedMillis) * 1000;
+  if (!suppressFrameActions_) {
+    currentEventMicros_ = std::max<std::int64_t>(0, elapsedMillis) * 1000;
+  }
   if (!resources_ || !movies_ || frameSerial == 0) {
     lastDiagnostics_.push_back(failure(
         "skin.result_session.frame_invalid",
@@ -445,7 +459,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
       return false;
     }
   }
-  auto queuedWriters = std::exchange(queuedWriterInvocations_, {});
+  auto queuedWriters = suppressFrameActions_
+                           ? std::vector<QueuedWriterInvocation>{}
+                           : std::exchange(queuedWriterInvocations_, {});
   for (const auto &invocation : queuedWriters) {
     if (runtime_ == nullptr) {
       lastDiagnostics_.push_back(failure(
@@ -520,7 +536,8 @@ bool ResultSkinSession::render(RenderContext &renderContext,
     bridge.setCustomTimer(timer.id, value);
   }
   for (std::size_t eventIndex = 0;
-       eventIndex < model_.model.customEvents.size(); ++eventIndex) {
+       !suppressFrameActions_ && eventIndex < model_.model.customEvents.size();
+       ++eventIndex) {
     const auto &event = model_.model.customEvents[eventIndex];
     const auto lastDefinition =
         customEventLastDefinitionIndexes_.find(event.id);
@@ -578,7 +595,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
     }
     customEventLastExecutionMicros_.insert_or_assign(event.id, now);
   }
-  auto queuedInvocations = std::exchange(queuedEventInvocations_, {});
+  auto queuedInvocations = suppressFrameActions_
+                               ? std::vector<QueuedEventInvocation>{}
+                               : std::exchange(queuedEventInvocations_, {});
   for (const auto &invocation : queuedInvocations) {
     if (runtime_ == nullptr) {
       lastDiagnostics_.push_back(failure(
@@ -645,7 +664,9 @@ bool ResultSkinSession::render(RenderContext &renderContext,
   lastDiagnostics_.insert(lastDiagnostics_.end(),
                           std::make_move_iterator(evaluated.diagnostics.begin()),
                           std::make_move_iterator(evaluated.diagnostics.end()));
-  publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
+  if (!suppressFrameActions_) {
+    publishedInteractionLayout_ = std::move(evaluated.interactionLayout);
+  }
   return true;
 }
 
@@ -843,6 +864,7 @@ LuaSkinEventExecutionResult ResultSkinSession::executeHostEvent(
                 .message = "Skin event executor has no active result session."}};
   }
   auto &session = *static_cast<ResultSkinSession *>(opaque);
+  if (session.suppressFrameActions_) return {};
   try {
     if (session.queueEvent(eventId, arguments, session.currentEventMicros_)) {
       return {};
