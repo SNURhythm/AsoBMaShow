@@ -1450,6 +1450,210 @@ void testConcurrentReaderRejectsOversizedPayload() {
   assert(received == 0 && !error.empty());
 }
 
+void testConcurrentStoredZipFitsExactBudget() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "exact-budget.zip";
+  const std::string payload(128 * 1024, 'x');
+  writeStoredZipContents(path, "payload.bin", payload);
+  std::size_t received = 0;
+  std::string error;
+  assert(archive_file::readArchiveEntriesConcurrently(
+      path, {"payload.bin"}, [&](archive_file::FileData &&file) {
+        assert(std::string(file.bytes.begin(), file.bytes.end()) == payload);
+        ++received;
+        return true;
+      }, 2, payload.size(), &error));
+  assert(received == 1);
+}
+
+void testConcurrentOversizedEntries(const std::string &format) {
+  TempDirectory temporary;
+  const bool zip = format == "stored" || format == "deflated";
+  const auto path = temporary.path() / (zip ? "oversized.zip" : "oversized.rar");
+  std::vector<std::filesystem::path> paths;
+  if (zip) {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_set_options(writer.get(), format == "stored"
+        ? "zip:compression=store" : "zip:compression=deflate") == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+    for (int index = 0; index < 8; ++index) {
+      const std::string name = std::to_string(index) + ".bin";
+      paths.emplace_back(name);
+      // Include empty entries to check that zero-byte reservations cannot
+      // overlap an oversized entry's callback.
+      const std::string payload(index % 2 == 0 ? 4096 : 0, 'x');
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      archive_entry_set_pathname(entry.get(), name.c_str());
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_size(entry.get(), payload.size());
+      assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+      assert(archive_write_data(writer.get(), payload.data(), payload.size()) ==
+             static_cast<la_ssize_t>(payload.size()));
+      assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  } else {
+    std::ofstream output(path, std::ios::binary);
+    if (format == "rar4") {
+      output.write(reinterpret_cast<const char *>(archive_rar_fixtures::rar4),
+                   sizeof(archive_rar_fixtures::rar4));
+      paths = {"test.txt", "testdir/test.txt"};
+    } else if (format == "rar5-parallel") {
+      // Repeat a valid independent 1 MiB member with unique names to exceed
+      // the 512 MiB single-handle threshold without a large on-disk fixture.
+      const auto *fixture = archive_rar_fixtures::nonSolid;
+      output.write(reinterpret_cast<const char *>(fixture), 25);
+      for (int index = 0; index < 513; ++index) {
+        std::vector<unsigned char> member(fixture + 25, fixture + 123);
+        const std::string number = std::to_string(index);
+        const std::string name = "f" + std::string(4 - number.size(), '0') + number + ".bin";
+        paths.emplace_back(name);
+        std::copy(name.begin(), name.end(), member.begin() + 29);
+        std::uint32_t crc = 0xffffffffu;
+        for (std::size_t offset = 4; offset < 38; ++offset) {
+          crc ^= member[offset];
+          for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1u) ^ ((crc & 1u) ? 0xedb88320u : 0u);
+        }
+        writeLeU32(member.data(), crc ^ 0xffffffffu);
+        output.write(reinterpret_cast<const char *>(member.data()), member.size());
+      }
+      output.write(reinterpret_cast<const char *>(fixture + 417), 8);
+    } else {
+      const auto *fixture = format == "rar5-solid"
+          ? archive_rar_fixtures::solid : archive_rar_fixtures::nonSolid;
+      output.write(reinterpret_cast<const char *>(fixture),
+                   sizeof(archive_rar_fixtures::nonSolid));
+      paths = {"file0.bin", "file1.bin", "file2.bin", "file3.bin"};
+    }
+  }
+
+  std::atomic_int active = 0;
+  std::atomic_bool oversizedActive = false;
+  std::mutex receivedMutex;
+  std::set<std::filesystem::path> received;
+  std::string error;
+  const auto consume = [&](archive_file::FileData &&file) {
+    const bool oversized = file.bytes.size() > 1;
+    const auto count = ++active;
+    if (oversized) {
+      assert(count == 1);
+      assert(!oversizedActive.exchange(true));
+    } else {
+      assert(!oversizedActive.load());
+    }
+    if (zip) {
+      const bool empty = (file.path.string().front() - '0') % 2 != 0;
+      assert(file.bytes.size() == (empty ? 0 : 4096));
+      assert(std::all_of(file.bytes.begin(), file.bytes.end(), [](auto b) { return b == 'x'; }));
+    } else if (format == "rar4") {
+      assert(std::string(file.bytes.begin(), file.bytes.end()) == "test text document\r\n");
+    } else {
+      const auto value = format == "rar5-parallel" ? 'a' : 'a' + file.path.string()[4] - '0';
+      assert(file.bytes.size() == 1024 * 1024);
+      assert(std::all_of(file.bytes.begin(), file.bytes.end(), [&](auto b) { return b == value; }));
+    }
+    std::this_thread::sleep_for(1ms);
+    {
+      std::lock_guard lock(receivedMutex);
+      assert(received.insert(file.path).second);
+    }
+    if (oversized) oversizedActive = false;
+    --active;
+    return true;
+  };
+  const bool read = archive_file::readArchiveEntriesConcurrently(
+      path, paths, consume, 4, 1, &error, nullptr,
+      archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry);
+  if (!read) std::cerr << format << ": " << error << '\n';
+  assert(read && received.size() == paths.size());
+
+  // The default policy must still reject the same nonempty entries before
+  // invoking their consumers, including RAR5's single-handle optimization.
+  std::atomic_size_t receivedNonempty = 0;
+  assert(!archive_file::readArchiveEntriesConcurrently(
+      path, paths, [&](archive_file::FileData &&file) {
+        if (!file.bytes.empty()) ++receivedNonempty;
+        return true;
+      }, 4, 1, &error));
+  assert(receivedNonempty == 0);
+
+  if (format == "stored" || format == "deflated" || format == "rar4" ||
+      format == "rar5-parallel") {
+    std::atomic_bool callbackEntered = false;
+    std::atomic_bool cancellationObserved = false;
+    std::atomic_int callbacks = 0;
+    error.clear();
+    assert(!archive_file::readArchiveEntriesConcurrently(
+        path, paths, [&](archive_file::FileData &&) {
+          ++callbacks;
+          callbackEntered = true;
+          const auto deadline = std::chrono::steady_clock::now() + 5s;
+          while (!cancellationObserved && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::yield();
+          assert(cancellationObserved);
+          return true;
+        }, 2, 1, &error, [&] {
+          if (callbackEntered) {
+            cancellationObserved = true;
+            return false;
+          }
+          return true;
+        }, archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry));
+    assert(callbacks > 0 && cancellationObserved);
+    assert(error == "Operation cancelled");
+  }
+}
+
+void testLargeEntriesUseSerialFallback(const std::string &extension) {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("large-serial" + extension);
+  const std::string payload(17 * 1024 * 1024, 'x');
+  if (extension == ".7z" || extension == ".cb7") {
+    writeSevenZip(path, payload, true);
+  } else {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_pax_restricted(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.gz") assert(archive_write_add_filter_gzip(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.bz2") assert(archive_write_add_filter_bzip2(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.xz") assert(archive_write_add_filter_xz(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.zst") assert(archive_write_add_filter_zstd(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+    ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), "chart.bms");
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_size(entry.get(), payload.size());
+    assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+    assert(archive_write_data(writer.get(), payload.data(), payload.size()) ==
+           static_cast<la_ssize_t>(payload.size()));
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  std::vector<archive_file::Entry> entries;
+  std::string error;
+  assert(archive_file::listEntries(path, entries, &error));
+  std::vector<std::filesystem::path> paths;
+  for (const auto &entry : entries) if (!entry.directory) paths.push_back(entry.path);
+  assert(!paths.empty());
+  std::size_t received = 0;
+  const auto consume = [&](archive_file::FileData &&file) {
+    assert(std::string_view(reinterpret_cast<const char *>(file.bytes.data()),
+                            file.bytes.size()) == payload);
+    ++received;
+    return true;
+  };
+  assert(!archive_file::readArchiveEntriesConcurrently(
+      path, paths, consume, 4, 16 * 1024 * 1024, &error, nullptr,
+      archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry));
+  assert(received == 0);
+  assert(archive_file::readArchiveEntriesStreaming(path, paths, consume, &error));
+  assert(received == paths.size());
+  received = 0;
+  assert(!archive_file::readArchiveEntriesStreamingBounded(
+      path, paths, consume, 16 * 1024 * 1024, &error));
+  assert(received == 0);
+}
+
 void testSerialZipUnzipDoesNotMaterializeLargeMembers() {
   TempDirectory temporary;
   const auto path = temporary.path() / "large.zip";
@@ -3291,6 +3495,10 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 3 && std::string(argv[1]) == "--oversized-entry") {
+    testConcurrentOversizedEntries(argv[2]);
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--temporary-cache") {
     testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity();
     return 0;
@@ -3410,6 +3618,15 @@ int main(int argc, char **argv) {
   testLiveManifestPromotionCoalescesAndCancelsWaiters();
   testBoundedStreamingRejectsOversizedPayload();
   testConcurrentReaderRejectsOversizedPayload();
+  testConcurrentStoredZipFitsExactBudget();
+  for (const auto *format : {"stored", "deflated", "rar4", "rar5",
+                             "rar5-solid", "rar5-parallel"}) {
+    testConcurrentOversizedEntries(format);
+  }
+  for (const auto *extension : {".7z", ".cb7", ".tar", ".tar.gz",
+                                ".tar.bz2", ".tar.xz", ".tar.zst"}) {
+    testLargeEntriesUseSerialFallback(extension);
+  }
   testSerialZipUnzipDoesNotMaterializeLargeMembers();
   testFullUnzipCountsEntriesAndImplicitDirectories();
   for (const auto *extension : {".zip", ".7z", ".tar"}) testFullUnzipCountsExplicitDirectoriesAndEmptyFiles(extension);

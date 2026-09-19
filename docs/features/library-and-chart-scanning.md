@@ -63,6 +63,36 @@ not cancel the builder or other waiters. Builder abandonment publishes failure,
 and cache publication precedes successful completion. Checkpoints run outside
 the coordinator mutex; data-cache locks remain outside the coordinator.
 
+## Archive chart read budgets
+
+The scanner's 16 MiB in-flight chart budget is a scheduling target, not a
+maximum chart size or archive size. Concurrent reads explicitly use
+`ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry`: one oversized entry
+can be extracted and parsed while all other entry reservations wait. Empty
+entries also hold a reservation until their callback finishes. The default
+`Strict` policy remains a hard entry-buffer limit for audio consumers.
+
+| Archive family (including extension aliases) | Chart extraction path |
+| --- | --- |
+| ZIP, CBZ | Direct miniz workers for supported methods; stored entries reserve output bytes, deflated entries reserve output plus compressed scratch. Unsupported methods use the scanner's serial fallback. |
+| Non-solid RAR4, CBR | Independent unarr readers, when that backend is available. Each reserves its output bytes. |
+| RAR5, CBR | Solid archives and batches up to 512 MiB use one SDK handle. Larger non-solid batches use independent SDK readers. Both respect the scanner's oversized-entry policy. |
+| Solid RAR4 or unavailable random-access backend | Serial streaming fallback. |
+| 7z, CB7, ZIPX, LHA/LZH | Serial SDK extraction, with libarchive fallback if unavailable; solid-block dependencies are preserved. |
+| TAR and gzip/bzip2/xz/zstd variants | Serial libarchive fallback. |
+
+Serial chart parsing already admits a single oversized chart. Its queue
+budget and concurrent entry reservations exclude decoder dictionaries,
+parsed metadata, and memory retained by consumers. These are not process-wide
+memory caps. Full extraction and bounded asset reads retain their separate
+limits.
+
+Regression coverage includes oversized stored/deflated ZIP, RAR4, small and
+solid RAR5, and a compact RAR5 fixture with more than 512 MiB of expanded data
+to exercise parallel SDK extraction. Tests also check cancellation, strict
+rejection, exact-budget stored ZIP reads, 7z/compressed TAR fallback, and an
+end-to-end scanner batch containing a 17 MiB chart.
+
 ## Verification
 
 Start with `chart_library_scanner_tests`, `chart_scan_work_scheduler_tests`,

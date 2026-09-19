@@ -193,7 +193,16 @@ bool readArchiveEntriesStreamingBounded(
     FileDataCallback onFile, std::uint64_t maximumBytes,
     std::string *errorMessage = nullptr,
     PauseCallback pauseCallback = nullptr);
+enum class ConcurrentReadMemoryPolicy {
+  Strict,
+  AllowSingleOversizedEntry,
+};
+
 // Calls onFile from extractor worker threads. The callback must be thread-safe.
+// maxInFlightBytes == 0 is unlimited. The default rejects entries above the
+// budget; AllowSingleOversizedEntry admits them only when no entry is active.
+// Reservations cover entry buffers through callback completion, not decoder
+// dictionaries or buffers retained by the consumer.
 bool readArchiveEntriesConcurrently(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
@@ -201,7 +210,8 @@ bool readArchiveEntriesConcurrently(
     std::size_t maxWorkers,
     std::uint64_t maxInFlightBytes,
     std::string *errorMessage = nullptr,
-    PauseCallback pauseCallback = nullptr);
+    PauseCallback pauseCallback = nullptr,
+    ConcurrentReadMemoryPolicy memoryPolicy = ConcurrentReadMemoryPolicy::Strict);
 bool readArchiveEntriesInRange(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,

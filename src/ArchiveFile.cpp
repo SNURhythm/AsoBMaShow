@@ -1931,7 +1931,10 @@ public:
         releaseBytes_(std::move(releaseBytes)),
         pauseCallback_(std::move(pauseCallback)) {}
 
-  ~SevenZipThrottledStreamingExtractCallback() { releaseCurrentBytes(); }
+  ~SevenZipThrottledStreamingExtractCallback() {
+    currentFile_.reset();
+    releaseCurrentBytes();
+  }
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -5624,7 +5627,8 @@ bool readZipEntriesByIndexConcurrent(
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -5791,6 +5795,7 @@ bool readZipEntriesByIndexConcurrent(
   std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
+  std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
   ZipDirectExtractionStats aggregateStats;
@@ -5807,7 +5812,8 @@ bool readZipEntriesByIndexConcurrent(
   };
 
   auto acquireBytes = [&](std::uint64_t bytes) {
-    if (bytes > maxInFlightBytes) {
+    if (bytes > maxInFlightBytes &&
+        memoryPolicy == ConcurrentReadMemoryPolicy::Strict) {
       setFailure("Archive entry exceeds concurrent read memory limit.");
       return false;
     }
@@ -5816,7 +5822,13 @@ bool readZipEntriesByIndexConcurrent(
       if (failed) {
         return false;
       }
-      if (bytes <= maxInFlightBytes - inFlightBytes) {
+      // A scheduling budget can admit one oversized entry exclusively. Check
+      // the current reservation before subtracting to avoid unsigned underflow.
+      if ((inFlightFiles == 0 &&
+           memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry) ||
+          (inFlightBytes <= maxInFlightBytes &&
+           bytes <= maxInFlightBytes - inFlightBytes)) {
+        ++inFlightFiles;
         inFlightBytes += bytes;
         return true;
       }
@@ -5834,6 +5846,7 @@ bool readZipEntriesByIndexConcurrent(
   auto releaseBytes = [&](std::uint64_t bytes) {
     {
       std::lock_guard lock(stateMutex);
+      --inFlightFiles;
       inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
     }
     spaceCv.notify_all();
@@ -5867,11 +5880,13 @@ bool readZipEntriesByIndexConcurrent(
         break;
       }
 
+      // Stored entries read directly into the output buffer.
+      const std::uint64_t scratchBytes =
+          target.method == MZ_DEFLATED ? target.compressedSize : 0;
       const std::uint64_t targetBytes =
-          target.size > std::numeric_limits<std::uint64_t>::max() -
-                            target.compressedSize
+          target.size > std::numeric_limits<std::uint64_t>::max() - scratchBytes
               ? std::numeric_limits<std::uint64_t>::max()
-              : target.size + target.compressedSize;
+              : target.size + scratchBytes;
       const auto acquireStart = std::chrono::steady_clock::now();
       if (!acquireBytes(targetBytes)) {
         break;
@@ -6325,7 +6340,8 @@ bool readUnarrRarEntriesByOffsetConcurrent(
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -6400,6 +6416,7 @@ bool readUnarrRarEntriesByOffsetConcurrent(
   std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
+  std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
   long long acquireMicros = 0;
@@ -6418,7 +6435,8 @@ bool readUnarrRarEntriesByOffsetConcurrent(
   };
 
   auto acquireBytes = [&](std::uint64_t bytes) {
-    if (bytes > maxInFlightBytes) {
+    if (bytes > maxInFlightBytes &&
+        memoryPolicy == ConcurrentReadMemoryPolicy::Strict) {
       setFailure("Archive entry exceeds concurrent read memory limit.");
       return false;
     }
@@ -6427,7 +6445,13 @@ bool readUnarrRarEntriesByOffsetConcurrent(
       if (failed) {
         return false;
       }
-      if (bytes <= maxInFlightBytes - inFlightBytes) {
+      // A scheduling budget can admit one oversized entry exclusively. Check
+      // the current reservation before subtracting to avoid unsigned underflow.
+      if ((inFlightFiles == 0 &&
+           memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry) ||
+          (inFlightBytes <= maxInFlightBytes &&
+           bytes <= maxInFlightBytes - inFlightBytes)) {
+        ++inFlightFiles;
         inFlightBytes += bytes;
         return true;
       }
@@ -6445,6 +6469,7 @@ bool readUnarrRarEntriesByOffsetConcurrent(
   auto releaseBytes = [&](std::uint64_t bytes) {
     {
       std::lock_guard lock(stateMutex);
+      --inFlightFiles;
       inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
     }
     spaceCv.notify_all();
@@ -7353,7 +7378,8 @@ bool readSevenZipEntriesByIndexConcurrent(
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -7455,6 +7481,7 @@ bool readSevenZipEntriesByIndexConcurrent(
   std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
+  std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
   long long acquireMicros = 0;
@@ -7474,7 +7501,8 @@ bool readSevenZipEntriesByIndexConcurrent(
   };
 
   auto acquireBytes = [&](std::uint64_t bytes) {
-    if (bytes > maxInFlightBytes) {
+    if (bytes > maxInFlightBytes &&
+        memoryPolicy == ConcurrentReadMemoryPolicy::Strict) {
       setFailure("Archive entry exceeds concurrent read memory limit.");
       return false;
     }
@@ -7483,7 +7511,13 @@ bool readSevenZipEntriesByIndexConcurrent(
       if (failed) {
         return false;
       }
-      if (bytes <= maxInFlightBytes - inFlightBytes) {
+      // A scheduling budget can admit one oversized entry exclusively. Check
+      // the current reservation before subtracting to avoid unsigned underflow.
+      if ((inFlightFiles == 0 &&
+           memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry) ||
+          (inFlightBytes <= maxInFlightBytes &&
+           bytes <= maxInFlightBytes - inFlightBytes)) {
+        ++inFlightFiles;
         inFlightBytes += bytes;
         return true;
       }
@@ -7501,6 +7535,7 @@ bool readSevenZipEntriesByIndexConcurrent(
   auto releaseBytes = [&](std::uint64_t bytes) {
     {
       std::lock_guard lock(stateMutex);
+      --inFlightFiles;
       inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
     }
     spaceCv.notify_all();
@@ -8890,7 +8925,8 @@ bool readArchiveEntriesConcurrently(
     std::size_t maxWorkers,
     std::uint64_t maxInFlightBytes,
     std::string *errorMessage,
-    PauseCallback pauseCallback) {
+    PauseCallback pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (!onFile) {
     if (errorMessage != nullptr) {
       *errorMessage = "Archive file consumer is unavailable.";
@@ -8924,7 +8960,7 @@ bool readArchiveEntriesConcurrently(
   if (hasZipArchiveExtension(archivePath) &&
       readZipEntriesByIndexConcurrent(archivePath, innerPaths, std::nullopt,
                                       onFile, maxWorkers, maxInFlightBytes,
-                                      &zipError, pauseCallback)) {
+                                      &zipError, pauseCallback, memoryPolicy)) {
     appendDebugLogLineImpl("Read archive batch via concurrent miniz ZIP: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -8952,7 +8988,7 @@ bool readArchiveEntriesConcurrently(
   if (rarArchiveSignature == RarSignature::Rar4 &&
       readUnarrRarEntriesByOffsetConcurrent(
           archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
-          maxInFlightBytes, &unarrError, pauseCallback)) {
+          maxInFlightBytes, &unarrError, pauseCallback, memoryPolicy)) {
     appendDebugLogLineImpl(
         "Read archive batch via concurrent unarr RAR random access: " +
         pathForLog(archivePath) +
@@ -8997,11 +9033,16 @@ bool readArchiveEntriesConcurrently(
           " maxTargetBytes=" + byteCountForLog(rar5Stats.maxBytes) +
           " reason=" +
           (rar5Stats.hasSolid ? "solid-archive" : "small-targets"));
+      // This route already holds only one entry through callback completion.
+      const auto entryLimit = maxInFlightBytes == 0
+          ? std::numeric_limits<std::uint64_t>::max()
+          : memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry
+              ? std::max(maxInFlightBytes, rar5Stats.maxBytes)
+              : maxInFlightBytes;
       if (readSevenZipEntriesByIndexStreaming(
               archivePath, innerPaths, std::nullopt, onFile, &sevenZipError,
               pauseCallback, static_cast<std::size_t>(std::min<std::uint64_t>(
-                  maxInFlightBytes == 0 ? std::numeric_limits<std::uint64_t>::max() : maxInFlightBytes,
-                  std::numeric_limits<std::size_t>::max())))) {
+                  entryLimit, std::numeric_limits<std::size_t>::max())))) {
         appendDebugLogLineImpl(
             "Read archive batch via single-handle 7-Zip RAR5: " +
             pathForLog(archivePath) +
@@ -9033,7 +9074,7 @@ bool readArchiveEntriesConcurrently(
   if (isRar5Archive &&
       readSevenZipEntriesByIndexConcurrent(
           archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
-          maxInFlightBytes, &sevenZipError, pauseCallback)) {
+          maxInFlightBytes, &sevenZipError, pauseCallback, memoryPolicy)) {
     appendDebugLogLineImpl("Read archive batch via concurrent 7-Zip RAR5: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +

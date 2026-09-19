@@ -32,8 +32,10 @@ void testPartialFailureRetriesOnlyMissingEntries(bool cancelAfterDelivery) {
     return true;
   };
   auto concurrent = [&](const auto &, const auto &, auto onFile, auto workers,
-                        auto budget, auto *, auto checkpoint) {
+                        auto budget, auto *, auto checkpoint, auto policy) {
     require(workers == 2 && budget == 16, "extractor receives its bounded budget");
+    require(policy == archive_file::ConcurrentReadMemoryPolicy::Strict,
+            "audio extraction keeps a hard memory limit");
     require(checkpoint() && onFile({.path = "first", .bytes = {42}}),
             "first entry delivered before reader failure");
     require(consumed.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
@@ -72,7 +74,7 @@ void testSerialOnlyReaderConsumesEveryEntryOnce(std::size_t workers) {
   std::atomic_uint consumed = 0;
   const auto caller = std::this_thread::get_id();
   unsigned serialCalls = 0;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) -> bool {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) -> bool {
     throw std::runtime_error("serial-only operation must not use concurrent reader");
   };
   auto streaming = [&](const auto &, const auto &requested, auto onFile, auto budget,
@@ -112,7 +114,7 @@ void testConsumerFailureDoesNotRestartExtraction() {
     return false;
   };
   auto concurrent = [&](const auto &, const auto &, auto onFile, auto, auto,
-                        auto *, auto checkpoint) {
+                        auto *, auto checkpoint, auto) {
     require(onFile({.path = "first", .bytes = {42}}), "consumer receives first entry");
     require(rejection.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
             "consumer signals rejection");
@@ -135,7 +137,7 @@ void testConsumerFailureDoesNotRestartExtraction() {
 
 void testInlineConsumptionRejectsIncompleteDeliveryAndConsumerFailure() {
   std::atomic_bool cancelled = false;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) -> bool {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) -> bool {
     throw std::runtime_error("inline operation does not create extractor threads");
   };
   for (const bool reject : {false, true}) {
@@ -162,7 +164,7 @@ void testOversizedDeliveryNeverReachesConsumer(std::size_t workers,
   std::atomic_uint consumed = 0;
   const std::vector<std::filesystem::path> requested = singlePath
       ? std::vector<std::filesystem::path>{"first"} : paths;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) {
     return false;
   };
   auto streaming = [](const auto &, const auto &entries, auto onFile, auto,
@@ -195,7 +197,7 @@ void testExtractionLimitPreventsOversizedAllocation(std::size_t workers,
   const std::vector<std::filesystem::path> requested = singlePath
       ? std::vector<std::filesystem::path>{"first"} : paths;
   auto concurrent = [&](const auto &, const auto &, auto, auto, auto budget,
-                        auto *, auto) {
+                        auto *, auto, auto) {
     require(budget <= maximumBytes / 2,
             "concurrent extraction reserves room for queued and decoding bytes");
     return false;
@@ -225,7 +227,7 @@ void testExtractionLimitPreventsOversizedAllocation(std::size_t workers,
 void testTinyAndOddBudgetsRetainExactLimit(std::uint64_t maximumBytes) {
   std::atomic_bool cancelled = false;
   std::atomic_uint consumed = 0;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) {
     return false;
   };
   auto streaming = [&](const auto &, const auto &requested, auto onFile, auto budget,

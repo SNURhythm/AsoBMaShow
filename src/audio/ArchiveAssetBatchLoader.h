@@ -90,7 +90,8 @@ bool ConsumeArchiveAssetBatch(
   bool read = false;
   if (extractWorkers > 1) {
     read = readConcurrently(archivePath, innerPaths, onFile, extractWorkers,
-                           extractionBytes, errorMessage, continueReading);
+                           extractionBytes, errorMessage, continueReading,
+                           archive_file::ConcurrentReadMemoryPolicy::Strict);
   }
   if ((!read || acceptedPaths.size() != innerPaths.size()) &&
       continueReading() && !rejected) {
