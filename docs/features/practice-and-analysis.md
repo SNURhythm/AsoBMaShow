@@ -25,11 +25,17 @@ and saved presets. Overrides are evaluated through the shared ruleset policy;
 practice state must be identified in provenance so it is not confused with an
 ordinary eligible score.
 
+Chart Viewer releases its listening audio through guarded cleanup before chart
+and view destruction, including direct deletion and initialization failure.
+Active, loaded, and retained listening resources require a stop; unused viewers
+leave the shared jukebox untouched.
+
 ## Verification
 
 Use `practice_configuration_tests`, `practice_session_tests`,
 `practice_rule_override_tests`, `practice_analytics_tests`,
-`practice_result_*_tests`, and `gameplay_practice_*_tests`.
+`practice_result_*_tests`, `gameplay_practice_*_tests`, and
+`chart_viewer_lifecycle_tests`.
 
 ## Related pages
 

@@ -9,6 +9,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def read_music_select_scene():
+    return "\n".join((ROOT / path).read_text() for path in (
+        "src/scene/MusicSelectScene.cpp", "src/scene/MusicSelectSceneRecords.cpp"))
+
+
 def fixture_compile_command(compiler, frontend, compiler_id, source, executable,
                             extra_sources=()):
     if frontend == "MSVC" or compiler_id == "MSVC":
@@ -62,6 +67,20 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
 
 
 class MusicSelectSceneBehaviorTests(unittest.TestCase):
+    def test_course_stage_and_result_navigation_preserve_records_owner(self):
+        methods = []
+        for file, signature in (
+            ("src/scene/play/GamePlayScene.cpp", "bool GamePlayScene::startCourseReplayChartAtCurrentIndex()"),
+            ("src/scene/ResultScene.cpp", "void ResultScene::startCourseReplayStage("),
+            ("src/scene/ResultScene.cpp", "void ResultScene::exitResult()"),
+        ):
+            source = (ROOT / file).read_text()
+            start = source.index(signature)
+            opening = source.index("{", start)
+            methods.append(source[start:opening] + function_body(source, signature))
+        fixture = (ROOT / "tests/course_record_navigation_fixture.cpp").read_text()
+        self.compile_and_run(fixture.replace("SCENE_METHODS", "\n".join(methods)))
+
     def test_records_autoplay_audio_failure_cancel_and_retry(self):
         self.run_replay_audio_fixture([4])
 
@@ -69,15 +88,26 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         self.run_replay_audio_fixture(range(4))
 
     def run_replay_audio_fixture(self, paths):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signatures = [
-            "void MusicSelectScene::launchCourseReplay(const MusicSelectBar &course, int slot, const MusicSelectBarManagerReadView &snapshot)",
+            "void MusicSelectScene::launchCourseReplay(\n    const MusicSelectBar &course",
+            "void MusicSelectScene::launchCourseReplay(\n    const ChartMetaRecord &record",
             "void MusicSelectScene::launchSelectedReplay(int slot)",
-            "void MusicSelectScene::launchChartReplay(const ChartMetaRecord &record, const ModernChartResultRecord &modern, bool ghostBattle)",
+            "void MusicSelectScene::launchChartReplay(",
             "void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record)",
+            "bool MusicSelectScene::beginRecordsOperation(",
+            "void MusicSelectScene::startRecordsWork(",
+            "void MusicSelectScene::finishRecordsLoading()",
+            "void MusicSelectScene::onApplicationBackgroundChanged(bool background)",
         ]
-        methods = "\n".join(signature + function_body(source, signature.split("(")[0] + "(")
-                            for signature in signatures)
+        methods = []
+        for signature in signatures:
+            start = source.index(signature)
+            opening = source.index("{", start)
+            methods.append(source[start:opening] + function_body(source, signature))
+        update = function_body(source, "void MusicSelectScene::update(float)")
+        methods.append("void MusicSelectScene::update(float) " + update[:update.index("  tryCompletePendingPreloadLaunch();")] + "}")
+        methods = "\n".join(methods)
         fixture = (ROOT / "tests/music_select_scene_replay_audio_fixture.cpp").read_text()
         callback = function_body(source, "callbacks.watchAutoPlay =")
         for path in paths:
@@ -86,10 +116,11 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                                      .replace("SCENE_METHODS", methods)
                                      .replace("AUTOPLAY_CALLBACK", callback)
                                      .replace("SCENE_TEST", "testAutoPlayAudio()" if path == 4
-                                              else f"testReplayAudio({path})"))
+                                              else f"testReplayAudio({path})"),
+                                     [ROOT / "src/scene/ReplayRecordTask.cpp"])
 
     def test_folder_statistics_prioritize_selection_and_survive_navigation(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         method = function_body(source, "void MusicSelectScene::requestFolderStatus(")
         prefix = method[1:method.index("const int longNoteMode")]
         fixture = (ROOT / "tests/music_select_folder_status_fixture.cpp").read_text()
@@ -120,10 +151,14 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_course_deferred_failure_does_not_revive_background_audio(self):
         self.run_course_audio_fixture("testCourseFailureWhileApplicationBackgrounded()")
 
+    def test_course_worker_admission_failure_restores_selector_and_allows_retry(self):
+        self.run_course_audio_fixture("testCourseWorkerAdmissionFailure()")
+
     def run_course_audio_fixture(self, test_name):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signatures = [
             "void MusicSelectScene::launchCourse(const MusicSelectBar &bar, bool autoplay)",
+            "void MusicSelectScene::resetFailedLaunch(std::uint64_t generation)",
             "void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory)",
             "void MusicSelectScene::onPause()",
             "void MusicSelectScene::onResume()",
@@ -137,7 +172,8 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
                              .replace("CLEANUP_LAUNCH", cleanup)
                              .replace("SCENE_METHODS", methods)
-                             .replace("SCENE_TEST", test_name))
+                             .replace("SCENE_TEST", test_name),
+                             [ROOT / "tests/support/AllocationFailure.cpp"])
 
     def test_runtime_error_keyboard_and_controller_settings_recovery(self):
         self.run_error_recovery_fixture("testSettingsRecovery")
@@ -152,7 +188,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         self.run_error_recovery_fixture("testHealthySettingsRetainsSelector")
 
     def run_error_recovery_fixture(self, test_name):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         events = function_body(source, "EventHandleResult MusicSelectScene::handleEvents(")
         prefix = events[1:events.index("if (selectorInputBlocked())")]
         signatures = [
@@ -173,17 +209,22 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                     f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture)
 
     def test_uncached_launch_cleanup_cancels_parser_and_audio_without_handoff(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         launch = function_body(source, "void MusicSelectScene::launchSelected(")
         worker = launch[launch.index("if (launchThread_.joinable())"):-1]
         cleanup = function_body(source, "void MusicSelectScene::cleanupScene()")
         cleanup = cleanup[1:cleanup.index("stopPreloadWorker();")]
         fixture = (ROOT / "tests/music_select_scene_launch_cancel_fixture.cpp").read_text()
-        self.compile_and_run(fixture.replace("LAUNCH_WORKER", worker)
-                             .replace("CLEANUP_LAUNCH", cleanup))
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                             .replace("LAUNCH_WORKER", worker)
+                             .replace("CLEANUP_LAUNCH", cleanup)
+                             .replace("RESET_FAILED_LAUNCH",
+                                      "void MusicSelectScene::resetFailedLaunch(std::uint64_t generation)" +
+                                      function_body(source, "void MusicSelectScene::resetFailedLaunch(")),
+                             [ROOT / "tests/support/AllocationFailure.cpp"])
 
     def test_failed_fallback_audio_load_does_not_launch_gameplay(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         launch = function_body(source, "void MusicSelectScene::launchSelected(")
         worker = launch[launch.index("launchThread_ = std::jthread("):]
         start = worker.index("context.jukebox.stop();")
@@ -192,7 +233,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         self.compile_and_run(fixture.replace("STAGING_BLOCK", worker[start:finish]))
 
     def test_recursive_directory_queries_preserve_persisted_folder_metadata(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         method = function_body(source, "bool MusicSelectScene::loadDirectoryChildren(")
         branch = function_body(method, "case skin::MusicSelectBarKind::Folder:")
         fixture = (ROOT / "tests/music_select_scene_directory_metadata_fixture.cpp").read_text()
@@ -267,7 +308,7 @@ int main() {
 '''.replace("OFFSET", offset))
 
     def test_archive_actions_do_not_enable_song_favorite_events(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         event = function_body(source, "void MusicSelectScene::executeEvent(")
         expression = event.split(".selectedSongHasPath =", 1)[1].split(
             ".rivalCount", 1)[0].strip().rstrip(",")
@@ -305,7 +346,7 @@ int main() {
         self.run_directory_loading_fixture("testFailedSceneCancelsReadyAutoplay")
 
     def test_library_reload_replaces_rows_before_configuring(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         body = function_body(source, "void MusicSelectScene::reloadLibrary(")
         self.assertLess(
             body.index("bars_.refresh("), body.index("bars_.configure("),
@@ -313,7 +354,7 @@ int main() {
         )
 
     def run_directory_loading_fixture(self, test_name):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signatures = [
             "void MusicSelectScene::openSelected()",
             "void MusicSelectScene::closeDirectory()",
@@ -365,7 +406,7 @@ int main() {
         self.run_directory_loading_fixture("testSearchOpensAsynchronouslyAndRestores")
 
     def test_search_submission_probes_raw_existence_without_rich_projection(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         fixture = r'''
 #include <cassert>
 #include <stdexcept>
@@ -436,7 +477,7 @@ int main() {
             self.fail(error.stderr)
 
     def test_sound_services_follow_changed_paths_and_bookmarks(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signatures = [
             "std::filesystem::path musicSelectSoundSetRoot(const std::string &configured)",
             "void MusicSelectScene::configureSoundServices()",
@@ -457,7 +498,7 @@ int main() {
         header = (ROOT / "src/scene/Scene.h").read_text()
         header = "\n".join(line for line in header.splitlines()
                            if not line.startswith(("#include", "#pragma")))
-        scene = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        scene = read_music_select_scene()
         launch = function_body(scene, "void MusicSelectScene::launchSelected(")
         worker = launch[launch.index("launchThread_ = std::jthread("):]
         submit = "postDeferred(callback)" if "postDeferred(" in worker else "defer(callback, 0, true)"
@@ -466,15 +507,42 @@ int main() {
         self.compile_and_run(fixture.replace("SCENE_HEADER", header)
                              .replace("SUBMIT_CALLBACK", submit))
 
+    def test_direct_destruction_joins_workers_and_cleans_up_once(self):
+        source = read_music_select_scene()
+        methods = "\n".join(
+            signature + function_body(source, signature) for signature in (
+                "MusicSelectScene::~MusicSelectScene()",
+                "void MusicSelectScene::cleanupScene()",
+                "void MusicSelectScene::cancelDirectoryLoad()",
+                "void MusicSelectScene::stopPreloadWorker()",
+                "void MusicSelectScene::stopInputListening()",
+                "void MusicSelectScene::cancelSelectedChartAnalysis()",
+                "void MusicSelectScene::cancelSkinPreparation()",
+            ))
+        base = (ROOT / "src/scene/Scene.h").read_text()
+        fixture = (ROOT / "tests/music_select_scene_destruction_fixture.cpp").read_text()
+        for marker, signature in (
+            ("BASE_CLEANUP", "inline void cleanup()"),
+            ("BASE_DESTRUCTOR", "virtual ~Scene()"),
+            ("BASE_DESTROY_VIEWS", "void destroyOwnedViews()"),
+            ("BASE_CLEAR_POSTED", "void clearPostedDeferred()"),
+        ):
+            fixture = fixture.replace(marker, function_body(base, signature))
+        self.compile_and_run(fixture.replace("SCENE_METHODS", methods)
+                             .replace("REPOSITORY_ROOT", ROOT.as_posix()), [
+            ROOT / "src/scene/ReplayRecordTask.cpp",
+            ROOT / "src/replay/ReplayExportJob.cpp",
+        ])
+
     def test_failed_audio_preload_is_not_published(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signature = "[this](const ChartMetaRecord &request, std::atomic_bool &cancelled)"
         callback = signature + function_body(source, signature)
         fixture = (ROOT / "tests/music_select_scene_preload_fixture.cpp").read_text()
         self.compile_and_run(fixture.replace("PRELOAD_CALLBACK", callback))
 
     def test_background_audio_resumes_only_for_active_foreground_selector(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signatures = ["void MusicSelectScene::onPause()",
                       "void MusicSelectScene::onResume()"]
         methods = "\n".join(signature + function_body(source, signature)
@@ -571,7 +639,7 @@ int main() {
 '''.replace("PENDING_GUARD", guard).replace("REFRESH_METHOD", method))
 
     def test_modal_reset_preserves_nondefault_timing_and_analog_configuration(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         signature = "void MusicSelectScene::resetLogicalInput()"
         body = function_body(source, signature)
         fixture = (ROOT / "tests/music_select_scene_input_reset_fixture.cpp").read_text()
@@ -590,7 +658,7 @@ int main() {
                                  dependencies)
 
     def run_scene_fixture(self, filename, signatures, extra_sources=()):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         methods = "\n".join(
             signature + function_body(source, signature) for signature in signatures
         )
@@ -599,7 +667,7 @@ int main() {
                              .replace("REPOSITORY_ROOT", ROOT.as_posix()), extra_sources)
 
     def test_records_callbacks_dispatch_selected_chart_and_saved_result(self):
-        source = (ROOT / "src/scene/MusicSelectScene.cpp").read_text()
+        source = read_music_select_scene()
         callbacks = "\n".join(
             f"callbacks.{name} = [this](const ChartMetaRecord &record, "
             "const ModernChartResultRecord &modern) "

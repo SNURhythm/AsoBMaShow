@@ -15,6 +15,13 @@ associated with a result.
   prepare and consume verified playback data.
 - `ReplayFileStore.*`, `ReplayFileLifecycle.*`, association, reconciliation,
   and profile-transfer services own file lifecycle and durable linkage.
+- `scene/MusicSelectSceneRecords.cpp` contains Music Select's modal wiring and
+  scene handoffs.
+- `scene/ResultRecordsLoader.*`, `ChartRecordActions.*`, `CourseRecordActions.*`,
+  `RecordFileActions.*`, and `RecordsIrActions.*` share Records behavior between
+  Main Menu and Music Select.
+- `replay/ReplayExportJob.*` owns export execution and queued progress/results;
+  `scene/ReplayRecordTask.*` owns cancellable preparation and UI completion.
 - `ReplayVideoExporter.*` and `ResultImageExporter.*` produce user artifacts.
 
 ## Boundaries and invariants
@@ -24,6 +31,19 @@ input. Result rows, replay files, and IR snapshots are separate durable facts
 linked by verified references; one must not materialize or mutate another as a
 side effect. Playback/export works from a prepared chart agreement and fails
 closed when identity, codec, or file checks do not agree.
+
+Both selectors expose chart and saved-course Records, including result recall,
+BRD sharing/deletion, and available IR actions. Recall returns to the originating
+selector. Preparation continues while the app is backgrounded, with navigation
+held until resume. Audio loading failure alone does not reject replay Watch or
+G-Battle; cancellation still prevents launch. Autoplay Watch reuses a matching
+preloaded chart's RANDOM choices, otherwise generating fresh ones. Autoplay
+Watch and G-Battle honor the selected ClubMode; autoplay Watch hides touch
+visualization and replay ghosts.
+
+Exports hold their reservation until the UI consumes the terminal result and
+joins the worker. Preview media must be released before exporting. Sharing
+retains a verified file snapshot until the asynchronous document operation ends.
 
 ## Verification
 

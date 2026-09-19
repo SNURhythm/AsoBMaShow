@@ -1,3 +1,6 @@
+#include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
+#include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
+#include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
 #include <atomic>
 #include <algorithm>
 #include <cassert>
@@ -9,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -34,7 +38,10 @@ struct ChartMetaRecord {
   bool unavailable = false;
 };
 namespace bms_parser {
-struct Chart { Metadata Meta; };
+struct Chart {
+  Metadata Meta;
+  std::shared_ptr<int> lifetime = std::make_shared<int>(0);
+};
 }
 
 WORKER_DECLARATION
@@ -59,8 +66,12 @@ struct Selections {
   int gaugeAutoShiftLowerBound = 0;
   int assistOption = 0;
   int ruleset = 0;
-  int pacemakerTarget = 0;
-  static Selections fromSettings(const Settings &) { return {}; }
+  std::string pacemakerTarget = "A";
+  inline static int callsUntilFailure = 0;
+  static Selections fromSettings(const Settings &) {
+    if (callsUntilFailure > 0 && --callsUntilFailure == 0) throw std::bad_alloc{};
+    return {};
+  }
 };
 }
 bool preparationAvailable = true;
@@ -100,6 +111,7 @@ struct Loaded {
   std::unique_ptr<bms_parser::Chart> chart;
   std::unique_ptr<ReplayData> replayData = std::make_unique<ReplayData>();
   bool ready() const { return chart != nullptr; }
+  std::string diagnostic;
 };
 struct Consumer {
   Loaded load(const ModernChartResultRecord &, const std::string &path,
@@ -109,31 +121,28 @@ struct Consumer {
 };
 Consumer makeRuntimeChartReplayConsumer(int) { return {}; }
 }
+namespace audio { struct PlaybackRate { int percent; int mode; }; }
 namespace replay_autoplay {
-struct Playback { int percent; int mode; };
+using Playback = audio::PlaybackRate;
 ReplayData BuildReplayData(bms_parser::Chart &, int, int, Playback,
                            const std::string &, int, const std::string &, int,
                            int, bool, int, int) { return {}; }
 }
-struct ReplayVideoExportProgress { float fraction; std::string message; };
-struct ReplayVideoExportOptions {
-  std::function<void(const ReplayVideoExportProgress &)> progressCallback;
-  std::stop_token stop;
-  bool renderTouchPoints = true;
-  bool renderReplayGhosts = true;
-};
-struct ReplayVideoExportResult { bool success; std::string message; };
+namespace replay_records {
+std::string diagnosticOr(const std::string &message, const char *fallback) { return message.empty() ? fallback : message; }
+}
 struct Modal {
   bool exporting = false;
+  bool visible = false;
   bool progressVisible = false;
   std::string status;
   void resize(int, int) {}
   void update() {}
   void cancelAndWait() {}
-  bool isVisible() const { return false; }
+  bool isVisible() const { return visible; }
   bool inProgress() const { return false; }
   void setExportInProgress(bool value) { exporting = value; }
-  void showExportProgress(const char *, const char *) { progressVisible = true; }
+  void showExportProgress(const std::string &, const std::string &) { progressVisible = true; }
   void returnToList(const std::string &message) {
     progressVisible = false;
     status = message;
@@ -177,7 +186,7 @@ struct Context {
   std::atomic_bool visualsLoaded = false;
   std::atomic_bool exportEntered = false;
   std::atomic_bool releaseExport = false;
-  ReplayVideoExportResult exportResult{true, "Exported"};
+  ReplayVideoExportResult exportResult{true, {}, "Exported"};
   std::function<void()> checkHandoff;
 };
 struct ReplayVideoExporter {
@@ -246,9 +255,7 @@ struct Bars {
   }
   void installFolderStatus(const MusicSelectBarId &, int) {}
 };
-namespace audio {
-struct PlaybackRate { int percent; int mode; };
-}
+
 struct StartOptions {
   int startPosition;
   bool autoKeySound, autoPlay;
@@ -258,7 +265,8 @@ struct StartOptions {
   std::string playOption2;
   int playOption2Seed;
   bool doublePlayFlip;
-  int longNoteMode, assistOption, pacemakerTarget;
+  int longNoteMode, assistOption;
+  std::string pacemakerTarget;
   std::string tableName, tableLevel;
   bool practiceMode;
   audio::PlaybackRate playback;
@@ -316,6 +324,8 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  void resetFailedLaunch(std::uint64_t generation);
+  bool recordsResumeAudioPending_ = false;
   Modal *archiveUnzipModal_ = nullptr;
   bool selectorInputBlocked() const { return launching_; }
   void startArchiveUnzip(const ChartMetaRecord &) {}
@@ -394,13 +404,14 @@ struct MusicSelectScene {
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
   std::string preloadedPath_;
   Modal *recordsModal_ = nullptr;
-  std::atomic_bool recordsExportInProgress_ = false;
-  std::jthread recordsExportThread_;
-  std::mutex recordsExportProgressMutex_;
-  struct PendingRecordsExportProgress { float fraction; std::string message; };
-  std::optional<PendingRecordsExportProgress> pendingRecordsExportProgress_;
-  std::mutex recordsExportResultMutex_;
-  std::optional<ReplayVideoExportResult> pendingRecordsExportResult_;
+  replay::ReplayExportJob recordsExportJob_;
+  ReplayRecordTask recordsTask_;
+  struct FileActions { bool active() const { return false; } };
+  std::unique_ptr<FileActions> recordFileActions_;
+  void finishRecordsLoading() { launching_ = false; }
+  void publishRecordsDiagnostic(const std::string &) const {}
+  void updateRecordServices() {}
+  bool beginRecordsExport(const std::string &);
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
   void reloadLibrary() {
@@ -416,8 +427,8 @@ struct MusicSelectScene {
   void refreshRepositoryRevisions();
   void startPreloadForSelection();
   void stopPreloadWorker();
-  bool reusePreloadedChart(const ChartMetaRecord &, bms_parser::Chart *&,
-                          play_options::PlayOptionReplayInfo &, int &);
+  std::unique_ptr<bms_parser::Chart> takePreloadedChart(
+      const ChartMetaRecord &, play_options::PlayOptionReplayInfo &, int &);
   void launchChartReplayExport(const ChartMetaRecord &, const ModernChartResultRecord &,
                                ReplayVideoExportOptions);
   void launchAutoPlayExport(const ChartMetaRecord &, ReplayVideoExportOptions);
@@ -472,16 +483,16 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
            "export must invalidate reusable publication after joining");
   };
   preparationAvailable = outcome != 3;
-  if (outcome == 1) scene.context.exportResult = {false, "Encoding unavailable"};
-  if (outcome == 2) scene.context.exportResult = {false, "No Chart"};
+  if (outcome == 1) scene.context.exportResult = {false, {}, "Encoding unavailable"};
+  if (outcome == 2) scene.context.exportResult = {false, {}, "No Chart"};
   if (autoplay) scene.launchAutoPlayExport(record, {});
   else scene.launchChartReplayExport(record, {}, {});
   if (outcome != 3) {
     while (!scene.context.exportEntered.load()) std::this_thread::yield();
   } else {
-    scene.recordsExportThread_.join();
+    scene.recordsExportJob_.cancelAndWait();
   }
-  expect(scene.recordsExportInProgress_.load(), "export lock must last until result delivery");
+  expect(scene.recordsExportJob_.inProgress(), "export lock must last until result delivery");
   if (withModal) expect(modal.exporting && modal.progressVisible, "export must show progress");
   ++scene.context.scoreRepository.revision;
   scene.refreshRepositoryRevisions();
@@ -493,19 +504,21 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
     expect(scene.preloadedPath_.empty(), "revision refresh must not queue preload during export");
   }
   scene.context.releaseExport = true;
-  if (scene.recordsExportThread_.joinable()) scene.recordsExportThread_.join();
-  scene.applyRecordsExportResult();
-  expect(!scene.recordsExportInProgress_.load(), "all outcomes must release the export lock");
+  while (scene.recordsExportJob_.inProgress()) {
+    scene.applyRecordsExportResult();
+    std::this_thread::yield();
+  }
+  expect(!scene.recordsExportJob_.inProgress(), "all outcomes must release the export lock");
   if (withModal) {
     expect(!modal.exporting && !modal.progressVisible && !modal.status.empty(),
            "all outcomes must restore records UI with a result");
   }
-  bms_parser::Chart *cached = nullptr;
   play_options::PlayOptionReplayInfo playInfo;
   int lnMode = 0;
-  expect(!scene.reusePreloadedChart(record, cached, playInfo, lnMode),
+  auto cached = scene.takePreloadedChart(record, playInfo, lnMode);
+  expect(!cached,
          "next same-selection play must not skip loading BGA after export");
-  delete cached;
+  cached.reset();
   worker.stop();
   scene.stopPreloadWorker();
   holdPreload = false;
@@ -515,14 +528,51 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
   scene.startPreloadForSelection();
   while (!preloadFinished.load()) std::this_thread::yield();
   expect(scene.context.visualsLoaded.load(), "preloading must recover and restore BGA after export");
-  cached = nullptr;
-  expect(scene.reusePreloadedChart(record, cached, playInfo, lnMode),
+  cached = scene.takePreloadedChart(record, playInfo, lnMode);
+  expect(cached != nullptr,
          "fresh post-export load must become reusable");
-  delete cached;
+  cached.reset();
   scene.stopPreloadWorker();
 }
 
+void testExportStartupFailureRestoresRecords() {
+  for (bool withModal : {false, true}) {
+    caseName = withModal ? "startup-failure/modal" : "startup-failure/no-modal";
+    std::atomic_bool ran = false;
+    Modal modal;
+    MusicSelectScene scene;
+    if (withModal) scene.recordsModal_ = &modal;
+    expect(scene.beginRecordsExport("Export"), "startup failure reserves the export");
+    replay::ReplayExportJob::Work work = [&](const auto &, auto &) {
+      ran = true;
+      return ReplayVideoExportResult{};
+    };
+    ReplayVideoExportOptions options;
+    bool threw = false;
+    try {
+      const test_support::FailNextAllocation failure;
+      scene.recordsExportJob_.start(std::move(options), std::move(work));
+    } catch (const std::bad_alloc &) {
+      threw = true;
+    }
+    expect(!threw, "startup failure must reach the selector result consumer");
+    if (threw) continue;
+    expect(!ran && !scene.recordsExportJob_.hasWorker() &&
+               scene.recordsExportJob_.inProgress(),
+           "failed startup keeps export ownership until result consumption");
+    scene.applyRecordsExportResult();
+    expect(!scene.recordsExportJob_.inProgress(), "startup failure releases selector admission");
+    if (withModal) {
+      expect(!modal.exporting && !modal.progressVisible && !modal.status.empty(),
+             "startup failure restores Records with its diagnostic");
+    }
+    scene.applyRecordsExportResult();
+    expect(!scene.recordsExportJob_.takeResult(), "startup failure is consumed once");
+  }
+}
+
 int main() {
+  testExportStartupFailureRestoresRecords();
   for (bool autoplay : {false, true}) {
     for (bool active : {false, true}) {
       for (int outcome = 0; outcome < 4; ++outcome) {

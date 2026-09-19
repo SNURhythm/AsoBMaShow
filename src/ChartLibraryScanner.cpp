@@ -2479,7 +2479,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       }
     } else {
       std::atomic_size_t nextOffset{0};
-      std::vector<std::thread> workers;
+      std::vector<std::jthread> workers;
       workers.reserve(workerCount);
       for (std::size_t worker = 0; worker < workerCount; ++worker) {
         workers.emplace_back([&]() {

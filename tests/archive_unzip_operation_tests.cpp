@@ -1315,13 +1315,24 @@ void batchAndEntryWorkersShareOneBudget() {
   Fixture fixture;
   fixture.indexedArchive("a.zip", 64);
   fixture.indexedArchive("b.zip", 64);
-  std::set<std::thread::id> threads;
+  std::map<std::uint64_t, std::set<std::thread::id>> archiveThreads;
   const auto result = ArchiveUnzipOperation::RunAll(fixture.repository, false, {},
       [&](const archive_file::UnzipProgress &progress) {
-        if (!progress.indexing) threads.insert(std::this_thread::get_id());
+        if (!progress.indexing) {
+          archiveThreads[progress.archiveIndex].insert(std::this_thread::get_id());
+        }
       }, {.maximumConcurrentArchives = 2, .maximumWorkers = 4,
           .maximumMemoryBytes = 512ull * 1024 * 1024});
-  assert(result.success && threads.size() == 4 && result.succeededCount == 2);
+  assert(result.success && result.succeededCount == 2 && archiveThreads.size() == 2);
+  // Each archive gets its outer worker plus one ZIP entry worker. Inner
+  // workers from different archives need not overlap and may reuse an ID.
+  for (const auto &[archive, threads] : archiveThreads) {
+    if (threads.size() != 2) {
+      std::cerr << "Archive " << archive << " used " << threads.size()
+                << " extraction threads; expected its two-worker budget\n";
+    }
+    assert(threads.size() == 2);
+  }
 }
 
 void unzipPlanDividesCpuAndMemoryRatherThanMultiplyingThem() {

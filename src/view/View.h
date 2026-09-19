@@ -16,6 +16,7 @@
 #include "../rendering/UiBatchRenderer.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/Color.h"
+#include "../RAII.h"
 #include "bgfx/bgfx.h"
 #include "bgfx/defines.h"
 
@@ -343,21 +344,25 @@ public:
     dbgColor = {static_cast<uint8_t>(rand() % 256),
                 static_cast<uint8_t>(rand() % 256),
                 static_cast<uint8_t>(rand() % 256), 64};
-    node = YGNodeNew();
+    UniqueResource<YGNode, YGNodeFree> pendingNode(YGNodeNew());
+    node = pendingNode.get();
     YGNodeStyleSetPosition(node, YGEdgeLeft, x);
     YGNodeStyleSetPosition(node, YGEdgeTop, y);
     YGNodeStyleSetWidth(node, width);
     YGNodeStyleSetHeight(node, height);
     YGNodeSetContext(node, this);
     applyYogaLayout();
+    pendingNode.release();
   }
   inline View() : isVisible(true) {
     dbgColor = {static_cast<uint8_t>(rand() % 256),
                 static_cast<uint8_t>(rand() % 256),
                 static_cast<uint8_t>(rand() % 256), 64};
-    node = YGNodeNew();
+    UniqueResource<YGNode, YGNodeFree> pendingNode(YGNodeNew());
+    node = pendingNode.get();
     YGNodeSetContext(node, this);
     applyYogaLayout();
+    pendingNode.release();
   }
 
   View(const View &) = delete;

@@ -24,9 +24,15 @@ WorkScheduler::WorkScheduler(std::size_t workerCount,
       actualWorkerCount > 1 ? actualWorkerCount - 1 : std::size_t{1};
   archiveIoLimit_ =
       std::clamp<std::size_t>(archiveIoLimit, 1, archiveIoCeiling);
-  workers_.reserve(actualWorkerCount);
-  for (std::size_t index = 0; index < actualWorkerCount; ++index) {
-    workers_.emplace_back([this] { workerLoop(); });
+  try {
+    workers_.reserve(actualWorkerCount);
+    for (std::size_t index = 0; index < actualWorkerCount; ++index) {
+      workers_.emplace_back([this] { workerLoop(); });
+    }
+  } catch (...) {
+    // A failed constructor does not run the destructor for this owner.
+    cancel();
+    throw;
   }
 }
 

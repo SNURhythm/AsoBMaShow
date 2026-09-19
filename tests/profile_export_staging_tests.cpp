@@ -1,9 +1,11 @@
 #include "ProfileExportStaging.h"
+#include "support/AllocationFailure.h"
 
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -365,6 +367,46 @@ void testLifetimeDoesNotDeleteARecreatedNormalRoot() {
 }
 
 #if !defined(_WIN32)
+std::size_t openDescriptorCount() {
+  // Desktop POSIX targets expose this process's descriptors through /dev/fd.
+  // The iterator's own descriptor is present in both observations.
+  std::size_t count = 0;
+  for (const auto &entry : std::filesystem::directory_iterator("/dev/fd")) {
+    (void)entry;
+    ++count;
+  }
+  return count;
+}
+
+void testSweepAllocationFailuresCloseDirectoryStreams() {
+  const auto root = makeRoot("allocation-" + std::to_string(::getpid()));
+  const auto request = requestFor(root);
+  auto active = profile_export_staging::Create(request);
+  expect(active.ok(), "allocation probe creates an active staging directory");
+  if (!active.ok()) return;
+  const auto descriptors = openDescriptorCount();
+  int rejected = 0, completed = 0;
+  for (std::size_t allocation = 0; allocation < 128; ++allocation) {
+    try {
+      const test_support::FailAllocationAfter failure(allocation);
+      if (profile_export_staging::Sweep(request).ok()) ++completed;
+    } catch (const std::bad_alloc &) {
+      ++rejected;
+    }
+    const bool closed = openDescriptorCount() == descriptors;
+    expect(closed, "sweep releases directory descriptors after allocation " +
+                       std::to_string(allocation));
+    if (!closed) break;
+  }
+  expect(rejected > 0 && completed > 0,
+         "allocation walk covers rejected and successful sweeps");
+  expect(std::filesystem::exists(active.archivePath.parent_path()),
+         "allocation probes preserve the active staging lifetime");
+  active.sourceLifetime.reset();
+  std::error_code ignored;
+  std::filesystem::remove_all(root, ignored);
+}
+
 void testStaleSweepRejectsHardLinkedLeaseWithoutMutation() {
   const auto root = makeRoot("hard-linked-lease");
   auto initial = profile_export_staging::Create(requestFor(root));
@@ -464,6 +506,7 @@ int main() {
   testLifetimeRefusesIntermediateRootReplacement();
   testLifetimeDoesNotDeleteARecreatedNormalRoot();
 #if !defined(_WIN32)
+  testSweepAllocationFailuresCloseDirectoryStreams();
   testStaleSweepRejectsHardLinkedLeaseWithoutMutation();
   testStaleSweepHonorsCrossProcessLeaseFile();
 #endif

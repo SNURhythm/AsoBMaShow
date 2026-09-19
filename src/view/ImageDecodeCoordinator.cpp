@@ -10,9 +10,15 @@ ImageDecodeCoordinator::ImageDecodeCoordinator(Loader loader,
     : loader_(std::move(loader)) {
   workerCount = std::max<std::size_t>(1, workerCount);
   configuredWorkerCount_ = workerCount;
-  workers_.reserve(workerCount);
-  for (std::size_t index = 0; index < workerCount; ++index) {
-    workers_.emplace_back([this] { run(); });
+  try {
+    workers_.reserve(workerCount);
+    for (std::size_t index = 0; index < workerCount; ++index) {
+      workers_.emplace_back([this] { run(); });
+    }
+  } catch (...) {
+    // A failed constructor does not run the destructor for this owner.
+    shutdown();
+    throw;
   }
 }
 

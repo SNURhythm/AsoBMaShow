@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <system_error>
 #include <thread>
 #include <utility>
 
@@ -31,6 +32,7 @@ struct WorkerControl {
   std::atomic_size_t rejectedBytes = 0;
   std::atomic_bool unexpectedException = false;
   std::vector<std::thread> threads;
+  bool failNextThread = false;
 
   void pauseAt(PausePoint point) {
     std::unique_lock lock(mutex);
@@ -76,16 +78,21 @@ struct WorkerControl {
 class GraphTestThread {
 public:
   template <typename Callback>
-  explicit GraphTestThread(Callback callback)
-      : thread_([callback = std::move(callback)] {
-          graph_test::AllocationGuard guard;
-          try {
-            callback();
-          } catch (...) {
-            workerControl.unexpectedException = true;
-          }
-          workerControl.rejectedBytes = graph_test::rejectedAllocationBytes;
-        }) {}
+  explicit GraphTestThread(Callback callback) {
+    if (std::exchange(workerControl.failNextThread, false)) {
+      throw std::system_error(
+          std::make_error_code(std::errc::resource_unavailable_try_again));
+    }
+    thread_ = std::thread([callback = std::move(callback)] {
+      graph_test::AllocationGuard guard;
+      try {
+        callback();
+      } catch (...) {
+        workerControl.unexpectedException = true;
+      }
+      workerControl.rejectedBytes = graph_test::rejectedAllocationBytes;
+    });
+  }
 
   void detach() { workerControl.threads.push_back(std::move(thread_)); }
 
@@ -168,6 +175,41 @@ ASOBMS_GRAPH_SELECTOR_METHODS
 
 namespace {
 
+void testFailedThreadAdmissionCanBeRetried() {
+  workerControl.arm(PausePoint::None);
+  MusicSelectScene scene("graph_short_timeline.bms");
+  auto previous = std::make_shared<SkinGameplayChartGraphState>();
+  scene.selectedChartInformation_ = previous;
+  const auto generation = scene.selectedChartAnalysisGeneration_;
+  workerControl.failNextThread = true;
+  bool threw = false;
+  try {
+    scene.updateSelectedChartAnalysis();
+  } catch (const std::system_error &) {
+    threw = true;
+  }
+  require(threw && workerControl.threads.empty(),
+          "fixture must reject admission before a worker starts");
+  require(!scene.selectedChartAnalysisStarted_ &&
+              scene.selectedChartAnalysis_ == nullptr &&
+              scene.selectedChartAnalysisGeneration_ == generation &&
+              scene.selectedChartInformation_ == previous,
+          "failed worker admission must preserve retryable selection state");
+
+  scene.updateSelectedChartAnalysis();
+  const auto mailbox = scene.selectedChartAnalysis_;
+  require(mailbox != nullptr && workerControl.threads.size() == 1,
+          "retry must admit exactly one analysis worker");
+  workerControl.join();
+  require(mailbox->finished.load() && mailbox->result != nullptr,
+          "retried analysis must produce its real chart graph");
+  const auto produced = mailbox->result;
+  scene.updateSelectedChartAnalysis();
+  require(scene.selectedChartInformation_ == produced &&
+              scene.selectedChartAnalysis_ == nullptr,
+          "retried analysis must publish through the existing mailbox");
+}
+
 void testPublication(const char *filename, bool distant) {
   workerControl.arm(PausePoint::None);
   MusicSelectScene scene(filename);
@@ -234,6 +276,7 @@ void testGenerationMismatch() {
 }
 
 int main() {
+  testFailedThreadAdmissionCanBeRetried();
   testPublication("graph_short_timeline.bms", false);
   testCancelled(PausePoint::Parsed);
   testCancelled(PausePoint::ModelBuilt);

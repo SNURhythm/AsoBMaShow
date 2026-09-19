@@ -175,6 +175,8 @@ struct FixtureUnzipModal {
 };
 
 struct MusicSelectScene {
+  bool recordsResumeAudioPending_ = false;
+  struct { bool active() const { return false; } } recordsTask_;
   struct Context {
     std::atomic_bool appInBackground = false;
     FixtureRepository chartRepository;

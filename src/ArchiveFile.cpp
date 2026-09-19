@@ -1,4 +1,8 @@
 #include "ArchiveFile.h"
+#include "StableHash.h"
+#include "archive/TemporaryCache.h"
+#include "archive/UnzipOutput.h"
+#include "archive/IndexBuildCoordinator.h"
 #include "ArchiveSourceIdentity.h"
 #include "FileExtensionResolver.h"
 
@@ -119,248 +123,13 @@ namespace {
 
 std::mutex gFullUnzipOutputMutex;
 
-class UnzipWriteGuard {
-public:
-  UnzipWriteGuard(UnzipBudget &budget, std::filesystem::path destination)
-      : budget_(budget), destination_(std::move(destination)) {}
-
-  ~UnzipWriteGuard() {
-    std::lock_guard lock(budget_.mutex);
-    budget_.pendingWriteBytes -= pendingBytes_;
-  }
-
-  bool admit(std::uint64_t bytes) {
-    std::lock_guard lock(budget_.mutex);
-    return check(bytes);
-  }
-
-  bool admitEntries(std::uint64_t entries) {
-    std::lock_guard lock(budget_.mutex);
-    if (budget_.exhausted || entries > budget_.limits.maximumArchiveEntries ||
-        budget_.admittedEntries > budget_.limits.maximumTotalEntries ||
-        entries > budget_.limits.maximumTotalEntries - budget_.admittedEntries)
-      return reject("Unzip entry-count limit exceeded. Original archive kept.");
-    budget_.admittedEntries += entries;
-    return true;
-  }
-
-  bool rejectEntryLimit() {
-    std::lock_guard lock(budget_.mutex);
-    return reject("Unzip entry-count limit exceeded. Original archive kept.");
-  }
-
-  bool consume(std::uint64_t bytes) {
-    std::lock_guard lock(budget_.mutex);
-    budget_.pendingWriteBytes -= std::exchange(pendingBytes_, 0);
-    if (!check(bytes)) return false;
-    archiveBytes_ += bytes;
-    budget_.writtenBytes += bytes;
-    budget_.pendingWriteBytes += bytes;
-    pendingBytes_ = bytes;
-    return true;
-  }
-
-  const std::string &error() const { return error_; }
-
-  bool write(std::ostream &output, const void *data, std::size_t size) {
-    std::lock_guard lock(writeMutex_);
-    if (!consume(size)) return false;
-    output.write(static_cast<const char *>(data), static_cast<std::streamsize>(size));
-    output.flush();
-    return static_cast<bool>(output);
-  }
-
-private:
-  bool check(std::uint64_t bytes) {
-    if (!error_.empty()) return false;
-    if (budget_.exhausted ||
-        archiveBytes_ > budget_.limits.maximumArchiveBytes ||
-        bytes > budget_.limits.maximumArchiveBytes - archiveBytes_ ||
-        budget_.writtenBytes > budget_.limits.maximumTotalBytes ||
-        bytes > budget_.limits.maximumTotalBytes - budget_.writtenBytes) {
-      return reject("Unzip expanded-byte limit exceeded. Original archive kept.");
-    }
-    std::error_code error;
-    const auto space = std::filesystem::space(destination_, error);
-    if (error || space.available == std::numeric_limits<std::uintmax_t>::max()) {
-      return reject("Could not check unzip free-space. Original archive kept.");
-    }
-    if (space.available < budget_.limits.reservedFreeBytes ||
-        budget_.pendingWriteBytes > space.available - budget_.limits.reservedFreeBytes ||
-        bytes > space.available - budget_.limits.reservedFreeBytes - budget_.pendingWriteBytes) {
-      return reject("Unzip reserved free-space limit reached. Original archive kept.");
-    }
-    return true;
-  }
-
-  bool reject(std::string message) {
-    if (budget_.failureMessage.empty()) budget_.failureMessage = std::move(message);
-    budget_.exhausted = true;
-    error_ = budget_.failureMessage;
-    return false;
-  }
-
-  UnzipBudget &budget_;
-  std::filesystem::path destination_;
-  std::uint64_t archiveBytes_ = 0;
-  std::uint64_t pendingBytes_ = 0;
-  std::string error_;
-  std::mutex writeMutex_;
-};
-
 bool stopRequested(const std::stop_token *stopToken);
 bool pauseIfNeeded(const PauseCallback &pauseCallback,
                    std::string *errorMessage = nullptr);
-bool unzipCheckpoint(const std::stop_token *stopToken,
-                     const PauseCallback &pauseCallback,
-                     std::string *errorMessage = nullptr);
 void reportUnzipProgress(const UnzipProgressCallback &callback,
                           double fraction, std::uint64_t current,
                           std::uint64_t total, std::string message);
 
-class UnzipOutputPipeline {
-public:
-  UnzipOutputPipeline(UnzipWriteGuard &guard, const UnzipExecutionPlan &plan,
-                      const std::stop_token *stopToken, PauseCallback pause)
-      : guard_(guard), stopToken_(stopToken), pause_(std::move(pause)),
-        capacity_(static_cast<std::size_t>(std::min<std::uint64_t>(8 * 1024 * 1024, plan.memoryPerArchive / 8))) {
-    if (plan.workersPerArchive > 1 && capacity_ >= 64 * 1024) {
-      worker_ = std::jthread([this] { run(); });
-    }
-  }
-
-  ~UnzipOutputPipeline() {
-    flush();
-    {
-      std::lock_guard lock(mutex_);
-      stopping_ = true;
-    }
-    changed_.notify_all();
-    if (worker_.joinable()) worker_.join();
-  }
-
-  bool enabled() const { return worker_.joinable(); }
-  std::size_t bufferBudget() const { return enabled() ? capacity_ : 0; }
-
-  bool write(const std::shared_ptr<std::ofstream> &output, const void *data, std::size_t size) {
-    std::lock_guard stagingLock(stagingMutex_);
-    if (!enabled()) return guard_.write(*output, data, size);
-    if (stagedOutput_ != output && !enqueueStaged()) return false;
-    const auto *bytes = static_cast<const char *>(data);
-    const auto chunkSize = std::min<std::size_t>(1024 * 1024, capacity_ / 2);
-    while (size > 0) {
-      stagedOutput_ = output;
-      const auto count = std::min(size, chunkSize - stagedSize_);
-      if (!stagedBytes_) stagedBytes_.reset(new char[chunkSize]);
-      std::memcpy(stagedBytes_.get() + stagedSize_, bytes, count);
-      stagedSize_ += count;
-      bytes += count;
-      size -= count;
-      if (stagedSize_ == chunkSize && !enqueueStaged()) return false;
-    }
-    return true;
-  }
-
-  bool flush() {
-    std::lock_guard stagingLock(stagingMutex_);
-    try {
-      enqueueStaged();
-    } catch (...) {
-      std::lock_guard lock(mutex_);
-      failed_ = true;
-    }
-    std::unique_lock lock(mutex_);
-    changed_.wait(lock, [&] { return pendingBytes_ == 0; });
-    return !failed_;
-  }
-
-  bool cancelled() const { return cancelled_; }
-
-private:
-  struct Chunk {
-    std::shared_ptr<std::ofstream> output;
-    std::unique_ptr<char[]> bytes;
-    std::size_t size = 0;
-    std::size_t capacity = 0;
-  };
-
-  bool enqueueStaged() {
-    if (stagedSize_ == 0) return true;
-    const auto chunkSize = std::min<std::size_t>(1024 * 1024, capacity_ / 2);
-    std::unique_lock lock(mutex_);
-    changed_.wait(lock, [&] { return failed_ ||
-        (pendingBytes_ + chunkSize <= capacity_ - chunkSize && queue_.size() < 128); });
-    if (failed_) {
-      stagedBytes_.reset();
-      stagedSize_ = 0;
-      stagedOutput_.reset();
-      return false;
-    }
-    queue_.emplace_back();
-    auto &chunk = queue_.back();
-    chunk.output = std::move(stagedOutput_);
-    chunk.bytes = std::move(stagedBytes_);
-    chunk.size = std::exchange(stagedSize_, 0);
-    chunk.capacity = chunkSize;
-    pendingBytes_ += chunkSize;
-    lock.unlock();
-    changed_.notify_all();
-    return true;
-  }
-
-  void run() {
-    for (;;) {
-      Chunk chunk;
-      {
-        std::unique_lock lock(mutex_);
-        changed_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
-        if (queue_.empty()) return;
-        chunk = std::move(queue_.front());
-        queue_.pop_front();
-      }
-      bool success = false;
-      try {
-        if (!unzipCheckpoint(stopToken_, pause_)) {
-          cancelled_ = true;
-        } else {
-          success = guard_.write(*chunk.output, chunk.bytes.get(), chunk.size);
-        }
-      } catch (...) {
-        success = false;
-      }
-      const auto size = chunk.capacity;
-      chunk.bytes.reset();
-      chunk.output.reset();
-      {
-        std::lock_guard lock(mutex_);
-        pendingBytes_ -= size;
-        if (!success) {
-          failed_ = true;
-          queue_.clear();
-          pendingBytes_ = 0;
-        }
-      }
-      changed_.notify_all();
-    }
-  }
-
-  UnzipWriteGuard &guard_;
-  const std::stop_token *stopToken_;
-  PauseCallback pause_;
-  std::size_t capacity_;
-  std::mutex stagingMutex_;
-  std::mutex mutex_;
-  std::condition_variable changed_;
-  std::deque<Chunk> queue_;
-  std::shared_ptr<std::ofstream> stagedOutput_;
-  std::unique_ptr<char[]> stagedBytes_;
-  std::size_t stagedSize_ = 0;
-  std::size_t pendingBytes_ = 0;
-  bool stopping_ = false;
-  bool failed_ = false;
-  std::atomic_bool cancelled_ = false;
-  std::jthread worker_;
-};
 bool emitFileData(FileData &&file, const FileDataCallback &onFile,
                   std::string *errorMessage);
 bool archiveReadCancelled(const std::string &errorMessage);
@@ -665,7 +434,7 @@ std::size_t filterSystemEntries(std::vector<Entry> &entries) {
 
 std::mutex gCachePathNormalizerMutex;
 CachePathNormalizer gCachePathNormalizer;
-std::mutex gTemporaryCacheMutex;
+TemporaryCache gTemporaryCache;
 
 std::filesystem::path cacheNormalizedPath(const std::filesystem::path &path) {
   std::filesystem::path normalized = path.lexically_normal();
@@ -715,68 +484,9 @@ std::string fileStateKey(const std::filesystem::path &path) {
   return out.str();
 }
 
-std::uint64_t clampFileSizeForResult(std::uintmax_t value) {
-  return static_cast<std::uint64_t>(
-      std::min(value, static_cast<std::uintmax_t>(
-                          std::numeric_limits<std::uint64_t>::max())));
-}
-
 void addClamped(std::uint64_t &total, std::uint64_t value) {
   const std::uint64_t maxValue = std::numeric_limits<std::uint64_t>::max();
   total = value > maxValue - total ? maxValue : total + value;
-}
-
-bool directoryStats(const std::filesystem::path &root, std::uint64_t &bytes,
-                    std::uint64_t &entries,
-                    const std::stop_token *stopToken = nullptr) {
-  bytes = 0;
-  entries = 0;
-  std::error_code error;
-  const bool rootIsFile = std::filesystem::is_regular_file(root, error);
-  if (error) {
-    return false;
-  }
-  if (rootIsFile) {
-    const std::uintmax_t size = std::filesystem::file_size(root, error);
-    if (error) {
-      return false;
-    }
-    bytes = clampFileSizeForResult(size);
-    entries = 1;
-    return true;
-  }
-  const bool rootIsDirectory = std::filesystem::is_directory(root, error);
-  if (error || !rootIsDirectory) {
-    return false;
-  }
-
-  std::filesystem::recursive_directory_iterator it(
-      root, std::filesystem::directory_options::skip_permission_denied, error);
-  const std::filesystem::recursive_directory_iterator end;
-  while (!error && it != end) {
-    if (stopRequested(stopToken)) {
-      return false;
-    }
-    const std::filesystem::directory_entry &entry = *it;
-    std::error_code entryError;
-    if (entry.is_regular_file(entryError) && !entryError) {
-      const std::uintmax_t size = entry.file_size(entryError);
-      if (!entryError) {
-        addClamped(bytes, clampFileSizeForResult(size));
-      }
-    }
-    addClamped(entries, 1);
-    it.increment(error);
-  }
-  return !error && !stopRequested(stopToken);
-}
-
-std::uint64_t directoryByteSize(const std::filesystem::path &root,
-                                const std::stop_token *stopToken = nullptr) {
-  std::uint64_t bytes = 0;
-  std::uint64_t entries = 0;
-  directoryStats(root, bytes, entries, stopToken);
-  return bytes;
 }
 
 struct CachedIndex {
@@ -808,50 +518,11 @@ std::filesystem::path gArchiveIndexCacheDirectory;
 // for a key, concurrent requesters wait and reuse the finished index instead
 // of rebuilding it (a large library can otherwise index the same archive from
 // the scan and the prefetch/read workers at once).
-std::mutex gIndexBuildMutex;
-std::condition_variable gIndexBuildCv;
-std::unordered_map<std::string, bool> gIndexBuildActive;
-std::unordered_map<std::string, bool> gIndexBuildDone;
-std::unordered_map<std::string, bool> gIndexBuildFailed;
-std::unordered_map<std::string, std::uint32_t> gIndexBuildWaiters;
+IndexBuildCoordinator gIndexBuilds;
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
 #endif
-
-// RAII scope for the single-flight index builder: on ANY exit from the builder
-// body (including an exception thrown by a backend) it clears the in-flight
-// flag, records the outcome, and wakes every waiter, so a failing or aborted
-// build can never leave waiters blocked on the in-flight condition variable.
-class IndexBuildScope {
-public:
-  explicit IndexBuildScope(std::string key) : key_(std::move(key)) {}
-
-  ~IndexBuildScope() {
-    if (!finished_) {
-      complete(false);
-    }
-  }
-
-  void complete(bool success) {
-    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
-    gIndexBuildActive[key_] = false;
-    gIndexBuildDone[key_] = true;
-    gIndexBuildFailed[key_] = !success;
-    gIndexBuildCv.notify_all();
-    if (gIndexBuildWaiters[key_] == 0) {
-      gIndexBuildActive.erase(key_);
-      gIndexBuildDone.erase(key_);
-      gIndexBuildFailed.erase(key_);
-      gIndexBuildWaiters.erase(key_);
-    }
-    finished_ = true;
-  }
-
-private:
-  std::string key_;
-  bool finished_ = false;
-};
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
 constexpr std::uint8_t kArchiveIndexCacheVersion = 5;
@@ -3855,12 +3526,9 @@ void buildIndexLookups(CachedIndex &index) {
 // archive's size, mtime, and source identity still match.
 // ---------------------------------------------------------------------------
 
-std::string hex64(std::uint64_t value);
-std::uint64_t fnv1a64(const std::string &value);
-
 std::filesystem::path archiveIndexCacheFilePath(const std::string &key) {
   return archiveIndexCacheDirectory() /
-         ("archive-index-" + hex64(fnv1a64(key)) + ".idx");
+         ("archive-index-" + stable_hash::hex64(stable_hash::fnv1a64(key)) + ".idx");
 }
 
 // Internal implementation of pruneArchiveIndexCache; kept in the anonymous
@@ -3879,7 +3547,7 @@ std::size_t pruneArchiveIndexCacheImpl(
   for (const auto &path : liveArchivePaths) {
     const std::string key = archiveKey(path);
     liveArchiveKeys.insert(key);
-    liveArchiveHashes.insert(fnv1a64(key));
+    liveArchiveHashes.insert(stable_hash::fnv1a64(key));
   }
   const auto parseHashFromFileName = [](const std::string &fileName)
       -> std::optional<std::uint64_t> {
@@ -4241,77 +3909,42 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     }
   }
 
-  // Single-flight: if another thread is already building this archive's index,
-  // wait for it and reuse the result instead of rebuilding. The first caller
-  // to reach here becomes the builder.
-  for (;;) {
-    std::unique_lock<std::mutex> buildLock(gIndexBuildMutex);
-    if (!gIndexBuildActive[key]) {
-      gIndexBuildActive[key] = true;
-      gIndexBuildDone[key] = false;
-      gIndexBuildFailed[key] = false;
-      break;
-    }
-    ++gIndexBuildWaiters[key];
+  // A lease either owns the build or waits for the exact generation it joined.
+  // Cache freshness and retry decisions remain here, outside coordination locks.
+  auto buildScope = gIndexBuilds.acquire(key);
+  while (!buildScope.isBuilder()) {
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     gSingleFlightWaiterCountForTesting.fetch_add(1, std::memory_order_relaxed);
 #endif
-    bool keepGoing = true;
-    do {
-      gIndexBuildCv.wait_for(buildLock, std::chrono::milliseconds(20),
-                            [&] { return !gIndexBuildActive[key]; });
-      buildLock.unlock();
-      keepGoing = pauseIfNeeded(pauseCallback, errorMessage);
-      buildLock.lock();
-    } while (keepGoing && gIndexBuildActive[key]);
-    const bool builtOk = gIndexBuildDone[key];
-    const bool builtFailed = gIndexBuildFailed[key];
-    if (--gIndexBuildWaiters[key] == 0 && !gIndexBuildActive[key]) {
-      gIndexBuildActive.erase(key);
-      gIndexBuildDone.erase(key);
-      gIndexBuildFailed.erase(key);
-      gIndexBuildWaiters.erase(key);
-    }
-    buildLock.unlock();
-    if (!keepGoing) {
+    const auto outcome = buildScope.wait([&] {
+      return pauseIfNeeded(pauseCallback, errorMessage);
+    });
+    if (outcome == IndexBuildCoordinator::WaitOutcome::Cancelled) {
       return nullptr;
     }
-    std::lock_guard<std::mutex> cacheLock(gIndexMutex);
-    const auto cacheIt = gIndexCache.find(key);
-    if (builtOk && cacheIt != gIndexCache.end() && usableIndex(cacheIt->second)) {
-      return boundedIndex(cacheIt->second);
+    {
+      std::lock_guard<std::mutex> cacheLock(gIndexMutex);
+      const auto current = gIndexCache.find(key);
+      if (current != gIndexCache.end() && usableIndex(current->second)) {
+        return boundedIndex(current->second);
+      }
     }
-    if (builtFailed) {
-      // The in-flight build failed (corrupt archive, backend error, or a
-      // pause abort). Report the failure to this caller instead of retrying,
-      // so N concurrent waiters do not each run a full re-index back to
-      // back. A later request can rebuild normally.
+    if (outcome == IndexBuildCoordinator::WaitOutcome::Failed) {
+      // Share a failed build with its current waiters instead of having each
+      // run a full re-index. A later independent request can rebuild normally.
       if (errorMessage != nullptr) {
         *errorMessage = "Failed to index archive: " + pathForLog(archivePath);
       }
       return nullptr;
     }
-    // Re-acquire the build lock and re-check whether another waiter has
-    // claimed the builder role while this thread inspected the cache; if so,
-    // loop back and wait on that build instead of racing into a duplicate
-    // one. Reaching the fall-through otherwise means the in-flight result did
-    // not match (e.g. a completed build that was evicted) rather than
-    // returning a mismatched index.
-    buildLock.lock();
-    if (gIndexBuildActive[key]) {
-      buildLock.unlock();
-      continue;
-    }
-    gIndexBuildActive[key] = true;
-    gIndexBuildDone[key] = false;
-    gIndexBuildFailed[key] = false;
-    break;
+    // The completed index did not satisfy this caller (for example a live
+    // source manifest is required). Recheck admission so only one waiter can
+    // own the next build; all others join it before inspecting the cache again.
+    buildScope = gIndexBuilds.acquire(key);
   }
 
-  // Guard the entire builder body below: even if make_shared, buildIndexLookups,
-  // or a backend throws, the in-flight flag is cleared and every waiter wakes
-  // with a recorded failure instead of blocking forever.
-  IndexBuildScope buildScope(key);
+  // The builder lease covers every exit below, including backend exceptions.
+  // Recheck the cache after admission before starting expensive backend work.
   std::shared_ptr<const CachedIndex> completedIndex;
   {
     std::lock_guard cacheLock(gIndexMutex);
@@ -6289,7 +5922,7 @@ bool readZipEntriesByIndexConcurrent(
   };
 
   const auto start = Clock::now();
-  std::vector<std::thread> workers;
+  std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
     workers.emplace_back(worker);
@@ -6907,7 +6540,7 @@ bool readUnarrRarEntriesByOffsetConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
-  std::vector<std::thread> workers;
+  std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
     workers.emplace_back(worker);
@@ -7989,7 +7622,7 @@ bool readSevenZipEntriesByIndexConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
-  std::vector<std::thread> workers;
+  std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
     workers.emplace_back(worker);
@@ -8523,25 +8156,6 @@ resolveInnerPath(const std::filesystem::path &archivePath,
   return std::nullopt;
 }
 
-std::uint64_t fnv1a64(const std::string &value) {
-  std::uint64_t hash = 14695981039346656037ull;
-  for (unsigned char c : value) {
-    hash ^= c;
-    hash *= 1099511628211ull;
-  }
-  return hash;
-}
-
-std::string hex64(std::uint64_t value) {
-  constexpr char digits[] = "0123456789abcdef";
-  std::string out(16, '0');
-  for (int i = 15; i >= 0; --i) {
-    out[i] = digits[value & 0xf];
-    value >>= 4;
-  }
-  return out;
-}
-
 bool stopRequested(const std::stop_token *stopToken) {
   return stopToken != nullptr && stopToken->stop_requested();
 }
@@ -8553,18 +8167,6 @@ bool pauseIfNeeded(const PauseCallback &pauseCallback,
   }
   if (errorMessage != nullptr && errorMessage->empty()) {
     *errorMessage = "Operation cancelled";
-  }
-  return false;
-}
-
-bool unzipCheckpoint(const std::stop_token *stopToken,
-                     const PauseCallback &pauseCallback,
-                     std::string *errorMessage) {
-  if (!stopRequested(stopToken) && pauseIfNeeded(pauseCallback)) {
-    return true;
-  }
-  if (errorMessage != nullptr) {
-    *errorMessage = "Unzip cancelled";
   }
   return false;
 }
@@ -8765,13 +8367,6 @@ void clearArchiveIndexCacheForTesting() {
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     gIndexCache.clear();
-  }
-  {
-    std::lock_guard<std::mutex> lock(gIndexBuildMutex);
-    gIndexBuildWaiters.clear();
-    gIndexBuildActive.clear();
-    gIndexBuildDone.clear();
-    gIndexBuildFailed.clear();
   }
   setArchiveIndexCacheDirectory({});
 }
@@ -10196,7 +9791,8 @@ unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
   }
 
   if (outputFolder.empty()) {
-    outputFolder = destinationRoot / (baseName + " " + hex64(fnv1a64(key)));
+    outputFolder = destinationRoot /
+                   (baseName + " " + stable_hash::hex64(stable_hash::fnv1a64(key)));
     outputChartPath = outputFolder / *chartRelative;
     markerPath = outputFolder / ".asobmashow_unzip_complete";
   }
@@ -10812,7 +10408,8 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   for (int attempt = 0; attempt < (reuseCompletedFolder ? 101 : 100); ++attempt) {
     const std::string folderName =
         attempt == 0 ? baseName : baseName + " " +
-            (attempt == 100 ? hex64(fnv1a64(key)) : std::to_string(attempt + 1));
+            (attempt == 100 ? stable_hash::hex64(stable_hash::fnv1a64(key))
+                            : std::to_string(attempt + 1));
     const std::filesystem::path candidate = destinationRoot / folderName;
     const std::filesystem::path candidateMarker =
         candidate / ".asobmashow_unzip_complete";
@@ -11073,94 +10670,16 @@ materializeFileBytes(const std::filesystem::path &path,
     }
     return std::nullopt;
   }
-
-  std::filesystem::path cacheRoot = archiveCacheRoot();
-  std::lock_guard<std::mutex> lock(gTemporaryCacheMutex);
-  std::error_code error;
-  std::filesystem::create_directories(cacheRoot, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not create archive cache: " + error.message();
-    }
-    return std::nullopt;
-  }
-
-  std::filesystem::path output = materializedFileCachePath(path);
-  bool needsWrite = true;
-  const bool outputExists = std::filesystem::exists(output, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not check cached archive entry: " +
-                      error.message();
-    }
-    return std::nullopt;
-  }
-  if (outputExists) {
-    const std::uintmax_t size = std::filesystem::file_size(output, error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not read cached archive entry size: " +
-                        error.message();
-      }
-      return std::nullopt;
-    }
-    needsWrite = size != bytes.size();
-  }
-  if (needsWrite) {
-    if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Materialize cancelled.";
-      }
-      return std::nullopt;
-    }
-
-    std::ofstream file(output, std::ios::binary | std::ios::trunc);
-    if (!file) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not create cached archive entry: " +
-                        pathForLog(output);
-      }
-      return std::nullopt;
-    }
-    if (!bytes.empty()) {
-      constexpr std::size_t kMaterializeWriteChunkBytes = 1024 * 1024;
-      std::size_t offset = 0;
-      while (offset < bytes.size()) {
-        if (cancelled != nullptr &&
-            cancelled->load(std::memory_order_relaxed)) {
-          if (errorMessage != nullptr) {
-            *errorMessage = "Materialize cancelled.";
-          }
-          file.close();
-          std::filesystem::remove(output, error);
-          return std::nullopt;
-        }
-        const std::size_t chunkBytes =
-            std::min(kMaterializeWriteChunkBytes, bytes.size() - offset);
-        file.write(reinterpret_cast<const char *>(bytes.data() + offset),
-                   static_cast<std::streamsize>(chunkBytes));
-        if (!file) {
-          break;
-        }
-        offset += chunkBytes;
-      }
-    }
-    if (!file) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not write cached archive entry: " +
-                        pathForLog(output);
-      }
-      return std::nullopt;
-    }
-  }
-  return output;
+  return gTemporaryCache.materialize(
+      archiveCacheRoot(), [&path] { return materializedFileCachePath(path); },
+      bytes, errorMessage, cancelled);
 }
 
 std::filesystem::path
 materializedFileCachePath(const std::filesystem::path &path) {
   const std::string key = cacheKeyForPath(path);
   return archiveCacheRoot() /
-         (hex64(fnv1a64(key)) + path.extension().string());
+         (stable_hash::hex64(stable_hash::fnv1a64(key)) + path.extension().string());
 }
 
 bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,
@@ -11168,125 +10687,27 @@ bool cleanupTemporaryCache(TemporaryCacheCleanupResult &result,
                                &protectedPaths,
                            std::string *errorMessage) {
   result = {};
-  result.path = archiveCacheRoot();
-
-  std::lock_guard<std::mutex> lock(gTemporaryCacheMutex);
-  std::error_code error;
-  const bool exists = std::filesystem::exists(result.path, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not check archive cache: " + error.message();
-    }
-    return false;
+  const bool cleaned = gTemporaryCache.cleanup(
+      archiveCacheRoot(), result, protectedPaths, cachePathKey, errorMessage);
+  if (cleaned && result.cacheExisted) {
+    appendDebugLogLineImpl("Cleaned archive temporary cache: " +
+                           pathForLog(result.path) +
+                           " entries=" +
+                           std::to_string(result.removedEntries) +
+                           " skipped=" +
+                           std::to_string(result.skippedEntries) +
+                           " bytes=" +
+                           std::to_string(result.removedBytes));
   }
-  if (!exists) {
-    return true;
-  }
-
-  result.cacheExisted = true;
-  std::unordered_set<std::string> protectedKeys;
-  protectedKeys.reserve(protectedPaths.size());
-  for (const auto &protectedPath : protectedPaths) {
-    if (!protectedPath.empty()) {
-      protectedKeys.insert(cachePathKey(protectedPath));
-    }
-  }
-
-  std::vector<std::filesystem::path> cacheEntries;
-  std::filesystem::directory_iterator it(
-      result.path, std::filesystem::directory_options::skip_permission_denied,
-      error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not read archive cache: " + error.message();
-    }
-    return false;
-  }
-
-  const std::filesystem::directory_iterator end;
-  while (it != end) {
-    cacheEntries.push_back(it->path());
-    it.increment(error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not scan archive cache: " + error.message();
-      }
-      return false;
-    }
-  }
-
-  for (const auto &entryPath : cacheEntries) {
-    if (protectedKeys.contains(cachePathKey(entryPath))) {
-      ++result.skippedEntries;
-      continue;
-    }
-
-    const std::uint64_t entryBytes = directoryByteSize(entryPath);
-    const std::uintmax_t removedEntries =
-        std::filesystem::remove_all(entryPath, error);
-    if (error) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Could not remove archive cache entry: " +
-                        error.message();
-      }
-      return false;
-    }
-    result.removedBytes += entryBytes;
-    result.removedEntries += clampFileSizeForResult(removedEntries);
-  }
-
-  error.clear();
-  std::filesystem::remove(result.path, error);
-  if (error && error != std::errc::directory_not_empty) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not remove empty archive cache folder: " +
-                      error.message();
-    }
-    return false;
-  }
-  appendDebugLogLineImpl("Cleaned archive temporary cache: " +
-                         pathForLog(result.path) +
-                         " entries=" +
-                         std::to_string(result.removedEntries) +
-                         " skipped=" +
-                         std::to_string(result.skippedEntries) +
-                         " bytes=" +
-                         std::to_string(result.removedBytes));
-  return true;
+  return cleaned;
 }
 
 bool measureTemporaryCache(TemporaryCacheUsageResult &result,
                            std::string *errorMessage,
                            const std::stop_token *stopToken) {
   result = {};
-  result.path = archiveCacheRoot();
-
-  std::error_code error;
-  const bool exists = std::filesystem::exists(result.path, error);
-  if (error) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not check archive cache: " + error.message();
-    }
-    return false;
-  }
-  if (!exists) {
-    return true;
-  }
-
-  result.cacheExisted = true;
-  if (!directoryStats(result.path, result.bytes, result.entries, stopToken)) {
-    if (stopRequested(stopToken)) {
-      if (errorMessage != nullptr) {
-        *errorMessage = "Archive cache measurement cancelled.";
-      }
-      return false;
-    }
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not measure archive cache.";
-    }
-    return false;
-  }
-  return true;
+  return gTemporaryCache.measure(archiveCacheRoot(), result, errorMessage,
+                                  stopToken);
 }
 
 void parseChart(bms_parser::Parser &parser, const std::filesystem::path &path,

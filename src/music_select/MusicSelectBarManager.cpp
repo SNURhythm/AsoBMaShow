@@ -1,5 +1,7 @@
 #include "MusicSelectBarManager.h"
 
+#include "MusicSelectMode.h"
+
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -18,31 +20,6 @@ constexpr std::array<std::string_view, 10> kModeFilters{
 constexpr std::array<std::string_view, 9> kDifficultyFilters{
     "ALL", "BEGINNER", "NORMAL", "HYPER", "ANOTHER", "INSANE",
     "SCRATCH CHART", "LONG NOTE CHART", "SPEED CHANGE CHART"};
-
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
-  return 0;
-}
-
-bool modeMatches(std::string_view filter, int mode) {
-  if (mode == 0 || filter == "ALL") return true;
-  if (filter == "7KEY") return mode == 7;
-  if (filter == "14KEY") return mode == 14;
-  if (filter == "9KEY") return mode == 9;
-  if (filter == "5KEY") return mode == 5;
-  if (filter == "10KEY") return mode == 10;
-  if (filter == "24KEY") return mode == 25;
-  if (filter == "48KEY") return mode == 50;
-  if (filter == "SINGLE") return mode == 5 || mode == 7;
-  if (filter == "DOUBLE") return mode == 10 || mode == 14;
-  return false;
-}
 
 bool difficultyMatches(std::string_view filter,
                        const ChartMetaRecord &record) {
@@ -366,7 +343,7 @@ void MusicSelectBarManager::rebuildRows(
           if (!bar.chart || bar.chart->solidArchive ||
               ((showInvisibleCharts ||
                 (bar.chart->songReviewFavorite & (4 | 8)) == 0) &&
-               modeMatches(mode, songMode(bar.chart->meta)) &&
+               musicSelectModeMatches(mode, musicSelectSongMode(bar.chart->meta)) &&
                difficultyMatches(difficulty, *bar.chart))) {
             (*rows_).push_back(bar);
           }

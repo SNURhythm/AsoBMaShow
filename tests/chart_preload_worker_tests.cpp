@@ -3,10 +3,36 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
+#include <limits>
+#include <new>
+#include <semaphore>
 #include <string>
 #include <thread>
 #include <vector>
+
+namespace preload_allocation_fault {
+thread_local bool observing = false;
+thread_local std::size_t allocations = 0;
+thread_local std::size_t failAt = std::numeric_limits<std::size_t>::max();
+}
+
+void *operator new(std::size_t size) {
+  using namespace preload_allocation_fault;
+  if (observing && allocations++ == failAt) {
+    observing = false;
+    throw std::bad_alloc();
+  }
+  if (void *memory = std::malloc(size == 0 ? 1 : size)) return memory;
+  throw std::bad_alloc();
+}
+
+void *operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void *memory) noexcept { std::free(memory); }
+void operator delete[](void *memory) noexcept { std::free(memory); }
+void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
 
 namespace {
 int failures = 0;
@@ -22,6 +48,53 @@ ChartMetaRecord makeRecord(std::string title) {
   record.meta.Title = std::move(title);
   record.meta.BmsPath = "/charts/" + record.meta.Title + ".bms";
   return record;
+}
+
+void testThreadStartupFailureAllowsRetryOfTheSameChart() {
+  const auto record = makeRecord("startup");
+  const auto measureRequest = [&] {
+    ChartPreloadWorker worker(std::chrono::milliseconds(0));
+    preload_allocation_fault::allocations = 0;
+    preload_allocation_fault::observing = true;
+    worker.request(record);
+    preload_allocation_fault::observing = false;
+    const auto count = preload_allocation_fault::allocations;
+    worker.stop();
+    return count;
+  };
+  (void)measureRequest(); // Warm one-time thread-library initialization.
+  const auto allocationCount = measureRequest();
+  expect(allocationCount > 0, "request measures actual thread startup allocations");
+  if (allocationCount == 0) return;
+
+  std::binary_semaphore processed{0};
+  std::atomic_int calls = 0;
+  ChartPreloadWorker worker(std::chrono::milliseconds(0));
+  worker.configure([&](const ChartMetaRecord &, std::atomic_bool &) {
+    ++calls;
+    processed.release();
+  });
+  // request only notifies after constructing its thread, so its last caller
+  // allocation is in real thread startup, after storing the pending chart.
+  preload_allocation_fault::allocations = 0;
+  preload_allocation_fault::failAt = allocationCount - 1;
+  preload_allocation_fault::observing = true;
+  bool threw = false;
+  try {
+    worker.request(record);
+  } catch (const std::bad_alloc &) {
+    threw = true;
+  }
+  preload_allocation_fault::observing = false;
+  preload_allocation_fault::failAt = std::numeric_limits<std::size_t>::max();
+  expect(threw, "preload thread startup failure propagates to the caller");
+  expect(!worker.isRequesting("/charts/startup.bms") && calls == 0,
+         "failed startup releases the queued chart without processing it");
+  worker.request(record);
+  expect(processed.try_acquire_for(std::chrono::seconds(3)),
+         "an identical chart retry starts after thread creation failed");
+  worker.stop();
+  expect(calls == 1, "retry processes the chart exactly once");
 }
 
 // Processor records each started request and blocks until released so tests
@@ -359,6 +432,7 @@ void testActiveCancelDefersCleanupUntilProcessorReturns() {
 }  // namespace
 
 int main() {
+  testThreadStartupFailureAllowsRetryOfTheSameChart();
   testLatestWinsSupersedesQueued();
   testDedupSamePath();
   testReselectCancelledInFlightPathReplacesPending();

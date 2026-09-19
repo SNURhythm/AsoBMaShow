@@ -38,7 +38,8 @@ struct Rows {
 };
 
 struct MainMenuScene {
-  std::atomic_bool willStart = false, replayExportInProgress = false;
+  std::atomic_bool willStart = false;
+  struct { bool inProgress() const { return false; } } replayExportJob_;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct {
     std::atomic_bool chartLibraryListReloadRequested = false;
@@ -52,8 +53,6 @@ struct MainMenuScene {
   Text *unzipButtonText = &button, *replayStatusText = &status;
   struct Preview { void stop() {} };
   Preview *previewWorker_ = nullptr;
-  std::mutex previewCleanupMutex;
-  bool pendingStopAndClearSelectedChartAfterPreview = false;
   bool buttonVisible = false;
   void stopAndClearSelectedChart() {}
   bool archiveUnzipInProgress() const { return modal.active; }

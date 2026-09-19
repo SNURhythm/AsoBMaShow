@@ -1,4 +1,5 @@
 #include "AudioBackend.h"
+#include "../StableHash.h"
 
 #include "../targets.h"
 
@@ -266,25 +267,6 @@ public:
 
 #if TARGET_OS_DESKTOP || TARGET_OS_LINUX
 
-std::uint64_t fnv1a64(std::string_view value) {
-  std::uint64_t hash = 14695981039346656037ULL;
-  for (const unsigned char byte : value) {
-    hash ^= byte;
-    hash *= 1099511628211ULL;
-  }
-  return hash;
-}
-
-std::string hex64(std::uint64_t value) {
-  constexpr char digits[] = "0123456789abcdef";
-  std::string result(16, '0');
-  for (std::size_t index = result.size(); index > 0; --index) {
-    result[index - 1] = digits[value & 0xFU];
-    value >>= 4U;
-  }
-  return result;
-}
-
 struct PortAudioDeviceRecord {
   DeviceInfo info;
   PaDeviceIndex index = paNoDevice;
@@ -325,8 +307,9 @@ std::vector<PortAudioDeviceRecord> enumeratePortAudioDevices() {
     parameters.suggestedLatency = device->defaultLowOutputLatency;
 
     PortAudioDeviceRecord record;
-    record.info.id = "portaudio:" + hex64(fnv1a64(fingerprint)) + ":" +
-                     std::to_string(ordinal);
+    record.info.id = "portaudio:" +
+                     stable_hash::hex64(stable_hash::fnv1a64(fingerprint)) +
+                     ":" + std::to_string(ordinal);
     record.info.name = hostName + " — " + deviceName;
     record.info.isDefault = index == defaultOutput;
     for (const auto rate : sampleRates) {

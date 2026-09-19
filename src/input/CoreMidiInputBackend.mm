@@ -2,6 +2,7 @@
 
 #if defined(__APPLE__)
 
+#include "../StableHash.h"
 #include "AppleInputTimestamp.h"
 #include "InputLifecycle.h"
 #include "LiveMidiDeviceIdAllocator.h"
@@ -118,25 +119,6 @@ std::string stringProperty(MIDIObjectRef object, CFStringRef property) {
   return result;
 }
 
-std::uint64_t fnv1a64(std::string_view value) {
-  std::uint64_t hash = 14695981039346656037ULL;
-  for (const unsigned char byte : value) {
-    hash ^= byte;
-    hash *= 1099511628211ULL;
-  }
-  return hash;
-}
-
-std::string hex64(std::uint64_t value) {
-  constexpr char digits[] = "0123456789abcdef";
-  std::string result(16, '0');
-  for (std::size_t index = result.size(); index > 0; --index) {
-    result[index - 1] = digits[value & 0xFU];
-    value >>= 4U;
-  }
-  return result;
-}
-
 std::vector<CoreMidiSourceDescriptor> enumerateSources() {
   struct Candidate {
     MIDIEndpointRef endpoint = 0;
@@ -172,7 +154,8 @@ std::vector<CoreMidiSourceDescriptor> enumerateSources() {
         uniqueId != 0) {
       baseStableId = "midi:core:" + std::to_string(uniqueId);
     } else {
-      baseStableId = "midi:core:fallback:" + hex64(fnv1a64(fingerprint));
+      baseStableId = "midi:core:fallback:" +
+                     stable_hash::hex64(stable_hash::fnv1a64(fingerprint));
     }
     candidates.push_back({.endpoint = endpoint,
                           .baseStableId = std::move(baseStableId),
@@ -190,7 +173,8 @@ std::vector<CoreMidiSourceDescriptor> enumerateSources() {
   for (const auto &candidate : candidates) {
     std::string proposed = candidate.baseStableId;
     if (baseTotals[candidate.baseStableId] > 1U) {
-      proposed += ":" + hex64(fnv1a64(candidate.fingerprint));
+      proposed +=
+          ":" + stable_hash::hex64(stable_hash::fnv1a64(candidate.fingerprint));
     }
     ++proposedTotals[proposed];
     proposedIds.push_back(std::move(proposed));

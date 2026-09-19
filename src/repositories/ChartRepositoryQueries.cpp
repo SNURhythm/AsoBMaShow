@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "ChartRepository.h"
+#include "../BeatorajaClearType.h"
 #include "ChartRepositoryInternal.h"
 #include "../BmsMetadataText.h"
 #include "ChartMetaSql.h"
@@ -1750,18 +1751,6 @@ bool selectorScoreSort(std::string_view sort) {
          sort == "DURATION" || sort == "LASTUPDATE";
 }
 
-int selectorLamp(int rank) {
-  if (rank == kNoClearTypeRank) return 0;
-  if (rank >= kClearTypeFullComboRank) return 8;
-  if (rank >= kClearTypeExHardClearRank) return 7;
-  if (rank >= kClearTypeHardClearRank) return 6;
-  if (rank >= kClearTypeNormalClearRank) return 5;
-  if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
-  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
-  return 1;
-}
-
 class SelectorScoreFunction {
 public:
   SelectorScoreFunction(sqlite3 *database, const ChartSelectorQuery &query)
@@ -1805,7 +1794,7 @@ private:
       } else {
         const int rank = query.clears ? query.clears->bestRankForHash(hash, mode)
                                      : score->clearType;
-        sqlite3_result_int(context, selectorLamp(rank));
+        sqlite3_result_int(context, beatorajaSongClearType(rank));
       }
     } catch (const std::exception &error) {
       sqlite3_result_error(context, error.what(), -1);

@@ -2,6 +2,7 @@
 #include "audio/AudioDeviceManager.h"
 #include "audio/Jukebox.h"
 #include "rendering/UniformCache.h"
+#include "support/AllocationFailure.h"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -16,6 +17,8 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <new>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -53,6 +56,9 @@ void require(bool condition, std::string_view message) {
 
 struct BackendControl {
   std::deque<bool> startResults;
+  std::optional<test_support::FailNextAllocation> *failAfterStart = nullptr;
+  bool running = false;
+  unsigned int startCalls = 0;
   audio::RenderCallback renderCallback = nullptr;
   void *renderUserData = nullptr;
 };
@@ -69,6 +75,7 @@ public:
   }
 
   bool start(std::string &errorMessage) override {
+    ++control_->startCalls;
     const bool result =
         control_->startResults.empty() ? true : control_->startResults.front();
     if (!control_->startResults.empty()) {
@@ -79,11 +86,16 @@ public:
       return false;
     }
     running_ = true;
+    control_->running = true;
+    if (control_->failAfterStart) {
+      control_->failAfterStart->emplace();
+    }
     return true;
   }
 
   bool stop(std::string &) override {
     running_ = false;
+    control_->running = false;
     return true;
   }
 
@@ -786,6 +798,60 @@ void testPoorBgaScheduleSelectsLatestAndRecomputesOnSeek() {
           "backward seek recomputes the poor-BGA sequence from the immutable schedule");
 }
 
+void testSchedulerPreparationFailureLeavesPlaybackStoppedAndRetryable() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  const auto startsBefore = control->startCalls;
+  bool threw = false;
+  {
+    test_support::FailNextAllocation fail;
+    try {
+      (void)jukebox.play();
+    } catch (const std::bad_alloc &) {
+      threw = true;
+    }
+  }
+  require(threw, "scheduler preparation must exercise allocation failure");
+  require(control->startCalls == startsBefore && !control->running &&
+              !stopwatch.isRunning(),
+          "failed scheduler preparation must precede backend playback");
+  const auto snapshot = jukebox.suspendAndDrain();
+  require(snapshot.valid && !snapshot.active,
+          "failed scheduler preparation leaves an inactive session");
+  require(jukebox.play().success, "scheduler preparation can be retried");
+  require(jukebox.stop().success, "retried scheduler can stop and join");
+}
+
+void testSchedulerStartupFailureDoesNotLeaveAudioPlaying() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::optional<test_support::FailNextAllocation> allocationFailure;
+  control->failAfterStart = &allocationFailure;
+  bool allocationThrew = false;
+  bool started = false;
+  try {
+    started = jukebox.play().success;
+  } catch (const std::bad_alloc &) {
+    allocationThrew = true;
+  }
+  control->failAfterStart = nullptr;
+  allocationFailure.reset();
+
+  const bool audioWasRunning = control->running;
+  const bool clockWasRunning = stopwatch.isRunning();
+  const auto snapshot = jukebox.suspendAndDrain();
+  require(snapshot.valid, "startup probe must drain before checking its result");
+  if (allocationThrew) {
+    require(!audioWasRunning && !clockWasRunning && !snapshot.active,
+            "failed scheduler startup must not leave audio or playback active");
+  } else {
+    require(started && audioWasRunning && clockWasRunning && snapshot.active,
+            "prepared scheduler resources allow playback to start normally");
+  }
+}
+
 void testPausedSchedulerSleepsAndWakesForResumeAndStop() {
   Stopwatch stopwatch;
   auto control = std::make_shared<BackendControl>();
@@ -829,6 +895,8 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    testSchedulerPreparationFailureLeavesPlaybackStoppedAndRetryable();
+    testSchedulerStartupFailureDoesNotLeaveAudioPlaying();
     testPausedSchedulerSleepsAndWakesForResumeAndStop();
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
     testVideoMaterializationCompletesBeforePlayback();

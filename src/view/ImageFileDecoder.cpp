@@ -439,11 +439,10 @@ std::optional<DecodedImageData>
 decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat, int encodedWidth,
                            int encodedHeight,
                            const ImageDecodeOptions &options) {
-  if (stopped(options)) return std::nullopt;
-
   const auto format = std::unique_ptr<AVFormatContext,
                                       void (*)(AVFormatContext *)>(
       rawFormat, [](AVFormatContext *value) { avformat_close_input(&value); });
+  if (stopped(options)) return std::nullopt;
   std::size_t encodedDecodedBytes = 0;
   if (!validDimensions(encodedWidth, encodedHeight,
                        options.maximumDimension, options.maximumDecodedBytes,
@@ -597,7 +596,11 @@ decodeWebpWithFfmpeg(std::span<const std::byte> encoded,
     return std::nullopt;
   }
   const auto io = std::unique_ptr<AVIOContext, void (*)(AVIOContext *)>(
-      rawIo, [](AVIOContext *value) { avio_context_free(&value); });
+      rawIo, [](AVIOContext *value) {
+        // Probing may replace the original input buffer.
+        av_freep(&value->buffer);
+        avio_context_free(&value);
+      });
   AVFormatContext *rawFormat = avformat_alloc_context();
   if (rawFormat == nullptr) return std::nullopt;
   rawFormat->pb = io.get();

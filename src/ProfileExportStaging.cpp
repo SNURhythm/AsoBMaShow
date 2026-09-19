@@ -1,4 +1,5 @@
 #include "ProfileExportStaging.h"
+#include "RAII.h"
 
 #include <array>
 #include <cstdio>
@@ -452,16 +453,18 @@ bool clearDirectoryContents(int directoryFd, dev_t expectedDevice,
         posixError("Unable to inspect profile export staging", errno);
     return false;
   }
-  DIR *rawDirectory = ::fdopendir(duplicate.release());
-  if (rawDirectory == nullptr) {
+  UniqueResource<DIR, ::closedir> directory(::fdopendir(duplicate.get()));
+  if (!directory) {
     errorMessage =
         posixError("Unable to inspect profile export staging", errno);
     return false;
   }
+  // fdopendir takes ownership only on success; the stream now closes the fd.
+  (void)duplicate.release();
   bool success = true;
   while (true) {
     errno = 0;
-    dirent *entry = ::readdir(rawDirectory);
+    dirent *entry = ::readdir(directory.get());
     if (entry == nullptr) {
       if (errno != 0) {
         errorMessage =
@@ -527,7 +530,6 @@ bool clearDirectoryContents(int directoryFd, dev_t expectedDevice,
       break;
     }
   }
-  ::closedir(rawDirectory);
   return success;
 }
 
@@ -577,21 +579,21 @@ bool listIssuedNames(const NativeRoot &root, std::vector<std::string> &names,
         posixError("Unable to inspect profile export staging", errno);
     return false;
   }
-  DIR *directory = ::fdopendir(duplicate.release());
-  if (directory == nullptr) {
+  UniqueResource<DIR, ::closedir> directory(::fdopendir(duplicate.get()));
+  if (!directory) {
     errorMessage =
         posixError("Unable to inspect profile export staging", errno);
     return false;
   }
+  (void)duplicate.release();
   errno = 0;
-  while (dirent *entry = ::readdir(directory)) {
+  while (dirent *entry = ::readdir(directory.get())) {
     const std::string_view name(entry->d_name);
     if (IsIssuedDirectoryName(name)) {
       names.emplace_back(name);
     }
   }
   const int enumerationError = errno;
-  ::closedir(directory);
   if (enumerationError != 0) {
     errorMessage = posixError("Unable to enumerate profile export staging",
                               enumerationError);

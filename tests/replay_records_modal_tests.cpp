@@ -136,6 +136,33 @@ void testRetainedModalActivatesSelectedRecordThroughOwner() {
   modal->hide();
   expect(!modal->isVisible(), "hide dismisses the retained records modal");
 }
+void testCourseTargetsHaveIndependentIdentity() {
+  MusicSelectBar course;
+  course.kind = skin::MusicSelectBarKind::Grade;
+  course.title = "Saved course";
+  course.courseKey = "course-identity";
+  ChartMetaRecord stage;
+  stage.meta.SHA256 = "stage-hash";
+  stage.meta.BmsPath = "stage.bms";
+  course.courseCharts.push_back(stage);
+  const auto target = musicSelectRecordsTarget(course);
+  expect(target && target->courseStart && target->meta.Title == "Saved course" &&
+             target->meta.SHA256.empty() && target->meta.BmsPath.empty(),
+         "saved courses browse course records without inheriting stage identity");
+  course.courseCharts.front().unavailable = true;
+  expect(musicSelectRecordsTarget(course).has_value(),
+         "missing course stages do not hide result history");
+  course.courseKey.clear();
+  expect(!musicSelectRecordsTarget(course), "anonymous courses have no saved record identity");
+  course.courseId = 27;
+  expect(musicSelectRecordsTarget(course).has_value(), "legacy course identity remains browsable");
+  MusicSelectBar song;
+  song.chart = stage;
+  expect(musicSelectRecordsTarget(song).has_value(), "available songs open chart records");
+  song.chart->solidArchive = true;
+  expect(!musicSelectRecordsTarget(song), "solid archive targets cannot open chart records");
+}
+
 } // namespace
 
 int main() {
@@ -147,6 +174,7 @@ int main() {
     std::cerr << "FAIL: headless bgfx did not initialize\n";
     return 1;
   }
+  testCourseTargetsHaveIndependentIdentity();
   testSelectedModernRecordDispatchesWatchAndExport();
   testNonModernRecordCannotCrossTheActionBoundary();
   testRetainedModalActivatesSelectedRecordThroughOwner();

@@ -1,4 +1,7 @@
 #include "MusicSelectSongIndex.h"
+#include "../BeatorajaClearType.h"
+
+#include "MusicSelectMode.h"
 
 #include "../path.h"
 
@@ -25,19 +28,8 @@ void checkCancelled(std::stop_token stop) {
   if (stop.stop_requested()) throw std::runtime_error("song index cancelled");
 }
 
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
-  return 0;
-}
-
 std::uint16_t modeMask(const bms_parser::ChartMeta &meta) {
-  const int mode = songMode(meta);
+  const int mode = musicSelectSongMode(meta);
   if (mode == 0) return (1U << kModes.size()) - 1;
   std::uint16_t mask = 1;
   constexpr std::array modes{7, 14, 9, 5, 10, 25, 50};
@@ -75,18 +67,6 @@ std::uint16_t difficultyMask(const ChartMetaRecord &record) {
     mask |= 1U << 8;
   }
   return mask;
-}
-
-int clearLamp(int rank) {
-  if (rank == kNoClearTypeRank) return 0;
-  if (rank >= kClearTypeFullComboRank) return 8;
-  if (rank >= kClearTypeExHardClearRank) return 7;
-  if (rank >= kClearTypeHardClearRank) return 6;
-  if (rank >= kClearTypeNormalClearRank) return 5;
-  if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
-  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
-  return 1;
 }
 
 std::string lowerAscii(std::string value) {
@@ -134,7 +114,7 @@ void MusicSelectSongIndex::add(const ChartMetaRecord &record,
       .duration = score ? score->averageJudgeMicros.value_or(0) : 0,
       .lastPlayed = score ? score->lastPlayedUnixSeconds.value_or(0) : 0,
       .difficulty = meta.Difficulty,
-      .lamp = clearLamp(clearRank),
+      .lamp = beatorajaSongClearType(clearRank),
       .badPoints = score ? score->badPoints.value_or(0) : 0,
       .modes = modeMask(meta),
       .difficulties = difficultyMask(record),

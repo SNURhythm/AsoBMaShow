@@ -118,8 +118,7 @@ public:
     isDead = false;
     isCleaned = false;
     deferred.clear();
-    std::lock_guard lock(postedDeferredMutex_);
-    postedDeferred_.clear();
+    clearPostedDeferred();
   }
 
   inline void addView(View *view) {
@@ -144,14 +143,22 @@ protected:
   ApplicationContext &context;
 
 private:
+  void clearPostedDeferred() {
+    std::vector<std::function<bool()>> discarded;
+    {
+      std::lock_guard lock(postedDeferredMutex_);
+      discarded.swap(postedDeferred_);
+    }
+    // Release captured resources after unlocking so cleanup can post new work.
+  }
+
   void destroyOwnedViews() {
     for (auto *view : views) {
       delete view;
     }
     views.clear();
     deferred.clear();
-    std::lock_guard lock(postedDeferredMutex_);
-    postedDeferred_.clear();
+    clearPostedDeferred();
   }
 
   std::mutex postedDeferredMutex_;

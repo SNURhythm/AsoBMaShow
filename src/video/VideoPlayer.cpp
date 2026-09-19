@@ -941,7 +941,12 @@ void VideoPlayer::predecodeFrames() {
 }
 
 void VideoPlayer::stopPredecoding() {
-  predecodingActive = false;
+  {
+    // Publish stop under both wait mutexes so neither decoder wait can miss
+    // the notification between checking its predicate and going to sleep.
+    std::scoped_lock lock(bufferMutex, eofMutex);
+    predecodingActive = false;
+  }
 
   freeSpace.notify_all();
   eofCV.notify_all();

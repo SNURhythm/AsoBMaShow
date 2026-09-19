@@ -57,60 +57,6 @@ void appendUtf8CodePoint(std::string &output, char32_t codePoint) {
 }
 } // namespace
 
-unsigned int parallel_worker_count(size_t n) {
-  if (n == 0) {
-    return 0;
-  }
-
-  unsigned int hwThreads = std::thread::hardware_concurrency();
-  if (hwThreads == 0) {
-    hwThreads = 4;
-  }
-
-  // Keep headroom for render/audio/main threads to reduce frame-time spikes.
-  unsigned int reservedThreads = 1;
-  if (hwThreads > 8) {
-    reservedThreads = 4;
-  } else if (hwThreads > 4) {
-    reservedThreads = 2;
-  }
-
-  unsigned int workerThreads =
-      hwThreads > reservedThreads ? hwThreads - reservedThreads : 1;
-  return std::min<unsigned int>(workerThreads, static_cast<unsigned int>(n));
-}
-
-void parallel_for(size_t n, std::function<void(int start, int end)> f) {
-  const unsigned int workerThreads = parallel_worker_count(n);
-  if (workerThreads == 0) {
-    return;
-  }
-
-  if (workerThreads <= 1) {
-    f(0, static_cast<int>(n));
-    return;
-  }
-
-  const size_t batchSize = (n + workerThreads - 1) / workerThreads;
-  std::vector<std::thread> threads;
-  threads.reserve(workerThreads);
-
-  for (unsigned int i = 0; i < workerThreads; ++i) {
-    const size_t start = static_cast<size_t>(i) * batchSize;
-    if (start >= n) {
-      break;
-    }
-    const size_t end = std::min(n, start + batchSize);
-    threads.emplace_back([&f, start, end]() {
-      f(static_cast<int>(start), static_cast<int>(end));
-    });
-  }
-
-  for (auto &t : threads) {
-    t.join();
-  }
-}
-
 std::optional<std::string> cp932_to_utf8(std::string_view value) {
   if (value.empty()) {
     return std::string{};
@@ -305,11 +251,4 @@ bool Utils::EnsureDirectoryExists(const std::filesystem::path &Path,
   }
   std::filesystem::create_directories(Path, Error);
   return !Error;
-}
-
-threadRAII::threadRAII(std::thread &&_th) { th = std::move(_th); }
-threadRAII::~threadRAII() {
-  if (th.joinable()) {
-    th.join();
-  }
 }

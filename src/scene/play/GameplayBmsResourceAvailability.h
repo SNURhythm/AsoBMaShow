@@ -31,8 +31,8 @@ public:
       complete_.store(true, std::memory_order_release);
       return;
     }
-    const auto resourcePath = meta.BmsPath.parent_path() / declaredPath;
     try {
+      const auto resourcePath = meta.BmsPath.parent_path() / declaredPath;
       worker_ = std::jthread(
           [this, resourcePath, decode = std::move(decode)](
               std::stop_token stop) mutable {

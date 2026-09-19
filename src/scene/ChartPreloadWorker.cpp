@@ -32,7 +32,12 @@ void ChartPreloadWorker::request(const ChartMetaRecord &record) {
     pending_ = record;
     pendingSince_ = std::chrono::steady_clock::now();
   }
-  ensureWorker();
+  try {
+    ensureWorker();
+  } catch (...) {
+    cancel();
+    throw;
+  }
   cv_.notify_one();
 }
 

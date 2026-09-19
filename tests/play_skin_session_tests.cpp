@@ -4,6 +4,7 @@
 
 #include "ArchiveFile.h"
 #include "music_select_runtime_ledger_assertions.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include "rendering/SkinQuadBatchRenderer.h"
 #include "scene/play/PlayfieldPresentation.h"
@@ -153,8 +154,10 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code ignored;
-    fs::remove_all(root_, ignored);
+    const auto error = test_support::removeReadOnlyTree(root_);
+    if (error) {
+      expect(false, "temporary fixture cleanup failed: " + error.message());
+    }
   }
 
   const fs::path &root() const noexcept { return root_; }
@@ -162,6 +165,48 @@ public:
 private:
   fs::path root_;
 };
+
+void testTempDirectoryRemovesReadOnlySnapshots() {
+  TempDirectory outside;
+  const fs::path outsideFile = outside.root() / "keep.txt";
+  writeText(outsideFile, "keep");
+  const auto readOnlyDirectory = fs::perms::owner_read | fs::perms::owner_exec;
+  fs::permissions(outsideFile, fs::perms::owner_read);
+  fs::permissions(outside.root(), readOnlyDirectory);
+  const auto outsidePermissions = fs::status(outside.root()).permissions();
+  const auto outsideFilePermissions = fs::status(outsideFile).permissions();
+
+  fs::path removedRoot;
+  {
+    TempDirectory temporary;
+    removedRoot = temporary.root();
+    const fs::path revision = temporary.root() / "revisions" / "snapshot";
+    const fs::path skin = revision / "skin";
+    writeText(skin / "header.lua", "return {}\n");
+#ifndef _WIN32
+    // Windows symlink creation can require privileges unavailable to test runs.
+    fs::create_directory_symlink(outside.root(), revision / "external");
+#endif
+    fs::permissions(skin / "header.lua", fs::perms::owner_read);
+    fs::permissions(skin, readOnlyDirectory);
+    fs::permissions(revision, readOnlyDirectory);
+    fs::permissions(temporary.root() / "revisions", readOnlyDirectory);
+    fs::permissions(temporary.root(), readOnlyDirectory);
+  }
+
+  expect(!fs::exists(removedRoot),
+         "temporary fixture removes nested read-only snapshot directories and files");
+  std::ifstream input(outsideFile, std::ios::binary);
+  const std::string retained{std::istreambuf_iterator<char>(input),
+                             std::istreambuf_iterator<char>()};
+  expect(retained == "keep" &&
+             fs::status(outside.root()).permissions() == outsidePermissions &&
+             fs::status(outsideFile).permissions() == outsideFilePermissions,
+         "temporary fixture cleanup preserves external target contents and permissions");
+  // This fixture owns the external target independently of the removed tree.
+  fs::permissions(outside.root(), fs::perms::owner_all, fs::perm_options::add);
+  fs::permissions(outsideFile, fs::perms::owner_write, fs::perm_options::add);
+}
 
 class AcceptFiles final : public SkinAliasDetector {
 public:
@@ -8399,6 +8444,7 @@ int main(int argc, char **argv) {
               << failures << " failure(s)\n";
     return failures == 0 ? 0 : 1;
   }
+  testTempDirectoryRemovesReadOnlySnapshots();
   testLuaJsonAndLr2SessionsEmitEquivalentSharedObjects();
   testLr2ProductionRecoveryAndFatalBoundaries();
   testLr2ProductionBuiltInGraphsOwnChartAndPlainImages();

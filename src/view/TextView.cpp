@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <memory>
 #include <string_view>
+#include <tuple>
 #include <utility>
 
 namespace {
@@ -35,7 +36,9 @@ struct CachedFont {
   int refCount = 0;
 };
 
-std::map<std::string, CachedFont> g_fontCache;
+using FontCacheKey = std::tuple<std::string, int, int>;
+// Borrowed tuple lookups avoid allocating a key while releasing a font.
+std::map<FontCacheKey, CachedFont, std::less<>> g_fontCache;
 
 struct Utf8Token {
   Uint32 codepoint = 0;
@@ -120,12 +123,6 @@ int fontStyleForWeight(TextView::FontWeight weight) {
                                                : TTF_STYLE_NORMAL;
 }
 
-std::string fontCacheKey(const std::string &path, int fontSize,
-                         int fontStyle) {
-  return path + "#" + std::to_string(fontSize) + "#" +
-         std::to_string(fontStyle);
-}
-
 TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
                                int fontStyle, bool required) {
   text_runtime::OperationGuard operation;
@@ -133,7 +130,7 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
     return nullptr;
   }
 
-  const std::string key = fontCacheKey(path, fontSize, fontStyle);
+  const auto key = std::tie(path, fontSize, fontStyle);
   {
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
     auto cached = g_fontCache.find(key);
@@ -143,21 +140,20 @@ TTF_Font *acquireFontCandidate(const std::string &path, int fontSize,
     }
   }
 
-  TTF_Font *opened = TTF_OpenFont(path.c_str(), fontSize);
+  UniqueResource<TTF_Font, TTF_CloseFont> opened(TTF_OpenFont(path.c_str(), fontSize));
   if (opened == nullptr && (required || canReadFile(path))) {
     SDL_Log("Failed to load font '%s': %s", path.c_str(), TTF_GetError());
   }
   if (opened != nullptr) {
-    TTF_SetFontStyle(opened, fontStyle);
+    TTF_SetFontStyle(opened.get(), fontStyle);
     std::lock_guard<std::mutex> lock(g_fontCacheMutex);
-    auto [cached, inserted] = g_fontCache.emplace(key, CachedFont{opened, 1});
+    auto [cached, inserted] = g_fontCache.emplace(key, CachedFont{opened.get(), 1});
     if (!inserted) {
       ++cached->second.refCount;
-      TTF_CloseFont(opened);
       return cached->second.font;
     }
   }
-  return opened;
+  return opened.release();
 }
 
 void releaseFontCandidate(const std::string &path, int fontSize, int fontStyle,
@@ -167,7 +163,7 @@ void releaseFontCandidate(const std::string &path, int fontSize, int fontStyle,
     return;
   }
 
-  const std::string key = fontCacheKey(path, fontSize, fontStyle);
+  const auto key = std::tie(path, fontSize, fontStyle);
   std::lock_guard<std::mutex> lock(g_fontCacheMutex);
   auto cached = g_fontCache.find(key);
   if (cached == g_fontCache.end()) {
@@ -308,6 +304,7 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   primaryFontPath_ = fontPath;
   fallbackFontPaths = fontFallbackPaths(fontPath);
   ttfInitialized = text_runtime::acquire();
+  auto rollback = makeScopeExit([this] { releaseFontResources(); });
   if (ttfInitialized) {
     while (nextFallbackFontPath < fallbackFontPaths.size()) {
       const bool required = nextFallbackFontPath == 0;
@@ -328,13 +325,17 @@ TextView::TextView(const std::string &fontPath, int fontSize,
   rect = {0, 0, 0, 0};
   s_texColor = rendering::UniformCache::getInstance().getSampler("s_texColor");
   YGNodeSetMeasureFunc(getNode(), measureFunc);
+  rollback.dismiss();
 }
 
 TextView::~TextView() {
   if (bgfx::isValid(texture)) {
     bgfx::destroy(texture);
   }
+  releaseFontResources();
+}
 
+void TextView::releaseFontResources() {
   for (auto &face : fontFaces) {
     if (face.font != nullptr) {
       releaseFontCandidate(face.path, fontRasterSize, fontStyle_, face.font);
@@ -344,6 +345,7 @@ TextView::~TextView() {
   font = nullptr;
   if (ttfInitialized) {
     text_runtime::release();
+    ttfInitialized = false;
   }
 }
 
@@ -510,10 +512,14 @@ TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
     return nullptr;
   }
 
+  auto rollback = makeScopeExit([&] {
+    releaseFontCandidate(path, fontRasterSize, fontStyle_, opened);
+  });
+  fontFaces.push_back({opened, path});
+  rollback.dismiss();
   if (font == nullptr) {
     font = opened;
   }
-  fontFaces.push_back({opened, path});
   includeFontMetrics(opened);
   return opened;
 }

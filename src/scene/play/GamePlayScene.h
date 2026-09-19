@@ -21,6 +21,7 @@
 #include "StartSelectControl.h"
 #include "RhythmState.h"
 #include "../Scene.h"
+#include "../ReplayRecordTask.h"
 #include "../../bms_parser.hpp"
 #include "../../input/IRhythmControl.h"
 #include "../../input/InputTypes.h"
@@ -286,11 +287,7 @@ private:
   gameplay::BmsResourceImageAvailabilityProbe stageFileAvailability;
   gameplay::BmsResourceImageAvailabilityProbe backBmpAvailability;
   std::optional<ResultPreviousBestData> activeReplayPacemakerPreviousBest;
-  std::jthread bestReplayLoadThread;
-  std::shared_ptr<std::atomic_bool> bestReplayLoadCancelled =
-      std::make_shared<std::atomic_bool>(false);
-  std::mutex bestReplayLoadMutex;
-  std::shared_ptr<ReplayData> pendingBestReplay;
+  ReplayRecordTask bestReplayLoadTask;
   PlayfieldChartVisualModel playfieldChartVisualModel;
   SkinGameplayGraphAccumulator skinGameplayGraph;
   std::unordered_map<const bms_parser::Note *, ChartVisualId>
@@ -378,6 +375,7 @@ private:
   void startBestReplayLoad(std::string attemptId,
                            std::filesystem::path chartPath);
   void applyPendingBestReplay();
+  void applyLoadedBestReplay(const ReplayData &loaded);
   void stopBestReplayLoad();
   void updatePacemakerStatus();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

@@ -3,22 +3,21 @@
 #include "../repositories/ChartRepository.h"
 #include "../ir/IrSettingsPresentation.h"
 #include "../PlatformDocumentHandoff.h"
-#include "../ThreadCompat.h"
 #include "ProfileSettingsController.h"
+#include "ProfileArchiveWorker.h"
 #include "SettingsAudioVideoModel.h"
+#include "SettingsCacheMaintenance.h"
+#include "SettingsLibraryTask.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../skin/LuaGameplaySkinFeature.h"
 #include "play/Judge.h"
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -43,17 +42,6 @@ class InputCaptureController;
 namespace settings_scene {
 struct LayoutMetrics;
 }
-
-struct SettingsProfileArchiveCompletion {
-  ProfileArchiveTaskKind kind = ProfileArchiveTaskKind::Export;
-  std::uint64_t generation = 0;
-  ProfileArchiveResult result;
-};
-
-struct SettingsProfileArchiveMailbox {
-  std::mutex mutex;
-  std::optional<SettingsProfileArchiveCompletion> completion;
-};
 
 enum class SettingsProfileDocumentHandoffKind { None, Import, Export };
 
@@ -304,11 +292,9 @@ private:
   SettingsTab activeTab = SettingsTab::Profile;
   std::vector<DifficultyTableInfo> difficultyTables;
   std::vector<ChartEntry> chartEntries;
-  std::jthread difficultyTableJobThread;
-  std::jthread archiveCacheCleanupThread;
-  std::jthread archiveCacheMeasureThread;
-  std::jthread profileArchiveThread;
-  std::shared_ptr<SettingsProfileArchiveMailbox> profileArchiveMailbox;
+  SettingsLibraryTask libraryTask;
+  SettingsCacheMaintenance archiveCacheMaintenance;
+  ProfileArchiveWorker profileArchiveWorker;
   std::unique_ptr<ProfileSettingsController> profileController;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::unique_ptr<skin::GameplaySkinSettingsController>
@@ -346,30 +332,6 @@ private:
   bool profileExportStagingSwept = false;
   std::string profileCreateNameText;
   settings_scene::ProfileInlineEditorState profileInlineEditor;
-  std::atomic_bool difficultyTableJobRunning = false;
-  std::atomic_bool archiveCacheCleanupRunning = false;
-  std::atomic_bool archiveCacheMeasureRunning = false;
-  std::atomic<std::uint64_t> archiveCacheStatusGeneration = 0;
-  std::mutex difficultyTableStatusMutex;
-  std::mutex archiveCacheCleanupStatusMutex;
-  bool pendingDifficultyTableStatus = false;
-  bool pendingChartFolderStatus = false;
-  bool pendingDifficultyTableReload = false;
-  bool pendingDifficultyTableImportProgress = false;
-  bool pendingDifficultyTableImportFinished = false;
-  bool pendingDifficultyTableImportSucceeded = false;
-  bool pendingArchiveCacheCleanupStatus = false;
-  int pendingDifficultyTableImportCurrent = 0;
-  int pendingDifficultyTableImportTotal = 0;
-  std::string pendingDifficultyTableImportName;
-  std::string pendingDifficultyTableImportSubmittedUrl;
-  std::string pendingDifficultyTableImportStatusText;
-  std::string pendingDifficultyTableStatusText;
-  std::string pendingChartFolderStatusText;
-  std::string pendingArchiveCacheCleanupStatusText;
-  SDL_Color pendingDifficultyTableStatusColor{157, 177, 200, 255};
-  SDL_Color pendingChartFolderStatusColor{157, 177, 200, 255};
-  SDL_Color pendingArchiveCacheCleanupStatusColor{157, 177, 200, 255};
   std::string difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string chartFolderStatusMessage;
@@ -468,19 +430,6 @@ private:
   void resetPreviewSimulation();
   void loadDifficultyTables();
   void loadChartEntries();
-  void requestDifficultyTableStatus(const std::string &text,
-                                    const SDL_Color &color,
-                                    bool reloadTables = false);
-  void requestChartFolderStatus(const std::string &text, const SDL_Color &color,
-                                bool reloadTables = false);
-  void requestDifficultyTableImportProgress(int current, int total,
-                                            const std::string &tableName,
-                                            const std::string &statusText,
-                                            bool finished,
-                                            bool succeeded,
-                                            const std::string &submittedUrl);
-  void requestArchiveCacheCleanupStatus(const std::string &text,
-                                        const SDL_Color &color);
   void applyPendingDifficultyTableUpdates();
   void applyPendingArchiveCacheCleanupStatus();
   void refreshTablesIfLibraryChanged();

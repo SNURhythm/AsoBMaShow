@@ -3,6 +3,7 @@
 
 #if TARGET_OS_ANDROID
 
+#include "StableHash.h"
 #include "audio/NativeMusicPlayer.h"
 #include "library/ChartLibraryTaskService.h"
 
@@ -98,25 +99,6 @@ struct UniqueFd {
   int value;
 };
 
-std::uint64_t fnv1a64(const std::string &value) {
-  std::uint64_t hash = 14695981039346656037ull;
-  for (unsigned char c : value) {
-    hash ^= static_cast<std::uint64_t>(c);
-    hash *= 1099511628211ull;
-  }
-  return hash;
-}
-
-std::string hex64(std::uint64_t value) {
-  constexpr char digits[] = "0123456789abcdef";
-  std::string out(16, '0');
-  for (int i = 15; i >= 0; --i) {
-    out[static_cast<std::size_t>(i)] = digits[value & 0xfu];
-    value >>= 4;
-  }
-  return out;
-}
-
 std::string sanitizePathComponent(std::string value) {
   for (char &c : value) {
     if (c == '/' || c == '\\' || c == '\0') {
@@ -131,7 +113,8 @@ std::string sanitizePathComponent(std::string value) {
 
 std::filesystem::path makeAndroidTreeRootPath(const std::string &treeUri,
                                               const std::string &displayName) {
-  return std::filesystem::path(kAndroidTreeSentinel) / hex64(fnv1a64(treeUri)) /
+  return std::filesystem::path(kAndroidTreeSentinel) /
+         stable_hash::hex64(stable_hash::fnv1a64(treeUri)) /
          sanitizePathComponent(displayName);
 }
 

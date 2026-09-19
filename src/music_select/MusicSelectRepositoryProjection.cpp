@@ -1,4 +1,7 @@
 #include "MusicSelectRepositoryProjection.h"
+#include "../BeatorajaClearType.h"
+
+#include "MusicSelectMode.h"
 
 #include "../BmsMetadataText.h"
 #include "../CourseConstraintUtils.h"
@@ -64,43 +67,6 @@ bool pathAtOrInside(const std::filesystem::path &path,
          *first != std::filesystem::path(".");
 }
 
-int beatorajaClearType(int rank) {
-  if (rank == kNoClearTypeRank) return 0;
-  if (rank >= kClearTypeFullComboRank) return 8;
-  if (rank >= kClearTypeExHardClearRank) return 7;
-  if (rank >= kClearTypeHardClearRank) return 6;
-  if (rank >= kClearTypeNormalClearRank) return 5;
-  if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
-  if (rank >= kClearTypeAssistedEasyClearRank) return 2;
-  return 1;
-}
-
-int songMode(const bms_parser::ChartMeta &meta) {
-  if (meta.KeyMode == 5 && !meta.IsDP) return 5;
-  if (meta.KeyMode == 7 && !meta.IsDP) return 7;
-  if (meta.KeyMode == 9 && !meta.IsDP) return 9;
-  if (meta.KeyMode == 10 || (meta.KeyMode == 5 && meta.IsDP)) return 10;
-  if (meta.KeyMode == 14 || (meta.KeyMode == 7 && meta.IsDP)) return 14;
-  if (meta.KeyMode == 24 && !meta.IsDP) return 25;
-  if (meta.KeyMode == 48 || (meta.KeyMode == 24 && meta.IsDP)) return 50;
-  return 0;
-}
-
-bool modeMatches(std::string_view filter, int mode) {
-  if (mode == 0 || filter == "ALL") return true;
-  if (filter == "7KEY") return mode == 7;
-  if (filter == "14KEY") return mode == 14;
-  if (filter == "9KEY") return mode == 9;
-  if (filter == "5KEY") return mode == 5;
-  if (filter == "10KEY") return mode == 10;
-  if (filter == "24KEY") return mode == 25;
-  if (filter == "48KEY") return mode == 50;
-  if (filter == "SINGLE") return mode == 5 || mode == 7;
-  if (filter == "DOUBLE") return mode == 10 || mode == 14;
-  return false;
-}
-
 int songFeatures(const ChartMetaRecord &record) {
   const auto &meta = record.meta;
   int features = 0;
@@ -146,7 +112,7 @@ MusicSelectFolderStatusAccumulator::MusicSelectFolderStatusAccumulator(
 void MusicSelectFolderStatusAccumulator::add(const bms_parser::ChartMeta &meta,
                                             bool available) {
   checkCancelled();
-  if (!available || !modeMatches(input_.modeFilter, songMode(meta))) return;
+  if (!available || !musicSelectModeMatches(input_.modeFilter, musicSelectSongMode(meta))) return;
   const auto best = input_.scoreFor
                         ? input_.scoreFor(meta, input_.selectedLongNoteMode)
                         : std::nullopt;
@@ -155,7 +121,7 @@ void MusicSelectFolderStatusAccumulator::add(const bms_parser::ChartMeta &meta,
                         ? input_.clearFor(meta, input_.selectedLongNoteMode)
                         : best ? best->clearType : kNoClearTypeRank;
   checkCancelled();
-  ++frame_.folderLampCounts[static_cast<std::size_t>(beatorajaClearType(clear))];
+  ++frame_.folderLampCounts[static_cast<std::size_t>(beatorajaSongClearType(clear))];
   int rank = 0;
   if (best && best->maxScore > 0) {
     rank = static_cast<int>(std::clamp<std::int64_t>(
@@ -196,7 +162,7 @@ struct ProjectionBuilder {
     const int rank = input.clearFor
                          ? input.clearFor(record.meta, input.selectedLongNoteMode)
                          : best ? best->clearType : kNoClearTypeRank;
-    return beatorajaClearType(rank);
+    return beatorajaSongClearType(rank);
   }
 
   MusicSelectBarId addSong(const ChartMetaRecord &record,
@@ -760,7 +726,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
           for (const auto &score : scores) {
             if (score) rank = std::max(rank, score->clearType);
           }
-          grade.presentation.lamp = beatorajaClearType(rank);
+          grade.presentation.lamp = beatorajaSongClearType(rank);
           grade.score = scores.front();
 
           // GradeBar checks trophies from last to first against the normal,

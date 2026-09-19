@@ -312,46 +312,6 @@ bool isLaneOrderSummaryOption(const std::optional<std::string> &option) {
          normalized == "RANDOM-EX";
 }
 
-std::optional<std::string>
-formatLaneOrderSummary(const bms_parser::ChartMeta &meta,
-                       const std::vector<int> &laneOrder) {
-  const std::vector<int> destinationLanes = meta.GetTotalLaneIndices();
-  if (destinationLanes.empty() || laneOrder.size() != destinationLanes.size()) {
-    return std::nullopt;
-  }
-
-  std::unordered_map<int, char> laneToSymbol;
-  const auto scratchLanes = meta.GetScratchLaneIndices();
-  if (meta.IsDP) {
-    if (scratchLanes.size() >= 2) {
-      laneToSymbol[scratchLanes.front()] = 'L';
-      laneToSymbol[scratchLanes.back()] = 'R';
-    }
-  } else if (!scratchLanes.empty()) {
-    laneToSymbol[scratchLanes.front()] = 'S';
-  }
-
-  constexpr std::string_view keySymbols = "123456789ABCDE";
-  const auto keyLanes = meta.GetKeyLaneIndices();
-  if (keyLanes.size() > keySymbols.size()) {
-    return std::nullopt;
-  }
-  for (size_t i = 0; i < keyLanes.size(); ++i) {
-    laneToSymbol[keyLanes[i]] = keySymbols[i];
-  }
-
-  std::string result;
-  result.reserve(laneOrder.size());
-  for (int sourceLane : laneOrder) {
-    const auto symbol = laneToSymbol.find(sourceLane);
-    if (symbol == laneToSymbol.end()) {
-      return std::nullopt;
-    }
-    result.push_back(symbol->second);
-  }
-  return result;
-}
-
 bool matchHeader(std::string_view line, std::string_view headerUpper) {
   if (line.size() < headerUpper.size()) {
     return false;
@@ -2379,6 +2339,11 @@ ChartViewerScene::ChartViewerScene(
   }
 }
 
+ChartViewerScene::~ChartViewerScene() {
+  // Release listening audio before the chart and other scene members disappear.
+  cleanup();
+}
+
 void ChartViewerScene::init() {
   initView();
   parseAndRefresh(selectedRandomValues.empty()
@@ -3992,8 +3957,8 @@ bool ChartViewerScene::applyViewerPlayOptions(bms_parser::Chart &target,
   }
 
   if (shouldSummarizeLaneOrder) {
-    viewerLaneOrderSummary = formatLaneOrderSummary(target.Meta,
-                                                    combinedLaneOrder);
+    viewerLaneOrderSummary = play_options::formatLaneOrderSummary(
+        target.Meta, combinedLaneOrder);
   }
 
   return true;

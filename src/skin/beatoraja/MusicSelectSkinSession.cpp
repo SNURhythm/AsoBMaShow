@@ -328,12 +328,9 @@ MusicSelectSkinSession::MusicSelectSkinSession(
     std::unique_ptr<SkinResourceCatalog> resources,
     std::unique_ptr<SkinMovieCatalog> movies, SkinStorageRoots storageRoots,
     SkinResourcePreparationService &resourcePreparation,
-    std::shared_ptr<SkinTextureDevice> textureDevice,
     SkinBuiltinImageReader builtinImageReader,
-    std::shared_ptr<SkinLiveResourceCounters> liveResourceCounters,
     rendering::SkinQuadBatchBackend *quadBackend,
     SkinSafetyPolicy safetyPolicy, ViewportSettings viewportSettings,
-    std::stop_token stop,
     RuntimeStringsByObject preparedRuntimeStringsByObject,
     std::map<int, std::filesystem::path> preparedBuiltinImagePaths)
     : sessionSerial_(sessionSerial), profileId_(std::move(profileId)),
@@ -342,11 +339,8 @@ MusicSelectSkinSession::MusicSelectSkinSession(
       runtime_(std::move(runtime)), resources_(std::move(resources)),
       movies_(std::move(movies)), storageRoots_(std::move(storageRoots)),
       resourcePreparation_(&resourcePreparation),
-      textureDevice_(std::move(textureDevice)),
       builtinImageReader_(std::move(builtinImageReader)),
-      liveResourceCounters_(std::move(liveResourceCounters)),
       safetyPolicy_(safetyPolicy), viewportSettings_(viewportSettings),
-      stop_(stop),
       quadRenderer_(quadBackend
                         ? std::make_unique<rendering::SkinQuadBatchRenderer>(
                               *quadBackend)
@@ -642,10 +636,8 @@ MusicSelectSkinSessionCreateResult MusicSelectSkinSession::finalize(
             std::move(prepared.document.luaRuntime),
             std::move(uploaded.catalog), std::move(preparedMovies.catalog),
             std::move(prepared.storageRoots), context.resourcePreparation,
-            std::move(context.textureDevice),
             std::move(prepared.builtinImageReader),
-            std::move(context.liveResourceCounters), context.quadBackend,
-            prepared.safetyPolicy, request.viewport, prepared.stop,
+            context.quadBackend, prepared.safetyPolicy, request.viewport,
             std::move(prepared.runtimeAtlasStrings),
             std::move(prepared.builtinImagePaths)));
     result.session->queuedActions_ = std::move(prepared.initialActions);
@@ -1079,65 +1071,6 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
             std::move(residentGlyphsByKey), stop);
       });
   return false;
-}
-
-bool MusicSelectSkinSession::refreshResources(
-    const MusicSelectSkinFrame &frame) {
-  if (!requiresResourceRefresh(frame)) return true;
-  try {
-    auto resourceFiles = LuaSkinFileSystem::create(
-        {.revision = revision_.readView(),
-         .entry = entry_,
-         .storageRoots = storageRoots_,
-         .profileId = profileId_,
-         .safetyPolicy = safetyPolicy_});
-    if (!resourceFiles.fileSystem) {
-      diagnostics_.push_back(failure(
-          "skin.music_select_session.refresh_filesystem_create_failed",
-          resourceFiles.failure
-              ? resourceFiles.failure->message
-              : "Music-select refresh filesystem could not be created."));
-      return false;
-    }
-    auto runtimeAtlasStrings = musicSelectRuntimeAtlasStrings(
-        model_, frame, observedRuntimeStringsByObject_, kMusicSelectTitleOverscan);
-    auto builtinImagePaths = musicSelectBuiltinImagePaths(frame);
-    auto planned = resourcePreparation_->decodeAndPlan(
-        {.revision = revision_.clone(),
-         .entry = entry_,
-         .fileSystem = *resourceFiles.fileSystem,
-         .model = model_,
-         .configuration = configuration_,
-         .requiredRuntimeStringsByObject = runtimeAtlasStrings,
-         .builtinImagePaths = builtinImagePaths,
-         .builtinImageReader = builtinImageReader_,
-         .safetyPolicy = safetyPolicy_,
-         .stop = stop_});
-    diagnostics_.insert(
-        diagnostics_.end(),
-        std::make_move_iterator(planned.diagnostics.begin()),
-        std::make_move_iterator(planned.diagnostics.end()));
-    if (planned.cancelled || !planned.plan || hasErrors(diagnostics_)) {
-      return false;
-    }
-    auto uploaded = SkinResourceCatalog::upload(
-        std::move(*planned.plan), textureDevice_, liveResourceCounters_);
-    diagnostics_.insert(
-        diagnostics_.end(),
-        std::make_move_iterator(uploaded.diagnostics.begin()),
-        std::make_move_iterator(uploaded.diagnostics.end()));
-    if (!uploaded.catalog || hasErrors(diagnostics_)) return false;
-    uploaded.catalog->enterRenderPhase();
-    resources_ = std::move(uploaded.catalog);
-    preparedRuntimeStringsByObject_ = std::move(runtimeAtlasStrings);
-    preparedBuiltinImagePaths_ = std::move(builtinImagePaths);
-    return true;
-  } catch (...) {
-    diagnostics_.push_back(failure(
-        "skin.music_select_session.refresh_failed",
-        "Music-select skin resources could not be refreshed."));
-    return false;
-  }
 }
 
 MusicSelectSkinPointerTarget

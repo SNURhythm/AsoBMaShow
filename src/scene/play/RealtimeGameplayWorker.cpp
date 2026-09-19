@@ -105,7 +105,12 @@ bool RealtimeGameplayWorker::start() {
     return false;
   }
   stopRequested_.store(false, std::memory_order_release);
-  thread_ = std::thread([this] { run(); });
+  try {
+    thread_ = std::thread([this] { run(); });
+  } catch (...) {
+    started_.store(false, std::memory_order_release);
+    throw;
+  }
   return true;
 }
 

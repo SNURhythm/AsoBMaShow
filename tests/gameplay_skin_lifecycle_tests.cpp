@@ -1,4 +1,5 @@
 #include "skin/GameplaySkinLifecycle.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
@@ -42,8 +43,11 @@ public:
     throw std::runtime_error("could not create lifecycle test directory");
   }
   ~TempDirectory() {
-    std::error_code error;
-    fs::remove_all(path_, error);
+    const auto error = ::test_support::removeReadOnlyTree(path_);
+    if (error) {
+      const std::string message = "lifecycle fixture cleanup failed: " + error.message();
+      require(false, message.c_str());
+    }
   }
   const fs::path &path() const noexcept { return path_; }
 

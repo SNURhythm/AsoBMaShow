@@ -6,6 +6,7 @@
 #include "skin/package/SkinAliasDetector.h"
 #include "skin/package/SkinPathPolicy.h"
 #include "skin/package/SkinTreeSnapshotter.h"
+#include "support/ReadOnlyTreeCleanup.h"
 
 #include <algorithm>
 #include <array>
@@ -49,14 +50,9 @@ public:
   }
 
   ~TempDirectory() {
-    std::error_code ignored;
-    for (fs::recursive_directory_iterator iterator(root_, ignored), end;
-         !ignored && iterator != end; ++iterator) {
-      fs::permissions(iterator->path(), fs::perms::owner_all,
-                      fs::perm_options::add, ignored);
+    if (const auto error = ::test_support::removeReadOnlyTree(root_)) {
+      expect(false, "Lua filesystem fixture cleanup failed: " + error.message());
     }
-    ignored.clear();
-    fs::remove_all(root_, ignored);
   }
 
   const fs::path &root() const noexcept { return root_; }

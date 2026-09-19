@@ -248,10 +248,12 @@ laneOrderForPlayOption(const bms_parser::ChartMeta &meta,
 
   bms_parser::Chart syntheticChart;
   syntheticChart.Meta = meta;
-  auto *measure = new bms_parser::Measure();
-  auto *timeline = new bms_parser::TimeLine(laneCount, false);
-  measure->TimeLines.push_back(timeline);
-  syntheticChart.Measures.push_back(measure);
+  auto measure = std::make_unique<bms_parser::Measure>();
+  auto timeline = std::make_unique<bms_parser::TimeLine>(laneCount, false);
+  measure->TimeLines.push_back(timeline.get());
+  timeline.release();
+  syntheticChart.Measures.push_back(measure.get());
+  measure.release();
   modifier->Modify(syntheticChart);
   return modifier->GetLaneOrder(meta);
 }

@@ -670,6 +670,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
             src/ArchiveFile.cpp
+            src/archive/TemporaryCache.cpp
+            src/archive/UnzipOutput.cpp
+            src/archive/IndexBuildCoordinator.cpp
             src/MinizBridge.c
             src/audio/GameplayBgaMissStateTracker.cpp
             src/bms_parser.cpp
@@ -1362,6 +1365,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(music_select_repository_projection_tests PRIVATE cxx_std_23)
         add_executable(music_select_folder_status_loader_tests
             tests/music_select_folder_status_loader_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/music_select/MusicSelectFolderStatusLoader.cpp
         )
         target_include_directories(music_select_folder_status_loader_tests PRIVATE
@@ -1442,14 +1446,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(music_select_external_actions_tests PRIVATE cxx_std_23)
 
-        add_executable(intro_scene_navigation_tests
-            tests/intro_scene_navigation_tests.cpp
-            src/music_select/MusicSelectInputProcessor.cpp
-        )
-        target_include_directories(intro_scene_navigation_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/src
-        )
-        target_compile_features(intro_scene_navigation_tests PRIVATE cxx_std_23)
+        include(cmake/IntroSceneTests.cmake)
 
         add_executable(music_select_bar_manager_tests
             tests/music_select_bar_manager_tests.cpp
@@ -1504,6 +1501,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_compile_features(music_select_sql_songs_tests PRIVATE cxx_std_23)
         add_executable(music_select_directory_loader_tests
             tests/music_select_directory_loader_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/music_select/MusicSelectDirectoryLoader.cpp
         )
         target_include_directories(music_select_directory_loader_tests PRIVATE
@@ -2564,13 +2562,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(lane_cover_number_geometry_tests PRIVATE cxx_std_23)
 
-    add_executable(chart_viewer_note_geometry_tests
-        tests/chart_viewer_note_geometry_tests.cpp
-    )
-    target_include_directories(chart_viewer_note_geometry_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(chart_viewer_note_geometry_tests PRIVATE cxx_std_23)
+    include(cmake/ChartViewerTests.cmake)
 
     add_executable(gameplay_scroll_geometry_tests
         tests/gameplay_scroll_geometry_tests.cpp
@@ -3014,6 +3006,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Uuid.cpp
         src/Utils.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/bms_parser.cpp
         src/MinizBridge.c
         src/repositories/ChartStorageIdentity.cpp
@@ -3160,6 +3155,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(ir_submission_service_tests
         tests/ir_submission_service_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/AtomicFile.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
@@ -3305,6 +3301,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_legacy_migration_tests
         tests/replay_legacy_migration_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/repositories/ReplayRepository.cpp
@@ -3815,6 +3812,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(music_playlist_repository_tests
         tests/music_playlist_repository_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartStorageIdentity.cpp
@@ -3851,6 +3851,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/ir/IrOutboxModels.cpp
@@ -3895,6 +3898,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(chart_repository_tests PRIVATE shell32 ole32)
     endif()
     get_target_property(CHART_SELECTOR_QUERY_TEST_SOURCES chart_repository_tests SOURCES)
+    # Keep allocation injection local to the repository runner.
+    target_sources(chart_repository_tests PRIVATE tests/support/AllocationFailure.cpp)
     list(REMOVE_ITEM CHART_SELECTOR_QUERY_TEST_SOURCES tests/chart_repository_tests.cpp)
     add_executable(chart_selector_query_tests
         tests/chart_selector_query_tests.cpp
@@ -3904,15 +3909,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(chart_selector_query_tests PRIVATE cxx_std_23)
     get_target_property(CHART_SELECTOR_QUERY_TEST_LIBRARIES chart_repository_tests LINK_LIBRARIES)
     target_link_libraries(chart_selector_query_tests PRIVATE ${CHART_SELECTOR_QUERY_TEST_LIBRARIES})
-
-    add_executable(chart_scan_work_scheduler_tests
-        tests/chart_scan_work_scheduler_tests.cpp
-        src/ChartScanWorkScheduler.cpp
-    )
-    target_include_directories(chart_scan_work_scheduler_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(chart_scan_work_scheduler_tests PRIVATE cxx_std_23)
 
     add_executable(archive_asset_pipeline_tests
         tests/archive_asset_pipeline_tests.cpp
@@ -3941,6 +3937,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(archive_file_concurrency_tests
         tests/archive_file_concurrency_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4005,6 +4004,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4091,6 +4093,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4217,6 +4222,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/modern_result_recall_tests.cpp
         src/ModernResultRecallBuilder.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/ModernResult.cpp
         src/FileChecksum.cpp
@@ -4274,16 +4282,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(score_provenance_db_tests PRIVATE SDL2)
     endif()
 
-    add_executable(best_replay_resolver_tests
-        tests/best_replay_resolver_tests.cpp
-        src/ScoreProvenance.cpp
-        src/replay/BestReplayResolver.cpp
-        src/scene/play/GameplayGaugeRules.cpp
-    )
-    target_include_directories(best_replay_resolver_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(best_replay_resolver_tests PRIVATE cxx_std_23)
+    include(cmake/ReplayLoadTests.cmake)
 
     add_executable(chart_record_filters_tests
         tests/chart_record_filters_tests.cpp
@@ -4314,6 +4313,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(chart_library_task_service_tests
         tests/chart_library_task_service_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/library/ChartLibraryTaskService.cpp
     )
     target_include_directories(chart_library_task_service_tests PRIVATE
@@ -4334,6 +4334,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -4458,6 +4461,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayDefinition.cpp
         src/scene/play/ReplayKeysoundSchedule.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/Uuid.cpp
@@ -4504,6 +4510,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/skin_sound_bundle_decode_tests.cpp
         src/audio/decoder.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/bms_parser.cpp
@@ -4526,7 +4535,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(jukebox_restore_tests
         tests/jukebox_restore_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
@@ -4565,7 +4578,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     get_target_property(VISUAL_CATCH_UP_SOURCES jukebox_restore_tests SOURCES)
     list(REMOVE_ITEM VISUAL_CATCH_UP_SOURCES
-        tests/jukebox_restore_tests.cpp src/video/VideoPlayer.cpp)
+        tests/jukebox_restore_tests.cpp tests/support/AllocationFailure.cpp
+        src/video/VideoPlayer.cpp)
     add_executable(visual_catch_up_tests
         tests/visual_catch_up_tests.cpp
         tests/visual_catch_up_video_fixture.cpp
@@ -4646,18 +4660,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(decoded_image_cache_tests PRIVATE cxx_std_23)
 
-    add_executable(image_decode_coordinator_tests
-        tests/image_decode_coordinator_tests.cpp
-        src/view/DecodedImageCache.cpp
-        src/view/ImageDecodeCoordinator.cpp
-    )
-    target_include_directories(image_decode_coordinator_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(image_decode_coordinator_tests PRIVATE cxx_std_23)
-
     add_executable(image_file_decoder_tests
         tests/image_file_decoder_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/MinizBridge.c
         src/path.cpp
         src/view/DecodedImageCache.cpp
@@ -4878,6 +4883,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4917,6 +4925,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -4948,6 +4959,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UiBatchRenderer.cpp
         src/rendering/UniformCache.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -5009,6 +5023,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(view_layout_tests
         tests/view_layout_tests.cpp
+        tests/support/AllocationLifetimeProbe.cpp
         src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
         src/view/View.cpp
@@ -5053,6 +5068,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(text_view_font_lifetime_tests
+        tests/text_view_font_lifetime_tests.cpp
+        tests/support/AllocationFailure.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(text_view_font_lifetime_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(text_view_font_lifetime_tests PRIVATE cxx_std_23)
+    target_compile_definitions(text_view_font_lifetime_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    target_link_libraries(text_view_font_lifetime_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(checkbox_button_content_tests
         tests/checkbox_button_content_tests.cpp
         src/rendering/Color.cpp
@@ -5080,6 +5110,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(difficulty_table_url_completion_tests PRIVATE
         cxx_std_23
     )
+
+    add_executable(play_option_summary_tests
+        tests/play_option_summary_tests.cpp
+        tests/support/AllocationLifetimeProbe.cpp
+        src/bms_parser.cpp
+    )
+    target_include_directories(play_option_summary_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(play_option_summary_tests PRIVATE cxx_std_23)
 
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
@@ -5217,6 +5255,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/Utils.cpp
         src/repositories/ChartStorageIdentity.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/path.cpp
@@ -5234,20 +5275,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(ir_upload_candidate_list_view_tests PRIVATE iconv)
     endif()
 
-    add_executable(ir_uploads_controller_tests
-        tests/ir_uploads_controller_tests.cpp
-        src/scene/IrUploadsController.cpp
-        src/ir/IrOutboxModels.cpp
-        src/ScoreProvenance.cpp
-        src/scene/play/GameplayGaugeRules.cpp
-        src/scene/play/GameplayJudgeRules.cpp
-        src/scene/play/Judge.cpp
-        src/Uuid.cpp
-    )
-    target_include_directories(ir_uploads_controller_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(ir_uploads_controller_tests PRIVATE cxx_std_23)
+    include(cmake/IrUploadTests.cmake)
 
     add_executable(score_provenance_tests
         tests/score_provenance_tests.cpp
@@ -5348,6 +5376,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(profile_export_staging_tests
             tests/profile_export_staging_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/ProfileExportStaging.cpp
             src/PlatformDocumentHandoff.cpp
             src/skin/package/SkinPathPolicy.cpp
@@ -5402,31 +5431,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(input_timestamp_tests PRIVATE cxx_std_23)
 
-    add_executable(input_capture_controller_tests
-        tests/input_capture_controller_tests.cpp
-        src/input/InputCaptureController.cpp
-        src/input/InputBindingResolver.cpp
-        src/input/InputDefaults.cpp
-        src/input/InputDeviceIdentity.cpp
-        src/input/InputDeviceRegistry.cpp
-        src/input/InputProfile.cpp
-        src/input/VirtualControllerConfig.cpp
-        src/input/SDLInputBackend.cpp
-    )
-    target_include_directories(input_capture_controller_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(input_capture_controller_tests PRIVATE cxx_std_23)
-    asobmashow_add_midi_backend(input_capture_controller_tests)
-    asobmashow_add_gyroscope_backend(input_capture_controller_tests)
-    asobmashow_add_windows_realtime_input_backend(input_capture_controller_tests)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(input_capture_controller_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(input_capture_controller_tests PRIVATE SDL2)
-    endif()
+    include(cmake/InputCaptureTests.cmake)
 
     add_executable(app_settings_store_tests
         tests/app_settings_store_tests.cpp
@@ -5647,6 +5652,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/FindBmsDialogPolicy.cpp
         src/scene/FindBmsProgressPresentation.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/Uuid.cpp
@@ -5787,6 +5795,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/Utils.cpp
         src/audio/AudioBackend.cpp
@@ -6085,6 +6096,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(play_skin_session_tests
             tests/play_skin_session_tests.cpp
             src/ArchiveFile.cpp
+            src/archive/TemporaryCache.cpp
+            src/archive/UnzipOutput.cpp
+            src/archive/IndexBuildCoordinator.cpp
             src/MinizBridge.c
             src/FileChecksum.cpp
             src/Utils.cpp
@@ -6245,6 +6259,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(replay_playfield_presentation_tests
             tests/replay_playfield_presentation_tests.cpp
             src/ArchiveFile.cpp
+            src/archive/TemporaryCache.cpp
+            src/archive/UnzipOutput.cpp
+            src/archive/IndexBuildCoordinator.cpp
             src/AtomicFile.cpp
             src/FileChecksum.cpp
             src/MinizBridge.c
@@ -6550,6 +6567,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/settings/AudioVideoSettings.cpp
         src/AtomicFile.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
         src/MinizBridge.c
@@ -6633,7 +6653,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests
     )
     target_compile_features(gameplay_terminal_scene_tests PRIVATE cxx_std_23)
-    target_link_libraries(gameplay_terminal_scene_tests PRIVATE ${COMMON_LIBS})
+    target_sources(gameplay_terminal_scene_tests PRIVATE
+        src/scene/play/RealtimeGameplayInputRegistration.cpp)
+    target_link_libraries(gameplay_terminal_scene_tests PRIVATE ${COMMON_LIBS}
+        input_registry_test_support)
     if(APPLE)
         target_link_libraries(gameplay_terminal_scene_tests PRIVATE iconv)
     endif()
@@ -6743,6 +6766,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(realtime_gameplay_worker_tests
         tests/realtime_gameplay_worker_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/bms_parser.cpp
         src/ScoreProvenance.cpp
         src/input/InputBindingResolver.cpp
@@ -6927,6 +6951,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(remote_result_scene_tests
         tests/remote_result_scene_tests.cpp
+        src/BeatorajaScoreMetrics.cpp
         src/bms_parser.cpp
         src/ir/IrProfileSettings.cpp
         src/ir/IrRemoteScoreModels.cpp
@@ -7113,6 +7138,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputDefaults.cpp
         src/input/InputProfileStore.cpp
         src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/MinizBridge.c
         src/bms_parser.cpp
         src/repositories/ChartRepository.cpp
@@ -7229,15 +7257,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(profile_archive_tests PRIVATE shell32 ole32 advapi32)
     endif()
 
-    add_executable(profile_settings_controller_tests
-        tests/profile_settings_controller_tests.cpp
-        src/scene/ProfileSettingsController.cpp
-        src/scene/ProfileRuntimeReapply.cpp
-    )
-    target_include_directories(profile_settings_controller_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(profile_settings_controller_tests PRIVATE cxx_std_23)
+    include(cmake/ProfileSettingsTests.cmake)
 
     add_executable(profile_runtime_reapply_tests
         tests/profile_runtime_reapply_tests.cpp
@@ -7248,24 +7268,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(profile_runtime_reapply_tests PRIVATE cxx_std_23)
 
-    add_executable(input_device_registry_tests
-        tests/input_device_registry_tests.cpp
-        src/input/InputDeviceIdentity.cpp
-        src/input/InputDeviceRegistry.cpp
-        src/input/SDLInputBackend.cpp
-    )
-    target_include_directories(input_device_registry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(input_device_registry_tests PRIVATE cxx_std_23)
-    asobmashow_add_midi_backend(input_device_registry_tests)
-    asobmashow_add_gyroscope_backend(input_device_registry_tests)
-    asobmashow_add_windows_realtime_input_backend(input_device_registry_tests)
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2)
-    elseif(TARGET SDL2::SDL2-static)
-        target_link_libraries(input_device_registry_tests PRIVATE SDL2::SDL2-static)
-    elseif(TARGET SDL2)
-        target_link_libraries(input_device_registry_tests PRIVATE SDL2)
-    endif()
+    include(cmake/RealtimeInputTests.cmake)
 
     add_executable(logical_gameplay_input_tests
         tests/logical_gameplay_input_tests.cpp
@@ -7892,6 +7895,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         view_layout_tests
         button_enabled_tests
         text_input_box_tests
+        text_view_font_lifetime_tests
         checkbox_button_content_tests
         play_options_panel_view_tests
         replay_summary_list_view_tests
@@ -7941,6 +7945,55 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
     endfunction()
+
+    add_executable(profile_database_ownership_tests
+        tests/profile_database_ownership_tests.cpp
+        tests/support/AllocationFailure.cpp
+        src/ProfileDatabaseTools.cpp
+    )
+    target_include_directories(profile_database_ownership_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(profile_database_ownership_tests PRIVATE cxx_std_23)
+    target_link_libraries(profile_database_ownership_tests PRIVATE
+        SQLite3 Threads::Threads ${CMAKE_DL_LIBS})
+    asobmashow_register_test(profile_database_ownership_tests)
+
+    add_executable(replay_export_job_tests
+        tests/replay_export_job_tests.cpp
+        tests/support/AllocationFailure.cpp
+        src/replay/ReplayExportJob.cpp
+    )
+    target_compile_features(replay_export_job_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(replay_export_job_tests)
+    include(cmake/UtilityTests.cmake)
+    include(cmake/WorkerPoolTests.cmake)
+    include(cmake/LibraryPickerTests.cmake)
+    include(cmake/MusicPlayerTests.cmake)
+    include(cmake/JukeboxSchedulerTests.cmake)
+    include(cmake/ArchiveStorageTests.cmake)
+    include(cmake/FindBmsTaskTests.cmake)
+
+    add_executable(main_menu_preview_controller_tests
+        tests/main_menu_preview_controller_tests.cpp
+        src/scene/MainMenuPreviewController.cpp
+        src/scene/ChartPreloadWorker.cpp
+        src/path.cpp
+    )
+    target_include_directories(main_menu_preview_controller_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/include
+    )
+    target_compile_features(main_menu_preview_controller_tests PRIVATE cxx_std_23)
+    target_link_libraries(main_menu_preview_controller_tests PRIVATE Threads::Threads)
+    asobmashow_register_test(main_menu_preview_controller_tests)
+
+    add_executable(replay_record_task_tests
+        tests/replay_record_task_tests.cpp
+        src/scene/ReplayRecordTask.cpp
+    )
+    target_include_directories(replay_record_task_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(replay_record_task_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(replay_record_task_tests)
+
+    include(cmake/RecordsTests.cmake)
 
     asobmashow_register_test(skin_package_store_tests)
     if (TARGET curl_redirect_policy_tests)
@@ -8021,6 +8074,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         start_lane_indicator_geometry_tests
         lane_cover_number_geometry_tests
         chart_viewer_note_geometry_tests
+        chart_viewer_lifecycle_tests
         gameplay_scroll_geometry_tests
         gameplay_chart_entity_render_budget_tests
         club_beat_tests
@@ -8083,6 +8137,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         course_replay_consumer_tests
         replay_playback_driver_tests
         best_replay_resolver_tests
+        best_replay_load_tests
         music_playlist_repository_tests
         chart_repository_tests
         chart_selector_query_tests
@@ -8224,6 +8279,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET intro_scene_navigation_tests)
         asobmashow_register_test(intro_scene_navigation_tests)
+        asobmashow_register_test(intro_scene_lifecycle_tests)
     endif()
     if (TARGET music_select_bar_manager_tests)
         asobmashow_register_test(music_select_bar_manager_tests)
@@ -8451,6 +8507,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(TARGET skin_configuration_write_queue_tests)
         asobmashow_register_test(skin_configuration_write_queue_tests)
     endif()
+    asobmashow_register_test(text_view_font_lifetime_tests)
+    asobmashow_register_test(play_option_summary_tests)
     asobmashow_register_test(play_options_panel_view_tests)
     asobmashow_register_test(gameplay_judge_rules_tests)
     asobmashow_register_test(judgement_indicator_range_tests)
@@ -8466,6 +8524,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(ios_gyroscope_motion_adapter_tests foundation_input_gyroscope_ios_adapter)
     asobmashow_register_test(gyroscope_input_backend_core_tests foundation_input_gyroscope_backend)
     asobmashow_register_test(input_capture_controller_tests foundation_input_capture)
+    asobmashow_register_test(input_capture_startup_failure_tests)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(application_ui_state_store_tests)
@@ -8521,6 +8580,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
+    asobmashow_register_test(realtime_gameplay_input_registration_tests)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
     asobmashow_register_test(start_select_control_tests)
     asobmashow_register_test(beatoraja_hispeed_tests)
