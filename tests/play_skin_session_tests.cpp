@@ -3813,6 +3813,76 @@ void testMusicSelectStopsRetryingAnUnavailableCallbackFont() {
          "without retrying the whole selector frame");
 }
 
+void testMusicSelectAcceptsOversizedSelectedArtwork() {
+  for (const auto safetyLevel : {SkinSafetyLevel::Standard,
+                                 SkinSafetyLevel::BeatorajaCompatibility}) {
+    ActivationFixture fixture(
+        {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+    if (!fixture.ready()) return;
+    std::string stage = "P6\n4096 2\n255\n" +
+                        std::string(4096U * 2U * 3U, '\x66');
+    std::string banner = "P6\n2 4096\n255\n" +
+                         std::string(2U * 4096U * 3U, '\x99');
+    stage.resize(32U * 1024U * 1024U + 1U);
+    banner.resize(32U * 1024U * 1024U + 1U);
+    auto context = fixture.musicSelectContext();
+    context.builtinImageReader =
+        [&](const fs::path &path, std::vector<unsigned char> &bytes,
+            std::size_t maximumBytes, std::string *, std::stop_token) {
+          const auto &encoded = path == "stage.ppm" ? stage : banner;
+          if (encoded.size() > maximumBytes) return false;
+          bytes.assign(encoded.begin(), encoded.end());
+          return true;
+        };
+    auto preparation = MusicSelectSkinSession::prepare(
+        {.activation = fixture.takeActivation(),
+         .profileId = fixture.profile(),
+         .sessionSerial = 102},
+        {.storageRoots = context.storageRoots,
+         .resourcePreparation = context.resourcePreparation,
+         .initialFrame = context.initialFrame,
+         .builtinImageReader = context.builtinImageReader});
+    expect(preparation.prepared.has_value(), "oversized selector artwork prepares");
+    if (!preparation.prepared) continue;
+    preparation.prepared->safetyPolicy = SkinSafetyPolicy(safetyLevel);
+    preparation.prepared->resourcePlan.safetyPolicy = SkinSafetyPolicy(safetyLevel);
+    SessionQuadBackend quadBackend;
+    auto created = MusicSelectSkinSession::finalize(
+        std::move(*preparation.prepared),
+        {.resourcePreparation = context.resourcePreparation,
+         .textureDevice = context.textureDevice,
+         .movieDevice = context.movieDevice,
+         .liveResourceCounters = context.liveResourceCounters,
+         .quadBackend = &quadBackend});
+    expect(created.session != nullptr, "oversized selector artwork session finalizes");
+    if (!created.session) continue;
+    const auto uploads = fixture.device()->createCalls;
+    RenderContext renderContext;
+    MusicSelectSkinFrame frame;
+    frame.stageFile = "stage.ppm";
+    frame.banner = "banner.ppm";
+    bool rendered = true;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(2);
+    while (fixture.device()->createCalls < uploads + 2 &&
+           std::chrono::steady_clock::now() < deadline) {
+      ++frame.serial;
+      rendered = created.session->render(renderContext, frame) && rendered;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(rendered && fixture.device()->createCalls == uploads + 2 &&
+               quadBackend.submitCalls > 0,
+           "selected stage and banner above 32 MiB render under both skin policies");
+    const auto &images = fixture.device()->createdImages;
+    if (images.size() >= uploads + 2) {
+      expect(images[uploads].width == 2048 && images[uploads].height == 1 &&
+                 images[uploads + 1].width == 1 &&
+                 images[uploads + 1].height == 2048,
+             "selected artwork patches preserve aspect ratio within 2048 pixels");
+    }
+  }
+}
+
 void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
   ActivationFixture fixture(
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
@@ -8488,6 +8558,7 @@ int main(int argc, char **argv) {
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
+  testMusicSelectAcceptsOversizedSelectedArtwork();
   testMusicSelectRetriesCancelledArtworkAfterReturningToChart();
   testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
   testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();

@@ -198,9 +198,18 @@ musicSelectBuiltinImagePaths(const MusicSelectSkinFrame &frame) {
 
 MusicSelectBuiltinImagePatch prepareBuiltinImagePatch(
     std::map<int, std::filesystem::path> paths,
-    SkinBuiltinImageReader reader, SkinSafetyPolicy safetyPolicy,
-    std::stop_token stop) {
+    SkinBuiltinImageReader reader, std::stop_token stop) {
   MusicSelectBuiltinImagePatch result{.paths = std::move(paths)};
+  // Selected chart artwork follows the same decode policy as initial chart
+  // built-ins, independently of authored-skin allocation limits.
+  const image_decode::ImageDecodeOptions decodeOptions{
+      .maximumDimension = std::numeric_limits<std::uint16_t>::max(),
+      .maximumEncodedBytes =
+          static_cast<std::size_t>(std::numeric_limits<int>::max()),
+      .maximumDecodedBytes = UINT32_MAX,
+      .targetWidth = 2048,
+      .targetHeight = 2048,
+      .stop = stop};
   for (const int reference : {100, 102}) {
     const auto path = result.paths.find(reference);
     if (stop.stop_requested() || path == result.paths.end() ||
@@ -210,22 +219,14 @@ MusicSelectBuiltinImagePatch prepareBuiltinImagePatch(
     }
     std::vector<unsigned char> encoded;
     std::string readError;
-    if (!reader(path->second, encoded,
-                skinResourceLimit(safetyPolicy,
-                                  SkinResourcePolicy::maximumEncodedBytes),
+    if (!reader(path->second, encoded, decodeOptions.maximumEncodedBytes,
                 &readError, stop) ||
         stop.stop_requested()) {
       result.images.emplace(reference, std::nullopt);
       continue;
     }
     auto decoded = image_decode::decodeImageMemory(
-        std::as_bytes(std::span(encoded)),
-        {.maximumDimension = skinResourceDimensionLimit(safetyPolicy),
-         .maximumEncodedBytes = skinResourceLimit(
-             safetyPolicy, SkinResourcePolicy::maximumEncodedBytes),
-         .maximumDecodedBytes = skinResourceLimit(
-             safetyPolicy, SkinResourcePolicy::maximumImageBytes),
-         .stop = stop});
+        std::as_bytes(std::span(encoded)), decodeOptions);
     result.images.emplace(reference, std::move(decoded));
   }
   result.cancelled = stop.stop_requested();
@@ -957,10 +958,10 @@ void MusicSelectSkinSession::updateBuiltinImages(
   pendingBuiltinImagePaths_ = paths;
   pendingBuiltinImagePatch_ = std::async(
       std::launch::async,
-      [paths, reader = builtinImageReader_, safetyPolicy = safetyPolicy_,
+      [paths, reader = builtinImageReader_,
        stop = builtinImagePatchStop_.get_token()] mutable {
         return prepareBuiltinImagePatch(std::move(paths), std::move(reader),
-                                        safetyPolicy, stop);
+                                        stop);
       });
 }
 
