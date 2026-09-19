@@ -13,6 +13,7 @@
 #include "../../ChartPlaybackDuration.h"
 #include "../../ArchiveFile.h"
 #include "../../ReplayGhostUtils.h"
+#include "../../ReplayResultStateBuilder.h"
 #include "../../GBattleMode.h"
 #include "../../CourseConstraintUtils.h"
 #include "../../PlayOptionUtils.h"
@@ -5604,8 +5605,15 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
         }
         const long long resultGameplayTimeMicros =
             getGameplayTimeMicros(context.jukebox.getTimeMicros());
+        // Live results use finalized attempt facts, just like record recall.
+        // The presentation graph can be stale after worker stop. Replay and
+        // practice sources may contain future or moved-out events.
         const SkinGameplayGraphState resultGameplayGraph =
-            playfieldVisualStateStore
+            !isReplayPlayback() && options.practiceSession == nullptr &&
+                    analyticsSource != nullptr
+                ? replay_result::BuildSkinGameplayGraphState(
+                      *chart, *analyticsSource, *state)
+                : playfieldVisualStateStore
                 ->capture({.serial = ++playfieldFrameSerial,
                            .visualTimeMicros =
                                getVisualTimeMicros(resultGameplayTimeMicros),

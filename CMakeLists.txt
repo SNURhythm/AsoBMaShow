@@ -8451,6 +8451,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             --root ${CMAKE_SOURCE_DIR}
             --output ${CMAKE_CURRENT_BINARY_DIR}/graph_result_fixture.cpp
         DEPENDS tests/graph_result_extract.py tests/graph_result_fixture.cpp src/scene/ResultScene.cpp
+                src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
     get_target_property(GRAPH_RESULT_SOURCES replay_summary_list_tests SOURCES)
