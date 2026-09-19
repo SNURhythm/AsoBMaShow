@@ -62,6 +62,33 @@ void assertVerificationFailure(const BmsSearchResult &result,
   assert(!std::filesystem::exists(request.downloadRoot / "_archives" / request.archiveName));
 }
 
+void testSelectedDownloadAcceptsLargeChart() {
+  const std::string chart = "#TITLE Large\n#BPM 120\n" + std::string(17U * 1024U * 1024U, ' ');
+  bms_parser::MD5 md5;
+  md5.update(reinterpret_cast<const unsigned char *>(chart.data()), chart.size());
+  const auto key = md5.finalize().hexdigest();
+  for (const bool packed : {false, true}) {
+    CleanupPaths cleanup;
+    std::string error;
+    const auto attempt = createFindBmsDownloadAttempt("large.zip", error);
+    assert(attempt);
+    cleanup.add(attempt->root);
+    const auto library = testDownloadRoot(*attempt);
+    cleanup.add(library.parent_path());
+    writeExtractionZip(attempt->archivePath, {{"chart.bms", chart}});
+    DownloadedArchiveWorkflowRequest request{
+        .attempt = *attempt, .downloadRoot = library, .archiveName = "large.zip",
+        .storageKey = "large", .archiveKey = key,
+        .options = {.skipUnarchivingForNonSolidArchives = packed}};
+    std::atomic_bool cancelled = false;
+    BmsSearchResult result;
+    assert(processDownloadedArchive(request, cancelled, {}, result, realVerificationWorkflow()));
+    assert(result.status == BmsSearchResult::Status::Downloaded);
+    assert(!result.pendingArtifact && std::filesystem::exists(result.outputPath));
+    if (!packed) assert(readText(result.outputPath / "chart.bms") == chart);
+  }
+}
+
 void testRealVerificationWorkflowLimitsAndControls() {
   const std::string chart = "abc";
   const std::string md5 = "900150983cd24fb0d6963f7d28e17f72";
@@ -269,7 +296,7 @@ void testExtractedVerificationActualGrowth() {
   }
 }
 
-void testOwnedAttemptVerificationCleanup() {
+void testOwnedAttemptAllocationFailureCleanup() {
   CleanupPaths cleanup;
   std::string error;
   const auto fixture = createFindBmsDownloadAttempt("owned-verification.zip", error);
@@ -282,11 +309,16 @@ void testOwnedAttemptVerificationCleanup() {
   for (const bool packed : {true, false}) {
     std::atomic_bool cancelled = false;
     BmsSearchResult result;
-    VerificationAllocationGuard guard;
+    verification_allocation_guard::rejected = 0;
+    verification_allocation_guard::enabled = true;
+    const auto resetGuard = makeScopeExit([] {
+      verification_allocation_guard::enabled = false;
+    });
     assert(!downloadAndExtractArchive("https://fixture.invalid/song.zip", "", "",
         library, cancelled, {}, {.skipUnarchivingForNonSolidArchives = packed}, result));
     assert(result.status == BmsSearchResult::Status::DownloadFailed);
-    assert(result.message.find("limit") != std::string::npos);
+    assert(result.message.find("memory") != std::string::npos);
+    assert(verification_allocation_guard::rejected > 0);
     assert(!result.pendingArtifact);
     assert(result.outputPath.empty());
     assert(result.removedPaths.empty());
@@ -350,10 +382,11 @@ void testRealVerificationCodecFallback() {
 #endif
 
 int testRealVerification() {
+  testSelectedDownloadAcceptsLargeChart();
   testRealVerificationWorkflowLimitsAndControls();
   testRealVerificationCancellation();
   testExtractedVerificationActualGrowth();
-  testOwnedAttemptVerificationCleanup();
+  testOwnedAttemptAllocationFailureCleanup();
 #if ASOBMSHOW_HAS_LIBARCHIVE
   testRealVerificationCodecFallback();
 #endif

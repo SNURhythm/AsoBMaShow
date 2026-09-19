@@ -17,10 +17,12 @@ namespace chart_audio {
 
 inline constexpr int kOutputSampleRate = 44100;
 inline constexpr int kOutputChannels = 2;
-inline constexpr std::size_t kMaxOutputFrames =
+inline constexpr std::size_t kAdjacentPreloadMaxOutputFrames =
     128U * 1024U * 1024U / (sizeof(float) * kOutputChannels);
-inline constexpr std::size_t kMaxMixedFrames =
+inline constexpr std::size_t kAdjacentPreloadMaxMixedFrames =
     static_cast<std::size_t>(kOutputSampleRate) * 60U * 60U;
+
+inline constexpr std::size_t kAdjacentPreloadMaxClubBeats = 100000;
 
 inline long long outputTimeMicros(long long chartTimeMicros,
                                   audio::PlaybackRate playback) {
@@ -92,8 +94,11 @@ struct RenderOptions {
   const prep_metronome::PrepMetronomePlan *prepMetronomePlan = nullptr;
   std::atomic_bool *isCancelled = nullptr;
   LogCallback log;
-  std::size_t maxOutputFrames = kMaxOutputFrames;
-  std::size_t maxMixedFrames = kMaxMixedFrames;
+  // Selected charts have no policy quota; the renderer still enforces WAV and
+  // container representability. Background callers provide explicit budgets.
+  std::size_t maxOutputFrames = std::numeric_limits<std::size_t>::max();
+  std::size_t maxMixedFrames = std::numeric_limits<std::size_t>::max();
+  std::size_t maxClubBeats = std::numeric_limits<std::size_t>::max();
 };
 
 struct RenderResult {

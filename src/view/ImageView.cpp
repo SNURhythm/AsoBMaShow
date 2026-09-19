@@ -293,10 +293,14 @@ void writeCachedArchivedThumbnail(const std::filesystem::path &path,
 std::optional<DecodedImage>
 decodeImageFile(const std::filesystem::path &path,
                 ImageDecodeTimings *timings = nullptr, int targetWidth = 0,
-                int targetHeight = 0, std::stop_token stop = {}) {
+                int targetHeight = 0, std::stop_token stop = {},
+                std::size_t maximumEncodedBytes = kImageMaximumEncodedBytes,
+                std::size_t maximumDecodedBytes = kImageMaximumDecodedBytes) {
   ImageDecodeTimings measured;
   const bool archiveEntryPath = isArchiveEntryImagePath(path);
-  const auto options = imageDecodeOptions(targetWidth, targetHeight, stop);
+  auto options = imageDecodeOptions(targetWidth, targetHeight, stop);
+  options.maximumEncodedBytes = maximumEncodedBytes;
+  options.maximumDecodedBytes = maximumDecodedBytes;
   if (stop.stop_requested()) return std::nullopt;
 #if TARGET_OS_ANDROID
   if (IsAndroidTreePath(path)) {
@@ -321,14 +325,14 @@ decodeImageFile(const std::filesystem::path &path,
     if (fstat(*fd, &status) != 0 ||
         (S_ISREG(status.st_mode) &&
          (status.st_size <= 0 || static_cast<std::uintmax_t>(status.st_size) >
-                                      kImageMaximumEncodedBytes))) {
+                                      options.maximumEncodedBytes))) {
       SDL_Log("Android image descriptor is outside encoded byte bounds: %s",
               fspath_to_utf8(path).c_str());
       return std::nullopt;
     }
     const auto sourceLoadStarted = std::chrono::steady_clock::now();
     const auto bytes = readBoundedDescriptorBytes(*fd,
-                                                  kImageMaximumEncodedBytes,
+                                                  options.maximumEncodedBytes,
                                                   stop);
     measured.sourceLoadDecodeMillis = elapsedMillis(
         sourceLoadStarted, std::chrono::steady_clock::now());
@@ -355,7 +359,7 @@ decodeImageFile(const std::filesystem::path &path,
           makeScopeExit([descriptor] { (void)close(descriptor); });
       const auto sourceLoadStarted = std::chrono::steady_clock::now();
       const auto bytes = readBoundedDescriptorBytes(
-          descriptor, kImageMaximumEncodedBytes, stop,
+          descriptor, options.maximumEncodedBytes, stop,
           std::filesystem::is_fifo(status));
       measured.sourceLoadDecodeMillis = elapsedMillis(
           sourceLoadStarted, std::chrono::steady_clock::now());
@@ -379,7 +383,7 @@ decodeImageFile(const std::filesystem::path &path,
     std::string errorMessage;
     const auto sourceAccessStarted = std::chrono::steady_clock::now();
     if (!archive_file::readFileBounded(path, bytes,
-                                       kImageMaximumEncodedBytes,
+                                       options.maximumEncodedBytes,
                                        &errorMessage, stop)) {
       measured.sourceAccessMillis = elapsedMillis(
           sourceAccessStarted, std::chrono::steady_clock::now());
@@ -397,10 +401,13 @@ decodeImageFile(const std::filesystem::path &path,
       return std::nullopt;
     }
     const auto sourceLoadStarted = std::chrono::steady_clock::now();
+    auto sourceOptions = options;
+    sourceOptions.targetWidth = 0;
+    sourceOptions.targetHeight = 0;
     auto decoded = image_decode::decodeImageMemory(
         std::span<const std::byte>(reinterpret_cast<const std::byte *>(bytes.data()),
                                    bytes.size()),
-        imageDecodeOptions(0, 0, stop));
+        sourceOptions);
     measured.sourceLoadDecodeMillis = elapsedMillis(
         sourceLoadStarted, std::chrono::steady_clock::now());
     if (!decoded.has_value()) {
@@ -440,7 +447,9 @@ image_decode::ImageDecodeCoordinator &imageDecodeCoordinator() {
               : request.maximumDimension;
         }
         auto decoded = decodeImageFile(request.path, &timings,
-                                       targetWidth, targetHeight, stop);
+                                       targetWidth, targetHeight, stop,
+                                       request.maximumEncodedBytes,
+                                       request.maximumDecodedBytes);
         const auto workerMillis = elapsedMillis(
             started, std::chrono::steady_clock::now());
         if (workerMillis >= 250) {
@@ -545,7 +554,12 @@ bool imageResourceAvailable(const std::filesystem::path &path) {
 
 bool imageResourceAvailable(const std::filesystem::path &path,
                             std::stop_token stop) {
-  return decodeImageFile(path, nullptr, 0, 0, stop).has_value();
+  return decodeImageFile(
+             path, nullptr, kSharedChartImageMaxDimension,
+             kSharedChartImageMaxDimension, stop,
+             static_cast<std::size_t>(std::numeric_limits<int>::max()),
+             UINT32_MAX)
+      .has_value();
 }
 
 image_decode::DecodedImageCache ImageView::imageCache(
@@ -733,7 +747,9 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
            .path = std::filesystem::path(path),
            .targetWidth = targetWidth,
            .targetHeight = targetHeight,
-           .priority = prioritize});
+           .priority = prioritize,
+           .maximumEncodedBytes = kImageMaximumEncodedBytes,
+           .maximumDecodedBytes = kImageMaximumDecodedBytes});
     }
     if (asyncTicket != 0 &&
         !imageDecodeCoordinator().hasFailed(asyncTicket)) {
@@ -760,7 +776,9 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
        .path = std::filesystem::path(path),
        .targetWidth = targetWidth,
        .targetHeight = targetHeight,
-       .priority = prioritize});
+       .priority = prioritize,
+       .maximumEncodedBytes = kImageMaximumEncodedBytes,
+       .maximumDecodedBytes = kImageMaximumDecodedBytes});
   asyncImagePending =
       asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
   return false;
@@ -807,8 +825,11 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
            .path = std::filesystem::path(path),
            .targetWidth = 0,
            .targetHeight = 0,
+           .priority = prioritize,
            .maximumDimension = kSharedChartImageMaxDimension,
-           .priority = prioritize});
+           .maximumEncodedBytes =
+               static_cast<std::size_t>(std::numeric_limits<int>::max()),
+           .maximumDecodedBytes = UINT32_MAX});
     }
     asyncImagePending =
         asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
@@ -831,8 +852,11 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
        .path = std::filesystem::path(path),
        .targetWidth = 0,
        .targetHeight = 0,
+       .priority = prioritize,
        .maximumDimension = kSharedChartImageMaxDimension,
-       .priority = prioritize});
+       .maximumEncodedBytes =
+           static_cast<std::size_t>(std::numeric_limits<int>::max()),
+       .maximumDecodedBytes = UINT32_MAX});
   asyncImagePending =
       asyncTicket != 0 && !imageDecodeCoordinator().hasFailed(asyncTicket);
   return false;

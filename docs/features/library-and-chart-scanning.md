@@ -52,8 +52,14 @@ dependencies remain alive.
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;
 usage measurement remains best-effort and does not block writes or cleanup.
-Full extraction shares byte, entry, and free-space budgets across archive
-writers. Output streams remain owned until queued writes finish; the pipeline
+Bulk library extraction shares byte, entry, and free-space budgets across archive
+writers. Extracting one selected archive has no fixed expanded-byte or entry-count
+quota; free-space checks, path validation, cancellation, and output buffering remain.
+With libarchive available, fallback extraction (including unsupported direct ZIP
+methods) streams output in chunks instead of rejecting entries above 64 MiB.
+On builds without a chunked fallback backend, the whole-entry fallback retains a
+memory bound for bulk operations and allows oversized entries for a selected
+archive. Output streams remain owned until queued writes finish; the pipeline
 joins before its guard and cancellation dependencies are released. The archive
 workflow retains path reservations, recovery markers, and output publication.
 
@@ -85,7 +91,7 @@ Chart audio loading also opts into the oversized-entry scheduling policy.
 Serial chart parsing already admits a single oversized chart. Its queue
 budget and concurrent entry reservations exclude decoder dictionaries,
 parsed metadata, and memory retained by consumers. These are not process-wide
-memory caps. Full extraction and explicitly bounded reads retain their separate
+memory caps. Bulk extraction and explicitly bounded reads retain their separate
 limits.
 
 Regression coverage includes oversized stored/deflated ZIP, RAR4, small and

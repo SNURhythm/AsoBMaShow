@@ -594,7 +594,8 @@ MusicSelectSkinSessionCreateResult MusicSelectSkinSession::finalize(
          .safetyPolicy = prepared.safetyPolicy,
          .liveResourceCounters = context.liveResourceCounters,
          .stop = prepared.stop,
-         .sessionDecodedBytes = prepared.resourcePlan.decodedBytes});
+         .sessionDecodedBytes = prepared.resourcePlan.decodedBytes -
+             prepared.resourcePlan.chartDecodedBytes});
     result.diagnostics.insert(
         result.diagnostics.end(),
         std::make_move_iterator(preparedMovies.diagnostics.begin()),

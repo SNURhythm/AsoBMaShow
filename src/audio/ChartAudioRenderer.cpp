@@ -719,8 +719,15 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
   std::atomic_bool localCancelled = false;
   std::atomic_bool &isCancelled =
       options.isCancelled == nullptr ? localCancelled : *options.isCancelled;
-  RenderBudget budget{options, isCancelled, std::min(options.maxOutputFrames, kMaxOutputFrames),
-                      std::min(options.maxMixedFrames, kMaxMixedFrames), {}};
+  // PCM16 stereo WAV has a 36-byte RIFF payload header and 4 bytes/frame.
+  // Keep both RIFF's 32-bit chunk size and the dense mix representable.
+  constexpr std::size_t maxWavFrames =
+      (std::numeric_limits<std::uint32_t>::max() - 36ULL) /
+      (sizeof(short) * kOutputChannels);
+  const auto maxFrames = std::min({options.maxOutputFrames, maxWavFrames,
+                                  std::vector<float>{}.max_size() / kOutputChannels});
+  RenderBudget budget{options, isCancelled, maxFrames,
+                      options.maxMixedFrames, {}};
   const auto failure = [&]() -> RenderResult {
     return {.outputPath = path, .message = budget.error};
   };
@@ -755,8 +762,13 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     for (const auto *measure : chart.Measures) {
       if (!budget.checkpoint()) return failure();
       if (measure == nullptr || !std::isfinite(measure->Scale) || measure->Scale <= 0) continue;
-      beatCount += std::ceil(static_cast<long double>(measure->Scale) * 4);
-      if (beatCount > 100000) {
+      const long double measureBeats =
+          std::ceil(static_cast<long double>(measure->Scale) * 4);
+      beatCount += measureBeats;
+      // buildPlan increments an int beat number after each generated beat.
+      if (measureBeats >= std::numeric_limits<int>::max() ||
+          beatCount > std::vector<club_beat::Event>{}.max_size() ||
+          beatCount > options.maxClubBeats) {
         budget.error = "Chart audio club beat plan limit exceeded";
         return failure();
       }
@@ -765,7 +777,7 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
         decodedClubSound(club_beat::synthesizeKick(kOutputSampleRate));
     const DecodedSound clap =
         decodedClubSound(club_beat::synthesizeClap(kOutputSampleRate));
-    for (const auto &event : club_beat::buildPlan(chart)) {
+    for (const auto &event : club_beat::buildPlan(chart, &isCancelled)) {
       const auto time = outputTimeMicrosFromTimelineStart(event.timeMicros,
           options.timelineStartMicros, options.playback);
       if (!mixSoundAt(mix, kick, time, options.playback, budget)) return failure();
@@ -812,6 +824,8 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
           .message = "Audio exported",
           .durationMicros = durationMicros,
           .eventCount = audioEvents.size()};
+} catch (const std::length_error &) {
+  return {.outputPath = path, .message = "Chart audio container size is not representable"};
 } catch (const std::bad_alloc &) {
   return {.outputPath = path, .message = "Chart audio memory resource limit exceeded"};
 }

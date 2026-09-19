@@ -114,9 +114,11 @@ int main() {
     const auto source = fixtureRoot / "artwork.pgm";
     {
       std::ofstream output(source, std::ios::binary);
-      output << "P5\n4096 4096\n255\n";
+      // Cross the shared-image dimension bound without making the 1-pixel
+      // thumbnail cache-isolation check resize a full-screen source.
+      output << "P5\n4096 16\n255\n";
       const std::string row(4096, char(0x66));
-      for (int index = 0; index < 4096; ++index) output.write(row.data(), row.size());
+      for (int index = 0; index < 16; ++index) output.write(row.data(), row.size());
     }
     const path_t imagePath = fspath_to_path_t(source);
     ImageView::dropAllCache();
@@ -132,12 +134,12 @@ int main() {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     require(ready, "large shared artwork is downsampled, not rejected");
-    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,
+    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 8,
             "shared artwork request bounds the actual decoded dimensions");
     const auto shared = ImageView::findChartImage(imagePath);
-    require(shared && shared->width == 2048 && shared->height == 2048 &&
-                shared->byteSize() == 16U * 1024U * 1024U,
-            "shared chart cache retains 16 MiB rather than 64 MiB");
+    require(shared && shared->width == 2048 && shared->height == 8 &&
+                shared->byteSize() == 64U * 1024U,
+            "shared chart cache retains 64 KiB rather than 256 KiB");
     ImageView thumbnail(0, 0, 1, 1);
     ready = false;
     const auto thumbnailDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -149,13 +151,50 @@ int main() {
     require(thumbnail.imageWidth() == 1 && thumbnail.imageHeight() == 1,
             "shared artwork does not collide with a one-pixel thumbnail cache key");
     artwork.onLayout();
-    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,
+    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 8,
             "layout does not replace shared artwork with a display-sized thumbnail");
     ImageView reused(0, 0, 1, 1);
-    require(reused.setImageAsyncShared(imagePath, true) && reused.imageWidth() == 2048,
+    require(reused.setImageAsyncShared(imagePath, true) &&
+                reused.imageWidth() == 2048 && reused.imageHeight() == 8,
             "shared artwork reuses its bounded cache entry");
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
+  }
+
+  {
+    const auto source = std::filesystem::temp_directory_path() /
+        ("asobmashow-large-encoded-artwork-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ppm");
+    writeSinglePixelPpm(source);
+    std::filesystem::resize_file(source, 32U * 1024U * 1024U + 1U);
+    require(imageResourceAvailable(source),
+            "selected chart availability accepts a source larger than the thumbnail limit");
+    const path_t imagePath = fspath_to_path_t(source);
+    ImageView::dropAllCache();
+    ImageView artwork(0, 0, 1, 1);
+    bool ready = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ready && std::chrono::steady_clock::now() < deadline) {
+      ready = artwork.setImageAsyncShared(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ready && artwork.imageWidth() == 1 && artwork.imageHeight() == 1,
+            "selected chart artwork accepts an encoded source larger than 32 MiB");
+    ImageView thumbnail(0, 0, 1, 1);
+    thumbnail.setImageAsync(imagePath, true);
+    const auto thumbnailDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (ImageView::pendingAsyncDecodeCountForTesting(imagePath) != 0 &&
+           std::chrono::steady_clock::now() < thumbnailDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ImageView::pendingAsyncDecodeCountForTesting(imagePath) == 0,
+            "library thumbnail request completes within the test deadline");
+    require(!thumbnail.setImageAsync(imagePath, true),
+            "library thumbnails retain their encoded source limit after shared chart loading");
+    require(thumbnail.imageWidth() == 0,
+            "a library thumbnail does not inherit an unrestricted chart decode");
+    ImageView::dropAllCache();
+    std::filesystem::remove(source);
   }
 
   {

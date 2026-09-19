@@ -34,6 +34,13 @@ join all work, including uncancellable artifact resolution, and discard queued
 updates. Pending progress retains the latest 160 events in order. Selection
 generation and downloaded-path indexing remain application-thread scene policy.
 
+Selected downloads do not impose fixed archive, chart-member, total expanded-byte,
+or entry-count quotas. Chart verification reads one member at a time, and extraction
+streams data to disk. Hash validation, cancellation, path containment, available
+staging space, and atomic publication remain enforced. Callers can still supply
+explicit verification/extraction limits for bounded work. Network metadata response
+limits are separate and remain in place.
+
 ## Verification
 
 Use `find_bms_download_tests`, archive-file concurrency tests, chart scanning

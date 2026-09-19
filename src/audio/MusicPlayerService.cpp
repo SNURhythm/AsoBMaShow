@@ -1641,7 +1641,8 @@ void MusicPlayerService::AdjacentPreloadWorker(
 
     try {
       auto result = chart_music_cache::EnsureRenderedMusicFile(
-          track.representativeChart, preloadCancelled, requestedClubMode);
+          track.representativeChart, preloadCancelled, requestedClubMode, {},
+          chart_music_cache::RenderPolicy::AdjacentPreload);
       if (!result.success && isCurrentPreload()) {
         std::cerr << "Could not preload adjacent music track: "
                   << (result.message.empty() ? "Unknown error"

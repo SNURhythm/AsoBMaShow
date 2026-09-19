@@ -40,6 +40,19 @@ oversized assets. The budget is not a maximum audio file or archive size, and
 it does not cap decoded PCM, decoder dictionaries, or consumer-retained data.
 Cancellation, consumer failure, and missing-entry-only retry remain enforced.
 
+## Selected charts and background work
+
+Selected-chart audio rendering and music playback do not inherit the speculative
+preload quotas. Adjacent-track preloading retains its 128 MiB output, one-hour
+cumulative mixing, and Club Beat planning bounds. Foreground rendering instead
+checks actual WAV/container and arithmetic representability, cancellation, and
+allocation failures.
+
+Selected chart stage/back/banner images accept oversized encoded sources and
+are resized to a shared 2048-pixel display image. Chart-owned images do not consume
+authored-skin quotas. Library thumbnails, image worker concurrency, retained cache
+budgets, and authored-skin/package limits remain bounded.
+
 ## Verification
 
 Use `audio_*_tests`, `jukebox_restore_tests`, `video_*_tests`,

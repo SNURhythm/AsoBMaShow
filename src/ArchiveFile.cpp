@@ -9947,9 +9947,8 @@ bool extractArchiveFullyWithBatchReader(
     const UnzipProgressCallback &progressCallback,
     const PauseCallback &pauseCallback,
     std::string *errorMessage, UnzipWriteGuard &writeGuard,
-    std::uint64_t maximumMemoryBytes) {
+    std::uint64_t maximumEntryBytes) {
   static constexpr std::size_t kMaxBatchFiles = 128;
-  const auto maximumEntryBytes = std::min<std::uint64_t>(64ull * 1024 * 1024, maximumMemoryBytes);
 
   struct FileEntryRef {
     const Entry *entry = nullptr;
@@ -10312,7 +10311,13 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   bool reuseCompletedFolder,
                   UnzipPrepareCallback prepareCallback,
                   UnzipBudget *budget) {
-  UnzipBudget localBudget;
+  // Bulk library operations pass a shared budget. A user-selected archive has
+  // no fixed expanded-size/count quota; free-space and arithmetic checks remain.
+  UnzipBudget localBudget{.limits = {
+      .maximumArchiveBytes = std::numeric_limits<std::uint64_t>::max(),
+      .maximumTotalBytes = std::numeric_limits<std::uint64_t>::max(),
+      .maximumArchiveEntries = std::numeric_limits<std::uint64_t>::max(),
+      .maximumTotalEntries = std::numeric_limits<std::uint64_t>::max()}};
   UnzipWriteGuard writeGuard(budget ? *budget : localBudget, destinationRoot);
   const auto &sharedBudget = budget ? *budget : localBudget;
   auto execution = unzipExecutionPlan(sharedBudget.limits, sharedBudget.concurrentArchives);
@@ -10574,7 +10579,11 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
-  if (!extracted && !stopRequested(stopToken) && index->backend == ArchiveIndexBackend::LibArchive) {
+  // Stream unsupported direct ZIP methods in chunks too, instead of allocating
+  // a whole oversized entry in memory. Keep other backends' existing readers.
+  if (!extracted && !stopRequested(stopToken) &&
+      (index->backend == ArchiveIndexBackend::LibArchive ||
+       index->backend == ArchiveIndexBackend::MinizZip)) {
     extracted = extractArchiveFullyWithLibarchive(
         archivePath, outputFolder, index, stopToken, progressCallback,
         pauseCallback, errorMessage, writeGuard, pipeline);
@@ -10597,7 +10606,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   if (!extracted && !stopRequested(stopToken)) {
     extracted = extractArchiveFullyWithBatchReader(
         archivePath, outputFolder, index->entries, stopToken, progressCallback,
-        pauseCallback, errorMessage, writeGuard, execution.memoryPerArchive);
+        pauseCallback, errorMessage, writeGuard,
+        budget ? std::min<std::uint64_t>(64ull * 1024 * 1024, execution.memoryPerArchive)
+               : std::numeric_limits<std::uint64_t>::max());
   }
   if (!extracted) {
     if (errorMessage != nullptr && errorMessage->empty()) {

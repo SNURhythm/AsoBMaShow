@@ -1397,6 +1397,46 @@ void parallelBatchJoinsWorkersAfterProgressCallbackFailure() {
   assert(std::filesystem::exists(fixture.root / "b.zip"));
 }
 
+void oversizedFallbackEntryStreamsWithinLibraryBudget() {
+  Fixture fixture;
+  const auto path = fixture.root / "large-bzip.zip";
+  auto writer = makeArchiveWriteHandle();
+  assert(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_set_format_option(writer.get(), "zip", "compression", "bzip2") == ARCHIVE_OK);
+  assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+  auto entry = std::unique_ptr<archive_entry, decltype(&archive_entry_free)>(
+      archive_entry_new(), archive_entry_free);
+  constexpr std::uint64_t size = 65ull * 1024 * 1024;
+  const std::string chunk(64 * 1024, 'x');
+  archive_entry_set_pathname(entry.get(), "song/large.wav");
+  archive_entry_set_size(entry.get(), size);
+  archive_entry_set_filetype(entry.get(), AE_IFREG);
+  archive_entry_set_perm(entry.get(), 0644);
+  assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+  for (std::uint64_t offset = 0; offset < size; offset += chunk.size()) {
+    assert(archive_write_data(writer.get(), chunk.data(), chunk.size()) ==
+           static_cast<la_ssize_t>(chunk.size()));
+  }
+  assert(archive_write_finish_entry(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  writer.reset();
+  archive_file::UnzipBudget budget{.limits = {
+      .maximumWorkers = 1, .maximumMemoryBytes = 32ull * 1024 * 1024}};
+  std::string error;
+  const auto output = archive_file::unzipArchiveFully(
+      path, fixture.root / "output", &error, nullptr, {}, {}, false, {}, &budget);
+  if (!output) std::cerr << error << '\n';
+  assert(output && "large fallback member streams without a per-entry memory rejection");
+  const auto file = output->outputFolder / "song/large.wav";
+  assert(std::filesystem::file_size(file) == size && budget.writtenBytes == size);
+  std::ifstream input(file, std::ios::binary);
+  std::string actual(chunk.size(), '\0');
+  for (std::uint64_t offset = 0; offset < size; offset += chunk.size()) {
+    input.read(actual.data(), actual.size());
+    assert(input && actual == chunk);
+  }
+}
+
 void parallelBatchCannotOverspendItsSharedByteBudget() {
   Fixture fixture;
   for (const auto *name : {"a.zip", "b.zip", "c.zip", "d.zip"}) {
@@ -2004,7 +2044,8 @@ int main(int argc, char **argv) {
   testExecutable = std::filesystem::absolute(argv[0]);
   if (argc == 2) {
     const std::string test = argv[1];
-    if (test == "--partial-recovery") partialExtractionIsNotIndexedByOrdinaryStartupScan();
+    if (test == "--oversized-fallback") oversizedFallbackEntryStreamsWithinLibraryBudget();
+    else if (test == "--partial-recovery") partialExtractionIsNotIndexedByOrdinaryStartupScan();
     else if (test == "--single-cancel-recovery") singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(true);
     else if (test == "--single-failure-recovery") singlePartialExtractionRecoveryCleansOutputAndAllowsRetry(false);
     else if (test == "--single-ack") singleSuccessfulIndexAcknowledgesRecovery(false);
@@ -2095,6 +2136,7 @@ int main(int argc, char **argv) {
   parallelBatchCancellationKeepsActiveAndQueuedOriginals(".zip");
   parallelBatchCancellationKeepsActiveAndQueuedOriginals(".7z");
   parallelBatchJoinsWorkersAfterProgressCallbackFailure();
+  oversizedFallbackEntryStreamsWithinLibraryBudget();
   parallelBatchCannotOverspendItsSharedByteBudget();
   parallelBatchReservesDistinctOutputFoldersForMatchingStems();
   batchBudgetStopsBeforeNextArchiveAndIndexesCompletedWork(false);

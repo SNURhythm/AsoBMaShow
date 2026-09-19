@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -11,10 +12,12 @@ namespace asobmshow::bms_search {
 
 enum class DirectArchiveDisposition { KeepArchive, Unarchive, HashMismatch, Failed };
 
+// A selected download has no genre-dependent chart-size quota. Callers doing
+// background work may still supply explicit bounds.
 struct ArchiveVerificationLimits {
-  std::uint64_t maxMemberBytes = 16ULL * 1024 * 1024;
-  std::uint64_t maxTotalBytes = 256ULL * 1024 * 1024;
-  std::uint64_t maxEntries = 100000;
+  std::uint64_t maxMemberBytes = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t maxTotalBytes = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t maxEntries = std::numeric_limits<std::uint64_t>::max();
 };
 
 inline constexpr std::size_t archiveVerificationChunkBytes = 64 * 1024;

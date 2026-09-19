@@ -357,7 +357,8 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
          .safetyPolicy = context.safetyPolicy,
          .liveResourceCounters = context.liveResourceCounters,
          .stop = context.stop,
-         .sessionDecodedBytes = planned.plan->decodedBytes});
+         .sessionDecodedBytes = planned.plan->decodedBytes -
+             planned.plan->chartDecodedBytes});
     result.diagnostics.insert(
         result.diagnostics.end(),
         std::make_move_iterator(preparedMovies.diagnostics.begin()),

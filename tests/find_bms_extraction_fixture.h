@@ -300,7 +300,7 @@ void testDownloadAttemptExtractionCleanup() {
       assert(observedPartialOutput);
       assert(result.message == "Lookup cancelled.");
     } else {
-      assert(result.message.find("expanded member limit") != std::string::npos);
+      assert(result.message.find("extract") != std::string::npos);
     }
   }
 }
@@ -314,6 +314,8 @@ int testVerificationAllocationGuard() {
   cleanup.add(fixture->root);
   writeExtractionZip(fixture->archivePath, {{"chart.bms", "#TITLE Test\n", 17U * 1024 * 1024}});
   writeText(fixture->extractedPath / "chart.bms", std::string(17U * 1024 * 1024, 'a'));
+  const ArchiveVerificationLimits limits{.maxMemberBytes = 16U * 1024 * 1024,
+                                         .maxTotalBytes = 256U * 1024 * 1024};
   int failures = 0;
   for (const bool packed : {true, false}) {
     verification_allocation_guard::rejected = 0;
@@ -321,10 +323,10 @@ int testVerificationAllocationGuard() {
     bool rejectedCleanly = false;
     try {
       if (packed) {
-        const auto decision = decideDownloadedArchive(fixture->archivePath, "", true, {}, defaultArchiveReaderDependencies());
+        const auto decision = decideDownloadedArchive(fixture->archivePath, "", true, {}, defaultArchiveReaderDependencies(), limits);
         rejectedCleanly = decision.disposition != DirectArchiveDisposition::KeepArchive && decision.message.find("limit") != std::string::npos;
       } else {
-        const auto decision = decideExtractedArchive(fixture->extractedPath, std::string(32, '0'));
+        const auto decision = decideExtractedArchive(fixture->extractedPath, std::string(32, '0'), {}, limits);
         rejectedCleanly = decision.disposition == ExtractedArchiveDisposition::Inconclusive && decision.message.find("limit") != std::string::npos;
       }
     } catch (const std::bad_alloc &) {

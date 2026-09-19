@@ -1212,12 +1212,20 @@ void testBzipZipFallbackStopsBeforeOversizedAllocation() {
     bounded_allocation_probe::enabled = false;
     assert(!streamed && !consumed && bounded_allocation_probe::largest <= budget);
     archive_file::UnzipBudget unzipBudget{.limits = {.maximumWorkers = 1, .maximumMemoryBytes = budget}};
+    std::filesystem::path outputFolder;
     bounded_allocation_probe::largest = 0;
     bounded_allocation_probe::enabled = true;
     const auto unzipped = archive_file::unzipArchiveFully(forged, temporary.path() / std::to_string(budget),
-        &error, nullptr, nullptr, nullptr, false, nullptr, &unzipBudget);
+        &error, nullptr, nullptr, nullptr, false,
+        [&](const auto &folder, const auto &) { outputFolder = folder; return true; }, &unzipBudget);
     bounded_allocation_probe::enabled = false;
-    assert(!unzipped && unzipBudget.writtenBytes == 0 && bounded_allocation_probe::largest <= budget);
+    // Full unzip streams to disk within the memory budget. A forged size can
+    // fail after partial writes, but must never certify the output as complete.
+    assert(!unzipped && bounded_allocation_probe::largest <= budget);
+    assert(error.find("wrong size") != std::string::npos);
+    assert(std::filesystem::exists(outputFolder / ".asobmashow_unzip_incomplete"));
+    assert(!std::filesystem::exists(outputFolder / ".asobmashow_unzip_complete"));
+    assert(std::filesystem::exists(forged));
   }
   std::vector<unsigned char> bytes;
   assert(archive_file::readFileBounded(

@@ -11,6 +11,11 @@
 
 namespace chart_music_cache {
 
+enum class RenderPolicy {
+  SelectedTrack,
+  AdjacentPreload,
+};
+
 struct CacheResult {
   bool success = false;
   bool rendered = false;
@@ -33,13 +38,15 @@ CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
                                     chart_audio::LogCallback log = {});
 CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
                                     std::atomic_bool &cancelled, bool clubMode,
-                                    chart_audio::LogCallback log = {});
+                                    chart_audio::LogCallback log = {},
+                                    RenderPolicy policy = RenderPolicy::SelectedTrack);
 
 CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
                                     std::atomic_bool &cancelled,
                                     chart_audio::LogCallback log = {});
 CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
                                     std::atomic_bool &cancelled, bool clubMode,
-                                    chart_audio::LogCallback log = {});
+                                    chart_audio::LogCallback log = {},
+                                    RenderPolicy policy = RenderPolicy::SelectedTrack);
 
 } // namespace chart_music_cache

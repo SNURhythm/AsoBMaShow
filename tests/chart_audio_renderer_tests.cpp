@@ -3,6 +3,7 @@
 #include "Uuid.h"
 #include "audio/ChartAudioRenderer.h"
 #include "audio/ChartMusicCache.h"
+#include "audio/ClubBeat.h"
 #include "audio/MusicPlaylist.h"
 #include "audio/SoundFileIO.h"
 
@@ -162,7 +163,7 @@ void testRateAndTailSemantics(const std::filesystem::path &root) {
   }
   chart->Measures.front()->TimeLines.front()->Timing = 1999000;
   expect(guardedRender(*chart, output).success,
-         "ordinary sound-tail growth is allowed below the hard limit");
+         "ordinary sound-tail growth is allowed");
   SF_INFO info{};
   auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
   expect(sound && info.frames == 88597,
@@ -199,6 +200,105 @@ void testDurationAdmission(const std::filesystem::path &root) {
     expect(readText(output) == "preserved output",
            "failed admission preserves caller-owned output");
   }
+}
+
+void testSelectedLargeRender(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "selected-large", "0.5");
+  const auto output = chart->Meta.Folder / "result.wav";
+  writeText(output, "preserved output");
+  std::atomic_bool cancelled{false};
+  bool reachedWriteBoundary = false;
+  const auto result = chart_audio::RenderChartAudioToWav(
+      *chart, output,
+      {.isCancelled = &cancelled,
+       .log = [&](const std::string &message) {
+         if (message.starts_with("Chart audio duration:")) {
+           reachedWriteBoundary = true;
+           cancelled.store(true);
+         }
+       }});
+  expect(reachedWriteBoundary && result.durationMicros == 480000000,
+         "selected eight-minute chart mixes beyond the former 128 MiB quota");
+  expect(!result.success && result.message.find("cancel") != std::string::npos &&
+             readText(output) == "preserved output",
+         "large selected render retains cancellation and atomic publication");
+
+  const auto allocationFailure = guardedRender(*chart, output);
+  expect(!allocationFailure.success && audio_allocation_guard::rejected == 1 &&
+             allocationFailure.message.find("memory") != std::string::npos &&
+             readText(output) == "preserved output",
+         "selected allocation failure is reported and preserves existing output");
+
+  cancelled.store(false);
+  reachedWriteBoundary = false;
+  const auto cache = chart_music_cache::EnsureRenderedMusicFile(
+      *chart, cancelled, [&](const std::string &message) {
+        if (message.starts_with("Chart audio duration:")) {
+          reachedWriteBoundary = true;
+          cancelled.store(true);
+        }
+      });
+  expect(reachedWriteBoundary && !cache.success &&
+             !std::filesystem::exists(cache.audioPath),
+         "foreground music cache admits the same large chart and cleans cancellation");
+}
+
+void testSelectedHighMixWork(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "selected-high-work", "120", 88200);
+  auto *timeline = chart->Measures.front()->TimeLines.front();
+  for (int index = 0; index < 1800; ++index) {
+    timeline->BackgroundNotes.push_back(new bms_parser::Note(1));
+  }
+  const auto output = chart->Meta.Folder / "result.wav";
+  // 1801 overlapping two-second sounds exceed the former one-hour work quota.
+  const auto result = guardedRender(*chart, output);
+  expect(result.success && result.eventCount == 1801,
+         "selected work beyond the former one-hour quota renders every sound");
+  SF_INFO info{};
+  auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+  expect(sound && info.frames == 88201,
+         "high cumulative work retains the full two-second decoded tail");
+  std::atomic_bool cancelled{false};
+  AllocationGuard guard;
+  const auto background = chart_music_cache::EnsureRenderedMusicFile(
+      *chart, cancelled, false, {}, chart_music_cache::RenderPolicy::AdjacentPreload);
+  expect(!background.success &&
+             background.message.find("work limit") != std::string::npos &&
+             !std::filesystem::exists(background.audioPath),
+         "background music cache retains its cumulative mixing work quota");
+}
+
+void testSelectedLargeClubPlan(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "selected-large-club", "100000000");
+  chart->Measures.front()->Scale = 25001;
+  chart->Measures.front()->TimeLines.front()->Notes.front()->Wav =
+      bms_parser::Parser::NoWav;
+  std::atomic_bool cancelled{false};
+  bool mixedClubSound = false;
+  const auto result = guardedRender(
+      *chart, chart->Meta.Folder / "result.wav",
+      {.clubMode = true,
+       .isCancelled = &cancelled,
+       .log = [&](const std::string &message) {
+         if (message.starts_with("Chart audio mix started:")) {
+           mixedClubSound = true;
+           cancelled.store(true);
+         }
+       }});
+  expect(mixedClubSound && !result.success &&
+             result.message.find("cancel") != std::string::npos,
+         "selected club plan beyond 100000 beats reaches real generated-sound mixing");
+  expect(club_beat::buildPlan(*chart, &cancelled).empty(),
+         "cancelled club planning stops before producing events");
+  cancelled.store(false);
+  AllocationGuard guard;
+  const auto background = chart_music_cache::EnsureRenderedMusicFile(
+      *chart, cancelled, true, {}, chart_music_cache::RenderPolicy::AdjacentPreload);
+  expect(!background.success &&
+             background.message.find("plan limit") != std::string::npos &&
+             audio_allocation_guard::rejected == 0 &&
+             !std::filesystem::exists(background.audioPath),
+         "background music cache retains its club-plan quota without allocation");
 }
 
 void testOverflowScaleMetadata(const std::filesystem::path &root) {
@@ -346,17 +446,25 @@ void testGeneratedSoundBudget(const std::filesystem::path &root) {
   options.maxMixedFrames = 441;
   expect(!guardedRender(*chart, output, options).success,
          "generated sounds share the cumulative keysound work limit");
-  chart->Measures.front()->Scale = 1000000000;
-  options.maxMixedFrames = chart_audio::kMaxMixedFrames;
+  chart->Measures.front()->Scale = 25001;
+  options.maxMixedFrames = chart_audio::kAdjacentPreloadMaxMixedFrames;
+  options.maxClubBeats = chart_audio::kAdjacentPreloadMaxClubBeats;
   const auto result = guardedRender(*chart, output, options);
   expect(!result.success && result.message.find("plan limit") != std::string::npos &&
              audio_allocation_guard::rejected == 0,
-         "huge club scale is rejected before allocating or iterating the plan");
+         "explicit background club budget rejects before allocating or iterating the plan");
+  chart->Measures.front()->Scale = 1000000000;
+  options.maxClubBeats = std::numeric_limits<std::size_t>::max();
+  const auto unrepresentable = guardedRender(*chart, output, options);
+  expect(!unrepresentable.success &&
+             unrepresentable.message.find("plan limit") != std::string::npos &&
+             audio_allocation_guard::rejected == 0,
+         "unrepresentable club beat numbers fail before allocation or integer overflow");
 }
 
 #if !TARGET_OS_WINDOWS
 void testAdjacentPreloadRejectsAndContinues(const std::filesystem::path &root) {
-  auto oversized = chartFixture(root, "preload-oversized", "0.001");
+  auto oversized = chartFixture(root, "preload-oversized", "0.5");
   auto normal = chartFixture(root, "preload-normal");
   const auto oversizedPath = chart_music_cache::CachedAudioPathForChart(oversized->Meta);
   const auto normalPath = chart_music_cache::CachedAudioPathForChart(normal->Meta);
@@ -406,6 +514,9 @@ int main() {
     testNormalDecodedRender(root);
     testRateAndTailSemantics(root);
     testDurationAdmission(root);
+    testSelectedLargeRender(root);
+    testSelectedHighMixWork(root);
+    testSelectedLargeClubPlan(root);
     testOverflowScaleMetadata(root);
     testCancellationBeforePublication(root);
     testTailAndWorkAdmission(root);
