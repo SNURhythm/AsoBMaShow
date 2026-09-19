@@ -2948,6 +2948,27 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = true;
   setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saving);
   ResultImageExportResult result;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (resultSkinSession) {
+    auto skinData = makeResultSkinData();
+    skinData.showControls = false;
+    const long long elapsedMillis =
+        std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+    result = ResultImageExporter::ExportSkin(
+        context, local != nullptr ? local->meta.Title : remote->presentation.title,
+        [this, &skinData, elapsedMillis](RenderContext &renderContext) {
+          if (resultSkinSession->requiresRuntimeStringRefresh(skinData) &&
+              !resultSkinSession->refreshRuntimeStrings(skinData)) {
+            appendResultSkinRenderDiagnostics();
+            return false;
+          }
+          const bool rendered = resultSkinSession->render(
+              renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
+          appendResultSkinRenderDiagnostics();
+          return rendered;
+        });
+  } else
+#endif
   if (remote != nullptr) {
     result = ResultImageExporter::Export(context, remote->presentation);
   } else {
@@ -4209,8 +4230,7 @@ void ResultScene::renderScene() {
       }
     }
     const bool rendered = resultSkinSession->render(
-        renderContext, skinData,
-        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
+        renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
     appendResultSkinRenderDiagnostics();
     if (!rendered) {
       handleResultSkinRenderFailure();

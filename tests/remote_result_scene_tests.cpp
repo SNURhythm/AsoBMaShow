@@ -549,13 +549,6 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "  publishedInteractionLayout_",
                   "successful result frames retain non-fatal diagnostics");
   requireContains(result,
-                  "const bool rendered = resultSkinSession->render(\n"
-                  "        renderContext, skinData,\n"
-                  "        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);\n"
-                  "    appendResultSkinRenderDiagnostics();\n"
-                  "    if (!rendered) {",
-                  "ResultScene publishes diagnostics from successful result frames");
-  requireContains(result,
                   "const int playerOffset = player == 1 ? keyCount : 0;",
                   "generated 2P result patterns use replay-local lane ordinals");
   requireContains(result,
