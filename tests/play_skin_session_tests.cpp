@@ -47,6 +47,7 @@
 #include <optional>
 #include <span>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -3883,7 +3884,77 @@ void testMusicSelectAcceptsOversizedSelectedArtwork() {
   }
 }
 
-void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
+void testMusicSelectContainsArtworkAllocationFailures() {
+  for (const bool lengthFailure : {false, true}) {
+    for (const bool bannerFailure : {false, true}) {
+      ActivationFixture fixture(
+          {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+      if (!fixture.ready()) return;
+      const std::string pixels = "P6\n1 1\n255\n" + std::string(3, '\x66');
+      std::atomic_int failedReads = 0;
+      auto context = fixture.musicSelectContext();
+      SessionQuadBackend quadBackend;
+      context.quadBackend = &quadBackend;
+      context.builtinImageReader =
+          [&](const fs::path &path, std::vector<unsigned char> &bytes,
+              std::size_t, std::string *, std::stop_token) {
+            if (path == "unallocatable.ppm") {
+              ++failedReads;
+              if (lengthFailure) throw std::length_error("artwork size");
+              throw std::bad_alloc();
+            }
+            bytes.assign(pixels.begin(), pixels.end());
+            return true;
+          };
+      auto created = MusicSelectSkinSession::create(
+          {.activation = fixture.takeActivation(),
+           .profileId = fixture.profile(), .sessionSerial = 103},
+          std::move(context));
+      expect(created.session != nullptr, "allocation-failure selector creates");
+      if (!created.session) continue;
+      const auto uploads = fixture.device()->createCalls;
+      const auto destroys = fixture.device()->destroyCalls;
+      RenderContext renderContext;
+      MusicSelectSkinFrame frame;
+      auto &path = bannerFailure ? frame.banner : frame.stageFile;
+      path = "available.ppm";
+      bool rendered = true;
+      const auto renderFrame = [&] {
+        ++frame.serial;
+        rendered = created.session->render(renderContext, frame) && rendered;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      };
+      const auto renderUntilUploads = [&](std::size_t count) {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(2);
+        while (fixture.device()->createCalls < count &&
+               std::chrono::steady_clock::now() < deadline) renderFrame();
+      };
+      renderUntilUploads(uploads + 1);
+      expect(fixture.device()->createCalls == uploads + 1,
+             "artwork is visible before the failing selection");
+      path = "unallocatable.ppm";
+      bool exceptionEscaped = false;
+      try {
+        for (int index = 0; index < 100; ++index) renderFrame();
+      } catch (const std::exception &) {
+        exceptionEscaped = true;
+      }
+      expect(!exceptionEscaped && rendered && failedReads == 1 &&
+                 fixture.device()->createCalls == uploads + 1 &&
+                 fixture.device()->destroyCalls == destroys + 1,
+             "allocation failures clear stale artwork, render normally, and do not retry each frame");
+      if (exceptionEscaped) continue;
+      path = "available.ppm";
+      renderUntilUploads(uploads + 2);
+      expect(rendered && fixture.device()->createCalls == uploads + 2 &&
+                 failedReads == 1,
+             "selector loads artwork after navigating away from a failed allocation");
+    }
+  }
+}
+
+void testMusicSelectRetriesCancelledArtworkAfterReturningToChart(int allocationFailure = 0) {
   ActivationFixture fixture(
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
   if (!fixture.ready()) return;
@@ -3915,6 +3986,8 @@ void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
           readerStarted.set_value();
           released.wait();
           cancellationObserved = stop.stop_requested();
+          if (allocationFailure == 1) throw std::bad_alloc();
+          if (allocationFailure == 2) throw std::length_error("artwork size");
           return false;
         }
         if (path != "chart-a.png") return false;
@@ -8559,7 +8632,9 @@ int main(int argc, char **argv) {
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
   testMusicSelectAcceptsOversizedSelectedArtwork();
-  testMusicSelectRetriesCancelledArtworkAfterReturningToChart();
+  testMusicSelectContainsArtworkAllocationFailures();
+  for (const int allocationFailure : {0, 1, 2})
+    testMusicSelectRetriesCancelledArtworkAfterReturningToChart(allocationFailure);
   testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
   testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();
   testMusicSelectLuaSessionContainsRecursiveCustomEventFailure();

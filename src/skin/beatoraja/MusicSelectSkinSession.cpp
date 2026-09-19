@@ -17,8 +17,10 @@
 #include <chrono>
 #include <future>
 #include <limits>
+#include <new>
 #include <ranges>
 #include <set>
+#include <stdexcept>
 #include <utility>
 #include <utf8proc.h>
 
@@ -920,7 +922,16 @@ void MusicSelectSkinSession::updateBuiltinImages(
       }
       return;
     }
-    MusicSelectBuiltinImagePatch patch = pendingBuiltinImagePatch_.get();
+    MusicSelectBuiltinImagePatch patch;
+    try {
+      patch = pendingBuiltinImagePatch_.get();
+    } catch (const std::bad_alloc &) {
+      // Changed artwork was already cleared when the job started. Remember
+      // this attempted selection so optional images do not retry every frame.
+      patch.paths = std::move(pendingBuiltinImagePaths_);
+    } catch (const std::length_error &) {
+      patch.paths = std::move(pendingBuiltinImagePaths_);
+    }
     pendingBuiltinImagePaths_.clear();
     const bool cancelled = patch.cancelled ||
                            builtinImagePatchStop_.stop_requested();
