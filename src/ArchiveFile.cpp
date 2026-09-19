@@ -36,8 +36,10 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -1544,6 +1546,8 @@ private:
   SevenZipInFileStream *stream_ = nullptr;
 };
 
+// SDK callbacks are noexcept. Translate allocation failures before they can
+// cross that boundary; an extraction worker's catch cannot intercept them.
 class SevenZipMemoryOutStream final : public ISequentialOutStream {
 public:
   SevenZipMemoryOutStream(std::vector<unsigned char> &bytes,
@@ -1578,7 +1582,7 @@ public:
   }
 
   STDMETHOD(Write)(const void *data, UInt32 size,
-                   UInt32 *processedSize) throw() override {
+                   UInt32 *processedSize) throw() override try {
     if (processedSize != nullptr) {
       *processedSize = 0;
     }
@@ -1605,6 +1609,10 @@ public:
       if (processedSize != nullptr) *processedSize = offset;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
 private:
@@ -1721,16 +1729,20 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
-                       Int32 askExtractMode) throw() override {
+                       Int32 askExtractMode) throw() override try {
     if (outStream == nullptr) {
       return E_FAIL;
     }
@@ -1757,17 +1769,25 @@ public:
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override {
+  STDMETHOD(PrepareOperation)(Int32) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override try {
     if (currentTarget_ != nullptr &&
         opRes != NArchive::NExtract::NOperationResult::kOK) {
       failed_ = true;
@@ -1775,6 +1795,10 @@ public:
     }
     currentTarget_ = nullptr;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   bool failed() const { return failed_; }
@@ -1828,16 +1852,20 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
-                       Int32 askExtractMode) throw() override {
+                       Int32 askExtractMode) throw() override try {
     if (outStream == nullptr) {
       return E_FAIL;
     }
@@ -1863,17 +1891,25 @@ public:
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override {
+  STDMETHOD(PrepareOperation)(Int32) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override try {
     if (currentFile_ != nullptr) {
       if (opRes != NArchive::NExtract::NOperationResult::kOK) {
         failed_ = true;
@@ -1890,6 +1926,10 @@ public:
     }
     currentFile_.reset();
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   bool failed() const { return failed_; }
@@ -1963,16 +2003,20 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
-                       Int32 askExtractMode) throw() override {
+                       Int32 askExtractMode) throw() override try {
     if (outStream == nullptr) {
       return E_FAIL;
     }
@@ -2012,17 +2056,25 @@ public:
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override {
+  STDMETHOD(PrepareOperation)(Int32) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override try {
     if (currentFile_ != nullptr) {
       if (opRes != NArchive::NExtract::NOperationResult::kOK) {
         failed_ = true;
@@ -2050,6 +2102,10 @@ public:
     currentFile_.reset();
     releaseCurrentBytes();
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   bool failed() const { return failed_; }
@@ -5798,14 +5854,16 @@ bool readZipEntriesByIndexConcurrent(
   std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
+  const char *resourceFailure = nullptr;
   ZipDirectExtractionStats aggregateStats;
 
-  auto setFailure = [&](std::string message) {
+  auto setFailure = [&](std::string message, const char *resourceError = nullptr) {
     {
       std::lock_guard lock(stateMutex);
       if (!failed) {
         failed = true;
         failureMessage = std::move(message);
+        resourceFailure = resourceError;
       }
     }
     spaceCv.notify_all();
@@ -5852,7 +5910,7 @@ bool readZipEntriesByIndexConcurrent(
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  auto extractWorker = [&]() {
     ZipDirectExtractionStats localStats;
     RandomAccessFile archiveFile;
     std::string openError;
@@ -5937,6 +5995,17 @@ bool readZipEntriesByIndexConcurrent(
   };
 
   const auto start = Clock::now();
+  // Allocations can fail even when one oversized entry is admitted. Unwind
+  // buffers/handles, then wake blocked workers without allocating a message.
+  auto worker = [&]() {
+    try {
+      extractWorker();
+    } catch (const std::bad_alloc &) {
+      setFailure({}, "Not enough memory to extract archive entry.");
+    } catch (const std::length_error &) {
+      setFailure({}, "Archive entry size is not representable.");
+    }
+  };
   std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
@@ -5950,7 +6019,9 @@ bool readZipEntriesByIndexConcurrent(
 
   if (failed) {
     if (errorMessage != nullptr) {
-      *errorMessage = failureMessage.empty()
+      *errorMessage = resourceFailure != nullptr
+                          ? resourceFailure
+                          : failureMessage.empty()
                           ? "Parallel ZIP extraction failed."
                           : failureMessage;
     }
@@ -6419,16 +6490,18 @@ bool readUnarrRarEntriesByOffsetConcurrent(
   std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
+  const char *resourceFailure = nullptr;
   long long acquireMicros = 0;
   long long extractMicros = 0;
   long long callbackMicros = 0;
 
-  auto setFailure = [&](std::string message) {
+  auto setFailure = [&](std::string message, const char *resourceError = nullptr) {
     {
       std::lock_guard lock(stateMutex);
       if (!failed) {
         failed = true;
         failureMessage = std::move(message);
+        resourceFailure = resourceError;
       }
     }
     spaceCv.notify_all();
@@ -6475,7 +6548,7 @@ bool readUnarrRarEntriesByOffsetConcurrent(
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  auto extractWorker = [&]() {
     UnarrStreamHandle stream;
     UnarrArchiveHandle archive;
     std::string openError;
@@ -6565,6 +6638,17 @@ bool readUnarrRarEntriesByOffsetConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
+  // Allocations can fail even when one oversized entry is admitted. Unwind
+  // buffers/handles, then wake blocked workers without allocating a message.
+  auto worker = [&]() {
+    try {
+      extractWorker();
+    } catch (const std::bad_alloc &) {
+      setFailure({}, "Not enough memory to extract archive entry.");
+    } catch (const std::length_error &) {
+      setFailure({}, "Archive entry size is not representable.");
+    }
+  };
   std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
@@ -6578,7 +6662,9 @@ bool readUnarrRarEntriesByOffsetConcurrent(
 
   if (failed) {
     if (errorMessage != nullptr) {
-      *errorMessage = failureMessage.empty()
+      *errorMessage = resourceFailure != nullptr
+                          ? resourceFailure
+                          : failureMessage.empty()
                           ? "Parallel RAR extraction failed."
                           : failureMessage;
     }
@@ -7484,17 +7570,19 @@ bool readSevenZipEntriesByIndexConcurrent(
   std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
+  const char *resourceFailure = nullptr;
   long long acquireMicros = 0;
   long long openMicros = 0;
   long long extractMicros = 0;
   long long callbackMicros = 0;
 
-  auto setFailure = [&](std::string message) {
+  auto setFailure = [&](std::string message, const char *resourceError = nullptr) {
     {
       std::lock_guard lock(stateMutex);
       if (!failed) {
         failed = true;
         failureMessage = std::move(message);
+        resourceFailure = resourceError;
       }
     }
     spaceCv.notify_all();
@@ -7541,7 +7629,7 @@ bool readSevenZipEntriesByIndexConcurrent(
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  auto extractWorker = [&]() {
     long long localAcquireMicros = 0;
     long long localOpenMicros = 0;
     long long localExtractMicros = 0;
@@ -7657,6 +7745,17 @@ bool readSevenZipEntriesByIndexConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
+  // Allocations can fail even when one oversized entry is admitted. Unwind
+  // buffers/handles, then wake blocked workers without allocating a message.
+  auto worker = [&]() {
+    try {
+      extractWorker();
+    } catch (const std::bad_alloc &) {
+      setFailure({}, "Not enough memory to extract archive entry.");
+    } catch (const std::length_error &) {
+      setFailure({}, "Archive entry size is not representable.");
+    }
+  };
   std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
@@ -7670,7 +7769,9 @@ bool readSevenZipEntriesByIndexConcurrent(
 
   if (failed) {
     if (errorMessage != nullptr) {
-      *errorMessage = failureMessage.empty()
+      *errorMessage = resourceFailure != nullptr
+                          ? resourceFailure
+                          : failureMessage.empty()
                           ? "Parallel RAR5 extraction failed."
                           : failureMessage;
     }

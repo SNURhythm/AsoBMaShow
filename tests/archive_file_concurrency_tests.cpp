@@ -37,9 +37,21 @@ thread_local std::size_t largest = 0;
 thread_local std::stop_source *cancelOnChunk = nullptr;
 std::atomic_size_t observedEntrySize{0};
 thread_local unsigned char *observedEntry = nullptr;
+thread_local bool rejectEntryAllocation = false;
+std::atomic_size_t rejectedEntrySize{0};
+std::atomic_size_t rejectedAllocations{0};
+std::atomic_int allocationFailureKind{0};
+const std::length_error injectedLengthError("injected archive length failure");
 }
 
 void *operator new(std::size_t size) {
+  if (bounded_allocation_probe::rejectEntryAllocation &&
+      size == bounded_allocation_probe::rejectedEntrySize.load()) {
+    ++bounded_allocation_probe::rejectedAllocations;
+    if (bounded_allocation_probe::allocationFailureKind == 2)
+      throw bounded_allocation_probe::injectedLengthError;
+    throw std::bad_alloc();
+  }
   if (bounded_allocation_probe::enabled) {
     bounded_allocation_probe::largest =
         std::max(bounded_allocation_probe::largest, size);
@@ -1474,7 +1486,7 @@ void testConcurrentStoredZipFitsExactBudget() {
   assert(received == 1);
 }
 
-void testConcurrentOversizedEntries(const std::string &format) {
+void testConcurrentOversizedEntries(const std::string &format, int allocationFailure = 0) {
   TempDirectory temporary;
   const bool zip = format == "stored" || format == "deflated";
   const auto path = temporary.path() / (zip ? "oversized.zip" : "oversized.rar");
@@ -1535,6 +1547,47 @@ void testConcurrentOversizedEntries(const std::string &format) {
                    sizeof(archive_rar_fixtures::nonSolid));
       paths = {"file0.bin", "file1.bin", "file2.bin", "file3.bin"};
     }
+  }
+
+  if (allocationFailure != 0) {
+    std::vector<archive_file::Entry> entries;
+    std::string error;
+    assert(archive_file::listEntries(path, entries, &error));
+    const auto caller = std::this_thread::get_id();
+    std::atomic_size_t receivedNonempty = 0;
+    bounded_allocation_probe::rejectedEntrySize = zip ? 4096 :
+        format == "rar4" ? 20 : 1024 * 1024;
+    bounded_allocation_probe::allocationFailureKind = allocationFailure;
+    bounded_allocation_probe::rejectedAllocations = 0;
+    const bool read = archive_file::readArchiveEntriesConcurrently(
+        path, paths, [&](archive_file::FileData &&file) {
+          if (!file.bytes.empty()) ++receivedNonempty;
+          return true;
+        }, 4, 1, &error, [&] {
+          // Direct ZIP/RAR4 and large RAR5 run on worker threads. Small/solid
+          // RAR5 uses the SDK on this thread, with the same no-throw callbacks.
+          bounded_allocation_probe::rejectEntryAllocation =
+              std::this_thread::get_id() != caller ||
+              format == "rar5" || format == "rar5-solid";
+          return true;
+        }, archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry);
+    bounded_allocation_probe::rejectEntryAllocation = false;
+    bounded_allocation_probe::rejectedEntrySize = 0;
+    assert(bounded_allocation_probe::rejectedAllocations > 0);
+    assert(!read && !error.empty() && receivedNonempty == 0);
+    // The failed read must release its SDK handle and reservations so another
+    // read of the same archive can deliver an entry and cancel normally.
+    std::atomic_bool recovered = false;
+    error.clear();
+    assert(!archive_file::readArchiveEntriesConcurrently(
+        path, paths, [&](archive_file::FileData &&file) {
+          if (file.bytes.empty()) return true;
+          recovered = true;
+          return false;
+        }, 4, 1, &error, nullptr,
+        archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry));
+    assert(recovered && error == "Archive file consumer cancelled.");
+    return;
   }
 
   std::atomic_int active = 0;
@@ -3503,6 +3556,10 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 4 && std::string(argv[1]) == "--allocation-failure") {
+    testConcurrentOversizedEntries(argv[2], std::stoi(argv[3]));
+    return 0;
+  }
   if (argc == 3 && std::string(argv[1]) == "--oversized-entry") {
     testConcurrentOversizedEntries(argv[2]);
     return 0;
@@ -3630,6 +3687,8 @@ int main(int argc, char **argv) {
   for (const auto *format : {"stored", "deflated", "rar4", "rar5",
                              "rar5-solid", "rar5-parallel"}) {
     testConcurrentOversizedEntries(format);
+    testConcurrentOversizedEntries(format, 1);
+    testConcurrentOversizedEntries(format, 2);
   }
   for (const auto *extension : {".7z", ".cb7", ".tar", ".tar.gz",
                                 ".tar.bz2", ".tar.xz", ".tar.zst"}) {
