@@ -548,7 +548,7 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "                          std::make_move_iterator(evaluated.diagnostics.end()));\n"
                   "  if (!suppressFrameActions_) {",
                   "successful result frames retain non-fatal diagnostics");
-  requireContains(result,
+  requireContains(readSource("src/ResultReplayLanePattern.h"),
                   "const int playerOffset = player == 1 ? keyCount : 0;",
                   "generated 2P result patterns use replay-local lane ordinals");
   requireContains(result,

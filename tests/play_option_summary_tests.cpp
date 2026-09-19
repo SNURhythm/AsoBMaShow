@@ -1,3 +1,4 @@
+#include "ResultReplayLanePattern.h"
 #include "PlayOptionUtils.h"
 #include "support/AllocationLifetimeProbe.h"
 
@@ -47,6 +48,23 @@ void testSyntheticChartOwnership() {
 }
 
 int main() {
+  for (int keyMode : {7, 14}) {
+    bms_parser::ChartMeta meta;
+    meta.KeyMode = keyMode;
+    meta.IsDP = keyMode == 14;
+    for (int player = 0; player < (meta.IsDP ? 2 : 1); ++player) {
+      for (const std::string option : {"RANDOM", "R-RANDOM", "RANDOM-EX"}) {
+        const auto pattern = resultReplayLanePattern(meta, option, 123, player);
+        assert(pattern && pattern->size() == 8);
+        assert(pattern == resultReplayLanePattern(meta, option, 123, player));
+        auto sorted = *pattern;
+        std::ranges::sort(sorted);
+        for (int index = 0; index < 8; ++index)
+          assert(sorted[index] == index + player * 7);
+      }
+    }
+  }
+
   testLaneOrders();
   testSyntheticChartOwnership();
   testLaneOrders();

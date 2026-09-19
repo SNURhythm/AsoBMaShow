@@ -8498,6 +8498,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(result_skin_export_tests ${CMAKE_CURRENT_BINARY_DIR}/result_skin_export_fixture.cpp)
     target_compile_features(result_skin_export_tests PRIVATE cxx_std_23)
     asobmashow_register_test(result_skin_export_tests)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/replay_result_skin_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
+        DEPENDS tests/replay_result_skin_extract.py tests/replay_result_skin_fixture.cpp
+                src/ReplayVideoExporter.cpp
+        VERBATIM
+    )
+    add_executable(replay_result_skin_tests ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp)
+    target_compile_features(replay_result_skin_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(replay_result_skin_tests)
     set_tests_properties(bounded_duration_graph_tests graph_selector_tests graph_simulation_tests PROPERTIES TIMEOUT 15)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)

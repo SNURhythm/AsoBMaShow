@@ -30,6 +30,38 @@ class ReplayVideoUiBatchContracts(unittest.TestCase):
         self.assertNotIn("createLuaSkinApplicationAudioBackend", services)
         self.assertNotIn("jukebox.audioRuntime", services)
 
+    def test_all_result_surfaces_use_capture_sessions(self) -> None:
+        source = (ROOT / "src/ReplayVideoExporter.cpp").read_text(encoding="utf-8")
+        for name, elapsed in (("resultPresentation", "videoTimeMicros - gameplayDurationMicros"),
+                              ("stageResultPresentation", "resultOffsetMicros"),
+                              ("courseResultPresentation", "resultOffsetMicros")):
+            self.assertIn(f"{name}.prepare(", source)
+            self.assertIn(f"{name}.render(renderContext,", source)
+            self.assertIn(f"{name}.reset();", source)
+            start = source.index(f"{name}.render(renderContext,")
+            self.assertIn(elapsed, source[start:start + 220])
+            self.assertGreater(source.rfind("RenderContext::UiBatchScope", 0, start),
+                               source.rfind("[&]() {", 0, start))
+        start = source.index("class PreparedReplayResultPresentation")
+        end = source.index("replayExportPersistedScore", start)
+        helper = source[start:end]
+        self.assertIn("renderForExport", helper)
+        self.assertIn("createLuaSkinNoOutputAudioBackend", helper)
+        self.assertIn(".stop = stop", helper)
+        self.assertNotIn("createLuaSkinApplicationAudioBackend", helper)
+
+    def test_result_data_keeps_replay_mode_and_shared_lane_projection(self) -> None:
+        source = (ROOT / "src/ReplayVideoExporter.cpp").read_text(encoding="utf-8")
+        start = source.index("void populateReplayResultSkinData(")
+        end = source.index("replayExportPersistedScore", start)
+        projection = source[start:end]
+        self.assertIn("data.keyModeOverride = replay.chartMeta.KeyMode;", projection)
+        self.assertIn("resultReplayLanePattern(", projection)
+        self.assertIn("beatorajaResultTimingStatistics(", projection)
+        self.assertIn("data.courseResult = true;", source)
+        self.assertIn("context, data, 15, resolvedOptions.stop", source)
+        self.assertIn("context, data, 7, resolvedOptions.stop", source)
+
     def test_every_gameplay_presentation_render_is_scoped(self) -> None:
         source = (ROOT / "src/ReplayVideoExporter.cpp").read_text(encoding="utf-8")
         gameplay_calls = list(
