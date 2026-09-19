@@ -101,7 +101,7 @@ struct AudioCommand {
 };
 
 constexpr size_t kMaxActiveSounds = 512;
-constexpr size_t kMaxScheduledSounds = 65536;
+constexpr size_t kInitialScheduledSoundCapacity = 65536;
 constexpr size_t kAudioCommandQueueSize = 4096;
 constexpr size_t kOwnerControlCommandQueueSize = 4096;
 constexpr size_t kCombinedAudioCommandQueueSize =
@@ -118,6 +118,7 @@ struct AudioCallbackState {
   std::unique_ptr<PlayingSound[]> playingSounds;
   size_t playingSoundCount = 0;
   std::unique_ptr<ScheduledSound[]> scheduledSounds;
+  size_t scheduledSoundCapacity = kInitialScheduledSoundCapacity;
   size_t scheduledSoundCount = 0;
   std::unique_ptr<AudioCommand[]> commandQueue;
   std::atomic<std::uint32_t> commandReadCursor{0};
@@ -209,6 +210,10 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        float gain = 1.0F, bool loop = false);
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
+// Only call while the backend is confirmed stopped and callback state is owned
+// exclusively. The realtime insertion path never allocates.
+bool PrepareScheduledSoundCapacity(AudioCallbackState &state,
+                                   size_t requiredCapacity) noexcept;
 void ClearCallbackSounds(AudioCallbackState &state,
                           bool preserveSystemSounds = false);
 void RemoveSound(AudioCallbackState &state, SoundData *soundData);

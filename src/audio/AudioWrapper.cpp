@@ -1515,6 +1515,12 @@ bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
 
   {
     std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+    if (!audio::playback::PrepareScheduledSoundCapacity(
+            callbackState, callbackState.scheduledSoundCount + 1)) {
+      SDL_LogError(SDL_LOG_CATEGORY_AUDIO,
+                   "Unable to allocate the complete chart audio schedule");
+      return false;
+    }
     if (!audio::playback::InsertScheduledSound(
             callbackState, {.soundData = soundData.get(),
                             .bus = bus,

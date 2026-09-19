@@ -1283,6 +1283,27 @@ void testClearCallbackSoundsPreservesSystemVoicesAndSchedules() {
 
 int main() {
   try {
+    {
+      AudioCallbackState state;
+      SoundData sound;
+      const auto *storage = state.scheduledSounds.get();
+      for (std::size_t index = 0; index < 65'536; ++index) {
+        require(audio::playback::InsertScheduledSound(
+                    state, {.soundData = &sound,
+                            .startMicros = static_cast<long long>(index)}),
+                "the callback can fill its prepared scheduling storage");
+      }
+      require(!audio::playback::InsertScheduledSound(
+                  state, {.soundData = &sound, .startMicros = 65'536}) &&
+                  state.scheduledSounds.get() == storage &&
+                  state.scheduledSoundCount == 65'536,
+              "callback insertion rejects exhaustion without allocating or losing events");
+      require(!audio::playback::PrepareScheduledSoundCapacity(
+                  state, std::numeric_limits<std::size_t>::max()) &&
+                  state.scheduledSounds.get() == storage &&
+                  state.scheduledSoundCount == 65'536,
+              "unrepresentable staging requests preserve the existing schedule");
+    }
     const audio::Volumes volumes{
         .master = 0.5f,
         .bgm = 0.25f,

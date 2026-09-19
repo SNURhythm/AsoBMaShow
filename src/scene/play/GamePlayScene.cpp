@@ -3506,7 +3506,14 @@ bool GamePlayScene::reset() {
   }
   updateSkinResetLayoutVisibility();
 #endif
-  context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  const auto playbackStarted =
+      context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  if (!playbackStarted.success) {
+    showPlaybackInitializationFailure(
+        gameplay_startup::playbackInitializationResult(
+            false, playbackStarted.diagnostic).visibleStatus);
+    return false;
+  }
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
