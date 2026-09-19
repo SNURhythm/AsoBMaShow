@@ -17,4 +17,14 @@ public:
 
 using FailNextAllocation = FailAllocationAfter;
 
+// Observe ordinary C++ allocations on this thread without changing admission.
+class AllocationSizeObserver final {
+public:
+  AllocationSizeObserver() noexcept;
+  ~AllocationSizeObserver();
+  [[nodiscard]] std::size_t largest() const noexcept;
+  AllocationSizeObserver(const AllocationSizeObserver &) = delete;
+  AllocationSizeObserver &operator=(const AllocationSizeObserver &) = delete;
+};
+
 } // namespace test_support
