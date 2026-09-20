@@ -31,6 +31,13 @@ extern "C" {
 #include <vector>
 
 #include "PngRowDecoder.h"
+#include "JpegScaledDecoder.h"
+#include "GifRowDecoder.h"
+#include "JpegComponentRowDecoder.h"
+#include "RasterRowDecoder.h"
+#include "PortableRowDecoder.h"
+#include "PsdRowDecoder.h"
+#include "PicRowDecoder.h"
 
 namespace image_decode {
 namespace {
@@ -634,6 +641,21 @@ decodeImageMemory(std::span<const std::byte> encoded,
       !validDimensions(width, height, options.maximumDimension,
                        options.maximumDecodedBytes, bytes)) {
     return std::nullopt;
+  }
+  const auto target = detail::reducedDimensions(width, height, options);
+  if (target.first != width || target.second != height) {
+    if (detail::isJpeg(encoded)) {
+      if (auto image = detail::decodeJpegScaled(encoded, options, width, height))
+        return image;
+      return detail::decodeJpegComponentRows(encoded, options);
+    }
+    if (detail::isGif(encoded)) return detail::decodeGifRows(encoded, options);
+    if (detail::isBmp(encoded)) return detail::decodeBmpRows(encoded, options);
+    if (detail::isPsd(encoded)) return detail::decodePsdRows(encoded, options);
+    if (detail::isPnm(encoded)) return detail::decodePnmRows(encoded, options);
+    if (detail::isHdr(encoded)) return detail::decodeHdrRows(encoded, options);
+    if (detail::isPic(encoded)) return detail::decodePicRows(encoded, options);
+    if (detail::isTga(encoded)) return detail::decodeTgaRows(encoded, options);
   }
   std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(
       stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(encoded.data()),

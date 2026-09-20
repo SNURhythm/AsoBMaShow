@@ -606,7 +606,21 @@ void testGameplayBmsResourceProbePublishesDecodedAvailabilityOffThread() {
 
 }
 
+#include "image_reduced_formats_tests.h"
+#include "psd_row_decoder_tests.h"
+#include "portable_row_decoder_tests.h"
+#include "raster_row_decoder_tests.h"
+
 int main() {
+  if (std::getenv("ASOBMS_JPEG_STRESS")) {
+    testJpegDecodeTimeScaling(true);
+    return failures == 0 ? 0 : 1;
+  }
+  testJpegDecodeTimeScaling();
+  testGifAndPicRowDecoders();
+  testPsdRowDecoders();
+  testPortableRowDecoders();
+  testRasterRowDecoders();
   testLargePngDownsamplesWithoutSourceAllocation();
   testPngVariantsAndInvalidInput();
   testPngRejectsInvalidInflatedRows();

@@ -23,9 +23,11 @@ struct ImageDecodeOptions {
 };
 
 // This decoder has no cache, thumbnail, archive, or UI side effects.  Package
-// callers supply bytes obtained through their own containment boundary. PNG,
-// CIM and WBMP reduce while decoding; other codecs avoid a second source-sized
-// RGBA copy when a smaller target is requested.
+// callers supply bytes obtained through their own containment boundary. Raster
+// formats reduce rows without a source-sized RGBA buffer. JPEG uses reduced IDCT
+// where supported, otherwise component-row conversion; its component/progressive
+// coefficient buffers can still depend on source dimensions. WebP scales from
+// its native decoder frame directly into the requested RGBA image.
 [[nodiscard]] std::optional<DecodedImageData>
 decodeImageMemory(std::span<const std::byte> encoded,
                   const ImageDecodeOptions &options);
