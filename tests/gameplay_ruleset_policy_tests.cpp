@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 void require(bool condition, const char *message) {
@@ -103,6 +104,59 @@ void testBeatorajaPolicyIsCoherent() {
               std::abs(policy.gauge.effectiveTotal - 200.5) < 0.0001 &&
               policy.canonical,
           "Beatoraja policy cannot contain LR2 judge or gauge semantics");
+}
+
+void testNonpositiveTotalBuildsAndReplays() {
+  for (const double total : {0.0, -1.0}) {
+    auto meta = chartMeta(GameplayRuleset::Beatoraja);
+    meta.Total = total;
+    const auto live = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja, .sourceRank = meta.Rank});
+    require(live.built() && live.policy->canonical &&
+                std::abs(live.policy->gauge.effectiveTotal -
+                         460.9090909090909) < 0.0001,
+            "nonpositive authored TOTAL builds a canonical default gauge");
+    StartOptions options;
+    options.ruleset = GameplayRuleset::Beatoraja;
+    const auto captured = captureScoreProvenanceAtPlayStart(
+        options, meta, *live.policy);
+    require(captured.stages.front().authoredGaugeTotal == total,
+            "default gauge resolution preserves authored TOTAL provenance");
+    const auto replay = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja,
+               .sourceRank = meta.Rank,
+               .replaySnapshot = captured.stages.front()});
+    require(replay.built() && replay.policy->canonical &&
+                replay.policy->gauge == live.policy->gauge,
+            "default TOTAL is reproducible from the captured replay policy");
+  }
+
+  std::atomic_bool cancelled{false};
+  const std::string source = "#BPM 120\n#TOTAL 0\n#00111:01\n";
+  bms_parser::Parser parser;
+  bms_parser::Chart *parsed = nullptr;
+  parser.Parse(std::vector<unsigned char>(source.begin(), source.end()),
+               &parsed, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(parsed);
+  require(chart && chart->Meta.TotalNotes == 1 && !chart->Meta.HasTotal,
+          "the BMS parser treats TOTAL zero as unspecified");
+  const auto parsedPolicy = gameplay::buildGameplayRulesetPolicy(
+      chart->Meta, {.ruleset = GameplayRuleset::Beatoraja,
+                    .sourceRank = chart->Meta.Rank});
+  require(parsedPolicy.built() &&
+              parsedPolicy.policy->gauge.effectiveTotal == 260.0,
+          "a parsed TOTAL zero chart can start with the default gauge");
+
+  for (const double total : {std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::quiet_NaN()}) {
+    auto meta = chartMeta(GameplayRuleset::Beatoraja);
+    meta.Total = total;
+    const auto outcome = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja});
+    require(outcome.status == gameplay::GameplayPolicyBuildStatus::InvalidChart,
+            "nonfinite TOTAL remains an invalid chart policy");
+  }
 }
 
 void testInvalidInputsDoNotFallBack() {
@@ -283,6 +337,7 @@ void testLegacyReplayUsesBeatorajaFallback() {
 } // namespace
 
 int main() {
+  testNonpositiveTotalBuildsAndReplays();
   testLr2PolicyIsCoherent();
   testBeatorajaPolicyIsCoherent();
   testInvalidInputsDoNotFallBack();
