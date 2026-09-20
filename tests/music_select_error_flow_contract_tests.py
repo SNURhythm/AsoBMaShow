@@ -678,13 +678,16 @@ int main() {
         self.compile_and_run(fixture.replace("SCENE_CALLBACKS", callbacks))
 
     def test_toolbar_reveal_uses_native_file_action_on_mobile(self):
-        signature = "void MusicSelectScene::revealChart()"
+        signatures = ["OverlayAnchor MusicSelectScene::revealChartAnchor() const",
+                      "void MusicSelectScene::revealChart()",
+                      "void MusicSelectScene::revealSelectedChartInFileManager()"]
         source = read_music_select_scene()
         overlay = (ROOT / "src/view/OverlayPortal.h").read_text()
         anchors = overlay[overlay.index("struct OverlayAnchor"):overlay.index("struct OverlayPlacement")]
         fixture = r'''#include <algorithm>
 #include <cassert>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -697,7 +700,7 @@ enum class MusicSelectSkinActionKind { Event };
 struct Action { MusicSelectSkinActionKind kind; struct { int value; } selector; int arguments[2]; };
 }
 struct Chart { bool unavailable = false, solidArchive = false;
-  struct { std::filesystem::path BmsPath = "/charts/song.bms"; } meta; };
+  struct { std::filesystem::path BmsPath = "/charts/song.bms", Folder; } meta; };
 struct Row { skin::MusicSelectBarKind kind = skin::MusicSelectBarKind::Song;
   std::optional<Chart> chart = Chart{}; };
 struct Bars {
@@ -716,6 +719,29 @@ struct Control { MusicSelectToolbarControl control; View *icon; };
 struct Toolbar : View {
   View icon;
   std::vector<Control> controls() { return {{MusicSelectToolbarControl::RevealChart, &icon}}; }
+};
+struct OverlayPortal {};
+struct ContextMenuView {
+  struct Action { std::string id, label; bool enabled = true; };
+  struct Callbacks { std::function<void(bool)> onOpenChanged;
+                     std::function<void(const std::string &)> onActionSelected; } callbacks;
+  bool open = false;
+  int width = 0;
+  std::vector<Action> actions;
+  ContextMenuView(OverlayPortal *, Callbacks value) : callbacks(std::move(value)) {}
+  bool isOpen() const { return open; }
+  void dismiss() { open = false; if (callbacks.onOpenChanged) callbacks.onOpenChanged(false); }
+  void setViewportSize(int, int) {}
+  void propagateThemeChange() {}
+  void show(OverlayAnchor, std::vector<Action> value, int menuWidth) {
+    actions = std::move(value); width = menuWidth; open = true;
+    if (callbacks.onOpenChanged) callbacks.onOpenChanged(true);
+  }
+  void select(int index) {
+    assert(open && actions[index].enabled);
+    callbacks.onActionSelected(actions[index].id);
+    dismiss();
+  }
 };
 namespace platform_open {
 struct RevealAnchor { float x, y, width, height; };
@@ -740,14 +766,23 @@ struct MusicSelectScene {
   Bars bars_;
   Toolbar toolbar;
   Toolbar *toolbar_ = &toolbar;
-  bool selectorInputBlocked() const { return blocked; }
+  OverlayPortal portal;
+  OverlayPortal *modalOverlayPortal_ = &portal;
+  std::optional<int> chartSession_ = 0;
+  std::unique_ptr<ContextMenuView> revealContextMenu_;
+  int folders = 0, resets = 0;
+  bool selectorInputBlocked() const { return blocked || (revealContextMenu_ && revealContextMenu_->isOpen()); }
+  bool openSameFolder(bool notify) { assert(notify && !selectorInputBlocked()); ++folders; return true; }
+  void resetLogicalInput() { ++resets; }
   void executeEvent(const skin::Action &) { ++legacyEvents; }
   void revealChart();
+  void revealSelectedChartInFileManager();
+  OverlayAnchor revealChartAnchor() const;
 };
 METHOD
 int main() {
   MusicSelectScene scene;
-  scene.revealChart();
+  scene.revealSelectedChartInFileManager();
   assert(platform_open::calls == 1 && scene.legacyEvents == 0);
   assert(platform_open::lastPath == "/charts/song.bms");
   assert(platform_open::lastAnchor.x == 0.2f && platform_open::lastAnchor.y == 0.2f);
@@ -755,26 +790,49 @@ int main() {
   auto &row = scene.bars_.rows[0];
   row.chart->solidArchive = true;
   row.chart->meta.BmsPath = "/charts/package.zip/nested/chart.bms";
-  scene.revealChart();
+  scene.revealSelectedChartInFileManager();
   assert(platform_open::calls == 2 && platform_open::lastPath == row.chart->meta.BmsPath);
-  scene.blocked = true; scene.revealChart(); scene.blocked = false;
-  scene.sceneActive_ = false; scene.revealChart(); scene.sceneActive_ = true;
-  scene.failed_ = true; scene.revealChart(); scene.failed_ = false;
-  row.chart->unavailable = true; scene.revealChart(); row.chart->unavailable = false;
-  row.chart->meta.BmsPath.clear(); scene.revealChart();
-  row.chart.reset(); scene.revealChart();
-  row.kind = skin::MusicSelectBarKind::Folder; scene.revealChart();
-  scene.bars_.selectedIndex = 1; scene.revealChart();
+  scene.blocked = true; scene.revealSelectedChartInFileManager(); scene.blocked = false;
+  scene.sceneActive_ = false; scene.revealSelectedChartInFileManager(); scene.sceneActive_ = true;
+  scene.failed_ = true; scene.revealSelectedChartInFileManager(); scene.failed_ = false;
+  row.chart->unavailable = true; scene.revealSelectedChartInFileManager(); row.chart->unavailable = false;
+  row.chart->meta.BmsPath.clear(); scene.revealSelectedChartInFileManager();
+  row.chart.reset(); scene.revealSelectedChartInFileManager();
+  row.kind = skin::MusicSelectBarKind::Folder; scene.revealSelectedChartInFileManager();
+  scene.bars_.selectedIndex = 1; scene.revealSelectedChartInFileManager();
   assert(platform_open::calls == 2);
   scene.bars_ = Bars{};
   scene.toolbar_ = nullptr;
   platform_open::success = false;
-  scene.revealChart();
+  scene.revealSelectedChartInFileManager();
   assert(platform_open::calls == 3 && logs == 1);
+  scene.toolbar_ = &scene.toolbar;
+  platform_open::success = true;
+  scene.revealChart();
+  assert(platform_open::calls == 3 && scene.revealContextMenu_->isOpen());
+  const auto &menu = *scene.revealContextMenu_;
+  assert(menu.width == 220 && menu.actions.size() == 2);
+  assert(menu.actions[0].label == "Show Same Folder" && menu.actions[0].enabled);
+  assert(menu.actions[1].label == "Reveal File" && menu.actions[1].enabled);
+  scene.revealChart();
+  assert(!menu.isOpen());
+  scene.revealChart();
+  scene.revealContextMenu_->select(0);
+  assert(scene.folders == 1 && platform_open::calls == 3 && !menu.isOpen());
+  scene.revealChart();
+  scene.revealContextMenu_->select(1);
+  assert(scene.folders == 1 && platform_open::calls == 4 && !menu.isOpen());
+  scene.chartSession_.reset();
+  scene.revealChart();
+  assert(!menu.actions[0].enabled && menu.actions[1].enabled);
+  scene.revealContextMenu_->dismiss();
+  scene.bars_.selectedIndex = 1;
+  scene.revealChart();
+  assert(!menu.isOpen());
 }
 '''
         self.compile_and_run(fixture.replace("ANCHORS", anchors).replace(
-            "METHOD", signature + function_body(source, signature)))
+            "METHOD", "\n".join(signature + function_body(source, signature) for signature in signatures)))
 
     def compile_and_run(self, source, extra_sources=()):
         compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")

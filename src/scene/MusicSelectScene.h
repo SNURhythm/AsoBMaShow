@@ -47,6 +47,8 @@
 #include <vector>
 
 class BlockingOverlayView;
+class ContextMenuView;
+struct OverlayAnchor;
 class OverlayPortal;
 class DecideLoadingOverlay;
 class ChartPreloadWorker;
@@ -130,6 +132,8 @@ private:
   void openChartViewer();
   void openChartRecords();
   void revealChart();
+  void revealSelectedChartInFileManager();
+  [[nodiscard]] OverlayAnchor revealChartAnchor() const;
   void openMusicPlayer();
   void openTasks();
   void openPlayOptions();
@@ -270,6 +274,7 @@ private:
   std::chrono::steady_clock::time_point started_;
   std::vector<skin::SkinDiagnostic> diagnostics_;
   MusicSelectToolbarView *toolbar_ = nullptr;
+  std::unique_ptr<ContextMenuView> revealContextMenu_;
   BlockingOverlayView *searchOverlay_ = nullptr;
   TextInputBox *searchInput_ = nullptr;
   View *modalLayer_ = nullptr;

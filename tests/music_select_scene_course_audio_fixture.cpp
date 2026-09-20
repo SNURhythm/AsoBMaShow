@@ -207,6 +207,9 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  struct RevealMenu { void dismiss() {} };
+  std::unique_ptr<RevealMenu> revealContextMenu_;
+
   void resetFailedLaunch(std::uint64_t generation);
   bool recordsResumeAudioPending_ = false;
   struct FileActions { void close() {} };

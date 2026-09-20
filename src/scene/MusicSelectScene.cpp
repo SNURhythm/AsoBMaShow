@@ -40,6 +40,7 @@
 #include "../view/Button.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/OverlayPortal.h"
+#include "../view/ContextMenuView.h"
 #include "ChartPreloadWorker.h"
 #include "DecideLoadingOverlay.h"
 #include "../view/ResultRecordListView.h"
@@ -647,6 +648,7 @@ void MusicSelectScene::init() {
 }
 
 void MusicSelectScene::onPause() {
+  if (revealContextMenu_) revealContextMenu_->dismiss();
   recordsResumeAudioPending_ = false;
   recordsTask_.cancelAndWait();
   finishRecordsLoading();
@@ -883,6 +885,7 @@ void MusicSelectScene::requestFolderStatus(
 }
 
 void MusicSelectScene::selectedBarMoved() {
+  if (revealContextMenu_) revealContextMenu_->dismiss();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   cancelSelectedChartAnalysis();
   selectedChartInformation_.reset();
@@ -1466,6 +1469,10 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
       return {};
     }
     (void)searchOverlay_->handleEvents(event);
+    return {};
+  }
+  if (revealContextMenu_ && revealContextMenu_->isOpen()) {
+    (void)revealContextMenu_->handleEvents(event);
     return {};
   }
   if (toolbar_ != nullptr && !toolbar_->handleEvents(event)) return {};
@@ -2828,7 +2835,7 @@ void MusicSelectScene::consumeActions() {
 }
 
 bool MusicSelectScene::selectorInputBlocked() const {
-  return launching_ ||
+  return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
@@ -3288,6 +3295,10 @@ void MusicSelectScene::update(float) {
     modalOverlayPortal_->setSize(rendering::window_width,
                                  rendering::window_height);
   }
+  if (revealContextMenu_) {
+    revealContextMenu_->setViewportSize(rendering::window_width,
+                                        rendering::window_height);
+  }
   if (playOptionsModal_ != nullptr) {
     playOptionsModal_->resize(rendering::window_width,
                               rendering::window_height);
@@ -3394,6 +3405,7 @@ void MusicSelectScene::enterError(
   skinTouchGesture_.cancel();
 #endif
   if (searchOverlay_ != nullptr) searchOverlay_->setVisible(false);
+  if (revealContextMenu_) revealContextMenu_->dismiss();
   diagnostics_ = std::move(diagnostics);
   if (diagnostics_.empty()) {
     diagnostics_.push_back(skin::SkinDiagnostic{
@@ -3474,16 +3486,7 @@ void MusicSelectScene::openChartViewer() {
       std::nullopt, SceneReturnTarget::Retained(this)), true);
 }
 
-void MusicSelectScene::revealChart() {
-  if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
-  const auto snapshot = bars_.readView();
-  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
-  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
-  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
-      selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) {
-    return;
-  }
-
+OverlayAnchor MusicSelectScene::revealChartAnchor() const {
   OverlayAnchor sourceAnchor{};
   if (toolbar_ != nullptr) {
     const View *anchor = toolbar_;
@@ -3496,6 +3499,63 @@ void MusicSelectScene::revealChart() {
     sourceAnchor = {.x = anchor->getX(), .y = anchor->getY(),
                     .width = anchor->getWidth(), .height = anchor->getHeight()};
   }
+  return sourceAnchor;
+}
+
+void MusicSelectScene::revealChart() {
+  if (revealContextMenu_ && revealContextMenu_->isOpen()) {
+    revealContextMenu_->dismiss();
+    return;
+  }
+  if (!sceneActive_ || failed_ || selectorInputBlocked() ||
+      toolbar_ == nullptr || modalOverlayPortal_ == nullptr) return;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) return;
+
+  if (!revealContextMenu_) {
+    revealContextMenu_ = std::make_unique<ContextMenuView>(
+        modalOverlayPortal_, ContextMenuView::Callbacks{
+            .onOpenChanged = [this](bool) { resetLogicalInput(); },
+            .onActionSelected = [this](const std::string &actionId) {
+              // ContextMenuView normally dismisses after the callback. Unblock
+              // selector actions before invoking the selected command.
+              revealContextMenu_->dismiss();
+              if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
+              if (actionId == "show-same-folder") {
+                (void)openSameFolder(true);
+              } else if (actionId == "reveal-file") {
+                revealSelectedChartInFileManager();
+              }
+            }});
+  }
+  const auto folder = selected.chart->meta.Folder.empty()
+                          ? selected.chart->meta.BmsPath.parent_path()
+                          : selected.chart->meta.Folder;
+  revealContextMenu_->setViewportSize(rendering::window_width,
+                                      rendering::window_height);
+  revealContextMenu_->propagateThemeChange();
+  revealContextMenu_->show(
+      revealChartAnchor(),
+      {{.id = "show-same-folder", .label = "Show Same Folder",
+        .enabled = chartSession_.has_value() && !selected.chart->solidArchive &&
+                   !folder.empty()},
+       {.id = "reveal-file", .label = "Reveal File"}}, 220);
+}
+
+void MusicSelectScene::revealSelectedChartInFileManager() {
+  if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+
+  const auto sourceAnchor = revealChartAnchor();
   const auto normalized = normalizeOverlayAnchor(
       sourceAnchor, rendering::window_width, rendering::window_height);
   std::string error;
@@ -4038,6 +4098,7 @@ void MusicSelectScene::persistToolbar(MusicSelectToolbarState state) {
 }
 
 void MusicSelectScene::cleanupScene() {
+  revealContextMenu_.reset();
   recordsTask_.cancelAndWait();
   if (recordFileActions_) recordFileActions_->close();
   sceneActive_ = false;

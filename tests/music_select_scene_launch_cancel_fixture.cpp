@@ -106,6 +106,8 @@ struct PreviewAudio {
   void resumeDefaultBgm() { ++resumes; }
 };
 struct MusicSelectScene {
+  std::unique_ptr<int> revealContextMenu_;
+
   void resetFailedLaunch(std::uint64_t generation);
   struct { void cancelAndWait() {} } recordsTask_;
   struct FileActions { void close() {} };
