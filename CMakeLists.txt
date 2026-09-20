@@ -4255,7 +4255,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(modern_result_recall_tests PRIVATE shell32 ole32)
     endif()
 
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/result_history_scene_methods.h
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/result_history_scene_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/result_history_scene_methods.h
+        DEPENDS tests/result_history_scene_extract.py src/scene/ResultScene.cpp
+                src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
     add_executable(score_provenance_db_tests
+        ${CMAKE_CURRENT_BINARY_DIR}/result_history_scene_methods.h
         tests/score_provenance_db_tests.cpp
         src/CourseIdentity.cpp
         src/FileChecksum.cpp
@@ -4272,7 +4282,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/sqlite3.c
         src/scene/play/GameplayGaugeRules.cpp
     )
-    target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(score_provenance_db_tests PRIVATE ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR})
     target_compile_features(score_provenance_db_tests PRIVATE cxx_std_23)
     if(TARGET SDL2::SDL2)
         target_link_libraries(score_provenance_db_tests PRIVATE SDL2::SDL2)
@@ -4872,6 +4882,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/view/DecodedImageCache.cpp
         src/view/ImageDecodeCoordinator.cpp
         src/view/ImageFade.cpp
@@ -8388,6 +8399,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(ui_batch_renderer_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
+    if(APPLE)
+        add_executable(ui_batch_metal_tests
+            tests/ui_batch_metal_tests.cpp
+            src/rendering/UiBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+        )
+        target_include_directories(ui_batch_metal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(ui_batch_metal_tests PRIVATE cxx_std_23)
+        target_link_libraries(ui_batch_metal_tests PRIVATE ${COMMON_LIBS} bgfx)
+        asobmashow_register_test(ui_batch_metal_tests)
+        set_tests_properties(ui_batch_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
+    endif()
     asobmashow_register_test(ui_batch_renderer_tests)
     if (TARGET skin_renderer_golden_tests)
         asobmashow_register_test(skin_renderer_golden_tests)
@@ -8451,6 +8477,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             --root ${CMAKE_SOURCE_DIR}
             --output ${CMAKE_CURRENT_BINARY_DIR}/graph_result_fixture.cpp
         DEPENDS tests/graph_result_extract.py tests/graph_result_fixture.cpp src/scene/ResultScene.cpp
+                src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
     get_target_property(GRAPH_RESULT_SOURCES replay_summary_list_tests SOURCES)
@@ -8460,6 +8487,30 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(graph_result_tests PRIVATE cxx_std_23)
     asobmashow_register_test(graph_result_tests)
     set_tests_properties(graph_result_tests PROPERTIES TIMEOUT 15)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/result_skin_export_fixture.cpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/result_skin_export_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/result_skin_export_fixture.cpp
+        DEPENDS tests/result_skin_export_extract.py tests/result_skin_export_fixture.cpp
+                src/scene/ResultScene.cpp src/ResultImageExporter.cpp
+        VERBATIM
+    )
+    add_executable(result_skin_export_tests ${CMAKE_CURRENT_BINARY_DIR}/result_skin_export_fixture.cpp)
+    target_compile_features(result_skin_export_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(result_skin_export_tests)
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/replay_result_skin_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
+        DEPENDS tests/replay_result_skin_extract.py tests/replay_result_skin_fixture.cpp
+                src/ReplayVideoExporter.cpp
+        VERBATIM
+    )
+    add_executable(replay_result_skin_tests ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp)
+    target_compile_features(replay_result_skin_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(replay_result_skin_tests)
     set_tests_properties(bounded_duration_graph_tests graph_selector_tests graph_simulation_tests PROPERTIES TIMEOUT 15)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)

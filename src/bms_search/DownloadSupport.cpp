@@ -175,7 +175,7 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   if (progressCallback) {
     progressCallback({.message = "Downloading archive"});
   }
-  constexpr std::uint64_t maximumArchiveBytes = 8ULL * 1024 * 1024 * 1024;
+  constexpr auto maximumArchiveBytes = std::numeric_limits<std::uint64_t>::max();
   IOSDownloadProgressContext progressContext{
       .progressCallback = &progressCallback};
   if (!DownloadURLToFileIOS(url, path, cancelled, maximumArchiveBytes,

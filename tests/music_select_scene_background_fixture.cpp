@@ -1,3 +1,4 @@
+#include <memory>
 #include <atomic>
 #include <cassert>
 #include <initializer_list>
@@ -30,6 +31,13 @@ struct ExternalUrlService {
 };
 
 struct MusicSelectScene {
+  struct RevealMenu {
+    void dismiss() {}
+    void setViewportSize(int, int) {}
+    bool isOpen() const { return false; }
+  };
+  std::unique_ptr<RevealMenu> revealContextMenu_;
+
   bool recordsResumeAudioPending_ = false;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
   void finishRecordsLoading() {}

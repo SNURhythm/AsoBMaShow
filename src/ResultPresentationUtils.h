@@ -2,6 +2,7 @@
 
 #include "repositories/ChartRepository.h"
 #include "ReplayData.h"
+#include "CoursePlaySession.h"
 #include "replay/BestReplayResolver.h"
 #include "repositories/ScoreRepository.h"
 #include "scene/play/Pacemaker.h"
@@ -176,10 +177,12 @@ previousBestForReplayChart(ScoreRepository &scores,
                            const bms_parser::ChartMeta &meta,
                            const ReplayData &replay) {
   std::optional<std::string> beforeCreatedAt;
-  if (!replay.autoPlay && !replay.createdAt.empty()) {
+  if (!replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;
   }
-  if (const auto best = scores.LoadBestScore(meta, beforeCreatedAt);
+  if (!beforeCreatedAt && !replay.resultAttemptId) return std::nullopt;
+  if (const auto best = scores.LoadBestScore(
+          meta, beforeCreatedAt, std::nullopt, 0, replay.resultAttemptId);
       best.has_value()) {
     return previousBestDataFromSnapshot(*best);
   }
@@ -191,14 +194,46 @@ previousLampBestForReplayChart(ScoreRepository &scores,
                                const bms_parser::ChartMeta &meta,
                                const ReplayData &replay) {
   std::optional<std::string> beforeCreatedAt;
-  if (!replay.autoPlay && !replay.createdAt.empty()) {
+  if (!replay.createdAt.empty()) {
     beforeCreatedAt = replay.createdAt;
   }
-  if (const auto best = scores.LoadBestClearScore(meta, beforeCreatedAt);
+  if (!beforeCreatedAt && !replay.resultAttemptId) return std::nullopt;
+  if (const auto best = scores.LoadBestClearScore(
+          meta, beforeCreatedAt, std::nullopt, 0, replay.resultAttemptId);
       best.has_value()) {
     return previousBestDataFromSnapshot(*best);
   }
   return std::nullopt;
+}
+
+struct PreviousCourseBests {
+  std::optional<ResultPreviousBestData> score;
+  std::optional<ResultPreviousBestData> lamp;
+};
+
+inline PreviousCourseBests previousBestsForReplayCourse(
+    ScoreRepository &scores, const CourseReplayData &replay) {
+  // Materialized stages share their parent course's authenticated identity.
+  const auto attemptId = replay.stages.empty()
+                             ? std::optional<std::string>{}
+                             : replay.stages.front().replay.resultAttemptId;
+  auto time = replay.createdAt;
+  if (time.empty() && !replay.stages.empty()) {
+    time = replay.stages.front().replay.createdAt;
+  }
+  if (!attemptId && time.empty()) return {};
+  CoursePlaySession course;
+  course.courseId = replay.courseId;
+  course.courseKey = replay.courseKey;
+  course.longNoteMode = replay.longNoteMode;
+  PreviousCourseBests result;
+  if (const auto best = scores.LoadBestCourseScore(course, time, attemptId)) {
+    result.score = previousBestDataFromSnapshot(*best);
+  }
+  if (const auto lamp = scores.LoadBestCourseClearScore(course, time, attemptId)) {
+    result.lamp = previousBestDataFromSnapshot(*lamp);
+  }
+  return result;
 }
 
 inline std::string difficultyLabelForChart(

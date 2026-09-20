@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <new>
+#include <stdexcept>
 #include <system_error>
 #include <vector>
 
@@ -85,7 +87,7 @@ ExtractedArchiveDecision
 decideExtractedArchive(const std::filesystem::path &root,
                        const std::string &archiveKey,
                        archive_file::PauseCallback pauseCallback,
-                       ArchiveVerificationLimits limits) {
+                       ArchiveVerificationLimits limits) try {
   std::atomic_bool cancelled = false;
   const auto checkpoint = [pauseCallback, &cancelled] {
     if (cancelled.load()) return false;
@@ -170,6 +172,10 @@ decideExtractedArchive(const std::filesystem::path &root,
           .message = foundBmsFile
                          ? "Archive did not contain the selected BMS chart."
                          : "Archive did not contain a BMS chart file."};
+} catch (const std::bad_alloc &) {
+  return {.message = "Not enough memory to verify the selected chart."};
+} catch (const std::length_error &) {
+  return {.message = "Selected chart size is not representable."};
 }
 
 bool processDownloadedArchive(

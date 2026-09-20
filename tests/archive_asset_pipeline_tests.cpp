@@ -37,7 +37,8 @@ private:
   bool released = false;
 };
 
-void testConsumptionOverlapsProductionAndRetainsBudget() {
+void testConsumptionOverlapsProductionAndRetainsBudget(
+    std::size_t firstBytes = 8, std::size_t secondBytes = 8) {
   std::atomic_bool cancelled = false;
   std::promise<void> consuming;
   std::promise<void> pushing;
@@ -46,7 +47,8 @@ void testConsumptionOverlapsProductionAndRetainsBudget() {
   std::atomic_int consumed = 0;
   audio::ArchiveAssetPipeline pipeline(2, 8, cancelled,
       [&](archive_file::FileData &&file) {
-        require(file.bytes.size() == 8, "consumer owns complete entry bytes");
+        require(file.bytes.size() == (file.path == "first" ? firstBytes : secondBytes),
+                "consumer owns complete entry bytes");
         if (consumed.fetch_add(1) == 0) {
           consuming.set_value();
           require(consumerGate.wait(), "first consumer is released before timeout");
@@ -59,7 +61,7 @@ void testConsumptionOverlapsProductionAndRetainsBudget() {
     producerGate.release();
     consumerGate.release();
   });
-  require(pipeline.push({.path = "first", .bytes = std::vector<unsigned char>(8)}),
+  require(pipeline.push({.path = "first", .bytes = std::vector<unsigned char>(firstBytes)}),
           "first entry accepted");
   require(consuming.get_future().wait_for(std::chrono::seconds(2)) ==
               std::future_status::ready,
@@ -67,7 +69,7 @@ void testConsumptionOverlapsProductionAndRetainsBudget() {
   producer = std::async(std::launch::async, [&] {
     require(producerGate.wait(), "second producer is released before timeout");
     pushing.set_value();
-    return pipeline.push({.path = "second", .bytes = std::vector<unsigned char>(8)});
+    return pipeline.push({.path = "second", .bytes = std::vector<unsigned char>(secondBytes)});
   });
   producerGate.release();
   require(pushing.get_future().wait_for(std::chrono::seconds(2)) ==
@@ -76,7 +78,7 @@ void testConsumptionOverlapsProductionAndRetainsBudget() {
   require(producer.wait_for(std::chrono::milliseconds(100)) ==
               std::future_status::timeout,
           "second push blocks while the first consumer retains the byte budget");
-  require(pipeline.inFlightBytes() == 8 && consumed == 1,
+  require(pipeline.inFlightBytes() == firstBytes && consumed == 1,
           "dequeued bytes remain resident and a second consumer cannot start");
   consumerGate.release();
   require(producer.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
@@ -136,48 +138,6 @@ void testCancellationWakesBudgetWaiter() {
   require(!pipeline.finish(), "cancelled pipeline does not report completion");
   require(pipeline.inFlightBytes() == 0 && consumed == 1,
           "cancelled pipeline releases bytes without consuming the rejected entry");
-}
-
-void testOversizedCapacityIsRejectedWithoutWaitingOrMoving(bool occupied) {
-  std::atomic_bool cancelled = false;
-  std::atomic_uint consumed = 0;
-  TestGate consumerGate;
-  std::promise<void> consuming;
-  audio::ArchiveAssetPipeline pipeline(1, 8, cancelled,
-      [&](archive_file::FileData &&) {
-        ++consumed;
-        if (occupied) {
-          consuming.set_value();
-          require(consumerGate.wait(), "active consumer is released");
-        }
-        return true;
-      });
-  archive_file::FileData oversized{.path = "oversized", .bytes = {42}};
-  oversized.bytes.reserve(9);
-  const auto *storage = oversized.bytes.data();
-  std::future<bool> producer;
-  const auto cleanup = makeScopeExit([&] {
-    cancelled = true;
-    consumerGate.release();
-  });
-  if (occupied) {
-    require(pipeline.push({.path = "active", .bytes = std::vector<unsigned char>(8)}),
-            "active entry fills capacity");
-    require(consuming.get_future().wait_for(std::chrono::seconds(2)) ==
-                std::future_status::ready, "active entry reaches consumer");
-  }
-  producer = std::async(std::launch::async, [&] {
-    return pipeline.push(std::move(oversized));
-  });
-  require(producer.wait_for(std::chrono::milliseconds(100)) ==
-              std::future_status::ready, "oversized push rejects without waiting for capacity");
-  require(!producer.get(), "oversized capacity is never accepted even when empty");
-  require(oversized.bytes.data() == storage && oversized.bytes.size() == 1,
-          "rejected buffer remains owned by producer without copying or moving");
-  consumerGate.release();
-  require(pipeline.finish(), "capacity rejection leaves valid entries drainable");
-  require(consumed == (occupied ? 1U : 0U) && pipeline.inFlightBytes() == 0,
-          "oversized entry never reaches consumer or resident accounting");
 }
 
 void testAcceptedBufferIsMovedWithoutCopy() {
@@ -305,8 +265,9 @@ void testConsumerFailureJoinsWorkersAndPropagates() {
 
 int main() {
   try {
-    testOversizedCapacityIsRejectedWithoutWaitingOrMoving(false);
-    testOversizedCapacityIsRejectedWithoutWaitingOrMoving(true);
+    testConsumptionOverlapsProductionAndRetainsBudget(9, 1);
+    testConsumptionOverlapsProductionAndRetainsBudget(1, 9);
+    testConsumptionOverlapsProductionAndRetainsBudget(9, 9);
     testAcceptedBufferIsMovedWithoutCopy();
     testConsumptionOverlapsProductionAndRetainsBudget();
     testCancellationWakesBudgetWaiter();

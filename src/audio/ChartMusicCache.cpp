@@ -192,7 +192,8 @@ CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
 
 CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
                                     std::atomic_bool &cancelled, bool clubMode,
-                                    chart_audio::LogCallback log) {
+                                    chart_audio::LogCallback log,
+                                    RenderPolicy policy) {
   if (meta.BmsPath.empty()) {
     return {.success = false, .message = "Chart path is empty"};
   }
@@ -219,7 +220,7 @@ CacheResult EnsureRenderedMusicFile(const bms_parser::ChartMeta &meta,
             .audioPath = outputPath,
             .message = "Could not parse chart for music render"};
   }
-  return EnsureRenderedMusicFile(*chart, cancelled, clubMode, std::move(log));
+  return EnsureRenderedMusicFile(*chart, cancelled, clubMode, std::move(log), policy);
 }
 
 CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
@@ -230,7 +231,8 @@ CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
 
 CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
                                     std::atomic_bool &cancelled, bool clubMode,
-                                    chart_audio::LogCallback log) {
+                                    chart_audio::LogCallback log,
+                                    RenderPolicy policy) {
   const std::filesystem::path outputPath =
       CachedAudioPathForChart(chart.Meta, clubMode);
   if (CachedAudioExists(chart.Meta, clubMode)) {
@@ -253,12 +255,17 @@ CacheResult EnsureRenderedMusicFile(bms_parser::Chart &chart,
                        error.message()};
   }
 
-  const chart_audio::RenderOptions options{
+  chart_audio::RenderOptions options{
       .keySoundMode = chart_audio::KeySoundMode::ChartTiming,
       .clubMode = clubMode,
       .isCancelled = &cancelled,
       .log = std::move(log),
   };
+  if (policy == RenderPolicy::AdjacentPreload) {
+    options.maxOutputFrames = chart_audio::kAdjacentPreloadMaxOutputFrames;
+    options.maxMixedFrames = chart_audio::kAdjacentPreloadMaxMixedFrames;
+    options.maxClubBeats = chart_audio::kAdjacentPreloadMaxClubBeats;
+  }
   const auto renderResult =
       chart_audio::RenderChartAudioToWav(chart, tempPath, options);
   if (!renderResult.success) {

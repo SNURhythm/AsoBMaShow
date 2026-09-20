@@ -1,3 +1,4 @@
+#include <memory>
 // Complete production destruction/cleanup methods with controlled resources.
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
@@ -87,6 +88,13 @@ private:
   std::jthread worker;
 };
 class MusicSelectScene final : public Scene {
+  struct RevealMenu {
+    void dismiss() {}
+    void setViewportSize(int, int) {}
+    bool isOpen() const { return false; }
+  };
+  std::unique_ptr<RevealMenu> revealContextMenu_;
+
 public:
   explicit MusicSelectScene(ApplicationContext &context, Evidence &e)
       : Scene(context), e(e), previewController_(e, "preview-controller"),

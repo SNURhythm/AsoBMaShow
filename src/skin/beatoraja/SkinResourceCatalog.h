@@ -284,6 +284,8 @@ struct SkinResourceUploadPlan {
   std::vector<PreparedPomyuCharaResource> pomyuCharas;
   std::array<int, 8> pomyuMotionCyclesMillis = {1, 1, 1, 1, 1, 1, 1, 1};
   std::size_t decodedBytes = 0;
+  // Included in decodedBytes, but independent of authored-skin quotas.
+  std::size_t chartDecodedBytes = 0;
 };
 
 struct SkinResourceValidationInputs {

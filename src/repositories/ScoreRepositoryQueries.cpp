@@ -1390,7 +1390,8 @@ std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
-    int selectedLongNoteMode) {
+    int selectedLongNoteMode,
+    const std::optional<std::string> &beforeAttemptId) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
@@ -1398,7 +1399,7 @@ std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScore(
   }
   return score_repository_detail::LoadBestScoreOnConnection(
       impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId,
-      selectedLongNoteMode);
+      selectedLongNoteMode, nullptr, beforeAttemptId);
 }
 
 std::optional<ChartScoreHistorySnapshot>
@@ -1508,7 +1509,8 @@ std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestClearScore(
     const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
-    int selectedLongNoteMode) {
+    int selectedLongNoteMode,
+    const std::optional<std::string> &beforeAttemptId) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
@@ -1516,7 +1518,7 @@ std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestClearScore(
   }
   return score_repository_detail::LoadBestClearScoreOnConnection(
       impl_->sessionDatabase, chartMeta, beforeCreatedAt, excludeAttemptId,
-      selectedLongNoteMode);
+      selectedLongNoteMode, beforeAttemptId);
 }
 
 std::optional<ScoreBestSnapshot> ScoreRepository::LoadBestScoreForRuleset(
@@ -1537,7 +1539,8 @@ score_repository_detail::LoadBestScoreOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
-    int selectedLongNoteMode, const RulesetDescriptor *requiredRuleset) {
+    int selectedLongNoteMode, const RulesetDescriptor *requiredRuleset,
+    const std::optional<std::string> &beforeAttemptId) {
   const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode =
@@ -1557,8 +1560,12 @@ score_repository_detail::LoadBestScoreOnConnection(
   query += scoreChartMatchPredicate();
   query += " AND " +
            score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
-           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) "
-           "AND (? = '' OR created_at < ?) ";
+           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) ";
+  query += beforeAttemptId
+      ? "AND (s.created_at, s.id) < ("
+        "COALESCE((SELECT created_at FROM scores WHERE attempt_id = ?), ?), "
+        "COALESCE((SELECT id FROM scores WHERE attempt_id = ?), 0)) "
+      : "AND (? = '' OR created_at < ?) ";
   if (excludeAttemptId.has_value()) {
     query += "AND (attempt_id IS NULL OR attempt_id <> ?) ";
   }
@@ -1579,8 +1586,14 @@ score_repository_detail::LoadBestScoreOnConnection(
   bindIndex = bindScoreChartMatch(stmt.get(), bindIndex, match);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
   sqlite3_bind_int(stmt.get(), bindIndex++, legacyLongNoteModeFallback ? 1 : 0);
-  bindSqliteText(stmt.get(), bindIndex++, cutoff);
-  bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  if (beforeAttemptId) {
+    bindSqliteText(stmt.get(), bindIndex++, *beforeAttemptId);
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+    bindSqliteText(stmt.get(), bindIndex++, *beforeAttemptId);
+  } else {
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  }
   if (excludeAttemptId.has_value()) {
     bindSqliteText(stmt.get(), bindIndex++, *excludeAttemptId);
   }
@@ -1777,7 +1790,8 @@ score_repository_detail::LoadBestClearScoreOnConnection(
     sqlite3 *db, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
-    int selectedLongNoteMode) {
+    int selectedLongNoteMode,
+    const std::optional<std::string> &beforeAttemptId) {
   const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode =
@@ -1797,8 +1811,12 @@ score_repository_detail::LoadBestClearScoreOnConnection(
            score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
            " AND s.score_source = " +
            std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
-           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) "
-           "AND (? = '' OR created_at < ?) ";
+           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) ";
+  query += beforeAttemptId
+      ? "AND (s.created_at, s.id) < ("
+        "COALESCE((SELECT created_at FROM scores WHERE attempt_id = ?), ?), "
+        "COALESCE((SELECT id FROM scores WHERE attempt_id = ?), 0)) "
+      : "AND (? = '' OR created_at < ?) ";
   if (excludeAttemptId.has_value()) {
     query += "AND (attempt_id IS NULL OR attempt_id <> ?) ";
   }
@@ -1816,8 +1834,14 @@ score_repository_detail::LoadBestClearScoreOnConnection(
   bindIndex = bindScoreChartMatch(stmt.get(), bindIndex, match);
   sqlite3_bind_int(stmt.get(), bindIndex++, longNoteMode);
   sqlite3_bind_int(stmt.get(), bindIndex++, legacyLongNoteModeFallback ? 1 : 0);
-  bindSqliteText(stmt.get(), bindIndex++, cutoff);
-  bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  if (beforeAttemptId) {
+    bindSqliteText(stmt.get(), bindIndex++, *beforeAttemptId);
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+    bindSqliteText(stmt.get(), bindIndex++, *beforeAttemptId);
+  } else {
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  }
   if (excludeAttemptId.has_value()) {
     bindSqliteText(stmt.get(), bindIndex++, *excludeAttemptId);
   }
@@ -1857,14 +1881,29 @@ score_repository_detail::LoadBestClearScoreOnConnection(
 }
 
 std::optional<ScoreBestSnapshot>
-ScoreRepository::LoadBestCourseScore(const CoursePlaySession &session) {
+ScoreRepository::LoadBestCourseScore(const CoursePlaySession &session,
+    const std::optional<std::string> &beforeCreatedAt,
+    const std::optional<std::string> &beforeAttemptId) {
   profile_database_activity::ReadGuard operation;
   std::lock_guard lock(impl_->sessionMutex);
   if (!EnsureSessionDatabaseLocked()) {
     return std::nullopt;
   }
   return score_repository_detail::LoadBestCourseScoreOnConnection(
-      impl_->sessionDatabase, session);
+      impl_->sessionDatabase, session, beforeCreatedAt, beforeAttemptId);
+}
+
+std::optional<ScoreBestSnapshot>
+ScoreRepository::LoadBestCourseClearScore(const CoursePlaySession &session,
+    const std::optional<std::string> &beforeCreatedAt,
+    const std::optional<std::string> &beforeAttemptId) {
+  profile_database_activity::ReadGuard operation;
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!EnsureSessionDatabaseLocked()) {
+    return std::nullopt;
+  }
+  return score_repository_detail::LoadBestCourseScoreOnConnection(
+      impl_->sessionDatabase, session, beforeCreatedAt, beforeAttemptId, true);
 }
 
 CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
@@ -1947,21 +1986,29 @@ CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
 
 std::optional<ScoreBestSnapshot>
 score_repository_detail::LoadBestCourseScoreOnConnection(
-    sqlite3 *db, const CoursePlaySession &session) {
+    sqlite3 *db, const CoursePlaySession &session,
+    const std::optional<std::string> &beforeCreatedAt,
+    const std::optional<std::string> &beforeAttemptId, bool preferClear) {
   const std::string courseKey = courseKeyForSession(session);
   const int lnMode = long_note_mode::normalizeValue(session.longNoteMode);
-  const std::string query =
+  std::string query =
       "SELECT score, max_score, max_combo, combo_break, fast, slow, "
-      "final_gauge, clear_type, created_at "
+      "final_gauge, clear_type, created_at, attempt_id "
       "FROM course_scores c "
       "WHERE ((? != '' AND course_key = ?) OR "
       "(COALESCE(course_key, '') = '' AND course_id = ?)) "
       "AND " +
       score_cache_queries::detail::scoreParticipatesInBestExpr("c") +
       " "
-      "AND (ln_mode = ? OR ln_mode = -1) "
-      "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC "
-      "LIMIT 1";
+      "AND (ln_mode = ? OR ln_mode = -1) ";
+  query += beforeAttemptId
+      ? "AND (c.created_at, c.id) < ("
+        "COALESCE((SELECT created_at FROM course_scores WHERE attempt_id = ?), ?), "
+        "COALESCE((SELECT id FROM course_scores WHERE attempt_id = ?), 0)) "
+      : "AND (? = '' OR created_at < ?) ";
+  query += preferClear
+      ? "ORDER BY clear_type DESC, score DESC, created_at DESC, id DESC LIMIT 1"
+      : "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC LIMIT 1";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
@@ -1974,6 +2021,15 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
   bindSqliteText(stmt.get(), bindIndex++, courseKey);
   sqlite3_bind_int(stmt.get(), bindIndex++, session.courseId);
   sqlite3_bind_int(stmt.get(), bindIndex++, lnMode);
+  const std::string cutoff = beforeCreatedAt.value_or("");
+  if (beforeAttemptId) {
+    bindSqliteText(stmt.get(), bindIndex++, *beforeAttemptId);
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+    bindSqliteText(stmt.get(), bindIndex++, *beforeAttemptId);
+  } else {
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+    bindSqliteText(stmt.get(), bindIndex++, cutoff);
+  }
 
   if (sqlite3_step(stmt.get()) != SQLITE_ROW) {
     return std::nullopt;
@@ -1990,6 +2046,9 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
       static_cast<float>(sqlite3_column_double(stmt.get(), 6));
   snapshot.clearType = sqlite3_column_int(stmt.get(), 7);
   snapshot.createdAt = sqliteColumnString(stmt.get(), 8);
+  if (sqlite3_column_type(stmt.get(), 9) == SQLITE_TEXT) {
+    snapshot.attemptId = sqliteColumnString(stmt.get(), 9);
+  }
   return snapshot;
 }
 

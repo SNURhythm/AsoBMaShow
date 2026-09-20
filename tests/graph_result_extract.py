@@ -11,10 +11,13 @@ def generate(root, output):
     fixture = (root / "tests/graph_result_fixture.cpp").read_text()
     if fixture.count("ASOBMS_GRAPH_RESULT_METHODS") != 1:
         raise ValueError("Result graph fixture anchor changed")
+    gameplay = (root / "src/scene/play/GamePlayScene.cpp").read_text()
+    graph_start = gameplay.index("        const long long resultGameplayTimeMicros =")
+    graph_end = gameplay.index("        if (isCoursePlayback()", graph_start)
     output.write_text(fixture.replace(
         "ASOBMS_GRAPH_RESULT_METHODS",
         source[start:end] + source[padding_start:padding_end],
-    ))
+    ).replace("ASOBMS_GAMEPLAY_RESULT_GRAPH", gameplay[graph_start:graph_end]))
 
 
 if __name__ == "__main__":

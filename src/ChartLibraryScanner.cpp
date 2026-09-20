@@ -2803,7 +2803,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           }
           return !shouldStop();
         },
-        workerCount, kArchiveParseMaxInFlightBytes, &readError, pauseCallback);
+        workerCount, kArchiveParseMaxInFlightBytes, &readError, pauseCallback,
+        archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry);
 
     std::vector<ArchiveParsedChart> parsedCharts;
     {

@@ -18,6 +18,8 @@
 #include <string>
 #include <string_view>
 
+struct RenderContext;
+
 struct ResultImageExportResult {
   bool success = false;
   std::filesystem::path outputPath;
@@ -26,6 +28,9 @@ struct ResultImageExportResult {
 };
 
 namespace result_image_export {
+
+// Draw only the active skin; application controls are outside this callback.
+using SkinRenderBackend = std::function<bool(RenderContext &)>;
 
 struct PresentationPlan {
   ResultSkinData skinData{};
@@ -119,6 +124,9 @@ presentationPlanFor(const ResultPresentationModel &presentation,
 
 class ResultImageExporter {
 public:
+  static ResultImageExportResult ExportSkin(
+      ApplicationContext &context, const std::string &title,
+      const result_image_export::SkinRenderBackend &renderSkin);
   // Shared presentation export orchestration. Production supplies the bgfx
   // renderer; controlled/headless callers can supply another artifact writer
   // while exercising the same destination, filename, skin, and gauge plan.

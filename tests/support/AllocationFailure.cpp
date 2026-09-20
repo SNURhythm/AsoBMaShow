@@ -7,6 +7,8 @@
 namespace {
 constexpr auto noFailure = std::numeric_limits<std::size_t>::max();
 thread_local std::size_t allocationsBeforeFailure = noFailure;
+thread_local bool observeSizes = false;
+thread_local std::size_t largestAllocation = 0;
 }
 
 test_support::FailAllocationAfter::FailAllocationAfter(
@@ -18,7 +20,19 @@ test_support::FailAllocationAfter::~FailAllocationAfter() {
   allocationsBeforeFailure = noFailure;
 }
 
+test_support::AllocationSizeObserver::AllocationSizeObserver() noexcept {
+  largestAllocation = 0;
+  observeSizes = true;
+}
+test_support::AllocationSizeObserver::~AllocationSizeObserver() {
+  observeSizes = false;
+}
+std::size_t test_support::AllocationSizeObserver::largest() const noexcept {
+  return largestAllocation;
+}
+
 void *operator new(std::size_t size) {
+  if (observeSizes && size > largestAllocation) largestAllocation = size;
   if (allocationsBeforeFailure == 0) {
     allocationsBeforeFailure = noFailure;
     throw std::bad_alloc();

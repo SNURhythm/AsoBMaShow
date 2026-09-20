@@ -190,6 +190,10 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   expect(matched.replayData && matched.replayData->touchSamples.size() == 1 &&
              matched.replayData->laneCoverEvents.size() == 1,
          "consumer track preserves BRD-owned touch and lane-cover streams");
+  expect(matched.replayData &&
+             matched.replayData->createdAt == "2023-11-14 22:13:20" &&
+             matched.replayData->resultAttemptId == saved.attemptId,
+         "consumer track retains the historical play time for BEST comparisons");
 
   auto alteredRateReplay = replay;
   alteredRateReplay.playback.setup.playback = {.percent = 90};

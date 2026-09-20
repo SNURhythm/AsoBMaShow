@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <cctype>
 #include <limits>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -110,7 +112,7 @@ DirectArchiveDecision decideDownloadedArchive(
     const std::filesystem::path &archivePath, const std::string &archiveKey,
     bool skipUnarchivingForNonSolidArchives,
     archive_file::PauseCallback pauseCallback,
-    const ArchiveReaderDependencies &reader, ArchiveVerificationLimits limits) {
+    const ArchiveReaderDependencies &reader, ArchiveVerificationLimits limits) try {
   if (!skipUnarchivingForNonSolidArchives) {
     return {};
   }
@@ -222,6 +224,12 @@ DirectArchiveDecision decideDownloadedArchive(
   return {.disposition = DirectArchiveDisposition::HashMismatch,
           .foundBmsFile = true,
           .message = "Archive did not contain the selected BMS chart."};
+} catch (const std::bad_alloc &) {
+  return {.disposition = DirectArchiveDisposition::Failed,
+          .message = "Not enough memory to verify the selected chart."};
+} catch (const std::length_error &) {
+  return {.disposition = DirectArchiveDisposition::Failed,
+          .message = "Selected chart size is not representable."};
 }
 
 } // namespace asobmshow::bms_search

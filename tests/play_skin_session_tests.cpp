@@ -47,6 +47,7 @@
 #include <optional>
 #include <span>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -743,6 +744,7 @@ struct ActivationFixtureOptions {
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
   bool resultEventExec = false;
+  bool resultVideoEventAnimation = false;
   bool resultNestedEventExec = false;
   bool resultIntervalEventExec = false;
   bool resultRecursiveEventExec = false;
@@ -1276,6 +1278,31 @@ if skin_config then
     }
   }
 )lua";
+    } else if (options.resultVideoEventAnimation) {
+      script += "\n  local ticks, nested, frames = 0, 0, 0\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {
+      {id = 1000, minInterval = 1000, condition = function() return true end,
+       action = function()
+         ticks = ticks + 1
+         assert(main_state.event_exec(1001))
+         assert(main_state.event_exec(210))
+       end},
+      {id = 1001, action = function()
+         nested = nested + 1
+         assert(main_state.event_exec(1003))
+       end},
+      {id = 1002, action = 210, condition = function() return true end},
+      {id = 1003, action = 210}
+    },
+    customTimers = {{id = 10000, timer = function()
+      frames = frames + 1
+      assert(ticks == math.floor(frames / 2), "automatic animation events did not advance")
+      assert(nested == math.floor((frames - 1) / 2), "deferred animation events did not advance")
+      return ticks * 1000000
+    end}}
+  }
+)lua";
     } else if (options.resultNestedEventExec) {
       script += "\n  return { type = " +
                 std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
@@ -1373,7 +1400,7 @@ if skin_config then
   "type": 7,
   "w": 1280,
   "h": 720,
-  "customEvents": [{"id": 1000, "action": 210, "condition": 50}]
+  "customEvents": [{"id": 1000, "action": 210, "condition": 50, "minInterval": 1000}]
 })json");
     }
 
@@ -3813,7 +3840,147 @@ void testMusicSelectStopsRetryingAnUnavailableCallbackFont() {
          "without retrying the whole selector frame");
 }
 
-void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
+void testMusicSelectAcceptsOversizedSelectedArtwork() {
+  for (const auto safetyLevel : {SkinSafetyLevel::Standard,
+                                 SkinSafetyLevel::BeatorajaCompatibility}) {
+    ActivationFixture fixture(
+        {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+    if (!fixture.ready()) return;
+    std::string stage = "P6\n4096 2\n255\n" +
+                        std::string(4096U * 2U * 3U, '\x66');
+    std::string banner = "P6\n2 4096\n255\n" +
+                         std::string(2U * 4096U * 3U, '\x99');
+    stage.resize(32U * 1024U * 1024U + 1U);
+    banner.resize(32U * 1024U * 1024U + 1U);
+    auto context = fixture.musicSelectContext();
+    context.builtinImageReader =
+        [&](const fs::path &path, std::vector<unsigned char> &bytes,
+            std::size_t maximumBytes, std::string *, std::stop_token) {
+          const auto &encoded = path == "stage.ppm" ? stage : banner;
+          if (encoded.size() > maximumBytes) return false;
+          bytes.assign(encoded.begin(), encoded.end());
+          return true;
+        };
+    auto preparation = MusicSelectSkinSession::prepare(
+        {.activation = fixture.takeActivation(),
+         .profileId = fixture.profile(),
+         .sessionSerial = 102},
+        {.storageRoots = context.storageRoots,
+         .resourcePreparation = context.resourcePreparation,
+         .initialFrame = context.initialFrame,
+         .builtinImageReader = context.builtinImageReader});
+    expect(preparation.prepared.has_value(), "oversized selector artwork prepares");
+    if (!preparation.prepared) continue;
+    preparation.prepared->safetyPolicy = SkinSafetyPolicy(safetyLevel);
+    preparation.prepared->resourcePlan.safetyPolicy = SkinSafetyPolicy(safetyLevel);
+    SessionQuadBackend quadBackend;
+    auto created = MusicSelectSkinSession::finalize(
+        std::move(*preparation.prepared),
+        {.resourcePreparation = context.resourcePreparation,
+         .textureDevice = context.textureDevice,
+         .movieDevice = context.movieDevice,
+         .liveResourceCounters = context.liveResourceCounters,
+         .quadBackend = &quadBackend});
+    expect(created.session != nullptr, "oversized selector artwork session finalizes");
+    if (!created.session) continue;
+    const auto uploads = fixture.device()->createCalls;
+    RenderContext renderContext;
+    MusicSelectSkinFrame frame;
+    frame.stageFile = "stage.ppm";
+    frame.banner = "banner.ppm";
+    bool rendered = true;
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(2);
+    while (fixture.device()->createCalls < uploads + 2 &&
+           std::chrono::steady_clock::now() < deadline) {
+      ++frame.serial;
+      rendered = created.session->render(renderContext, frame) && rendered;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(rendered && fixture.device()->createCalls == uploads + 2 &&
+               quadBackend.submitCalls > 0,
+           "selected stage and banner above 32 MiB render under both skin policies");
+    const auto &images = fixture.device()->createdImages;
+    if (images.size() >= uploads + 2) {
+      expect(images[uploads].width == 2048 && images[uploads].height == 1 &&
+                 images[uploads + 1].width == 1 &&
+                 images[uploads + 1].height == 2048,
+             "selected artwork patches preserve aspect ratio within 2048 pixels");
+    }
+  }
+}
+
+void testMusicSelectContainsArtworkAllocationFailures() {
+  for (const bool lengthFailure : {false, true}) {
+    for (const bool bannerFailure : {false, true}) {
+      ActivationFixture fixture(
+          {.skinType = 5, .musicSelectBuiltinImageBearing = true});
+      if (!fixture.ready()) return;
+      const std::string pixels = "P6\n1 1\n255\n" + std::string(3, '\x66');
+      std::atomic_int failedReads = 0;
+      auto context = fixture.musicSelectContext();
+      SessionQuadBackend quadBackend;
+      context.quadBackend = &quadBackend;
+      context.builtinImageReader =
+          [&](const fs::path &path, std::vector<unsigned char> &bytes,
+              std::size_t, std::string *, std::stop_token) {
+            if (path == "unallocatable.ppm") {
+              ++failedReads;
+              if (lengthFailure) throw std::length_error("artwork size");
+              throw std::bad_alloc();
+            }
+            bytes.assign(pixels.begin(), pixels.end());
+            return true;
+          };
+      auto created = MusicSelectSkinSession::create(
+          {.activation = fixture.takeActivation(),
+           .profileId = fixture.profile(), .sessionSerial = 103},
+          std::move(context));
+      expect(created.session != nullptr, "allocation-failure selector creates");
+      if (!created.session) continue;
+      const auto uploads = fixture.device()->createCalls;
+      const auto destroys = fixture.device()->destroyCalls;
+      RenderContext renderContext;
+      MusicSelectSkinFrame frame;
+      auto &path = bannerFailure ? frame.banner : frame.stageFile;
+      path = "available.ppm";
+      bool rendered = true;
+      const auto renderFrame = [&] {
+        ++frame.serial;
+        rendered = created.session->render(renderContext, frame) && rendered;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      };
+      const auto renderUntilUploads = [&](std::size_t count) {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(2);
+        while (fixture.device()->createCalls < count &&
+               std::chrono::steady_clock::now() < deadline) renderFrame();
+      };
+      renderUntilUploads(uploads + 1);
+      expect(fixture.device()->createCalls == uploads + 1,
+             "artwork is visible before the failing selection");
+      path = "unallocatable.ppm";
+      bool exceptionEscaped = false;
+      try {
+        for (int index = 0; index < 100; ++index) renderFrame();
+      } catch (const std::exception &) {
+        exceptionEscaped = true;
+      }
+      expect(!exceptionEscaped && rendered && failedReads == 1 &&
+                 fixture.device()->createCalls == uploads + 1 &&
+                 fixture.device()->destroyCalls == destroys + 1,
+             "allocation failures clear stale artwork, render normally, and do not retry each frame");
+      if (exceptionEscaped) continue;
+      path = "available.ppm";
+      renderUntilUploads(uploads + 2);
+      expect(rendered && fixture.device()->createCalls == uploads + 2 &&
+                 failedReads == 1,
+             "selector loads artwork after navigating away from a failed allocation");
+    }
+  }
+}
+
+void testMusicSelectRetriesCancelledArtworkAfterReturningToChart(int allocationFailure = 0) {
   ActivationFixture fixture(
       {.skinType = 5, .musicSelectBuiltinImageBearing = true});
   if (!fixture.ready()) return;
@@ -3845,6 +4012,8 @@ void testMusicSelectRetriesCancelledArtworkAfterReturningToChart() {
           readerStarted.set_value();
           released.wait();
           cancellationObserved = stop.stop_requested();
+          if (allocationFailure == 1) throw std::bad_alloc();
+          if (allocationFailure == 2) throw std::length_error("artwork size");
           return false;
         }
         if (path != "chart-a.png") return false;
@@ -7043,6 +7212,83 @@ void testStaticResultSessionRunsCustomBuiltinEvent() {
          "static result custom events evaluate built-in conditions and actions");
 }
 
+void testResultPhotoFramePreservesLiveEvents() {
+  {
+    ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
+    if (!fixture.ready()) return;
+    auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                             fixture.resultContext());
+    expect(created.session != nullptr, "photo event fixture creates a result session");
+    if (!created.session) return;
+    RenderContext context;
+    expect(created.session->renderForExport(context, {}, 1, 0) &&
+               created.session->takeQueuedBuiltinEventIds().empty(),
+           "photo frame does not execute condition-driven result events");
+    expect(created.session->render(context, {}, 2, 0) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "photo frame leaves automatic event timing available to the next live frame");
+    expect(created.session->render(context, {}, 3, 1000) &&
+               created.session->renderForExport(context, {}, 4, 2000) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "photo frame preserves already queued builtin actions without adding any");
+    expect(created.session->render(context, {}, 5, 2000) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "photo frame does not advance the live automatic event interval");
+    expect(!created.session->renderForExport(context, {}, 0, 3000) &&
+               created.session->render(context, {}, 6, 3000) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "failed photo capture restores live event dispatch");
+  }
+  {
+    ActivationFixture fixture({.skinType = 7, .resultNestedEventExec = true});
+    if (!fixture.ready()) return;
+    auto created = ResultSkinSession::create(fixture.takeActivation(),
+                                             fixture.resultContext());
+    if (!created.session) return;
+    RenderContext context;
+    expect(created.session->render(context, {}, 1, 0) &&
+               created.session->takeQueuedBuiltinEventIds().empty(),
+           "live frame queues a deferred Lua event");
+    expect(created.session->renderForExport(context, {}, 2, 1) &&
+               created.session->takeQueuedBuiltinEventIds().empty(),
+           "photo frame suppresses timer host events and preserves queued Lua actions");
+    expect(created.session->render(context, {}, 3, 1) &&
+               created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+           "next live frame resumes the preserved Lua action exactly once");
+  }
+}
+
+void testResultVideoFramesAdvanceLocalEventsOnly() {
+  for (const int skinType : {7, 15}) {
+    ActivationFixture fixture({.skinType = skinType, .resultVideoEventAnimation = true});
+    if (!fixture.ready()) continue;
+    auto created = ResultSkinSession::create(fixture.takeActivation(), fixture.resultContext());
+    expect(created.session != nullptr, "video event fixture creates a result session");
+    if (!created.session) continue;
+    RenderContext context;
+    // Do not drain host actions between frames: external events must never
+    // accumulate or fill the queue while local event state advances.
+    for (int frame = 0; frame < 80; ++frame) {
+      const bool rendered = created.session->renderForVideoExport(
+          context, {}, frame + 1, frame * 500);
+      expect(rendered, "video callbacks advance automatic intervals and deferred Lua state");
+      if (!rendered) break;
+    }
+    expect(created.session->takeQueuedBuiltinEventIds().empty() &&
+               created.session->takeQueuedAudioVolumeWrites().empty(),
+           "video callbacks never publish external actions or volume writes");
+  }
+  ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
+  if (!fixture.ready()) return;
+  auto created = ResultSkinSession::create(fixture.takeActivation(), fixture.resultContext());
+  if (!created.session) return;
+  RenderContext context;
+  expect(!created.session->renderForVideoExport(context, {}, 0, 0) &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+         "failed video frame restores normal external event dispatch");
+}
+
 void testResultSkinInputAvailabilityMatchesResultTimer() {
   expect(!resultSkinInputAvailable(1'000, 999'999) &&
              resultSkinInputAvailable(1'000, 1'000'000) &&
@@ -8488,7 +8734,10 @@ int main(int argc, char **argv) {
   testMusicSelectPreparesCallbackTextGlyphsIncrementally();
   testMusicSelectStopsRetryingAnUnavailableCallbackFont();
   testMusicSelectCancelsSelectedArtworkWhenSessionIsDestroyed();
-  testMusicSelectRetriesCancelledArtworkAfterReturningToChart();
+  testMusicSelectAcceptsOversizedSelectedArtwork();
+  testMusicSelectContainsArtworkAllocationFailures();
+  for (const int allocationFailure : {0, 1, 2})
+    testMusicSelectRetriesCancelledArtworkAfterReturningToChart(allocationFailure);
   testMusicSelectRestoresPreparedArtworkAfterCancelledNavigation();
   testMusicSelectDoesNotRetryMissingOrEmptyArtworkEveryFrame();
   testMusicSelectLuaSessionContainsRecursiveCustomEventFailure();
@@ -8553,6 +8802,8 @@ int main(int argc, char **argv) {
   testResultLuaSessionUsesTheLastDuplicateCustomEventDefinition();
   testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
+  testResultPhotoFramePreservesLiveEvents();
+  testResultVideoFramesAdvanceLocalEventsOnly();
   testResultSkinInputAvailabilityMatchesResultTimer();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

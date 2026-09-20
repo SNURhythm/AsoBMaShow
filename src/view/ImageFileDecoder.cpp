@@ -30,6 +30,15 @@ extern "C" {
 #include <utility>
 #include <vector>
 
+#include "PngRowDecoder.h"
+#include "JpegScaledDecoder.h"
+#include "GifRowDecoder.h"
+#include "JpegComponentRowDecoder.h"
+#include "RasterRowDecoder.h"
+#include "PortableRowDecoder.h"
+#include "PsdRowDecoder.h"
+#include "PicRowDecoder.h"
+
 namespace image_decode {
 namespace {
 
@@ -136,7 +145,7 @@ decodeWbmp(std::span<const std::byte> encoded,
                           (encoded.size() - offset) / rowBytes) {
     return std::nullopt;
   }
-  auto rgba = std::make_shared<std::vector<unsigned char>>(rgbaBytes);
+  detail::ImageRowReducer reducer(width, height, options);
   for (int y = 0; y < height; ++y) {
     if (stopped(options)) return std::nullopt;
     const std::size_t sourceRow = offset + static_cast<std::size_t>(y) * rowBytes;
@@ -147,18 +156,10 @@ decodeWbmp(std::span<const std::byte> encoded,
       // opaque white in BufferedImage before PixmapResourcePool converts it.
       const unsigned char intensity =
           (packed & (0x80U >> (x % 8))) == 0 ? 0xff : 0x00;
-      const std::size_t destination =
-          (static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-           static_cast<std::size_t>(x)) * 4U;
-      (*rgba)[destination] = intensity;
-      (*rgba)[destination + 1] = intensity;
-      (*rgba)[destination + 2] = intensity;
-      (*rgba)[destination + 3] = 0xff;
+      reducer.add(x, y, {intensity, intensity, intensity, 0xff});
     }
   }
-  DecodedImageData result{.width = width, .height = height, .rgba = std::move(rgba)};
-  return result.valid() ? std::optional<DecodedImageData>(std::move(result))
-                        : std::nullopt;
+  return reducer.finish();
 }
 
 bool inflateExact(mz_stream &stream, std::span<unsigned char> output,
@@ -294,28 +295,22 @@ decodeLibGdxCim(std::span<const std::byte> encoded,
                                        *bytesPerPixel) {
     return std::nullopt;
   }
-  auto rgba = std::make_shared<std::vector<unsigned char>>(rgbaBytes);
-  if (format == 4) {
-    // LibGDX's overwhelmingly common RGBA8888 CIM payload is already in the
-    // byte order consumed by our texture device. Inflate it into its final
-    // allocation instead of materializing and copying a second full image.
-    if (!inflateExact(stream, *rgba, options, finished)) {
-      return std::nullopt;
+  detail::ImageRowReducer reducer(width, height, options);
+  std::vector<unsigned char> nativeRow(static_cast<std::size_t>(width) * *bytesPerPixel);
+  std::vector<unsigned char> rgbaRow(static_cast<std::size_t>(width) * 4);
+  for (int y = 0; y < height; ++y) {
+    if (stopped(options) || finished ||
+        !inflateExact(stream, nativeRow, options, finished)) return std::nullopt;
+    expandCimPixels(format, nativeRow, rgbaRow);
+    for (int x = 0; x < width; ++x) {
+      const auto offset = static_cast<std::size_t>(x) * 4;
+      reducer.add(x, y, {rgbaRow[offset], rgbaRow[offset + 1],
+                         rgbaRow[offset + 2], rgbaRow[offset + 3]});
     }
-  } else {
-    std::vector<unsigned char> nativePixels(pixels * *bytesPerPixel);
-    if (!inflateExact(stream, nativePixels, options, finished)) {
-      return std::nullopt;
-    }
-    expandCimPixels(format, nativePixels, *rgba);
   }
   if ((!finished && !inflateHasNoRemainingOutput(stream, options)) ||
-      stopped(options)) {
-    return std::nullopt;
-  }
-  DecodedImageData result{.width = width, .height = height, .rgba = std::move(rgba)};
-  return result.valid() ? std::optional<DecodedImageData>(std::move(result))
-                        : std::nullopt;
+      stopped(options)) return std::nullopt;
+  return reducer.finish();
 }
 
 std::optional<DecodedImageData>
@@ -502,26 +497,30 @@ decodeWebpFormatWithFfmpeg(AVFormatContext *rawFormat, int encodedWidth,
                            options.maximumDecodedBytes, bytes)) {
         return std::nullopt;
       }
+      const auto [outputWidth, outputHeight] =
+          detail::reducedDimensions(frame->width, frame->height, options);
+      if (!validDimensions(outputWidth, outputHeight, options.maximumDimension,
+                           options.maximumDecodedBytes, bytes)) return std::nullopt;
       const auto sws = std::unique_ptr<SwsContext, void (*)(SwsContext *)>(
           sws_getContext(frame->width, frame->height,
                          static_cast<AVPixelFormat>(frame->format),
-                         frame->width, frame->height, AV_PIX_FMT_RGBA,
+                         outputWidth, outputHeight, AV_PIX_FMT_RGBA,
                          SWS_BILINEAR, nullptr, nullptr, nullptr),
           sws_freeContext);
       if (!sws) return std::nullopt;
       auto rgba = std::make_shared<std::vector<unsigned char>>(bytes);
       std::array<std::uint8_t *, 4> output{rgba->data(), nullptr, nullptr,
                                             nullptr};
-      std::array<int, 4> lineSizes{frame->width * 4, 0, 0, 0};
+      std::array<int, 4> lineSizes{outputWidth * 4, 0, 0, 0};
       if (sws_scale(sws.get(), frame->data, frame->linesize, 0, frame->height,
-                    output.data(), lineSizes.data()) != frame->height ||
+                    output.data(), lineSizes.data()) != outputHeight ||
           stopped(options)) {
         return std::nullopt;
       }
-      DecodedImageData decoded{.width = frame->width,
-                               .height = frame->height,
+      DecodedImageData decoded{.width = outputWidth,
+                               .height = outputHeight,
                                .rgba = std::move(rgba)};
-      return decoded.valid() ? resize(decoded, options) : std::nullopt;
+      return decoded.valid() ? std::optional(std::move(decoded)) : std::nullopt;
     }
   };
 
@@ -623,6 +622,7 @@ decodeImageMemory(std::span<const std::byte> encoded,
       encoded.size() > options.maximumEncodedBytes) {
     return std::nullopt;
   }
+  if (detail::isPng(encoded)) return detail::decodePngRows(encoded, options);
   int width = 0;
   int height = 0;
   int channels = 0;
@@ -642,6 +642,21 @@ decodeImageMemory(std::span<const std::byte> encoded,
                        options.maximumDecodedBytes, bytes)) {
     return std::nullopt;
   }
+  const auto target = detail::reducedDimensions(width, height, options);
+  if (target.first != width || target.second != height) {
+    if (detail::isJpeg(encoded)) {
+      if (auto image = detail::decodeJpegScaled(encoded, options, width, height))
+        return image;
+      return detail::decodeJpegComponentRows(encoded, options);
+    }
+    if (detail::isGif(encoded)) return detail::decodeGifRows(encoded, options);
+    if (detail::isBmp(encoded)) return detail::decodeBmpRows(encoded, options);
+    if (detail::isPsd(encoded)) return detail::decodePsdRows(encoded, options);
+    if (detail::isPnm(encoded)) return detail::decodePnmRows(encoded, options);
+    if (detail::isHdr(encoded)) return detail::decodeHdrRows(encoded, options);
+    if (detail::isPic(encoded)) return detail::decodePicRows(encoded, options);
+    if (detail::isTga(encoded)) return detail::decodeTgaRows(encoded, options);
+  }
   std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> decoded(
       stbi_load_from_memory(reinterpret_cast<const stbi_uc *>(encoded.data()),
                             static_cast<int>(encoded.size()), &width, &height,
@@ -653,12 +668,19 @@ decodeImageMemory(std::span<const std::byte> encoded,
     return std::nullopt;
   }
   if (stopped(options)) return std::nullopt;
-  auto rgba = std::make_shared<std::vector<unsigned char>>(decoded.get(),
-                                                             decoded.get() + bytes);
+  const auto [outputWidth, outputHeight] = detail::reducedDimensions(width, height, options);
+  if (outputWidth != width || outputHeight != height) {
+    auto rgba = std::make_shared<std::vector<unsigned char>>(
+        static_cast<std::size_t>(outputWidth) * outputHeight * 4);
+    if (stbir_resize_uint8(decoded.get(), width, height, 0, rgba->data(),
+                           outputWidth, outputHeight, 0, 4) == 0 || stopped(options)) {
+      return std::nullopt;
+    }
+    return DecodedImageData{.width = outputWidth, .height = outputHeight, .rgba = std::move(rgba)};
+  }
+  auto rgba = std::make_shared<std::vector<unsigned char>>(decoded.get(), decoded.get() + bytes);
   if (stopped(options)) return std::nullopt;
-  DecodedImageData result{.width = width, .height = height, .rgba = std::move(rgba)};
-  if (!result.valid()) return std::nullopt;
-  return resize(result, options);
+  return DecodedImageData{.width = width, .height = height, .rgba = std::move(rgba)};
 }
 
 std::optional<DecodedImageData>

@@ -797,7 +797,8 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
          .safetyPolicy = context.safetyPolicy,
          .liveResourceCounters = context.liveResourceCounters,
          .stop = context.stop,
-         .sessionDecodedBytes = planned.plan->decodedBytes});
+         .sessionDecodedBytes = planned.plan->decodedBytes -
+             planned.plan->chartDecodedBytes});
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Movie,
                                  loadingMicros(movieStarted));

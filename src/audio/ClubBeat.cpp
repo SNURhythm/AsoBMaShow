@@ -25,7 +25,8 @@ float clampSample(double value) {
 }
 } // namespace
 
-std::vector<Event> buildPlan(const bms_parser::Chart &chart) {
+std::vector<Event> buildPlan(const bms_parser::Chart &chart,
+                             const std::atomic_bool *cancelled) {
   std::vector<Event> result;
   double activeBpm = initialBpm(chart);
   double measureBeatPosition = 0.0;
@@ -53,6 +54,9 @@ std::vector<Event> buildPlan(const bms_parser::Chart &chart) {
     for (double localBeatPosition = 0.0;
          localBeatPosition < measure->Scale - kTolerance;
          localBeatPosition += kBeatPositionStep, ++beatInMeasure) {
+      if (cancelled != nullptr && cancelled->load(std::memory_order_relaxed)) {
+        return {};
+      }
       const double targetBeatPosition =
           measureBeatPosition + localBeatPosition;
       while (timelineIndex < measure->TimeLines.size()) {

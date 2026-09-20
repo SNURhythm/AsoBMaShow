@@ -975,9 +975,10 @@ void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
       fs::path(ASOBMASHOW_SOURCE_DIR) /
           "tests/fixtures/beatoraja_skin/resources/fixture.png",
       std::ios::binary);
-  const std::vector<unsigned char> returnedBytes{
+  std::vector<unsigned char> returnedBytes{
       std::istreambuf_iterator<char>(imageFile),
       std::istreambuf_iterator<char>()};
+  returnedBytes.resize(32U * 1024U * 1024U + 1U);
   const fs::path platformPath = temporary.root / "platform/stage.png";
   fs::create_directories(platformPath.parent_path());
   std::ofstream(platformPath, std::ios::binary).put('\0');
@@ -1019,12 +1020,11 @@ void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
        .builtinImageReader = reader});
   expect(exact.plan && exact.plan->builtinImageResources.contains(100) &&
              skin::skinResourceCommittedEncodedBytesForTesting() ==
-                 returnedBytes.size(),
-         "chart built-in charges the reader's retained bytes once rather "
-         "than the stale one-byte path size");
+                 0,
+         "large chart built-in input does not consume authored-skin encoded budget");
 
   skin::setSkinResourceAccountingLimitsForTesting(
-      returnedBytes.size() - 1U, std::numeric_limits<std::size_t>::max());
+      0, std::numeric_limits<std::size_t>::max());
   auto oversized = service.decodeAndPlan(
       {.revision = lease->clone(),
        .entry = entry,
@@ -1038,10 +1038,44 @@ void testChartBuiltinReaderOwnsBytesAndAccountingTransaction() {
         return diagnostic.code == "skin.resource.builtin_image_unavailable";
       });
   expect(oversized.plan &&
-             !oversized.plan->builtinImageResources.contains(100) && warned &&
+             oversized.plan->builtinImageResources.contains(100) && !warned &&
              skin::skinResourceCommittedEncodedBytesForTesting() == 0,
-         "aggregate encoded-byte overage rolls back the optional chart image "
-         "without charging rejected bytes");
+         "cached chart input remains available with no authored-skin encoded budget");
+
+  skin::setSkinResourceAccountingLimitsForTesting(
+      0, std::numeric_limits<std::size_t>::max(), 0, 0);
+  const std::string widePpm = "P6\n4096 2\n255\n" + std::string(4096U * 2U * 3U, '\x66');
+  auto wide = service.decodeAndPlan(
+      {.revision = lease->clone(),
+       .entry = entry,
+       .fileSystem = *fileSystem.fileSystem,
+       .model = model,
+       .configuration = configuration,
+       .builtinImagePaths = {{100, platformPath}},
+       .builtinImageReader =
+           [&widePpm](const fs::path &, std::vector<unsigned char> &bytes,
+                      std::size_t, std::string *, std::stop_token) {
+             bytes.assign(widePpm.begin(), widePpm.end());
+             return true;
+           }});
+  expect(wide.plan && wide.plan->builtinImageResources.contains(100) &&
+             wide.plan->images.back().pixels.width == 2048 &&
+             wide.plan->images.back().pixels.height == 1 &&
+             wide.plan->decodedBytes == 8192 &&
+             wide.plan->chartDecodedBytes == 8192,
+         "chart source wider than 2048 is downsampled and retained bytes are accounted");
+  if (wide.plan) {
+    auto device = std::make_shared<FakeTextureDevice>();
+    ++wide.plan->chartDecodedBytes;
+    auto inconsistent = skin::SkinResourceCatalog::upload(std::move(*wide.plan), device);
+    expect(!inconsistent.catalog && device->live == 0,
+           "upload rejects inconsistent chart byte accounting before allocating textures");
+    --wide.plan->chartDecodedBytes;
+    auto uploaded = skin::SkinResourceCatalog::upload(std::move(*wide.plan), device);
+    expect(uploaded.catalog && uploaded.catalog->builtinImageResource(100),
+           "chart built-in uploads even when authored-skin decoded budget is exhausted");
+  }
+
 
   skin::setSkinResourceAccountingLimitsForTesting(
       returnedBytes.size(), std::numeric_limits<std::size_t>::max());
@@ -1152,9 +1186,8 @@ void testChartBuiltinBatchPreservesSparseReferences() {
                }
                return true;
              }, .safetyPolicy = policy});
-    expect(receivedLimit == (policy.enforces(skin::SkinSafetyGuard::ResourceAllocationLimit)
-               ? 32U * 1024U * 1024U : std::numeric_limits<std::size_t>::max()),
-           "batch reader receives the active policy bound before reading any payload");
+    expect(receivedLimit == static_cast<std::size_t>(std::numeric_limits<int>::max()),
+           "chart batch reads preserve decoder representability independently of authored-skin quotas");
     expect(receivedPaths == requestedPaths && fallbackReads == 0,
            "batch requests preserve authored references when unused built-ins "
            "are omitted");

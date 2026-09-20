@@ -68,6 +68,9 @@ struct PreviewAudio {
   void silence() { silenced = true; }
 };
 struct MusicSelectScene : Scene {
+  struct RevealMenu { void dismiss() {} };
+  std::unique_ptr<RevealMenu> revealContextMenu_;
+
   struct UnzipModal {
     bool cancelled = false;
     void cancelAndWait() { cancelled = true; }

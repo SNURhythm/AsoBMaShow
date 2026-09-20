@@ -78,7 +78,8 @@ std::optional<ScoreBestSnapshot> LoadBestScoreOnConnection(
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
     int selectedLongNoteMode = 0,
-    const RulesetDescriptor *requiredRuleset = nullptr);
+    const RulesetDescriptor *requiredRuleset = nullptr,
+    const std::optional<std::string> &beforeAttemptId = std::nullopt);
 std::optional<ChartScoreHistorySnapshot> LoadChartScoreHistoryOnConnection(
     sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
     int selectedLongNoteMode = 0);
@@ -89,10 +90,14 @@ std::optional<ScoreBestSnapshot> LoadBestClearScoreOnConnection(
     sqlite3 *database, const bms_parser::ChartMeta &chartMeta,
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
-    int selectedLongNoteMode = 0);
+    int selectedLongNoteMode = 0,
+    const std::optional<std::string> &beforeAttemptId = std::nullopt);
 std::optional<ScoreBestSnapshot>
 LoadBestCourseScoreOnConnection(sqlite3 *database,
-                                const CoursePlaySession &session);
+                                const CoursePlaySession &session,
+                                const std::optional<std::string> &beforeCreatedAt = std::nullopt,
+                                const std::optional<std::string> &beforeAttemptId = std::nullopt,
+                                bool preferClear = false);
 CourseScoreRecoveryResult RecoverCourseRecordsOnConnection(
     sqlite3 *database,
     std::span<const course_identity::Definition> definitions);

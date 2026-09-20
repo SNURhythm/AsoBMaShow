@@ -56,6 +56,10 @@
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
 #include "SettingsScene.h"
+#include "MusicSelectScene.h"
+#include "MusicSelectSkinErrorScene.h"
+#include "../music_select/MusicSelectLaunchPolicy.h"
+#include "../skin/GameplaySkinLifecycle.h"
 #include "play/GamePlayScene.h"
 #include "play/GameplayGaugeRules.h"
 #include "play/Pacemaker.h"
@@ -958,6 +962,40 @@ void MainMenuScene::onResume() {
   }
   refreshLibraryIfNeeded();
   reselectCurrentChart();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  // Settings retains the built-in selector. Re-evaluate type 5 after resume
+  // unwinds, so changing the scene cannot clean up views inside onResume().
+  defer([this]() {
+    skin::GameplaySkinAcquisition acquisition;
+    if (context.gameplaySkinLifecycle) {
+      acquisition =
+          context.gameplaySkinLifecycle->acquireForSkinType(5, false);
+    } else if (context.settings.skin.selectedSkinEntries.contains(5)) {
+      acquisition.disposition =
+          skin::GameplaySkinAcquisitionDisposition::Failed;
+      acquisition.failure = skin::GameplaySkinAcquisitionFailure{
+          .diagnostic = skin::SkinDiagnostic{
+              .code = "skin.music_select.lifecycle_unavailable",
+              .message =
+                  "The selected music-select skin service is unavailable."}};
+    }
+    auto decision = decideMusicSelectLaunch(std::move(acquisition));
+    if (decision.kind == MusicSelectLaunchKind::SelectedSkin &&
+        decision.request) {
+      context.sceneManager->changeScene(std::make_unique<MusicSelectScene>(
+          context, std::move(*decision.request)));
+      return false;
+    }
+    if (decision.kind == MusicSelectLaunchKind::Error) {
+      context.sceneManager->changeScene(
+          std::make_unique<MusicSelectSkinErrorScene>(
+              context, std::move(decision.selectedSkinPath),
+              std::move(decision.diagnostics)));
+      return false;
+    }
+    return true;
+  }, 0, true);
+#endif
 }
 
 void MainMenuScene::reloadProfileSelectionsFromSettings() {

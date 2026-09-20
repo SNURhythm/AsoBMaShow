@@ -89,6 +89,91 @@ void testSyntheticPaddingAdmission() {
           "short missing-stage synthetic samples retain their original convention");
 }
 
+// Exercise the actual gameplay result-handoff expression with a stale
+// presentation snapshot, as can remain after realtime worker shutdown.
+SkinGameplayGraphState liveResultGraph(
+    bms_parser::Chart *chart, const RhythmState *state,
+    const ReplayData *analyticsSource, SkinGameplayGraphState snapshot,
+    bool replayPlayback = false, bool practiceSession = false) {
+  const auto isReplayPlayback = [replayPlayback] { return replayPlayback; };
+  struct { const void *practiceSession; } options{practiceSession ? &snapshot : nullptr};
+  struct Clock {
+    std::uint64_t serial;
+    long long visualTimeMicros, gameplayTimeMicros, replayTouchTimeMicros,
+        bgaTimeMicros;
+    struct {} playTimer;
+  };
+  struct Store {
+    SkinGameplayGraphState graph;
+    struct Snapshot { SkinGameplayGraphState skinGameplayGraph; };
+    Snapshot capture(Clock, bool) const { return {graph}; }
+  } store{std::move(snapshot)};
+  auto *playfieldVisualStateStore = &store;
+  struct Context {
+    struct Jukebox { long long getTimeMicros() const { return 9'000'000; } } jukebox;
+  } context;
+  const auto getGameplayTimeMicros = [](long long time) { return time; };
+  const auto getVisualTimeMicros = [](long long time) { return time; };
+  std::uint64_t playfieldFrameSerial = 0;
+  ASOBMS_GAMEPLAY_RESULT_GRAPH
+  return resultGameplayGraph;
+}
+
+void testLiveResultUsesCompletedJudgements() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  chart.Measures.push_back(measure);
+  for (int index = 1; index <= 2; ++index) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = index * 1'000'000;
+    timeline->Bpm = 120.0;
+    timeline->SetNote(1, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+  }
+  RhythmState state(&chart, false);
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+  state.currentGauge = 32.0F;
+  state.gaugeValues[gaugeTypeIndex(state.gaugeType)] = 32.0F;
+  state.gaugeHistory = {20.0F, 55.0F, 32.0F};
+  state.gaugeHistoryFor(state.gaugeType) = state.gaugeHistory;
+  ReplayData replay;
+  replay.events = {
+      {.action = ReplayEventAction::Press, .lane = 1,
+       .noteTimeMicros = 1'000'000, .songTimeMicros = 1'005'000,
+       .judgement = Great, .diffMicros = -5'000},
+      // An abort can add a remaining-note miss after the worker stops.
+      {.action = ReplayEventAction::Miss, .lane = 1,
+       .noteTimeMicros = 2'000'000, .songTimeMicros = 1'500'000,
+       .judgement = Poor, .diffMicros = 500'000},
+  };
+  RhythmState initialState(&chart, false);
+  const auto stale = replay_result::BuildSkinGameplayGraphState(chart, {}, initialState);
+  const auto live = liveResultGraph(&chart, &state, &replay, stale);
+  require(live.dynamic->judgementDistribution[1][0] == 0 &&
+              live.dynamic->judgementDistribution[1][2] == 1 &&
+              live.dynamic->judgementDistribution[2][0] == 0 &&
+              live.dynamic->judgementDistribution[2][5] == 1,
+          "normal result must retain actual judges and abort-finalized misses, not unjudged playfield data");
+  const auto recalled = replay_result::BuildSkinGameplayGraphState(chart, replay, state);
+  require(*live.chart == *recalled.chart && *live.dynamic == *recalled.dynamic,
+          "normal and recalled result graphs agree for the same completed attempt");
+  require(live.dynamic->gaugeType == GaugeType::Hard &&
+              live.dynamic->gaugeHistories[gaugeTypeIndex(state.gaugeType)] ==
+                  std::vector<float>({20.0F, 55.0F, 32.0F}),
+          "normal result preserves the completed gauge history");
+  const auto fallback = liveResultGraph(&chart, &state, nullptr, stale);
+  require(fallback.chart == stale.chart && fallback.dynamic == stale.dynamic,
+          "attempts without analytics retain their existing presentation snapshot");
+  for (const auto &preserved : {
+           liveResultGraph(&chart, &state, &replay, stale, true, false),
+           liveResultGraph(&chart, &state, &replay, stale, false, true)}) {
+    require(preserved.chart == stale.chart && preserved.dynamic == stale.dynamic,
+            "replay and practice sessions retain their current graph semantics");
+  }
+}
+
 void testReplayCopies() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -192,6 +277,7 @@ int main() {
                             {"fallback", testCourseFallback},
                             {"synthetic-padding", testSyntheticPaddingAdmission},
                             {"replay-copies", testReplayCopies},
+                            {"live-result-handoff", testLiveResultUsesCompletedJudgements},
                             {"offsets", testCombinedOffsets},
                             {"partial-channels", testPartialGaugeChannels}};
   bool passed = true;

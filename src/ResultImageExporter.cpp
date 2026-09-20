@@ -506,14 +506,15 @@ ResultImageExportResult renderResultImageWithSkinData(
     ApplicationContext &context, ResultSkinData resultSkinData,
     const std::optional<result_gauge_history::ResultGaugeGraph> &gaugeGraph,
     const std::optional<practice::ResultModel> &analyticsModel,
-    bool attachGaugeAsView, const std::filesystem::path &path) {
+    bool attachGaugeAsView, const std::filesystem::path &path,
+    const result_image_export::SkinRenderBackend &renderSkin = {}) {
   const int width = rendering::render_width;
   const bool mobileTarget =
       TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android;
   const auto layoutMetrics = result_layout::metricsFor(
       static_cast<float>(rendering::window_height), mobileTarget);
   const int height =
-      analyticsModel.has_value()
+      !renderSkin && analyticsModel.has_value()
           ? result_layout::photoCanvasPixelHeight(
                 width, rendering::render_height,
                 static_cast<float>(rendering::window_width), layoutMetrics)
@@ -531,7 +532,7 @@ ResultImageExportResult renderResultImageWithSkinData(
     restorePrimaryRenderViews(context);
   });
 
-  if (analyticsModel.has_value()) {
+  if (!renderSkin && analyticsModel.has_value()) {
     rendering::updateUIScale(width, height);
   }
 
@@ -580,13 +581,15 @@ ResultImageExportResult renderResultImageWithSkinData(
   configureResultImageViews(width, height, outputFrameBuffer);
 
   View *graphPlaceHolder = nullptr;
-  resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
-                                      rendering::window_height);
-  resultSkinData.context = &context;
-  resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
-  DefaultSkin resultSkin;
-  resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
-  if (analyticsModel.has_value()) {
+  if (!renderSkin) {
+    resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
+                                        rendering::window_height);
+    resultSkinData.context = &context;
+    resultSkinData.outGraphPlaceholder = &graphPlaceHolder;
+    DefaultSkin resultSkin;
+    resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
+  }
+  if (!renderSkin && analyticsModel.has_value()) {
     const float visualHeight = layoutMetrics.photoPrimaryHeight +
                                layoutMetrics.photoSecondaryHeight +
                                layoutMetrics.photoGridGap;
@@ -673,7 +676,7 @@ ResultImageExportResult renderResultImageWithSkinData(
   if (attachGaugeAsView && gaugeGraph.has_value()) {
     attachPresentationGaugeGraph(graphPlaceHolder, *gaugeGraph);
   }
-  resultRoot->applyYogaLayout();
+  if (resultRoot) resultRoot->applyYogaLayout();
 
   context.uiBatchRenderer.beginFrame();
   RenderContext renderContext(context.uiBatchRenderer);
@@ -687,11 +690,24 @@ ResultImageExportResult renderResultImageWithSkinData(
                         static_cast<float>(rendering::window_height),
                         ui_theme::backdrop().toABGR());
   backdropBatch.end();
+  bool rendered = true;
   {
     RenderContext::UiBatchScope uiBatchScope(renderContext);
-    resultRoot->render(renderContext);
+    if (renderSkin) {
+      rendered = renderSkin(renderContext);
+    } else {
+      resultRoot->render(renderContext);
+    }
   }
-  if (!attachGaugeAsView) {
+  if (!rendered) {
+    // Drain any partial skin/backdrop submission before restoring the views
+    // to the window, so a failed export cannot leak into the next app frame.
+    bgfx::frame();
+    return {.success = false,
+            .outputPath = path,
+            .message = "Failed to render the active result skin"};
+  }
+  if (!renderSkin && !attachGaugeAsView) {
     drawResultGaugeGraph(graphBatch, gaugeGraph, graphPlaceHolder);
   }
   bgfx::blit(rendering::readback_view, readbackTexture, 0, 0, outputTexture);
@@ -807,6 +823,32 @@ ResultImageExportResult exportResultImage(
       std::move(gameplayGraph), analyticsModel, outputPath);
 }
 } // namespace
+
+ResultImageExportResult ResultImageExporter::ExportSkin(
+    ApplicationContext &context, const std::string &title,
+    const result_image_export::SkinRenderBackend &renderSkin) {
+  if (!renderSkin) {
+    return {.success = false, .message = "No active result skin renderer"};
+  }
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::string photosErrorMessage;
+  if (!RequestIOSPhotoAddAuthorization(photosErrorMessage)) {
+    return {.success = false,
+            .message = photosErrorMessage.empty()
+                           ? "Photos permission was not granted"
+                           : photosErrorMessage};
+  }
+#endif
+  const auto outputDir = Utils::GetDocumentsPath("result_exports");
+  if (const auto error = ensureExportDirectoryError(
+          outputDir, "Failed to create result export directory")) {
+    return {.success = false, .message = *error};
+  }
+  const auto outputPath = outputDir / (sanitizeFileNamePart(title) + "_" +
+                                       makeTimestamp() + ".png");
+  return renderResultImageWithSkinData(context, {}, std::nullopt, std::nullopt,
+                                       false, outputPath, renderSkin);
+}
 
 ResultImageExportResult ResultImageExporter::Export(
     ApplicationContext &context,
@@ -1002,9 +1044,11 @@ ResultImageExporter::ExportCourseReplay(ApplicationContext &context,
   const int clearRank = replay.clearType;
   clearLabelOverride = clearTypeRankToLabel(clearRank);
   clearRankOverride = clearRank;
+  const auto previous = result_presentation::previousBestsForReplayCourse(
+      context.scoreRepository, replay);
   const auto courseResult = renderResultImage(
       context, courseMeta, courseState, display.mode, display.laneOrder,
-      "Course", std::nullopt, std::nullopt, clearLabelOverride,
+      "Course", previous.score, previous.lamp, clearLabelOverride,
       clearRankOverride, "COURSE", std::nullopt,
       combineSkinGameplayGraphStates(stageGraphs), std::nullopt,
       outputDir / "course_result.png",

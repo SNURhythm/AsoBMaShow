@@ -142,7 +142,8 @@ double resolveEffectiveGaugeTotal(
     }
     return lr2DefaultTotal(meta.TotalNotes);
   }
-  return meta.HasTotal
+  // BMSPlayerRule.validate treats nonpositive BMS TOTAL as unspecified.
+  return meta.HasTotal && meta.Total > 0.0
              ? meta.Total
              : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
 }

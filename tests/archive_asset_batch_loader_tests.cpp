@@ -32,8 +32,10 @@ void testPartialFailureRetriesOnlyMissingEntries(bool cancelAfterDelivery) {
     return true;
   };
   auto concurrent = [&](const auto &, const auto &, auto onFile, auto workers,
-                        auto budget, auto *, auto checkpoint) {
+                        auto budget, auto *, auto checkpoint, auto policy) {
     require(workers == 2 && budget == 16, "extractor receives its bounded budget");
+    require(policy == archive_file::ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry,
+            "audio extraction admits one oversized entry when idle");
     require(checkpoint() && onFile({.path = "first", .bytes = {42}}),
             "first entry delivered before reader failure");
     require(consumed.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
@@ -41,9 +43,8 @@ void testPartialFailureRetriesOnlyMissingEntries(bool cancelAfterDelivery) {
     cancelled = cancelAfterDelivery;
     return false;
   };
-  auto streaming = [&](const auto &, const auto &missing, auto onFile, auto budget,
+  auto streaming = [&](const auto &, const auto &missing, auto onFile,
                        auto *, auto) {
-    require(budget == 16, "fallback retains the extraction memory capacity");
     ++fallbackCalls;
     require(missing == std::vector<std::filesystem::path>{"second", "third", "fourth"},
             "fallback excludes entries already delivered");
@@ -72,13 +73,11 @@ void testSerialOnlyReaderConsumesEveryEntryOnce(std::size_t workers) {
   std::atomic_uint consumed = 0;
   const auto caller = std::this_thread::get_id();
   unsigned serialCalls = 0;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) -> bool {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) -> bool {
     throw std::runtime_error("serial-only operation must not use concurrent reader");
   };
-  auto streaming = [&](const auto &, const auto &requested, auto onFile, auto budget,
+  auto streaming = [&](const auto &, const auto &requested, auto onFile,
                        auto *, auto) {
-    require(budget == (workers == 1 ? 32 : 16),
-            "serial extraction shares total capacity with asynchronous consumption");
     ++serialCalls;
     for (const auto &path : requested) {
       require(onFile({.path = path, .bytes = {42}}), "serial entry accepted");
@@ -112,7 +111,7 @@ void testConsumerFailureDoesNotRestartExtraction() {
     return false;
   };
   auto concurrent = [&](const auto &, const auto &, auto onFile, auto, auto,
-                        auto *, auto checkpoint) {
+                        auto *, auto checkpoint, auto) {
     require(onFile({.path = "first", .bytes = {42}}), "consumer receives first entry");
     require(rejection.wait_for(std::chrono::seconds(2)) == std::future_status::ready,
             "consumer signals rejection");
@@ -123,7 +122,7 @@ void testConsumerFailureDoesNotRestartExtraction() {
     require(!checkpoint(), "reader observes consumer rejection before its next operation");
     return false;
   };
-  auto streaming = [&](const auto &, const auto &, auto, auto, auto *, auto) {
+  auto streaming = [&](const auto &, const auto &, auto, auto *, auto) {
     ++fallbackCalls;
     return false;
   };
@@ -135,12 +134,12 @@ void testConsumerFailureDoesNotRestartExtraction() {
 
 void testInlineConsumptionRejectsIncompleteDeliveryAndConsumerFailure() {
   std::atomic_bool cancelled = false;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) -> bool {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) -> bool {
     throw std::runtime_error("inline operation does not create extractor threads");
   };
   for (const bool reject : {false, true}) {
     unsigned consumed = 0;
-    auto streaming = [&](const auto &, const auto &, auto onFile, auto,
+    auto streaming = [&](const auto &, const auto &, auto onFile,
                          auto *, auto checkpoint) {
       const bool accepted = onFile({.path = "first", .bytes = {42}});
       require(accepted != reject, "inline consumer result reaches reader");
@@ -156,16 +155,16 @@ void testInlineConsumptionRejectsIncompleteDeliveryAndConsumerFailure() {
   }
 }
 
-void testOversizedDeliveryNeverReachesConsumer(std::size_t workers,
-                                             bool singlePath) {
+void testOversizedDeliveryReachesConsumer(std::size_t workers,
+                                         bool singlePath) {
   std::atomic_bool cancelled = false;
   std::atomic_uint consumed = 0;
   const std::vector<std::filesystem::path> requested = singlePath
       ? std::vector<std::filesystem::path>{"first"} : paths;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) {
     return false;
   };
-  auto streaming = [](const auto &, const auto &entries, auto onFile, auto,
+  auto streaming = [](const auto &, const auto &entries, auto onFile,
                       auto *, auto) {
     for (const auto &path : entries) {
       archive_file::FileData file{.path = path, .bytes = {42}};
@@ -177,60 +176,23 @@ void testOversizedDeliveryNeverReachesConsumer(std::size_t workers,
     return true;
   };
   std::string error;
-  require(!audio::ConsumeArchiveAssetBatch(
+  require(audio::ConsumeArchiveAssetBatch(
               "oversized.7z", requested, workers, 8,
               [&](archive_file::FileData &&) { ++consumed; return true; },
               &error, cancelled, concurrent, streaming),
-          "loader rejects deliveries exceeding the encoded memory capacity");
-  require(consumed == 0, "oversized allocation never reaches an audio consumer");
-  require(!error.empty(), "memory rejection reports a diagnostic");
+          "loader admits deliveries exceeding the scheduling budget");
+  require(consumed == requested.size(), "each oversized asset reaches its consumer");
+  require(error.empty(), "successful oversized loading leaves no error");
 }
 
-void testExtractionLimitPreventsOversizedAllocation(std::size_t workers,
-                                                   bool singlePath,
-                                                   std::uint64_t maximumBytes) {
-  std::atomic_bool cancelled = false;
-  unsigned consumed = 0;
-  unsigned streamingCalls = 0;
-  const std::vector<std::filesystem::path> requested = singlePath
-      ? std::vector<std::filesystem::path>{"first"} : paths;
-  auto concurrent = [&](const auto &, const auto &, auto, auto, auto budget,
-                        auto *, auto) {
-    require(budget <= maximumBytes / 2,
-            "concurrent extraction reserves room for queued and decoding bytes");
-    return false;
-  };
-  auto streaming = [&](const auto &, const auto &, auto onFile, std::uint64_t budget,
-                       std::string *error, auto checkpoint) {
-    ++streamingCalls;
-    require(checkpoint(), "bounded streaming preserves cancellation checkpoint");
-    const auto memberBytes = (workers <= 1 || singlePath)
-        ? maximumBytes + 1 : maximumBytes / 2 + 1;
-    if (memberBytes > budget) {
-      *error = "entry exceeds memory limit";
-      return false;
-    }
-    return onFile({.path = "first", .bytes = {42}});
-  };
-  std::string error;
-  require(!audio::ConsumeArchiveAssetBatch(
-              "oversized.7z", requested, workers, maximumBytes,
-              [&](archive_file::FileData &&) { ++consumed; return true; },
-              &error, cancelled, concurrent, streaming),
-          "bounded extraction rejects a member before allocating its buffer");
-  require(streamingCalls == 1 && consumed == 0 && !error.empty(),
-          "oversized member is rejected in one streaming pass without consumption");
-}
-
-void testTinyAndOddBudgetsRetainExactLimit(std::uint64_t maximumBytes) {
+void testTinyAndOddBudgetsAllowProgress(std::uint64_t maximumBytes) {
   std::atomic_bool cancelled = false;
   std::atomic_uint consumed = 0;
-  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto) {
+  auto concurrent = [](const auto &, const auto &, auto, auto, auto, auto *, auto, auto) {
     return false;
   };
-  auto streaming = [&](const auto &, const auto &requested, auto onFile, auto budget,
+  auto streaming = [&](const auto &, const auto &requested, auto onFile,
                        auto *, auto) {
-    require(budget == 1, "tiny or odd budget reserves one extraction byte");
     for (const auto &path : requested) {
       if (!onFile({.path = path, .bytes = {42}})) {
         return false;
@@ -245,26 +207,20 @@ void testTinyAndOddBudgetsRetainExactLimit(std::uint64_t maximumBytes) {
       &error, cancelled, concurrent, streaming);
   require(loaded == (maximumBytes > 0), "zero budget cannot load nonempty assets");
   require(consumed == (maximumBytes > 0 ? paths.size() : 0),
-          "tiny budgets do not round up extraction plus pipeline beyond the total");
+          "positive scheduling budgets allow every asset to be consumed");
 }
 
 }
 
 int main() {
   try {
-    testOversizedDeliveryNeverReachesConsumer(1, false);
-    testOversizedDeliveryNeverReachesConsumer(4, true);
-    testOversizedDeliveryNeverReachesConsumer(2, false);
-    testOversizedDeliveryNeverReachesConsumer(4, false);
-    for (const auto budget : {32ull, 64ull * 1024ull * 1024ull}) {
-      testExtractionLimitPreventsOversizedAllocation(1, false, budget);
-      testExtractionLimitPreventsOversizedAllocation(4, true, budget);
-      testExtractionLimitPreventsOversizedAllocation(2, false, budget);
-      testExtractionLimitPreventsOversizedAllocation(4, false, budget);
-    }
-    testTinyAndOddBudgetsRetainExactLimit(0);
-    testTinyAndOddBudgetsRetainExactLimit(1);
-    testTinyAndOddBudgetsRetainExactLimit(3);
+    testOversizedDeliveryReachesConsumer(1, false);
+    testOversizedDeliveryReachesConsumer(4, true);
+    testOversizedDeliveryReachesConsumer(2, false);
+    testOversizedDeliveryReachesConsumer(4, false);
+    testTinyAndOddBudgetsAllowProgress(0);
+    testTinyAndOddBudgetsAllowProgress(1);
+    testTinyAndOddBudgetsAllowProgress(3);
     testPartialFailureRetriesOnlyMissingEntries(false);
     testPartialFailureRetriesOnlyMissingEntries(true);
     testSerialOnlyReaderConsumesEveryEntryOnce(1);

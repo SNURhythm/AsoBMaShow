@@ -331,7 +331,7 @@ bool extractZipArchive(const std::filesystem::path &archivePath,
                    std::to_string(limits.maxEntries) + ").";
     return false;
   }
-  int extractedFiles = 0;
+  std::uint64_t extractedFiles = 0;
   bool ok = true;
   for (mz_uint i = 0; i < fileCount; ++i) {
     if (!budget.checkpoint()) {
@@ -539,10 +539,10 @@ bool extractArchiveWithLibarchive(
   }
 
   bool ok = true;
-  int extractedFiles = 0;
-  int skippedInvalidPaths = 0;
-  int skippedUnsupportedTypes = 0;
-  int directoryEntries = 0;
+  std::uint64_t extractedFiles = 0;
+  std::uint64_t skippedInvalidPaths = 0;
+  std::uint64_t skippedUnsupportedTypes = 0;
+  std::uint64_t directoryEntries = 0;
   std::uint64_t entryIndex = 0;
   unsigned headerRetries = 0;
   auto readEntry = [&](std::ofstream *output) {

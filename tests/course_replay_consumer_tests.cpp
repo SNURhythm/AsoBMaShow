@@ -381,6 +381,9 @@ void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
              watch->replayTouchVisualizationEnabled == true &&
              watch->replayGhostRenderingEnabled == true,
          "Watch adapter retains verified playback and prepared charts");
+  expect(watch && watch->modernCourseAttemptId == watchHarness.listed.result.attemptId &&
+             watch->modernCoursePlayedAtUnixMillis == watchHarness.listed.result.playedAtUnixMillis,
+         "Watch adapter retains the saved history boundary");
 
   ConsumerHarness retryHarness;
   auto retryConsumer = retryHarness.makeConsumer();
@@ -394,6 +397,9 @@ void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
              retry->courseRetrySameStageSetup(0) != nullptr &&
              retry->preparedCourseCharts.size() == 2,
          "Retry Same adapter keeps validated setup without replay playback");
+  expect(retry && retry->modernCourseAttemptId.empty() &&
+             retry->modernCoursePlayedAtUnixMillis == 0,
+         "Retry Same starts a new attempt without inheriting the watched history boundary");
 }
 
 #endif

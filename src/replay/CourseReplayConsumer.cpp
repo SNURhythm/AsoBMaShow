@@ -187,6 +187,8 @@ std::shared_ptr<CoursePlaySession> makeCourseReplayLaunchSession(
   session->replayGhostRenderingEnabled = renderGhosts;
   if (mode == CourseReplayLaunchMode::Watch) {
     session->courseReplayPlayback = true;
+    session->modernCourseAttemptId = savedResult.attemptId;
+    session->modernCoursePlayedAtUnixMillis = savedResult.playedAtUnixMillis;
     session->courseReplayData = std::move(replayData);
   } else {
     session->courseReplayPlayback = false;

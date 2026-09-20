@@ -324,6 +324,13 @@ struct Preview {
 };
 int previewSelection(const Bars &, bool) { return 0; }
 struct MusicSelectScene {
+  struct RevealMenu {
+    void dismiss() {}
+    void setViewportSize(int, int) {}
+    bool isOpen() const { return false; }
+  };
+  std::unique_ptr<RevealMenu> revealContextMenu_;
+
   void resetFailedLaunch(std::uint64_t generation);
   bool recordsResumeAudioPending_ = false;
   Modal *archiveUnzipModal_ = nullptr;

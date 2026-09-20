@@ -2230,6 +2230,10 @@ void testLargeSingleArchivePreservesAllChartResults() {
     files.emplace_back("charts/chart-" + std::to_string(index) + ".bms",
                        chartText("Large Archive " + std::to_string(index)));
   }
+  // A valid chart may exceed the concurrency scheduling budget. It must not
+  // discard the concurrent batch and force every chart to be parsed again.
+  files.front().second.append(17 * 1024 * 1024, ' ');
+  files.front().second += '\n';
   const auto archivePath = writeZip(root / "large-single-archive.zip", files);
 
   TestChartRepository repository(temporary.path() / "chart.db");

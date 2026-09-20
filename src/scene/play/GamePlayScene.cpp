@@ -13,6 +13,7 @@
 #include "../../ChartPlaybackDuration.h"
 #include "../../ArchiveFile.h"
 #include "../../ReplayGhostUtils.h"
+#include "../../ReplayResultStateBuilder.h"
 #include "../../GBattleMode.h"
 #include "../../CourseConstraintUtils.h"
 #include "../../PlayOptionUtils.h"
@@ -3505,7 +3506,14 @@ bool GamePlayScene::reset() {
   }
   updateSkinResetLayoutVisibility();
 #endif
-  context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  const auto playbackStarted =
+      context.jukebox.play(preparationPlan.playbackStartTimeMicros);
+  if (!playbackStarted.success) {
+    showPlaybackInitializationFailure(
+        gameplay_startup::playbackInitializationResult(
+            false, playbackStarted.diagnostic).visibleStatus);
+    return false;
+  }
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   touchVisualizerLoaded = false;
@@ -4033,7 +4041,9 @@ bool GamePlayScene::restartCourseFromBeginning() {
   session->carriedCombo = 0;
   session->maxCombo = 0;
   session->courseScoreSaved = false;
-  session->resetModernCourseAttempt();
+  if (!session->courseReplayPlayback) {
+    session->resetModernCourseAttempt();
+  }
   session->playOption.reset();
   session->playOptionSeed.reset();
   session->playOption2.reset();
@@ -5604,8 +5614,15 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
         }
         const long long resultGameplayTimeMicros =
             getGameplayTimeMicros(context.jukebox.getTimeMicros());
+        // Live results use finalized attempt facts, just like record recall.
+        // The presentation graph can be stale after worker stop. Replay and
+        // practice sources may contain future or moved-out events.
         const SkinGameplayGraphState resultGameplayGraph =
-            playfieldVisualStateStore
+            !isReplayPlayback() && options.practiceSession == nullptr &&
+                    analyticsSource != nullptr
+                ? replay_result::BuildSkinGameplayGraphState(
+                      *chart, *analyticsSource, *state)
+                : playfieldVisualStateStore
                 ->capture({.serial = ++playfieldFrameSerial,
                            .visualTimeMicros =
                                getVisualTimeMicros(resultGameplayTimeMicros),

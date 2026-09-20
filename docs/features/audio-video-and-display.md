@@ -30,6 +30,29 @@ before scene destruction while it owns those overrides. Unused and already-
 exited scenes leave shared BGA policy unchanged. This teardown does not stop
 native music playback or refresh the UI.
 
+## Archived chart asset budgets
+
+Gameplay and audio export keep a 64 MiB concurrent extraction scheduling budget.
+Gameplay splits it between extraction and the decode queue when those stages
+run concurrently. Each stage admits one oversized asset when otherwise empty;
+other entries wait until capacity is available. Serial extraction also accepts
+oversized assets. The budget is not a maximum audio file or archive size, and
+it does not cap decoded PCM, decoder dictionaries, or consumer-retained data.
+Cancellation, consumer failure, and missing-entry-only retry remain enforced.
+
+## Selected charts and background work
+
+Selected-chart audio rendering and music playback do not inherit the speculative
+preload quotas. Adjacent-track preloading retains its 128 MiB output, one-hour
+cumulative mixing, and Club Beat planning bounds. Foreground rendering instead
+checks actual WAV/container and arithmetic representability, cancellation, and
+allocation failures.
+
+Selected chart stage/back/banner images accept oversized encoded sources and
+are resized to a shared 2048-pixel display image. Chart-owned images do not consume
+authored-skin quotas. Library thumbnails, image worker concurrency, retained cache
+budgets, and authored-skin/package limits remain bounded.
+
 ## Verification
 
 Use `audio_*_tests`, `jukebox_restore_tests`, `video_*_tests`,

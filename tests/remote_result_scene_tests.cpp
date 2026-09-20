@@ -546,16 +546,9 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "lastDiagnostics_.insert(lastDiagnostics_.end(),\n"
                   "                          std::make_move_iterator(evaluated.diagnostics.begin()),\n"
                   "                          std::make_move_iterator(evaluated.diagnostics.end()));\n"
-                  "  publishedInteractionLayout_",
+                  "  if (!suppressFrameActions_) {",
                   "successful result frames retain non-fatal diagnostics");
-  requireContains(result,
-                  "const bool rendered = resultSkinSession->render(\n"
-                  "        renderContext, skinData,\n"
-                  "        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);\n"
-                  "    appendResultSkinRenderDiagnostics();\n"
-                  "    if (!rendered) {",
-                  "ResultScene publishes diagnostics from successful result frames");
-  requireContains(result,
+  requireContains(readSource("src/ResultReplayLanePattern.h"),
                   "const int playerOffset = player == 1 ? keyCount : 0;",
                   "generated 2P result patterns use replay-local lane ordinals");
   requireContains(result,
@@ -735,7 +728,7 @@ void testResultSkinProjectionAndLifecycleRegressionContractsRemainPresent() {
                   "        local->courseOptions.session->courseReplayPlayback;",
                   "course replay uses its recorded stage-rest timer as the transition authority");
   requireOrdered(session,
-                 "auto queuedWriters = std::exchange(queuedWriterInvocations_, {});",
+                 "std::exchange(queuedWriterInvocations_, {});",
                  "for (std::size_t timerIndex = 0;",
                  "result Lua writers run before custom timer and event evaluation");
   requireOrdered(result,

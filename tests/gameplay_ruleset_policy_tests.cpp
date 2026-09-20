@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 
 namespace {
 void require(bool condition, const char *message) {
@@ -103,6 +104,148 @@ void testBeatorajaPolicyIsCoherent() {
               std::abs(policy.gauge.effectiveTotal - 200.5) < 0.0001 &&
               policy.canonical,
           "Beatoraja policy cannot contain LR2 judge or gauge semantics");
+}
+
+void testNonpositiveTotalBuildsAndReplays() {
+  for (const double total : {0.0, -1.0}) {
+    auto meta = chartMeta(GameplayRuleset::Beatoraja);
+    meta.Total = total;
+    const auto live = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja, .sourceRank = meta.Rank});
+    require(live.built() && live.policy->canonical &&
+                std::abs(live.policy->gauge.effectiveTotal -
+                         460.9090909090909) < 0.0001,
+            "nonpositive authored TOTAL builds a canonical default gauge");
+    StartOptions options;
+    options.ruleset = GameplayRuleset::Beatoraja;
+    const auto captured = captureScoreProvenanceAtPlayStart(
+        options, meta, *live.policy);
+    require(captured.stages.front().authoredGaugeTotal == total,
+            "default gauge resolution preserves authored TOTAL provenance");
+    const auto replay = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja,
+               .sourceRank = meta.Rank,
+               .replaySnapshot = captured.stages.front()});
+    require(replay.built() && replay.policy->canonical &&
+                replay.policy->gauge == live.policy->gauge,
+            "default TOTAL is reproducible from the captured replay policy");
+  }
+
+  std::atomic_bool cancelled{false};
+  const std::string source = "#BPM 120\n#TOTAL 0\n#00111:01\n";
+  bms_parser::Parser parser;
+  bms_parser::Chart *parsed = nullptr;
+  parser.Parse(std::vector<unsigned char>(source.begin(), source.end()),
+               &parsed, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(parsed);
+  require(chart && chart->Meta.TotalNotes == 1 && !chart->Meta.HasTotal,
+          "the BMS parser treats TOTAL zero as unspecified");
+  const auto parsedPolicy = gameplay::buildGameplayRulesetPolicy(
+      chart->Meta, {.ruleset = GameplayRuleset::Beatoraja,
+                    .sourceRank = chart->Meta.Rank});
+  require(parsedPolicy.built() &&
+              parsedPolicy.policy->gauge.effectiveTotal == 260.0,
+          "a parsed TOTAL zero chart can start with the default gauge");
+
+  for (const double total : {std::numeric_limits<double>::infinity(),
+                             -std::numeric_limits<double>::infinity(),
+                             std::numeric_limits<double>::quiet_NaN()}) {
+    auto meta = chartMeta(GameplayRuleset::Beatoraja);
+    meta.Total = total;
+    const auto outcome = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja});
+    require(outcome.status == gameplay::GameplayPolicyBuildStatus::InvalidChart,
+            "nonfinite TOTAL remains an invalid chart policy");
+  }
+}
+
+void testLr2FractionalTotalStartsAndPersists() {
+  for (const std::string total : {"0.001", "0.5", "0.999"}) {
+    const std::string source = "#BPM 120\n#TOTAL " + total + "\n#00111:01\n";
+    bms_parser::Parser parser;
+    std::atomic_bool cancelled{false};
+    bms_parser::Chart *parsed = nullptr;
+    parser.Parse(std::vector<unsigned char>(source.begin(), source.end()),
+                 &parsed, false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> chart(parsed);
+    require(chart && chart->Meta.HasTotal && chart->Meta.Total > 0.0 &&
+                chart->Meta.Total < 1.0,
+            "BMS parsing preserves a positive fractional TOTAL");
+    StartOptions options;
+    options.ruleset = GameplayRuleset::LR2;
+    const auto live = buildGameplayRulesetPolicyAtPlayStart(
+        options, *chart, AppSettings::NotePriorityMode::Lowest);
+    require(live.built() && live.policy->canonical &&
+                live.policy->gauge.effectiveTotal == 0.0,
+            "LR2 starts with a fractional TOTAL rounded down to zero");
+    require(live.policy->gauge.delta(GaugeType::Normal, PGreat, 20.0F) == 0.0F &&
+                live.policy->gauge.delta(GaugeType::Normal, Poor, 20.0F) < 0.0F,
+            "zero LR2 TOTAL disables groove recovery but retains damage");
+    const auto captured = captureScoreProvenanceAtPlayStart(
+        options, chart->Meta, *live.policy);
+    std::string error;
+    const auto serialized = serializeValidatedScoreProvenance(captured, error);
+    require(serialized.has_value() && error.empty(),
+            "zero effective TOTAL can be saved with score and replay provenance");
+    const auto restored = deserializeScoreProvenance(*serialized, error);
+    require(restored.has_value() && error.empty() && *restored == captured,
+            "zero effective TOTAL round-trips without losing authored TOTAL");
+    auto replayData = std::make_shared<ReplayData>();
+    replayData->chartMeta = chart->Meta;
+    replayData->provenance = *restored;
+    StartOptions replayOptions{.replayData = replayData};
+    applyReplayProvenanceToStartOptions(replayOptions, *replayData);
+    const auto replay = buildGameplayRulesetPolicyAtPlayStart(
+        replayOptions, *chart, AppSettings::NotePriorityMode::Lowest);
+    require(replay.built() && replay.policy->canonical &&
+                replay.policy->gauge == live.policy->gauge,
+            "saved zero TOTAL replay uses the original LR2 gauge policy");
+
+    auto invalid = restored->stages.front();
+    invalid.effectiveGaugeTotal = -1.0;
+    const auto rejected = gameplay::buildGameplayRulesetPolicy(
+        chart->Meta, {.ruleset = GameplayRuleset::LR2,
+                      .sourceRank = chart->Meta.Rank,
+                      .replaySnapshot = invalid});
+    require(rejected.status == gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+            "negative effective TOTAL is still rejected in replay policies");
+  }
+}
+
+void testBeatorajaRejectsZeroReplayTotal() {
+  auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  meta.MD5 = std::string(32, 'b');
+  meta.SHA256 = std::string(64, 'a');
+  const auto live = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::Beatoraja,
+             .sourceRank = meta.Rank});
+  require(live.built() && live.policy->gauge.effectiveTotal == 200.5,
+          "Beatoraja has positive canonical gauge recovery");
+  StartOptions options;
+  options.ruleset = GameplayRuleset::Beatoraja;
+  auto replay = std::make_shared<ReplayData>();
+  replay->chartMeta = meta;
+  replay->provenance = captureScoreProvenanceAtPlayStart(
+      options, meta, *live.policy);
+  replay->provenance.stages.front().effectiveGaugeTotal = 0.0;
+  const auto rejected = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::Beatoraja,
+             .sourceRank = meta.Rank,
+             .replaySnapshot = replay->provenance.stages.front()});
+  require(rejected.status ==
+              gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot &&
+              !rejected.policy.has_value(),
+          "Beatoraja rejects a zero TOTAL snapshot instead of disabling recovery");
+
+  StartOptions replayOptions{.replayData = replay};
+  applyReplayProvenanceToStartOptions(replayOptions, *replay);
+  require(!replayOptions.replayRulesetOverride.has_value(),
+          "Beatoraja replay ingestion rejects zero TOTAL with otherwise complete proof");
+  const auto start = buildGameplayRulesetPolicyAtPlayStart(
+      replayOptions, meta, AppSettings::NotePriorityMode::Lowest);
+  require(start.status ==
+              gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+          "Beatoraja cannot start a replay with rejected zero TOTAL proof");
 }
 
 void testInvalidInputsDoNotFallBack() {
@@ -283,6 +426,9 @@ void testLegacyReplayUsesBeatorajaFallback() {
 } // namespace
 
 int main() {
+  testBeatorajaRejectsZeroReplayTotal();
+  testLr2FractionalTotalStartsAndPersists();
+  testNonpositiveTotalBuildsAndReplays();
   testLr2PolicyIsCoherent();
   testBeatorajaPolicyIsCoherent();
   testInvalidInputsDoNotFallBack();

@@ -8,7 +8,7 @@
 
 AudioCallbackState::AudioCallbackState()
     : playingSounds(std::make_unique<PlayingSound[]>(kMaxActiveSounds)),
-      scheduledSounds(std::make_unique<ScheduledSound[]>(kMaxScheduledSounds)),
+      scheduledSounds(std::make_unique<ScheduledSound[]>(kInitialScheduledSoundCapacity)),
       commandQueue(
           std::make_unique<AudioCommand[]>(kCombinedAudioCommandQueueSize)),
       realtimeCommandQueue(
@@ -536,10 +536,34 @@ static bool AppendRealtimeActiveSound(AudioCallbackState &state,
   return AppendActiveSound(state, soundData, bus, 0, startFrame);
 }
 
+bool PrepareScheduledSoundCapacity(AudioCallbackState &state,
+                                   size_t requiredCapacity) noexcept {
+  if (requiredCapacity <= state.scheduledSoundCapacity) return true;
+  // The live non-system count is uint32_t; retain its representation bound.
+  constexpr size_t maximumCapacity = std::min<size_t>(
+      std::numeric_limits<std::uint32_t>::max(),
+      std::numeric_limits<size_t>::max() / sizeof(ScheduledSound));
+  if (requiredCapacity > maximumCapacity) return false;
+  const size_t grownCapacity = state.scheduledSoundCapacity > maximumCapacity / 2
+                                   ? maximumCapacity
+                                   : state.scheduledSoundCapacity * 2;
+  const size_t capacity = std::max(requiredCapacity, grownCapacity);
+  try {
+    auto replacement = std::make_unique<ScheduledSound[]>(capacity);
+    std::copy_n(state.scheduledSounds.get(), state.scheduledSoundCount,
+                replacement.get());
+    state.scheduledSounds = std::move(replacement);
+    state.scheduledSoundCapacity = capacity;
+    return true;
+  } catch (const std::bad_alloc &) {
+    return false;
+  }
+}
+
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound) {
   if (scheduledSound.soundData == nullptr ||
-      state.scheduledSoundCount >= kMaxScheduledSounds) {
+      state.scheduledSoundCount >= state.scheduledSoundCapacity) {
     return false;
   }
 

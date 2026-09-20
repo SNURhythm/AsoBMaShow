@@ -13,6 +13,8 @@
 #include "../ResultImageExporter.h"
 #include "../ResultContracts.h"
 #include "../ResultPresentationUtils.h"
+#include "../ScoreHistoryTime.h"
+#include "../ResultReplayLanePattern.h"
 #include "../repositories/ScoreRepository.h"
 #include "../path.h"
 #include "../practice/PracticeLaunchRequest.h"
@@ -153,69 +155,6 @@ void projectResultIrRanking(
       break;
     }
   }
-}
-
-std::optional<std::vector<int>> resultReplayLanePattern(
-    const bms_parser::ChartMeta &meta, const std::optional<std::string> &option,
-    const std::optional<long long> &seed, int player) {
-  const auto optionIndex = option
-                               ? replay::projectedBeatorajaReplayOptionIndex(*option)
-                               : std::nullopt;
-  if (!optionIndex || (*optionIndex != 2 && *optionIndex != 3 &&
-                       *optionIndex != 8)) {
-    return std::nullopt;
-  }
-  const auto laneOrder = play_options::laneOrderForPlayOption(
-      meta, option, seed, player);
-  if (!laneOrder) return std::nullopt;
-  const auto destinations = meta.GetTotalLaneIndices();
-  if (destinations.size() != laneOrder->size()) return std::nullopt;
-  std::unordered_map<int, int> sourceByDestination;
-  for (std::size_t index = 0; index < destinations.size(); ++index) {
-    sourceByDestination.emplace(destinations[index], (*laneOrder)[index]);
-  }
-  const int keyCount = meta.KeyMode == 10 ? 5
-                       : meta.KeyMode == 14 ? 7
-                                            : meta.KeyMode;
-  const auto keys = meta.GetKeyLaneIndices();
-  const auto scratches = meta.GetScratchLaneIndices();
-  const std::size_t keyOffset = player == 0 ? 0 : static_cast<std::size_t>(keyCount);
-  if (keyCount <= 0 ||
-      keyOffset + static_cast<std::size_t>(keyCount) > keys.size()) {
-    return std::nullopt;
-  }
-  const int playerOffset = player == 1 ? keyCount : 0;
-  std::vector<int> sourceLanes;
-  sourceLanes.reserve(static_cast<std::size_t>(keyCount +
-      (static_cast<std::size_t>(player) < scratches.size() ? 1 : 0)));
-  for (int key = 0; key < keyCount; ++key) {
-    sourceLanes.push_back(keys[keyOffset + static_cast<std::size_t>(key)]);
-  }
-  if (static_cast<std::size_t>(player) < scratches.size()) {
-    sourceLanes.push_back(scratches[static_cast<std::size_t>(player)]);
-  }
-  std::vector<int> pattern;
-  pattern.reserve(sourceLanes.size());
-  const auto appendSourceOrdinal = [&](int sourceLane) {
-    const auto source = std::ranges::find(sourceLanes, sourceLane);
-    if (source == sourceLanes.end()) return false;
-    pattern.push_back(static_cast<int>(source - sourceLanes.begin()) +
-                      playerOffset);
-    return true;
-  };
-  for (int key = 0; key < keyCount; ++key) {
-    const auto found = sourceByDestination.find(
-        keys[keyOffset + static_cast<std::size_t>(key)]);
-    if (found == sourceByDestination.end()) return std::nullopt;
-    if (!appendSourceOrdinal(found->second)) return std::nullopt;
-  }
-  if (static_cast<std::size_t>(player) < scratches.size()) {
-    const auto scratch = sourceByDestination.find(
-        scratches[static_cast<std::size_t>(player)]);
-    if (scratch == sourceByDestination.end()) return std::nullopt;
-    if (!appendSourceOrdinal(scratch->second)) return std::nullopt;
-  }
-  return pattern;
 }
 
 void drawResultGaugeGraphPrimitive(
@@ -1225,33 +1164,57 @@ void ResultScene::loadPreviousBest() {
   local->previousLampBest.reset();
 
   std::optional<std::string> beforeCreatedAt;
-  std::optional<std::string> excludeAttemptId;
+  std::optional<std::string> beforeAttemptId = local->modernReplayAttemptId;
+  if ((local->modernReplayAttemptId || local->replayResult) &&
+      local->currentScoreDateUnixSeconds) {
+    const auto time = scoreHistoryTime(*local->currentScoreDateUnixSeconds * 1000);
+    if (!time.empty()) beforeCreatedAt = time;
+  }
   if (persistenceOptions.chartAttempt != nullptr &&
       persistenceOptions.chartOutcome.has_value() &&
       persistenceOptions.chartOutcome->durable()) {
-    excludeAttemptId = persistenceOptions.chartAttempt->result.attemptId;
-  } else if (local->replayResult && local->retryData.has_value() &&
-             !local->retryData->autoPlay &&
-             !local->retryData->createdAt.empty()) {
-    beforeCreatedAt = local->retryData->createdAt;
+    beforeAttemptId = persistenceOptions.chartAttempt->result.attemptId;
+    const auto time = scoreHistoryTime(
+        persistenceOptions.chartAttempt->result.playedAtUnixMillis);
+    if (!time.empty()) beforeCreatedAt = time;
+  } else if (local->replayResult && local->retryData.has_value()) {
+    beforeAttemptId = local->retryData->resultAttemptId;
+    if (!local->retryData->createdAt.empty()) {
+      beforeCreatedAt = local->retryData->createdAt;
+    }
+    // An undated replay cannot establish a previous-record boundary.
+    if (!beforeAttemptId && !beforeCreatedAt) return;
+  }
+  if (const auto &session = local->courseOptions.session;
+      session != nullptr && !session->modernCourseAttemptId.empty() &&
+      (session->modernCourseResultBrowsing ||
+       session->modernCoursePlayedAtUnixMillis > 0)) {
+    beforeAttemptId = session->modernCourseAttemptId;
+    const auto time = scoreHistoryTime(session->modernCoursePlayedAtUnixMillis);
+    if (!time.empty()) beforeCreatedAt = time;
   }
 
   const auto best = isCourseFinalResult()
                         ? context.scoreRepository.LoadBestCourseScore(
-                              *local->courseOptions.session)
+                              *local->courseOptions.session, beforeCreatedAt,
+                              beforeAttemptId)
                         : context.scoreRepository.LoadBestScore(
-                              local->meta, beforeCreatedAt, excludeAttemptId);
+                              local->meta, beforeCreatedAt, std::nullopt, 0,
+                              beforeAttemptId);
   if (best.has_value()) {
     local->previousBest =
         result_presentation::previousBestDataFromSnapshot(*best);
   }
-  if (!isCourseFinalResult()) {
-    const auto bestLamp = context.scoreRepository.LoadBestClearScore(
-        local->meta, beforeCreatedAt, excludeAttemptId);
-    if (bestLamp.has_value()) {
-      local->previousLampBest =
-          result_presentation::previousBestDataFromSnapshot(*bestLamp);
-    }
+  const auto bestLamp = isCourseFinalResult()
+                           ? context.scoreRepository.LoadBestCourseClearScore(
+                                 *local->courseOptions.session, beforeCreatedAt,
+                                 beforeAttemptId)
+                           : context.scoreRepository.LoadBestClearScore(
+                                 local->meta, beforeCreatedAt, std::nullopt, 0,
+                                 beforeAttemptId);
+  if (bestLamp.has_value()) {
+    local->previousLampBest =
+        result_presentation::previousBestDataFromSnapshot(*bestLamp);
   }
 }
 
@@ -2948,6 +2911,27 @@ void ResultScene::exportPhoto() {
   resultPhotoExportInProgress = true;
   setResultPhotoExportPresentation(ResultPhotoExportPresentation::Saving);
   ResultImageExportResult result;
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (resultSkinSession) {
+    auto skinData = makeResultSkinData();
+    skinData.showControls = false;
+    const long long elapsedMillis =
+        std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+    result = ResultImageExporter::ExportSkin(
+        context, local != nullptr ? local->meta.Title : remote->presentation.title,
+        [this, &skinData, elapsedMillis](RenderContext &renderContext) {
+          if (resultSkinSession->requiresRuntimeStringRefresh(skinData) &&
+              !resultSkinSession->refreshRuntimeStrings(skinData)) {
+            appendResultSkinRenderDiagnostics();
+            return false;
+          }
+          const bool rendered = resultSkinSession->renderForExport(
+              renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
+          appendResultSkinRenderDiagnostics();
+          return rendered;
+        });
+  } else
+#endif
   if (remote != nullptr) {
     result = ResultImageExporter::Export(context, remote->presentation);
   } else {
@@ -3695,6 +3679,10 @@ void ResultScene::startCourseReplay() {
   replaySession->assistOption = replayData->assistOption;
   replaySession->autoKeySound = false;
   replaySession->courseReplayPlayback = true;
+  replaySession->modernCourseAttemptId =
+      local->courseOptions.session->modernCourseAttemptId;
+  replaySession->modernCoursePlayedAtUnixMillis =
+      local->courseOptions.session->modernCoursePlayedAtUnixMillis;
   replaySession->courseReplayData = std::move(replayData);
   replaySession->replayTouchVisualizationEnabled =
       local->courseOptions.session->replayTouchVisualizationEnabled;
@@ -4209,8 +4197,7 @@ void ResultScene::renderScene() {
       }
     }
     const bool rendered = resultSkinSession->render(
-        renderContext, skinData,
-        std::max<std::uint64_t>(1, context.currentFrame), elapsedMillis);
+        renderContext, skinData, ++resultSkinFrameSerial, elapsedMillis);
     appendResultSkinRenderDiagnostics();
     if (!rendered) {
       handleResultSkinRenderFailure();

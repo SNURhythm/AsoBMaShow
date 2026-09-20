@@ -52,8 +52,14 @@ dependencies remain alive.
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;
 usage measurement remains best-effort and does not block writes or cleanup.
-Full extraction shares byte, entry, and free-space budgets across archive
-writers. Output streams remain owned until queued writes finish; the pipeline
+Bulk library extraction shares byte, entry, and free-space budgets across archive
+writers. Extracting one selected archive has no fixed expanded-byte or entry-count
+quota; free-space checks, path validation, cancellation, and output buffering remain.
+With libarchive available, fallback extraction (including unsupported direct ZIP
+methods) streams output in chunks instead of rejecting entries above 64 MiB.
+On builds without a chunked fallback backend, the whole-entry fallback retains a
+memory bound for bulk operations and allows oversized entries for a selected
+archive. Output streams remain owned until queued writes finish; the pipeline
 joins before its guard and cancellation dependencies are released. The archive
 workflow retains path reservations, recovery markers, and output publication.
 
@@ -62,6 +68,37 @@ later request starts another build for the same key. Cancelling one waiter does
 not cancel the builder or other waiters. Builder abandonment publishes failure,
 and cache publication precedes successful completion. Checkpoints run outside
 the coordinator mutex; data-cache locks remain outside the coordinator.
+
+## Archive chart read budgets
+
+The scanner's 16 MiB in-flight chart budget is a scheduling target, not a
+maximum chart size or archive size. Concurrent reads explicitly use
+`ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry`: one oversized entry
+can be extracted and parsed while all other entry reservations wait. Empty
+entries also hold a reservation until their callback finishes. The default
+`Strict` policy remains available to callers requiring a hard entry-buffer limit.
+Chart audio loading also opts into the oversized-entry scheduling policy.
+
+| Archive family (including extension aliases) | Chart extraction path |
+| --- | --- |
+| ZIP, CBZ | Direct miniz workers for supported methods; stored entries reserve output bytes, deflated entries reserve output plus compressed scratch. Unsupported methods use the scanner's serial fallback. |
+| Non-solid RAR4, CBR | Independent unarr readers, when that backend is available. Each reserves its output bytes. |
+| RAR5, CBR | Solid archives and batches up to 512 MiB use one SDK handle. Larger non-solid batches use independent SDK readers. Both respect the scanner's oversized-entry policy. |
+| Solid RAR4 or unavailable random-access backend | Serial streaming fallback. |
+| 7z, CB7, ZIPX, LHA/LZH | Serial SDK extraction, with libarchive fallback if unavailable; solid-block dependencies are preserved. |
+| TAR and gzip/bzip2/xz/zstd variants | Serial libarchive fallback. |
+
+Serial chart parsing already admits a single oversized chart. Its queue
+budget and concurrent entry reservations exclude decoder dictionaries,
+parsed metadata, and memory retained by consumers. These are not process-wide
+memory caps. Bulk extraction and explicitly bounded reads retain their separate
+limits.
+
+Regression coverage includes oversized stored/deflated ZIP, RAR4, small and
+solid RAR5, and a compact RAR5 fixture with more than 512 MiB of expanded data
+to exercise parallel SDK extraction. Tests also check cancellation, strict
+rejection, exact-budget stored ZIP reads, 7z/compressed TAR fallback, and an
+end-to-end scanner batch containing a 17 MiB chart.
 
 ## Verification
 

@@ -3,6 +3,7 @@
 #include "replay/CourseReplayConsumer.h"
 #include "replay/ReplayOption.h"
 
+#include "BeatorajaScoreMetrics.h"
 #include "ChartPlaybackDuration.h"
 #include "ArchiveFile.h"
 #include "CourseConstraintUtils.h"
@@ -12,6 +13,7 @@
 #include "RAII.h"
 #include "ReplayResultStateBuilder.h"
 #include "ResultPresentationUtils.h"
+#include "ResultReplayLanePattern.h"
 #include "Utils.h"
 #include "audio/ChartAudioRenderer.h"
 #include "audio/GameplayBgaMissStateTracker.h"
@@ -33,6 +35,11 @@
 #include "scene/play/ReplayVideoGameplayPreflight.h"
 #include "skin/DefaultSkin.h"
 #include "skin/ResultSkinConfiguration.h"
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+#include "skin/GameplaySkinLifecycle.h"
+#include "skin/beatoraja/BgfxSkinTextureDevice.h"
+#include "skin/beatoraja/ResultSkinSession.h"
+#endif
 #include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "skin/beatoraja/LuaSkinCurlHttpTransport.h"
 #include "view/ImageView.h"
@@ -150,6 +157,153 @@ replayGameplaySkinSessionServices(ApplicationContext &context,
   (void)stop;
   return {};
 #endif
+}
+
+// Own result data and GPU resources until the reserved export renderer is released.
+class PreparedReplayResultPresentation {
+public:
+  bool prepare(ApplicationContext &context, ResultSkinData data, int skinType,
+               std::stop_token stop, std::string &error,
+               ReplayVideoExportLog *log) {
+    reset();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (!context.gameplaySkinLifecycle || !context.skinStorageRoots ||
+        !context.skinResourcePreparationService ||
+        !context.skinLiveResourceCounters) {
+      if (context.settings.skin.selectedSkinEntries.contains(skinType)) {
+        error = "Required services are unavailable for the selected replay result skin";
+        return false;
+      }
+      return true;
+    }
+    auto acquisition =
+        context.gameplaySkinLifecycle->acquireForSkinType(skinType, false);
+    if (acquisition.disposition == skin::GameplaySkinAcquisitionDisposition::BuiltIn)
+      return true;
+    if (acquisition.disposition != skin::GameplaySkinAcquisitionDisposition::Ready ||
+        !acquisition.request) {
+      error = "Failed to acquire selected replay result skin";
+      if (acquisition.failure)
+        error += ": " + acquisition.failure->diagnostic.message;
+      return false;
+    }
+    const auto profileId =
+        skin::makeSkinProfileId(context.profileManager.activeProfile().id);
+    if (!profileId) {
+      error = "Invalid profile for replay result skin";
+      return false;
+    }
+    data.showControls = false;
+    data.outGraphPlaceholder = nullptr;
+    data_ = std::move(data);
+    auto created = skin::ResultSkinSession::create(
+        std::move(acquisition.request->activation),
+        {.expectedSkinType = skinType,
+         .profileId = *profileId,
+         .storageRoots = *context.skinStorageRoots,
+         .resourcePreparation = *context.skinResourcePreparationService,
+         .initialData = data_,
+         .textureDevice = std::make_shared<skin::BgfxSkinTextureDevice>(),
+         .builtinImageReader = archive_file::readFileBounded,
+         .audioBackend = skin::createLuaSkinNoOutputAudioBackend(
+             context.skinLiveResourceCounters),
+         .liveResourceCounters = context.skinLiveResourceCounters,
+         .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel),
+         .stop = stop});
+    for (const auto &diagnostic : created.diagnostics)
+      replayExportLog(log, "Replay result skin: %s", diagnostic.message.c_str());
+    session_ = std::move(created.session);
+    if (!session_) {
+      error = "Failed to prepare selected replay result skin";
+      if (!created.diagnostics.empty())
+        error += ": " + created.diagnostics.back().message;
+      return false;
+    }
+#else
+    (void)context; (void)data; (void)skinType; (void)stop; (void)error; (void)log;
+#endif
+    return true;
+  }
+
+  bool active() const {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    return session_ != nullptr;
+#else
+    return false;
+#endif
+  }
+
+  bool render(RenderContext &context, long long elapsedMicros,
+              std::string &error, ReplayVideoExportLog *log) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    const bool rendered = session_->renderForVideoExport(
+        context, data_, ++frameSerial_, elapsedMicros / 1000);
+    for (const auto &diagnostic : session_->takeLastDiagnostics())
+      replayExportLog(log, "Replay result skin: %s", diagnostic.message.c_str());
+    if (!rendered) error = "Failed to render selected replay result skin";
+    return rendered;
+#else
+    (void)context; (void)elapsedMicros; (void)error; (void)log;
+    return true;
+#endif
+  }
+
+  void reset() {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    session_.reset();
+    data_ = {};
+    frameSerial_ = 0;
+#endif
+  }
+
+private:
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  ResultSkinData data_;
+  std::unique_ptr<skin::ResultSkinSession> session_;
+  std::uint64_t frameSerial_ = 0;
+#endif
+};
+
+void populateReplayResultSkinData(ResultSkinData &data,
+                                 ApplicationContext &context,
+                                 const ReplayData &replay,
+                                 bms_parser::Chart *chart) {
+  data.playerName = context.profileManager.activeProfile().displayName;
+  data.irOnline = !context.irAccountNameSnapshot().empty();
+  data.autoPlayResult = replay.autoPlay;
+  data.replayKeyMode = replay.chartMeta.KeyMode;
+  data.keyModeOverride = replay.chartMeta.KeyMode;
+  data.replayRandomOption1P = replay::projectedBeatorajaReplayOptionIndex(
+      replay.playOption.value_or("NORMAL"));
+  if (replay.chartMeta.IsDP)
+    data.replayRandomOption2P = replay::projectedBeatorajaReplayOptionIndex(
+        replay.playOption2.value_or("NORMAL"));
+  data.replayDoublePlayOption = replay.provenance.doublePlayFlip ? 1 : 0;
+  data.replayLaneShufflePattern1P = replay.laneShufflePattern1P;
+  data.replayLaneShufflePattern2P = replay.laneShufflePattern2P;
+  if (!data.replayLaneShufflePattern1P)
+    data.replayLaneShufflePattern1P = resultReplayLanePattern(
+        replay.chartMeta, replay.playOption, replay.playOptionSeed, 0);
+  if (!data.replayLaneShufflePattern2P && replay.chartMeta.IsDP)
+    data.replayLaneShufflePattern2P = resultReplayLanePattern(
+        replay.chartMeta, replay.playOption2, replay.playOption2Seed, 1);
+  const auto history = context.scoreRepository.LoadPlayerScoreHistory();
+  data.playerHistory = ResultPlayerHistoryData{
+      .playCount = history.playCount, .clearCount = history.clearCount,
+      .judgementCounts = history.judgementCounts,
+      .playDurationSeconds = history.playDurationSeconds};
+  if (chart != nullptr) {
+    const auto timing = beatorajaResultTimingStatistics(
+        &replay, chart->Meta.TotalNotes, chart);
+    if (timing) {
+      if (timing->hasTimingSamples) {
+        data.timingAverageMillis = timing->averageMillis;
+        data.timingStandardDeviationMillis = timing->standardDeviationMillis;
+      }
+      data.averageJudgeMicros = timing->averageJudgeMicros;
+      data.timingDistribution = timing->distribution;
+    }
+  }
 }
 
 std::optional<PlayfieldPersistedScoreState>
@@ -1252,9 +1406,22 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
     totalNotes += std::max(0, stage.chart->Meta.TotalNotes);
     playLength += std::max(0LL, stage.chart->Meta.PlayLength);
   }
-  return result_presentation::courseResultMeta(
+  auto meta = result_presentation::courseResultMeta(
       replay.courseName, replay.courseGroupName, stages.size(), totalNotes,
       playLength);
+  if (!stages.empty() && stages.back().chart != nullptr) {
+    const auto &lastMeta = stages.back().chart->Meta;
+    meta.Rank = lastMeta.Rank;
+    meta.LnMode = lastMeta.LnMode;
+    meta.BmsPath = lastMeta.BmsPath;
+    meta.Folder = lastMeta.Folder;
+    meta.StageFile = lastMeta.StageFile;
+    meta.BackBmp = lastMeta.BackBmp;
+    meta.Banner = lastMeta.Banner;
+    meta.TotalLongNotes = lastMeta.TotalLongNotes;
+    meta.TotalBackSpinNotes = lastMeta.TotalBackSpinNotes;
+  }
+  return meta;
 }
 
 RhythmState courseResultStateForReplayVideo(
@@ -2626,6 +2793,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
+  PreparedReplayResultPresentation resultPresentation;
+  std::string errorMessage;
   std::unique_ptr<View> resultRoot;
   View *resultGraphPlaceholder = nullptr;
   PracticeAnalyticsView *resultAnalytics = nullptr;
@@ -2634,6 +2803,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
   auto cleanupBgfx = [&]() {
     resultGraphPlaceholder = nullptr;
     resultAnalytics = nullptr;
+    resultPresentation.reset();
     resultRoot.reset();
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
@@ -2782,8 +2952,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       replay_result::BuildResultState(chart, resultReplay);
   rendering::SimpleBatchRenderer resultGraphBatch;
   if (resultFrameCount > 0 && resolvedOptions.includeResultScreen) {
-    resultRoot = std::make_unique<View>(0, 0, rendering::window_width,
-                                        rendering::window_height);
     const std::string difficultyLabel =
         result_presentation::difficultyLabelForChart(context.chartRepository,
                                                       chart.Meta);
@@ -2804,18 +2972,33 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resultSkinData.currentClearLabelOverride = "AUTO PLAY";
     }
     resultSkinData.previousBest = previousBest;
+    resultSkinData.previousLampBest =
+        result_presentation::previousLampBestForReplayChart(
+            context.scoreRepository, chart.Meta, replay);
     resultSkinData.pacemaker =
         result_presentation::pacemakerDataForReplayResult(
             chart, replayResultState, replay, selectedPacemakerTarget,
             previousBest, bestScoreReplay.get());
-    DefaultSkin resultSkin;
-    resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
-    resultAnalytics =
-        addReplayResultAnalytics(*resultRoot, chart, resultReplay);
-    resultRoot->applyYogaLayout();
+    resultSkinData.chartHasDocument = chartMetadataAuthority.chartHasDocument;
+    resultSkinData.stageFileAvailable = chartMetadataAuthority.stageFileAvailable;
+    resultSkinData.backBmpAvailable = chartMetadataAuthority.backBmpAvailable;
+    populateReplayResultSkinData(resultSkinData, context, resultReplay, &chart);
+    if (!resultPresentation.prepare(
+            context, resultSkinData, 7, resolvedOptions.stop, errorMessage, log)) {
+      bgfxCleanup.runNow();
+      return {.success = false, .outputPath = outputPath, .message = errorMessage};
+    }
+    if (!resultPresentation.active()) {
+      resultRoot = std::make_unique<View>(
+          0, 0, rendering::window_width, rendering::window_height);
+      DefaultSkin resultSkin;
+      resultSkin.buildLayout("Result", resultRoot.get(), &resultSkinData);
+      resultAnalytics =
+          addReplayResultAnalytics(*resultRoot, chart, resultReplay);
+      resultRoot->applyYogaLayout();
+    }
   }
   ReplayAsyncFrameEncoder encoder;
-  std::string errorMessage;
   std::filesystem::path videoAudioPath = wavPath;
   std::filesystem::path alignedAudioPath;
   if (totalDurationMicros > 0) {
@@ -3186,6 +3369,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resultAnalytics->setMode(analyticsMode);
       resultAnalyticsMode = analyticsMode;
     }
+    bool resultRendered = true;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::bga_view);
@@ -3198,7 +3382,11 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
               bgaBlurPass->outputTexture(), rendering::final_view,
               static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
           bgfx::touch(rendering::ui_view);
-          if (resultRoot != nullptr) {
+          if (resultPresentation.active()) {
+            RenderContext::UiBatchScope uiBatchScope(renderContext);
+            resultRendered = resultPresentation.render(renderContext,
+                videoTimeMicros - gameplayDurationMicros, errorMessage, log);
+          } else if (resultRoot != nullptr) {
             {
               RenderContext::UiBatchScope uiBatchScope(renderContext);
               resultRoot->render(renderContext);
@@ -3206,7 +3394,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             drawReplayResultGaugeGraph(resultGraphBatch, replayResultState,
                                        resultGraphPlaceholder);
           }
-        })) {
+        }) || !resultRendered) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3354,6 +3542,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   std::vector<bgfx::TextureHandle> readbackTextures(frameBufferCount,
                                                     BGFX_INVALID_HANDLE);
   std::unique_ptr<rendering::BlurPass> bgaBlurPass;
+  PreparedReplayResultPresentation stageResultPresentation;
+  PreparedReplayResultPresentation courseResultPresentation;
+  std::string errorMessage;
   std::unique_ptr<View> stageResultRoot;
   View *stageResultGraphPlaceholder = nullptr;
   PracticeAnalyticsView *stageResultAnalytics = nullptr;
@@ -3366,7 +3557,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     stageResultGraphPlaceholder = nullptr;
     stageResultAnalytics = nullptr;
     courseResultGraphPlaceholder = nullptr;
+    stageResultPresentation.reset();
     stageResultRoot.reset();
+    courseResultPresentation.reset();
     courseResultRoot.reset();
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
@@ -3447,10 +3640,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
   RhythmState courseState = courseResultStateForReplayVideo(replay, stages);
   rendering::SimpleBatchRenderer courseResultGraphBatch;
   if (courseResultFrameCount > 0 && resolvedOptions.includeResultScreen) {
-    courseResultRoot =
-        std::make_unique<View>(0, 0, rendering::window_width,
-                               rendering::window_height);
     ResultSkinData data = {&courseState, &courseMeta, &context};
+    const auto previous = result_presentation::previousBestsForReplayCourse(
+        context.scoreRepository, replay);
+    data.previousBest = previous.score;
+    data.previousLampBest = previous.lamp;
     data.configuration = makeResultSkinConfiguration(settings);
     data.configuration->irAccountName = context.irAccountNameSnapshot();
     if (!stages.empty() && stages.back().chart != nullptr) {
@@ -3476,17 +3670,30 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const int clearRank = replay.clearType;
     data.currentClearLabelOverride = clearTypeRankToLabel(clearRank);
     data.currentClearRankOverride = clearRank;
-    DefaultSkin resultSkin;
-    resultSkin.buildLayout("Result", courseResultRoot.get(), &data);
-    if (auto *analytics = courseResultRoot->findViewByName("timingAnalytics");
-        analytics != nullptr) {
-      analytics->setDisplay(YGDisplayNone);
+    data.courseResult = true;
+    data.courseTitle = courseMeta.Title;
+    for (const auto &stage : stages)
+      data.courseTitles.push_back(stage.chart->Meta.Title);
+    populateReplayResultSkinData(data, context, stages.back().replay, nullptr);
+    if (!courseResultPresentation.prepare(
+            context, data, 15, resolvedOptions.stop, errorMessage, log)) {
+      bgfxCleanup.runNow();
+      return {.success = false, .outputPath = outputPath, .message = errorMessage};
     }
-    courseResultRoot->applyYogaLayout();
+    if (!courseResultPresentation.active()) {
+      courseResultRoot = std::make_unique<View>(
+          0, 0, rendering::window_width, rendering::window_height);
+      DefaultSkin resultSkin;
+      resultSkin.buildLayout("Result", courseResultRoot.get(), &data);
+      if (auto *analytics = courseResultRoot->findViewByName("timingAnalytics");
+          analytics != nullptr) {
+        analytics->setDisplay(YGDisplayNone);
+      }
+      courseResultRoot->applyYogaLayout();
+    }
   }
 
   ReplayAsyncFrameEncoder encoder;
-  std::string errorMessage;
   if (!encoder.start(wavPath, outputPath, width, height, fps, frameBytes,
                      frameBufferCount, log, errorMessage)) {
     bgfxCleanup.runNow();
@@ -3761,9 +3968,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
 
     rendering::SimpleBatchRenderer stageResultGraphBatch;
     if (resultFrameCount > 0) {
-      stageResultRoot =
-          std::make_unique<View>(0, 0, rendering::window_width,
-                                 rendering::window_height);
       ResultSkinData data = {&stage.resultState, &chart.Meta, &context};
       data.configuration = makeResultSkinConfiguration(settings);
       data.configuration->irAccountName = context.irAccountNameSnapshot();
@@ -3781,12 +3985,30 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.currentClearLabelOverride = "NO PLAY";
       data.currentClearRankOverride = kNoClearTypeRank;
       data.previousBest = previousBest;
-      DefaultSkin resultSkin;
-      resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
-      stageResultAnalytics =
-          addReplayResultAnalytics(*stageResultRoot, chart, stageReplay);
-      stageResultAnalyticsMode = PracticeAnalyticsMode::Histogram;
-      stageResultRoot->applyYogaLayout();
+      data.previousLampBest =
+          result_presentation::previousLampBestForReplayChart(
+              context.scoreRepository, chart.Meta, stageReplay);
+      data.chartHasDocument = chartMetadataAuthority.chartHasDocument;
+      data.stageFileAvailable = chartMetadataAuthority.stageFileAvailable;
+      data.backBmpAvailable = chartMetadataAuthority.backBmpAvailable;
+      for (const auto &courseStage : stages)
+        data.courseTitles.push_back(courseStage.chart->Meta.Title);
+      populateReplayResultSkinData(data, context, stageReplay, &chart);
+      if (!stageResultPresentation.prepare(
+              context, data, 7, resolvedOptions.stop, errorMessage, log)) {
+        bgfxCleanup.runNow();
+        return {.success = false, .outputPath = outputPath, .message = errorMessage};
+      }
+      if (!stageResultPresentation.active()) {
+        stageResultRoot = std::make_unique<View>(
+            0, 0, rendering::window_width, rendering::window_height);
+        DefaultSkin resultSkin;
+        resultSkin.buildLayout("Result", stageResultRoot.get(), &data);
+        stageResultAnalytics =
+            addReplayResultAnalytics(*stageResultRoot, chart, stageReplay);
+        stageResultAnalyticsMode = PracticeAnalyticsMode::Histogram;
+        stageResultRoot->applyYogaLayout();
+      }
     }
 
     for (size_t frame = 0; frame < gameplayFrameCount; ++frame) {
@@ -3994,6 +4216,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         stageResultAnalytics->setMode(analyticsMode);
         stageResultAnalyticsMode = analyticsMode;
       }
+      bool resultRendered = true;
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                                [&]() {
                                  bgfx::touch(rendering::clear_view);
@@ -4012,7 +4235,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                          settings.bgaBrightnessPercent) /
                                          100.0f);
                                  bgfx::touch(rendering::ui_view);
-                                 if (stageResultRoot != nullptr) {
+                                 if (stageResultPresentation.active()) {
+                                   RenderContext::UiBatchScope uiBatchScope(renderContext);
+                                   resultRendered = stageResultPresentation.render(renderContext,
+                                       resultOffsetMicros, errorMessage, log);
+                                 } else if (stageResultRoot != nullptr) {
                                    {
                                      RenderContext::UiBatchScope uiBatchScope(
                                          renderContext);
@@ -4023,7 +4250,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        stage.resultState,
                                        stageResultGraphPlaceholder);
                                  }
-                               })) {
+                               }) || !resultRendered) {
         bgfxCleanup.runNow();
         return {.success = false,
                 .outputPath = outputPath,
@@ -4038,6 +4265,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         stage.gameplayDurationMicros + stage.resultDurationMicros;
     stageResultGraphPlaceholder = nullptr;
     stageResultAnalytics = nullptr;
+    stageResultPresentation.reset();
     stageResultRoot.reset();
     if (stageIndex + 1 < stages.size() || courseResultFrameCount == 0) {
       context.jukebox.stop();
@@ -4058,6 +4286,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const long long stageBgaTimeMicros =
         gameplay_timing::gameplayTimeFromRawSongTime(
             stageChartTimeMicros, audioOffsetMicros);
+    bool resultRendered = true;
     if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                              [&]() {
                                bgfx::touch(rendering::clear_view);
@@ -4076,7 +4305,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        settings.bgaBrightnessPercent) /
                                        100.0f);
                                bgfx::touch(rendering::ui_view);
-                               if (courseResultRoot != nullptr) {
+                               if (courseResultPresentation.active()) {
+                                 RenderContext::UiBatchScope uiBatchScope(renderContext);
+                                 resultRendered = courseResultPresentation.render(renderContext,
+                                     resultOffsetMicros, errorMessage, log);
+                               } else if (courseResultRoot != nullptr) {
                                  {
                                    RenderContext::UiBatchScope uiBatchScope(
                                        renderContext);
@@ -4086,7 +4319,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      courseResultGraphBatch, courseState,
                                      courseResultGraphPlaceholder);
                                }
-                             })) {
+                             }) || !resultRendered) {
       bgfxCleanup.runNow();
       return {.success = false,
               .outputPath = outputPath,

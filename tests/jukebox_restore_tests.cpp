@@ -435,6 +435,50 @@ void testArchivedVisualsPreloadInOneArchiveBatch() {
           "timed activation reuses the preloaded archived video");
 }
 
+void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
+                                                     bool singleAsset) {
+  TemporaryArchivedVisualFixture fixture;
+  if (sevenZip) {
+    fixture.archivePath.replace_extension(".7z");
+  }
+  // A large legal RIFF JUNK chunk exercises encoded size without large PCM.
+  const unsigned paddingBytes = (singleAsset ? 65U : 33U) * 1024U * 1024U;
+  auto wave = shortWave();
+  std::string padding(8 + paddingBytes, '\0');
+  padding.replace(0, 4, "JUNK");
+  for (unsigned offset = 0; offset < 4; ++offset) {
+    padding[4 + offset] = static_cast<char>(paddingBytes >> (offset * 8));
+  }
+  wave.insert(36, padding);
+  const auto riffBytes = static_cast<unsigned>(wave.size() - 8);
+  for (unsigned offset = 0; offset < 4; ++offset) {
+    wave[4 + offset] = static_cast<char>(riffBytes >> (offset * 8));
+  }
+  writeChartArchive(fixture.archivePath,
+                    {{"song/large.wav", wave}, {"song/small.wav", shortWave()},
+                     {"song/third.wav", shortWave()}, {"song/fourth.wav", shortWave()}});
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<TestFactory>(std::make_shared<BackendControl>()));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = archive_file::makeVirtualPath(fixture.archivePath, "song");
+  chart.Meta.BmsPath = chart.Meta.Folder / "large.bms";
+  chart.ReferencedWavTable = {{1, "large.wav"}};
+  if (!singleAsset) {
+    chart.ReferencedWavTable.emplace(2, "small.wav");
+    chart.ReferencedWavTable.emplace(3, "third.wav");
+    chart.ReferencedWavTable.emplace(4, "fourth.wav");
+  }
+  std::atomic_bool cancelled = false;
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "archived chart with oversized encoded audio loads");
+  for (const auto &[id, path] : chart.ReferencedWavTable) {
+    const auto sound = jukebox.resolveRealtimeKeySound(id);
+    require(sound && sound->valid(),
+            "audio above the scheduling budget decodes to a playable sound");
+  }
+}
+
 void testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(bool sevenZip) {
   TemporaryArchivedVisualFixture fixture;
   if (sevenZip) {
@@ -895,6 +939,11 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    for (const bool sevenZip : {false, true}) {
+      for (const bool singleAsset : {false, true}) {
+        testArchivedChartLoadsAudioAboveSchedulingBudget(sevenZip, singleAsset);
+      }
+    }
     testSchedulerPreparationFailureLeavesPlaybackStoppedAndRetryable();
     testSchedulerStartupFailureDoesNotLeaveAudioPlaying();
     testPausedSchedulerSleepsAndWakesForResumeAndStop();

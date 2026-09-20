@@ -15,6 +15,7 @@ namespace image_decode {
 struct ImageDecodeOptions {
   int maximumDimension = 65535;
   std::size_t maximumEncodedBytes = static_cast<std::size_t>(UINT32_MAX);
+  // Explicit source-image admission bound, checked even when reducing by rows.
   std::size_t maximumDecodedBytes = static_cast<std::size_t>(UINT32_MAX);
   int targetWidth = 0;
   int targetHeight = 0;
@@ -22,7 +23,11 @@ struct ImageDecodeOptions {
 };
 
 // This decoder has no cache, thumbnail, archive, or UI side effects.  Package
-// callers supply bytes obtained through their own containment boundary.
+// callers supply bytes obtained through their own containment boundary. Raster
+// formats reduce rows without a source-sized RGBA buffer. JPEG uses reduced IDCT
+// where supported, otherwise component-row conversion; its component/progressive
+// coefficient buffers can still depend on source dimensions. WebP scales from
+// its native decoder frame directly into the requested RGBA image.
 [[nodiscard]] std::optional<DecodedImageData>
 decodeImageMemory(std::span<const std::byte> encoded,
                   const ImageDecodeOptions &options);

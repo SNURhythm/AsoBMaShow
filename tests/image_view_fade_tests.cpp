@@ -1,6 +1,12 @@
 #include "ArchiveFile.h"
+#include <archive.h>
+#include <archive_entry.h>
 #include "rendering/UniformCache.h"
 #include "view/ImageView.h"
+#include "support/AllocationFailure.h"
+
+#define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
+#include "../bgfx/bimg/3rdparty/tinyexr/deps/miniz/miniz.h"
 
 #include <bgfx/bgfx.h>
 
@@ -67,6 +73,50 @@ void writePpm(const std::filesystem::path &path, int width, int height) {
   }
 }
 
+void writeArchivedPng(const std::filesystem::path &path) {
+  constexpr int width = 4096, height = 2048;
+  std::vector<unsigned char> png{137, 80, 78, 71, 13, 10, 26, 10};
+  const auto bigEndian = [](std::vector<unsigned char> &bytes, std::uint32_t value) {
+    for (int shift : {24, 16, 8, 0}) bytes.push_back((value >> shift) & 255);
+  };
+  const auto chunk = [&](const char *type, const std::vector<unsigned char> &data) {
+    bigEndian(png, static_cast<std::uint32_t>(data.size()));
+    const auto start = png.size();
+    png.insert(png.end(), type, type + 4);
+    png.insert(png.end(), data.begin(), data.end());
+    bigEndian(png, static_cast<std::uint32_t>(mz_crc32(0, png.data() + start, data.size() + 4)));
+  };
+  std::vector<unsigned char> header;
+  bigEndian(header, width);
+  bigEndian(header, height);
+  header.insert(header.end(), {8, 0, 0, 0, 0});
+  chunk("IHDR", header);
+  std::vector<unsigned char> rows((width + 1) * height, 0x66);
+  for (int y = 0; y < height; ++y) rows[y * (width + 1)] = 0;
+  mz_ulong size = mz_compressBound(rows.size());
+  std::vector<unsigned char> compressed(size);
+  require(mz_compress(compressed.data(), &size, rows.data(), rows.size()) == MZ_OK,
+          "archived PNG fixture compresses");
+  compressed.resize(size);
+  chunk("IDAT", compressed);
+  chunk("IEND", {});
+  auto *zip = archive_write_new();
+  require(zip && archive_write_set_format_zip(zip) == ARCHIVE_OK &&
+              archive_write_open_filename(zip, path.string().c_str()) == ARCHIVE_OK,
+          "artwork ZIP fixture opens");
+  auto *entry = archive_entry_new();
+  require(entry != nullptr, "artwork ZIP entry allocates");
+  archive_entry_set_pathname(entry, "artwork.png");
+  archive_entry_set_size(entry, png.size());
+  archive_entry_set_filetype(entry, AE_IFREG);
+  archive_entry_set_perm(entry, 0644);
+  require(archive_write_header(zip, entry) == ARCHIVE_OK &&
+              archive_write_data(zip, png.data(), png.size()) == static_cast<la_ssize_t>(png.size()),
+          "artwork ZIP fixture is written");
+  archive_entry_free(entry);
+  archive_write_free(zip);
+}
+
 #ifndef _WIN32
 bool writeAll(int descriptor, const char *data, std::size_t size) {
   while (size > 0) {
@@ -107,6 +157,42 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image fade state");
 
   {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("asobms-archived-artwork-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root);
+    const auto zip = root / "artwork.zip";
+    writeArchivedPng(zip);
+    const auto path = archive_file::makeVirtualPath(zip, "artwork.png");
+    {
+      test_support::AllocationSizeObserver allocations;
+      require(imageResourceAvailable(path), "large archived artwork remains available");
+      require(allocations.largest() <= 2048U * 1024U * 4U,
+              "archived artwork availability retains the 2048-pixel decode target");
+    }
+    {
+      ImageView thumbnail(0, 0, 64, 32);
+      test_support::AllocationSizeObserver allocations;
+      require(thumbnail.setImage(fspath_to_path_t(path)), "archived thumbnail loads");
+      require(thumbnail.imageWidth() == 64 && thumbnail.imageHeight() == 32,
+              "archived output respects the requested thumbnail dimensions");
+      require(allocations.largest() < 1024U * 1024U,
+              "thumbnail decode retains only a bounded intermediate for cache generation");
+    }
+    ImageView artwork(0, 0, 1, 1);
+    bool ready = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!ready && std::chrono::steady_clock::now() < deadline) {
+      ready = artwork.setImageAsyncShared(fspath_to_path_t(path), true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ready && artwork.imageWidth() == 2048 && artwork.imageHeight() == 1024,
+            "archived shared artwork keeps its full requested resolution");
+    ImageView::dropAllCache();
+    std::filesystem::remove_all(root);
+  }
+
+  {
     const auto fixtureRoot = std::filesystem::temp_directory_path() /
         ("asobmashow-shared-artwork-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -114,9 +200,11 @@ int main() {
     const auto source = fixtureRoot / "artwork.pgm";
     {
       std::ofstream output(source, std::ios::binary);
-      output << "P5\n4096 4096\n255\n";
+      // Cross the shared-image dimension bound without making the 1-pixel
+      // thumbnail cache-isolation check resize a full-screen source.
+      output << "P5\n4096 16\n255\n";
       const std::string row(4096, char(0x66));
-      for (int index = 0; index < 4096; ++index) output.write(row.data(), row.size());
+      for (int index = 0; index < 16; ++index) output.write(row.data(), row.size());
     }
     const path_t imagePath = fspath_to_path_t(source);
     ImageView::dropAllCache();
@@ -132,12 +220,12 @@ int main() {
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
     require(ready, "large shared artwork is downsampled, not rejected");
-    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,
+    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 8,
             "shared artwork request bounds the actual decoded dimensions");
     const auto shared = ImageView::findChartImage(imagePath);
-    require(shared && shared->width == 2048 && shared->height == 2048 &&
-                shared->byteSize() == 16U * 1024U * 1024U,
-            "shared chart cache retains 16 MiB rather than 64 MiB");
+    require(shared && shared->width == 2048 && shared->height == 8 &&
+                shared->byteSize() == 64U * 1024U,
+            "shared chart cache retains 64 KiB rather than 256 KiB");
     ImageView thumbnail(0, 0, 1, 1);
     ready = false;
     const auto thumbnailDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -149,13 +237,50 @@ int main() {
     require(thumbnail.imageWidth() == 1 && thumbnail.imageHeight() == 1,
             "shared artwork does not collide with a one-pixel thumbnail cache key");
     artwork.onLayout();
-    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 2048,
+    require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 8,
             "layout does not replace shared artwork with a display-sized thumbnail");
     ImageView reused(0, 0, 1, 1);
-    require(reused.setImageAsyncShared(imagePath, true) && reused.imageWidth() == 2048,
+    require(reused.setImageAsyncShared(imagePath, true) &&
+                reused.imageWidth() == 2048 && reused.imageHeight() == 8,
             "shared artwork reuses its bounded cache entry");
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
+  }
+
+  {
+    const auto source = std::filesystem::temp_directory_path() /
+        ("asobmashow-large-encoded-artwork-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".ppm");
+    writeSinglePixelPpm(source);
+    std::filesystem::resize_file(source, 32U * 1024U * 1024U + 1U);
+    require(imageResourceAvailable(source),
+            "selected chart availability accepts a source larger than the thumbnail limit");
+    const path_t imagePath = fspath_to_path_t(source);
+    ImageView::dropAllCache();
+    ImageView artwork(0, 0, 1, 1);
+    bool ready = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!ready && std::chrono::steady_clock::now() < deadline) {
+      ready = artwork.setImageAsyncShared(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ready && artwork.imageWidth() == 1 && artwork.imageHeight() == 1,
+            "selected chart artwork accepts an encoded source larger than 32 MiB");
+    ImageView thumbnail(0, 0, 1, 1);
+    thumbnail.setImageAsync(imagePath, true);
+    const auto thumbnailDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (ImageView::pendingAsyncDecodeCountForTesting(imagePath) != 0 &&
+           std::chrono::steady_clock::now() < thumbnailDeadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(ImageView::pendingAsyncDecodeCountForTesting(imagePath) == 0,
+            "library thumbnail request completes within the test deadline");
+    require(!thumbnail.setImageAsync(imagePath, true),
+            "library thumbnails retain their encoded source limit after shared chart loading");
+    require(thumbnail.imageWidth() == 0,
+            "a library thumbnail does not inherit an unrestricted chart decode");
+    ImageView::dropAllCache();
+    std::filesystem::remove(source);
   }
 
   {

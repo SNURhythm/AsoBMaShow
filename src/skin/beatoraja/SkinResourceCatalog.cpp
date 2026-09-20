@@ -53,6 +53,7 @@ constexpr SkinResourceId kBuiltinBackResource =
     std::numeric_limits<SkinResourceId>::max() - 4U;
 constexpr SkinResourceId kBuiltinBannerResource =
     std::numeric_limits<SkinResourceId>::max() - 5U;
+constexpr int kBuiltinChartImageMaxDimension = 2048;
 constexpr std::string_view kPracticeSystemFontVirtualPath =
     "@asobmashow/practice-system-font";
 constexpr std::string_view kPracticeSystemFontPath =
@@ -1550,13 +1551,9 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "texture device reports an invalid maximum dimension")); return result;
   }
   const int deviceMaximumDimension = reportedDeviceMaximumDimension;
-  if (plan.decodedBytes > skinResourceLimit(
-                              safetyPolicy,
-                              SkinResourcePolicy::maximumSessionDecodedBytes)) {
-    result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan exceeds fixed limits"));
-    return result;
-  }
   std::set<SkinResourceId> imageIds;
+  std::size_t chartImageCount = 0;
+  std::size_t chartDecodedBytes = 0;
   std::set<SkinTextAtlasId> atlasIds;
   std::set<SkinTextAtlasKey> atlasKeys;
   SkinResourceSessionAccounting session(safetyPolicy);
@@ -1568,8 +1565,27 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
            resolved.gridColumns == region.gridColumns && resolved.gridRows == region.gridRows;
   };
   for (const auto &image : plan.images) {
+    const bool chartBuiltin = std::ranges::any_of(
+        plan.builtinImageResources, [&](const auto &mapping) {
+          return mapping.first >= 100 && mapping.first <= 102 &&
+                 mapping.second == builtinImageResourceId(mapping.first) &&
+                 image.id == mapping.second;
+        });
+    if (chartBuiltin) {
+      // Only the three canonical, bounded chart backgrounds are independent
+      // of the authored skin's resource budget.
+      if (!image.aliases.empty() || !image.aliasRegions.empty() ||
+          !image.aliasRegionMappings.empty() || image.regions.size() != 1 ||
+          image.pixels.width > kBuiltinChartImageMaxDimension ||
+          image.pixels.height > kBuiltinChartImageMaxDimension) {
+        result.diagnostics.push_back(diagnostic(
+            "skin.resource.image_dimensions", "invalid chart built-in image"));
+        return result;
+      }
+      ++chartImageCount;
+    }
     if (image.id == 0 || !imageIds.insert(image.id).second ||
-        imageIds.size() > skinResourceLimit(
+        imageIds.size() - chartImageCount > skinResourceLimit(
                               safetyPolicy,
                               SkinResourcePolicy::maximumResources) ||
         image.aliases.size() >= skinResourceLimit(
@@ -1579,7 +1595,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
     }
     for (SkinResourceId alias : image.aliases) {
       if (alias == 0 || !imageIds.insert(alias).second ||
-          imageIds.size() > skinResourceLimit(
+          imageIds.size() - chartImageCount > skinResourceLimit(
                                 safetyPolicy,
                                 SkinResourcePolicy::maximumResources)) {
         result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has duplicate image aliases")); return result;
@@ -1593,6 +1609,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
                                       SkinResourcePolicy::maximumSessionDecodedBytes)) {
       result.diagnostics.push_back(diagnostic("skin.resource.image_dimensions", "resource upload plan has invalid image dimensions or bytes")); return result;
     }
+    if (chartBuiltin) chartDecodedBytes += image.pixels.byteSize();
     if (image.regions.size() > skinResourceLimit(
                                    safetyPolicy,
                                    SkinResourcePolicy::maximumRegions)) { result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource region count exceeds fixed limit")); return result; }
@@ -1660,7 +1677,7 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
         result.diagnostics.push_back(diagnostic("skin.resource.texture_create_failed", "resource upload plan has extra alias region identities")); return result;
       }
     }
-    if (!session.addImage(/*physicalResources=*/1,
+    if (!chartBuiltin && !session.addImage(/*physicalResources=*/1,
                           /*logicalResources=*/1 + image.aliases.size(),
                           /*encodedBytes=*/0, image.pixels.byteSize(),
                           imageRegions)) {
@@ -1927,7 +1944,9 @@ SkinResourceUploadResult SkinResourceCatalog::upload(
         "resource upload plan has invalid Pomyu motion cycles"));
     return result;
   }
-  if (session.decodedBytes() != plan.decodedBytes) {
+  if (chartDecodedBytes != plan.chartDecodedBytes ||
+      chartDecodedBytes > plan.decodedBytes ||
+      session.decodedBytes() != plan.decodedBytes - chartDecodedBytes) {
     result.diagnostics.push_back(diagnostic("skin.resource.session_limit", "resource upload plan decoded byte total is inconsistent")); return result;
   }
   try {
@@ -3103,7 +3122,6 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     // Builtin chart images are display/skin backgrounds; a bounded decode
     // dimension keeps the load fast and matches the shared chart-image cache
     // so the skin reuses pixels already decoded for the decide overlay.
-    constexpr int kBuiltinChartImageMaxDimension = 2048;
     struct WantedBuiltin {
       int reference = 0;
       std::filesystem::path virtualPath;
@@ -3119,8 +3137,17 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       wanted.push_back({reference, path->second});
     }
     if (wanted.empty()) return true;
-    const std::size_t maximumEncodedBytes = skinResourceLimit(
-        input.safetyPolicy, SkinResourcePolicy::maximumEncodedBytes);
+    // Chart inputs are selected by the player, outside the authored skin
+    // allocation budget. Preserve the decoder's representational limits.
+    constexpr std::size_t maximumEncodedBytes =
+        static_cast<std::size_t>(std::numeric_limits<int>::max());
+    const image_decode::ImageDecodeOptions decodeOptions{
+        .maximumDimension = std::numeric_limits<std::uint16_t>::max(),
+        .maximumEncodedBytes = maximumEncodedBytes,
+        .maximumDecodedBytes = UINT32_MAX,
+        .targetWidth = kBuiltinChartImageMaxDimension,
+        .targetHeight = kBuiltinChartImageMaxDimension,
+        .stop = input.stop};
     const auto readOne = [&](const std::filesystem::path &virtualPath,
                              std::vector<unsigned char> &encoded) {
       std::string readError;
@@ -3157,15 +3184,6 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       return false;
     }
     for (const auto &[reference, encoded] : encodedByReference) {
-      SkinResourceSessionAccounting candidateSession = session;
-      if (!candidateSession.addImage(
-              /*physicalResources=*/1, /*logicalResources=*/1,
-              encoded.size(), /*decodedBytes=*/0, /*regions=*/0)) {
-        result.diagnostics.push_back(warning(
-            "skin.resource.builtin_image_unavailable",
-            "chart built-in image exceeds the session resource policy"));
-        continue;
-      }
       file_checksum::Sha256 digest;
       digest.update(std::span<const std::byte>(
           reinterpret_cast<const std::byte *>(encoded.data()),
@@ -3176,13 +3194,11 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       std::optional<image_decode::DecodedImageData> decoded;
       // Reuse an image already decoded for selector/decide display (the same
       // archive entry, keyed by content identity) instead of re-decoding it.
-      bool fromSharedCache = false;
       if (input.builtinImageCache && input.builtinImageCacheKey) {
         const std::string sharedKey =
             input.builtinImageCacheKey(
                 virtualPathByReference.at(reference));
         decoded = input.builtinImageCache->get(sharedKey);
-        fromSharedCache = decoded.has_value();
       }
       if (cancellationRequested(input.stop)) {
         result.cancelled = true;
@@ -3199,34 +3215,14 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       if (!decoded) {
         decoded = image_decode::decodeImageMemory(
             std::as_bytes(std::span(encoded)),
-            {.maximumDimension = kBuiltinChartImageMaxDimension,
-             .maximumEncodedBytes = maximumEncodedBytes,
-             .maximumDecodedBytes = skinResourceLimit(
-                 input.safetyPolicy, SkinResourcePolicy::maximumImageBytes),
-             .stop = input.stop});
+            decodeOptions);
         if (cancellationRequested(input.stop)) {
           result.cancelled = true;
           return false;
         }
-        if (decoded) {
-          std::lock_guard lock(serviceMutex_);
-          cache_.put(cacheKey, *decoded);
-          if (input.builtinImageCache && input.builtinImageCacheKey) {
-            input.builtinImageCache->put(
-                input.builtinImageCacheKey(
-                    virtualPathByReference.at(reference)),
-                *decoded);
-          }
-        }
       }
-      if (decoded && !fromSharedCache && input.builtinImageCache &&
-          input.builtinImageCacheKey) {
-        // A shared-cache miss that hit the service cache: still seed the
-        // shared cache so the display path can reuse it.
-        input.builtinImageCache->put(
-            input.builtinImageCacheKey(
-                virtualPathByReference.at(reference)),
-            *decoded);
+      if (decoded) {
+        decoded = image_decode::resizeDecodedImage(*decoded, decodeOptions);
       }
       if (!decoded ||
           !skinResourceDimensionsAllowed(decoded->width, decoded->height,
@@ -3234,16 +3230,18 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
                                          input.safetyPolicy)) {
         continue;
       }
+      {
+        std::lock_guard lock(serviceMutex_);
+        cache_.put(cacheKey, *decoded);
+      }
+      if (input.builtinImageCache && input.builtinImageCacheKey) {
+        input.builtinImageCache->put(
+            input.builtinImageCacheKey(
+                virtualPathByReference.at(reference)),
+            *decoded);
+      }
       const SkinSourceRect region{
           .x = 0, .y = 0, .w = decoded->width, .h = decoded->height};
-      if (!candidateSession.addImage(
-              /*physicalResources=*/0, /*logicalResources=*/0,
-              /*encodedBytes=*/0, decoded->byteSize(), /*regions=*/1)) {
-        result.diagnostics.push_back(warning(
-            "skin.resource.builtin_image_unavailable",
-            "chart built-in image exceeds the session resource policy"));
-        continue;
-      }
       const SkinResourceId resource = resourceForBuiltin(reference);
       plan.images.push_back(
           {.id = resource,
@@ -3251,8 +3249,8 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
            .regions = {region},
            .regionMappings = {{.authored = region, .resolved = region}}});
       plan.builtinImageResources.emplace(reference, resource);
-      session = candidateSession;
-      plan.decodedBytes = session.decodedBytes();
+      plan.chartDecodedBytes += plan.images.back().pixels.byteSize();
+      plan.decodedBytes = session.decodedBytes() + plan.chartDecodedBytes;
     }
     return true;
   };
@@ -3624,9 +3622,9 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     }
     ++atlasId;
   }
-  // Chart-owned images are optional SkinSourceReference inputs. Prepare them
-  // only from the budget left after package-critical images/fonts so an
-  // oversized stage file cannot starve the authored skin resources.
+  // Chart-owned backgrounds retain only their downsampled output and have
+  // independent accounting, so neither chart nor skin inputs consume the
+  // other's authored-resource budget.
   if (!prepareChartBuiltinImages()) return result;
   if (std::ranges::any_of(result.diagnostics, [](const SkinDiagnostic &d) { return d.severity == DiagnosticSeverity::Error; })) return result;
   {

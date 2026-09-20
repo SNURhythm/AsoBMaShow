@@ -49,10 +49,16 @@ struct AllocationGate {
 
 thread_local AllocationGate *allocationGate = nullptr;
 thread_local bool decodeMemoryFixture = false;
+thread_local std::size_t failAllocationBytes = 0;
 
 }
 
 void *operator new(std::size_t bytes) {
+  if (resampling_test::failAllocationBytes != 0 &&
+      bytes == resampling_test::failAllocationBytes) {
+    resampling_test::failAllocationBytes = 0;
+    throw std::bad_alloc();
+  }
   if (auto *gate = resampling_test::allocationGate;
       gate != nullptr && bytes == gate->bytes) {
     resampling_test::allocationGate = nullptr;
@@ -2783,8 +2789,68 @@ void testLuaSkinUnknownBackendTeardownTransfersOwnerWithoutSpinning() {
 
 } // namespace
 
+void testLongChartScheduleStartsAndAcceptsRealtimeKeysounds() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t path = PATH("long-chart-schedule");
+  require(wrapper.loadGeneratedSound(path, {6000, 6000, 6000, 6000}, 1, 44100),
+          "long chart fixture retains one reusable sound");
+  require(wrapper.stopSounds().success, "chart staging drains the backend");
+  constexpr std::size_t events = 65'540;
+  constexpr long long intervalMicros = 60'000;
+  auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
+  for (std::size_t index = 0; index < events; ++index) {
+    if (index == 65'536) {
+      const auto *storage = state.scheduledSounds.get();
+      resampling_test::failAllocationBytes = 131'072 * sizeof(ScheduledSound);
+      const bool staged = wrapper.stageScheduledSound(
+          path, audio::Bus::Bgm, index * intervalMicros);
+      const bool injected = resampling_test::failAllocationBytes == 0;
+      resampling_test::failAllocationBytes = 0;
+      require(injected && !staged && state.scheduledSoundCount == index &&
+                  state.scheduledSounds.get() == storage &&
+                  state.scheduledSounds[0].startMicros == 0,
+              "failed schedule growth retains all staged events for retry");
+    }
+    require(wrapper.stageScheduledSound(path, audio::Bus::Bgm,
+                                        index * intervalMicros),
+            "a chart over one hour stages every event beyond 65,536 entries");
+  }
+  require(state.scheduledSoundCount == events &&
+              state.scheduledSounds[events - 1].startMicros > 3'600'000'000LL,
+          "complete long chart timing survives staging growth");
+  require(wrapper.startDevice().success, "the complete long chart starts audio");
+  wrapper.seekClock(0);
+  stopwatch.start();
+  std::array<std::int16_t, 8> output{};
+  control->renderCallback(output.data(), 4, 2, control->renderUserData);
+  require(state.scheduledSoundCount == events - 1 && output.front() != 0,
+          "the first scheduled sound plays without losing later events");
+  const auto sound = wrapper.resolveRealtimeSound(path);
+  const auto reservation = wrapper.tryReserveRealtimeSoundCommand();
+  require(sound && reservation && wrapper.commitRealtimeKeysound(*reservation, *sound),
+          "the first touch can reserve and commit its keysound after startup");
+  control->renderCallback(output.data(), 4, 2, control->renderUserData);
+  require(output.front() != 0, "the first realtime keysound reaches audio output");
+  // Jukebox seeking drains and restages only the remaining schedule.
+  const long long tailMicros = state.scheduledSounds[state.scheduledSoundCount - 1].startMicros;
+  require(wrapper.stopSounds().success &&
+              wrapper.stageScheduledSound(path, audio::Bus::Bgm, tailMicros) &&
+              wrapper.startDevice().success,
+          "seeking restages the retained tail in the grown schedule storage");
+  wrapper.seekClock(tailMicros);
+  stopwatch.start();
+  output.fill(0);
+  control->renderCallback(output.data(), 4, 2, control->renderUserData);
+  require(state.scheduledSoundCount == 0 && output.front() != 0,
+          "the tail after one hour remains playable");
+}
+
 int main() {
   try {
+    testLongChartScheduleStartsAndAcceptsRealtimeKeysounds();
     testResamplingDoesNotBlockPublishedSoundsOrOtherLoads();
     testResamplingRetriesAcrossOutputRateChanges();
     testUnloadInvalidatesPendingResamplingOnlyAfterConfirmedDrain();

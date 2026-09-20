@@ -63,6 +63,7 @@ public:
   bool setImage(const path_t &path);
   bool setImageAsync(const path_t &path, bool prioritize = false);
   // Like setImageAsync but fits the source within 2048 x 2048 pixels and also
+  // accepts chart sources beyond the library thumbnail byte limits, and
   // seeds the shared chart-image cache, so the gameplay skin's builtin
   // stage/back/banner loads reuse the same decoded pixels.
   bool setImageAsyncShared(const path_t &path, bool prioritize = false);

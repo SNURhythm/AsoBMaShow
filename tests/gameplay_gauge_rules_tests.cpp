@@ -90,6 +90,36 @@ void testLr2EffectiveTotalRules() {
           "Beatoraja keeps its existing default TOTAL formula");
 }
 
+void testBeatorajaDefaultTotalParity() {
+  // BMSPlayerRule.calculateDefaultTotal in beatoraja. Use fixed reference
+  // values so this does not merely compare the resolver with its own helper.
+  struct TotalCase { int notes; double standard; double keyboard; };
+  for (const auto sample : {TotalCase{1, 260.0, 300.0},
+                            TotalCase{500, 330.6521739130435, 396.7826086956522},
+                            TotalCase{1000, 460.9090909090909, 507.0}}) {
+    for (const int keyMode : {5, 7, 9, 10, 14, 24, 48}) {
+      const double expected = keyMode == 24 || keyMode == 48
+                                  ? sample.keyboard : sample.standard;
+      for (const double total : {0.0, -1.0, -100.0}) {
+        const auto rules = compileGameplayGaugeRules(
+            GameplayRuleset::Beatoraja, meta(sample.notes, total, true, keyMode),
+            GaugeProfile::Standard);
+        require(close(rules.effectiveTotal, expected),
+                "Beatoraja replaces nonpositive TOTAL with its mode default");
+        require(close(rules.delta(GaugeType::Normal, PGreat, 20.0F),
+                      expected / sample.notes),
+                "Beatoraja normal recovery uses default TOTAL per note");
+      }
+      require(close(resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja,
+                        meta(sample.notes, 100.0, false, keyMode)), expected),
+              "missing TOTAL uses the same Beatoraja mode default");
+      require(close(resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja,
+                        meta(sample.notes, 0.5, true, keyMode)), 0.5),
+              "positive fractional BMS TOTAL is absolute, not a percentage");
+    }
+  }
+}
+
 void testLr2StandardGaugeDefinitionsAndDeltas() {
   const auto rules = compileGameplayGaugeRules(
       GameplayRuleset::LR2, meta(200, 200.0), GaugeProfile::Standard);
@@ -347,6 +377,7 @@ void testPracticeLr2CategoryUsesPinnedGradeGaugeTable() {
 } // namespace
 
 int main() {
+  testBeatorajaDefaultTotalParity();
   testLr2EffectiveTotalRules();
   testLr2StandardGaugeDefinitionsAndDeltas();
   testLr2ProfileIdentityDoesNotLeakBeatorajaModeProfiles();

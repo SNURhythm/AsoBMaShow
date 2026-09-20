@@ -36,8 +36,10 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -1544,6 +1546,8 @@ private:
   SevenZipInFileStream *stream_ = nullptr;
 };
 
+// SDK callbacks are noexcept. Translate allocation failures before they can
+// cross that boundary; an extraction worker's catch cannot intercept them.
 class SevenZipMemoryOutStream final : public ISequentialOutStream {
 public:
   SevenZipMemoryOutStream(std::vector<unsigned char> &bytes,
@@ -1578,7 +1582,7 @@ public:
   }
 
   STDMETHOD(Write)(const void *data, UInt32 size,
-                   UInt32 *processedSize) throw() override {
+                   UInt32 *processedSize) throw() override try {
     if (processedSize != nullptr) {
       *processedSize = 0;
     }
@@ -1605,6 +1609,10 @@ public:
       if (processedSize != nullptr) *processedSize = offset;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
 private:
@@ -1721,16 +1729,20 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
-                       Int32 askExtractMode) throw() override {
+                       Int32 askExtractMode) throw() override try {
     if (outStream == nullptr) {
       return E_FAIL;
     }
@@ -1757,17 +1769,25 @@ public:
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override {
+  STDMETHOD(PrepareOperation)(Int32) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override try {
     if (currentTarget_ != nullptr &&
         opRes != NArchive::NExtract::NOperationResult::kOK) {
       failed_ = true;
@@ -1775,6 +1795,10 @@ public:
     }
     currentTarget_ = nullptr;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   bool failed() const { return failed_; }
@@ -1828,16 +1852,20 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
-                       Int32 askExtractMode) throw() override {
+                       Int32 askExtractMode) throw() override try {
     if (outStream == nullptr) {
       return E_FAIL;
     }
@@ -1863,17 +1891,25 @@ public:
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override {
+  STDMETHOD(PrepareOperation)(Int32) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override try {
     if (currentFile_ != nullptr) {
       if (opRes != NArchive::NExtract::NOperationResult::kOK) {
         failed_ = true;
@@ -1890,6 +1926,10 @@ public:
     }
     currentFile_.reset();
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   bool failed() const { return failed_; }
@@ -1931,7 +1971,10 @@ public:
         releaseBytes_(std::move(releaseBytes)),
         pauseCallback_(std::move(pauseCallback)) {}
 
-  ~SevenZipThrottledStreamingExtractCallback() { releaseCurrentBytes(); }
+  ~SevenZipThrottledStreamingExtractCallback() {
+    currentFile_.reset();
+    releaseCurrentBytes();
+  }
 
   STDMETHOD(QueryInterface)(REFIID iid, void **outObject) throw() override {
     if (outObject == nullptr) {
@@ -1960,16 +2003,20 @@ public:
   }
 
   STDMETHOD(SetTotal)(UInt64) throw() override { return S_OK; }
-  STDMETHOD(SetCompleted)(const UInt64 *) throw() override {
+  STDMETHOD(SetCompleted)(const UInt64 *) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   STDMETHOD(GetStream)(UInt32 index, ISequentialOutStream **outStream,
-                       Int32 askExtractMode) throw() override {
+                       Int32 askExtractMode) throw() override try {
     if (outStream == nullptr) {
       return E_FAIL;
     }
@@ -2009,17 +2056,25 @@ public:
     streamInterface->AddRef();
     *outStream = streamInterface;
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(PrepareOperation)(Int32) throw() override {
+  STDMETHOD(PrepareOperation)(Int32) throw() override try {
     if (!pauseIfNeeded(pauseCallback_)) {
       cancelled_ = true;
       return E_ABORT;
     }
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
-  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override {
+  STDMETHOD(SetOperationResult)(Int32 opRes) throw() override try {
     if (currentFile_ != nullptr) {
       if (opRes != NArchive::NExtract::NOperationResult::kOK) {
         failed_ = true;
@@ -2047,6 +2102,10 @@ public:
     currentFile_.reset();
     releaseCurrentBytes();
     return S_OK;
+  } catch (const std::bad_alloc &) {
+    return E_OUTOFMEMORY;
+  } catch (const std::length_error &) {
+    return E_INVALIDARG;
   }
 
   bool failed() const { return failed_; }
@@ -5624,7 +5683,8 @@ bool readZipEntriesByIndexConcurrent(
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -5791,23 +5851,27 @@ bool readZipEntriesByIndexConcurrent(
   std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
+  std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
+  const char *resourceFailure = nullptr;
   ZipDirectExtractionStats aggregateStats;
 
-  auto setFailure = [&](std::string message) {
+  auto setFailure = [&](std::string message, const char *resourceError = nullptr) {
     {
       std::lock_guard lock(stateMutex);
       if (!failed) {
         failed = true;
         failureMessage = std::move(message);
+        resourceFailure = resourceError;
       }
     }
     spaceCv.notify_all();
   };
 
   auto acquireBytes = [&](std::uint64_t bytes) {
-    if (bytes > maxInFlightBytes) {
+    if (bytes > maxInFlightBytes &&
+        memoryPolicy == ConcurrentReadMemoryPolicy::Strict) {
       setFailure("Archive entry exceeds concurrent read memory limit.");
       return false;
     }
@@ -5816,7 +5880,13 @@ bool readZipEntriesByIndexConcurrent(
       if (failed) {
         return false;
       }
-      if (bytes <= maxInFlightBytes - inFlightBytes) {
+      // A scheduling budget can admit one oversized entry exclusively. Check
+      // the current reservation before subtracting to avoid unsigned underflow.
+      if ((inFlightFiles == 0 &&
+           memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry) ||
+          (inFlightBytes <= maxInFlightBytes &&
+           bytes <= maxInFlightBytes - inFlightBytes)) {
+        ++inFlightFiles;
         inFlightBytes += bytes;
         return true;
       }
@@ -5834,12 +5904,13 @@ bool readZipEntriesByIndexConcurrent(
   auto releaseBytes = [&](std::uint64_t bytes) {
     {
       std::lock_guard lock(stateMutex);
+      --inFlightFiles;
       inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
     }
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  auto extractWorker = [&]() {
     ZipDirectExtractionStats localStats;
     RandomAccessFile archiveFile;
     std::string openError;
@@ -5867,11 +5938,13 @@ bool readZipEntriesByIndexConcurrent(
         break;
       }
 
+      // Stored entries read directly into the output buffer.
+      const std::uint64_t scratchBytes =
+          target.method == MZ_DEFLATED ? target.compressedSize : 0;
       const std::uint64_t targetBytes =
-          target.size > std::numeric_limits<std::uint64_t>::max() -
-                            target.compressedSize
+          target.size > std::numeric_limits<std::uint64_t>::max() - scratchBytes
               ? std::numeric_limits<std::uint64_t>::max()
-              : target.size + target.compressedSize;
+              : target.size + scratchBytes;
       const auto acquireStart = std::chrono::steady_clock::now();
       if (!acquireBytes(targetBytes)) {
         break;
@@ -5922,6 +5995,17 @@ bool readZipEntriesByIndexConcurrent(
   };
 
   const auto start = Clock::now();
+  // Allocations can fail even when one oversized entry is admitted. Unwind
+  // buffers/handles, then wake blocked workers without allocating a message.
+  auto worker = [&]() {
+    try {
+      extractWorker();
+    } catch (const std::bad_alloc &) {
+      setFailure({}, "Not enough memory to extract archive entry.");
+    } catch (const std::length_error &) {
+      setFailure({}, "Archive entry size is not representable.");
+    }
+  };
   std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
@@ -5935,7 +6019,9 @@ bool readZipEntriesByIndexConcurrent(
 
   if (failed) {
     if (errorMessage != nullptr) {
-      *errorMessage = failureMessage.empty()
+      *errorMessage = resourceFailure != nullptr
+                          ? resourceFailure
+                          : failureMessage.empty()
                           ? "Parallel ZIP extraction failed."
                           : failureMessage;
     }
@@ -6325,7 +6411,8 @@ bool readUnarrRarEntriesByOffsetConcurrent(
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -6400,25 +6487,29 @@ bool readUnarrRarEntriesByOffsetConcurrent(
   std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
+  std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
+  const char *resourceFailure = nullptr;
   long long acquireMicros = 0;
   long long extractMicros = 0;
   long long callbackMicros = 0;
 
-  auto setFailure = [&](std::string message) {
+  auto setFailure = [&](std::string message, const char *resourceError = nullptr) {
     {
       std::lock_guard lock(stateMutex);
       if (!failed) {
         failed = true;
         failureMessage = std::move(message);
+        resourceFailure = resourceError;
       }
     }
     spaceCv.notify_all();
   };
 
   auto acquireBytes = [&](std::uint64_t bytes) {
-    if (bytes > maxInFlightBytes) {
+    if (bytes > maxInFlightBytes &&
+        memoryPolicy == ConcurrentReadMemoryPolicy::Strict) {
       setFailure("Archive entry exceeds concurrent read memory limit.");
       return false;
     }
@@ -6427,7 +6518,13 @@ bool readUnarrRarEntriesByOffsetConcurrent(
       if (failed) {
         return false;
       }
-      if (bytes <= maxInFlightBytes - inFlightBytes) {
+      // A scheduling budget can admit one oversized entry exclusively. Check
+      // the current reservation before subtracting to avoid unsigned underflow.
+      if ((inFlightFiles == 0 &&
+           memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry) ||
+          (inFlightBytes <= maxInFlightBytes &&
+           bytes <= maxInFlightBytes - inFlightBytes)) {
+        ++inFlightFiles;
         inFlightBytes += bytes;
         return true;
       }
@@ -6445,12 +6542,13 @@ bool readUnarrRarEntriesByOffsetConcurrent(
   auto releaseBytes = [&](std::uint64_t bytes) {
     {
       std::lock_guard lock(stateMutex);
+      --inFlightFiles;
       inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
     }
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  auto extractWorker = [&]() {
     UnarrStreamHandle stream;
     UnarrArchiveHandle archive;
     std::string openError;
@@ -6540,6 +6638,17 @@ bool readUnarrRarEntriesByOffsetConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
+  // Allocations can fail even when one oversized entry is admitted. Unwind
+  // buffers/handles, then wake blocked workers without allocating a message.
+  auto worker = [&]() {
+    try {
+      extractWorker();
+    } catch (const std::bad_alloc &) {
+      setFailure({}, "Not enough memory to extract archive entry.");
+    } catch (const std::length_error &) {
+      setFailure({}, "Archive entry size is not representable.");
+    }
+  };
   std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
@@ -6553,7 +6662,9 @@ bool readUnarrRarEntriesByOffsetConcurrent(
 
   if (failed) {
     if (errorMessage != nullptr) {
-      *errorMessage = failureMessage.empty()
+      *errorMessage = resourceFailure != nullptr
+                          ? resourceFailure
+                          : failureMessage.empty()
                           ? "Parallel RAR extraction failed."
                           : failureMessage;
     }
@@ -7353,7 +7464,8 @@ bool readSevenZipEntriesByIndexConcurrent(
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::size_t maxWorkers, std::uint64_t maxInFlightBytes,
-    std::string *errorMessage, const PauseCallback &pauseCallback) {
+    std::string *errorMessage, const PauseCallback &pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -7455,26 +7567,30 @@ bool readSevenZipEntriesByIndexConcurrent(
   std::size_t nextTarget = 0;
   std::size_t emittedFiles = 0;
   std::uint64_t inFlightBytes = 0;
+  std::size_t inFlightFiles = 0;
   bool failed = false;
   std::string failureMessage;
+  const char *resourceFailure = nullptr;
   long long acquireMicros = 0;
   long long openMicros = 0;
   long long extractMicros = 0;
   long long callbackMicros = 0;
 
-  auto setFailure = [&](std::string message) {
+  auto setFailure = [&](std::string message, const char *resourceError = nullptr) {
     {
       std::lock_guard lock(stateMutex);
       if (!failed) {
         failed = true;
         failureMessage = std::move(message);
+        resourceFailure = resourceError;
       }
     }
     spaceCv.notify_all();
   };
 
   auto acquireBytes = [&](std::uint64_t bytes) {
-    if (bytes > maxInFlightBytes) {
+    if (bytes > maxInFlightBytes &&
+        memoryPolicy == ConcurrentReadMemoryPolicy::Strict) {
       setFailure("Archive entry exceeds concurrent read memory limit.");
       return false;
     }
@@ -7483,7 +7599,13 @@ bool readSevenZipEntriesByIndexConcurrent(
       if (failed) {
         return false;
       }
-      if (bytes <= maxInFlightBytes - inFlightBytes) {
+      // A scheduling budget can admit one oversized entry exclusively. Check
+      // the current reservation before subtracting to avoid unsigned underflow.
+      if ((inFlightFiles == 0 &&
+           memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry) ||
+          (inFlightBytes <= maxInFlightBytes &&
+           bytes <= maxInFlightBytes - inFlightBytes)) {
+        ++inFlightFiles;
         inFlightBytes += bytes;
         return true;
       }
@@ -7501,12 +7623,13 @@ bool readSevenZipEntriesByIndexConcurrent(
   auto releaseBytes = [&](std::uint64_t bytes) {
     {
       std::lock_guard lock(stateMutex);
+      --inFlightFiles;
       inFlightBytes = bytes > inFlightBytes ? 0 : inFlightBytes - bytes;
     }
     spaceCv.notify_all();
   };
 
-  auto worker = [&]() {
+  auto extractWorker = [&]() {
     long long localAcquireMicros = 0;
     long long localOpenMicros = 0;
     long long localExtractMicros = 0;
@@ -7622,6 +7745,17 @@ bool readSevenZipEntriesByIndexConcurrent(
                          " maxInFlightBytes=" +
                          std::to_string(maxInFlightBytes));
 
+  // Allocations can fail even when one oversized entry is admitted. Unwind
+  // buffers/handles, then wake blocked workers without allocating a message.
+  auto worker = [&]() {
+    try {
+      extractWorker();
+    } catch (const std::bad_alloc &) {
+      setFailure({}, "Not enough memory to extract archive entry.");
+    } catch (const std::length_error &) {
+      setFailure({}, "Archive entry size is not representable.");
+    }
+  };
   std::vector<std::jthread> workers;
   workers.reserve(maxWorkers);
   for (std::size_t i = 0; i < maxWorkers; ++i) {
@@ -7635,7 +7769,9 @@ bool readSevenZipEntriesByIndexConcurrent(
 
   if (failed) {
     if (errorMessage != nullptr) {
-      *errorMessage = failureMessage.empty()
+      *errorMessage = resourceFailure != nullptr
+                          ? resourceFailure
+                          : failureMessage.empty()
                           ? "Parallel RAR5 extraction failed."
                           : failureMessage;
     }
@@ -8890,7 +9026,8 @@ bool readArchiveEntriesConcurrently(
     std::size_t maxWorkers,
     std::uint64_t maxInFlightBytes,
     std::string *errorMessage,
-    PauseCallback pauseCallback) {
+    PauseCallback pauseCallback,
+    ConcurrentReadMemoryPolicy memoryPolicy) {
   if (!onFile) {
     if (errorMessage != nullptr) {
       *errorMessage = "Archive file consumer is unavailable.";
@@ -8924,7 +9061,7 @@ bool readArchiveEntriesConcurrently(
   if (hasZipArchiveExtension(archivePath) &&
       readZipEntriesByIndexConcurrent(archivePath, innerPaths, std::nullopt,
                                       onFile, maxWorkers, maxInFlightBytes,
-                                      &zipError, pauseCallback)) {
+                                      &zipError, pauseCallback, memoryPolicy)) {
     appendDebugLogLineImpl("Read archive batch via concurrent miniz ZIP: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -8952,7 +9089,7 @@ bool readArchiveEntriesConcurrently(
   if (rarArchiveSignature == RarSignature::Rar4 &&
       readUnarrRarEntriesByOffsetConcurrent(
           archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
-          maxInFlightBytes, &unarrError, pauseCallback)) {
+          maxInFlightBytes, &unarrError, pauseCallback, memoryPolicy)) {
     appendDebugLogLineImpl(
         "Read archive batch via concurrent unarr RAR random access: " +
         pathForLog(archivePath) +
@@ -8997,11 +9134,16 @@ bool readArchiveEntriesConcurrently(
           " maxTargetBytes=" + byteCountForLog(rar5Stats.maxBytes) +
           " reason=" +
           (rar5Stats.hasSolid ? "solid-archive" : "small-targets"));
+      // This route already holds only one entry through callback completion.
+      const auto entryLimit = maxInFlightBytes == 0
+          ? std::numeric_limits<std::uint64_t>::max()
+          : memoryPolicy == ConcurrentReadMemoryPolicy::AllowSingleOversizedEntry
+              ? std::max(maxInFlightBytes, rar5Stats.maxBytes)
+              : maxInFlightBytes;
       if (readSevenZipEntriesByIndexStreaming(
               archivePath, innerPaths, std::nullopt, onFile, &sevenZipError,
               pauseCallback, static_cast<std::size_t>(std::min<std::uint64_t>(
-                  maxInFlightBytes == 0 ? std::numeric_limits<std::uint64_t>::max() : maxInFlightBytes,
-                  std::numeric_limits<std::size_t>::max())))) {
+                  entryLimit, std::numeric_limits<std::size_t>::max())))) {
         appendDebugLogLineImpl(
             "Read archive batch via single-handle 7-Zip RAR5: " +
             pathForLog(archivePath) +
@@ -9033,7 +9175,7 @@ bool readArchiveEntriesConcurrently(
   if (isRar5Archive &&
       readSevenZipEntriesByIndexConcurrent(
           archivePath, innerPaths, std::nullopt, onFile, maxWorkers,
-          maxInFlightBytes, &sevenZipError, pauseCallback)) {
+          maxInFlightBytes, &sevenZipError, pauseCallback, memoryPolicy)) {
     appendDebugLogLineImpl("Read archive batch via concurrent 7-Zip RAR5: " +
                            pathForLog(archivePath) +
                            " targets=" + std::to_string(innerPaths.size()) +
@@ -9906,9 +10048,8 @@ bool extractArchiveFullyWithBatchReader(
     const UnzipProgressCallback &progressCallback,
     const PauseCallback &pauseCallback,
     std::string *errorMessage, UnzipWriteGuard &writeGuard,
-    std::uint64_t maximumMemoryBytes) {
+    std::uint64_t maximumEntryBytes) {
   static constexpr std::size_t kMaxBatchFiles = 128;
-  const auto maximumEntryBytes = std::min<std::uint64_t>(64ull * 1024 * 1024, maximumMemoryBytes);
 
   struct FileEntryRef {
     const Entry *entry = nullptr;
@@ -10271,7 +10412,13 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
                   bool reuseCompletedFolder,
                   UnzipPrepareCallback prepareCallback,
                   UnzipBudget *budget) {
-  UnzipBudget localBudget;
+  // Bulk library operations pass a shared budget. A user-selected archive has
+  // no fixed expanded-size/count quota; free-space and arithmetic checks remain.
+  UnzipBudget localBudget{.limits = {
+      .maximumArchiveBytes = std::numeric_limits<std::uint64_t>::max(),
+      .maximumTotalBytes = std::numeric_limits<std::uint64_t>::max(),
+      .maximumArchiveEntries = std::numeric_limits<std::uint64_t>::max(),
+      .maximumTotalEntries = std::numeric_limits<std::uint64_t>::max()}};
   UnzipWriteGuard writeGuard(budget ? *budget : localBudget, destinationRoot);
   const auto &sharedBudget = budget ? *budget : localBudget;
   auto execution = unzipExecutionPlan(sharedBudget.limits, sharedBudget.concurrentArchives);
@@ -10533,7 +10680,11 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   }
 #endif
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
-  if (!extracted && !stopRequested(stopToken) && index->backend == ArchiveIndexBackend::LibArchive) {
+  // Stream unsupported direct ZIP methods in chunks too, instead of allocating
+  // a whole oversized entry in memory. Keep other backends' existing readers.
+  if (!extracted && !stopRequested(stopToken) &&
+      (index->backend == ArchiveIndexBackend::LibArchive ||
+       index->backend == ArchiveIndexBackend::MinizZip)) {
     extracted = extractArchiveFullyWithLibarchive(
         archivePath, outputFolder, index, stopToken, progressCallback,
         pauseCallback, errorMessage, writeGuard, pipeline);
@@ -10556,7 +10707,9 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
   if (!extracted && !stopRequested(stopToken)) {
     extracted = extractArchiveFullyWithBatchReader(
         archivePath, outputFolder, index->entries, stopToken, progressCallback,
-        pauseCallback, errorMessage, writeGuard, execution.memoryPerArchive);
+        pauseCallback, errorMessage, writeGuard,
+        budget ? std::min<std::uint64_t>(64ull * 1024 * 1024, execution.memoryPerArchive)
+               : std::numeric_limits<std::uint64_t>::max());
   }
   if (!extracted) {
     if (errorMessage != nullptr && errorMessage->empty()) {
