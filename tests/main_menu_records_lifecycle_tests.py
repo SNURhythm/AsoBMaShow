@@ -80,6 +80,19 @@ def records_fixture():
 
 
 class MainMenuRecordsLifecycleTests(unittest.TestCase):
+    def test_resume_activates_selected_music_select_skin_after_callback_returns(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        fixture = (ROOT / "tests/main_menu_skin_resume_fixture.cpp").read_text()
+        fixture = fixture.replace("REPOSITORY_ROOT", ROOT.as_posix()).replace(
+            "RESUME_BODY", fixture_tools.function_body(source, "void MainMenuScene::onResume()"))
+        for enabled in (0, 1):
+            with self.subTest(skins_enabled=enabled):
+                try:
+                    fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(
+                        f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {enabled}\n" + fixture)
+                except subprocess.CalledProcessError as error:
+                    self.fail(error.stderr)
+
     def test_actual_owner_callbacks_release_records_on_return_and_cancel(self):
         try:
             fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(records_fixture(), [ROOT / "src/replay/ReplayExportJob.cpp", ROOT / "src/scene/ReplayRecordTask.cpp", ROOT / "src/scene/FindBmsTask.cpp", ROOT / "tests/support/AllocationFailure.cpp"])
