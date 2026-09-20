@@ -744,6 +744,7 @@ struct ActivationFixtureOptions {
   bool requireConfiguredState = false;
   bool requireResultConfiguredState = false;
   bool resultEventExec = false;
+  bool resultVideoEventAnimation = false;
   bool resultNestedEventExec = false;
   bool resultIntervalEventExec = false;
   bool resultRecursiveEventExec = false;
@@ -1275,6 +1276,31 @@ if skin_config then
       {id = "pomyu-one", dst = {{x = 0, y = 0, w = 64, h = 64}}},
       {id = "pomyu-two", dst = {{x = 64, y = 0, w = 64, h = 64}}}
     }
+  }
+)lua";
+    } else if (options.resultVideoEventAnimation) {
+      script += "\n  local ticks, nested, frames = 0, 0, 0\n  return { type = " +
+                std::to_string(options.skinType) + R"lua(, w = 1280, h = 720,
+    customEvents = {
+      {id = 1000, minInterval = 1000, condition = function() return true end,
+       action = function()
+         ticks = ticks + 1
+         assert(main_state.event_exec(1001))
+         assert(main_state.event_exec(210))
+       end},
+      {id = 1001, action = function()
+         nested = nested + 1
+         assert(main_state.event_exec(1003))
+       end},
+      {id = 1002, action = 210, condition = function() return true end},
+      {id = 1003, action = 210}
+    },
+    customTimers = {{id = 10000, timer = function()
+      frames = frames + 1
+      assert(ticks == math.floor(frames / 2), "automatic animation events did not advance")
+      assert(nested == math.floor((frames - 1) / 2), "deferred animation events did not advance")
+      return ticks * 1000000
+    end}}
   }
 )lua";
     } else if (options.resultNestedEventExec) {
@@ -7232,6 +7258,37 @@ void testResultPhotoFramePreservesLiveEvents() {
   }
 }
 
+void testResultVideoFramesAdvanceLocalEventsOnly() {
+  for (const int skinType : {7, 15}) {
+    ActivationFixture fixture({.skinType = skinType, .resultVideoEventAnimation = true});
+    if (!fixture.ready()) continue;
+    auto created = ResultSkinSession::create(fixture.takeActivation(), fixture.resultContext());
+    expect(created.session != nullptr, "video event fixture creates a result session");
+    if (!created.session) continue;
+    RenderContext context;
+    // Do not drain host actions between frames: external events must never
+    // accumulate or fill the queue while local event state advances.
+    for (int frame = 0; frame < 80; ++frame) {
+      const bool rendered = created.session->renderForVideoExport(
+          context, {}, frame + 1, frame * 500);
+      expect(rendered, "video callbacks advance automatic intervals and deferred Lua state");
+      if (!rendered) break;
+    }
+    expect(created.session->takeQueuedBuiltinEventIds().empty() &&
+               created.session->takeQueuedAudioVolumeWrites().empty(),
+           "video callbacks never publish external actions or volume writes");
+  }
+  ActivationFixture fixture({.skinType = 7, .staticResultCustomEvent = true});
+  if (!fixture.ready()) return;
+  auto created = ResultSkinSession::create(fixture.takeActivation(), fixture.resultContext());
+  if (!created.session) return;
+  RenderContext context;
+  expect(!created.session->renderForVideoExport(context, {}, 0, 0) &&
+             created.session->render(context, {}, 1, 0) &&
+             created.session->takeQueuedBuiltinEventIds() == std::vector<int>{210},
+         "failed video frame restores normal external event dispatch");
+}
+
 void testResultSkinInputAvailabilityMatchesResultTimer() {
   expect(!resultSkinInputAvailable(1'000, 999'999) &&
              resultSkinInputAvailable(1'000, 1'000'000) &&
@@ -8746,6 +8803,7 @@ int main(int argc, char **argv) {
   testResultLuaSessionUsesTheLastDuplicateCustomTimerDefinition();
   testStaticResultSessionRunsCustomBuiltinEvent();
   testResultPhotoFramePreservesLiveEvents();
+  testResultVideoFramesAdvanceLocalEventsOnly();
   testResultSkinInputAvailabilityMatchesResultTimer();
   testResultSessionRefreshesForAsynchronousRankingNames();
   testResultSessionRefreshesForAllStringSelectors();

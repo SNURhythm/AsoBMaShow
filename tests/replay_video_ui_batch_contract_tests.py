@@ -45,7 +45,8 @@ class ReplayVideoUiBatchContracts(unittest.TestCase):
         start = source.index("class PreparedReplayResultPresentation")
         end = source.index("replayExportPersistedScore", start)
         helper = source[start:end]
-        self.assertIn("renderForExport", helper)
+        self.assertIn("renderForVideoExport", helper)
+        self.assertNotIn("renderForExport(", helper)
         self.assertIn("createLuaSkinNoOutputAudioBackend", helper)
         self.assertIn(".stop = stop", helper)
         self.assertNotIn("createLuaSkinApplicationAudioBackend", helper)

@@ -83,7 +83,7 @@ struct ResultSkinSession {
     if (failCreate) return {nullptr, {{"decode failed"}}};
     return {std::make_unique<ResultSkinSession>(), {}};
   }
-  bool renderForExport(RenderContext &, const ResultSkinData &data,
+  bool renderForVideoExport(RenderContext &, const ResultSkinData &data,
                        std::uint64_t serial, long long time) {
     rendered = data; serials.push_back(serial); times.push_back(time);
     return !failRender;

@@ -410,6 +410,18 @@ bool ResultSkinSession::renderForExport(RenderContext &renderContext,
   return render(renderContext, data, frameSerial, elapsedMillis);
 }
 
+bool ResultSkinSession::renderForVideoExport(RenderContext &renderContext,
+                                             const ResultSkinData &data,
+                                             std::uint64_t frameSerial,
+                                             std::int64_t elapsedMillis) {
+  struct RestoreActions {
+    bool &suppressed;
+    bool previous;
+    ~RestoreActions() { suppressed = previous; }
+  } restore{suppressExternalActions_, std::exchange(suppressExternalActions_, true)};
+  return render(renderContext, data, frameSerial, elapsedMillis);
+}
+
 bool ResultSkinSession::render(RenderContext &renderContext,
                                const ResultSkinData &data,
                                std::uint64_t frameSerial,
@@ -712,6 +724,10 @@ bool ResultSkinSession::queueEvent(int eventId, std::span<const int> arguments,
     return true;
   }
 
+  // Video sessions still resolve and execute custom Lua events above. Only
+  // built-in host actions are inert, including those reached through aliases.
+  if (suppressExternalActions_) return true;
+
   // open_ir is the only EventFactory action with an AsoBMaShow result
   // transition. Replay-save and selector-only events have no equivalent here;
   // preserve Beatoraja's successful no-op behavior and emit one contextual
@@ -821,6 +837,7 @@ bool ResultSkinSession::queueWriterInvocation(
           "Result skin writer queue reached its frame limit."));
       return false;
     }
+    if (suppressExternalActions_) return true;
     queuedAudioVolumeWrites_.push_back(
         {.selector = *selector,
          .value = static_cast<float>(std::clamp(

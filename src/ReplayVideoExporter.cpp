@@ -231,7 +231,7 @@ public:
   bool render(RenderContext &context, long long elapsedMicros,
               std::string &error, ReplayVideoExportLog *log) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-    const bool rendered = session_->renderForExport(
+    const bool rendered = session_->renderForVideoExport(
         context, data_, ++frameSerial_, elapsedMicros / 1000);
     for (const auto &diagnostic : session_->takeLastDiagnostics())
       replayExportLog(log, "Replay result skin: %s", diagnostic.message.c_str());
