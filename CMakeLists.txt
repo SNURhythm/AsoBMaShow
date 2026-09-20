@@ -4882,6 +4882,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(image_view_fade_tests
         tests/image_view_fade_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/view/DecodedImageCache.cpp
         src/view/ImageDecodeCoordinator.cpp
         src/view/ImageFade.cpp

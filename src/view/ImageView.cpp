@@ -402,8 +402,14 @@ decodeImageFile(const std::filesystem::path &path,
     }
     const auto sourceLoadStarted = std::chrono::steady_clock::now();
     auto sourceOptions = options;
-    sourceOptions.targetWidth = 0;
-    sourceOptions.targetHeight = 0;
+    if (archiveEntryPath && options.targetWidth > 0 && options.targetHeight > 0) {
+      // Keep enough pixels for the persistent preview without discarding the
+      // caller's decode-time reduction (selected artwork can be very large).
+      sourceOptions.targetWidth =
+          std::max(options.targetWidth, kArchivedThumbnailMaxDimension);
+      sourceOptions.targetHeight =
+          std::max(options.targetHeight, kArchivedThumbnailMaxDimension);
+    }
     auto decoded = image_decode::decodeImageMemory(
         std::span<const std::byte>(reinterpret_cast<const std::byte *>(bytes.data()),
                                    bytes.size()),

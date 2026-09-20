@@ -374,6 +374,43 @@ void testPngRejectsInvalidInflatedRows() {
   }
 }
 
+void testPngTrailingOutputIsBounded() {
+  for (std::size_t padding : {0U, 1U, 65536U, 65537U, 4U * 1024U * 1024U}) {
+    const auto templatePng = makeVariantPng(8, 6, false);
+    std::vector<std::byte> png(templatePng.begin(), templatePng.begin() + 8), header;
+    appendBigEndian(header, 1);
+    appendBigEndian(header, 1);
+    for (int value : {8, 6, 0, 0, 0}) header.push_back(std::byte(value));
+    appendPngChunk(png, "IHDR", header);
+    std::vector<unsigned char> raw(5 + padding, 0);
+    raw[1] = raw[4] = 255;
+    mz_ulong size = mz_compressBound(raw.size());
+    std::vector<std::byte> compressed(size);
+    expect(mz_compress(reinterpret_cast<unsigned char *>(compressed.data()), &size,
+                       raw.data(), raw.size()) == MZ_OK, "padding fixture compresses");
+    compressed.resize(size);
+    // Force completion/padding accounting across IDAT boundaries.
+    const auto midpoint = compressed.size() / 2;
+    appendPngChunk(png, "IDAT", std::span(compressed).first(midpoint));
+    appendPngChunk(png, "IDAT", std::span(compressed).subspan(midpoint));
+    appendPngChunk(png, "IEND", {});
+    const auto decoded = image_decode::decodeImageMemory(png, image_decode::ImageDecodeOptions{});
+    expect(decoded.has_value() == (padding <= 65536),
+           ("PNG padding admission matches allowance: " + std::to_string(padding)).c_str());
+    if (decoded) expect((*decoded->rgba)[0] == 255 && (*decoded->rgba)[3] == 255,
+                        "padding does not change image pixels");
+    if (padding == 65536) {
+      // A bounded drain must still check the zlib checksum at the exact boundary.
+      compressed.back() ^= std::byte{1};
+      png.resize(33);
+      appendPngChunk(png, "IDAT", compressed);
+      appendPngChunk(png, "IEND", {});
+      expect(!image_decode::decodeImageMemory(png, image_decode::ImageDecodeOptions{}),
+             "PNG padding boundary still validates zlib completion and checksum");
+    }
+  }
+}
+
 void testDeclaredPngOverflowAndFractionalReduction() {
   auto png = makeVariantPng(8, 6, true);
   std::vector<std::byte> crafted(png.begin(), png.begin() + 8), header;
@@ -573,6 +610,7 @@ int main() {
   testLargePngDownsamplesWithoutSourceAllocation();
   testPngVariantsAndInvalidInput();
   testPngRejectsInvalidInflatedRows();
+  testPngTrailingOutputIsBounded();
   testDeclaredPngOverflowAndFractionalReduction();
   testLargeLegacyImagesUseRows();
   testInterlacedReductionCancellation();

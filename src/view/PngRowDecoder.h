@@ -128,13 +128,21 @@ public:
   bool finish() {
     if (!initialized_) return false;
     // stb accepts extra inflated padding found in real PNGs (stb issue 276).
-    // Drain it without retaining it, while still validating zlib completion.
+    // Bound only this non-pixel padding, not the declared image rows. A tiny
+    // image must not make us inflate arbitrarily large trailing output.
+    std::size_t remainingPadding = 64 * 1024;
     std::array<unsigned char, 64 * 1024> discard{};
     while (!finished_) {
       if (options_.stop.stop_requested()) return false;
       stream_.next_out = discard.data();
-      stream_.avail_out = discard.size();
+      // One extra byte distinguishes completion at the allowance from excess
+      // output, including when the zlib trailer lives in the next IDAT chunk.
+      const auto capacity = std::min(discard.size(), remainingPadding + 1);
+      stream_.avail_out = static_cast<mz_uint>(capacity);
       if (!step()) return false;
+      const auto produced = capacity - stream_.avail_out;
+      if (produced > remainingPadding) return false;
+      remainingPadding -= produced;
     }
     return stream_.total_in == expectedBytes_;
   }
