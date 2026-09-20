@@ -3475,9 +3475,39 @@ void MusicSelectScene::openChartViewer() {
 }
 
 void MusicSelectScene::revealChart() {
-  executeEvent({.kind = skin::MusicSelectSkinActionKind::Event,
-                .selector = {.value = 212},
-                .arguments = {0, 0}});
+  if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->unavailable || selected.chart->meta.BmsPath.empty()) {
+    return;
+  }
+
+  OverlayAnchor sourceAnchor{};
+  if (toolbar_ != nullptr) {
+    const View *anchor = toolbar_;
+    for (const auto &control : toolbar_->controls()) {
+      if (control.control == MusicSelectToolbarControl::RevealChart && control.icon) {
+        anchor = control.icon;
+        break;
+      }
+    }
+    sourceAnchor = {.x = anchor->getX(), .y = anchor->getY(),
+                    .width = anchor->getWidth(), .height = anchor->getHeight()};
+  }
+  const auto normalized = normalizeOverlayAnchor(
+      sourceAnchor, rendering::window_width, rendering::window_height);
+  std::string error;
+  // Use the native reveal action, including iOS Files and archive resolution.
+  // Skin event 212 intentionally retains its separate desktop Explorer behavior.
+  if (!platform_open::revealPathInFileManager(
+          selected.chart->meta.BmsPath,
+          {.x = normalized.x, .y = normalized.y,
+           .width = normalized.width, .height = normalized.height}, error)) {
+    SDL_Log("Failed to reveal chart file %s: %s",
+            fspath_to_utf8(selected.chart->meta.BmsPath).c_str(), error.c_str());
+  }
 }
 
 void MusicSelectScene::openTasks() {

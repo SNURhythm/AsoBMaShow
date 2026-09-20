@@ -677,6 +677,105 @@ int main() {
         fixture = (ROOT / "tests/music_select_scene_records_fixture.cpp").read_text()
         self.compile_and_run(fixture.replace("SCENE_CALLBACKS", callbacks))
 
+    def test_toolbar_reveal_uses_native_file_action_on_mobile(self):
+        signature = "void MusicSelectScene::revealChart()"
+        source = read_music_select_scene()
+        overlay = (ROOT / "src/view/OverlayPortal.h").read_text()
+        anchors = overlay[overlay.index("struct OverlayAnchor"):overlay.index("struct OverlayPlacement")]
+        fixture = r'''#include <algorithm>
+#include <cassert>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+ANCHORS
+namespace rendering { int window_width = 1000, window_height = 500; }
+namespace skin {
+enum class MusicSelectBarKind { Song, Folder };
+enum class MusicSelectSkinActionKind { Event };
+struct Action { MusicSelectSkinActionKind kind; struct { int value; } selector; int arguments[2]; };
+}
+struct Chart { bool unavailable = false, solidArchive = false;
+  struct { std::filesystem::path BmsPath = "/charts/song.bms"; } meta; };
+struct Row { skin::MusicSelectBarKind kind = skin::MusicSelectBarKind::Song;
+  std::optional<Chart> chart = Chart{}; };
+struct Bars {
+  std::size_t selectedIndex = 0;
+  std::vector<Row> rows{Row{}};
+  Bars readView() const { return *this; }
+  std::size_t rowCount() const { return rows.size(); }
+  const Row &rowAt(std::size_t index) const { return rows.at(index); }
+};
+struct View {
+  int getX() const { return 200; } int getY() const { return 100; }
+  int getWidth() const { return 40; } int getHeight() const { return 40; }
+};
+enum class MusicSelectToolbarControl { RevealChart };
+struct Control { MusicSelectToolbarControl control; View *icon; };
+struct Toolbar : View {
+  View icon;
+  std::vector<Control> controls() { return {{MusicSelectToolbarControl::RevealChart, &icon}}; }
+};
+namespace platform_open {
+struct RevealAnchor { float x, y, width, height; };
+int calls = 0;
+std::filesystem::path lastPath;
+RevealAnchor lastAnchor{};
+bool success = true;
+bool desktopOpenSupported() { return false; }
+bool revealPathInFileManager(const std::filesystem::path &path, const RevealAnchor &anchor,
+                             std::string &error) {
+  ++calls; lastPath = path; lastAnchor = anchor;
+  if (!success) error = "unsupported platform";
+  return success;
+}
+}
+std::string fspath_to_utf8(const std::filesystem::path &path) { return path.string(); }
+int logs = 0;
+template<class... T> void SDL_Log(const char *, T...) { ++logs; }
+struct MusicSelectScene {
+  bool sceneActive_ = true, failed_ = false, blocked = false;
+  int legacyEvents = 0;
+  Bars bars_;
+  Toolbar toolbar;
+  Toolbar *toolbar_ = &toolbar;
+  bool selectorInputBlocked() const { return blocked; }
+  void executeEvent(const skin::Action &) { ++legacyEvents; }
+  void revealChart();
+};
+METHOD
+int main() {
+  MusicSelectScene scene;
+  scene.revealChart();
+  assert(platform_open::calls == 1 && scene.legacyEvents == 0);
+  assert(platform_open::lastPath == "/charts/song.bms");
+  assert(platform_open::lastAnchor.x == 0.2f && platform_open::lastAnchor.y == 0.2f);
+  assert(platform_open::lastAnchor.width > 0 && platform_open::lastAnchor.height > 0);
+  auto &row = scene.bars_.rows[0];
+  row.chart->solidArchive = true;
+  row.chart->meta.BmsPath = "/charts/package.zip/nested/chart.bms";
+  scene.revealChart();
+  assert(platform_open::calls == 2 && platform_open::lastPath == row.chart->meta.BmsPath);
+  scene.blocked = true; scene.revealChart(); scene.blocked = false;
+  scene.sceneActive_ = false; scene.revealChart(); scene.sceneActive_ = true;
+  scene.failed_ = true; scene.revealChart(); scene.failed_ = false;
+  row.chart->unavailable = true; scene.revealChart(); row.chart->unavailable = false;
+  row.chart->meta.BmsPath.clear(); scene.revealChart();
+  row.chart.reset(); scene.revealChart();
+  row.kind = skin::MusicSelectBarKind::Folder; scene.revealChart();
+  scene.bars_.selectedIndex = 1; scene.revealChart();
+  assert(platform_open::calls == 2);
+  scene.bars_ = Bars{};
+  scene.toolbar_ = nullptr;
+  platform_open::success = false;
+  scene.revealChart();
+  assert(platform_open::calls == 3 && logs == 1);
+}
+'''
+        self.compile_and_run(fixture.replace("ANCHORS", anchors).replace(
+            "METHOD", signature + function_body(source, signature)))
+
     def compile_and_run(self, source, extra_sources=()):
         compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
         frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
