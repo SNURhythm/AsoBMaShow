@@ -159,6 +159,59 @@ void testNonpositiveTotalBuildsAndReplays() {
   }
 }
 
+void testLr2FractionalTotalStartsAndPersists() {
+  for (const std::string total : {"0.001", "0.5", "0.999"}) {
+    const std::string source = "#BPM 120\n#TOTAL " + total + "\n#00111:01\n";
+    bms_parser::Parser parser;
+    std::atomic_bool cancelled{false};
+    bms_parser::Chart *parsed = nullptr;
+    parser.Parse(std::vector<unsigned char>(source.begin(), source.end()),
+                 &parsed, false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> chart(parsed);
+    require(chart && chart->Meta.HasTotal && chart->Meta.Total > 0.0 &&
+                chart->Meta.Total < 1.0,
+            "BMS parsing preserves a positive fractional TOTAL");
+    StartOptions options;
+    options.ruleset = GameplayRuleset::LR2;
+    const auto live = buildGameplayRulesetPolicyAtPlayStart(
+        options, *chart, AppSettings::NotePriorityMode::Lowest);
+    require(live.built() && live.policy->canonical &&
+                live.policy->gauge.effectiveTotal == 0.0,
+            "LR2 starts with a fractional TOTAL rounded down to zero");
+    require(live.policy->gauge.delta(GaugeType::Normal, PGreat, 20.0F) == 0.0F &&
+                live.policy->gauge.delta(GaugeType::Normal, Poor, 20.0F) < 0.0F,
+            "zero LR2 TOTAL disables groove recovery but retains damage");
+    const auto captured = captureScoreProvenanceAtPlayStart(
+        options, chart->Meta, *live.policy);
+    std::string error;
+    const auto serialized = serializeValidatedScoreProvenance(captured, error);
+    require(serialized.has_value() && error.empty(),
+            "zero effective TOTAL can be saved with score and replay provenance");
+    const auto restored = deserializeScoreProvenance(*serialized, error);
+    require(restored.has_value() && error.empty() && *restored == captured,
+            "zero effective TOTAL round-trips without losing authored TOTAL");
+    auto replayData = std::make_shared<ReplayData>();
+    replayData->chartMeta = chart->Meta;
+    replayData->provenance = *restored;
+    StartOptions replayOptions{.replayData = replayData};
+    applyReplayProvenanceToStartOptions(replayOptions, *replayData);
+    const auto replay = buildGameplayRulesetPolicyAtPlayStart(
+        replayOptions, *chart, AppSettings::NotePriorityMode::Lowest);
+    require(replay.built() && replay.policy->canonical &&
+                replay.policy->gauge == live.policy->gauge,
+            "saved zero TOTAL replay uses the original LR2 gauge policy");
+
+    auto invalid = restored->stages.front();
+    invalid.effectiveGaugeTotal = -1.0;
+    const auto rejected = gameplay::buildGameplayRulesetPolicy(
+        chart->Meta, {.ruleset = GameplayRuleset::LR2,
+                      .sourceRank = chart->Meta.Rank,
+                      .replaySnapshot = invalid});
+    require(rejected.status == gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+            "negative effective TOTAL is still rejected in replay policies");
+  }
+}
+
 void testInvalidInputsDoNotFallBack() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
   auto future = RulesetDescriptor::For(GameplayRuleset::LR2);
@@ -337,6 +390,7 @@ void testLegacyReplayUsesBeatorajaFallback() {
 } // namespace
 
 int main() {
+  testLr2FractionalTotalStartsAndPersists();
   testNonpositiveTotalBuildsAndReplays();
   testLr2PolicyIsCoherent();
   testBeatorajaPolicyIsCoherent();

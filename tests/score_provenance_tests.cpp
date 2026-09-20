@@ -541,6 +541,14 @@ void testSchemaFourMalformedPolicyProofIsRejected() {
   nonFinite["stages"][0]["effectiveGaugeTotal"] = nullptr;
   assertMalformed(std::move(nonFinite));
 
+  auto negativeTotal = valid;
+  negativeTotal["stages"][0]["effectiveGaugeTotal"] = -1.0;
+  assertMalformed(std::move(negativeTotal));
+
+  auto missingTotal = valid;
+  missingTotal["stages"][0].erase("effectiveGaugeTotal");
+  assertMalformed(std::move(missingTotal));
+
   auto missingRulesetId = valid;
   missingRulesetId["ruleset"].erase("id");
   assertMalformed(std::move(missingRulesetId));

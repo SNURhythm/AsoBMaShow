@@ -321,7 +321,11 @@ replayJudgeOverrideForChart(const ScoreProvenance &provenance,
   }
   if (result.totalNotes <= 0 ||
       !std::isfinite(result.effectiveGaugeTotal) ||
-      result.effectiveGaugeTotal <= 0.0 ||
+      result.effectiveGaugeTotal < 0.0 ||
+      // Old schemas could omit TOTAL; zero alone is not a complete proof.
+      (result.effectiveGaugeTotal == 0.0 &&
+       provenance.fingerprintSchemaVersion > 0 &&
+       provenance.fingerprintSchemaVersion < 4) ||
       !validatedJudgeContexts(result).has_value()) {
     return std::nullopt;
   }
