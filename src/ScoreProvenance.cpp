@@ -620,7 +620,8 @@ void validateStageWindows(const ScoreStageProvenance &stage,
   }
 }
 
-void validateStageProof(const ScoreStageProvenance &stage) {
+void validateStageProof(const ScoreStageProvenance &stage,
+                        const RulesetDescriptor &ruleset) {
   if (stage.longNoteMode < 0 || stage.longNoteMode > 3) {
     throw std::runtime_error(
         "Score provenance long-note mode is not recognized.");
@@ -642,9 +643,12 @@ void validateStageProof(const ScoreStageProvenance &stage) {
   }
   // LR2 floors positive fractional authored TOTAL, which can yield zero.
   if (!std::isfinite(stage.effectiveGaugeTotal) ||
-      stage.effectiveGaugeTotal < 0.0) {
+      stage.effectiveGaugeTotal < 0.0 ||
+      (stage.effectiveGaugeTotal == 0.0 &&
+       ruleset != RulesetDescriptor::For(GameplayRuleset::LR2))) {
     throw std::runtime_error(
-        "Score provenance effective gauge TOTAL must be finite and nonnegative.");
+        "Score provenance effective gauge TOTAL must be finite and positive, "
+        "except LR2 permits zero.");
   }
   (void)candidateSelectionName(stage.candidateSelection);
   validateStageWindows(stage, true);
@@ -669,8 +673,9 @@ void migrateLegacyBeatorajaWindows(ScoreStageProvenance &stage) {
   }
 }
 
-Json stageToJson(ScoreStageProvenance stage, int wireSchemaVersion) {
-  validateStageProof(stage);
+Json stageToJson(ScoreStageProvenance stage, int wireSchemaVersion,
+                 const RulesetDescriptor &ruleset) {
+  validateStageProof(stage, ruleset);
   canonicalizeWindows(stage.effectiveJudgeWindows);
 
   Json value = Json::object();
@@ -773,7 +778,7 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
   }
   canonicalizeWindows(result.effectiveJudgeWindows);
   if (schemaVersion >= 4) {
-    validateStageProof(result);
+    validateStageProof(result, ruleset);
   } else {
     validateStageWindows(result, false);
   }
@@ -899,7 +904,8 @@ std::string serializeScoreProvenance(const ScoreProvenance &provenance) {
 
   Json stages = Json::array();
   for (const auto &stage : canonical.stages) {
-    stages.push_back(stageToJson(stage, canonical.schemaVersion));
+    stages.push_back(
+        stageToJson(stage, canonical.schemaVersion, canonical.ruleset));
   }
   root["stages"] = std::move(stages);
   root["gaugeType"] = gaugeTypeName(canonical.gaugeType);

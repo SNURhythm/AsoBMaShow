@@ -157,6 +157,8 @@ GameplayPolicyBuildOutcome buildGameplayRulesetPolicy(
     if (snapshot.totalNotes <= 0 ||
         !std::isfinite(snapshot.effectiveGaugeTotal) ||
         snapshot.effectiveGaugeTotal < 0.0 ||
+        (snapshot.effectiveGaugeTotal == 0.0 &&
+         input.ruleset != GameplayRuleset::LR2) ||
         (snapshot.authoredGaugeTotal.has_value() &&
          !std::isfinite(*snapshot.authoredGaugeTotal))) {
       return failure(GameplayPolicyBuildStatus::InvalidReplaySnapshot,
@@ -167,7 +169,8 @@ GameplayPolicyBuildOutcome buildGameplayRulesetPolicy(
   }
   if (!gauge.compiled || gauge.ruleset != input.ruleset ||
       !std::isfinite(gauge.effectiveTotal) ||
-      gauge.effectiveTotal < 0.0) {
+      gauge.effectiveTotal < 0.0 ||
+      (gauge.effectiveTotal == 0.0 && input.ruleset != GameplayRuleset::LR2)) {
     return failure(GameplayPolicyBuildStatus::InvalidChart,
                    "The chart gauge policy could not be compiled.");
   }

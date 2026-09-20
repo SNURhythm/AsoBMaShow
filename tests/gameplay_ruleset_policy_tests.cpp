@@ -212,6 +212,42 @@ void testLr2FractionalTotalStartsAndPersists() {
   }
 }
 
+void testBeatorajaRejectsZeroReplayTotal() {
+  auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  meta.MD5 = std::string(32, 'b');
+  meta.SHA256 = std::string(64, 'a');
+  const auto live = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::Beatoraja,
+             .sourceRank = meta.Rank});
+  require(live.built() && live.policy->gauge.effectiveTotal == 200.5,
+          "Beatoraja has positive canonical gauge recovery");
+  StartOptions options;
+  options.ruleset = GameplayRuleset::Beatoraja;
+  auto replay = std::make_shared<ReplayData>();
+  replay->chartMeta = meta;
+  replay->provenance = captureScoreProvenanceAtPlayStart(
+      options, meta, *live.policy);
+  replay->provenance.stages.front().effectiveGaugeTotal = 0.0;
+  const auto rejected = gameplay::buildGameplayRulesetPolicy(
+      meta, {.ruleset = GameplayRuleset::Beatoraja,
+             .sourceRank = meta.Rank,
+             .replaySnapshot = replay->provenance.stages.front()});
+  require(rejected.status ==
+              gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot &&
+              !rejected.policy.has_value(),
+          "Beatoraja rejects a zero TOTAL snapshot instead of disabling recovery");
+
+  StartOptions replayOptions{.replayData = replay};
+  applyReplayProvenanceToStartOptions(replayOptions, *replay);
+  require(!replayOptions.replayRulesetOverride.has_value(),
+          "Beatoraja replay ingestion rejects zero TOTAL with otherwise complete proof");
+  const auto start = buildGameplayRulesetPolicyAtPlayStart(
+      replayOptions, meta, AppSettings::NotePriorityMode::Lowest);
+  require(start.status ==
+              gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+          "Beatoraja cannot start a replay with rejected zero TOTAL proof");
+}
+
 void testInvalidInputsDoNotFallBack() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
   auto future = RulesetDescriptor::For(GameplayRuleset::LR2);
@@ -390,6 +426,7 @@ void testLegacyReplayUsesBeatorajaFallback() {
 } // namespace
 
 int main() {
+  testBeatorajaRejectsZeroReplayTotal();
   testLr2FractionalTotalStartsAndPersists();
   testNonpositiveTotalBuildsAndReplays();
   testLr2PolicyIsCoherent();

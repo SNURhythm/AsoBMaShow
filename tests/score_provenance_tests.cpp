@@ -545,6 +545,10 @@ void testSchemaFourMalformedPolicyProofIsRejected() {
   negativeTotal["stages"][0]["effectiveGaugeTotal"] = -1.0;
   assertMalformed(std::move(negativeTotal));
 
+  auto zeroTotal = valid;
+  zeroTotal["stages"][0]["effectiveGaugeTotal"] = 0.0;
+  assertMalformed(std::move(zeroTotal));
+
   auto missingTotal = valid;
   missingTotal["stages"][0].erase("effectiveGaugeTotal");
   assertMalformed(std::move(missingTotal));
@@ -570,6 +574,15 @@ void testUnknownFutureRulesetIsRetainedButUnsupported() {
   assert(decoded->ruleset.id == "future-ruleset");
   assert(decoded->ruleset.version == RulesetDescriptor::kCurrentVersion + 10);
   assert(!isSupportedRulesetDescriptor(decoded->ruleset));
+}
+
+void testBeatorajaZeroTotalCannotBeSerialized() {
+  auto input = sampleInput("zero-total");
+  input.effectiveGaugeTotal = 0.0;
+  const auto provenance = makeScoreProvenance(input);
+  std::string error;
+  assert(!serializeValidatedScoreProvenance(provenance, error).has_value());
+  assert(!error.empty());
 }
 
 void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {
@@ -1060,6 +1073,7 @@ void testTargetScoreOptionUsesPinnedScoreDataEncoding() {
 } // namespace
 
 int main() {
+  testBeatorajaZeroTotalCannotBeSerialized();
   testRulesetContract();
   testBpmGuideOnlyModifiesVariableTempoAttempt();
   testSchemaAndInputDeviceVocabularyContract();

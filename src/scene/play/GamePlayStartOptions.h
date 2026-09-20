@@ -322,6 +322,8 @@ replayJudgeOverrideForChart(const ScoreProvenance &provenance,
   if (result.totalNotes <= 0 ||
       !std::isfinite(result.effectiveGaugeTotal) ||
       result.effectiveGaugeTotal < 0.0 ||
+      (result.effectiveGaugeTotal == 0.0 &&
+       provenance.ruleset != RulesetDescriptor::For(GameplayRuleset::LR2)) ||
       // Old schemas could omit TOTAL; zero alone is not a complete proof.
       (result.effectiveGaugeTotal == 0.0 &&
        provenance.fingerprintSchemaVersion > 0 &&
