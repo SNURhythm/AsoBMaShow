@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <map>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -92,6 +93,9 @@ struct ResultSkinSession {
 };
 }
 struct ApplicationContext {
+  struct Settings {
+    struct Skin { std::map<int, int> selectedSkinEntries; } skin;
+  } settings;
   std::unique_ptr<skin::Lifecycle> gameplaySkinLifecycle = std::make_unique<skin::Lifecycle>();
   std::optional<int> skinStorageRoots = 1;
   std::unique_ptr<int> skinResourcePreparationService = std::make_unique<int>(1);
@@ -145,6 +149,30 @@ int main() {
   std::stop_source stop;
   std::string error;
   ResultSkinData data{.previousBest = 1234, .previousLampBest = 5, .graph = {2, 7}};
+  for (int type : {7, 15}) {
+    for (int missingService = 0; missingService < 4; ++missingService) {
+      ApplicationContext unavailable;
+      switch (missingService) {
+      case 0: unavailable.gameplaySkinLifecycle.reset(); break;
+      case 1: unavailable.skinStorageRoots.reset(); break;
+      case 2: unavailable.skinResourcePreparationService.reset(); break;
+      case 3: unavailable.skinLiveResourceCounters = nullptr; break;
+      }
+      error.clear();
+      check(presentation.prepare(unavailable, data, type, stop.get_token(), error, nullptr) &&
+                !presentation.active() && error.empty(),
+            "missing services keep native layout when no result skin is selected");
+      unavailable.settings.skin.selectedSkinEntries.emplace(type == 7 ? 15 : 7, 1);
+      check(presentation.prepare(unavailable, data, type, stop.get_token(), error, nullptr) &&
+                !presentation.active() && error.empty(),
+            "another result type's selection does not require services for this result");
+      unavailable.settings.skin.selectedSkinEntries.emplace(type, 1);
+      check(!presentation.prepare(unavailable, data, type, stop.get_token(), error, nullptr) &&
+                !presentation.active() && !error.empty(),
+            "missing service aborts a selected result skin instead of substituting native UI");
+    }
+  }
+  error.clear();
   check(presentation.prepare(app, data, 7, stop.get_token(), error, nullptr) &&
             !presentation.active(), "explicit built-in selection keeps native layout");
   app.gameplaySkinLifecycle->next = {skin::GameplaySkinAcquisitionDisposition::Ready, skin::Request{}};

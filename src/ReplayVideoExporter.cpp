@@ -169,8 +169,13 @@ public:
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     if (!context.gameplaySkinLifecycle || !context.skinStorageRoots ||
         !context.skinResourcePreparationService ||
-        !context.skinLiveResourceCounters)
+        !context.skinLiveResourceCounters) {
+      if (context.settings.skin.selectedSkinEntries.contains(skinType)) {
+        error = "Required services are unavailable for the selected replay result skin";
+        return false;
+      }
       return true;
+    }
     auto acquisition =
         context.gameplaySkinLifecycle->acquireForSkinType(skinType, false);
     if (acquisition.disposition == skin::GameplaySkinAcquisitionDisposition::BuiltIn)
