@@ -114,3 +114,17 @@ A controlled comparison also confirmed that the audio executable is byte-identic
 before and after this increment; direct baseline/current runs both passed in
 36.46/27.25 seconds. No timeout policy or test fixture was changed. All 404 cases
 passed across these runs; the single full parallel run is not reported as green.
+
+## Inactive configuration prune (2026-09-24)
+
+At the user's request, removed the inactive `cmake-build-lua-off`,
+`cmake-build-lua-off-vcpkg`, `cmake-build-release-bundle`, and
+`cmake-build-release-bundle-macos13` directories, plus 137 orphaned compiled
+objects and test executables. Selection excluded tracked files, current Ninja
+outputs and inputs, current CMake/Ninja/CTest references, dependency installations
+inside retained trees, and the extraction benchmark workspace.
+
+Removed artifacts occupied 2.135 GiB; observed available disk space increased
+from 12.817 to 14.935 GiB. Remaining desktop Debug and Release trees occupy
+7.675 and 0.403 GiB respectively. Both current Android configurations remain.
+A full incremental Debug build passed afterward without compiling objects.
