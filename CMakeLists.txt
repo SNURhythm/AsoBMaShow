@@ -1,7 +1,14 @@
 cmake_minimum_required(VERSION 3.22)
 
 include(ExternalProject)
+if(ASOBMASHOW_SHARE_ANDROID_DEPENDENCIES)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/AndroidDependencies.cmake")
+    asobmashow_prepare_android_dependencies()
+endif()
 project(AsoBMaShow VERSION 0.0.1 LANGUAGES C CXX)
+if(ASOBMASHOW_SHARE_ANDROID_DEPENDENCIES)
+    asobmashow_release_android_dependencies()
+endif()
 set(ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING
     "Application version exposed to native runtime and gameplay skins")
 add_compile_definitions(
@@ -8684,4 +8691,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             endif()
         endif()
     endforeach()
+    if(NOT IOS AND NOT PLATFORM_ANDROID)
+        include("${CMAKE_SOURCE_DIR}/cmake/SharedTestDependencies.cmake")
+        add_test(NAME shared_test_sources_tests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/shared_test_sources_tests.py -v)
+        add_test(NAME android_dependency_cache_tests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/android_dependency_cache_tests.py -v)
+    endif()
+
 endif()
