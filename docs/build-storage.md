@@ -86,3 +86,31 @@ increased from 9.863 to 19.687 GiB during cleanup. The final measured total is
 approximately 5.2 GiB below the rounded 19.8 GiB initial baseline. The removed
 variants will regenerate their packaging artifacts if built again, while reusing
 the compatible native configurations and shared dependency installation.
+
+## Additional desktop object sharing (2026-09-24)
+
+Extended the explicit list by 124 C/C++ production sources while preserving the
+helper and consumer list. Both local macOS Debug and Release graphs decreased
+from 3,794 to 3,258 compilation entries. Each of the 741 retired compilations has
+exactly one command-identical replacement on its original executable's Ninja
+link edge, supplied by 205 additional shared objects. All 443 main compilation
+commands and all 404 CTest registrations remain unchanged. Objective-C++ and
+build-identity sources were excluded from this expansion.
+
+Removed 409.66 MiB of retired Debug objects after validation; their shared
+replacements occupy 136.23 MiB. The additional net reduction is **273.43 MiB**
+(286,716,808 bytes), bringing both sharing passes to approximately **1.33 GiB**
+of net Debug object savings and **1,019 fewer compilation entries**. Conservative
+compile-contract partitioning limits the realized savings below the candidate
+ceiling. Windows and Linux builds were not run locally.
+
+The full Debug build, sharing fixture, three representative Release tests
+(`difficulty_table_importer_tests`, `replay_file_action_service_tests`, and
+`button_enabled_tests`), and incremental build checks passed. The parallel Debug
+suite passed 402/404 cases; audio rendering and jukebox restoration exceeded their
+existing 30-second limits. Jukebox restoration then passed twice in isolation
+(25.99 and 19.78 seconds), and the final audio CTest rerun passed in 14.60 seconds.
+A controlled comparison also confirmed that the audio executable is byte-identical
+before and after this increment; direct baseline/current runs both passed in
+36.46/27.25 seconds. No timeout policy or test fixture was changed. All 404 cases
+passed across these runs; the single full parallel run is not reported as green.

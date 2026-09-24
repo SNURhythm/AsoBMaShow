@@ -9,58 +9,182 @@ asobmashow_share_test_sources(dependencies
         src/ArchiveFile.cpp
         src/AtomicFile.cpp
         src/ChartLibraryScanner.cpp
+        src/ChartScanWorkScheduler.cpp
         src/CourseIdentity.cpp
+        src/DifficultyTableImporter.cpp
         src/FileChecksum.cpp
+        src/MinizBridge.c
         src/ModernResult.cpp
+        src/PrepMetronome.cpp
+        src/ResultPersistenceCoordinator.cpp
         src/ResultPersistenceModel.cpp
+        src/ResultRecordSummary.cpp
         src/ScoreProvenance.cpp
         src/Utils.cpp
+        src/Uuid.cpp
         src/VersionedJson.cpp
+        src/archive/IndexBuildCoordinator.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
+        src/audio/AudioBackend.cpp
+        src/audio/AudioDeviceManager.cpp
+        src/audio/AudioMix.cpp
+        src/audio/AudioWrapper.cpp
+        src/audio/ClubBeat.cpp
+        src/audio/GameplayBgaMissStateTracker.cpp
+        src/audio/Jukebox.cpp
+        src/audio/PrepMetronomeSound.cpp
+        src/audio/decoder.cpp
         src/bms_parser.cpp
+        src/ir/IrCredentialBackend.cpp
+        src/ir/IrCredentialStore.cpp
         src/ir/IrOutboxModels.cpp
+        src/ir/IrProfileSettings.cpp
+        src/ir/IrRankingModal.cpp
+        src/ir/IrReceiptModels.cpp
+        src/ir/IrRemoteScoreModels.cpp
+        src/ir/IrScoreReconciliation.cpp
+        src/ir/IrSettingsPresentation.cpp
+        src/ir/IrSubmission.cpp
+        src/ir/IrSubmissionModern.cpp
         src/ir/IrSubmissionSnapshot.cpp
         src/ir/IrUploadCandidates.cpp
+        src/ir/tachi/TachiBatchManual.cpp
+        src/library/ArchiveUnzipRecovery.cpp
+        src/music_select/MusicSelectBarManager.cpp
+        src/music_select/MusicSelectPagedSongs.cpp
+        src/music_select/MusicSelectPhysicalDirectory.cpp
+        src/music_select/MusicSelectPropertyProjection.cpp
+        src/music_select/MusicSelectReplaySlots.cpp
+        src/music_select/MusicSelectRepositoryMetadataLoader.cpp
         src/music_select/MusicSelectRepositoryProjection.cpp
+        src/music_select/MusicSelectSongIndex.cpp
+        src/music_select/MusicSelectSqlSongs.cpp
+        src/path.cpp
+        src/practice/PracticeAnalytics.cpp
         src/practice/PracticeConfiguration.cpp
+        src/practice/PracticeResultModel.cpp
+        src/practice/PracticeSession.cpp
+        src/rendering/Color.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+        src/rendering/common.cpp
+        src/replay/Base64Url.cpp
         src/replay/BeatorajaReplayCodec.cpp
+        src/replay/BeatorajaReplayPath.cpp
+        src/replay/ChartReplayAgreement.cpp
+        src/replay/CourseReplayAgreement.cpp
+        src/replay/GzipCodec.cpp
+        src/replay/ReplayCapabilities.cpp
+        src/replay/ReplayFileActionService.cpp
+        src/replay/ReplayFileAssociationCoordinator.cpp
+        src/replay/ReplayFileLifecycle.cpp
+        src/replay/ReplayFileStore.cpp
+        src/replay/ReplayPlayback.cpp
+        src/replay/ReplayPlaybackDriver.cpp
+        src/replay/ReplayPlaybackMaterializer.cpp
+        src/replay/ReplayProfileInventory.cpp
         src/replay/ReplayReferenceAgreement.cpp
+        src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
+        src/replay/ReplaySetupProvenance.cpp
         src/repositories/ChartRepository.cpp
         src/repositories/ChartRepositoryDifficulty.cpp
         src/repositories/ChartRepositoryQueries.cpp
         src/repositories/ChartScanStore.cpp
+        src/repositories/ChartStorageIdentity.cpp
+        src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
         src/repositories/ReplayRepositoryIrRemoteScores.cpp
+        src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ReplayRepositoryModernResults.cpp
+        src/repositories/ReplayRepositoryRecords.cpp
+        src/repositories/ReplayRepositorySchema.cpp
         src/repositories/ScoreRepository.cpp
+        src/repositories/ScoreRepositoryChartSession.cpp
+        src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/repositories/ScoreRepositorySchema.cpp
+        src/scene/play/CompiledGameplayJudge.cpp
+        src/scene/play/GameplayCandidateRules.cpp
+        src/scene/play/GameplayDefinition.cpp
         src/scene/play/GameplayGaugeRules.cpp
+        src/scene/play/GameplayJudgeRules.cpp
+        src/scene/play/GameplayNoteJudgeRole.cpp
+        src/scene/play/GameplayRulesetPolicy.cpp
+        src/scene/play/GameplaySimulation.cpp
+        src/scene/play/Judge.cpp
         src/scene/play/PlayfieldChartVisualModel.cpp
         src/scene/play/PlayfieldProjection.cpp
+        src/scene/play/RhythmLaneInputController.cpp
         src/scene/play/SkinGameplayGraphState.cpp
+        src/settings/AudioVideoSettings.cpp
         src/skin/SkinProfileSettings.cpp
+        src/skin/SkinStoragePaths.cpp
         src/skin/beatoraja/GameplaySkinDocumentLoader.cpp
         src/skin/beatoraja/JsonGameplaySkinDecoder.cpp
         src/skin/beatoraja/Lr2GameplaySkinDecoder.cpp
+        src/skin/beatoraja/LuaSkinAudioHost.cpp
         src/skin/beatoraja/LuaSkinBindingDecoder.cpp
         src/skin/beatoraja/LuaSkinFileSystem.cpp
         src/skin/beatoraja/LuaSkinHostModules.cpp
+        src/skin/beatoraja/LuaSkinHttpClient.cpp
         src/skin/beatoraja/LuaSkinJavaPatternPcre2.cpp
+        src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
         src/skin/beatoraja/LuaSkinRuntime.cpp
         src/skin/beatoraja/LuaSkinTableDecoder.cpp
+        src/skin/beatoraja/MusicSelectBarRenderer.cpp
+        src/skin/beatoraja/NumericGlyphAtlas.cpp
         src/skin/beatoraja/PlaySkinSession.cpp
         src/skin/beatoraja/PlaySkinStateBridge.cpp
+        src/skin/beatoraja/PlaySkinViewport.cpp
         src/skin/beatoraja/PomyuCharaResource.cpp
         src/skin/beatoraja/Skin2DRenderer.cpp
+        src/skin/beatoraja/SkinAcceptanceRecorder.cpp
+        src/skin/beatoraja/SkinBitmapFontParser.cpp
+        src/skin/beatoraja/SkinBpmGraphRenderer.cpp
+        src/skin/beatoraja/SkinCompatibilityDiagnostics.cpp
+        src/skin/beatoraja/SkinCoverNormalization.cpp
+        src/skin/beatoraja/SkinDecodeCache.cpp
+        src/skin/beatoraja/SkinDestinationEvaluator.cpp
+        src/skin/beatoraja/SkinGaugeGraphRenderer.cpp
+        src/skin/beatoraja/SkinGaugeNodeExpansion.cpp
+        src/skin/beatoraja/SkinHitErrorVisualizerRenderer.cpp
+        src/skin/beatoraja/SkinJudgeNormalization.cpp
+        src/skin/beatoraja/SkinJudgeNumberNormalization.cpp
         src/skin/beatoraja/SkinModelValidator.cpp
+        src/skin/beatoraja/SkinMovieCatalog.cpp
+        src/skin/beatoraja/SkinMovieCatalogFrame.cpp
+        src/skin/beatoraja/SkinNoteDistributionGraphRenderer.cpp
+        src/skin/beatoraja/SkinNoteLaneGeometryNormalization.cpp
+        src/skin/beatoraja/SkinNoteLineNormalization.cpp
+        src/skin/beatoraja/SkinNoteNormalization.cpp
+        src/skin/beatoraja/SkinObjectResolutionPrecedence.cpp
+        src/skin/beatoraja/SkinOverlayDigestProvider.cpp
+        src/skin/beatoraja/SkinPerformanceTelemetry.cpp
         src/skin/beatoraja/SkinResourceCatalog.cpp
+        src/skin/beatoraja/SkinTextAtlas.cpp
+        src/skin/beatoraja/SkinTextGraphNormalization.cpp
+        src/skin/beatoraja/SkinTimingVisualizerRenderer.cpp
+        src/skin/package/SkinAliasDetector.cpp
         src/skin/package/SkinPackageCatalog.cpp
+        src/skin/package/SkinPathPolicy.cpp
         src/skin/package/SkinTreeSnapshotter.cpp
         src/sqlite3.c
+        src/utils/Stopwatch.cpp
+        src/video/VideoDecodeState.cpp
+        src/video/VideoFrameLayout.cpp
+        src/video/VideoPlayer.cpp
+        src/view/Button.cpp
+        src/view/CheckboxButtonContent.cpp
+        src/view/DecodedImageCache.cpp
         src/view/ImageDecodeCoordinator.cpp
+        src/view/ImageFade.cpp
         src/view/ImageFileDecoder.cpp
+        src/view/ImageView.cpp
+        src/view/ScrollView.cpp
+        src/view/SdlTtfRuntime.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     TARGETS
