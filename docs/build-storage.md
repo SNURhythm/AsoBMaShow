@@ -53,9 +53,9 @@ Only those retired outputs were removed. A subsequent build compiled no objects.
 
 Firebase release and Play Debug build-only checks both passed and selected the
 same 862.7 MiB Android dependency installation. Repeating Play Debug passed
-without native compilation. Older Android configurations and their four local
-dependency installations remain on disk; this change prevents further compatible
-configuration copies but does not claim those retained directories were reclaimed.
+without native compilation. Initial validation retained older Android configurations
+and their four local dependency installations. The follow-up cleanup below
+reclaimed those artifacts after the user requested it.
 
 The full desktop build and two representative Release tests passed. Both new
 build-configuration tests passed. Two full CTest runs at `-j 6` passed 403 of 404
@@ -63,3 +63,26 @@ cases; `chart_audio_renderer_tests` exceeded its existing 30-second timeout in
 both parallel runs, passed in isolation in 12.94 seconds, and passed three more consecutive
 isolated runs in 12.92–13.09 seconds. Its large audio mixing workload remains sensitive to concurrent load; no test timeout or fixture
 was changed for this storage work.
+
+## Follow-up artifact cleanup (2026-09-24)
+
+Removed the four superseded native configurations (`Debug/35133n20` and
+`RelWithDebInfo/{27exq3c4,2l6u21r3,4k51t406}`), their corresponding native outputs,
+and old Firebase Debug / Play Release packaging artifacts. No Android build was
+running. Current Firebase Release and Play Debug APKs, native build trees, and
+shared dependencies were retained; their CMake caches and Ninja graphs did not
+reference the removed directories.
+
+| Measured area | Before cleanup | After cleanup |
+| --- | ---: | ---: |
+| Desktop Debug | 8.092 GiB | 8.092 GiB |
+| Android `.cxx` | 9.870 GiB | 2.758 GiB |
+| Android app `build` | 5.649 GiB | 2.903 GiB |
+| Shared Android dependencies | 0.843 GiB | 0.843 GiB |
+| Total | 24.454 GiB | 14.595 GiB |
+
+Allocated artifact storage decreased by 9.858 GiB. Filesystem available space
+increased from 9.863 to 19.687 GiB during cleanup. The final measured total is
+approximately 5.2 GiB below the rounded 19.8 GiB initial baseline. The removed
+variants will regenerate their packaging artifacts if built again, while reusing
+the compatible native configurations and shared dependency installation.
