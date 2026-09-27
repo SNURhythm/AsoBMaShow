@@ -707,6 +707,30 @@ void testCourseReplayPacemakerTracksAppliedStageJudgements() {
          "course replay pacemaker advances from each applied stage judgement");
 }
 
+void testReplayPacemakerUsesConsumedPmsIdentities() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 9;
+  chart.Meta.TotalNotes = 1;
+  RhythmState state(&chart, false);
+  const pacemaker::Target target{.enabled = true, .finalScore = 2,
+                                 .maxScore = 2, .totalNotes = 1};
+  pacemaker::applyReplayEventToState(state,
+      {.action = ReplayEventAction::Press, .judgement = Bad});
+  expect(pacemaker::snapshotForState(target, state).playedNotes == 0,
+         "PMS nonvanishing BAD does not advance the replay pacemaker");
+  pacemaker::applyReplayEventToState(state,
+      {.action = ReplayEventAction::Miss, .judgement = None});
+  expect(pacemaker::snapshotForState(target, state).playedNotes == 1 &&
+             state.judgeCount[Poor] == 0,
+         "suppressed PMS miss advances the replay pacemaker without POOR");
+  ReplayData replay;
+  replay.chartMeta = chart.Meta;
+  replay.events = {{.action = ReplayEventAction::Press, .judgement = Bad},
+                   {.action = ReplayEventAction::Press, .judgement = PGreat, .score = 2}};
+  expect(pacemaker::buildReplayScoreProgression(replay, 1) == std::vector<int>({0, 2}),
+         "PMS BEST ghost progression does not consume nonvanishing BAD");
+}
+
 void testReplayExportJudgementAuthorityRetainsFastSlowCounters() {
   replay_video_export::ReplayJudgementAuthorityPlayback authority;
   authority.recordApplied({.action = ReplayEventAction::Press,
@@ -719,13 +743,16 @@ void testReplayExportJudgementAuthorityRetainsFastSlowCounters() {
                             .judgement = Kpoor,
                             .diffMicros = -56});
 
+  authority.recordApplied({.action = ReplayEventAction::Press,
+                            .judgement = Good, .diffMicros = 0});
+
   const auto &counters = authority.judgementCounters();
   const auto &fastSlow = authority.judgementFastSlowCounters();
   expect(counters.at(PGreat) == 1 && counters.at(Great) == 1 &&
              counters.at(Kpoor) == 1 && fastSlow.at(PGreat).fast == 1 &&
              fastSlow.at(PGreat).slow == 0 && fastSlow.at(Great).fast == 0 &&
-             fastSlow.at(Great).slow == 1 && fastSlow.at(Kpoor).fast == 0 &&
-             fastSlow.at(Kpoor).slow == 0,
+             fastSlow.at(Great).slow == 1 && fastSlow.at(Kpoor).fast == 1 &&
+             fastSlow.at(Kpoor).slow == 0 && fastSlow.at(Good).fast == 1,
          "replay export retains per-judgement FAST/SLOW authority like replay watch");
 }
 
@@ -1848,6 +1875,29 @@ void testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot() {
          "the adapter stores the supplied judge BGA clock before frame snapshot");
 }
 
+void testMultiBadLeavesChargeTailForItsOwnMiss() {
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                          bms_parser::LongNoteType::ChargeNote,
+                          bms_parser::LongNoteType::HellChargeNote}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    addLongNotePair(chart, type, 1, 1'000, 2'000);
+    AppSettings settings;
+    PlayfieldPresentationConfig configuration;
+    TestBga bga;
+    const auto created = ReplayPlayfieldPresentation::create(
+        createInfo(chart, settings, configuration, bga));
+    if (!created.presentation) { expect(false, "MultiBad replay adapter created"); return; }
+    (void)created.presentation->applyReplayEvent(
+        {.action = ReplayEventAction::MultiBad, .lane = 1,
+         .noteTimeMicros = 1'000, .judgeTimeMicros = 900, .judgement = Bad}, {}, true);
+    const auto state = created.presentation->captureVisualStateForTesting({});
+    expect(state.notes.size() == 2 && state.notes[0].judged &&
+               state.notes[1].judged == (type == bms_parser::LongNoteType::LongNote),
+           "MultiBad consumes the paired tail only for classic LN");
+  }
+}
+
 void testLongTailMissPreservesExporterEndpointSemantics() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2156,6 +2206,60 @@ void testMaximumComboAdvancesOnlyWithAppliedReplayEvents() {
          "the progressive course maximum advances in the next stage");
 }
 
+void testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    for (const int keyMode : {5, 7, 9, 10, 14}) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = keyMode;
+      chart.Meta.TotalNotes = 2;
+      auto *measure = new bms_parser::Measure;
+      chart.Measures.push_back(measure);
+      auto *timeline = new bms_parser::TimeLine(18, false);
+      timeline->Timing = 1'000;
+      timeline->SetNote(1, new bms_parser::Note(bms_parser::Parser::NoWav));
+      measure->TimeLines.push_back(timeline);
+      AppSettings settings;
+      PlayfieldPresentationConfig configuration;
+      TestBga bga;
+      const auto created = ReplayPlayfieldPresentation::create(
+          createInfo(chart, settings, configuration, bga));
+      if (!created.presentation) { expect(false, "PMS replay adapter created"); return; }
+      PlayfieldAuthorityUpdate authority;
+      authority.gaugeRules.ruleset = ruleset;
+      created.presentation->applyAuthorityUpdate(authority);
+      (void)created.presentation->applyReplayEvent(
+          {.action = ReplayEventAction::Press, .lane = 2,
+           .judgement = PGreat, .combo = 1}, {}, true);
+      (void)created.presentation->applyReplayEvent(
+          {.action = ReplayEventAction::Press, .lane = 1,
+           .noteTimeMicros = 1'000, .judgement = Kpoor}, {}, true);
+      created.presentation->applyAuthorityUpdate(authority);
+      auto state = created.presentation->captureVisualStateForTesting({});
+      const bool breaks = ruleset == GameplayRuleset::Beatoraja &&
+                          (keyMode == 5 || keyMode == 9 || keyMode == 10);
+      expect(state.authority.stagePassedNotes == 1 &&
+                 state.authority.stageCombo == (breaks ? 0 : 1),
+             "empty POOR consumes no note and uses mode-specific combo policy");
+      if (keyMode == 9 && ruleset == GameplayRuleset::Beatoraja) {
+        (void)created.presentation->applyReplayEvent(
+            {.action = ReplayEventAction::Press, .lane = 1,
+             .noteTimeMicros = 1'000, .judgement = Bad}, {}, true);
+        created.presentation->applyAuthorityUpdate(authority);
+        state = created.presentation->captureVisualStateForTesting({});
+        expect(state.authority.stagePassedNotes == 1 && !state.notes.front().judged,
+               "PMS BAD preserves its unconsumed visual identity");
+        (void)created.presentation->applyReplayEvent(
+            {.action = ReplayEventAction::Miss, .lane = 1,
+             .noteTimeMicros = 1'000, .judgement = None}, {}, true);
+        created.presentation->applyAuthorityUpdate(authority);
+        state = created.presentation->captureVisualStateForTesting({});
+        expect(state.authority.stagePassedNotes == 2 && state.notes.front().judged,
+               "suppressed PMS miss consumes its identity without another judgment");
+      }
+    }
+  }
+}
+
 void testReplayAdapterCarriesStageFullComboAuthority() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -2326,6 +2430,7 @@ int main() {
   testReplayExportConfigUsesLaneRendererMainBpmTieRule();
   testReplayExportPersonalBestAuthorityUsesSavedBestReplay();
   testCourseReplayPacemakerTracksAppliedStageJudgements();
+  testReplayPacemakerUsesConsumedPmsIdentities();
   testReplayExportJudgementAuthorityRetainsFastSlowCounters();
   testFirstExportFrameRefreshesPreparedRendererGeometry();
   testReplayGameplayFrameStateMirrorsLiveTimerAndStartClocks();
@@ -2357,12 +2462,14 @@ int main() {
   testReplayDuplicateTimestampUsesLiveLongNoteIdentityForJudgementCount();
   testBuiltInReplayPresentationPreprocessesGhostsAndMisses();
   testAppliedJudgeCarriesTheProvidedBgaClockIntoSnapshot();
+  testMultiBadLeavesChargeTailForItsOwnMiss();
   testLongTailMissPreservesExporterEndpointSemantics();
   testChargeLongReleaseClearsBothEndpointsWithoutReactivation();
   testHcnBodyInputReprojectsBothEndpointStates();
   testMissedHcnHeadRecoversFromRecordedLanePress();
   testMineReplayEventFindsLandmineSource();
   testMaximumComboAdvancesOnlyWithAppliedReplayEvents();
+  testReplayAdapterMatchesEmptyPoorAndPmsPassedNotes();
   testReplayAdapterCarriesStageFullComboAuthority();
   testAutoplayReplayReducerMatchesEffectiveScorableTotal();
   testReplayExportPreparesSavedLongNoteScoreMetadata();

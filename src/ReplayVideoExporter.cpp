@@ -2929,7 +2929,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       result_presentation::pacemakerTargetForReplay(
           chart, replay, selectedPacemakerTarget, previousBest,
           bestScoreReplay.get());
-  RhythmState pacemakerState(&chart, false);
+  RhythmState pacemakerState(
+      &chart, false, gameplayRulesetFromId(replay.provenance.ruleset.id)
+                         .value_or(GameplayRuleset::Beatoraja));
   pacemakerState.configureGauge(replay.initialGaugeType,
                                 replay.gaugeAutoShift,
                                 GaugeProfile::Standard,
@@ -3209,6 +3211,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           event.action == ReplayEventAction::Gauge) {
         replayGaugeType = event.gaugeType;
         replayGauge = event.gauge;
+      }
+      if (event.action == ReplayEventAction::Miss && event.judgement == None) {
+        pacemaker::applyReplayEventToState(pacemakerState, event);
       }
       if (appliedHud && event.judgement != None) {
         pacemaker::applyReplayEventToState(pacemakerState, event);
@@ -3942,7 +3947,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         result_presentation::pacemakerTargetForReplay(
             chart, stageReplay, selectedPacemakerTarget, previousBest,
             bestScoreReplay.get());
-    RhythmState pacemakerState(&chart, false);
+    RhythmState pacemakerState(
+        &chart, false, gameplayRulesetFromId(stageReplay.provenance.ruleset.id)
+                           .value_or(GameplayRuleset::Beatoraja));
     pacemakerState.configureGauge(
         stageReplay.initialGaugeType, stageReplay.gaugeAutoShift,
         stage.initialGaugeState.gaugeProfile,
@@ -4036,6 +4043,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             event.action == ReplayEventAction::Gauge) {
           replayGaugeType = event.gaugeType;
           replayGauge = event.gauge;
+        }
+        if (event.action == ReplayEventAction::Miss && event.judgement == None) {
+          pacemaker::applyReplayEventToState(pacemakerState, event);
         }
         if (appliedHud && event.judgement != None) {
           pacemaker::applyReplayEventToState(pacemakerState, event);

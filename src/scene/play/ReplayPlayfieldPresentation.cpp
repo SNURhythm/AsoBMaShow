@@ -529,12 +529,20 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
     bool /*recordTimingSample*/) {
   const JudgeResult recordedJudge(event.judgement, event.diffMicros);
   const ChartVisualNote *resolvedGraphNote = replayNote(event);
+  const int keyMode = chartModel_->keyCount;
+  const bool beatoraja = authority_.gaugeRules.ruleset == GameplayRuleset::Beatoraja;
+  const bool pms = beatoraja && (keyMode == 9 || keyMode == 18);
+  const bool vanishes = recordedJudge.isNotePlayed() &&
+      !(pms && event.judgement == Bad && event.action == ReplayEventAction::Press);
   const auto applyHud = [&]() -> bool {
     if (event.judgement == None) {
+      if (event.action == ReplayEventAction::Miss) ++stagePassedNotes_;
       return false;
     }
-    ++stagePassedNotes_;
-    if (recordedJudge.isComboBreak()) {
+    if (vanishes) ++stagePassedNotes_;
+    if (recordedJudge.isComboBreak() ||
+        (event.judgement == Kpoor && beatoraja &&
+         (keyMode == 5 || keyMode == 10 || pms))) {
       stageCombo_ = 0;
     } else if (event.judgement != Kpoor) {
       ++stageCombo_;
@@ -559,7 +567,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
         current->playedTimeMicros = event.judgeTimeMicros;
         publishNoteState(note->id);
       }
-      if (note->kind == ChartVisualNoteKind::LongHead) {
+      if (note->kind == ChartVisualNoteKind::LongHead && isClassicLongNote(*note)) {
         if (auto *tail = noteState(note->pairId);
             tail != nullptr && !tail->judged) {
           tail->judged = true;
@@ -577,8 +585,8 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
       if (isLongNote(*note)) {
         suppressHudForLongNoteHead =
             note->kind == ChartVisualNoteKind::LongHead &&
-            recordedJudge.isNotePlayed() && isClassicLongNote(*note);
-        if (recordedJudge.isNotePlayed() &&
+            vanishes && isClassicLongNote(*note);
+        if (vanishes &&
             note->kind == ChartVisualNoteKind::LongHead) {
           if (auto *current = noteState(note->id); current != nullptr) {
             current->judged = true;
@@ -589,7 +597,7 @@ bool ReplayPlayfieldPresentation::applyReplayEvent(
             updateLongVisualState(*note);
           }
         }
-      } else if (recordedJudge.isNotePlayed()) {
+      } else if (vanishes) {
         if (auto *current = noteState(note->id); current != nullptr) {
           current->judged = true;
           current->playedTimeMicros = event.judgeTimeMicros;
