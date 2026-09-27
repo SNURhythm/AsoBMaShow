@@ -23,6 +23,7 @@ CompiledGameplayJudge CompiledGameplayJudge::from(const Judge &judge) {
       PGreat, Great, Good, Bad, Kpoor};
   GameplayJudgeRules rules;
   rules.ruleset = GameplayRuleset::Beatoraja;
+  rules.repeatedKpoor = true;
   JudgeWindowSet windows;
   for (std::size_t index = 0; index < order.size(); ++index) {
     const Judgement judgement = order[index];
@@ -83,6 +84,12 @@ std::optional<TimingWindow> CompiledGameplayJudge::window(
 std::optional<TimingWindow>
 CompiledGameplayJudge::window(Judgement judgement) const noexcept {
   return window(JudgeWindowContext::Normal, judgement);
+}
+
+std::int64_t CompiledGameplayJudge::automaticPoorLateMicros(
+    NoteJudgeRole role) const noexcept {
+  const auto bad = window(windowContextForRole(role), Bad);
+  return bad.has_value() ? bad->lateMicros : rules_.automaticPoorLateMicros;
 }
 
 std::int64_t CompiledGameplayJudge::latestHittableNoteTiming(

@@ -5,8 +5,19 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 
 namespace gameplay {
+
+// Keyboard BAD has the largest rank-scaled edge (320 ms). Empty-POOR and
+// ordinary/older snapshots remain covered by the established two-second cap.
+[[nodiscard]] inline constexpr std::int64_t maximumRecordedJudgeWindowMagnitude(
+    std::optional<int> effectiveRankPercent) noexcept {
+  constexpr std::int64_t ordinaryLimit = 2'000'000;
+  const std::int64_t extendedLimit =
+      std::int64_t{320'000} * effectiveRankPercent.value_or(0) / 100;
+  return extendedLimit > ordinaryLimit ? extendedLimit : ordinaryLimit;
+}
 
 struct TimingWindow {
   Judgement judgement = None;
@@ -51,6 +62,13 @@ struct GameplayJudgeRules {
   std::array<JudgeWindowSet, 4> contexts{};
   CandidateSelectionMode candidateSelection = CandidateSelectionMode::Lowest;
   std::int64_t automaticPoorLateMicros = 0;
+  int keyMode = 7;
+  std::optional<int> effectiveJudgeRankPercent;
+  bool comboKpoor = true;
+  bool singleMiss = false;
+  bool vanishBad = true;
+  std::int64_t normalReleaseMarginMicros = 0;
+  std::int64_t scratchReleaseMarginMicros = 0;
   bool repeatedKpoor = false;
   bool multiBad = false;
   bool rejectsLateBadForLongNoteHead = false;
@@ -66,6 +84,8 @@ windowContextForRole(NoteJudgeRole role) noexcept;
     int judgeScalePercent = 100,
     CourseJudgementConstraint constraint = CourseJudgementConstraint::None,
     CandidateSelectionMode beatorajaSelection =
-        CandidateSelectionMode::Lowest);
+        CandidateSelectionMode::Lowest,
+    int keyMode = 7,
+    std::optional<int> rankPercentOverride = std::nullopt);
 
 } // namespace gameplay

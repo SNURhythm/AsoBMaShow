@@ -423,9 +423,111 @@ void testLegacyReplayUsesBeatorajaFallback() {
               courseOutcome.policy->id == GameplayRuleset::Beatoraja,
           "a migrated legacy course replay uses the same Beatoraja fallback");
 }
+void testPolicyUsesChartKeyMode() {
+  for (int keys : {5, 7, 9, 24}) {
+    auto meta = chartMeta(GameplayRuleset::Beatoraja);
+    meta.KeyMode = keys;
+    const auto outcome = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja, .sourceRank = 1});
+    require(outcome.built(), "each supported profile compiles");
+    const long long great = keys == 5 ? 25000 : keys == 7 ? 30000 : keys == 9 ? 25000 : 45000;
+    require(outcome.policy->judge.window(Great)->lateMicros == great,
+            "policy selects timing profile from chart metadata");
+  }
+}
+
+void testExtendedRankPolicyCaptureAndReplay() {
+  const std::string source = "#BPM 120\n#DEFEXRANK 80\n#00111:01\n";
+  bms_parser::Parser parser;
+  std::atomic_bool cancelled{false};
+  bms_parser::Chart *parsed = nullptr;
+  parser.Parse(std::vector<unsigned char>(source.begin(), source.end()),
+               &parsed, false, false, cancelled);
+  const std::unique_ptr<bms_parser::Chart> chart(parsed);
+  require(chart != nullptr, "extended-rank chart parses");
+  StartOptions options;
+  options.ruleset = GameplayRuleset::LR2;
+  const auto live = buildGameplayRulesetPolicyAtPlayStart(
+      options, *chart, AppSettings::NotePriorityMode::Lowest);
+  require(live.built() && live.policy->judge.window(PGreat)->lateMicros == 16200,
+          "DEFEXRANK 80 resolves to NORMAL rank times 80%, then LR2 interpolation");
+  const auto captured = captureScoreProvenanceAtPlayStart(options, chart->Meta, *live.policy);
+  require(captured.stages.front().effectiveJudgeRankPercent == 60,
+          "the effective extended percentage is captured for replay and ranking");
+  const auto replay = gameplay::buildGameplayRulesetPolicy(
+      chart->Meta, {.ruleset = GameplayRuleset::LR2,
+                    .sourceRank = chart->Meta.Rank,
+                    .replaySnapshot = captured.stages.front()});
+  require(replay.built() && replay.policy->canonical &&
+              replay.policy->judge.rules() == live.policy->judge.rules(),
+          "extended-rank replay exactly restores the live judge policy");
+}
+
+
+void testLargeExtendedRankSurvivesPersistenceAndReplay() {
+  auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  meta.MD5 = std::string(32, 'a');
+  meta.SHA256 = std::string(64, 'b');
+  meta.RankType = bms_parser::JudgeRankType::DefExRank;
+  meta.Rank = 1000;
+  StartOptions options;
+  options.ruleset = GameplayRuleset::Beatoraja;
+  const auto live = buildGameplayRulesetPolicyAtPlayStart(
+      options, meta, AppSettings::NotePriorityMode::Lowest);
+  require(live.built() && live.policy->canonical &&
+              live.policy->judge.window(Bad)->lateMicros == 2'100'000,
+          "DEFEXRANK1000 produces a canonical 2.1-second Bea BAD window");
+  const auto captured = captureScoreProvenanceAtPlayStart(options, meta, *live.policy);
+  require(captured.stages.front().effectiveJudgeRankPercent == 750,
+          "large DEFEXRANK captures its exact effective percentage");
+  std::string diagnostic;
+  const auto json = serializeValidatedScoreProvenance(captured, diagnostic);
+  require(json.has_value(),
+          "canonical large DEFEXRANK windows must serialize without rejecting the result");
+  const auto restored = deserializeScoreProvenance(*json, diagnostic);
+  require(restored.has_value() && *restored == captured,
+          "large DEFEXRANK provenance round trips without changing its descriptor");
+  require(play_start_detail::validatedJudgeContexts(restored->stages.front()).has_value(),
+          "large DEFEXRANK is accepted by replay start context validation");
+  ReplayData recorded;
+  recorded.chartMeta = meta;
+  recorded.provenance = *restored;
+  StartOptions replayOptions;
+  applyReplayProvenanceToStartOptions(replayOptions, recorded);
+  require(replayOptions.replayRulesetOverride.has_value(),
+          "large DEFEXRANK replay retains its recorded policy override");
+  const auto replay = buildGameplayRulesetPolicyAtPlayStart(
+      replayOptions, meta, AppSettings::NotePriorityMode::Lowest);
+  require(replay.built() && replay.policy->canonical &&
+              replay.policy->judge.rules() == live.policy->judge.rules() &&
+              replay.policy->gauge == live.policy->gauge,
+          "large DEFEXRANK replay exactly reconstructs live judge and gauge policy");
+
+  for (const auto percent : {std::optional<int>{750}, std::optional<int>{},
+                             std::optional<int>{-1}}) {
+    auto forged = captured;
+    forged.stages.front().effectiveJudgeRankPercent = percent;
+    forged.stages.front().effectiveJudgeWindows.front().lateMicros =
+        percent == 750 ? 2'400'001 : 2'000'001;
+    require(!serializeValidatedScoreProvenance(forged, diagnostic),
+            "declared-rank bound never admits oversized or negative-rank windows");
+    require(!play_start_detail::validatedJudgeContexts(forged.stages.front()),
+            "replay start preserves the declared-rank or ordinary two-second bound");
+    const auto rejected = gameplay::buildGameplayRulesetPolicy(
+        meta, {.ruleset = GameplayRuleset::Beatoraja,
+               .sourceRank = meta.Rank,
+               .replaySnapshot = forged.stages.front()});
+    require(rejected.status == gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+            "replay policy rejects windows above their declared-rank bound");
+  }
+}
+
 } // namespace
 
 int main() {
+  testLargeExtendedRankSurvivesPersistenceAndReplay();
+  testExtendedRankPolicyCaptureAndReplay();
+  testPolicyUsesChartKeyMode();
   testBeatorajaRejectsZeroReplayTotal();
   testLr2FractionalTotalStartsAndPersists();
   testNonpositiveTotalBuildsAndReplays();

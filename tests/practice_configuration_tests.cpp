@@ -71,6 +71,10 @@ void testSkinMenuInitialJudgeRankUsesPinnedBmsRuleConversion() {
              practice::sourcePracticeJudgeRank(7, 5) == 75 &&
              practice::sourcePracticeJudgeRank(9, 2) == 70,
          "practice JUDGERANK converts BMS RANK through the pinned mode rule");
+  expect(practice::sourcePracticeJudgeRank(7, 80, 60) == 60 &&
+             practice::sourcePracticeJudgeRank(9, 80, 56) == 56 &&
+             practice::sourcePracticeJudgeRank(7, 1, 0) == 0,
+         "practice JUDGERANK preserves the resolved DEFEXRANK percentage");
 }
 
 void testFiveKeyPracticeUsesTheNormalRandomOptionDomain() {
@@ -100,13 +104,16 @@ void testSkinMenuJudgeRankUsesPinnedWindowRule() {
   expect(sevenWindows[0].earlyMicros == -10'000 &&
              sevenWindows[1].lateMicros == 30'000 &&
              sevenWindows[2].lateMicros == 75'000 &&
-             sevenWindows[3].earlyMicros == -280'000 &&
-             sevenWindows[4].lateMicros == 500'000 &&
+             sevenWindows[3].earlyMicros == -110'000 &&
+             sevenWindows[4].lateMicros == 150'000 &&
              pmsWindows[0].lateMicros == 20'000 &&
              pmsWindows[1].lateMicros == 25'000 &&
-             pmsWindows[2].lateMicros == 58'500,
-         "practice JUDGERANK scales only the pinned adjustable windows and "
-         "retains their source fixed bounds");
+             pmsWindows[2].lateMicros == 58'500 &&
+             seven.automaticPoorLateMicros == 140'000 &&
+             pms.automaticPoorLateMicros == 183'000 &&
+             pms.singleMiss && !pms.vanishBad && !pms.comboKpoor &&
+             pms.normalReleaseMarginMicros == 200'000,
+         "practice JUDGERANK uses rank-scaled BAD and input-minus-note windows");
 }
 
 void testSkinMenuScrollUsesPinnedDoublePlayViewport() {

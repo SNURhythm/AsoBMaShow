@@ -108,6 +108,20 @@ void testPreviousLr2ZeroTotalRemainsReadable() {
   assert(scoreEligibilityForProvenance(*decoded) == ScoreEligibility::Modified);
 }
 
+void testExtendedJudgeRankPercentSurvivesRoundTrip() {
+  auto root = nlohmann::json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance("extended-rank")));
+  root["stages"][0]["effectiveJudgeRankPercent"] = 112;
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(root.dump(), error);
+  assert(decoded.has_value());
+  const auto restored = nlohmann::json::parse(serializeScoreProvenance(*decoded));
+  assert(restored["stages"][0].contains("effectiveJudgeRankPercent"));
+  assert(restored["stages"][0]["effectiveJudgeRankPercent"] == 112);
+  root["stages"][0]["effectiveJudgeRankPercent"] = -1;
+  assert(!deserializeScoreProvenance(root.dump(), error).has_value());
+}
+
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
   assert(rules.id == "lr2");
@@ -1103,6 +1117,7 @@ void testTargetScoreOptionUsesPinnedScoreDataEncoding() {
 } // namespace
 
 int main() {
+  testExtendedJudgeRankPercentSurvivesRoundTrip();
   testPreviousLr2ZeroTotalRemainsReadable();
   testPreviousRulesetsCannotRemainVerified();
   testBeatorajaZeroTotalCannotBeSerialized();

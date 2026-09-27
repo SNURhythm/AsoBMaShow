@@ -575,7 +575,11 @@ SkinMenuState buildSkinMenuState(const Configuration &configuration,
   return controller.skinMenuState();
 }
 
-int sourcePracticeJudgeRank(int keyMode, int bmsRank) noexcept {
+int sourcePracticeJudgeRank(int keyMode, int bmsRank,
+                            std::optional<int> effectiveRankPercent) noexcept {
+  if (effectiveRankPercent.has_value()) {
+    return *effectiveRankPercent;
+  }
   constexpr std::array<int, 5> normalRanks = {25, 50, 75, 100, 125};
   constexpr std::array<int, 5> pmsRanks = {33, 50, 70, 100, 133};
   const auto &ranks = isPopnKeyMode(keyMode) ? pmsRanks : normalRanks;
@@ -647,14 +651,21 @@ sourcePracticeJudgeRules(int keyMode, int judgeRank) noexcept {
     for (std::size_t index = 0; index < judgements.size(); ++index) {
       long long early = bounds[index * 2];
       long long late = bounds[index * 2 + 1];
-      if (index < 3 && !(source.pGreatFixed && index == 0)) {
+      if (early > late) {
+        result.windows[index] = {judgements[index], 0, 0};
+        continue;
+      }
+      if (index < 4 && !(source.pGreatFixed && (index == 0 || index == 3))) {
         early = early * judgeRank / 100;
         late = late * judgeRank / 100;
+      }
+      if (index < 3) {
         const auto clampMagnitude = [](long long value, long long boundary) {
           return std::llabs(value) > std::llabs(boundary) ? boundary : value;
         };
-        early = clampMagnitude(early, bounds[6]);
-        late = clampMagnitude(late, bounds[7]);
+        const int badScale = source.pGreatFixed ? 100 : judgeRank;
+        early = clampMagnitude(early, bounds[6] * badScale / 100);
+        late = clampMagnitude(late, bounds[7] * badScale / 100);
         if (index > 0) {
           const auto &previous = result.windows[index - 1];
           if (std::llabs(early) < std::llabs(previous.earlyMicros)) {
@@ -667,11 +678,24 @@ sourcePracticeJudgeRules(int keyMode, int judgeRank) noexcept {
       }
       result.windows[index] = {judgements[index], early, late};
     }
+    // Source tables use note-minus-input; gameplay uses input-minus-note.
+    for (auto &window : result.windows) {
+      const auto sourceLate = window.earlyMicros;
+      window.earlyMicros = -window.lateMicros;
+      window.lateMicros = -sourceLate;
+    }
     return result;
   };
 
   gameplay::GameplayJudgeRules result;
   result.ruleset = GameplayRuleset::Beatoraja;
+  result.keyMode = keyMode;
+  result.effectiveJudgeRankPercent = judgeRank;
+  result.comboKpoor = keyMode != 5 && keyMode != 10 && keyMode != 9;
+  result.singleMiss = keyMode == 9;
+  result.vanishBad = keyMode != 9;
+  result.normalReleaseMarginMicros = keyMode == 9 ? 200'000 : 0;
+  result.repeatedKpoor = keyMode != 9;
   result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)] =
       makeWindowSet(source.note);
   result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Scratch)] =
@@ -680,7 +704,9 @@ sourcePracticeJudgeRules(int keyMode, int judgeRank) noexcept {
       makeWindowSet(source.longNote);
   result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::LongScratchTail)] =
       makeWindowSet(source.longScratch);
-  result.automaticPoorLateMicros = source.note[9];
+  result.automaticPoorLateMicros =
+      result.contexts[static_cast<std::size_t>(gameplay::JudgeWindowContext::Normal)]
+          .windows[3].lateMicros;
   return result;
 }
 

@@ -54,7 +54,6 @@ constexpr std::array<gameplay::JudgeWindowContext, 4> kJudgeContexts{
 };
 constexpr std::array<Judgement, 5> kPolicyJudgements{
     PGreat, Great, Good, Bad, Kpoor};
-constexpr std::int64_t kMaximumJudgeWindowMagnitude = 2'000'000;
 
 const char *judgeContextName(gameplay::JudgeWindowContext value) {
   switch (value) {
@@ -585,6 +584,11 @@ PlayerOptionProvenance playerOptionFromJson(const Json &value) {
 
 void validateStageWindows(const ScoreStageProvenance &stage,
                           bool requireCompleteContexts) {
+  if (stage.effectiveJudgeRankPercent && *stage.effectiveJudgeRankPercent < 0) {
+    throw std::runtime_error("Effective judge rank percent cannot be negative.");
+  }
+  const auto maximumMagnitude = gameplay::maximumRecordedJudgeWindowMagnitude(
+      stage.effectiveJudgeRankPercent);
   std::array<bool, kJudgeContexts.size() * kPolicyJudgements.size()> found{};
   for (const auto &window : stage.effectiveJudgeWindows) {
     const auto context = std::ranges::find(kJudgeContexts, window.context);
@@ -597,8 +601,8 @@ void validateStageWindows(const ScoreStageProvenance &stage,
     }
     if (window.earlyMicros > 0 || window.lateMicros < 0 ||
         window.earlyMicros > window.lateMicros ||
-        window.earlyMicros < -kMaximumJudgeWindowMagnitude ||
-        window.lateMicros > kMaximumJudgeWindowMagnitude) {
+        window.earlyMicros < -maximumMagnitude ||
+        window.lateMicros > maximumMagnitude) {
       throw std::runtime_error(
           "Score provenance judge window is outside safe bounds.");
     }
@@ -688,6 +692,9 @@ Json stageToJson(ScoreStageProvenance stage, int wireSchemaVersion,
   value["chartRandomValues"] = stage.chartRandomValues;
   value["judgeRankSource"] = judgeRankSourceName(stage.judgeRankSource);
   writeOptional(value, "sourceJudgeRank", stage.sourceJudgeRank);
+  if (stage.effectiveJudgeRankPercent.has_value()) {
+    value["effectiveJudgeRankPercent"] = *stage.effectiveJudgeRankPercent;
+  }
   value["totalNotes"] = stage.totalNotes;
   if (wireSchemaVersion >= ScoreProvenance::kPlayDurationSchemaVersion) {
     value["playDurationSeconds"] = stage.playDurationSeconds;
@@ -729,6 +736,12 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
       judgeRankSourceFromName(value.value("judgeRankSource", "unknown")),
       "Unknown judge-rank source in score provenance.");
   result.sourceJudgeRank = readOptional<int>(value, "sourceJudgeRank");
+  result.effectiveJudgeRankPercent =
+      readOptional<int>(value, "effectiveJudgeRankPercent");
+  if (result.effectiveJudgeRankPercent.has_value() &&
+      *result.effectiveJudgeRankPercent < 0) {
+    throw std::runtime_error("Effective judge rank percent cannot be negative.");
+  }
   result.totalNotes = value.value("totalNotes", result.totalNotes);
   result.playDurationSeconds =
       value.value("playDurationSeconds", result.playDurationSeconds);
@@ -1076,6 +1089,7 @@ ScoreProvenance makeScoreProvenance(const ScoreProvenanceBuildInput &input) {
   stage.chartRandomValues = input.chartMeta.RandomValues;
   stage.judgeRankSource = input.judgeRankSource;
   stage.sourceJudgeRank = input.sourceJudgeRank;
+  stage.effectiveJudgeRankPercent = input.effectiveJudgeRankPercent;
   if (!stage.sourceJudgeRank.has_value() &&
       stage.judgeRankSource == JudgeRankSource::Chart) {
     stage.sourceJudgeRank = input.chartMeta.Rank;

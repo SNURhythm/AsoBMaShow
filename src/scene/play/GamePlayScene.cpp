@@ -1672,7 +1672,8 @@ bool GamePlayScene::enterPracticeMenu() {
                                  : playfieldChartVisualModel.timelines.back()
                                        .timeMicros,
        .judgeRank = practice::sourcePracticeJudgeRank(
-           chart->Meta.KeyMode, chart->Meta.Rank),
+           chart->Meta.KeyMode, chart->Meta.Rank,
+           rulesetPolicyBuild.policy->judge.rules().effectiveJudgeRankPercent),
        .chartTotal = playfieldChartVisualModel.staticMetadata.songInformation
                          .value_or(PlayfieldSongInformation{})
                          .total,
@@ -1767,6 +1768,13 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   auto sourceJudgeRules =
       practice::sourcePracticeJudgeRules(chart->Meta.KeyMode, attempt.judgeRank);
   const auto &existingJudgeRules = rulesetPolicyBuild.policy->judge.rules();
+  sourceJudgeRules.ruleset = existingJudgeRules.ruleset;
+  sourceJudgeRules.keyMode = existingJudgeRules.keyMode;
+  sourceJudgeRules.comboKpoor = existingJudgeRules.comboKpoor;
+  sourceJudgeRules.singleMiss = existingJudgeRules.singleMiss;
+  sourceJudgeRules.vanishBad = existingJudgeRules.vanishBad;
+  sourceJudgeRules.normalReleaseMarginMicros = existingJudgeRules.normalReleaseMarginMicros;
+  sourceJudgeRules.scratchReleaseMarginMicros = existingJudgeRules.scratchReleaseMarginMicros;
   sourceJudgeRules.candidateSelection = existingJudgeRules.candidateSelection;
   sourceJudgeRules.repeatedKpoor = existingJudgeRules.repeatedKpoor;
   sourceJudgeRules.multiBad = existingJudgeRules.multiBad;
@@ -5251,7 +5259,8 @@ void GamePlayScene::capturePlayfieldVisualState(
                          ? 0
                          : playfieldChartVisualModel.timelines.back().timeMicros,
                  .judgeRank = practice::sourcePracticeJudgeRank(
-                     chart->Meta.KeyMode, chart->Meta.Rank),
+                     chart->Meta.KeyMode, chart->Meta.Rank,
+                     rulesetPolicyBuild.policy->judge.rules().effectiveJudgeRankPercent),
                  .chartTotal = playfieldChartVisualModel.staticMetadata
                                    .songInformation
                                        .value_or(PlayfieldSongInformation{})

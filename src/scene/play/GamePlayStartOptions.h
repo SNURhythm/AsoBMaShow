@@ -234,6 +234,11 @@ namespace play_start_detail {
 [[nodiscard]] inline std::optional<
     std::array<gameplay::JudgeWindowSet, 4>>
 validatedJudgeContexts(const ScoreStageProvenance &stage) {
+  if (stage.effectiveJudgeRankPercent && *stage.effectiveJudgeRankPercent < 0) {
+    return std::nullopt;
+  }
+  const auto maximumMagnitude = gameplay::maximumRecordedJudgeWindowMagnitude(
+      stage.effectiveJudgeRankPercent);
   constexpr std::array contexts{
       gameplay::JudgeWindowContext::Normal,
       gameplay::JudgeWindowContext::Scratch,
@@ -249,7 +254,8 @@ validatedJudgeContexts(const ScoreStageProvenance &stage) {
     if (context == contexts.end() || judgement == judgements.end() ||
         window.earlyMicros > 0 || window.lateMicros < 0 ||
         window.earlyMicros > window.lateMicros ||
-        window.earlyMicros < -2'000'000 || window.lateMicros > 2'000'000) {
+        window.earlyMicros < -maximumMagnitude ||
+        window.lateMicros > maximumMagnitude) {
       return std::nullopt;
     }
     const std::size_t contextIndex = static_cast<std::size_t>(
@@ -568,6 +574,7 @@ enforceCoursePlaybackRules(StartOptions options) {
           ? JudgeRankSource::Chart
           : JudgeRankSource::CourseConstraint;
   input.sourceJudgeRank = chartMeta.Rank;
+  input.effectiveJudgeRankPercent = policy.judge.rules().effectiveJudgeRankPercent;
   input.effectiveJudgeContexts = policy.judge.rules().contexts;
   input.totalNotes = policy.gauge.totalNotes;
   input.authoredGaugeTotal = chartMeta.HasTotal
