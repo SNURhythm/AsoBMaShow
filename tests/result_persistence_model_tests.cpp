@@ -493,6 +493,9 @@ void testFullComboNormalization() {
 
 void testVersionOneFingerprintGolden() {
   ReplayData replay;
+  // Freeze the historical payload input; the parser's current default rank
+  // can change without changing the encoding of an already recorded value.
+  replay.chartMeta.Rank = 3;
   replay.id = 99;
   replay.createdAt = "excluded database timestamp";
   const result_persistence::ChartScoreWrite score;

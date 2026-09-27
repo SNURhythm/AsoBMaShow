@@ -115,7 +115,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.max_bpm, 0),"
     "COALESCE(cm.min_bpm, 0),"
     "COALESCE(cm.length, 0),"
-    "COALESCE(cm.rank, 3),"
+    "COALESCE(cm.rank, 2),"
     "COALESCE(cm.player, 1),"
     "COALESCE(cm.keys, 5),"
     "COALESCE(cm.total_notes, 0),"
@@ -131,6 +131,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.has_random_sequence, 0),"
     "COALESCE(cm.most_prevalent_bpm, 0),"
     "COALESCE(cm.has_bga, 0),"
+    "COALESCE(cm.rank_type, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -169,7 +170,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.max_bpm, 0),"
     "COALESCE(cm.min_bpm, 0),"
     "COALESCE(cm.length, 0),"
-    "COALESCE(cm.rank, 3),"
+    "COALESCE(cm.rank, 2),"
     "COALESCE(cm.player, 1),"
     "COALESCE(cm.keys, 5),"
     "COALESCE(cm.total_notes, 0),"
@@ -185,6 +186,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.has_random_sequence, 0),"
     "COALESCE(cm.most_prevalent_bpm, 0),"
     "COALESCE(cm.has_bga, 0),"
+    "COALESCE(cm.rank_type, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -3022,6 +3024,7 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   if (sqlite3_column_count(stmt) > idx) {
     record.hasBga = sqlite3_column_int(stmt, idx++) != 0;
   }
+  ++idx; // RankType is consumed by the shared ChartMeta reader.
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);
   }

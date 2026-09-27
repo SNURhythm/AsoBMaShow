@@ -30,7 +30,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 11;
+constexpr int kChartDatabaseSchemaVersion = 12;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -156,6 +156,7 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "min_bpm     REAL,"
       "length     INTEGER,"
       "rank      INTEGER,"
+      "rank_type INTEGER NOT NULL DEFAULT 0,"
       "player    INTEGER,"
       "keys     INTEGER,"
       "total_notes INTEGER,"
@@ -737,6 +738,22 @@ bool runChartDatabaseMigrationPasses(
   return true;
 }
 
+bool migrateChartDatabaseToVersion12(sqlite3 *db, bool &completed) {
+  bool hasRankType = false;
+  if (const auto error =
+          querySqliteTableHasColumn(db, "chart_meta", "rank_type", hasRankType)) {
+    logSqlErrorText("checking chart judge rank source", *error);
+    return false;
+  }
+  if (hasRankType) {
+    completed = true;
+    return true;
+  }
+  // Old metadata cannot distinguish authored RANK from DEFEXRANK, and used
+  // EASY for a missing RANK. Reparse source charts rather than guessing.
+  return invalidateChartMetadataForNormalScan(db, completed);
+}
+
 bool migrateChartDatabaseSchema(sqlite3 *db) {
   static constexpr ChartDatabaseMigrationPass kMigrationPasses[] = {
       {1, "chart metadata rebuild", migrateChartDatabaseToVersion1},
@@ -753,6 +770,7 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
        migrateChartDatabaseToVersion9},
       {10, "persist selector folder add dates", migrateChartDatabaseToVersion10},
       {11, "refresh 7-Zip solid classification", migrateChartDatabaseToVersion11},
+      {12, "preserve chart judge rank source", migrateChartDatabaseToVersion12},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,

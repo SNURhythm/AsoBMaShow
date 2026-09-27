@@ -107,8 +107,10 @@ struct ApplicationContext {
 };
 
 namespace bms_parser {
+enum class JudgeRankType { BmsRank, DefExRank };
 struct ChartMeta {
   int TotalNotes = 0, Rank = 0, LnMode = 0;
+  JudgeRankType RankType = JudgeRankType::BmsRank;
   int TotalLongNotes = 0, TotalBackSpinNotes = 0;
   long long PlayLength = 0;
   std::string BmsPath, Folder, StageFile, BackBmp, Banner;
@@ -133,7 +135,8 @@ int main() {
     if (!value) { std::cerr << message << '\n'; ++failures; }
   };
   auto chart = std::make_shared<bms_parser::Chart>();
-  chart->Meta = {.TotalNotes = 100, .Rank = 3, .LnMode = 2,
+  chart->Meta = {.TotalNotes = 100, .Rank = 300, .LnMode = 2,
+                .RankType = bms_parser::JudgeRankType::DefExRank,
                 .TotalLongNotes = 5, .TotalBackSpinNotes = 1, .PlayLength = 123,
                 .BmsPath = "/charts/test.bms", .Folder = "/charts",
                 .StageFile = "stage.png", .BackBmp = "back.png", .Banner = "banner.png"};
@@ -141,7 +144,8 @@ int main() {
   check(courseMeta.TotalNotes == 200 && courseMeta.PlayLength == 246 &&
             courseMeta.StageFile == "stage.png" && courseMeta.BackBmp == "back.png" &&
             courseMeta.Banner == "banner.png" && courseMeta.BmsPath == "/charts/test.bms" &&
-            courseMeta.Rank == 3 && courseMeta.LnMode == 2,
+            courseMeta.Rank == 300 && courseMeta.LnMode == 2 &&
+            courseMeta.RankType == bms_parser::JudgeRankType::DefExRank,
         "course results retain aggregated totals and resolve last-stage artwork");
   ApplicationContext app;
   RenderContext render;

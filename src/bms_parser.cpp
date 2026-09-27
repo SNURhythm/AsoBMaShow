@@ -2063,6 +2063,8 @@ Note::~Note() { Timeline = nullptr; }
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <limits>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -3866,9 +3868,21 @@ void Parser::ParseHeader(Chart *Chart, std::string_view cmd,
     Chart->Meta.PlayLevelText = javaTrimmedHeaderValue(Value);
     Chart->Meta.PlayLevel =
         std::strtod(Value.c_str(), nullptr); // TODO: handle error
-  } else if (MatchHeader(cmd, "RANK")) {
-    Chart->Meta.Rank =
-        static_cast<int>(std::strtol(Value.c_str(), nullptr, 10));
+  } else if (MatchHeader(cmd, "RANK") || MatchHeader(cmd, "DEFEXRANK")) {
+    // Match Integer.parseInt: reject trailing text, fractions and overflow.
+    // Invalid headers leave the previous valid rank and its source unchanged.
+    const auto text = javaTrimmedHeaderValue(Value);
+    char *end = nullptr;
+    errno = 0;
+    const long rank = std::strtol(text.c_str(), &end, 10);
+    const bool extended = MatchHeader(cmd, "DEFEXRANK");
+    if (!text.empty() && end == text.c_str() + text.size() &&
+        errno != ERANGE && rank <= std::numeric_limits<int>::max() &&
+        (extended ? rank > 0 : rank >= 0 && rank < 5)) {
+      Chart->Meta.Rank = static_cast<int>(rank);
+      Chart->Meta.RankType = extended ? JudgeRankType::DefExRank
+                                      : JudgeRankType::BmsRank;
+    }
   } else if (MatchHeader(cmd, "TOTAL")) {
     auto total = std::strtod(Value.c_str(), nullptr);
     if (total > 0) {

@@ -1412,6 +1412,7 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;
     meta.Rank = lastMeta.Rank;
+    meta.RankType = lastMeta.RankType;
     meta.LnMode = lastMeta.LnMode;
     meta.BmsPath = lastMeta.BmsPath;
     meta.Folder = lastMeta.Folder;

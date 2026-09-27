@@ -168,7 +168,8 @@ const char *insertChartMetaSql() {
          "most_prevalent_bpm,"
          "has_bga,"
          "source_priority,"
-         "source_archive_size"
+         "source_archive_size,"
+         "rank_type"
          ") VALUES("
          "@path,"
          "@md5,"
@@ -208,7 +209,8 @@ const char *insertChartMetaSql() {
          "@most_prevalent_bpm,"
          "@has_bga,"
          "@source_priority,"
-         "@source_archive_size"
+         "@source_archive_size,"
+         "@rank_type"
          ") ON CONFLICT(path) DO UPDATE SET "
          "md5=excluded.md5,"
          "sha256=excluded.sha256,"
@@ -231,6 +233,7 @@ const char *insertChartMetaSql() {
          "min_bpm=excluded.min_bpm,"
          "length=excluded.length,"
          "rank=excluded.rank,"
+         "rank_type=excluded.rank_type,"
          "player=excluded.player,"
          "keys=excluded.keys,"
          "total_notes=excluded.total_notes,"
@@ -315,6 +318,7 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 38, sourcePreference.priority);
   sqlite3_bind_int64(statement, 39,
                      clampSqlInteger(sourcePreference.archiveSize));
+  sqlite3_bind_int(statement, 40, static_cast<int>(chartMeta.RankType));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
     return false;

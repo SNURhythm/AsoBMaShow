@@ -584,6 +584,8 @@ void testSessionRoundTripAndReadinessCost() {
   assert(first.has_value());
   assert(second.has_value());
   auto meta = chartMeta(temporary.path());
+  meta.Rank = 150;
+  meta.RankType = bms_parser::JudgeRankType::DefExRank;
   assert(first->InsertChartMeta(meta));
   assert(first->CountAllChartMeta() == 1);
   assert(second->CountAllChartMeta() == 1);
@@ -593,6 +595,8 @@ void testSessionRoundTripAndReadinessCost() {
   std::vector<ChartMetaRecord> page;
   first->QueryChartMeta(query, page);
   assert(page.size() == 1);
+  assert(page.front().meta.Rank == 150);
+  assert(page.front().meta.RankType == bms_parser::JudgeRankType::DefExRank);
   assert(first->FindChartMetaIndex(query, meta.BmsPath) == 0);
   first.reset();
   second.reset();
@@ -608,7 +612,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 11);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 12);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -819,7 +823,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=12"));
+                   "PRAGMA user_version=13"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -1608,7 +1612,7 @@ void testStreamingSelectionMatchesRawRowsWithNarrowPayload() {
       assert(record.meta.Preview.empty());
       assert(record.meta.Bpm == 0 && record.meta.MostPrevalentBpm == 0);
       assert(record.meta.Total == 100 && !record.meta.HasTotal);
-      assert(record.meta.Rank == 3 && record.meta.Player == 1);
+      assert(record.meta.Rank == 2 && record.meta.Player == 1);
       assert(record.meta.TotalLandmineNotes == 0);
       assert(record.meta.RandomValues.empty());
       assert(record.addDateSeconds == 0 && !record.hasDocument && !record.hasBga);
@@ -1966,7 +1970,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 11);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 12);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -2004,6 +2008,33 @@ void testChartMigrationCompatibilityMatrix() {
                     "SELECT COUNT(*) FROM pragma_table_info('folder') "
                     "WHERE name IN ('path', 'date', 'adddate')") == 3);
   }
+}
+
+void testJudgeRankMetadataMigrationRequestsReparse() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "judge-rank-migration.db";
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    auto meta = chartMeta(temporary.path());
+    assert(session && session->InsertChartMeta(meta));
+  }
+  {
+    auto database = openDatabase(path);
+    if (queryInt(database.get(), "SELECT COUNT(*) FROM "
+                 "pragma_table_info('chart_meta') WHERE name='rank_type'") != 0) {
+      assert(execute(database.get(), "ALTER TABLE chart_meta DROP COLUMN rank_type"));
+    }
+    assert(execute(database.get(), "PRAGMA user_version=11"));
+  }
+  ChartRepository repository(path);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session && session->CountAllChartMeta() == 0);
+  auto database = openDatabase(path);
+  assert(queryInt(database.get(),
+                  "SELECT required FROM chart_meta_rebuild_state WHERE id=1") == 1);
 }
 
 void testSolidArchiveClassificationMigration() {
@@ -2146,7 +2177,7 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 11);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 12);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
@@ -3964,6 +3995,7 @@ int main(int argc, char **argv) {
   testExactFolderQuery();
   testFolderProbeAndCancelledReadsDoNotPoisonSession();
   testChartMigrationCompatibilityMatrix();
+  testJudgeRankMetadataMigrationRequestsReparse();
   testSolidArchiveClassificationMigration();
   testSolidArchiveDirectoryLoadsOnlyArchiveRecords();
   testChartMigrationReleaseFailureDoesNotReportSuccess();
