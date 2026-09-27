@@ -1512,6 +1512,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     result.hasLaneVisual = true;
     result.laneVisual = {LaneVisualAction::Press, mainLane, judgedTime,
                         context.laneBeamTimeMicros, JudgeResult(None, 0)};
+    finishTransaction(judgedTime);
     inputTransactions_.push_back(result);
     return inputBatch(result);
   }
@@ -1717,6 +1718,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
                          .songTimeMicros = judgedTime,
                          .judgeTimeMicros = judgedTime};
     recordReplay(result.replayEvent);
+    finishTransaction(judgedTime);
     inputTransactions_.push_back(result);
     return inputBatch(result);
   }
@@ -1746,6 +1748,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
     result.replayEvent = {.action = GameplayReplayAction::Release, .lane = lane,
                          .songTimeMicros = judgedTime, .judgeTimeMicros = judgedTime};
     recordReplay(result.replayEvent);
+    finishTransaction(judgedTime);
     inputTransactions_.push_back(result);
     return inputBatch(result);
   }

@@ -1142,6 +1142,46 @@ void testReferencePmsSingleMissAndReleaseMargin() {
           "repressing inside PMS release margin preserves original LN head judgement");
 }
 
+void testRecoveryTransactionsLatchReplayCapacityFailure() {
+  for (bool scratch : {false, true}) {
+    for (bool overflowOnRecovery : {false, true}) {
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = scratch ? 7 : 9;
+      chart.Meta.TotalNotes = scratch ? 2 : 1;
+      const int lane = scratch ? 7 : 1;
+      auto *measure = new bms_parser::Measure();
+      addLongNote(*measure, 1'000'000, 2'000'000, lane,
+                  scratch ? bms_parser::LongNoteType::ChargeNote
+                          : bms_parser::LongNoteType::LongNote);
+      chart.Measures.push_back(measure);
+      const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+      const auto judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3,
+              100, 100, CourseJudgementConstraint::None,
+              gameplay::CandidateSelectionMode::Lowest, chart.Meta.KeyMode));
+      const std::size_t capacity = overflowOnRecovery ? 2 : 1;
+      gameplay::GameplaySimulation simulation(
+          definition, {.judge = judge, .attempt = {.replayCapacity = capacity}});
+      simulation.pressLane(lane, {.songTimeMicros = 1'000'000});
+      const long long releaseTime = scratch ? 1'950'000 : 1'500'000;
+      simulation.releaseLane(lane, {.songTimeMicros = releaseTime});
+      if (overflowOnRecovery) {
+        require(!simulation.terminal(), "recovery fixture retains both preceding replay edges");
+        simulation.pressLane(lane, {.songTimeMicros = releaseTime + 10'000});
+      }
+      require(simulation.replayOverflowed() && simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ReplayCapacityExceeded,
+              "replay-only release and recovery latch overflow in the same transaction");
+      const auto failed = simulation.terminalSnapshot();
+      simulation.advanceTo(4'000'000, 4'000'000);
+      require(simulation.terminalReason() ==
+                  gameplay::GameplayTerminalReason::ReplayCapacityExceeded &&
+                  sameAttemptSnapshot(failed, simulation.terminalSnapshot()),
+              "later chart completion cannot replace an incomplete-replay failure");
+    }
+  }
+}
+
 void testReferencePmsBadCanBeRecovered() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 9;
@@ -2778,6 +2818,7 @@ int main(int argc, char **argv) {
     else if (name == "hcn-head") testReferenceHellChargeStartsAfterHeadJudgement();
     else if (name == "played-poor") testReferencePlayedNotesCanReceiveEmptyPoor();
     else if (name == "pms-margin") testReferencePmsSingleMissAndReleaseMargin();
+    else if (name == "recovery-capacity") testRecoveryTransactionsLatchReplayCapacityFailure();
     else if (name == "pms-recovery") testReferencePmsBadCanBeRecovered();
     else return 2;
     return 0;
@@ -2788,6 +2829,7 @@ int main(int argc, char **argv) {
   testReferencePlayedNotesCanReceiveEmptyPoor();
   testReferencePmsBadCanBeRecovered();
   testReferencePmsSingleMissAndReleaseMargin();
+  testRecoveryTransactionsLatchReplayCapacityFailure();
   testReferenceScratchMissDeadlineIsIndependent();
   testReferenceMultiBadRetainsChargeTailPenalty();
   testReferenceScratchReleaseAndChargeTailMiss();
