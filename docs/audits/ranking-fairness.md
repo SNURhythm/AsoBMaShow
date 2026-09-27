@@ -80,6 +80,17 @@ adapters retain saved facts for every entry so exports, replay restarts, and sav
 result browsing include unplayed notes; course images preserve the final stage's
 judgement difficulty.
 
+The whole-branch regression review also corrected replay reconstruction after a
+recovered PMS long-note head BAD and video cutoffs for gauges whose automatic
+shift policy keeps play running. Historical partial-course browsing retains its
+original observed BP when exact passed-note facts were not saved. Chart metadata
+rebuilds preserve chart and folder added dates across interruptions and archive
+replacement; only a complete configured-library scan removes that restoration
+state. An eligibility index lets attached score queries recognize legitimate
+empty historical caches without repeatedly rebuilding or scanning old scores.
+Result-skin BP record and tie flags now share the exact BP calculation used by
+the displayed number, including notes left unplayed after an early failure.
+
 ## Primary source locations
 
 Both reference checkouts define these rules under `bms/player/beatoraja/play/`:
@@ -97,25 +108,25 @@ Independent read-only review found no outstanding source blockers.
 The build includes `fix/optimize-build-artifacts` through `ab1c1377`, which shares
 compatible test objects and adds two build-configuration checks.
 
-The complete desktop and test build passed with
+The final desktop and test build passed with
 `cmake --build cmake-build-debug --target main all -j 6`.
-The full `ctest --test-dir cmake-build-debug --output-on-failure -j 6` run
-passed 395 of 404 entries. Six stale fixture/schema/version expectations were
-corrected, rebuilt, and all six passed together. The skin evidence wrapper and
-jukebox restoration test passed in isolated CTest reruns. The audio renderer
-passed directly in 54.12 seconds, exceeding its unchanged 30-second CTest limit.
-Thus every entry has a passing result across verification runs; the full
-parallel run itself was not completely green. The build-storage branch already
-documents audio/jukebox timeout sensitivity, and the skin wrapper invokes a
-runner normally registered to run serially.
+The complete parallel CTest run passed 402 of 404 entries in 346.41 seconds.
+The legacy-profile fixture initially retained the new eligibility index while
+dropping its referenced columns; removing that modern index restores the old
+schema fixture, and all four profile archive suites then passed together.
+The audio renderer exceeded its unchanged 30-second CTest timeout in both the
+parallel run and an isolated rerun, then passed directly in 21.10 seconds.
+Every test entry therefore has a passing result across these runs; the full
+parallel run itself was not completely green. The previously observed audio
+timing sensitivity remains a verification limitation.
 
-After the review corrections, the desktop `main` build and all 14 focused
-CTest suites passed together with `-j 6`. These cover live input, replay
-materialization, course persistence/recall/exports, obsolete record actions,
-score migrations, and profile switching. Each reviewed defect was reproduced
-by a failing regression before its fix.
+All seven focused regression suites passed, as did the focused result-skin BP
+comparison cases and the full skin session test. Each reviewed defect was first
+reproduced by a failing permanent regression. Three fresh independent reviewers
+covered gameplay/builds, persistence, and replay/UI; follow-up reviews of the
+final BP correction and legacy fixture found no remaining regressions.
 
 Parser source verification passed `make clean`, `make test`, and
 `make test_amalgamation`; both copied parser files match that generated output.
-No release or deployment was performed. The feature commits are development
+No manual release or deployment was performed. The feature commits are development
 checkpoints; the final series tip is the verified behavior and migration boundary.
