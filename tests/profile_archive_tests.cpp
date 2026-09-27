@@ -2619,6 +2619,11 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
       expect(execute(database.get(), "DROP TRIGGER IF EXISTS "
                                      "score_sha256_summary_after_insert"),
              "legacy score fixture removes the current summary trigger");
+      expect(execute(database.get(), "DROP INDEX IF EXISTS idx_scores_best_eligible_" +
+                         std::to_string(RulesetDescriptor::For(GameplayRuleset::LR2).version) +
+                         "_" + std::to_string(
+                             RulesetDescriptor::For(GameplayRuleset::Beatoraja).version)),
+             "legacy score fixture removes the current eligibility index");
       for (const std::string_view table : {"scores", "course_scores"}) {
         for (const std::string_view column :
              {"provenance_json", "eligibility", "ruleset_version"}) {
