@@ -192,6 +192,53 @@ void testPartialCourseRetryAndOwnedState() {
           "session owns recalled charts and remains usable after preparation inputs expire");
 }
 
+void testRecallPreservesSavedFullCourseFacts() {
+  Fixture fixture;
+  for (std::size_t index = 0; index < fixture.result.entryFacts.size(); ++index) {
+    fixture.result.entryFacts[index].playLengthMicros =
+        1'234'000 + static_cast<long long>(index);
+    fixture.records[index].meta.TotalNotes = 500;
+    fixture.records[index].meta.PlayLength = 9'999'999;
+  }
+  fixture.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(fixture.result);
+  std::string diagnostic;
+  require(result_persistence::validateModernCourseResult(fixture.result, diagnostic),
+          "modified saved facts validate: " + diagnostic);
+  fixture.records.back().meta.Rank = 300;
+  fixture.records.back().meta.RankType = bms_parser::JudgeRankType::DefExRank;
+  ReplayRepository repository(fixture.directory / "replay.db");
+  require(repository.EnsureSchema(), "repository schema initializes");
+  require(repository.StageModernCourseResult(fixture.result, std::nullopt).status ==
+              ModernCourseStageStatus::Staged, "saved facts remain valid durable results");
+  std::atomic_bool cancelled{false};
+  auto prepared = course_records::prepareCourseResult(
+      repository, fixture.result.attemptId, fixture.selection(), true, cancelled);
+  require(prepared.session != nullptr, "saved course prepares: " + prepared.diagnostic);
+  const auto &entries = prepared.session->entries;
+  require(entries.size() == fixture.result.entryFacts.size(),
+          "recalled partial course retains the unplayed suffix");
+  // ResultScene uses completed result metadata for played entries and session
+  // entries for the unplayed suffix when computing its displayed denominator.
+  require(prepared.session->completedResults[0].meta.TotalNotes +
+              prepared.session->completedResults[1].meta.TotalNotes +
+              entries[2].meta.TotalNotes == fixture.result.maxScore / 2,
+          "recalled course display denominator includes saved unplayed notes");
+  for (std::size_t index = 0; index < entries.size(); ++index) {
+    require(entries[index].meta.TotalNotes == fixture.result.entryFacts[index].totalNotes &&
+                entries[index].meta.PlayLength == fixture.result.entryFacts[index].playLengthMicros,
+            "recalled course totals and duration use saved facts after all metadata overlays");
+    require(entries[index].meta.BmsPath == fixture.records[index].meta.BmsPath &&
+                entries[index].meta.SHA256 == fixture.records[index].meta.SHA256,
+            "saved fact overlay retains resolved chart identity");
+  }
+  require(entries.front().meta.Rank == 2 &&
+              entries.front().meta.RankType == bms_parser::JudgeRankType::BmsRank &&
+              entries.back().meta.Rank == 300 &&
+              entries.back().meta.RankType == bms_parser::JudgeRankType::DefExRank,
+          "saved fact overlay retains parsed and unplayed chart rank metadata");
+}
+
 void testVerifiedReplayOwnershipAndMissingFileFallback() {
   Fixture fixture;
   ReplayRepository repository(fixture.directory / "replay.db");
@@ -300,6 +347,7 @@ int main() {
 #if HAS_COURSE_RECORD_ACTIONS
     testCompletedPrefixValidation();
     testPartialCourseRetryAndOwnedState();
+    testRecallPreservesSavedFullCourseFacts();
     testFailureAndCancellation();
     testVerifiedReplayOwnershipAndMissingFileFallback();
 #else
