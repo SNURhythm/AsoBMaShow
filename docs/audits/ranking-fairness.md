@@ -41,6 +41,9 @@ Replay database 19 adds nullable bad-point facts; existing rows remain NULL.
 Score database 14 also adds nullable course bad-point totals and rebuilds the
 derived best-score caches against current supported ruleset descriptors.
 Historical result serialization omits absent new facts, preserving fingerprints.
+When the duration backfill waits for a chart rescan, a transactional completion
+marker records the independent version-14 work so repeated lookups do not
+rebuild score summaries. The duration migration still retries after the scan.
 
 Old input cannot generally be migrated faithfully after candidate selection,
 long-note handling, and scoring changes: running it under the corrected algorithm

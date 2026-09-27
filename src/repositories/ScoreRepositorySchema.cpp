@@ -837,6 +837,56 @@ bool courseBadPointsSchemaIsExact(sqlite3 *db) {
          state == CourseBadPointsSchemaState::Exact;
 }
 
+// Version 13 may wait for a chart rescan. Record the independent version 14
+// work without advancing user_version past that unfinished duration migration.
+constexpr const char *kScoreVersion14CompletionSql =
+    "CREATE TABLE score_v14_migration_state("
+    "completed INTEGER NOT NULL PRIMARY KEY CHECK(completed=1)) WITHOUT ROWID";
+
+enum class ScoreVersion14Completion { Absent, Pending, Complete };
+
+bool inspectScoreVersion14Completion(sqlite3 *db,
+                                     ScoreVersion14Completion &state) {
+  state = ScoreVersion14Completion::Absent;
+  SqliteStatementHandle schema;
+  if (!prepareSqliteStatementLogged(
+          db, "SELECT type,sql FROM sqlite_master WHERE "
+              "name='score_v14_migration_state'",
+          schema, "reading score version 14 completion schema", logSqlErrorText)) {
+    return false;
+  }
+  int rc = sqlite3_step(schema.get());
+  if (rc == SQLITE_DONE) {
+    return true;
+  }
+  if (rc != SQLITE_ROW || sqliteColumnString(schema.get(), 0) != "table" ||
+      sqliteColumnString(schema.get(), 1) != kScoreVersion14CompletionSql ||
+      sqlite3_step(schema.get()) != SQLITE_DONE) {
+    SDL_Log("Refusing unexpected score version 14 completion schema");
+    return false;
+  }
+  SqliteStatementHandle completion;
+  if (!prepareSqliteStatementLogged(
+          db, "SELECT completed FROM score_v14_migration_state", completion,
+          "reading score version 14 completion", logSqlErrorText)) {
+    return false;
+  }
+  rc = sqlite3_step(completion.get());
+  if (rc == SQLITE_DONE) {
+    state = ScoreVersion14Completion::Pending;
+    return true;
+  }
+  if (rc != SQLITE_ROW ||
+      sqlite3_column_type(completion.get(), 0) != SQLITE_INTEGER ||
+      sqlite3_column_int64(completion.get(), 0) != 1 ||
+      sqlite3_step(completion.get()) != SQLITE_DONE) {
+    SDL_Log("Refusing unexpected score version 14 completion value");
+    return false;
+  }
+  state = ScoreVersion14Completion::Complete;
+  return true;
+}
+
 bool currentScoreSchemaIsValid(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -847,7 +897,9 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
   if (*version != kScoreDatabaseSchemaVersion) {
     return false;
   }
-  return scoreAttemptIdentitySchemaIsExact(db) &&
+  ScoreVersion14Completion completion{};
+  return inspectScoreVersion14Completion(db, completion) &&
+         scoreAttemptIdentitySchemaIsExact(db) &&
          scoreImportedIrSchemaIsExact(db) &&
          courseScoreProjectionSchemaIsExact(db) &&
          courseBadPointsSchemaIsExact(db);
@@ -1739,8 +1791,14 @@ bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
   if (!version || *version > kScoreDatabaseSchemaVersion) {
     return false;
   }
-  if (*version >= 14) {
-    return courseBadPointsSchemaIsExact(db);
+  ScoreVersion14Completion completion{};
+  if (!inspectScoreVersion14Completion(db, completion)) {
+    return false;
+  }
+  if (*version >= 14 || completion == ScoreVersion14Completion::Complete) {
+    return courseBadPointsSchemaIsExact(db) &&
+           (*version < kScorePlayDurationRetrySchemaVersion ||
+            *version >= 14 || setDatabaseUserVersion(db, 14));
   }
   CourseBadPointsSchemaState badPointsState{};
   if (!inspectCourseBadPointsSchema(db, badPointsState) ||
@@ -1766,10 +1824,20 @@ bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
     logSqlErrorText("rebuilding current-ruleset score summaries", *failure);
     return false;
   }
-  // Do not skip a deferred duration migration, but still exclude old rules
-  // from derived rankings while the metadata scan is pending.
-  return *version < kScorePlayDurationRetrySchemaVersion ||
-         setDatabaseUserVersion(db, 14);
+  // The marker commits with the BP column and cache rebuild. It also records
+  // that empty caches are legitimate when only historical scores exist.
+  if (*version < kScorePlayDurationRetrySchemaVersion) {
+    if ((completion == ScoreVersion14Completion::Absent &&
+         !execSql(db, kScoreVersion14CompletionSql,
+                  "creating score version 14 completion state")) ||
+        !execSql(db, "INSERT INTO score_v14_migration_state VALUES(1)",
+                 "recording score version 14 completion")) {
+      return false;
+    }
+    return inspectScoreVersion14Completion(db, completion) &&
+           completion == ScoreVersion14Completion::Complete;
+  }
+  return setDatabaseUserVersion(db, 14);
 }
 
 std::string scoreMigrationHashHasValue(std::string_view columnName) {
@@ -2031,6 +2099,10 @@ bool score_repository_detail::CreateScoreTableOnConnection(
   if (db == nullptr || rejectFutureScoreDatabase(db)) {
     return false;
   }
+  ScoreVersion14Completion completion{};
+  if (!inspectScoreVersion14Completion(db, completion)) {
+    return false;
+  }
   bool existingScoreTable = false;
   if (!sqliteTableExists(db, "scores", existingScoreTable,
                          "checking score table existence")) {
@@ -2098,13 +2170,26 @@ bool score_repository_detail::CreateScoreTableOnConnection(
     }
     ensureCurrentSummarySchema = *version >= kScoreBestEligibilitySchemaVersion;
   }
+  bool completedSummariesInstalled = false;
+  if (completion == ScoreVersion14Completion::Complete) {
+    bool clearSummaryExists = false;
+    bool bestSummaryExists = false;
+    if (!sqliteTableExists(db, "score_sha256_clear_rank_cache", clearSummaryExists,
+                           "checking completed score clear summary") ||
+        !sqliteTableExists(db, "score_sha256_best_score_cache", bestSummaryExists,
+                           "checking completed score best summary")) {
+      return false;
+    }
+    completedSummariesInstalled = clearSummaryExists && bestSummaryExists;
+  }
   if (ensureCurrentSummarySchema) {
     if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
       logSqlErrorText("creating score identity summary schema", *error);
       return false;
     }
   }
-  if (existingScoreTable && ensureCurrentSummarySchema) {
+  if (existingScoreTable && ensureCurrentSummarySchema &&
+      !completedSummariesInstalled) {
     if (const auto error =
             score_cache_queries::repairScoreSummaryTablesIfEmpty(db)) {
       logSqlErrorText("repairing score identity summaries", *error);

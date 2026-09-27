@@ -1872,6 +1872,117 @@ void testVersion13RetriesDurationBackfillAfterChartAttachFailure(
          12);
 }
 
+int *activeSummaryRebuildCount = nullptr;
+
+int traceSummaryRebuild(unsigned mask, void *context, void *rawStatement, void *) {
+  if (mask == SQLITE_TRACE_STMT && rawStatement != nullptr) {
+    const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(rawStatement));
+    if (sql != nullptr && std::string_view(sql) ==
+                              "DELETE FROM score_sha256_best_score_cache") {
+      ++*static_cast<int *>(context);
+    }
+  }
+  return 0;
+}
+
+int installSummaryRebuildTrace(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_trace_v2(db, SQLITE_TRACE_STMT, traceSummaryRebuild,
+                         activeSummaryRebuildCount);
+}
+
+void testDeferredDurationMigrationRebuildsSummariesOnlyOnce(
+    const std::filesystem::path &root) {
+  for (const bool historicalOnly : {false, true}) {
+    const auto label = historicalOnly ? "deferred-historic" : "deferred-current";
+    const auto scorePath = root / label / "score.db";
+    const auto chartPath = root / label / "chart.db";
+    const auto meta = sampleMeta(root, label);
+    {
+      ScoreRepository bootstrap(scorePath);
+      assert(bootstrap.SaveScore(meta, sampleState(20, 5), sampleProvenance(label)));
+      auto scores = openDatabase(scorePath);
+      execOrAbort(scores.get(), "UPDATE scores SET play_duration_seconds=0");
+      if (historicalOnly) {
+        execOrAbort(scores.get(), "UPDATE scores SET ruleset_version=3, "
+            "provenance_json=json_set(provenance_json,'$.ruleset.version',3)");
+      }
+      execOrAbort(scores.get(), "ALTER TABLE course_scores DROP COLUMN bad_points");
+      execOrAbort(scores.get(), "PRAGMA user_version=12");
+    }
+    {
+      auto charts = openDatabase(chartPath);
+      execOrAbort(charts.get(),
+          "CREATE TABLE chart_meta(path TEXT,md5 TEXT,sha256 TEXT,length INTEGER,"
+          "source_priority INTEGER,source_archive_size INTEGER)");
+      execOrAbort(charts.get(), "CREATE TABLE chart_meta_rebuild_state(required INTEGER)");
+      execOrAbort(charts.get(), "INSERT INTO chart_meta_rebuild_state VALUES(1)");
+    }
+    // A failed outer commit must roll back the BP column, rebuilt cache and
+    // completion marker together, allowing the next open to retry all work.
+    {
+      auto scores = openDatabase(scorePath);
+      const auto originalSchema = schemaSnapshot(scores.get());
+      const auto originalBest = queryInt(scores.get(),
+          "SELECT COUNT(*) FROM score_sha256_best_score_cache");
+      sqlite3_commit_hook(scores.get(), [](void *) { return 1; }, nullptr);
+      assert(!score_repository_detail::EnsureSchemaOnConnection(scores.get(), chartPath));
+      sqlite3_commit_hook(scores.get(), nullptr, nullptr);
+      assert(schemaSnapshot(scores.get()) == originalSchema);
+      assert(queryInt(scores.get(), "PRAGMA user_version") == 12);
+      assert(!columnExists(scores.get(), "course_scores", "bad_points"));
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM score_sha256_best_score_cache") ==
+             originalBest);
+    }
+    int rebuilds = 0;
+    activeSummaryRebuildCount = &rebuilds;
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(installSummaryRebuildTrace)) == SQLITE_OK);
+    ScoreRepository repository(scorePath);
+    repository.SetChartDatabasePath(chartPath);
+    assert(repository.EnsureSchema());
+    assert(rebuilds == 1);
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      assert(repository.EnsureSchema());
+      assert(repository.LoadBestScore(meta).has_value() != historicalOnly);
+      (void)repository.LoadBestClearRanks();
+      assert(rebuilds == 1);
+    }
+    repository.Shutdown();
+    assert(repository.EnsureSchema());
+    assert(rebuilds == 1);
+    {
+      auto scores = openDatabase(scorePath);
+      assert(queryInt(scores.get(), "PRAGMA user_version") == 12);
+      assert(columnExists(scores.get(), "course_scores", "bad_points"));
+      assert(queryInt(scores.get(), "SELECT completed FROM score_v14_migration_state") == 1);
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM scores") == 1);
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM score_sha256_best_score_cache") ==
+             (historicalOnly ? 0 : 1));
+    }
+    {
+      auto charts = openDatabase(chartPath);
+      execOrAbort(charts.get(), "INSERT INTO chart_meta VALUES('chart.bms','" +
+          meta.MD5 + "','" + meta.SHA256 + "',12999999,0,0)");
+      execOrAbort(charts.get(), "UPDATE chart_meta_rebuild_state SET required=0");
+    }
+    assert(repository.EnsureSchema());
+    assert(rebuilds == 1);
+    auto scores = openDatabase(scorePath);
+    assert(queryInt(scores.get(), "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
+    assert(queryInt(scores.get(), "SELECT play_duration_seconds FROM scores") == 12);
+    sqlite3_reset_auto_extension();
+    activeSummaryRebuildCount = nullptr;
+    repository.Shutdown();
+    execOrAbort(scores.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(scores.get(), "INSERT INTO sentinel VALUES('completion-schema')");
+    execOrAbort(scores.get(), "DROP TABLE score_v14_migration_state");
+    execOrAbort(scores.get(), "CREATE TABLE score_v14_migration_state(completed TEXT)");
+    execOrAbort(scores.get(), "INSERT INTO score_v14_migration_state VALUES('1')");
+    scores.reset();
+    expectScoreSchemaRejectedWithoutMutation(scorePath);
+  }
+}
+
 void testProjectedRetryUpdatesSummaryCachesOnce(
     const std::filesystem::path &root) {
   const auto path = root / "projected-score-summary-once" / "score.db";
@@ -3905,6 +4016,7 @@ int main() {
   testVersion13RetriesDurationBackfillAfterChartMetadataRebuild(root);
   testVersion13RetriesDurationBackfillAfterEmptyChartLibrary(root);
   testVersion13RetriesDurationBackfillAfterChartAttachFailure(root);
+  testDeferredDurationMigrationRebuildsSummariesOnlyOnce(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
   testBestScoreLoadsKpoorInclusiveBadPoints(root);
   testBestScoreCanFilterExactRuleset(root);
