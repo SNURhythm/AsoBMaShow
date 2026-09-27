@@ -210,9 +210,47 @@ void testAlteredPlaybackUsesLightAssistEasy() {
               kClearTypeLightAssistedEasyClearRank,
           "altered playback caps persisted clears at Light Assist Easy");
 }
+
+void testCourseSurvivalToGrooveContinuesAfterGaugeDeath() {
+  bms_parser::ChartMeta meta;
+  meta.TotalNotes = 100;
+  meta.Total = 240.0;
+  meta.HasTotal = true;
+  GameplayScoreState state({
+      .gaugeRules = compileGameplayGaugeRules(
+          GameplayRuleset::Beatoraja, meta, GaugeProfile::Course7Keys),
+      .keyMode = 7});
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::SurvivalToGroove,
+                       GaugeProfile::Course7Keys);
+  state.applyGaugeDelta(-100.0F);
+  require(!state.activeGaugeFailed() && state.gaugeType == GaugeType::Hard,
+          "course Survival to Groove stays on the dead course gauge without terminating");
+  state.commitJudge(JudgeResult(PGreat, 0));
+  require(state.getScore() == 2 && state.currentGauge == 0.0F &&
+              state.getClearType() == ClearType::Failed,
+          "continued course play accumulates score while the dead gauge stays failed");
+}
+
+void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
+  GameplayScoreState state(beatorajaScoreConfig(1000, 7, 240.0));
+  state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
+  state.applyGaugeDelta(-100.0F);
+  require(state.gaugeType == GaugeType::AssistedEasy,
+          "BEST CLEAR falls back to bottom admitted gauge if none qualifies");
+  for (const auto shift : {GaugeAutoShiftMode::BestClear,
+                           GaugeAutoShiftMode::SelectToUnder}) {
+    state.configureGauge(GaugeType::ExHard, shift, GaugeProfile::Standard,
+                         GaugeType::Hard);
+    state.applyGaugeDelta(-100.0F);
+    require(!state.activeGaugeFailed() && state.getClearType() == ClearType::Failed,
+            "GAS continues even when every admitted survival gauge is dead");
+  }
+}
 } // namespace
 
 int main() {
+  testCourseSurvivalToGrooveContinuesAfterGaugeDeath();
+  testBestClearFallsBackToBottomGaugeWhenNoneQualifies();
   testConfiguredGaugeHistoryUsesLogicalLimit();
   testRhythmStateGaugeHistoryRemainsUnboundedByDefault();
   testGasRecordsEveryTrackedGaugeHistory();

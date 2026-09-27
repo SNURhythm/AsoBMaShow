@@ -14,39 +14,45 @@ double lr2DefaultTotal(int noteCount) noexcept {
       (notes + std::clamp(notes - 400, 0, 200)) * 0.16);
 }
 
-double lr2TotalFactor(double total) noexcept {
+float lr2TotalFactor(double total) noexcept {
   const double denominator =
       std::min(10.0, std::max(1.0, std::floor(total / 16.0) - 5.0));
-  return 10.0 / denominator;
+  return static_cast<float>(10.0 / denominator);
 }
 
-double lr2NoteFactor(int noteCount) noexcept {
+float lr2NoteFactor(int noteCount) noexcept {
   const int notes = std::max(1, noteCount);
   if (notes <= 20) {
-    return 10.0;
+    return 10.0F;
   }
   if (notes < 30) {
-    return 8.0 + 0.2 * (30 - notes);
+    const volatile float increment = 0.2F * (30 - notes);
+    return 8.0F + increment;
   }
   if (notes < 60) {
-    return 5.0 + 0.2 * (60 - notes) / 3.0;
+    return 5.0F + 0.2F * (60 - notes) / 3.0F;
   }
   if (notes < 125) {
-    return 4.0 + static_cast<double>(125 - notes) / 65.0;
+    return 4.0F + (125 - notes) / 65.0F;
   }
   if (notes < 250) {
-    return 3.0 + 0.008 * (250 - notes);
+    // Keep the Java multiplication rounding before addition, including in
+    // optimized builds whose compiler otherwise contracts this into an FMA.
+    const volatile float increment = 0.008F * (250 - notes);
+    return 3.0F + increment;
   }
   if (notes < 500) {
-    return 2.0 + 0.004 * (500 - notes);
+    const volatile float increment = 0.004F * (500 - notes);
+    return 2.0F + increment;
   }
   if (notes < 1000) {
-    return 1.0 + 0.002 * (1000 - notes);
+    const volatile float increment = 0.002F * (1000 - notes);
+    return 1.0F + increment;
   }
-  return 1.0;
+  return 1.0F;
 }
 
-double lr2DamageMultiplier(double total, int totalNotes) noexcept {
+float lr2DamageMultiplier(double total, int totalNotes) noexcept {
   return std::max(lr2TotalFactor(total), lr2NoteFactor(totalNotes));
 }
 
@@ -159,6 +165,12 @@ float gaugeReducedDamageZoneUpperBound(
   }
 
   if (!gaugeProfileIsCourse(profile)) {
+    if (profile == GaugeProfile::StandardLr2) {
+      return gaugeType == GaugeType::Hard || gaugeType == GaugeType::Grade ||
+                     gaugeType == GaugeType::ExGrade
+                 ? 30.0F
+                 : 0.0F;
+    }
     return gaugeType == GaugeType::Hard &&
                    profile != GaugeProfile::Standard5Keys
                ? 50.0F
@@ -219,8 +231,8 @@ float GameplayGaugeRules::delta(GaugeType type, Judgement judgement,
   const auto &definition = gauges[gaugeTypeIndex(type)];
   float result = definition.baseDelta[judgementIndex];
   if (result > 0.0F && definition.scalePositiveByTotal) {
-    result *= static_cast<float>(effectiveTotal) /
-              static_cast<float>(std::max(1, totalNotes));
+    result = static_cast<float>(result * effectiveTotal /
+                                std::max(1, totalNotes));
   }
   if (result < 0.0F && definition.scaleNegativeByLr2Damage) {
     result *= static_cast<float>(

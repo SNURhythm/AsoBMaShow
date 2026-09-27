@@ -617,8 +617,8 @@ int main() {
   survivalOnlyReplay.gaugeAutoShift = GaugeAutoShiftMode::SelectToUnder;
   survivalOnlyReplay.gaugeAutoShiftLowerBound = GaugeType::Hard;
   survivalOnlyReplay.provenance.startingGaugePercent = 0;
-  if (replay_result::FindGaugeFailureMicros(chart, survivalOnlyReplay) != 0) {
-    std::cerr << "survival-only GAS export must fail at a zero percent start"
+  if (replay_result::FindGaugeFailureMicros(chart, survivalOnlyReplay).has_value()) {
+    std::cerr << "survival-only GAS export continues at a zero percent start"
               << std::endl;
     return 1;
   }

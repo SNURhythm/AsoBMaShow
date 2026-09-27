@@ -413,7 +413,7 @@ inline float beatorajaDamageMultiplier(double total, int totalNotes) {
   float noteMultiplier = 1.0f;
   int note = 1000;
   float scale = 0.002f;
-  while (note > totalNotes && note > 1) {
+  while (note > totalNotes || note > 1) {
     noteMultiplier +=
         scale * static_cast<float>(
                     note - std::max(totalNotes, note / 2));
@@ -488,12 +488,12 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
     }
   }
   if (delta > 0.0f) {
-    if (gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard) {
+    if ((gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard) &&
+        profile != GaugeProfile::StandardLr2) {
       delta *= beatorajaHardRecoveryMultiplier(total, totalNotes);
     } else if (gaugeType == GaugeType::AssistedEasy ||
                gaugeType == GaugeType::Easy || gaugeType == GaugeType::Normal) {
-      delta *= static_cast<float>(total) /
-               static_cast<float>(std::max(1, totalNotes));
+      delta = static_cast<float>(delta * total / std::max(1, totalNotes));
     }
   }
   if (gaugeType == GaugeType::Hard && profile != GaugeProfile::StandardLr2 &&
@@ -901,7 +901,11 @@ public:
 
   [[nodiscard]] bool activeGaugeFailed() const {
     const int index = gaugeTypeIndex(gaugeType);
-    if (gaugeAutoShift == GaugeAutoShiftMode::Continue) {
+    if (gaugeAutoShift == GaugeAutoShiftMode::Continue ||
+        gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+        gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder ||
+        (gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+         gaugeProfileIsCourse(gaugeProfile))) {
       return false;
     }
     return gaugeDefinition(gaugeType).survival &&
@@ -1006,16 +1010,6 @@ private:
       if (clearTypeForCompiledGauge(type, gaugeValues[i],
                                     gaugeSurvivalFailed[i]) !=
           ClearType::Failed) {
-        return type;
-      }
-    }
-    return bestSurvivingGaugeType();
-  }
-
-  [[nodiscard]] GaugeType bestSurvivingGaugeType() const {
-    for (int i = autoShiftUpperIndex(); i >= autoShiftLowerIndex(); i--) {
-      const GaugeType type = gaugeTypeAtIndex(i);
-      if (!gaugeDefinition(type).survival || !gaugeSurvivalFailed[i]) {
         return type;
       }
     }
