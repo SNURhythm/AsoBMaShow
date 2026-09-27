@@ -139,11 +139,8 @@ void applySavedDisplayFacts(const result_persistence::ChartScoreWrite &score,
 }
 
 GameplayRuleset rulesetFor(const ScoreProvenance &provenance) noexcept {
-  if (isSupportedRulesetDescriptor(provenance.ruleset)) {
-    return gameplayRulesetFromId(provenance.ruleset.id)
-        .value_or(GameplayRuleset::Beatoraja);
-  }
-  return GameplayRuleset::Beatoraja;
+  return gameplayRulesetFromId(provenance.ruleset.id)
+      .value_or(GameplayRuleset::Beatoraja);
 }
 
 RhythmState resultStateFrom(

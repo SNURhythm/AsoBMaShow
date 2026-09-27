@@ -41,6 +41,7 @@ struct ReplayDecodeOutcome {
   std::vector<ReplayStageDecodeSource> stageSources;
   bool stockOnly = false;
   bool unsupportedAsoExtension = false;
+  bool obsoleteRuleset = false;
   std::string diagnostic;
 
   [[nodiscard]] std::optional<bool>

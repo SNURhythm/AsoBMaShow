@@ -6,6 +6,7 @@
 #include "ir/IrSettingsPresentation.h"
 #include "ir/tachi/TachiDriver.h"
 #include "repositories/ReplayRepository.h"
+#include "scene/play/GameplayRuleset.h"
 #include "support/AllocationFailure.h"
 
 #include <atomic>
@@ -525,14 +526,15 @@ ir::IrOutboxDraft tachiDraft(int suffix, std::int64_t createdAt) {
       .createdAtUnixMillis = createdAt,
   };
   const std::string proofInput =
-      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n" +
+      std::to_string(RulesetDescriptor::kCurrentVersion) + "\n" +
       std::to_string(result.attemptId.size()) + ":" + result.attemptId + "\n" +
       std::to_string(result.chartSha256.size()) + ":" + result.chartSha256 +
       "\n" + std::to_string(result.payloadJson.size()) + ":" +
       result.payloadJson;
   result.rulesetProof = {
       .rulesetId = "lr2",
-      .rulesetRevision = 3,
+      .rulesetRevision = RulesetDescriptor::kCurrentVersion,
       .validationFingerprint = file_checksum::sha256(proofInput),
   };
   return result;

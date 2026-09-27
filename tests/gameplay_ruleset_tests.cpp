@@ -38,7 +38,7 @@ void testStableDescriptors() {
   const RulesetDescriptor lr2 = RulesetDescriptor::For(GameplayRuleset::LR2);
   assert((lr2 == RulesetDescriptor{
                     .id = "lr2",
-                    .version = 3,
+                    .version = 4,
                     .scoringModel = "asobmashow-v1",
                     .judgementModel = "lr2-v1",
                     .gaugeModel = "lr2-gauge-v1",
@@ -50,7 +50,7 @@ void testStableDescriptors() {
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   assert((beatoraja == RulesetDescriptor{
                            .id = "beatoraja",
-                           .version = 2,
+                           .version = 3,
                            .scoringModel = "asobmashow-v1",
                            .judgementModel = "bms-rank-v1",
                            .gaugeModel = "beatoraja-profile-gauge-v2",

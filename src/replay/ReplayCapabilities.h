@@ -21,6 +21,7 @@ enum class ReplayState : std::uint8_t {
   Corrupt,
   Mismatched,
   UnsupportedExtension,
+  Obsolete,
 };
 
 struct ReplayCapabilityInput {

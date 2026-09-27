@@ -284,6 +284,24 @@ struct Harness {
   }
 };
 
+void testOldRulesetIsObsoleteAndPreservesSavedResult() {
+  Harness harness;
+  harness.result.provenance.ruleset.version = 3;
+  for (auto &stage : harness.result.stages) {
+    stage.score.provenance.ruleset.version = 3;
+  }
+  harness.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(harness.result);
+  const auto loaded = harness.makeContext().load(
+      kAttemptId, parsedFacts(harness.result));
+  expect(loaded.state == CourseReplayContextState::ObsoleteRuleset &&
+             loaded.replayState() == ReplayState::Obsolete &&
+             loaded.result == harness.result && !loaded.replayAvailable() &&
+             loaded.diagnostic.find("obsolete") != std::string::npos &&
+             harness.calls == std::vector<std::string>{"result"},
+         "old course replay preserves the saved result without new-rules playback");
+}
+
 void testUserDeletedCourseReferenceNeverTouchesFilesystem() {
   Harness harness;
   harness.fileReference.userDeleted = true;
@@ -511,6 +529,7 @@ void testReferenceDecodePlaybackAndResultAgreementFailClosed() {
 
 int main() {
 #if ASOBMASHOW_HAS_COURSE_REPLAY_CONTEXT
+  testOldRulesetIsObsoleteAndPreservesSavedResult();
   testCompletePartialRepeatedAndMixedSetupsUseStrictLoadOrder();
   testParsedDurationEstimatesDoNotOverrideEmbeddedBounds();
   testForcedCourseModeRetainsEffectiveStageReplayMode();

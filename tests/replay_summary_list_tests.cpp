@@ -457,6 +457,16 @@ int main() {
     return 1;
   }
 
+  ReplayData previousLr2Replay = lr2RulesetReplay;
+  previousLr2Replay.provenance.ruleset.version = 3;
+  const auto previousLr2Result =
+      replay_result::BuildResultState(chart, previousLr2Replay);
+  if (previousLr2Result.gaugeRules().ruleset != GameplayRuleset::LR2) {
+    std::cerr << "historical LR2 result must retain its ruleset identity"
+              << std::endl;
+    return 1;
+  }
+
   ReplayData legacyRulesetReplay = lr2RulesetReplay;
   legacyRulesetReplay.provenance = ScoreProvenance::Legacy();
   const RhythmState legacyRulesetResult =

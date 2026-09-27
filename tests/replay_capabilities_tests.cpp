@@ -60,6 +60,20 @@ void testVerifiedModernMatrix() {
          "verified modern course excludes chart-only actions");
 }
 
+void testObsoleteReplayPreservesResultsAndOriginalBytesOnly() {
+  for (const auto origin : {RecordOrigin::ModernChartResult,
+                           RecordOrigin::ModernCourseResult}) {
+    const auto value = replay::capabilitiesFor({
+        .origin = origin, .replayState = ReplayState::Obsolete,
+        .postponedIrSnapshotEligible = true});
+    expect(value.viewResult && value.shareOrCopy &&
+               value.profileDuplicateReplay && value.profileArchiveReplay &&
+               !value.watch && !value.retrySame && !value.gBattle &&
+               !value.practiceGhost && !value.videoExport && !value.irUpload,
+           "obsolete replays retain results and byte-preserving actions only");
+  }
+}
+
 void testAbsentReplayKeepsModernResultAndIr() {
   constexpr std::array states{
       ReplayState::NotApplicable,
@@ -210,6 +224,7 @@ void testUnknownEnumValuesFailClosed() {
 } // namespace
 
 int main() {
+  testObsoleteReplayPreservesResultsAndOriginalBytesOnly();
   testVerifiedModernMatrix();
   testAbsentReplayKeepsModernResultAndIr();
   testInvalidReplayIsOnlyDeletable();

@@ -5,6 +5,7 @@
 #include "ir/tachi/BokutachiCacheStore.h"
 
 #include "FileChecksum.h"
+#include "scene/play/GameplayRuleset.h"
 #include "ir/IrHttpClient.h"
 
 #include "nlohmann/json.hpp"
@@ -94,13 +95,14 @@ ir::IrOutboxEntry pendingEntry(bool userIntent = false) {
       .updatedAtUnixMillis = 1700000000000LL,
   };
   const std::string proofInput =
-      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n" +
+      std::to_string(RulesetDescriptor::kCurrentVersion) + "\n" +
       std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
       std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
       "\n" + std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
   entry.rulesetProof = {
       .rulesetId = "lr2",
-      .rulesetRevision = 3,
+      .rulesetRevision = RulesetDescriptor::kCurrentVersion,
       .validationFingerprint = file_checksum::sha256(proofInput),
   };
   return entry;
@@ -444,7 +446,8 @@ void testBatchSubmissionUsesOneRequestAndClassifiesResponse() {
   second.id = 2;
   second.attemptId = "123e4567-e89b-42d3-a456-426614174001";
   const std::string proofInput =
-      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n" +
+      std::to_string(RulesetDescriptor::kCurrentVersion) + "\n" +
       std::to_string(second.attemptId.size()) + ":" + second.attemptId + "\n" +
       std::to_string(second.chartSha256.size()) + ":" + second.chartSha256 +
       "\n" + std::to_string(second.payloadJson.size()) + ":" +

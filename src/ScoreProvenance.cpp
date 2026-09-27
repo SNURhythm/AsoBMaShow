@@ -560,7 +560,8 @@ RulesetDescriptor rulesetFromJson(const Json &value, int schemaVersion) {
       result.scoringModel == "asobmashow-v1" &&
       result.judgementModel == "bms-rank-v1" &&
       result.gaugeModel == "beatoraja-profile-gauge-v2") {
-    result = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    // Recover the formerly implicit identity without upgrading recorded rules.
+    result.id = "beatoraja";
   }
   return result;
 }
@@ -645,7 +646,7 @@ void validateStageProof(const ScoreStageProvenance &stage,
   if (!std::isfinite(stage.effectiveGaugeTotal) ||
       stage.effectiveGaugeTotal < 0.0 ||
       (stage.effectiveGaugeTotal == 0.0 &&
-       ruleset != RulesetDescriptor::For(GameplayRuleset::LR2))) {
+       ruleset.id != "lr2")) {
     throw std::runtime_error(
         "Score provenance effective gauge TOTAL must be finite and positive, "
         "except LR2 permits zero.");
@@ -773,7 +774,7 @@ ScoreStageProvenance stageFromJson(const Json &value, int schemaVersion,
     }
   }
   if (schemaVersion < 4 &&
-      ruleset == RulesetDescriptor::For(GameplayRuleset::Beatoraja)) {
+      ruleset.id == "beatoraja" && ruleset.version == 2) {
     migrateLegacyBeatorajaWindows(result);
   }
   canonicalizeWindows(result.effectiveJudgeWindows);

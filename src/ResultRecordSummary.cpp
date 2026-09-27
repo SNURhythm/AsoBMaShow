@@ -485,6 +485,11 @@ makeModernChartResultRecord(ModernChartResultRecord record,
       (linkedRemote && !validLinkedRemoteIdentity(*linkedRemote))) {
     throw std::invalid_argument("modern chart result is invalid");
   }
+  if (replayState == replay::ReplayState::Verified &&
+      isObsoleteRulesetDescriptor(record.result.score.provenance.ruleset)) {
+    replayState = replay::ReplayState::Obsolete;
+    irState = ir::IrRecordState::Hidden;
+  }
   const auto capabilities = replay::capabilitiesFor({
       .origin = replay::RecordOrigin::ModernChartResult,
       .replayState = replayState,
@@ -522,6 +527,10 @@ makeModernCourseResultRecord(ModernCourseResultRecord record,
   if (record.result.resultId <= 0 || record.result.attemptId.empty() ||
       record.result.courseKey.empty()) {
     throw std::invalid_argument("modern course result is invalid");
+  }
+  if (replayState == replay::ReplayState::Verified &&
+      isObsoleteRulesetDescriptor(record.result.provenance.ruleset)) {
+    replayState = replay::ReplayState::Obsolete;
   }
   const auto capabilities = replay::capabilitiesFor({
       .origin = replay::RecordOrigin::ModernCourseResult,

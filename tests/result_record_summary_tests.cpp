@@ -1,4 +1,5 @@
 #include "../src/ResultRecordSummary.h"
+#include "../src/ResultRecordFormatting.h"
 #include "../src/replay/ReplayFileActionSelection.h"
 
 #include <climits>
@@ -307,6 +308,21 @@ result_persistence::ModernCourseResult validModernCourseResult() {
   result.playedAtUnixMillis = chart.playedAtUnixMillis + 1'000;
   result.resultFingerprint = std::string(64, 'd');
   return result;
+}
+
+void testOldRulesetRecordIsExplicitlyObsolete() {
+  ModernChartResultRecord record{.result = validModernResult()};
+  record.result.score.provenance.ruleset.version = 3;
+  const auto summary = makeModernChartResultRecord(
+      record, replay::ReplayState::Verified, ir::IrRecordState::Eligible);
+  expect(summary.replayState == replay::ReplayState::Obsolete &&
+             summary.modern->result == record.result &&
+             summary.capabilities.resultRecall && summary.capabilities.shareOrCopy &&
+             !summary.capabilities.watch && !summary.capabilities.irUpload,
+         "old ruleset row is obsolete without modifying its saved result");
+  expect(result_record_ui::detailLabel(summary).find("Obsolete replay") !=
+             std::string::npos,
+         "Records visibly labels an obsolete replay");
 }
 
 void testModernConversionUsesSharedReplayCapabilities() {
@@ -820,6 +836,7 @@ int main() {
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
   testReplayDeleteConfirmationOwnsTheExactRequestedAttempt();
   testAutoPlayIsTheOnlyReplaySummaryBackedRecord();
+  testOldRulesetRecordIsExplicitlyObsolete();
   testModernConversionUsesSharedReplayCapabilities();
   testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions();
   testModernCourseConversionKeepsResultWithoutReplay();

@@ -517,6 +517,22 @@ void testNonStockChartProjectsBeatorajaKeyInput() {
   }
 }
 
+void testOldRulesetIsExplicitlyObsolete() {
+  replay::BeatorajaReplayCodec codec;
+  const auto source = chartDocument();
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(source, 1, diagnostic);
+  expect(encoded.has_value(), "obsolete fixture encodes with current rules");
+  if (!encoded) return;
+  auto previous = outerJson(*encoded);
+  previous["asobmashow"]["setup"]["ruleset"]["version"] = 3;
+  const auto decoded = codec.decode(encodeJson(previous), context(source));
+  expect(decoded.obsoleteRuleset && !decoded.chart && !decoded.course &&
+             decoded.diagnostic.find("obsolete") != std::string::npos &&
+             !decoded.stockOnly,
+         "old Aso rules are explicitly obsolete without stock fallback");
+}
+
 void testSupportedAsoExtensionIsAuthoritative() {
   replay::BeatorajaReplayCodec codec;
   const auto source = chartDocument();
@@ -766,6 +782,7 @@ int main() {
   testCourseRoundTripAndAggregateLimits();
   testDoublePlayAndKeyMapping();
   testNonStockChartProjectsBeatorajaKeyInput();
+  testOldRulesetIsExplicitlyObsolete();
   testSupportedAsoExtensionIsAuthoritative();
   testLaneCoverStateRoundTripsAndLegacyEventsUseSetupState();
   testContextAndUntrustedStructureFailClosed();
