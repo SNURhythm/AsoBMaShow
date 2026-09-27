@@ -1057,6 +1057,66 @@ void testSnapshotPublishesHeldLongNoteByLane() {
   worker.stop();
 }
 
+void testHeldLongNoteRecoveryDoesNotReserveAnotherKeysound() {
+  for (bool scratch : {false, true}) {
+    for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+      if (!scratch && ruleset == GameplayRuleset::LR2) continue;
+      bms_parser::Chart chart;
+      chart.Meta.KeyMode = scratch ? 7 : 9;
+      chart.Meta.TotalNotes = scratch ? 2 : 1;
+      const int lane = scratch ? 7 : 1;
+      const auto type = scratch ? bms_parser::LongNoteType::ChargeNote
+                                : bms_parser::LongNoteType::LongNote;
+      auto *measure = new bms_parser::Measure();
+      auto *head = new bms_parser::LongNote(41, type);
+      auto *tail = new bms_parser::LongNote(41, type);
+      head->Tail = tail;
+      tail->Head = head;
+      addTimeline(*measure, 1'000'000)->SetNote(lane, head);
+      addTimeline(*measure, 2'000'000)->SetNote(lane, tail);
+      chart.Measures.push_back(measure);
+      FakeClock clock;
+      FakeAudio audio;
+      auto config = makeConfig(clock, audio);
+      config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(ruleset, 3, 100, 100,
+              CourseJudgementConstraint::None,
+              gameplay::CandidateSelectionMode::Lowest, chart.Meta.KeyMode));
+      gameplay::RealtimeGameplayWorker worker(
+          gameplay::buildGameplayDefinition(chart, 0), config);
+      require(worker.start(), "long-note recovery worker starts");
+      require(worker.enqueueInput({.epoch = 7,
+          .type = gameplay::RealtimeGameplayInputType::Press,
+          .lane = lane, .compensateLane = lane,
+          .steadyTimestampMicros = 1'000'000}), "recovery head enters worker");
+      require(waitUntil([&] { return audio.commitCount.load() == 1; }),
+              "long-note head commits its input-triggered keysound");
+      const long long releaseTime = scratch ? 1'950'000 : 1'500'000;
+      require(worker.enqueueInput({.epoch = 7,
+          .type = gameplay::RealtimeGameplayInputType::Release,
+          .lane = lane, .steadyTimestampMicros = releaseTime}) &&
+          worker.enqueueInput({.epoch = 7,
+          .type = gameplay::RealtimeGameplayInputType::Press,
+          .lane = lane, .compensateLane = lane,
+          .steadyTimestampMicros = releaseTime + 10'000}),
+          "held-tail release and recovery enter worker");
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        return worker.fault() != gameplay::RealtimeGameplayFault::None ||
+               (snapshot && snapshot->transactionSequence >= 3);
+      }), "worker processes recovery");
+      require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+                  audio.reserveCount.load() == 1 && audio.commitCount.load() == 1,
+              "held-tail recovery must not reserve a keysound or fault live play");
+      const auto snapshot = worker.acquireLatestSnapshot();
+      require(snapshot && snapshot->longNoteHoldingByLane[lane] &&
+                  snapshot->replayEventCount == 3,
+              "successful recovery preserves the hold and records its input edge");
+      worker.stop();
+    }
+  }
+}
+
 void testAudioCapacityFailureDoesNotClaimTheNote() {
   FakeClock clock;
   FakeAudio audio;
@@ -1558,6 +1618,7 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+  testHeldLongNoteRecoveryDoesNotReserveAnotherKeysound();
   testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance();
   testWorkerLaunchFailureReleasesAdmission();
   testRapidInputsCommitStateAndSoundWithoutFramePump();

@@ -1466,6 +1466,12 @@ NoteId GameplaySimulation::previewPressSoundNote(
     return kInvalidNoteId;
   }
   const std::int64_t judgedTime = inputTime(context);
+  if (mainState != nullptr &&
+      selectReleaseCandidate(mainLane, judgedTime) != kInvalidNoteId) {
+    // Recovering an existing hold records an input edge without retriggering
+    // its head sound. Keep the audio reservation preview aligned with pressLane.
+    return kInvalidNoteId;
+  }
   const NoteId judgeCandidate =
       selectPressCandidate(mainLane, compensateLane, judgedTime);
   return judgeCandidate != kInvalidNoteId
