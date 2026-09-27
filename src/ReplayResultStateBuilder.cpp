@@ -385,14 +385,14 @@ FindGaugeFailureMicros(bms_parser::Chart &chart, const ReplayData &replay,
   if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
     return std::nullopt;
   }
-  const RhythmState initialState =
+  RhythmState state =
       BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
-  if (initialState.activeGaugeFailed()) {
+  if (state.activeGaugeFailed()) {
     return 0LL;
   }
   for (const ReplayEvent &event : replay.events) {
-    if (event.gauge <= 0.0f &&
-        gaugeIsSurvival(event.gaugeType, initialState.gaugeProfile)) {
+    syncReplayResultGaugeSnapshot(state, event);
+    if (state.activeGaugeFailed()) {
       return std::max(0LL, event.songTimeMicros);
     }
   }

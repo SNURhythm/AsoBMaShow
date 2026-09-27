@@ -92,11 +92,50 @@ bool testRecoveredPmsLongNoteRetainsHeadBad() {
   return true;
 }
 
+bool testContinuingAutoShiftReplayHasNoGaugeCutoff() {
+  bms_parser::Chart chart;
+  chart.Meta = makeSevenKeyMeta();
+  chart.Meta.TotalNotes = 100;
+  chart.Meta.Total = 100.0;
+  bool passed = true;
+  for (const auto profile : {GaugeProfile::Standard, GaugeProfile::CourseDefault}) {
+    for (const auto mode : {GaugeAutoShiftMode::BestClear,
+                            GaugeAutoShiftMode::SelectToUnder,
+                            GaugeAutoShiftMode::SurvivalToGroove}) {
+      if (profile == GaugeProfile::Standard &&
+          mode == GaugeAutoShiftMode::SurvivalToGroove) continue;
+      ReplayData replay;
+      replay.provenance.ruleset =
+          RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+      replay.initialGaugeType = GaugeType::ExHard;
+      replay.gaugeAutoShift = mode;
+      replay.gaugeAutoShiftLowerBound = GaugeType::Hard;
+      auto live = replay_result::BuildInitialGaugeState(chart, replay, profile);
+      live.applyGaugeDelta(-200.0f);
+      replay.events = {
+          {.action = ReplayEventAction::Mine, .songTimeMicros = 1'000'000,
+           .gauge = live.currentGauge, .gaugeType = live.gaugeType},
+          {.action = ReplayEventAction::Press, .songTimeMicros = 2'000'000,
+           .judgement = PGreat, .gauge = live.currentGauge,
+           .gaugeType = live.gaugeType, .combo = 1, .score = 2},
+      };
+      if (live.currentGauge != 0.0f || live.activeGaugeFailed() ||
+          replay_result::FindGaugeFailureMicros(chart, replay, profile)) {
+        std::cerr << "a continuing auto-shift replay must export past zero gauge "
+                  << "(profile " << static_cast<int>(profile) << ", mode "
+                  << static_cast<int>(mode) << ")" << std::endl;
+        passed = false;
+      }
+    }
+  }
+  return passed;
+}
 } // namespace
 
 int main() {
   const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
-  if (!recoveredPmsResult) return 1;
+  const bool continuingAutoShift = testContinuingAutoShiftReplayHasNoGaugeCutoff();
+  if (!recoveredPmsResult || !continuingAutoShift) return 1;
 
   ReplaySummary summary;
   summary.initialGaugeType = GaugeType::Hard;
@@ -649,6 +688,7 @@ int main() {
       replay_result::BuildResultState(chart, failedReplay);
   const GaugeStateSnapshot failedCarry = failedResult.gaugeSnapshot();
   if (!failedCarry.gaugeSurvivalFailed[gaugeTypeIndex(GaugeType::Hard)] ||
+      replay_result::FindGaugeFailureMicros(chart, failedReplay) != 500 ||
       replay_result::FindGaugeFailureMicros(
           chart, failedReplay, GaugeProfile::Standard, &failedCarry) != 0) {
     std::cerr << "course export must carry terminal survival gauge state"
