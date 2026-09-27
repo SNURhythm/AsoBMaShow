@@ -13,6 +13,15 @@ void require(bool condition, const char *message) {
   }
 }
 
+void testFallbackJudgementInvalidatesRankingOnlyWhenScoringBegins() {
+  require(gameplay::fallbackJudgementInvalidatesRanking(PGreat, false, false),
+          "a live fallback judgement invalidates the canonical ranking proof");
+  require(!gameplay::fallbackJudgementInvalidatesRanking(None, false, false) &&
+              !gameplay::fallbackJudgementInvalidatesRanking(PGreat, true, false) &&
+              !gameplay::fallbackJudgementInvalidatesRanking(PGreat, false, true),
+          "deferred startup, canonical authority, and recalled replays preserve their proof");
+}
+
 void testSessionBackedPracticeEligibility() {
   const gameplay::GameplayTimeRange range{.startMicros = 1'000'000,
                                           .endMicros = 2'000'000};
@@ -67,7 +76,7 @@ void testExistingExclusionsAndNormalActivationRemain() {
   });
   require(!replay.eligible, "replay playback remains excluded");
 
-  const auto unsupportedManual =
+  const auto bridgedManual =
       gameplay::makeRealtimeGameplayAuthorityPolicy({
           .nativeManualInputAvailable = false,
           .autoPlay = false,
@@ -76,8 +85,18 @@ void testExistingExclusionsAndNormalActivationRemain() {
           .practiceRange = gameplay::GameplayTimeRange{
               .startMicros = 1'000'000, .endMicros = 2'000'000},
       });
-  require(!unsupportedManual.eligible,
-          "manual practice keeps fallback on platforms without native input");
+  require(bridgedManual.eligible,
+          "manual practice uses the canonical simulation through the legacy input bridge");
+
+  const auto bridgedNormal = gameplay::makeRealtimeGameplayAuthorityPolicy({
+      .nativeManualInputAvailable = false,
+      .inputHandlerAvailable = true,
+  });
+  require(bridgedNormal.eligible,
+          "desktop and Android manual play use canonical simulation without a native adapter");
+  const auto missingInput = gameplay::makeRealtimeGameplayAuthorityPolicy({});
+  require(!missingInput.eligible,
+          "manual authority still requires an input handler");
 
   require(gameplay::shouldAttemptRealtimeGameplayReset(true, false, true) &&
               gameplay::shouldAttemptRealtimeGameplayReset(true, true, false) &&
@@ -170,6 +189,7 @@ void testAllNonPracticeModesUseLastPlayableNoteInsteadOfTrailingTimeline() {
 } // namespace
 
 int main() {
+  testFallbackJudgementInvalidatesRankingOnlyWhenScoringBegins();
   testSessionBackedPracticeEligibility();
   testExistingExclusionsAndNormalActivationRemain();
   testSourcePlaytimeCompletesBeforeTrailingWorkerTimeline();

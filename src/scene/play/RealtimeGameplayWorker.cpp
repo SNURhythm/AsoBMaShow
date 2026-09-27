@@ -674,7 +674,8 @@ bool RealtimeGameplayWorker::advanceAutomatic() {
   const auto after = simulation_.snapshot();
   const std::size_t gaugeSamplesAfter =
       simulation_.skinGameplayGraphState().gaugeHistories.front().size();
-  return !result.transactions.empty() || before.judgeCounts != after.judgeCounts ||
+  return simulation_.lastAdvanceStats().notesExamined != 0 ||
+         !result.transactions.empty() || before.judgeCounts != after.judgeCounts ||
          before.combo != after.combo || before.maxCombo != after.maxCombo ||
          before.comboBreak != after.comboBreak || before.score != after.score ||
          before.gauge != after.gauge || before.gaugeType != after.gaugeType ||

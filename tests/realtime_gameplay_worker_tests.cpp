@@ -1026,19 +1026,34 @@ void testSnapshotPublishesHeldLongNoteByLane() {
   FakeAudio audio;
   gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
                                            makeConfig(clock, audio));
+  gameplay::RealtimeGameplayInputBridge bridge(
+      7, {.context = &worker,
+          .emit = [](void *context, const gameplay::RealtimeGameplayInput &input) {
+            return static_cast<gameplay::RealtimeGameplayWorker *>(context)->enqueueInput(input);
+          }});
+  const replay::LogicalControl control{
+      .kind = replay::LogicalControlKind::ScratchClockwise, .player = 1};
   require(worker.start(), "long-note snapshot worker starts");
-  require(worker.enqueueInput(
-              {.epoch = 7,
-               .type = gameplay::RealtimeGameplayInputType::Press,
-               .lane = 7,
-               .compensateLane = 7,
-               .steadyTimestampMicros = 1'000'000}),
-          "scratch long-note head enters fixed ingress");
+  require(bridge.prepare(gameplay::RealtimeGameplayInputType::Press, 7, 7,
+                         false, 1'000'000, 0) &&
+              bridge.emitApplied(7, control, true, true, false, 1'000'000),
+          "legacy scratch head enters the canonical worker through its applied callback");
   require(waitUntil([&] {
             auto snapshot = worker.acquireLatestSnapshot();
-            return snapshot && snapshot->longNoteHoldingByLane[7];
+            return snapshot && snapshot->longNoteHoldingByLane[7] &&
+                   snapshot->attempt.score == 2;
           }),
           "worker snapshot publishes held long-note state for scratch routing");
+  require(bridge.prepare(gameplay::RealtimeGameplayInputType::Release, 7, 7,
+                         true, 2'000'000, 0) &&
+              bridge.emitApplied(7, control, true, false, false, 2'000'000),
+          "legacy backspin tail enters the same canonical worker");
+  require(waitUntil([&] {
+            auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot && !snapshot->longNoteHoldingByLane[7] &&
+                   snapshot->attempt.score == 4 && snapshot->attempt.combo == 2;
+          }),
+          "legacy bridge scores both charge identities and clears the published scratch hold");
   worker.stop();
 }
 
@@ -1492,9 +1507,58 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
   worker.stop();
 }
 
+void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
+  for (bool initiallyPressed : {false, true}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addTimeline(*measure, 1'000'000)->SetLandmineNote(1, new bms_parser::LandmineNote(4.0F));
+    addTimeline(*measure, 2'000'000)->SetNote(2, new bms_parser::Note(1));
+    chart.Measures.push_back(measure);
+    FakeClock clock;
+    FakeAudio audio;
+    clock.nowMicros.store(1'000'000);
+    gameplay::RealtimeGameplayWorker worker(gameplay::buildGameplayDefinition(chart, 0),
+                                             makeConfig(clock, audio));
+    if (initiallyPressed) {
+      require(worker.enqueueInput({.epoch = 7,
+          .type = gameplay::RealtimeGameplayInputType::Press,
+          .lane = 1, .steadyTimestampMicros = 0}), "initial mine lane press is queued");
+    }
+    require(worker.enqueueInput({.epoch = 7,
+        .type = initiallyPressed ? gameplay::RealtimeGameplayInputType::Release
+                                 : gameplay::RealtimeGameplayInputType::Press,
+        .lane = 1, .steadyTimestampMicros = 1'000'000}), "boundary input is queued");
+    require(worker.start(), "mine boundary worker starts");
+    require(waitUntil([&] {
+      auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->transactionSequence >= (initiallyPressed ? 2 : 1);
+    }), "worker processes input after its automatic preadvance");
+    {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      require(snapshot && !snapshot->noteStates[0].dead,
+              "worker preadvance leaves exact-time mine pending for input");
+    }
+    clock.nowMicros.store(1'000'001);
+    require(waitUntil([&] {
+      auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->noteStates[0].dead;
+    }), "worker resolves mine when clock passes the boundary");
+    {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      require(snapshot->noteStates[0].played == !initiallyPressed &&
+                  snapshot->attempt.gauge == (initiallyPressed ? 20.0F : 16.0F),
+              "worker mine damage uses the settled exact-time lane state");
+    }
+    worker.stop();
+  }
+}
+
 } // namespace
 
 int main() {
+  testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance();
   testWorkerLaunchFailureReleasesAdmission();
   testRapidInputsCommitStateAndSoundWithoutFramePump();
   testRealtimeSnapshotPublishesFlatGaugeSamplesWithoutInput();

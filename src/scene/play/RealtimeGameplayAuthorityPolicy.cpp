@@ -11,8 +11,7 @@ RealtimeGameplayAuthorityPolicy makeRealtimeGameplayAuthorityPolicy(
   const bool legacyPractice = input.practiceMode && !sessionBackedPractice;
   result.eligible =
       !input.replayPlayback && !legacyPractice &&
-      (input.autoPlay ||
-       (input.nativeManualInputAvailable && input.inputHandlerAvailable));
+      (input.autoPlay || input.inputHandlerAvailable);
   if (sessionBackedPractice) {
     result.allowedNoteRange = input.practiceRange;
     result.practiceCompletionSongTimeMicros = input.practiceRange->endMicros;

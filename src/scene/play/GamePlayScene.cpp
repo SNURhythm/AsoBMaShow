@@ -3085,6 +3085,13 @@ void GamePlayScene::init() {
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
         assist_options::isDragMode(options.assistOption));
+    inputHandler->setLongNoteHeldCallback([this](int lane) -> std::optional<bool> {
+      if (!realtimeGameplayAuthorityActive()) {
+        return std::nullopt;
+      }
+      return RealtimeGameplaySession::scratchLongNoteHeld(
+          realtimeGameplaySession.get(), lane);
+    });
     inputHandler->setTouchEventCallback([this](SDL_FingerID fingerIndex,
                                                ReplayTouchAction action,
                                                Vector3 normalizedLocation) {
@@ -6988,6 +6995,12 @@ void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
   note->PlayedTime = judgeTimeMicros;
 
   if (state != nullptr) {
+    if (!realtimeGameplayAuthorityActive() && !isReplayPlayback() &&
+        attemptProvenance.eligibility == ScoreEligibility::Verified) {
+      attemptProvenance.eligibility = ScoreEligibility::Modified;
+      recordedReplay.provenance = attemptProvenance;
+      analyticsReplay.provenance = attemptProvenance;
+    }
     state->applyGaugeDelta(-note->Damage);
     updateGaugeStatusText();
   }
@@ -7011,6 +7024,16 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             const bms_parser::Note *graphNote) {
   if (state == nullptr || state->isEnding) {
     return;
+  }
+  if (gameplay::fallbackJudgementInvalidatesRanking(
+          judgeResult.judgement, realtimeGameplayAuthorityActive(),
+          isReplayPlayback()) &&
+      attemptProvenance.eligibility == ScoreEligibility::Verified) {
+    // Defer invalidation until fallback scoring actually occurs: iOS may
+    // obtain its touch layout and start the worker after the first skin frame.
+    attemptProvenance.eligibility = ScoreEligibility::Modified;
+    recordedReplay.provenance = attemptProvenance;
+    analyticsReplay.provenance = attemptProvenance;
   }
   const int previousCount = state->judgeCount[judgeResult.judgement];
   state->commitJudge(judgeResult);

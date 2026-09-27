@@ -40,6 +40,7 @@ private:
   float playAreaWidth = 8.0f;
   float playAreaLeftX = 0.0f;
   bool dragModeEnabled = false;
+  std::function<std::optional<bool>(int)> longNoteHeldCallback;
   std::vector<int> laneOrder;
   std::map<SDL_FingerID, int> fingerToLane;
   std::map<SDL_FingerID, bool> fingerLanePressed;
@@ -95,6 +96,8 @@ public:
   void setDragModeEnabled(bool enabled);
   void setRegistryDeviceClassEnabled(input::DeviceClass deviceClass,
                                      bool enabled);
+  void setLongNoteHeldCallback(
+      std::function<std::optional<bool>(int)> callback);
   void setTouchEventCallback(
       std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3)> callback);
 };
