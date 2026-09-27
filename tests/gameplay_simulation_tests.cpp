@@ -409,6 +409,47 @@ void testCompiledJudgePreservesResolvedWindows() {
           "future cutoff uses the earliest hittable edge");
 }
 
+void testReferenceEarlyCandidateCutoffIsExclusive() {
+  // Both reference JudgeManagers stop before judging dmtime >= mjudgeend.
+  // Their individual window tables are inclusive, but this outer scan is not.
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    const long long leadMicros = ruleset == GameplayRuleset::LR2 ? 1'000'000 : 500'000;
+    for (int rank = 0; rank <= 4; ++rank) {
+      for (int lane : {1, 7}) {
+        const auto judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(ruleset, rank));
+        const auto role = lane == 7 ? gameplay::NoteJudgeRole::Scratch
+                                    : gameplay::NoteJudgeRole::Normal;
+        constexpr long long noteTime = 2'000'000;
+        const long long boundary = noteTime - leadMicros;
+        require(judge.judgeAt(role, noteTime, boundary).judgement == Kpoor,
+                "raw timing tables include the earliest empty-POOR edge");
+        for (long long offset : {-1LL, 0LL, 1LL}) {
+          bms_parser::Chart chart;
+          chart.Meta.KeyMode = 7;
+          auto *measure = new bms_parser::Measure();
+          addTimeline(*measure, noteTime)->SetNote(lane, new bms_parser::Note(1));
+          chart.Measures.push_back(measure);
+          const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+          gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+          const auto actual = simulation.pressLane(
+              lane, {.songTimeMicros = boundary + offset});
+          const auto expected = offset > 0 ? Kpoor : None;
+          require(actual.hasJudge == (expected != None) &&
+                      actual.judge.judgement == expected,
+                  "simulation excludes the exact early cutoff and accepts one microsecond inside");
+          std::unordered_map<int, bool> pressed;
+          RhythmLaneInputController controller(&chart, nullptr, pressed, judge);
+          const auto legacy = controller.pressLane(
+              lane, {.songTimeMicros = boundary + offset});
+          require(legacy.judge.judgement == expected,
+                  "lane controller preserves the same exclusive reference cutoff");
+        }
+      }
+    }
+  }
+}
+
 void testDefinitionUsesStableIdsAndLaneIndices() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -2726,6 +2767,7 @@ int main(int argc, char **argv) {
   if (argc > 1) {
     const std::string name = argv[1];
     if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
+    else if (name == "early-cutoff") testReferenceEarlyCandidateCutoffIsExclusive();
     else if (name == "release-search") testReleaseSearchStopsAtPracticeEnd();
     else if (name == "closer-empty-poor") testReferenceEmptyPoorRetainsCloserPlayedNote();
     else if (name == "lr2-closer-empty-poor") testReferenceLr2EmptyPoorRetainsCloserPlayedNote();
@@ -2752,6 +2794,7 @@ int main(int argc, char **argv) {
   testReferenceLongNoteReleaseFairness();
   testReferenceHellChargeStartsAfterHeadJudgement();
   testCompiledJudgePreservesResolvedWindows();
+  testReferenceEarlyCandidateCutoffIsExclusive();
   testGameplayGraphAuthorityUsesPinnedBucketsRingAndReplayOrder();
   testGameplayGraphGaugeHistorySamplesEveryTypeEveryHalfSecond();
   testManualKeysoundSelectionUsesFutureThenLastWithMainTies();

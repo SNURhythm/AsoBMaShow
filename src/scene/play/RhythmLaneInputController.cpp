@@ -411,6 +411,8 @@ RhythmLaneInputController::ResultBatch RhythmLaneInputController::pressLane(
       if (timeline->Timing < inputTime - latePoorTiming) {
         continue;
       }
+      // Match the reference scanner's dmtime >= mjudgeend guard; the raw
+      // judgement windows are inclusive, but their outer scan cutoff is not.
       if (timeline->Timing >= futureCutoff) {
         stopScanning = true;
         break;

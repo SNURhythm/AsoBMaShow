@@ -63,6 +63,13 @@ from the captured rank percentage. Snapshots without an extended rank retain the
 existing two-second limit. This avoids rejecting valid large DEFEXRANK charts
 during result serialization or replay setup.
 
+The candidate scanner's far-future cutoff is exclusive even though individual
+judge windows are inclusive. Both reference `JudgeManager` implementations stop
+at `noteTime - inputTime >= mjudgeend` before consulting the window table. Thus an
+LR2 press exactly 1,000,000 microseconds early (Beatoraja: 500,000) produces no
+judgement; one microsecond inside can produce empty POOR. A regression covers
+both authorities, normal/scratch lanes, all five ranks, and adjacent timestamps.
+
 ## Primary source locations
 
 Both reference checkouts define these rules under `bms/player/beatoraja/play/`:

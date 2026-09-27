@@ -1237,6 +1237,8 @@ NoteId GameplaySimulation::selectPressCandidate(int mainLane,
     const NoteId id = scan.ids[scan.index++];
     const auto &note = definition_.note(id);
     ++lastSearchStats_.notesExamined;
+    // Both reference JudgeManagers break at dmtime >= mjudgeend before the
+    // inclusive window lookup. The outer candidate cutoff is exclusive.
     if (note.timingMicros >= futureCutoff) {
       scan.index = scan.ids.size();
       continue;
