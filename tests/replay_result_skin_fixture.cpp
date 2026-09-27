@@ -177,6 +177,14 @@ int main() {
   check(4 + partialVideo.TotalNotes - 150 == 384 &&
             4 + partialImage.TotalNotes - 150 == 384,
         "both partial course export metadata yield full-course BP");
+  check(partialImage.Rank == 300 &&
+            partialImage.RankType == bms_parser::JudgeRankType::DefExRank,
+        "course image retains final-stage DEFEXRANK judging difficulty");
+  imageCharts.back()->Meta.Rank = 3;
+  imageCharts.back()->Meta.RankType = bms_parser::JudgeRankType::BmsRank;
+  const auto easyImage = courseResultMetaForReplay(partial, imageCharts);
+  check(easyImage.Rank == 3 && easyImage.RankType == bms_parser::JudgeRankType::BmsRank,
+        "course image retains final-stage EASY judging difficulty");
   partial.entryFacts.back() = {};
   const auto unknownVideo = courseResultMetaForReplayVideo(partial, {{chart}, {chart}});
   const auto unknownImage = courseResultMetaForReplay(partial, imageCharts);

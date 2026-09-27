@@ -471,6 +471,10 @@ bms_parser::ChartMeta courseResultMetaForReplay(
   auto meta = result_presentation::courseResultMeta(
       replay.courseName, replay.courseGroupName, chartCount,
       totalNotes, playLength);
+  if (!charts.empty() && charts.back() != nullptr) {
+    meta.Rank = charts.back()->Meta.Rank;
+    meta.RankType = charts.back()->Meta.RankType;
+  }
   return meta;
 }
 
