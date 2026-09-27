@@ -73,6 +73,13 @@ LR2 press exactly 1,000,000 microseconds early (Beatoraja: 500,000) produces no
 judgement; one microsecond inside can produce empty POOR. A regression covers
 both authorities, normal/scratch lanes, all five ranks, and adjacent timestamps.
 
+Review regressions also cover recovery inputs that do not retrigger a keysound,
+immediate replay-capacity failure on replay-only release/recovery transactions,
+and obsolete IR actions independently of replay-file availability. Partial course
+adapters retain saved facts for every entry so exports, replay restarts, and saved
+result browsing include unplayed notes; course images preserve the final stage's
+judgement difficulty.
+
 ## Primary source locations
 
 Both reference checkouts define these rules under `bms/player/beatoraja/play/`:
@@ -101,6 +108,12 @@ Thus every entry has a passing result across verification runs; the full
 parallel run itself was not completely green. The build-storage branch already
 documents audio/jukebox timeout sensitivity, and the skin wrapper invokes a
 runner normally registered to run serially.
+
+After the review corrections, the desktop `main` build and all 14 focused
+CTest suites passed together with `-j 6`. These cover live input, replay
+materialization, course persistence/recall/exports, obsolete record actions,
+score migrations, and profile switching. Each reviewed defect was reproduced
+by a failing regression before its fix.
 
 Parser source verification passed `make clean`, `make test`, and
 `make test_amalgamation`; both copied parser files match that generated output.
