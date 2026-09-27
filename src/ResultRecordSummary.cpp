@@ -485,9 +485,10 @@ makeModernChartResultRecord(ModernChartResultRecord record,
       (linkedRemote && !validLinkedRemoteIdentity(*linkedRemote))) {
     throw std::invalid_argument("modern chart result is invalid");
   }
-  if (replayState == replay::ReplayState::Verified &&
-      isObsoleteRulesetDescriptor(record.result.score.provenance.ruleset)) {
-    replayState = replay::ReplayState::Obsolete;
+  if (isObsoleteRulesetDescriptor(record.result.score.provenance.ruleset)) {
+    if (replayState == replay::ReplayState::Verified) {
+      replayState = replay::ReplayState::Obsolete;
+    }
     irState = ir::IrRecordState::Hidden;
   }
   const auto capabilities = replay::capabilitiesFor({
