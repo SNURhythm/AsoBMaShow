@@ -49,9 +49,55 @@ void addClassicLongNote(bms_parser::Chart &chart, long long headMicros,
   measure->TimeLines.push_back(tailTimeline);
   chart.Measures.push_back(measure);
 }
+
+bool testRecoveredPmsLongNoteRetainsHeadBad() {
+  for (const int keyMode : {9, 18}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = keyMode;
+    chart.Meta.LnMode = 1;
+    chart.Meta.TotalNotes = 1;
+    chart.Meta.TotalLongNotes = 1;
+    addClassicLongNote(chart, 1'000'000, 2'000'000, 1);
+    ReplayData replay;
+    replay.provenance.ruleset =
+        RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    replay.resultPassedNotes = 1;
+    replay.events = {
+        {.action = ReplayEventAction::Press, .lane = 1,
+         .noteTimeMicros = 1'000'000, .songTimeMicros = 850'000,
+         .judgeTimeMicros = 850'000, .judgement = Bad,
+         .diffMicros = -150'000, .gauge = 20.0f},
+        {.action = ReplayEventAction::Release, .lane = 1,
+         .songTimeMicros = 860'000, .judgeTimeMicros = 860'000,
+         .gauge = 20.0f},
+        {.action = ReplayEventAction::Press, .lane = 1,
+         .noteTimeMicros = 1'000'000, .songTimeMicros = 1'000'000,
+         .judgeTimeMicros = 1'000'000, .judgement = PGreat,
+         .gauge = 20.0f},
+        {.action = ReplayEventAction::Release, .lane = 1,
+         .noteTimeMicros = 2'000'000, .songTimeMicros = 2'000'000,
+         .judgeTimeMicros = 2'000'000, .judgement = PGreat,
+         .gauge = 30.0f, .combo = 1, .score = 2},
+    };
+    const auto result = replay_result::BuildResultState(chart, replay);
+    const int badPoints = result.judgeCount.at(Bad) + result.judgeCount.at(Poor) +
+        result.judgeCount.at(Kpoor) + chart.Meta.TotalNotes - result.stagePassedNotes;
+    if (result.judgeCount.at(Bad) != 1 || result.judgeCount.at(PGreat) != 1 ||
+        badPoints != 1 || result.comboBreak != 1 || result.fastCount != 1) {
+      std::cerr << "a recovered PMS classic LN must retain its independent head BAD "
+                << "in the exported result (key mode " << keyMode << ")" << std::endl;
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 int main() {
+  const bool recoveredPmsResult = testRecoveredPmsLongNoteRetainsHeadBad();
+  if (!recoveredPmsResult) return 1;
+
   ReplaySummary summary;
   summary.initialGaugeType = GaugeType::Hard;
   summary.finalGauge = 78.25f;

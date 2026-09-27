@@ -73,6 +73,7 @@ bool replayEventCountsInResult(
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const std::unordered_set<const bms_parser::LongNote *>
         &classicHeadsWithTailResult,
+    const ReplayData &replay,
     const ReplayEvent &event) {
   if (event.judgement == None) {
     return false;
@@ -88,8 +89,14 @@ bool replayEventCountsInResult(
   }
 
   auto *longNote = static_cast<bms_parser::LongNote *>(note);
+  const bool nonvanishingBad = event.judgement == Bad &&
+      (chart.Meta.KeyMode == 9 || chart.Meta.KeyMode == 18) &&
+      gameplayRulesetFromId(replay.provenance.ruleset.id)
+              .value_or(GameplayRuleset::Beatoraja) == GameplayRuleset::Beatoraja;
+  // PMS head BAD is already scored before recovery; the later tail only
+  // supplies the judgement for the accepted head.
   return longNote->IsTail() || !recordedJudge.isNotePlayed() ||
-         effectiveLongNoteIsCharge(longNote, chart) ||
+         effectiveLongNoteIsCharge(longNote, chart) || nonvanishingBad ||
          (event.judgement == Bad &&
           !classicHeadsWithTailResult.contains(longNote));
 }
@@ -274,7 +281,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
     }
 
     if (!replayEventCountsInResult(chart, lookup, classicHeadsWithTailResult,
-                                   event)) {
+                                   replay, event)) {
       continue;
     }
 
@@ -322,7 +329,7 @@ SkinGameplayGraphState BuildSkinGameplayGraphState(
     if (event.action == ReplayEventAction::Gauge ||
         event.action == ReplayEventAction::Mine ||
         !replayEventCountsInResult(chart, lookup,
-                                   classicHeadsWithTailResult, event)) {
+                                   classicHeadsWithTailResult, replay, event)) {
       continue;
     }
     const ChartVisualNote *note = replayGraphNote(graphNotes, event);
