@@ -615,7 +615,7 @@ void testLandmineDetonatesOrExpiresFromPriorLaneState() {
   simulation.pressLane(1, {.songTimeMicros = 0});
   const float gaugeBefore = simulation.snapshot().gauge;
 
-  const auto advanced = simulation.advanceTo(timingMicros, 8'000'000);
+  const auto advanced = simulation.advanceTo(timingMicros + 1, 8'000'000);
   require(advanced.transactions.size() == 1 &&
               advanced.transactions.front().noteId == detonatedId &&
               advanced.transactions.front().hasReplayEvent &&
@@ -625,12 +625,12 @@ void testLandmineDetonatesOrExpiresFromPriorLaneState() {
   require(simulation.noteState(detonatedId).played &&
               simulation.noteState(detonatedId).dead &&
               simulation.noteState(detonatedId).playedTimeMicros ==
-                  timingMicros &&
+                  timingMicros + 1 &&
               simulation.snapshot().gauge == gaugeBefore - 3.5F,
           "detonated mine commits state and exact negative damage");
   require(!simulation.noteState(expiredId).played &&
               simulation.noteState(expiredId).dead &&
-              simulation.noteState(expiredId).playedTimeMicros == timingMicros,
+              simulation.noteState(expiredId).playedTimeMicros == timingMicros + 1,
           "unpressed-lane mine expires without becoming played");
   require(std::ranges::count(simulation.replayEvents(),
                              gameplay::GameplayReplayAction::Mine,
@@ -638,45 +638,62 @@ void testLandmineDetonatesOrExpiresFromPriorLaneState() {
           "only the detonated mine records replay and gauge mutation");
 }
 
-void testSameTimeAutomaticWorkPrecedesPressAndRelease() {
+void testSameTimeMineUsesSettledInputState() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 5;
   auto *measure = new bms_parser::Measure();
   constexpr std::int64_t timingMicros = 1'000'000;
-  auto *timeline = addTimeline(*measure, timingMicros);
-  timeline->SetLandmineNote(1, new bms_parser::LandmineNote(4.0F));
+  addTimeline(*measure, timingMicros)->SetLandmineNote(1, new bms_parser::LandmineNote(4.0F));
   chart.Measures.push_back(measure);
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   const gameplay::NoteId mineId = definition.chronologicalNotes().front();
   const gameplay::GameplaySimulationConfig config{
       .judge = gameplay::CompiledGameplayJudge::from(Judge(1))};
+  for (bool initiallyPressed : {false, true}) {
+    for (bool partitionAtBoundary : {false, true}) {
+      gameplay::GameplaySimulation simulation(definition, config);
+      if (initiallyPressed) simulation.applyPressAt(1, 1, {.songTimeMicros = 0});
+      const float before = simulation.snapshot().gauge;
+      if (partitionAtBoundary) simulation.advanceTo(timingMicros, timingMicros);
+      if (initiallyPressed) {
+        simulation.applyReleaseAt(1, {.songTimeMicros = timingMicros});
+      } else {
+        simulation.applyPressAt(1, 1, {.songTimeMicros = timingMicros});
+      }
+      require(!simulation.noteState(mineId).dead,
+              "mine waits until equal-time input edges have settled");
+      simulation.advanceTo(timingMicros + 1, timingMicros + 1);
+      require(simulation.noteState(mineId).dead &&
+                  simulation.noteState(mineId).played == !initiallyPressed &&
+                  simulation.snapshot().gauge == before - (initiallyPressed ? 0.0F : 4.0F),
+              "exact-time press hits and exact-time release avoids a mine across frame partitions");
+    }
+  }
+  gameplay::GameplaySimulation tap(definition, config);
+  tap.applyPressAt(1, 1, {.songTimeMicros = timingMicros});
+  tap.applyReleaseAt(1, {.songTimeMicros = timingMicros});
+  tap.advanceTo(timingMicros + 1, timingMicros + 1);
+  require(!tap.noteState(mineId).played,
+          "all equal-time input edges settle before a mine samples the lane");
+}
 
-  gameplay::GameplaySimulation pressedAtDeadline(definition, config);
-  const float pressGaugeBefore = pressedAtDeadline.snapshot().gauge;
-  const auto press = pressedAtDeadline.applyPressAt(
-      1, 1, {.songTimeMicros = timingMicros, .laneBeamTimeMicros = 9'000'000});
-  require(!pressedAtDeadline.noteState(mineId).played &&
-              pressedAtDeadline.noteState(mineId).dead &&
-              pressedAtDeadline.snapshot().gauge == pressGaugeBefore &&
-              pressedAtDeadline.automaticResults().empty() &&
-              press.hasReplayEvent && pressedAtDeadline.lanePressed(1),
-          "same-time press expires the mine using the prior unpressed lane");
-
-  gameplay::GameplaySimulation releasedAtDeadline(definition, config);
-  releasedAtDeadline.pressLane(1, {.songTimeMicros = 0});
-  const float releaseGaugeBefore = releasedAtDeadline.snapshot().gauge;
-  const auto release = releasedAtDeadline.applyReleaseAt(
-      1, {.songTimeMicros = timingMicros, .laneBeamTimeMicros = 9'100'000});
-  require(releasedAtDeadline.noteState(mineId).played &&
-              releasedAtDeadline.noteState(mineId).dead &&
-              releasedAtDeadline.snapshot().gauge ==
-                  releaseGaugeBefore - 4.0F &&
-              releasedAtDeadline.automaticResults().size() == 1 &&
-              release.hasReplayEvent &&
-              release.replayEvent.action ==
-                  gameplay::GameplayReplayAction::Release &&
-              !releasedAtDeadline.lanePressed(1),
-          "same-time release detonates the mine before clearing the lane");
+void testDeferredMineDoesNotDelaySameTimeAutoplay() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 5;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  auto *timeline = addTimeline(*measure, 1'000'000);
+  timeline->SetLandmineNote(0, new bms_parser::LandmineNote(4.0F));
+  timeline->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition,
+      {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+       .attempt = {.autoPlay = true}});
+  simulation.advanceTo(1'000'000, 1'000'000);
+  require(simulation.snapshot().judgeCounts[PGreat] == 1 &&
+              !simulation.noteState(findNoteId(definition, 0, 1'000'000, gameplay::NoteKind::Landmine)).dead,
+          "a deferred mine does not block another lane's exact-time automatic note");
 }
 
 void testEqualDeadlineUsesAtTimingPhaseBeforeLatePoor() {
@@ -690,7 +707,7 @@ void testEqualDeadlineUsesAtTimingPhaseBeforeLatePoor() {
   auto *measure = new bms_parser::Measure();
   auto *normalTimeline = addTimeline(*measure, normalTiming);
   normalTimeline->SetNote(1, new bms_parser::Note(1));
-  auto *mineTimeline = addTimeline(*measure, sharedDeadline);
+  auto *mineTimeline = addTimeline(*measure, sharedDeadline - 1);
   mineTimeline->SetLandmineNote(1, new bms_parser::LandmineNote(2.0F));
   mineTimeline->SetLandmineNote(2, new bms_parser::LandmineNote(1.0F));
   chart.Measures.push_back(measure);
@@ -1039,8 +1056,7 @@ void testUnpressedLongNoteDeadlineIdentityMatrix() {
     const float gaugeBefore = simulation.snapshot().gauge;
 
     const auto advanced = simulation.advanceTo(headDeadline, 15'100'000);
-    const std::size_t expectedGaugeTransactions =
-        type == bms_parser::LongNoteType::HellChargeNote ? 2 : 0;
+    const std::size_t expectedGaugeTransactions = 0;
     require(
         advanced.transactions.size() == expectedGaugeTransactions + 2 &&
             advanced.transactions[expectedGaugeTransactions].noteId ==
@@ -1565,14 +1581,14 @@ void testHellChargeStrictThresholdsAndSerialInputState() {
       {.judge = compiledJudge,
        .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
   pressedAtT.advanceTo(headMicros + 100'000, 20'000'004);
-  require(pressedAtT.hellChargeBalances()[ids.head] == -100'000,
-          "unheld Hell Charge loses time before a later press");
+  require(pressedAtT.hellChargeBalances()[ids.head] == 0,
+          "unjudged Hell Charge does not change gauge before a later press");
   pressedAtT.applyPressAt(1, 1, {.songTimeMicros = headMicros + 100'000});
-  require(pressedAtT.hellChargeBalances()[ids.head] == -100'000 &&
+  require(pressedAtT.hellChargeBalances()[ids.head] == 0 &&
               pressedAtT.lanePressed(1),
           "press at T integrates through T before changing lane state");
   pressedAtT.advanceTo(headMicros + tickMicros, 20'000'005);
-  require(pressedAtT.hellChargeBalances()[ids.head] == 0,
+  require(pressedAtT.hellChargeBalances()[ids.head] == 100'000,
           "press affects only the later Hell Charge interval");
 
   gameplay::GameplaySimulation damaged(
@@ -1663,6 +1679,28 @@ void testHellChargeStrictThresholdsAndSerialInputState() {
   damaged.advanceTo(tailMicros + 1, 20'000'011);
   require(damaged.hellChargeBalances()[ids.head] == 0,
           "inactive Hell Charge balance resets on the next positive interval");
+}
+
+void testSuccessfulEarlyHellChargeReleaseKeepsGaining() {
+  bms_parser::Chart chart;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto ids = longPairIds(definition, 1);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+                   .attempt = {.replayCapacity = 32, .automaticResultCapacity = 32}});
+  simulation.applyPressAt(1, 1, {.songTimeMicros = 1'000'000});
+  const auto release = simulation.applyReleaseAt(1, {.songTimeMicros = 1'950'000});
+  require(release.hasJudge && release.judge.judgement == Good &&
+              !simulation.lanePressed(1),
+          "HCN fixture releases early within GOOD and clears held input");
+  simulation.advanceTo(1'999'999, 1'999'999);
+  require(simulation.hellChargeBalances()[ids.head] == 199'999,
+          "successful early HCN release keeps gaining through the tail interval");
 }
 
 void testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder() {
@@ -2093,17 +2131,19 @@ void testLr2AutomaticLongNoteResolutionUsesStoredHeadAndSeparateTails() {
 } // namespace
 
 int main() {
+  testSameTimeMineUsesSettledInputState();
+  testDeferredMineDoesNotDelaySameTimeAutoplay();
   testDefinitionCompilesAutomaticMetadata();
   testDefinitionUsesDefaultGaugeTotalWhenChartOmitsTotal();
   testDefinitionCompilesChronologicalHellChargeHeads();
   testHellChargeStrictThresholdsAndSerialInputState();
+  testSuccessfulEarlyHellChargeReleaseKeepsGaining();
   testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder();
   testAttemptInitializesConfiguredAndCarriedState();
   testCapacityFaultsLatchIndependentlyWithoutGrowth();
   testSimultaneousFaultPrecedenceAndFirstReasonImmutability();
   testNormalLatePoorUsesStrictDeadlineAndIsIdempotent();
   testLandmineDetonatesOrExpiresFromPriorLaneState();
-  testSameTimeAutomaticWorkPrecedesPressAndRelease();
   testEqualDeadlineUsesAtTimingPhaseBeforeLatePoor();
   testAutoplayNormalEmitsOnePressReplayAndVisualRelease();
   testAutomaticResultCapacityLatchesWithoutGrowth();

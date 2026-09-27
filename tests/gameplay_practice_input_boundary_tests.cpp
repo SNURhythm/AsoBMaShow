@@ -415,9 +415,80 @@ void testPressedCrossingClassicReplayAnalyticsStream() {
           "crossing classic held state stays clear across reset");
 }
 
+void testReferenceLongNoteReleaseSemantics() {
+  const auto release = [](GameplayRuleset ruleset, int rank,
+                          bms_parser::LongNoteType type, int lane,
+                          long long headDiff, long long tailDiff,
+                          Judgement expected, bool holding) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    auto *measure = new bms_parser::Measure();
+    auto *head = addLongNote(*measure, 1000000, 2000000, lane, type);
+    chart.Measures.push_back(measure);
+    std::unordered_map<int, bool> pressed;
+    const auto judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(ruleset, rank));
+    RhythmLaneInputController controller(&chart, nullptr, pressed, judge);
+    controller.pressLane(lane, {.songTimeMicros = 1000000 + headDiff});
+    const auto result = controller.releaseLane(lane, {.songTimeMicros = 2000000 + tailDiff});
+    require(result.judge.judgement == expected,
+            "release uses rank-specific tail windows and worse head/tail judgement");
+    require(head->Tail->IsHolding == holding,
+            "scratch release within the tail window retains holding state");
+    if (expected != None && type == bms_parser::LongNoteType::LongNote) {
+      require(result.judge.Diff == (std::llabs(headDiff) > std::llabs(tailDiff) ? headDiff : tailDiff),
+              "classic LN timing independently preserves the larger absolute error");
+    }
+  };
+  release(GameplayRuleset::LR2, 0, bms_parser::LongNoteType::LongNote,
+          1, 0, -60000, Bad, false);
+  release(GameplayRuleset::Beatoraja, 3, bms_parser::LongNoteType::LongNote,
+          1, 40000, -100000, Great, false);
+  release(GameplayRuleset::Beatoraja, 3, bms_parser::LongNoteType::LongNote,
+          1, 40000, -40000, Great, false);
+  release(GameplayRuleset::LR2, 2, bms_parser::LongNoteType::ChargeNote,
+          1, 0, -250000, Poor, false);
+  release(GameplayRuleset::LR2, 2, bms_parser::LongNoteType::ChargeNote,
+          7, 0, -50000, None, true);
+}
+
+void testRepeatedEmptyPoorAndPmsBadPersistence() {
+  for (int keys : {7, 9}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = keys;
+    auto *measure = new bms_parser::Measure();
+    auto *note = addNote(*measure, 1000000, 1);
+    chart.Measures.push_back(measure);
+    std::unordered_map<int, bool> pressed;
+    const auto judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 2,
+            100, 100, CourseJudgementConstraint::None,
+            gameplay::CandidateSelectionMode::Lowest, keys));
+    RhythmLaneInputController controller(&chart, nullptr, pressed, judge);
+    if (keys == 7) {
+      require(controller.pressLane(1, {.songTimeMicros = 1000000}).judge.judgement == PGreat,
+              "initial keypress judges normally");
+      controller.releaseLane(1, {.songTimeMicros = 1001000});
+      require(controller.pressLane(1, {.songTimeMicros = 1002000}).judge.judgement == Kpoor,
+              "a repeated keypress on a consumed note is empty POOR");
+    } else {
+      require(controller.pressLane(1, {.songTimeMicros = 850000}).judge.judgement == Bad && !note->IsPlayed,
+              "PMS BAD leaves the note available for a later good hit");
+      controller.releaseLane(1, {.songTimeMicros = 851000});
+      require(!controller.pressLane(1, {.songTimeMicros = 852000}).hasJudge,
+              "PMS suppresses repeated misses on the same note");
+      controller.releaseLane(1, {.songTimeMicros = 853000});
+      require(controller.pressLane(1, {.songTimeMicros = 1000000}).judge.judgement == PGreat,
+              "PMS permits recovery after a nonvanishing BAD");
+    }
+  }
+}
+
 } // namespace
 
 int main() {
+  testRepeatedEmptyPoorAndPmsBadPersistence();
+  testReferenceLongNoteReleaseSemantics();
   testControllerUsesResolvedEffectiveJudge();
   testActualInputAndJudgeRange();
   testManualKeysoundFallbackRespectsPracticeRangeAndDeadHeads();

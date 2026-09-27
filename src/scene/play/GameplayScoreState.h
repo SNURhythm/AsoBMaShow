@@ -620,20 +620,37 @@ public:
     return gaugeHistoryOverflowed_;
   }
 
-  void commitJudge(const JudgeResult &judgeResult) {
+  void commitJudge(const JudgeResult &judgeResult,
+                   std::optional<bool> vanishes = std::nullopt) {
+    commitJudgeCounters(judgeResult, vanishes);
+    applyGaugeJudgement(judgeResult.judgement);
+  }
+
+  void commitJudgeCounters(const JudgeResult &judgeResult,
+                           std::optional<bool> vanishes = std::nullopt) {
     ++judgeCount[judgeResult.judgement];
-    ++stagePassedNotes;
-    if (judgeResult.isComboBreak()) {
+    const bool pms = gaugeRules_.ruleset == GameplayRuleset::Beatoraja &&
+                     (gaugeKeyMode == 9 || gaugeKeyMode == 18);
+    if (vanishes.value_or(judgeResult.isNotePlayed() &&
+                          !(pms && judgeResult.judgement == Bad))) {
+      ++stagePassedNotes;
+    }
+    const bool emptyPoorBreaksCombo =
+        gaugeRules_.ruleset == GameplayRuleset::Beatoraja &&
+        (gaugeKeyMode == 5 || gaugeKeyMode == 10 || pms);
+    if (judgeResult.isComboBreak() ||
+        (judgeResult.judgement == Kpoor && emptyPoorBreaksCombo)) {
       combo = 0;
       stageCombo = 0;
-      ++comboBreak;
-    } else if (judgeResult.judgement != Kpoor) {
+      if (judgeResult.isComboBreak()) {
+        ++comboBreak;
+      }
+    } else if (judgeResult.judgement != Kpoor && judgeResult.judgement != None) {
       ++combo;
       ++stageCombo;
       maxCombo = std::max(maxCombo, combo);
     }
     recordFastSlow(judgeResult);
-    applyGaugeJudgement(judgeResult.judgement);
   }
 
   int getScore() const {
@@ -688,14 +705,15 @@ public:
   }
 
   void recordFastSlow(const JudgeResult &judgeResult) {
-    if (judgeResult.judgement == None || judgeResult.judgement == Kpoor) {
+    if (judgeResult.judgement == None) {
       return;
     }
-    if (judgeResult.Diff < 0) {
-      fastCount++;
+    // JudgeManager's note-minus-input >= 0 includes exact hits in FAST.
+    if (judgeResult.Diff <= 0) {
+      if (judgeResult.judgement != PGreat) ++fastCount;
       judgementFastSlowCount[judgeResult.judgement].fast++;
-    } else if (judgeResult.Diff > 0) {
-      slowCount++;
+    } else {
+      if (judgeResult.judgement != PGreat) ++slowCount;
       judgementFastSlowCount[judgeResult.judgement].slow++;
     }
   }

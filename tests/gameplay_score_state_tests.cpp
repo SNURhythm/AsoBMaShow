@@ -211,6 +211,29 @@ void testAlteredPlaybackUsesLightAssistEasy() {
           "altered playback caps persisted clears at Light Assist Easy");
 }
 
+void testPinnedCountsAndComboByMode() {
+  for (int mode : {5, 7, 9, 10, 14, 24, 48}) {
+    GameplayScoreState state(beatorajaScoreConfig(100, mode, 200.0));
+    state.commitJudge(JudgeResult(PGreat, 0));
+    state.commitJudge(JudgeResult(Kpoor, -100000));
+    require(state.stagePassedNotes == 1, "empty POOR does not consume a chart note");
+    require(state.combo == (mode == 5 || mode == 9 || mode == 10 ? 0 : 1),
+            "five-key and PMS empty POOR break combo");
+    require(state.judgementFastSlowCount.at(PGreat).fast == 1 &&
+                state.judgementFastSlowCount.at(Kpoor).fast == 1,
+            "zero timing and empty POOR are included in per-judge fast counts");
+    require(state.fastCount == 1 && state.slowCount == 0 && state.comboBreak == 0,
+            "display totals exclude PGREAT and combo-break count excludes empty POOR");
+    state.commitJudge(JudgeResult(Bad, -100000));
+    require(state.stagePassedNotes == (mode == 9 ? 1 : 2),
+            "PMS BAD does not consume a chart note");
+    state.commitJudge(JudgeResult(Bad, 10000), true);
+    require(state.stagePassedNotes == (mode == 9 ? 2 : 3) &&
+                state.judgementFastSlowCount.at(Bad).slow == 1,
+            "explicit vanishing LN BAD consumes a note and records slow timing");
+  }
+}
+
 void testCourseSurvivalToGrooveContinuesAfterGaugeDeath() {
   bms_parser::ChartMeta meta;
   meta.TotalNotes = 100;
@@ -250,6 +273,7 @@ void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
 
 int main() {
   testCourseSurvivalToGrooveContinuesAfterGaugeDeath();
+  testPinnedCountsAndComboByMode();
   testBestClearFallsBackToBottomGaugeWhenNoneQualifies();
   testConfiguredGaugeHistoryUsesLogicalLimit();
   testRhythmStateGaugeHistoryRemainsUnboundedByDefault();

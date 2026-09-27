@@ -1,6 +1,7 @@
 #include "GameplayCandidateRules.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 namespace gameplay {
 namespace {
@@ -42,10 +43,13 @@ Lr2CandidateResolution resolveLr2Candidates(
   Lr2CandidateResolution result;
   const JudgeCandidateDescriptor *selected = nullptr;
   for (const auto &candidate : candidates) {
-    if (candidate.judge.judgement == None) {
+    if (!candidate.selectable || candidate.judge.judgement == None) {
       continue;
     }
-    if (selected == nullptr || lr2ComboPrefers(*selected, candidate)) {
+    if ((selected == nullptr || selected->played ||
+         (!candidate.played && lr2ComboPrefers(*selected, candidate))) &&
+        (selected == nullptr || candidate.judge.judgement != Kpoor ||
+         std::llabs(selected->judge.Diff) > std::llabs(candidate.judge.Diff))) {
       selected = &candidate;
     }
   }
@@ -57,7 +61,7 @@ Lr2CandidateResolution resolveLr2Candidates(
   std::size_t count = 0;
   for (const auto &candidate : candidates) {
     if (count >= multiBadSourceIndices.size() ||
-        candidate.sourceIndex == selected->sourceIndex ||
+        candidate.sourceIndex == selected->sourceIndex || candidate.played ||
         candidate.judge.judgement != Bad) {
       continue;
     }

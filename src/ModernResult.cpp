@@ -141,9 +141,9 @@ bool validateTiming(const ChartScoreWrite &score,
       diagnostic = "judgement timing cannot be negative";
       return false;
     }
-    if (judgement == Kpoor || judgement == None) {
+    if (judgement == None) {
       if (count.fast != 0 || count.slow != 0) {
-        diagnostic = "KPOOR and NONE cannot have judgement timing";
+        diagnostic = "NONE cannot have judgement timing";
         return false;
       }
       continue;
@@ -153,10 +153,20 @@ bool validateTiming(const ChartScoreWrite &score,
       diagnostic = "judgement timing exceeds its result total";
       return false;
     }
-    fast += count.fast;
-    slow += count.slow;
+    if (judgement != PGreat) {
+      fast += count.fast;
+      slow += count.slow;
+    }
   }
-  if (fast != score.fast || slow != score.slow) {
+  const auto &pGreatTiming = timing->byJudgement[PGreat];
+  const auto &emptyPoorTiming = timing->byJudgement[Kpoor];
+  // Earlier durable results included PG in aggregate FAST/SLOW and did not
+  // retain empty POOR timing. Their absent BP fact identifies that contract.
+  const bool historicalTiming = !score.badPoints &&
+      emptyPoorTiming.fast == 0 && emptyPoorTiming.slow == 0 &&
+      fast + pGreatTiming.fast == score.fast &&
+      slow + pGreatTiming.slow == score.slow;
+  if ((fast != score.fast || slow != score.slow) && !historicalTiming) {
     diagnostic = "judgement timing disagrees with aggregate timing";
     return false;
   }

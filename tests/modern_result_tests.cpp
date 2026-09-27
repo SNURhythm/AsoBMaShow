@@ -82,16 +82,44 @@ struct CompletionFixture {
     state.gaugeHistoryFor(state.gaugeType) = {20.0F, 48.5F, 82.5F};
     state.maxCombo = 4;
     state.comboBreak = 1;
+    state.stagePassedNotes = 5;
     state.judgeCount[PGreat] = 2;
     state.judgeCount[Great] = 1;
     state.judgeCount[Good] = 1;
     state.judgeCount[Poor] = 1;
     state.judgementFastSlowCount[PGreat] = {.fast = 1, .slow = 0};
     state.judgementFastSlowCount[Great] = {.fast = 0, .slow = 1};
-    state.fastCount = 1;
+    state.fastCount = 0;
     state.slowCount = 1;
   }
 };
+
+void testHistoricalTimingRemainsReadable() {
+  auto historical = validChartResult();
+  historical.score.fast = 1;
+  historical.score.slow = 1;
+  historical.judgementTiming = result_persistence::ChartJudgementTiming{};
+  historical.judgementTiming->byJudgement[PGreat] = {.fast = 1, .slow = 0};
+  historical.judgementTiming->byJudgement[Great] = {.fast = 0, .slow = 1};
+  historical.resultFingerprint = result_persistence::modernResultFingerprint(historical);
+  std::string diagnostic;
+  expect(result_persistence::validateModernChartResult(historical, diagnostic),
+         "historical results retain their original PG-inclusive timing contract");
+}
+
+void testCapturePreservesExactAndEmptyPoorTiming() {
+  CompletionFixture fixture;
+  fixture.state.judgeCount[Kpoor] = 2;
+  fixture.state.judgementFastSlowCount[Kpoor] = {.fast = 1, .slow = 1};
+  fixture.state.fastCount = 1;
+  fixture.state.slowCount = 2;
+  std::string diagnostic;
+  const auto captured = result_persistence::captureModernChartResult(
+      std::string(kAttemptId), fixture.meta, fixture.state, fixture.provenance,
+      1, 1'700'000'000'123LL, diagnostic);
+  expect(captured.has_value(),
+         "modern captures preserve PG timing independently of aggregate totals and include empty POOR");
+}
 
 void testCompletionCaptureUsesOnlyResultFacts() {
   CompletionFixture fixture;
@@ -428,6 +456,8 @@ void testCourseResultPrefixAndAggregateContracts() {
 } // namespace
 
 int main() {
+  testHistoricalTimingRemainsReadable();
+  testCapturePreservesExactAndEmptyPoorTiming();
   testCompletionCaptureUsesOnlyResultFacts();
   testChartResultIsReplayIndependentAndFullyFingerprinted();
   testChartValidationAndFactAgreement();

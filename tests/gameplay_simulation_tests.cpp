@@ -270,8 +270,9 @@ void testGameplayGraphGaugeHistorySamplesEveryTypeEveryHalfSecond() {
       ->SetNote(1, new bms_parser::Note(1));
   chart.Measures.push_back(measure);
 
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
   gameplay::GameplaySimulation simulation(
-      gameplay::buildGameplayDefinition(chart, 0),
+      definition,
       {.judge = gameplay::CompiledGameplayJudge::from(Judge(3)),
        .attempt = {.gaugeAutoShift = GaugeAutoShiftMode::BestClear,
                    .gaugeHistoryCapacity = 3}});
@@ -402,7 +403,7 @@ void testCompiledJudgePreservesResolvedWindows() {
           "compiled judge preserves the resolved PGreat window");
   require(compiled.judgeAt(1'000'000, 1'030'000).judgement == Great,
           "compiled judge preserves the resolved Great window");
-  require(compiled.window(Bad)->lateMicros == 420'000,
+  require(compiled.window(Bad)->lateMicros == 140'000,
           "compiled judge exposes the Bad late edge");
   require(compiled.latestHittableNoteTiming(1'000'000) == 1'500'000,
           "future cutoff uses the earliest hittable edge");
@@ -549,8 +550,8 @@ void testCandidateSelectionIsLaneIndexed() {
 void testRejectedTransactionsResetLatestSearchStats() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
-  auto *timeline = addTimeline(*measure, 1'000'000);
-  timeline->SetNote(1, new bms_parser::Note(9));
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::LongNote);
   chart.Measures.push_back(measure);
 
   const auto definition = gameplay::buildGameplayDefinition(chart, 0);
@@ -700,13 +701,13 @@ void testReleaseSearchStopsAtPracticeEnd() {
   const auto secondNotesExamined = simulation.lastSearchStats().notesExamined;
 
   require(press.noteId != gameplay::kInvalidNoteId &&
-              repress.noteId == gameplay::kInvalidNoteId,
-          "release boundary setup presses the valid note then re-presses its lane");
+              repress.noteId == press.noteId && repress.judge.judgement == Kpoor,
+          "release boundary re-press can empty-POOR only the played in-range note");
   require(first.noteId == gameplay::kInvalidNoteId &&
               second.noteId == gameplay::kInvalidNoteId,
           "notes at the practice end remain excluded from release selection");
-  require(firstNotesExamined == 2 && secondNotesExamined == 0,
-          "repeated release search does not rescan the excluded practice tail");
+  require(firstNotesExamined == 0 && secondNotesExamined == 0,
+          "release without a held tail never scans the excluded practice notes");
 }
 
 void testPressCommitsStateAndSoundTogether() {
@@ -845,13 +846,13 @@ void testBadAndPoorTransactionsMatchStandaloneScoreState() {
 
   commitBoth(simulation.pressLane(1, {.songTimeMicros = 1'000'000}));
   const auto badPress =
-      simulation.pressLane(2, {.songTimeMicros = 2'200'000});
+      simulation.pressLane(2, {.songTimeMicros = 2'120'000});
   require(badPress.judge.judgement == Bad,
           "late normal-note press supplies the Bad combo break");
   commitBoth(badPress);
   commitBoth(simulation.pressLane(7, {.songTimeMicros = 3'000'000}));
   const auto poorRelease =
-      simulation.releaseLane(7, {.songTimeMicros = 3'500'000}, false);
+      simulation.releaseLane(7, {.songTimeMicros = 3'100'000}, false);
   require(poorRelease.judge.judgement == Poor,
           "non-backspin scratch release supplies the Poor combo break");
   commitBoth(poorRelease);
@@ -974,6 +975,270 @@ void testLongTailCannotMaskLaterPressCandidateForAnyPriorityMode() {
           "a long tail cannot mask a later playable normal under any priority");
 }
 
+void testReferencePlayedNotesCanReceiveEmptyPoor() {
+  for (const GameplayRuleset ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 1;
+    auto *measure = new bms_parser::Measure();
+    addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {.judge =
+        gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(ruleset, 3))});
+    simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+    simulation.releaseLane(1, {.songTimeMicros = 1'000'001});
+    const auto mash = simulation.pressLane(1, {.songTimeMicros = 1'000'002});
+    require(ruleset == GameplayRuleset::Beatoraja
+                ? mash.hasJudge && mash.judge.judgement == Kpoor
+                : !mash.hasJudge,
+            "played notes remain eligible only inside their ruleset empty-POOR window");
+    require(simulation.snapshot().score == 2 && simulation.snapshot().stagePassedNotes == 1,
+            "empty POOR cannot score or advance passed note count twice");
+  }
+}
+
+void testReferenceChargeMissIsAtomicBeforeSurvivalFailure() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge =
+      gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 3)),
+      .attempt = {.initialGaugeType = GaugeType::Hard, .startingGaugePercent = 3}});
+  simulation.advanceTo(1'200'001, 1'200'001);
+  require(simulation.terminal() && simulation.snapshot().judgeCounts[Poor] == 2 &&
+              simulation.noteState(1).played,
+          "missing a CN commits both head and tail before survival failure is latched");
+}
+
+void testReferenceEmptyPoorRetainsCloserPlayedNote() {
+  for (const auto priority : {AppSettings::NotePriorityMode::Lowest,
+                              AppSettings::NotePriorityMode::Duration,
+                              AppSettings::NotePriorityMode::Combo,
+                              AppSettings::NotePriorityMode::Score}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = 2;
+    auto *measure = new bms_parser::Measure();
+    addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+    addTimeline(*measure, 1'400'000)->SetNote(1, new bms_parser::Note(2));
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {
+        .judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3)),
+        .notePriorityMode = priority});
+    simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+    simulation.releaseLane(1, {.songTimeMicros = 1'000'001});
+    const auto mash = simulation.pressLane(1, {.songTimeMicros = 1'100'000});
+    require(mash.hasJudge && mash.noteId == 0 &&
+                mash.judge.judgement == Kpoor && mash.judge.Diff == 100'000 &&
+                simulation.scoreState().slowCount == 1,
+            "Beatoraja empty POOR keeps the closer played note and SLOW timing");
+  }
+}
+
+void testReferenceLr2EmptyPoorRetainsCloserPlayedNote() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  addTimeline(*measure, 1'400'000)->SetNote(1, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {
+      .judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 3))});
+  simulation.pressLane(1, {.songTimeMicros = 900'000});
+  simulation.releaseLane(1, {.songTimeMicros = 900'001});
+  const auto mash = simulation.pressLane(1, {.songTimeMicros = 900'002});
+  require(mash.hasJudge && mash.noteId == 0 &&
+              mash.judge.judgement == Kpoor && mash.judge.Diff == -99'998,
+          "LR2 empty POOR keeps the closer previously played future note");
+}
+
+void testReferencePmsSingleMissAndReleaseMargin() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 9;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  addLongNote(*measure, 2'000'000, 3'000'000, 2,
+              bms_parser::LongNoteType::LongNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+      GameplayRuleset::Beatoraja, 3, 100, 100, CourseJudgementConstraint::None,
+      gameplay::CandidateSelectionMode::Lowest, 9));
+  gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+  simulation.applyPressAt(1, 1, {.songTimeMicros = 850'000});
+  simulation.applyReleaseAt(1, {.songTimeMicros = 860'000});
+  simulation.applyPressAt(1, 1, {.songTimeMicros = 870'000});
+  simulation.advanceTo(1'200'000, 1'200'000);
+  require(simulation.snapshot().judgeCounts[Bad] == 1 &&
+              simulation.snapshot().judgeCounts[Poor] == 0 &&
+              simulation.snapshot().stagePassedNotes == 1,
+          "PMS nonvanishing BAD suppresses repeated BAD and automatic POOR counts");
+  require(std::ranges::any_of(simulation.replayEvents(), [](const auto &event) {
+            return event.action == gameplay::GameplayReplayAction::Miss &&
+                   event.noteId == 0 && event.judgement == None;
+          }),
+          "PMS suppressed miss records identity consumption without another POOR");
+  simulation.applyPressAt(2, 2, {.songTimeMicros = 2'000'000});
+  const auto release = simulation.applyReleaseAt(2, {.songTimeMicros = 2'500'000});
+  require(!release.hasJudge && simulation.noteState(2).holding,
+          "PMS early LN release leaves a recoverable 200ms margin");
+  simulation.applyPressAt(2, 2, {.songTimeMicros = 2'650'000});
+  simulation.advanceTo(3'000'001, 3'000'001);
+  require(simulation.snapshot().judgeCounts[PGreat] == 1 &&
+              simulation.snapshot().judgeCounts[Bad] == 1,
+          "repressing inside PMS release margin preserves original LN head judgement");
+}
+
+void testReferencePmsBadCanBeRecovered() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 9;
+  chart.Meta.TotalNotes = 1;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(1, new bms_parser::Note(1));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+      GameplayRuleset::Beatoraja, 3, 100, 100, CourseJudgementConstraint::None,
+      gameplay::CandidateSelectionMode::Lowest, 9));
+  gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+  const auto bad = simulation.pressLane(1, {.songTimeMicros = 850'000});
+  require(bad.hasJudge && bad.judge.judgement == Bad && !simulation.noteState(0).played,
+          "PMS BAD damages gauge without consuming the note");
+  simulation.releaseLane(1, {.songTimeMicros = 860'000});
+  const auto good = simulation.pressLane(1, {.songTimeMicros = 1'000'000});
+  require(good.hasJudge && good.judge.judgement == PGreat && simulation.snapshot().score == 2,
+          "PMS BAD can be recovered inside GOOD window");
+}
+
+void testReferenceScratchMissDeadlineIsIndependent() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 1'000'000)->SetNote(7, new bms_parser::Note(1));
+  addTimeline(*measure, 1'001'000)->SetNote(1, new bms_parser::Note(2));
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(rules)});
+  simulation.advanceTo(1'281'001, 1'281'001);
+  require(!simulation.noteState(0).played && simulation.noteState(1).played,
+          "key misses at 280ms while older scratch retains its 290ms late window");
+  simulation.advanceTo(1'290'001, 1'290'001);
+  require(simulation.snapshot().judgeCounts[Poor] == 2,
+          "scratch expires at its own strict BAD boundary");
+}
+
+void testReferenceMultiBadRetainsChargeTailPenalty() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 3;
+  auto *measure = new bms_parser::Measure();
+  addTimeline(*measure, 850'000)->SetNote(1, new bms_parser::Note(1));
+  addLongNote(*measure, 1'150'000, 1'800'000, 2,
+              bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(definition, {.judge =
+      gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+          GameplayRuleset::LR2, 2))});
+  const auto batch = simulation.pressLane(1, 2, {.songTimeMicros = 1'000'000});
+  require(batch.transactions.size() == 2 &&
+              !simulation.noteState(2).played,
+          "multi-BAD CN head must leave its independently scored tail unresolved");
+  simulation.advanceTo(2'000'001, 2'000'001);
+  require(simulation.snapshot().judgeCounts[Bad] == 2 &&
+              simulation.snapshot().judgeCounts[Poor] == 1,
+          "multi-BAD CN head still incurs its tail POOR");
+}
+
+void testReferenceScratchReleaseAndChargeTailMiss() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 7,
+              bms_parser::LongNoteType::ChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 3))});
+  simulation.pressLane(7, {.songTimeMicros = 1'000'000});
+  const auto release = simulation.releaseLane(7, {.songTimeMicros = 1'950'000});
+  require(!release.hasJudge && !simulation.noteState(1).played &&
+              simulation.noteState(1).holding,
+          "lifting a scratch inside tail window waits for backspin or late POOR");
+  simulation.advanceTo(2'200'001, 2'200'001);
+  require(simulation.snapshot().judgeCounts[Poor] == 1,
+          "scratch without backspin eventually receives one tail POOR");
+}
+
+// Reference JudgeManager combines LN judgement severity independently of timing.
+void testReferenceLongNoteReleaseFairness() {
+  for (const bool classic : {true, false}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = 7;
+    chart.Meta.TotalNotes = classic ? 1 : 2;
+    auto *measure = new bms_parser::Measure();
+    addLongNote(*measure, 1'000'000, 2'000'000, 1,
+                classic ? bms_parser::LongNoteType::LongNote
+                        : bms_parser::LongNoteType::ChargeNote);
+    chart.Measures.push_back(measure);
+    const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+    auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3);
+    // Literal EASY 7-key tail windows from JudgeProperty, in input-minus-note time.
+    rules.contexts[2].windows = {{{PGreat, -120000, 120000},
+                                  {Great, -160000, 160000},
+                                  {Good, -200000, 200000},
+                                  {Bad, -220000, 280000}, {Kpoor, 0, 0}}};
+    gameplay::GameplaySimulation simulation(
+        definition, {.judge = gameplay::CompiledGameplayJudge::from(rules)});
+    simulation.pressLane(1, {.songTimeMicros = 1'030'000});
+    const auto release = simulation.releaseLane(
+        1, {.songTimeMicros = classic ? 1'900'000 : 1'500'000});
+    require(release.hasJudge &&
+                release.judge.judgement == (classic ? Great : Poor),
+            classic ? "LN keeps the worse head judgement despite larger PG tail error"
+                    : "CN release outside all tail windows is POOR, not BAD");
+    if (classic) {
+      require(release.judge.Diff == -100000,
+              "LN stores the larger timing error independently of judgement");
+    }
+  }
+}
+
+void testReferenceHellChargeStartsAfterHeadJudgement() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 2;
+  auto *measure = new bms_parser::Measure();
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 3);
+  gameplay::GameplaySimulation simulation(
+      definition, {.judge = gameplay::CompiledGameplayJudge::from(rules)});
+  simulation.advanceTo(1'200'001, 1'200'001);
+  require(std::ranges::none_of(simulation.replayEvents(), [](const auto &event) {
+            return event.action == gameplay::GameplayReplayAction::Gauge;
+          }), "unjudged HCN head must not accumulate continuous damage");
+}
+
 void testClassicReleaseCommitsOneJudgeAndNoSound() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
@@ -1020,8 +1285,8 @@ void testChargeScratchRequiresBackspinRelease() {
   simulation.pressLane(7, {.songTimeMicros = 1'000'000});
   const auto release = simulation.releaseLane(
       7, {.songTimeMicros = 1'500'000}, false);
-  require(release.hasJudge && release.judge.judgement == Poor,
-          "non-backspin scratch release is Poor");
+  require(!release.hasJudge && simulation.noteState(1).holding,
+          "non-backspin scratch lift inside tail windows remains unresolved");
 }
 
 int legacyManualKeysoundAt(long long inputMicros, bool markLastDead = false) {
@@ -2246,11 +2511,11 @@ void testLr2LongTailBoundaryTableAcrossAuthorities() {
     Judgement expected;
   };
   const std::array cases{
-      TailCase{-200'001, Bad}, TailCase{-200'000, Bad},
-      TailCase{-120'001, Bad}, TailCase{-120'000, PGreat},
-      TailCase{0, PGreat},       TailCase{120'000, PGreat},
-      TailCase{120'001, Bad},   TailCase{200'000, Bad},
-      TailCase{200'001, Bad},
+      TailCase{-200'001, Poor}, TailCase{-200'000, Bad},
+      TailCase{-100'001, Bad}, TailCase{-100'000, PGreat},
+      TailCase{0, PGreat},       TailCase{100'000, PGreat},
+      TailCase{100'001, Bad},   TailCase{200'000, Bad},
+      TailCase{200'001, Poor},
   };
   for (const int lane : {1, 7}) {
     for (const auto &entry : cases) {
@@ -2266,7 +2531,7 @@ void testLr2LongTailBoundaryTableAcrossAuthorities() {
                   controller.judgement == entry.expected &&
                   simulation.diffMicros == entry.diffMicros &&
                   controller.diffMicros == entry.diffMicros,
-              "LR2 key and scratch tails share inclusive 120/200 ms edges");
+              "LR2 key and scratch tails share inclusive 100/200 ms edges");
     }
   }
 
@@ -2274,15 +2539,13 @@ void testLr2LongTailBoundaryTableAcrossAuthorities() {
       bms_parser::LongNoteType::ChargeNote, 7, 0, 0, false);
   const auto controllerNonBackSpin = runLr2ControllerRelease(
       bms_parser::LongNoteType::ChargeNote, 7, 0, 0, false);
-  require(nonBackSpin.hasJudge && nonBackSpin.judgement == Poor &&
-              controllerNonBackSpin.hasJudge &&
-              controllerNonBackSpin.judgement == Poor,
-          "LR2 scratch CN release without backspin remains Poor");
+  require(!nonBackSpin.hasJudge && !controllerNonBackSpin.hasJudge,
+          "LR2 scratch CN lift inside the window waits for backspin");
 
   const auto classicScratch = runLr2SimulationRelease(
-      bms_parser::LongNoteType::LongNote, 7, 50'000, 120'000, false);
+      bms_parser::LongNoteType::LongNote, 7, 50'000, 100'000, false);
   const auto controllerClassicScratch = runLr2ControllerRelease(
-      bms_parser::LongNoteType::LongNote, 7, 50'000, 120'000, false);
+      bms_parser::LongNoteType::LongNote, 7, 50'000, 100'000, false);
   require(classicScratch.judgement == Good &&
               controllerClassicScratch.judgement == Good,
           "LR2 classic scratch LN preserves its stored head inside tolerance");
@@ -2318,8 +2581,8 @@ void testLr2ClassicLongNoteStoresAndUsesAcceptedHeadJudge() {
 
   for (const auto &[tailDiff, expected] :
        std::array<std::pair<long long, Judgement>, 5>{
-           std::pair{-120'001LL, Bad}, std::pair{-120'000LL, Good},
-           std::pair{120'000LL, Good}, std::pair{120'001LL, Bad},
+           std::pair{-100'001LL, Bad}, std::pair{-100'000LL, Good},
+           std::pair{100'000LL, Good}, std::pair{100'001LL, Bad},
            std::pair{200'001LL, Bad}}) {
     const auto simulation = runLr2SimulationRelease(
         bms_parser::LongNoteType::LongNote, 1, 50'000, tailDiff, false);
@@ -2459,7 +2722,35 @@ void testAutoplayNormalReleaseCarriesSourceTimeWithoutReplay() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  if (argc > 1) {
+    const std::string name = argv[1];
+    if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
+    else if (name == "release-search") testReleaseSearchStopsAtPracticeEnd();
+    else if (name == "closer-empty-poor") testReferenceEmptyPoorRetainsCloserPlayedNote();
+    else if (name == "lr2-closer-empty-poor") testReferenceLr2EmptyPoorRetainsCloserPlayedNote();
+    else if (name == "scratch-deadline") testReferenceScratchMissDeadlineIsIndependent();
+    else if (name == "multi-bad-tail") testReferenceMultiBadRetainsChargeTailPenalty();
+    else if (name == "scratch-release") testReferenceScratchReleaseAndChargeTailMiss();
+    else if (name == "long-release") testReferenceLongNoteReleaseFairness();
+    else if (name == "hcn-head") testReferenceHellChargeStartsAfterHeadJudgement();
+    else if (name == "played-poor") testReferencePlayedNotesCanReceiveEmptyPoor();
+    else if (name == "pms-margin") testReferencePmsSingleMissAndReleaseMargin();
+    else if (name == "pms-recovery") testReferencePmsBadCanBeRecovered();
+    else return 2;
+    return 0;
+  }
+  testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
+  testReferenceEmptyPoorRetainsCloserPlayedNote();
+  testReferenceLr2EmptyPoorRetainsCloserPlayedNote();
+  testReferencePlayedNotesCanReceiveEmptyPoor();
+  testReferencePmsBadCanBeRecovered();
+  testReferencePmsSingleMissAndReleaseMargin();
+  testReferenceScratchMissDeadlineIsIndependent();
+  testReferenceMultiBadRetainsChargeTailPenalty();
+  testReferenceScratchReleaseAndChargeTailMiss();
+  testReferenceLongNoteReleaseFairness();
+  testReferenceHellChargeStartsAfterHeadJudgement();
   testCompiledJudgePreservesResolvedWindows();
   testGameplayGraphAuthorityUsesPinnedBucketsRingAndReplayOrder();
   testGameplayGraphGaugeHistorySamplesEveryTypeEveryHalfSecond();

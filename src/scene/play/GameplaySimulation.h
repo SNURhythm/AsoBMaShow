@@ -23,6 +23,7 @@ struct NoteRuntimeState {
   bool played = false;
   bool dead = false;
   bool holding = false;
+  bool hasNonvanishingJudge = false;
   std::int64_t playedTimeMicros = 0;
   std::int64_t releaseTimeMicros = 0;
   JudgeResult acceptedHeadJudge = JudgeResult(None, 0);
@@ -218,6 +219,10 @@ private:
     int lane = -1;
     bool pressed = false;
     std::size_t cursor = 0;
+    NoteId heldTailId = kInvalidNoteId;
+    NoteId pendingReleaseTailId = kInvalidNoteId;
+    std::int64_t pendingReleaseDeadline = 0;
+    JudgeResult pendingReleaseJudge = JudgeResult(None, 0);
   };
 
   [[nodiscard]] LaneRuntimeState *findLane(int lane) noexcept;
@@ -255,7 +260,8 @@ private:
                                  const JudgeResult &judge);
   GameplayInputResult commitAutomaticRelease(NoteId tailId,
                                              std::int64_t songTimeMicros,
-                                             std::int64_t visualTimeMicros);
+                                             std::int64_t visualTimeMicros,
+                                             std::optional<JudgeResult> releaseJudge = std::nullopt);
   void initializeAt(std::int64_t startMicros);
   [[nodiscard]] bool noteAllowed(NoteId id) const noexcept;
   void processAtTiming(NoteId id, std::int64_t songTimeMicros,
@@ -288,6 +294,8 @@ private:
   bool transactionGaugeHistoryCapacityExceeded_ = false;
   std::size_t atTimingCursor_ = 0;
   std::size_t latePoorCursor_ = 0;
+  std::vector<NoteId> atTimingNoteIds_;
+  std::vector<NoteId> latePoorNoteIds_;
   std::size_t resolvedIdentityCount_ = 0;
   std::int64_t lastAdvancedMicros_ = 0;
   bool hasAdvanced_ = false;

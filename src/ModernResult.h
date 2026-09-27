@@ -35,6 +35,8 @@ struct ChartScoreWrite {
   float finalGauge = 0.0F;
   int clearType = kClearTypeFailedRank;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
+  // Absent for historical results whose passed-note count was not retained.
+  std::optional<int> badPoints;
 
   bool operator==(const ChartScoreWrite &) const = default;
 };
@@ -89,6 +91,7 @@ describeChartScoreDifference(const ChartScoreWrite &expected,
   }
   scalar("clearType", expected.clearType, actual.clearType);
   opaque("provenance", expected.provenance, actual.provenance);
+  opaque("badPoints", expected.badPoints, actual.badPoints);
 
   if (differences.empty()) {
     return {};

@@ -183,8 +183,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
       return invalid("submission counters must not be negative");
     }
     if (submission.pGreatFast < 0 || submission.pGreatSlow < 0 ||
-        submission.pGreatFast > submission.fast ||
-        submission.pGreatSlow > submission.slow) {
+        static_cast<long long>(submission.pGreatFast) +
+                submission.pGreatSlow > submission.pGreat) {
       return invalid("submission PGREAT timing breakdown is invalid");
     }
     if (submission.judgementTimingBreakdownAvailable &&
@@ -244,8 +244,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
 
     const std::string &identifier =
         hasSha256 ? submission.chartSha256 : submission.chartMd5;
-    const int fast = submission.fast - submission.pGreatFast;
-    const int slow = submission.slow - submission.pGreatSlow;
+    const int fast = submission.fast;
+    const int slow = submission.slow;
     const auto sampledHistory = [&](std::span<const std::size_t> indices) {
       nlohmann::json history = nlohmann::json::array();
       for (const std::size_t index : indices) {
