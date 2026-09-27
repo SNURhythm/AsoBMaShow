@@ -41,7 +41,9 @@ prepare_bgfx_project() {
     rm "${build_dir}"
   fi
 
-  cmake \
+  # Compiler and SDK paths in CMake's state can outlive an Xcode upgrade.
+  # Refresh that state while retaining build products outside CMakeFiles.
+  cmake --fresh \
     -S "${ROOT_DIR}/bgfx" \
     -B "${build_dir}" \
     -GXcode \

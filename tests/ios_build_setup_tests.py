@@ -573,6 +573,63 @@ int main() { return 0; }
         init_script = IOS_INIT.read_text(encoding="utf-8")
         self.assertIn("-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0", init_script)
 
+    def test_bgfx_configuration_recovers_after_xcode_is_replaced(self):
+        script = IOS_INIT.read_text(encoding="utf-8")
+        configure = script[
+            script.index("prepare_bgfx_project() {") : script.index("install_gems() {")
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "bgfx"
+            source.mkdir()
+            (source / "CMakeLists.txt").write_text(
+                "cmake_minimum_required(VERSION 3.24)\n"
+                "project(XcodeRefreshProbe LANGUAGES C CXX)\n"
+                "find_library(FOUNDATION_LIBRARY Foundation REQUIRED)\n",
+                encoding="utf-8",
+            )
+
+            def prepare():
+                return subprocess.run(
+                    ["bash", "-euc", configure + '\nROOT_DIR="$1"\nprepare_bgfx_project',
+                     "bgfx-refresh-test", str(root)],
+                    capture_output=True,
+                    text=True,
+                )
+
+            initial = prepare()
+            self.assertEqual(0, initial.returncode, initial.stdout + initial.stderr)
+            build = source / "build"
+            retained_output = build / "existing-build-output"
+            retained_output.write_text("preserved", encoding="utf-8")
+            removed_xcode = root / "Xcode-removed.app"
+            compiler_records = list((build / "CMakeFiles").glob("*/CMake*Compiler.cmake"))
+            self.assertEqual(2, len(compiler_records))
+            for record in compiler_records:
+                stale = re.sub(
+                    r'set\((CMAKE_(?:C|CXX)_COMPILER) "[^"]+"\)',
+                    lambda match: f'set({match[1]} "{removed_xcode}/clang")',
+                    record.read_text(encoding="utf-8"),
+                )
+                record.write_text(stale, encoding="utf-8")
+            cache = build / "CMakeCache.txt"
+            cache.write_text(
+                re.sub(
+                    r"^FOUNDATION_LIBRARY:FILEPATH=.*$",
+                    f"FOUNDATION_LIBRARY:FILEPATH={removed_xcode}/Foundation.framework",
+                    cache.read_text(encoding="utf-8"),
+                    flags=re.MULTILINE,
+                ),
+                encoding="utf-8",
+            )
+
+            refreshed = prepare()
+            self.assertEqual(0, refreshed.returncode, refreshed.stdout + refreshed.stderr)
+            self.assertNotIn(str(removed_xcode), cache.read_text(encoding="utf-8"))
+            for record in (build / "CMakeFiles").glob("*/CMake*Compiler.cmake"):
+                self.assertNotIn(str(removed_xcode), record.read_text(encoding="utf-8"))
+            self.assertEqual("preserved", retained_output.read_text(encoding="utf-8"))
+
     def test_all_ios_build_entrypoints_override_dependencies_to_ios_14(self):
         self.assertIn(
             "IPHONEOS_DEPLOYMENT_TARGET=14.0", DEPLOY_SCRIPT.read_text()
