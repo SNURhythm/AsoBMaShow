@@ -8512,7 +8512,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             --root ${CMAKE_SOURCE_DIR}
             --output ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
         DEPENDS tests/replay_result_skin_extract.py tests/replay_result_skin_fixture.cpp
-                src/ReplayVideoExporter.cpp
+                src/ReplayVideoExporter.cpp src/ResultImageExporter.cpp
         VERBATIM
     )
     add_executable(replay_result_skin_tests ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp)

@@ -3,6 +3,7 @@
 #include "../CourseConstraintUtils.h"
 #include "../CoursePlaySession.h"
 
+#include <algorithm>
 #include <numeric>
 #include <utility>
 
@@ -112,6 +113,12 @@ std::shared_ptr<CourseReplayData> makeCompatibilityCourse(
     const VerifiedCourseReplay &verified,
     std::vector<CourseReplayStageData> stages) {
   const auto &result = verified.result;
+  std::vector<CourseReplayEntryFacts> entryFacts;
+  entryFacts.reserve(result.entryFacts.size());
+  for (const auto &entry : result.entryFacts) {
+    entryFacts.push_back({.totalNotes = entry.totalNotes,
+                          .playLengthMicros = entry.playLengthMicros});
+  }
   return std::make_shared<CourseReplayData>(CourseReplayData{
       // This is a memory-only adapter, not a legacy replay row identifier.
       .id = 0,
@@ -134,6 +141,7 @@ std::shared_ptr<CourseReplayData> makeCompatibilityCourse(
       .completedCharts = result.completedCharts,
       .totalCharts = result.totalCharts,
       .stages = std::move(stages),
+      .entryFacts = std::move(entryFacts),
       .provenance = result.provenance,
   });
 }
@@ -156,16 +164,16 @@ std::shared_ptr<CoursePlaySession> makeCourseReplayLaunchSession(
   session->courseGroupName = replayData->courseGroupName;
   session->constraintJson = replayData->constraintJson;
   const auto &savedResult = outcome.context.verified->result;
-  session->entries.resize(
-      static_cast<std::size_t>(savedResult.totalCharts));
-  for (std::size_t index = 0; index < session->entries.size(); ++index) {
-    session->entries[index].meta.TotalNotes =
-        savedResult.entryFacts[index].totalNotes;
-    session->entries[index].meta.PlayLength =
-        savedResult.entryFacts[index].playLengthMicros;
-  }
+  session->entries.resize(std::max(replayData->entryFacts.size(),
+                                   replayData->stages.size()));
   for (std::size_t index = 0; index < replayData->stages.size(); ++index) {
     session->entries[index].meta = replayData->stages[index].replay.chartMeta;
+  }
+  for (std::size_t index = 0; index < replayData->entryFacts.size(); ++index) {
+    session->entries[index].meta.TotalNotes =
+        replayData->entryFacts[index].totalNotes;
+    session->entries[index].meta.PlayLength =
+        replayData->entryFacts[index].playLengthMicros;
   }
   session->snapshotRulesetFromReplay(replayData->stages.front().replay);
   const CourseConstraintSettings constraintSettings =

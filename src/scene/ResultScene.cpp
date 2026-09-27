@@ -3667,10 +3667,17 @@ void ResultScene::startCourseReplay() {
   replaySession->courseName = replayData->courseName;
   replaySession->courseGroupName = replayData->courseGroupName;
   replaySession->constraintJson = replayData->constraintJson;
-  replaySession->entries.reserve(replayData->stages.size());
-  for (const auto &stage : replayData->stages) {
-    replaySession->entries.push_back(
-        CoursePlayEntry{.meta = stage.replay.chartMeta});
+  replaySession->entries.resize(std::max(replayData->entryFacts.size(),
+                                         replayData->stages.size()));
+  for (std::size_t index = 0; index < replayData->stages.size(); ++index) {
+    replaySession->entries[index].meta =
+        replayData->stages[index].replay.chartMeta;
+  }
+  for (std::size_t index = 0; index < replayData->entryFacts.size(); ++index) {
+    replaySession->entries[index].meta.TotalNotes =
+        replayData->entryFacts[index].totalNotes;
+    replaySession->entries[index].meta.PlayLength =
+        replayData->entryFacts[index].playLengthMicros;
   }
   replaySession->snapshotRulesetFromReplay(replayData->stages.front().replay);
   const CourseConstraintSettings constraintSettings =

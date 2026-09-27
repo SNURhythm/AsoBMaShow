@@ -87,6 +87,7 @@ extern "C" {
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -1399,15 +1400,30 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
     const std::vector<CourseReplayVideoStage> &stages) {
   int totalNotes = 0;
   long long playLength = 0;
-  for (const auto &stage : stages) {
-    if (stage.chart == nullptr) {
-      continue;
+  const auto addFacts = [&](int notes, long long length) {
+    totalNotes += std::min(std::numeric_limits<int>::max() - totalNotes,
+                           std::max(0, notes));
+    playLength += std::min(std::numeric_limits<long long>::max() - playLength,
+                           std::max(0LL, length));
+  };
+  // Only played stages have parsed charts. Saved facts also cover the
+  // unplayed suffix and remain authoritative for the recorded attempt.
+  if (!replay.entryFacts.empty()) {
+    for (const auto &entry : replay.entryFacts) {
+      addFacts(entry.totalNotes, entry.playLengthMicros);
     }
-    totalNotes += std::max(0, stage.chart->Meta.TotalNotes);
-    playLength += std::max(0LL, stage.chart->Meta.PlayLength);
+  } else {
+    for (const auto &stage : stages) {
+      if (stage.chart != nullptr) {
+        addFacts(stage.chart->Meta.TotalNotes, stage.chart->Meta.PlayLength);
+      }
+    }
   }
+  const auto chartCount = replay.entryFacts.empty()
+                              ? stages.size()
+                              : replay.entryFacts.size();
   auto meta = result_presentation::courseResultMeta(
-      replay.courseName, replay.courseGroupName, stages.size(), totalNotes,
+      replay.courseName, replay.courseGroupName, chartCount, totalNotes,
       playLength);
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;

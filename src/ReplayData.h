@@ -179,6 +179,11 @@ prepareCompletedPrefixForSave(
 
 } // namespace course_replay
 
+struct CourseReplayEntryFacts {
+  int totalNotes = 0;
+  long long playLengthMicros = 0;
+};
+
 struct CourseReplayData {
   int id = 0;
   int courseId = 0;
@@ -201,5 +206,8 @@ struct CourseReplayData {
   int totalCharts = 0;
   std::string createdAt;
   std::vector<CourseReplayStageData> stages;
+  // Saved full-course facts, including unplayed entries. Empty for adapters
+  // whose historical source did not retain these facts.
+  std::vector<CourseReplayEntryFacts> entryFacts;
   ScoreProvenance provenance = ScoreProvenance::Legacy();
 };

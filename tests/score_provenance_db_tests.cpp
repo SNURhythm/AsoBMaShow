@@ -2720,6 +2720,14 @@ void testCourseRecallUsesHistoricalScoreAndLamp(const std::filesystem::path &roo
   course.courseReplayData->courseId = 1;
   course.courseReplayData->longNoteMode = 1;
   course.courseReplayData->stages.front().replay.resultAttemptId = "current";
+  auto &playedMeta = course.courseReplayData->stages.front().replay.chartMeta;
+  playedMeta.TotalNotes = 99;
+  playedMeta.PlayLength = 111;
+  playedMeta.SHA256 = std::string(kShaA);
+  playedMeta.Rank = 3;
+  course.courseReplayData->completedCharts = 1;
+  course.courseReplayData->totalCharts = 3;
+  course.courseReplayData->entryFacts = {{100, 123}, {200, 456}, {300, 789}};
   const auto exported = result_presentation::previousBestsForReplayCourse(
       scores, *course.courseReplayData);
   assert(exported.score && exported.score->score == 200);
@@ -2727,6 +2735,15 @@ void testCourseRecallUsesHistoricalScoreAndLamp(const std::filesystem::path &roo
   scene.startCourseReplay();
   assert(scene.restartedSession && scene.restartedSession->modernCourseAttemptId == "current");
   assert(scene.restartedSession->modernCoursePlayedAtUnixMillis == 1'700'000'000'123LL);
+  assert(scene.restartedSession->entries.size() == 3);
+  assert(scene.restartedSession->entries[0].meta.TotalNotes == 100 &&
+         scene.restartedSession->entries[0].meta.PlayLength == 123 &&
+         scene.restartedSession->entries[0].meta.SHA256 == kShaA &&
+         scene.restartedSession->entries[0].meta.Rank == 3);
+  assert(scene.restartedSession->entries[1].meta.TotalNotes == 200 &&
+         scene.restartedSession->entries[1].meta.PlayLength == 456 &&
+         scene.restartedSession->entries[2].meta.TotalNotes == 300 &&
+         scene.restartedSession->entries[2].meta.PlayLength == 789);
   result_history_fixture::resetCourseForReplayRestart(scene.restartedSession.get());
   assert(scene.restartedSession->modernCourseAttemptId == "current" &&
          scene.restartedSession->modernCoursePlayedAtUnixMillis == 1'700'000'000'123LL);
