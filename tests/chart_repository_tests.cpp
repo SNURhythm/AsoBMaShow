@@ -2037,6 +2037,112 @@ void testJudgeRankMetadataMigrationRequestsReparse() {
                   "SELECT required FROM chart_meta_rebuild_state WHERE id=1") == 1);
 }
 
+void testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "judge-rank-added-dates.db";
+  auto loose = chartMeta(temporary.path());
+  loose.Title = "Loose";
+  auto archived = loose;
+  archived.BmsPath = temporary.path() / "pack.zip" / "chart.bms";
+  archived.Folder = temporary.path() / "pack.zip";
+  archived.Title = "Archived";
+  const std::array folders{ChartFolderScanNode{
+      .path = temporary.path(), .dateSeconds = 1000, .containsBms = true}};
+  const std::array roots{temporary.path()};
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session);
+    auto batch = session->BeginScanBatch();
+    assert(batch && batch->UpsertChart(loose, std::nullopt));
+    assert(batch->UpsertChart(archived, ChartSourcePreference{1, 4096}));
+    assert(batch->SynchronizeFolders(folders, roots));
+    assert(batch->Commit());
+  }
+  {
+    auto database = openDatabase(path);
+    assert(execute(database.get(),
+        "UPDATE chart_meta SET add_date=CASE title WHEN 'Loose' THEN 123456 "
+        "ELSE 234567 END; UPDATE folder SET adddate=345678; "
+        "ALTER TABLE chart_meta DROP COLUMN rank_type; PRAGMA user_version=11"));
+  }
+  // A failed migration must retain both the dates and the metadata that can
+  // supply them when the next open retries the rank rebuild.
+  {
+    ChartRepository repository(path);
+    std::atomic<int> connections{0};
+    ScopedConnectionObserver observer(connections, nullptr, 1);
+    assert(!repository.EnsureReady());
+  }
+  {
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 11);
+    assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 2);
+    assert(queryInt(database.get(),
+                    "SELECT add_date FROM chart_meta WHERE title='Loose'") == 123456);
+    assert(queryInt(database.get(), "SELECT adddate FROM folder") == 345678);
+  }
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session && session->CountAllChartMeta() == 0);
+    loose.Rank = 80;
+    loose.RankType = bms_parser::JudgeRankType::DefExRank;
+    auto cancelled = session->BeginScanBatch();
+    assert(cancelled && cancelled->UpsertChart(loose, std::nullopt));
+    cancelled.reset();
+    assert(session->CountAllChartMeta() == 0);
+    auto batch = session->BeginScanBatch();
+    assert(batch && batch->UpsertChart(loose, std::nullopt));
+    assert(batch->SynchronizeFolders(folders, roots));
+    assert(batch->Commit());
+    std::vector<ChartMetaRecord> records;
+    session->QueryChartMeta({}, records);
+    assert(records.size() == 1);
+    assert(records.front().addDateSeconds == 123456);
+    assert(records.front().meta.RankType == bms_parser::JudgeRankType::DefExRank);
+    assert(records.front().meta.Rank == 80);
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(), "SELECT adddate FROM folder") == 345678);
+    assert(queryInt(database.get(),
+                    "SELECT required FROM chart_meta_rebuild_state WHERE id=1") == 1);
+  }
+  // Resume in a fresh connection, including an archive replacement and a
+  // genuinely new chart which must receive the current scan's added date.
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    assert(session);
+    auto batch = session->BeginScanBatch();
+    assert(batch && batch->DeleteChartsInArchive(temporary.path() / "pack.zip"));
+    assert(batch->UpsertChart(archived, ChartSourcePreference{1, 4096}));
+    auto fresh = loose;
+    fresh.BmsPath = temporary.path() / "new.bms";
+    fresh.Title = "New";
+    assert(batch->UpsertChart(fresh, std::nullopt));
+    assert(batch->Commit());
+    // Archive resume can discard a previously committed prefix before parsing
+    // it again. Its original date must survive until the rebuild finishes.
+    auto restarted = session->BeginScanBatch();
+    assert(restarted && restarted->DeleteChartsInArchive(temporary.path() / "pack.zip"));
+    assert(restarted->UpsertChart(archived, ChartSourcePreference{1, 4096}));
+    assert(restarted->Commit());
+    assert(session->ClearChartMetadataRebuildRequired());
+    auto database = openDatabase(path);
+    assert(queryInt(database.get(),
+                    "SELECT add_date FROM chart_meta WHERE title='Loose'") == 123456);
+    assert(queryInt(database.get(),
+                    "SELECT add_date FROM chart_meta WHERE title='Archived'") == 234567);
+    assert(queryInt(database.get(),
+                    "SELECT add_date FROM chart_meta WHERE title='New'") > 345678);
+    assert(queryInt(database.get(), "SELECT adddate FROM folder") == 345678);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 12);
+  }
+}
+
 void testSolidArchiveClassificationMigration() {
   TempDirectory temporary;
   const auto path = temporary.path() / "solid-migration.db";
@@ -3996,6 +4102,7 @@ int main(int argc, char **argv) {
   testFolderProbeAndCancelledReadsDoNotPoisonSession();
   testChartMigrationCompatibilityMatrix();
   testJudgeRankMetadataMigrationRequestsReparse();
+  testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan();
   testSolidArchiveClassificationMigration();
   testSolidArchiveDirectoryLoadsOnlyArchiveRecords();
   testChartMigrationReleaseFailureDoesNotReportSuccess();

@@ -465,6 +465,16 @@ bool clearMetadataRebuildRequired(sqlite3 *database) {
   if (!exists) {
     return true;
   }
+  std::string error;
+  SqliteTransactionHandle transaction(
+      database, "SAVEPOINT chart_metadata_rebuild_completion", error,
+      "RELEASE chart_metadata_rebuild_completion",
+      "ROLLBACK TO chart_metadata_rebuild_completion; "
+      "RELEASE chart_metadata_rebuild_completion");
+  if (!transaction.active()) {
+    logSqlErrorText("starting chart metadata rebuild completion", error);
+    return false;
+  }
   const char *query =
       "INSERT INTO chart_meta_rebuild_state (id, required, updated_at) "
       "VALUES (1, ?, CURRENT_TIMESTAMP) "
@@ -479,6 +489,21 @@ bool clearMetadataRebuildRequired(sqlite3 *database) {
   sqlite3_bind_int(statement.get(), 1, 0);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("updating chart metadata rebuild state", database);
+    return false;
+  }
+  statement.reset();
+  // The scanner calls this only after a complete library traversal. Retain
+  // the date snapshot on any failure so a subsequent scan can still restore it.
+  for (const auto *cleanup : {
+           "DROP TRIGGER IF EXISTS restore_chart_meta_rebuild_add_date",
+           "DROP TABLE IF EXISTS chart_meta_rebuild_add_dates"}) {
+    if (const auto failure = executeSqlite(database, cleanup)) {
+      logSqlErrorText("finishing chart rebuild added-date restoration", *failure);
+      return false;
+    }
+  }
+  if (!transaction.commit(error)) {
+    logSqlErrorText("committing chart metadata rebuild completion", error);
     return false;
   }
   return true;

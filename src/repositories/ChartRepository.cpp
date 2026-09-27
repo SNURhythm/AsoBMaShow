@@ -394,7 +394,8 @@ bool clearChartMetadataRebuildRequiredIfPresent(sqlite3 *db) {
   return setChartMetadataRebuildRequired(db, false);
 }
 
-bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
+bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed,
+                                         bool preserveAddedDates = false) {
   completed = false;
   if (!execSql(db, "SAVEPOINT chart_metadata_rebuild_migration",
                "starting chart metadata rebuild migration")) {
@@ -402,22 +403,48 @@ bool invalidateChartMetadataForNormalScan(sqlite3 *db, bool &completed) {
   }
 
   bool ok = true;
+  if (preserveAddedDates) {
+    // Added dates cannot be recovered by parsing the source files. Keep them
+    // through interrupted scans and archive-prefix replacement until the full
+    // library rebuild completes.
+    ok = execSql(db,
+                 "CREATE TABLE chart_meta_rebuild_add_dates("
+                 "path TEXT PRIMARY KEY,add_date INTEGER NOT NULL) WITHOUT ROWID",
+                 "creating chart rebuild added dates") &&
+         execSql(db,
+                 "INSERT INTO chart_meta_rebuild_add_dates "
+                 "SELECT path,add_date FROM chart_meta",
+                 "preserving chart rebuild added dates");
+  }
   const char *queries[] = {
       "DROP TABLE IF EXISTS chart_meta",
       "DROP TABLE IF EXISTS solid_archives",
       "DROP TABLE IF EXISTS archive_scan_cache",
       "DROP TABLE IF EXISTS chart_scan_checkpoint",
       "DROP TABLE IF EXISTS chart_scan_completed_archive",
-      "DROP TABLE IF EXISTS folder",
   };
   for (const auto *query : queries) {
-    if (!execSql(db, query, "invalidating chart metadata cache")) {
+    if (!ok || !execSql(db, query, "invalidating chart metadata cache")) {
       ok = false;
       break;
     }
   }
+  if (ok && !preserveAddedDates) {
+    ok = execSql(db, "DROP TABLE IF EXISTS folder",
+                 "invalidating chart folder cache");
+  }
   if (ok) {
     ok = createChartMetaTableSchema(db);
+  }
+  if (ok && preserveAddedDates) {
+    ok = execSql(db,
+                 "CREATE TRIGGER restore_chart_meta_rebuild_add_date "
+                 "AFTER INSERT ON chart_meta WHEN EXISTS(SELECT 1 FROM "
+                 "chart_meta_rebuild_add_dates WHERE path=NEW.path) BEGIN "
+                 "UPDATE chart_meta SET add_date=(SELECT add_date FROM "
+                 "chart_meta_rebuild_add_dates WHERE path=NEW.path) "
+                 "WHERE path=NEW.path; END",
+                 "restoring chart added dates during rebuild");
   }
   if (ok) {
     ok = createFolderTableSchema(db);
@@ -751,7 +778,7 @@ bool migrateChartDatabaseToVersion12(sqlite3 *db, bool &completed) {
   }
   // Old metadata cannot distinguish authored RANK from DEFEXRANK, and used
   // EASY for a missing RANK. Reparse source charts rather than guessing.
-  return invalidateChartMetadataForNormalScan(db, completed);
+  return invalidateChartMetadataForNormalScan(db, completed, true);
 }
 
 bool migrateChartDatabaseSchema(sqlite3 *db) {

@@ -1407,6 +1407,32 @@ void testMissingFullScanRootPreservesMetadataRebuildState() {
   assert(metadataRebuildRequired(databasePath));
 }
 
+void testPartialLibraryFullScanPreservesMetadataRebuildState() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto first = root / "first";
+  const auto second = root / "second";
+  writeChart(first, "chart", "First");
+  writeChart(second, "chart", "Second");
+  const auto databasePath = temporary.path() / "chart.db";
+  TestChartRepository repository(databasePath);
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session && session->InsertEntry(root));
+  setMetadataRebuildRequired(databasePath, true);
+
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {first}).completed);
+  assert(session->CountAllChartMeta() == 1);
+  assert(metadataRebuildRequired(databasePath));
+  // An unchanged subfolder refresh still cannot finish a library migration.
+  assert(scanner.ScanWithResult(*session, {first}).completed);
+  assert(metadataRebuildRequired(databasePath));
+  assert(scanner.ScanWithResult(*session, {root}).completed);
+  assert(session->CountAllChartMeta() == 2);
+  assert(!metadataRebuildRequired(databasePath));
+}
+
 void testAddedScanStorageFailureDoesNotQualifyExistingChart() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2876,6 +2902,7 @@ int main() {
   testScopedSamePathRefreshStorageFailureRollsBack();
   testRebuildFlagClearFailureDoesNotReportCompletedScan();
   testMissingFullScanRootPreservesMetadataRebuildState();
+  testPartialLibraryFullScanPreservesMetadataRebuildState();
   testAddedScanStorageFailureDoesNotQualifyExistingChart();
   testAddedScanParseFailureDoesNotQualifyExistingChart();
   testArchiveChartCountReportsStorageReadFailure();
