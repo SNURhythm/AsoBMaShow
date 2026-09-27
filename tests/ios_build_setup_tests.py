@@ -580,10 +580,30 @@ int main() { return 0; }
         ]
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            cmake_guard = fake_bin / "cmake"
+            cmake_guard.write_text(
+                '#!/bin/sh\n'
+                'for argument in "$@"; do\n'
+                '  if [ "$argument" = "--fresh" ]; then\n'
+                '    echo "CMake before 3.24 does not support --fresh" >&2\n'
+                '    exit 1\n'
+                '  fi\n'
+                'done\n'
+                'exec "$REAL_CMAKE" "$@"\n',
+                encoding="utf-8",
+            )
+            cmake_guard.chmod(0o755)
+            environment = {
+                **os.environ,
+                "REAL_CMAKE": shutil.which("cmake"),
+                "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+            }
             source = root / "bgfx"
             source.mkdir()
             (source / "CMakeLists.txt").write_text(
-                "cmake_minimum_required(VERSION 3.24)\n"
+                "cmake_minimum_required(VERSION 3.22)\n"
                 "project(XcodeRefreshProbe LANGUAGES C CXX)\n"
                 "find_library(FOUNDATION_LIBRARY Foundation REQUIRED)\n",
                 encoding="utf-8",
@@ -595,6 +615,7 @@ int main() { return 0; }
                      "bgfx-refresh-test", str(root)],
                     capture_output=True,
                     text=True,
+                    env=environment,
                 )
 
             initial = prepare()
