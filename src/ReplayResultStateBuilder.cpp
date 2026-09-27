@@ -251,6 +251,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
       BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
   state.combo = std::max(0, carriedCombo);
   state.maxCombo = std::max(state.combo, carriedMaxCombo);
+  state.stagePassedNotes = replay.resultPassedNotes.value_or(chart.Meta.TotalNotes);
 
   for (const auto &event : replay.events) {
     if (event.action == ReplayEventAction::Gauge) {

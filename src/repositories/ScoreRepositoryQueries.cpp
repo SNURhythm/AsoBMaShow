@@ -238,7 +238,8 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
                        SQLITE_OK;
   const std::optional<int> badPoints =
       storage.source == ScoreStorageSource::LocalGameplay
-          ? std::optional<int>(score.bad + score.poor + score.kPoor)
+          ? std::optional<int>(score.badPoints.value_or(
+                score.bad + score.poor + score.kPoor))
           : storage.badPoints;
   if (badPoints) {
     bindInt(*badPoints);
@@ -345,7 +346,7 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
           "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
           "final_gauge, clear_type, play_duration_seconds, ruleset_version, "
           "eligibility, "
-          "provenance_json, created_at, average_judge_micros FROM scores "
+          "provenance_json, created_at, average_judge_micros, bad_points FROM scores "
           "WHERE attempt_id = ?",
           stmt, "preparing projected score collision lookup",
           logSqlErrorText) ||
@@ -405,6 +406,16 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
             .diagnostic =
                 "stored projected score has invalid SQLite value types"};
   }
+
+  int storedBadPoints = 0;
+  const int expectedBadPoints = pending.score.badPoints.value_or(
+      pending.score.bad + pending.score.poor + pending.score.kPoor);
+  if (!readStrictScoreInteger(stmt.get(), 27, storedBadPoints) ||
+      storedBadPoints != expectedBadPoints) {
+    return {.status = ProjectionStatus::IntegrityConflict,
+            .diagnostic = "stored projected score BP differs from the attempted payload"};
+  }
+  stored.badPoints = pending.score.badPoints;
 
   const double storedGauge = sqlite3_column_double(stmt.get(), 19);
   if (!std::isfinite(storedGauge) ||
@@ -1061,6 +1072,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
 namespace {
 
 struct CourseScoreProjection {
+  std::optional<int> badPoints = 0;
   int comboBreak = 0;
   int pGreat = 0;
   int great = 0;
@@ -1099,6 +1111,13 @@ std::optional<CourseScoreProjection> makeCourseScoreProjection(
   CourseScoreProjection projection;
   for (const auto &stage : pending.result.stages) {
     const auto &score = stage.score;
+    if (!score.badPoints) {
+      projection.badPoints.reset();
+    } else if (projection.badPoints &&
+               !checkedAddCourseFact(*projection.badPoints, *score.badPoints)) {
+      diagnostic = "course BP aggregate overflows";
+      return std::nullopt;
+    }
     if (!checkedAddCourseFact(projection.comboBreak, score.comboBreak) ||
         !checkedAddCourseFact(projection.pGreat, score.pGreat) ||
         !checkedAddCourseFact(projection.great, score.great) ||
@@ -1110,6 +1129,18 @@ std::optional<CourseScoreProjection> makeCourseScoreProjection(
         !checkedAddCourseFact(projection.slow, score.slow)) {
       diagnostic = "course score projection aggregate overflows";
       return std::nullopt;
+    }
+  }
+  if (projection.badPoints) {
+    // MusicResult adds every unattempted future chart's notes after a failed
+    // course stage. Completed stage BP already includes its own remainder.
+    for (std::size_t index = pending.result.stages.size();
+         index < pending.result.entryFacts.size(); ++index) {
+      if (!checkedAddCourseFact(*projection.badPoints,
+                                pending.result.entryFacts[index].totalNotes)) {
+        diagnostic = "course BP remainder overflows";
+        return std::nullopt;
+      }
     }
   }
   const auto provenanceJson =
@@ -1172,7 +1203,10 @@ bool bindProjectedCourseScore(
   integer(pending.modernResultId);
   text(result.resultFingerprint);
   text(pending.createdAt);
-  return bound && index == 35;
+  bound = bound && (projection.badPoints
+      ? sqlite3_bind_int(statement, index++, *projection.badPoints)
+      : sqlite3_bind_null(statement, index++)) == SQLITE_OK;
+  return bound && index == 36;
 }
 
 bool projectedCourseColumnMatchesText(sqlite3_stmt *statement, int column,
@@ -1202,7 +1236,7 @@ result_persistence::ProjectionOutcome classifyProjectedCourseScoreCollision(
           "total_charts, score, max_score, max_combo, combo_break, pgreat, "
           "great, good, bad, poor, kpoor, fast, slow, final_gauge, clear_type, "
           "ruleset_version, eligibility, provenance_json, attempt_id, "
-          "modern_result_id, result_fingerprint, created_at FROM "
+          "modern_result_id, result_fingerprint, created_at, bad_points FROM "
           "course_scores WHERE attempt_id = ?",
           statement, "preparing projected course score collision lookup",
           logSqlErrorText) ||
@@ -1281,7 +1315,10 @@ result_persistence::ProjectionOutcome classifyProjectedCourseScoreCollision(
                                       pending.modernResultId) &&
       projectedCourseColumnMatchesText(statement.get(), 32,
                                        result.resultFingerprint) &&
-      projectedCourseColumnMatchesText(statement.get(), 33, pending.createdAt);
+      projectedCourseColumnMatchesText(statement.get(), 33, pending.createdAt) &&
+      (projection.badPoints
+           ? projectedCourseColumnMatchesInt(statement.get(), 34, *projection.badPoints)
+           : sqlite3_column_type(statement.get(), 34) == SQLITE_NULL);
   rc = sqlite3_step(statement.get());
   if (rc == SQLITE_ROW) {
     return {.status = ProjectionStatus::IntegrityConflict,
@@ -1331,8 +1368,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedCourseScore(
           "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
           "final_gauge, clear_type, ruleset_version, eligibility, "
           "provenance_json, attempt_id, modern_result_id, result_fingerprint, "
-          "created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-          "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "created_at, bad_points) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
+          "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
           statement, "preparing projected course score insert",
           logSqlErrorText) ||
       !bindProjectedCourseScore(statement.get(), pending, *projection)) {
@@ -1552,8 +1589,8 @@ score_repository_detail::LoadBestScoreOnConnection(
       "s", effectiveClearRank, "id");
 
   std::string query = "SELECT score, max_score, max_combo, combo_break, "
-      "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
-      "CAST(kpoor AS INTEGER), fast, slow, final_gauge, ";
+      "COALESCE(bad_points, CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
+      "CAST(kpoor AS INTEGER)), fast, slow, final_gauge, ";
   query += effectiveClearRank +
            ", created_at, provenance_json, score_source, attempt_id "
            "FROM scores s WHERE ";
@@ -1801,8 +1838,8 @@ score_repository_detail::LoadBestClearScoreOnConnection(
       score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
 
   std::string query = "SELECT score, max_score, max_combo, combo_break, "
-      "CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
-      "CAST(kpoor AS INTEGER), fast, slow, final_gauge, ";
+      "COALESCE(bad_points, CAST(bad AS INTEGER) + CAST(poor AS INTEGER) + "
+      "CAST(kpoor AS INTEGER)), fast, slow, final_gauge, ";
   query += effectiveClearRank +
            ", created_at, score_source, attempt_id "
            "FROM scores s WHERE ";
@@ -1915,7 +1952,7 @@ CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
   if (!EnsureSessionDatabaseLocked()) return scores;
 
   const std::string query =
-      "SELECT score,max_score,bad + poor + kpoor,clear_type,play_option,"
+      "SELECT score,max_score,COALESCE(bad_points,bad + poor + kpoor),clear_type,play_option,"
       "provenance_json FROM course_scores c WHERE "
       "((?1<>'' AND course_key=?1) OR "
       "(COALESCE(course_key,'')='' AND course_id=?2)) AND "

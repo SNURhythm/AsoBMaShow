@@ -225,9 +225,13 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     if (expectedEx != submission.score) {
       return invalid("submission EX score disagrees with judgements");
     }
-    const long long badPoints = static_cast<long long>(submission.bad) +
-                                submission.poor + submission.kPoor;
-    if (badPoints > std::numeric_limits<int>::max()) {
+    // Supported 7K/14K judgements consume each note exactly once. This is
+    // BAD + POOR + empty POOR + (total notes - passed notes), including an
+    // unfinished remainder when a survival gauge ends the attempt early.
+    const long long badPoints = static_cast<long long>(submission.maxScore) / 2 -
+                                submission.pGreat - submission.great -
+                                submission.good + submission.kPoor;
+    if (badPoints < 0 || badPoints > std::numeric_limits<int>::max()) {
       return invalid("submission BP exceeds the supported range");
     }
     if (!std::isfinite(submission.finalGauge)) {

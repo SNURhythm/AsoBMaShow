@@ -2142,10 +2142,10 @@ void testLegacyLongNoteScoreMigrationSurvivesUnavailableChartMetadata() {
            std::string(testCase.label) +
                " does not strand the legacy score migration");
     scoreDatabase = openDatabase(scorePath);
+    // The duration retry is migration 13, so pending chart metadata keeps the
+    // version at 12 even when later independent migrations have been applied.
     const int expectedSchemaVersion =
-        testCase.rebuildRequired
-            ? ScoreRepository::kCurrentSchemaVersion - 1
-            : ScoreRepository::kCurrentSchemaVersion;
+        testCase.rebuildRequired ? 12 : ScoreRepository::kCurrentSchemaVersion;
     expect(scoreDatabase != nullptr &&
                queryInt(scoreDatabase.get(), "PRAGMA user_version") ==
                    expectedSchemaVersion &&

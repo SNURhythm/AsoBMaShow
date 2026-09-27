@@ -185,6 +185,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   expect(matched.matched() && matched.replayData &&
              !matched.replayData->events.empty() &&
              matched.replayData->finalScore == saved.score.score &&
+             matched.replayData->resultPassedNotes == 1 &&
              matched.replayData->provenance == saved.score.provenance,
          "verified replay yields one in-memory judged track for consumers");
   expect(matched.replayData && matched.replayData->touchSamples.size() == 1 &&

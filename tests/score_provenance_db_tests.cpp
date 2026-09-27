@@ -1921,17 +1921,23 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   pending.score.poor = 8;
   pending.score.kPoor = 40;
   pending.score.comboBreak = 22;
+  pending.score.good = 48;
+  pending.score.badPoints = 67; // Includes five unplayed notes at failure.
   pending.score.fast = 23;
   pending.score.slow = 29;
   pending.score.longNoteMode = 2;
   pending.averageJudgeMicros = 20'000;
   assert(helper.SaveProjectedScore(pending).status ==
          result_persistence::ProjectionStatus::Inserted);
+  assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::AlreadyPresent);
 
   auto metricBest = samplePendingScore(root, "best-score-ir-bp", 15,
                                        "2026-07-18 12:35:56", 10, 5);
   metricBest.score.bad = 2;
   metricBest.score.poor = 1;
+  metricBest.score.good = 22;
+  metricBest.score.badPoints = 63; // Three misses plus sixty unplayed notes.
   metricBest.score.longNoteMode = 2;
   metricBest.averageJudgeMicros = 10'000;
   assert(helper.SaveProjectedScore(metricBest).status ==
@@ -1941,14 +1947,14 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
                                          std::nullopt, std::nullopt, 2);
   assert(best.has_value());
   assert(best->comboBreak == 22);
-  assert(best->badPoints == 62);
+  assert(best->badPoints == 67);
   assert(best->fast == 23 && best->slow == 29);
 
   const auto selectorBest = helper.LoadBestScores().bestForHash(
       pending.score.chartSha256, pending.score.longNoteMode);
   assert(selectorBest.has_value());
   assert(selectorBest->score == pending.score.score);
-  assert(selectorBest->badPoints == 3);
+  assert(selectorBest->badPoints == 63);
   assert(selectorBest->averageJudgeMicros == 10'000);
   assert(selectorBest->fast == 23 && selectorBest->slow == 29);
 }
@@ -3131,6 +3137,125 @@ void testModifiedPlaybackDoesNotUpdateBestScores(
   assert(!helper.LoadBestCourseScore(session).has_value());
 }
 
+void testVersion14CourseBadPointsMigration(const std::filesystem::path &root) {
+  const auto path = root / "course-bp-migration" / "score.db";
+  createVersion4ScoreFixture(path);
+  {
+    ScoreRepository repository(path);
+    assert(repository.EnsureSchema());
+  }
+  auto db = openDatabase(path);
+  assert(columnExists(db.get(), "course_scores", "bad_points"));
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
+                           "WHERE bad_points IS NULL") == 1);
+  const auto outcome = courseOutcome(db.get());
+  const auto provenance = queryText(db.get(),
+      "SELECT provenance_json FROM course_scores WHERE id=1");
+  execOrAbort(db.get(), "ALTER TABLE course_scores DROP COLUMN bad_points");
+  execOrAbort(db.get(), "PRAGMA user_version=13");
+  const auto denyAlter = [](void *, int action, const char *, const char *table,
+                            const char *, const char *) {
+    return action == SQLITE_ALTER_TABLE && table &&
+                   std::string_view(table) == "course_scores"
+               ? SQLITE_DENY : SQLITE_OK;
+  };
+  assert(sqlite3_set_authorizer(db.get(), denyAlter, nullptr) == SQLITE_OK);
+  assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 13);
+  assert(!columnExists(db.get(), "course_scores", "bad_points"));
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
+                           "WHERE bad_points IS NULL") == 1);
+  assert(courseOutcome(db.get()) == outcome);
+  assert(queryText(db.get(), "SELECT provenance_json FROM course_scores "
+                            "WHERE id=1") == provenance);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
+                           "WHERE result_fingerprint IS NULL") == 1);
+  assert(score_repository_detail::CurrentSchemaIsValid(db.get()));
+  const auto schema = schemaSnapshot(db.get());
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(schemaSnapshot(db.get()) == schema);
+}
+
+void testCurrentCourseBadPointsSchemaFailsClosed(const std::filesystem::path &root) {
+  const std::array definitions{"", "TEXT", "INTEGER DEFAULT 0",
+                               "INTEGER NOT NULL DEFAULT 0"};
+  for (std::size_t index = 0; index < definitions.size(); ++index) {
+    const auto path = root / ("course-bp-shape-" + std::to_string(index)) / "score.db";
+    {
+      ScoreRepository repository(path);
+      assert(repository.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "ALTER TABLE course_scores DROP COLUMN bad_points");
+    if (std::string_view(definitions[index]).size() != 0) {
+      execOrAbort(db.get(), "ALTER TABLE course_scores ADD COLUMN bad_points " +
+                               std::string(definitions[index]));
+    }
+    const auto schema = schemaSnapshot(db.get());
+    assert(!score_repository_detail::CurrentSchemaIsValid(db.get()));
+    assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+    assert(schemaSnapshot(db.get()) == schema);
+  }
+}
+
+void testPreviousRulesetScoresRemainHistoryButNotBest(
+    const std::filesystem::path &root) {
+  const auto path = root / "previous-ruleset-best" / "score.db";
+  ScoreRepository initial(path);
+  assert(initial.EnsureSchema());
+  const auto meta = sampleMeta(root, "previous-ruleset-best");
+  const auto state = sampleState(20, 5);
+  const auto provenance = sampleProvenance("previous-ruleset-best");
+  assert(initial.SaveScore(meta, state, provenance));
+  CoursePlaySession session;
+  session.courseId = 93;
+  session.courseName = "Previous ruleset course";
+  session.constraintJson = "{}";
+  session.longNoteMode = meta.LnMode;
+  session.entries.push_back({.meta = meta});
+  session.courseKey = course_identity::makeCourseKey(session);
+  assert(initial.SaveCourseScore(session, state, 1, 1, provenance));
+  assert(initial.LoadBestScore(meta).has_value());
+  initial.Shutdown();
+
+  std::string savedProvenance;
+  {
+    auto db = openDatabase(path);
+    // Model a persisted, populated v13 database from the old LR2 revision.
+    for (const std::string table : {"scores", "course_scores"}) {
+      execOrAbort(db.get(), "UPDATE " + table +
+          " SET ruleset_version=3, provenance_json=json_set(provenance_json, "
+          "'$.ruleset.version', 3)");
+    }
+    savedProvenance = serializeScoreProvenance(
+        readStoredProvenance(db.get(), "scores", 1));
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM "
+                             "score_sha256_best_score_cache") == 1);
+    execOrAbort(db.get(), "PRAGMA user_version=13");
+  }
+
+  ScoreRepository migrated(path);
+  assert(migrated.EnsureSchema());
+  assert(!migrated.LoadBestScore(meta).has_value());
+  assert(!migrated.LoadBestCourseScore(session).has_value());
+  const auto ranks = migrated.LoadBestClearRanks();
+  assert(ranks.bestRankFor(meta) == kNoClearTypeRank);
+  assert(ranks.bestCourseRankFor(session.courseKey, session.courseId,
+                                meta.LnMode) == kNoClearTypeRank);
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM "
+                           "score_sha256_best_score_cache") == 0);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM "
+                           "score_sha256_clear_rank_cache") == 0);
+  assert(serializeScoreProvenance(readStoredProvenance(db.get(), "scores", 1)) ==
+         savedProvenance);
+}
+
 void testVersion8MigrationReclassifiesBeatorajaValidScores(
     const std::filesystem::path &root) {
   const auto path = root / "migration-v8-beatoraja-eligibility" / "score.db";
@@ -3805,6 +3930,9 @@ int main() {
   testFutureVersionIsRejected(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testCourseSelectorOptionScoresMatchBeatorajaBuckets(root);
+  testVersion14CourseBadPointsMigration(root);
+  testCurrentCourseBadPointsSchemaFailsClosed(root);
+  testPreviousRulesetScoresRemainHistoryButNotBest(root);
   testModifiedPlaybackDoesNotUpdateBestScores(root);
   testVersion8MigrationReclassifiesBeatorajaValidScores(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);

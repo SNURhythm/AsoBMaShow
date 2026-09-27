@@ -4532,6 +4532,7 @@ void GamePlayScene::finishReplayRecording() {
   }
 
   recordedReplay.finalScore = state->getScore();
+  recordedReplay.resultPassedNotes = state->stagePassedNotes;
   recordedReplay.maxCombo = state->maxCombo;
   recordedReplay.finalGauge = state->currentGauge;
   recordedReplay.clearType = state->getClearTypeRank();

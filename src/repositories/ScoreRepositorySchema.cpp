@@ -802,6 +802,41 @@ bool courseScoreProjectionSchemaIsExact(sqlite3 *db) {
   return true;
 }
 
+enum class CourseBadPointsSchemaState { Absent, Exact, Malformed };
+
+bool inspectCourseBadPointsSchema(sqlite3 *db, CourseBadPointsSchemaState &state) {
+  state = CourseBadPointsSchemaState::Absent;
+  SqliteStatementHandle columns;
+  if (!prepareSqliteStatementLogged(
+          db, "PRAGMA table_info(course_scores)", columns,
+          "reading course bad-point column", logSqlErrorText)) {
+    return false;
+  }
+  int rc = SQLITE_OK;
+  while ((rc = sqlite3_step(columns.get())) == SQLITE_ROW) {
+    if (sqliteColumnString(columns.get(), 1) != "bad_points") {
+      continue;
+    }
+    const bool exact = sqliteColumnString(columns.get(), 2) == "INTEGER" &&
+                       sqlite3_column_int(columns.get(), 3) == 0 &&
+                       sqlite3_column_type(columns.get(), 4) == SQLITE_NULL &&
+                       sqlite3_column_int(columns.get(), 5) == 0;
+    state = exact ? CourseBadPointsSchemaState::Exact
+                  : CourseBadPointsSchemaState::Malformed;
+  }
+  if (rc != SQLITE_DONE) {
+    logSqlError("reading course bad-point column", db);
+    return false;
+  }
+  return true;
+}
+
+bool courseBadPointsSchemaIsExact(sqlite3 *db) {
+  CourseBadPointsSchemaState state{};
+  return inspectCourseBadPointsSchema(db, state) &&
+         state == CourseBadPointsSchemaState::Exact;
+}
+
 bool currentScoreSchemaIsValid(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -814,7 +849,8 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
   }
   return scoreAttemptIdentitySchemaIsExact(db) &&
          scoreImportedIrSchemaIsExact(db) &&
-         courseScoreProjectionSchemaIsExact(db);
+         courseScoreProjectionSchemaIsExact(db) &&
+         courseBadPointsSchemaIsExact(db);
 }
 
 bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
@@ -1697,6 +1733,45 @@ bool migrateScoreDatabaseToVersion13(
   return true;
 }
 
+bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
+  std::string error;
+  const auto version = readSqliteUserVersion(db, error);
+  if (!version || *version > kScoreDatabaseSchemaVersion) {
+    return false;
+  }
+  if (*version >= 14) {
+    return courseBadPointsSchemaIsExact(db);
+  }
+  CourseBadPointsSchemaState badPointsState{};
+  if (!inspectCourseBadPointsSchema(db, badPointsState) ||
+      badPointsState == CourseBadPointsSchemaState::Malformed) {
+    return false;
+  }
+  // Historical course BP was not captured; NULL preserves that uncertainty.
+  if (badPointsState == CourseBadPointsSchemaState::Absent &&
+      !execSql(db, "ALTER TABLE course_scores ADD COLUMN bad_points INTEGER "
+                   "CHECK(bad_points>=0)", "adding exact course bad points")) {
+    return false;
+  }
+  if (!courseBadPointsSchemaIsExact(db)) {
+    return false;
+  }
+  // EnsureSchema owns the transaction. Rebuild only derived summaries, keeping
+  // recorded result payloads and their verification fingerprints unchanged.
+  if (const auto failure = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("updating current-ruleset score summaries", *failure);
+    return false;
+  }
+  if (const auto failure = score_cache_queries::rebuildScoreSummaryTables(db)) {
+    logSqlErrorText("rebuilding current-ruleset score summaries", *failure);
+    return false;
+  }
+  // Do not skip a deferred duration migration, but still exclude old rules
+  // from derived rankings while the metadata scan is pending.
+  return *version < kScorePlayDurationRetrySchemaVersion ||
+         setDatabaseUserVersion(db, 14);
+}
+
 std::string scoreMigrationHashHasValue(std::string_view columnName) {
   const std::string column(columnName);
   return "scores." + column + " IS NOT NULL AND trim(scores." + column +
@@ -2073,6 +2148,7 @@ bool score_repository_detail::CreateCourseScoreTableOnConnection(sqlite3 *db) {
                       "bad INTEGER NOT NULL,"
                       "poor INTEGER NOT NULL,"
                       "kpoor INTEGER NOT NULL,"
+                      "bad_points INTEGER CHECK(bad_points>=0),"
                       "fast INTEGER NOT NULL,"
                       "slow INTEGER NOT NULL,"
                       "final_gauge REAL NOT NULL,"
@@ -2140,6 +2216,7 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion11(db) ||
       !migrateScoreDatabaseToVersion12(db, chartDatabasePath) ||
       !migrateScoreDatabaseToVersion13(db, chartDatabasePath) ||
+      !migrateScoreDatabaseToVersion14(db) ||
       !ensureScorePlayDurationInvariant(db)) {
     return false;
   }

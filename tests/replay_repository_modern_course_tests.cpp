@@ -99,6 +99,7 @@ result_persistence::ModernCourseStageResult stage(int index, char hash,
   value.score.finalGauge = finalGauge;
   value.score.clearType = kClearTypeHardClearRank;
   value.score.provenance = ScoreProvenance::Legacy();
+  value.score.badPoints = 0;
   value.keyMode = index == 0 ? 7 : 14;
   value.adoptedGaugeType = GaugeType::Hard;
   value.adoptedGaugeHistory = {80.0F, finalGauge};

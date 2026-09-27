@@ -27,7 +27,24 @@ constexpr const char *kModernChartColumns =
     "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
     "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
     "key_mode,adopted_gauge_type,gauge_history_json,judgement_timing_json,"
-    "provenance_json,result_fingerprint,played_at_unix_ms,created_at";
+    "provenance_json,result_fingerprint,played_at_unix_ms,created_at,bad_points";
+
+bool validOptionalBadPoints(sqlite3_stmt *statement, int column) {
+  return sqlite3_column_type(statement, column) == SQLITE_NULL ||
+         (sqlite3_column_type(statement, column) == SQLITE_INTEGER &&
+          sqlite3_column_int64(statement, column) >= 0 &&
+          sqlite3_column_int64(statement, column) <= std::numeric_limits<int>::max());
+}
+
+std::optional<int> readBadPoints(sqlite3_stmt *statement, int column) {
+  return sqlite3_column_type(statement, column) == SQLITE_NULL
+             ? std::nullopt : std::optional<int>(sqlite3_column_int(statement, column));
+}
+
+bool bindBadPoints(sqlite3_stmt *statement, int column, std::optional<int> value) {
+  return (value ? sqlite3_bind_int(statement, column, *value)
+                : sqlite3_bind_null(statement, column)) == SQLITE_OK;
+}
 
 bool bindText(sqlite3_stmt *statement, int index, std::string_view value) {
   return sqlite3_bind_text(statement, index, value.data(),
@@ -355,7 +372,8 @@ decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
       (sqlite3_column_type(statement, 20) != SQLITE_FLOAT &&
        sqlite3_column_type(statement, 20) != SQLITE_INTEGER) ||
       (sqlite3_column_type(statement, 25) != SQLITE_NULL &&
-       sqlite3_column_type(statement, 25) != SQLITE_TEXT)) {
+       sqlite3_column_type(statement, 25) != SQLITE_TEXT) ||
+      !validOptionalBadPoints(statement, 30)) {
     diagnostic = "modern chart result row has invalid types";
     return std::nullopt;
   }
@@ -408,7 +426,8 @@ decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
                 .finalGauge =
                     static_cast<float>(sqlite3_column_double(statement, 20)),
                 .clearType = sqlite3_column_int(statement, 21),
-                .provenance = std::move(*provenance)},
+                .provenance = std::move(*provenance),
+                .badPoints = readBadPoints(statement, 30)},
       .keyMode = sqlite3_column_int(statement, 22),
       .adoptedGaugeType =
           static_cast<GaugeType>(sqlite3_column_int(statement, 23)),
@@ -1016,8 +1035,8 @@ bool insertResult(sqlite3 *database,
       "max_combo,combo_break,p_great,great,good,bad,poor,k_poor,fast,slow,"
       "final_gauge,clear_type,key_mode,adopted_gauge_type,gauge_history_json,"
       "judgement_timing_json,provenance_json,result_fingerprint,"
-      "played_at_unix_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-      "?,?,?,?,?,?)";
+      "played_at_unix_ms,bad_points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?,?,?,?,?,?,?)";
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return false;
   }
@@ -1057,8 +1076,9 @@ bool insertResult(sqlite3 *database,
   bound = bound && bindText(statement.get(), index++, provenanceJson) &&
           bindText(statement.get(), index++, result.resultFingerprint) &&
           sqlite3_bind_int64(statement.get(), index++,
-                             result.playedAtUnixMillis) == SQLITE_OK;
-  if (!bound || index != 29 || sqlite3_step(statement.get()) != SQLITE_DONE ||
+                             result.playedAtUnixMillis) == SQLITE_OK &&
+          bindBadPoints(statement.get(), index++, score.badPoints);
+  if (!bound || index != 30 || sqlite3_step(statement.get()) != SQLITE_DONE ||
       sqlite3_changes(database) != 1) {
     return false;
   }
@@ -1174,7 +1194,8 @@ decodeModernCourseStage(sqlite3_stmt *statement, std::string &diagnostic) {
       (sqlite3_column_type(statement, 19) != SQLITE_FLOAT &&
        sqlite3_column_type(statement, 19) != SQLITE_INTEGER) ||
       (sqlite3_column_type(statement, 24) != SQLITE_NULL &&
-       sqlite3_column_type(statement, 24) != SQLITE_TEXT)) {
+       sqlite3_column_type(statement, 24) != SQLITE_TEXT) ||
+      !validOptionalBadPoints(statement, 26)) {
     diagnostic = "modern course stage row has invalid types";
     return std::nullopt;
   }
@@ -1223,7 +1244,8 @@ decodeModernCourseStage(sqlite3_stmt *statement, std::string &diagnostic) {
                 .finalGauge =
                     static_cast<float>(sqlite3_column_double(statement, 19)),
                 .clearType = sqlite3_column_int(statement, 20),
-                .provenance = std::move(*provenance)},
+                .provenance = std::move(*provenance),
+                .badPoints = readBadPoints(statement, 26)},
       .keyMode = sqlite3_column_int(statement, 21),
       .adoptedGaugeType =
           static_cast<GaugeType>(sqlite3_column_int(statement, 22)),
@@ -1369,7 +1391,7 @@ ReadCourseResultOutcome readCourseResult(sqlite3 *database,
           "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
           "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
           "key_mode,adopted_gauge_type,gauge_history_json,"
-          "judgement_timing_json,provenance_json FROM modern_course_stages "
+          "judgement_timing_json,provenance_json,bad_points FROM modern_course_stages "
           "WHERE modern_course_result_id=? ORDER BY stage_index",
           statement) != SQLITE_OK ||
       sqlite3_bind_int(statement.get(), 1, result.resultId) != SQLITE_OK) {
@@ -1529,8 +1551,8 @@ bool insertModernCourseChildren(
       "long_note_mode,score,max_score,max_combo,combo_break,p_great,great,"
       "good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,key_mode,"
       "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
-      "provenance_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-      "?,?,?,?)";
+      "provenance_json,bad_points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?,?,?,?,?)";
   if (prepareSqliteStatement(database, stageQuery, stage) != SQLITE_OK) {
     return false;
   }
@@ -1581,8 +1603,9 @@ bool insertModernCourseChildren(
     } else {
       bound = bound && bindText(stage.get(), index++, *timingJson);
     }
-    bound = bound && bindText(stage.get(), index++, *provenanceJson);
-    if (!bound || index != 28 || sqlite3_step(stage.get()) != SQLITE_DONE ||
+    bound = bound && bindText(stage.get(), index++, *provenanceJson) &&
+            bindBadPoints(stage.get(), index++, value.score.badPoints);
+    if (!bound || index != 29 || sqlite3_step(stage.get()) != SQLITE_DONE ||
         sqlite3_changes(database) != 1) {
       return false;
     }

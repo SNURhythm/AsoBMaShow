@@ -28,6 +28,8 @@
 
 namespace {
 
+// These cache fixtures represent historical rows without a known ruleset.
+// Their zero indexed revision preserves the legacy participation policy.
 constexpr const char *kNeutralProvenanceJson =
     R"({"playback":{"percent":100}})";
 
@@ -140,6 +142,7 @@ bool createScoreDatabase(const std::filesystem::path &path,
                    "combo_break INTEGER NOT NULL,"
                    "final_gauge REAL NOT NULL DEFAULT 0,"
                    "clear_type INTEGER NOT NULL,"
+                   "ruleset_version INTEGER NOT NULL DEFAULT 0,"
                    "eligibility INTEGER NOT NULL DEFAULT 2,"
                    "provenance_json TEXT NOT NULL DEFAULT "
                    "'{\"playback\":{\"percent\":100}}',"
@@ -205,6 +208,7 @@ void attachScoreDatabaseForTest(sqlite3 *db) {
                   "slow INTEGER NOT NULL DEFAULT 0,"
                   "final_gauge REAL NOT NULL DEFAULT 0,"
                   "clear_type INTEGER NOT NULL,"
+                  "ruleset_version INTEGER NOT NULL DEFAULT 0,"
                   "eligibility INTEGER NOT NULL DEFAULT 2,"
                   "provenance_json TEXT NOT NULL DEFAULT "
                   "'{\"playback\":{\"percent\":100}}',"

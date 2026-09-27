@@ -98,6 +98,8 @@ struct ReplayData {
   std::string createdAt;
   // Runtime identity of the authenticated result, retained by materialization.
   std::optional<std::string> resultAttemptId;
+  // Runtime result fact from canonical judging; durable BP is stored separately.
+  std::optional<int> resultPassedNotes;
   std::vector<ReplayEvent> events;
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;

@@ -91,6 +91,15 @@ int main() {
     return 1;
   }
 
+  practiceGaugeReplay.resultPassedNotes = 0;
+  const RhythmState failedPassState =
+      replay_result::BuildResultState(chart, practiceGaugeReplay);
+  if (failedPassState.stagePassedNotes != 0 ||
+      practiceGaugeState.stagePassedNotes != chart.Meta.TotalNotes) {
+    std::cerr << "export restores canonical passed notes and preserves historical BP" << std::endl;
+    return 1;
+  }
+
   bms_parser::Chart replayGraphChart;
   replayGraphChart.Meta.KeyMode = 7;
   replayGraphChart.Meta.Bpm = 120.0;

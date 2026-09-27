@@ -1445,6 +1445,7 @@ RhythmState courseResultStateForReplayVideo(
       aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += state.comboBreak;
+    aggregate.stagePassedNotes += state.stagePassedNotes;
     aggregate.fastCount += state.fastCount;
     aggregate.slowCount += state.slowCount;
     aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);

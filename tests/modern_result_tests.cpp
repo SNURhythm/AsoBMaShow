@@ -107,6 +107,24 @@ void testHistoricalTimingRemainsReadable() {
          "historical results retain their original PG-inclusive timing contract");
 }
 
+void testCapturePreservesFailedPmsBadPoints() {
+  CompletionFixture fixture;
+  fixture.meta.KeyMode = 9;
+  fixture.state.judgeCount[Good] = 0;
+  fixture.state.judgeCount[Poor] = 0;
+  fixture.state.judgeCount[Bad] = 2;
+  fixture.state.judgeCount[Kpoor] = 3;
+  // PMS nonvanishing BAD does not advance pastNotes; later POOR can be
+  // suppressed by single-miss rules, so count totals cannot reconstruct it.
+  fixture.state.stagePassedNotes = 3;
+  const auto score = result_persistence::captureChartScoreWrite(
+      fixture.meta, fixture.state, fixture.provenance, 1);
+  expect(score.badPoints == 7,
+         "captured PMS BP preserves unplayed notes and nonvanishing BAD");
+  expect(score.comboBreak == fixture.state.comboBreak,
+         "BP capture does not repurpose combo-break counts");
+}
+
 void testCapturePreservesExactAndEmptyPoorTiming() {
   CompletionFixture fixture;
   fixture.state.judgeCount[Kpoor] = 2;
@@ -225,6 +243,9 @@ void testChartResultIsReplayIndependentAndFullyFingerprinted() {
                                "completion time");
   expectChartFingerprintChange(
       [](auto &v) { v.score.provenance.clubMode = true; }, "provenance");
+
+  expectChartFingerprintChange([](auto &v) { v.score.badPoints = 0; },
+                               "exact bad points");
 
   auto databaseAssigned = result;
   databaseAssigned.resultId = 99;
@@ -457,6 +478,7 @@ void testCourseResultPrefixAndAggregateContracts() {
 
 int main() {
   testHistoricalTimingRemainsReadable();
+  testCapturePreservesFailedPmsBadPoints();
   testCapturePreservesExactAndEmptyPoorTiming();
   testCompletionCaptureUsesOnlyResultFacts();
   testChartResultIsReplayIndependentAndFullyFingerprinted();

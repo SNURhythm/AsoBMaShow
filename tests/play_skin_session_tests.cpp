@@ -7552,12 +7552,25 @@ void testResultBridgeRecognizesScratchLongNotes() {
          "result LN options count scratch long notes as long notes");
 }
 
+void testResultBridgeCountsUnplayedPmsNotesInBadPoints() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[Bad] = 2;
+  state.judgeCount[Kpoor] = 3;
+  state.stagePassedNotes = 3;
+  bms_parser::ChartMeta meta{.KeyMode = 9, .TotalNotes = 5};
+  ResultSkinStateBridge bridge({.state = &state, .meta = &meta}, 1, 0);
+  const auto bp = bridge.integerProperty({76}, {});
+  expect(bp.supported && bp.value == 7,
+         "result BP includes unplayed PMS notes independently of BAD counts");
+}
+
 void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   RhythmState state(nullptr, false);
   state.judgeCount[PGreat] = 10;
   state.judgeCount[Bad] = 2;
   state.judgeCount[Poor] = 3;
   state.judgeCount[Kpoor] = 4;
+  state.stagePassedNotes = 10;
   state.judgementFastSlowCount[Great].fast = 5;
   state.judgementFastSlowCount[Poor].slow = 6;
   bms_parser::ChartMeta meta{.KeyMode = 0, .TotalNotes = 10};
@@ -8816,6 +8829,7 @@ int main(int argc, char **argv) {
   testResultBridgeUsesPreparedArtworkAvailability();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeRecognizesScratchLongNotes();
+  testResultBridgeCountsUnplayedPmsNotesInBadPoints();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeUsesProjectedKeyModeForScorePoint();
   testResultBridgeMatchesResultAliasesAndTimerUnits();

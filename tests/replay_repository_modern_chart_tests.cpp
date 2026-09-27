@@ -114,6 +114,7 @@ result_persistence::ModernChartResult result(int suffix, char sha = 'a') {
   value.adoptedGaugeType = GaugeType::Normal;
   value.adoptedGaugeHistory = {20.0F, 48.5F, 82.5F};
   value.playedAtUnixMillis = 1'700'000'000'000LL + suffix;
+  value.score.badPoints = 2;
   value.resultFingerprint = result_persistence::modernResultFingerprint(value);
   std::string diagnostic;
   assert(result_persistence::validateModernChartResult(value, diagnostic));

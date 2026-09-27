@@ -974,11 +974,14 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                  ? std::optional<int>(data_.pacemaker->targetScore)
                                  : data_.state != nullptr ? std::optional<int>(0)
                                                           : std::nullopt;
-    const auto badPoints = [this]() -> std::optional<int> {
+    const auto badPoints = [this, notes]() -> std::optional<int> {
       if (data_.presentation && !data_.state) return data_.presentation->badPoints;
       if (!data_.state) return std::nullopt;
-      return count(Bad).value_or(0) + count(Poor).value_or(0) +
-             count(Kpoor).value_or(0);
+      const std::int64_t value = static_cast<std::int64_t>(count(Bad).value_or(0)) +
+          count(Poor).value_or(0) + count(Kpoor).value_or(0) +
+          (notes ? *notes - data_.state->stagePassedNotes : 0);
+      return value >= 0 && value <= std::numeric_limits<int>::max()
+                 ? std::optional<int>(static_cast<int>(value)) : std::nullopt;
     };
     const auto scoreRate = [currentScore, maximum]() -> std::optional<double> {
       return currentScore && maximum && *maximum > 0

@@ -48,7 +48,7 @@ struct ProjectionOutcome {
 
 class ScoreRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 13;
+  static constexpr int kCurrentSchemaVersion = 14;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:

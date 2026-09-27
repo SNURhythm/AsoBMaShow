@@ -135,8 +135,27 @@ inline std::string keyHasValueExpr(std::string_view keyExpr) {
 }
 
 inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
-  return std::string(alias) + ".eligibility <> " +
-         std::to_string(static_cast<int>(ScoreEligibility::Modified));
+  const std::string prefix(alias);
+  const auto matches = [&](GameplayRuleset selection) {
+    const auto rules = RulesetDescriptor::For(selection);
+    const auto field = [&](std::string_view name) {
+      return "json_extract(" + prefix + ".provenance_json, '$.ruleset." +
+             std::string(name) + "')";
+    };
+    return "(" + field("id") + " = '" + rules.id + "' AND " +
+           field("version") + " = " + std::to_string(rules.version) +
+           " AND " + field("scoringModel") + " = '" + rules.scoringModel +
+           "' AND " + field("judgementModel") + " = '" + rules.judgementModel +
+           "' AND " + field("gaugeModel") + " = '" + rules.gaugeModel + "')";
+  };
+  // Historical and imported rows without a known policy retain their existing
+  // treatment. Known policies must match the current implementation; the saved
+  // provenance itself remains immutable for replay and attempt fingerprints.
+  return "(" + prefix + ".eligibility <> " +
+         std::to_string(static_cast<int>(ScoreEligibility::Modified)) +
+         " AND (" + prefix + ".ruleset_version = 0 OR CASE WHEN json_valid(" +
+         prefix + ".provenance_json) THEN (" + matches(GameplayRuleset::LR2) +
+         " OR " + matches(GameplayRuleset::Beatoraja) + ") ELSE 0 END))";
 }
 
 inline std::string rankLookupForMode(const std::string &sha256Expr,

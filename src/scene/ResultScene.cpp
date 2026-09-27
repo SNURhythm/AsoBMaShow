@@ -115,12 +115,17 @@ void applyModernCoursePersistencePresentation(
   };
 }
 
-std::optional<int> rankingBadPoints(const RhythmState &state) {
+std::optional<int> rankingBadPoints(const RhythmState &state, int totalNotes) {
   const auto count = [&](Judgement judgement) {
     const auto it = state.judgeCount.find(judgement);
     return it == state.judgeCount.end() ? 0 : it->second;
   };
-  return ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+  const auto observed = ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+  if (!observed) return std::nullopt;
+  const std::int64_t result = static_cast<std::int64_t>(*observed) +
+                              totalNotes - state.stagePassedNotes;
+  return result >= 0 && result <= std::numeric_limits<int>::max()
+             ? std::optional<int>(static_cast<int>(result)) : std::nullopt;
 }
 
 void projectResultIrRanking(
@@ -475,6 +480,7 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
       aggregate.addJudgeCountFrom(result.state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += result.state.comboBreak;
+    aggregate.stagePassedNotes += result.state.stagePassedNotes;
     aggregate.fastCount += result.state.fastCount;
     aggregate.slowCount += result.state.slowCount;
     aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
@@ -2660,7 +2666,7 @@ void ResultScene::openRankings() {
                           local->meta.TotalNotes)
                           .value_or(0),
           .clearType = local->resultState.getClearTypeRank(),
-          .badPoints = rankingBadPoints(local->resultState),
+          .badPoints = rankingBadPoints(local->resultState, local->meta.TotalNotes),
           .maxCombo = local->resultState.maxCombo,
       };
     }
