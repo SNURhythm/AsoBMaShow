@@ -313,6 +313,78 @@ void testVerifiedReplayOwnershipAndMissingFileFallback() {
           "an absent optional replay preserves saved result state and chart graphs");
 }
 
+void testHistoricalPartialCoursePreservesDisplayedBadPoints() {
+  Fixture fixture;
+  --fixture.result.provenance.ruleset.version;
+  for (auto &stage : fixture.result.stages) {
+    --stage.score.provenance.ruleset.version;
+    stage.score.badPoints.reset();
+  }
+  fixture.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(fixture.result);
+  const auto fingerprint = fixture.result.resultFingerprint;
+  ReplayRepository repository(fixture.directory / "replay.db");
+  require(repository.EnsureSchema(), "historical course schema initializes");
+  require(repository.StageModernCourseResult(fixture.result, std::nullopt).status ==
+              ModernCourseStageStatus::Staged, "historical partial course stages");
+  std::atomic_bool cancelled{false};
+  auto prepared = course_records::prepareCourseResult(
+      repository, fixture.result.attemptId, fixture.selection(), true, cancelled);
+  require(prepared.session != nullptr, "historical course prepares");
+  auto &session = *prepared.session;
+  require(session.resultPassedNotes() == 15,
+          "historical partial course keeps BP zero instead of adding five unplayed notes");
+  require(session.completedResults[0].state.stagePassedNotes == 5 &&
+              session.completedResults[1].state.stagePassedNotes == 5,
+          "historical aggregate BP preservation does not alter individual stage counts");
+  const auto stored = repository.LoadModernCourseResultByAttempt(fixture.result.attemptId);
+  require(stored.record && stored.record->result.resultFingerprint == fingerprint &&
+              !stored.record->result.stages[0].score.badPoints,
+          "historical course recall leaves its fingerprint and absent BP facts intact");
+  session.modernCourseResultBrowsing = false;
+  require(session.resultPassedNotes() == 10,
+          "leaving saved result browsing restores the played-stage count");
+  session.modernCourseResultBrowsing = true;
+  session.resetModernCourseAttempt();
+  require(session.resultPassedNotes() == 10,
+          "restarting a course clears its historical presentation override");
+}
+
+void testExactPartialCourseIncludesFailedStageRemainderInBadPoints() {
+  Fixture fixture;
+  fixture.result.stages[0].score.badPoints = 0;
+  auto &failed = fixture.result.stages[1];
+  failed.score.pGreat = 1;
+  failed.score.great = 0;
+  failed.score.good = 0;
+  failed.score.bad = 1;
+  failed.score.score = 2;
+  failed.score.badPoints = 4;
+  failed.score.maxCombo = 4;
+  failed.score.finalGauge = 0.0F;
+  failed.score.clearType = kClearTypeFailedRank;
+  failed.adoptedGaugeHistory = {80.0F, 0.0F};
+  fixture.result.finalScore = 9;
+  fixture.result.maxCombo = 4;
+  fixture.result.finalGauge = 0.0F;
+  fixture.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(fixture.result);
+  std::string diagnostic;
+  require(result_persistence::validateModernCourseResult(fixture.result, diagnostic),
+          "failed-stage fixture validates: " + diagnostic);
+  ReplayRepository repository(fixture.directory / "replay.db");
+  require(repository.EnsureSchema(), "exact course schema initializes");
+  require(repository.StageModernCourseResult(fixture.result, std::nullopt).status ==
+              ModernCourseStageStatus::Staged, "exact partial course stages");
+  std::atomic_bool cancelled{false};
+  auto prepared = course_records::prepareCourseResult(
+      repository, fixture.result.attemptId, fixture.selection(), true, cancelled);
+  require(prepared.session && prepared.session->resultPassedNotes() == 7,
+          "exact partial course retains seven passed notes for BP nine: one BAD, three remaining, five unplayed");
+  require(prepared.session->completedResults[1].state.stagePassedNotes == 2,
+          "the failed stage retains its two consumed note identities");
+}
+
 void testFailureAndCancellation() {
   Fixture fixture;
   ReplayRepository repository(fixture.directory / "replay.db");
@@ -348,6 +420,8 @@ int main() {
     testCompletedPrefixValidation();
     testPartialCourseRetryAndOwnedState();
     testRecallPreservesSavedFullCourseFacts();
+    testHistoricalPartialCoursePreservesDisplayedBadPoints();
+    testExactPartialCourseIncludesFailedStageRemainderInBadPoints();
     testFailureAndCancellation();
     testVerifiedReplayOwnershipAndMissingFileFallback();
 #else

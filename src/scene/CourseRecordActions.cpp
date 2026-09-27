@@ -136,6 +136,10 @@ PreparedCourseResult prepareCourseResult(
     session->modernCourseAttemptId = view.result.attemptId;
     session->modernCoursePlayedAtUnixMillis = view.result.playedAtUnixMillis;
     session->modernCourseResultBrowsing = true;
+    if (std::any_of(view.result.stages.begin(), view.result.stages.end(),
+                    [](const auto &stage) { return !stage.score.badPoints; })) {
+      session->recalledResultPassedNotes = view.result.maxScore / 2;
+    }
     session->restoreFinalClearTypeForResult(view.result.clearType);
     session->modernCourseRetrySameAllowed =
         retrySameAllowed && currentSelection->completeCourse;

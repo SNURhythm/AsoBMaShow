@@ -328,6 +328,9 @@ struct CoursePlaySession {
   // Reconstructed stage gauges cannot recreate every lamp (notably full combo),
   // so keep the authenticated browsing fact separate from live course state.
   std::optional<int> recalledFinalClearType;
+  // Historical course BP counted observed misses only. Keep its aggregate
+  // display convention separate from the individual stages' passed counts.
+  std::optional<int> recalledResultPassedNotes;
   bool modernCourseRetrySameAllowed = false;
   std::size_t currentIndex = 0;
   GaugeType gaugeType = GaugeType::Normal;
@@ -368,6 +371,17 @@ struct CoursePlaySession {
 
   [[nodiscard]] int finalClearTypeForPresentation(int derivedRank) const {
     return recalledFinalClearType.value_or(derivedRank);
+  }
+
+  [[nodiscard]] int resultPassedNotes() const {
+    if (modernCourseResultBrowsing && recalledResultPassedNotes) {
+      return *recalledResultPassedNotes;
+    }
+    int passed = 0;
+    for (const auto &result : completedResults) {
+      passed += result.state.stagePassedNotes;
+    }
+    return passed;
   }
 
   // SkinProperty exposes STRING_COURSE1_TITLE through
@@ -593,6 +607,7 @@ struct CoursePlaySession {
   }
 
   void resetModernCourseAttempt() {
+    recalledResultPassedNotes.reset();
     modernCourseAttemptId.clear();
     modernCoursePlayedAtUnixMillis = 0;
     modernCourseStageResults.clear();

@@ -474,13 +474,13 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   aggregate.fastCount = 0;
   aggregate.slowCount = 0;
   aggregate.gaugeHistory.clear();
+  aggregate.stagePassedNotes = session.resultPassedNotes();
 
   for (const auto &result : session.completedResults) {
     for (int i = 0; i < JudgementCount; ++i) {
       aggregate.addJudgeCountFrom(result.state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += result.state.comboBreak;
-    aggregate.stagePassedNotes += result.state.stagePassedNotes;
     aggregate.fastCount += result.state.fastCount;
     aggregate.slowCount += result.state.slowCount;
     aggregate.gaugeHistory.insert(aggregate.gaugeHistory.end(),
