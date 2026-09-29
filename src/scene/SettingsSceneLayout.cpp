@@ -521,6 +521,11 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->addView(previewScroll);
 
   if (previewPanelPage == 0) {
+    previewControls->addView(makeWrappedText(
+        "Acceleration compensation", metrics.bodyTextSize,
+        ui_theme::textSecondary()));
+    previewControls->addView(buildAccelerationCompensationControls(metrics));
+
     previewControls->addView(
         makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
     previewControls->addView(buildVisibleTimeControls(metrics, false, true));
@@ -1907,6 +1912,12 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
+
+  cardsColumn->addView(makeCard(
+      metrics, "Acceleration compensation",
+      "Keep note travel steady on screen by compensating for 3D perspective.",
+      buildAccelerationCompensationControls(metrics), metrics.modeCardHeight,
+      metrics.cardsWidth));
 
   if (showLegacyBuiltInGameplayControls) {
   auto *angleControls = new View();

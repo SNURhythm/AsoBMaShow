@@ -2975,6 +2975,7 @@ void GamePlayScene::init() {
       .playAreaWidth =
           context.settings.playAreaWidthForKeyMode(chart->Meta.KeyMode),
       .laneBeamsEnabled = true,
+      .accelerationCompensation = context.settings.accelerationCompensation,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = playfieldLaneCoverEnabled,
       .laneBeamLengthPercent = context.settings.laneBeamLengthPercent,

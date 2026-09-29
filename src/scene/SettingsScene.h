@@ -385,6 +385,8 @@ private:
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
                                  bool includeDescription,
                                  bool compactAdjustments);
+  View *buildAccelerationCompensationControls(
+      const settings_scene::LayoutMetrics &metrics);
   void buildPreviewLayout(const settings_scene::LayoutMetrics &metrics);
   View *buildTimingTab(const settings_scene::LayoutMetrics &metrics);
   View *buildProfileTab(const settings_scene::LayoutMetrics &metrics);

@@ -1433,10 +1433,11 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              static_cast<std::uint32_t>(builtInPlan.entries.size()),
          .bodyDepth = longOrder.bodyDepth,
          .endpointDepth = longOrder.endpointDepth});
+    const bool headAtLowerBound =
+        !headTraversed || (headState != nullptr && headState->dead) ||
+        !isWithinLatePoorWindow(headTimeline->timeMicros, timeMicros, request);
     const float headY = request.builtInTraversal.has_value()
-                            ? (!headTraversed || !isWithinLatePoorWindow(
-                                                     headTimeline->timeMicros,
-                                                     timeMicros, request)
+                            ? (headAtLowerBound
                                    ? request.builtInTraversal->lowerBound
                                    : builtInTimelineY.at(headTimeline->id))
                             : std::numeric_limits<float>::quiet_NaN();
@@ -1449,6 +1450,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         {.kind = BuiltInRendererPlanEntryKind::LongNote,
          .descriptorIndex =
              static_cast<std::uint32_t>(builtInPlan.longNotes.size() - 1U),
+         .headAtLowerBound = headAtLowerBound,
          .tailAtUpperBound = !tailTraversed,
          .renderY = headY,
          .tailRenderY = tailY});
