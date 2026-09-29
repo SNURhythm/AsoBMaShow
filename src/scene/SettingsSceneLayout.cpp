@@ -520,12 +520,12 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewScroll->setContentView(previewControls);
   previewPanel->addView(previewScroll);
 
-  previewControls->addView(makeWrappedText(
-      "Acceleration compensation", metrics.bodyTextSize,
-      ui_theme::textSecondary()));
-  previewControls->addView(buildAccelerationCompensationControls(metrics));
-
   if (previewPanelPage == 0) {
+    previewControls->addView(makeWrappedText(
+        "Acceleration compensation", metrics.bodyTextSize,
+        ui_theme::textSecondary()));
+    previewControls->addView(buildAccelerationCompensationControls(metrics));
+
     previewControls->addView(
         makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
     previewControls->addView(buildVisibleTimeControls(metrics, false, true));
@@ -1810,27 +1810,6 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics, "BGA Blur", "Soften background motion.",
       blurControls, metrics.offsetCardHeight, metrics.cardsWidth));
   return cardsColumn;
-}
-
-View *SettingsScene::buildAccelerationCompensationControls(
-    const LayoutMetrics &metrics) {
-  auto *compensationControls = new View();
-  compensationControls->setFlexDirection(FlexDirection::Row);
-  compensationControls->setAlignItems(YGAlignFlexStart);
-  auto *compensationButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(context.settings.accelerationCompensation ? "On" : "Off",
-               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
-  compensationButton->setOnClickListener([this]() {
-    context.settings.accelerationCompensation =
-        !context.settings.accelerationCompensation;
-    persistSettings();
-    lastLayoutWidth = -1;
-  });
-  compensationControls->addView(compensationButton);
-  return compensationControls;
 }
 
 View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {

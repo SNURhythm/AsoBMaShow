@@ -16,7 +16,8 @@ Notes retain the lane's perspective sizing. Long notes, measure lines, replay
 markers, and lane cover use the same mapping; chart timing, BPM changes, and
 judgement are unaffected. The setting applies to preview, gameplay, and replay
 video export. Find it under **Lane**, **Skins → Built-in gameplay**, or in the
-preview panels. An explicit saved Off preference stays off. Missed long-note
+preview panel’s **Scroll** tab. On/Off uses the same semantic colors as other
+gameplay toggles. An explicit saved Off preference stays off. Missed long-note
 bodies retain their offscreen clipping boundary instead of ending near the
 judgement line.
 
