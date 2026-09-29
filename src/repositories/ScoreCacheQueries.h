@@ -135,8 +135,27 @@ inline std::string keyHasValueExpr(std::string_view keyExpr) {
 }
 
 inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
-  return std::string(alias) + ".eligibility <> " +
-         std::to_string(static_cast<int>(ScoreEligibility::Modified));
+  const std::string prefix(alias);
+  const auto matches = [&](GameplayRuleset selection) {
+    const auto rules = RulesetDescriptor::For(selection);
+    const auto field = [&](std::string_view name) {
+      return "json_extract(" + prefix + ".provenance_json, '$.ruleset." +
+             std::string(name) + "')";
+    };
+    return "(" + field("id") + " = '" + rules.id + "' AND " +
+           field("version") + " = " + std::to_string(rules.version) +
+           " AND " + field("scoringModel") + " = '" + rules.scoringModel +
+           "' AND " + field("judgementModel") + " = '" + rules.judgementModel +
+           "' AND " + field("gaugeModel") + " = '" + rules.gaugeModel + "')";
+  };
+  // Historical and imported rows without a known policy retain their existing
+  // treatment. Known policies must match the current implementation; the saved
+  // provenance itself remains immutable for replay and attempt fingerprints.
+  return "(" + prefix + ".eligibility <> " +
+         std::to_string(static_cast<int>(ScoreEligibility::Modified)) +
+         " AND (" + prefix + ".ruleset_version = 0 OR CASE WHEN json_valid(" +
+         prefix + ".provenance_json) THEN (" + matches(GameplayRuleset::LR2) +
+         " OR " + matches(GameplayRuleset::Beatoraja) + ") ELSE 0 END))";
 }
 
 inline std::string rankLookupForMode(const std::string &sha256Expr,
@@ -428,6 +447,24 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return error;
   }
 
+  // Empty summaries are valid for historical-only profiles. Index the same
+  // policy used by summary construction so probing for repairable rows does
+  // not repeatedly scan all historical provenance on menu refresh.
+  if (detail::scoreTableHasProvenance(db, schema)) {
+    const auto lr2 = RulesetDescriptor::For(GameplayRuleset::LR2);
+    const auto beatoraja = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    const std::string index = detail::qualifiedName(
+        schema, "idx_scores_best_eligible_" + std::to_string(lr2.version) +
+                    "_" + std::to_string(beatoraja.version));
+    const std::string createEligibleIndex =
+        "CREATE INDEX IF NOT EXISTS " + index +
+        " ON scores(chart_sha256) WHERE " +
+        detail::scoreParticipatesInBestExpr("scores");
+    if (const auto error = executeSqlite(db, createEligibleIndex.c_str())) {
+      return error;
+    }
+  }
+
   const std::string dropTrigger = "DROP TRIGGER IF EXISTS " + trigger;
   if (const auto error = executeSqlite(db, dropTrigger.c_str())) {
     return error;
@@ -518,19 +555,6 @@ queryHasRows(sqlite3 *db, const std::string &query, bool &hasRows) {
 inline std::optional<std::string>
 repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema = {}) {
   profile_database_activity::WriteGuard operation;
-  const std::string scores = detail::qualifiedName(schema, "scores");
-  const std::string hasScoreIdentityQuery =
-      "SELECT 1 FROM " + scores + " WHERE " +
-      detail::keyHasValueExpr("chart_sha256") + " LIMIT 1";
-  bool hasScoreIdentity = false;
-  if (const auto error =
-          queryHasRows(db, hasScoreIdentityQuery, hasScoreIdentity)) {
-    return error;
-  }
-  if (!hasScoreIdentity) {
-    return std::nullopt;
-  }
-
   bool hasClearSummary = false;
   if (const auto error = queryHasRows(
           db, "SELECT 1 FROM " + detail::clearRankSummaryTable(schema) +
@@ -548,7 +572,19 @@ repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema = {}) {
   if (hasClearSummary && hasBestSummary) {
     return std::nullopt;
   }
-  return rebuildScoreSummaryTables(db, schema);
+  const bool hasProvenance = detail::scoreTableHasProvenance(db, schema);
+  const std::string hasEligibleIdentityQuery =
+      "SELECT 1 FROM " + detail::qualifiedName(schema, "scores") +
+      " s WHERE " + detail::keyHasValueExpr("s.chart_sha256") +
+      (hasProvenance ? " AND " + detail::scoreParticipatesInBestExpr("s") : "") +
+      " LIMIT 1";
+  bool hasEligibleIdentity = false;
+  if (const auto error = queryHasRows(db, hasEligibleIdentityQuery,
+                                     hasEligibleIdentity)) {
+    return error;
+  }
+  return hasEligibleIdentity ? rebuildScoreSummaryTables(db, schema)
+                             : std::nullopt;
 }
 
 inline std::string scoreRankLookupExpr(const std::string &sha256Expr,

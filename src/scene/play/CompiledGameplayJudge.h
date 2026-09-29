@@ -29,6 +29,7 @@ public:
   [[nodiscard]] std::int64_t
   latestHittableNoteTiming(std::int64_t inputTimeMicros) const noexcept;
   [[nodiscard]] std::int64_t automaticPoorLateMicros() const noexcept;
+  [[nodiscard]] std::int64_t automaticPoorLateMicros(NoteJudgeRole role) const noexcept;
   [[nodiscard]] std::int64_t latePoorTimingMicros() const noexcept;
   [[nodiscard]] const GameplayJudgeRules &rules() const noexcept;
 

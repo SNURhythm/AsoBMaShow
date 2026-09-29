@@ -10,6 +10,7 @@
 namespace gameplay {
 
 struct RealtimeGameplayAuthorityPolicyInput {
+  // Native adapters and the legacy input bridge both feed the same worker.
   bool nativeManualInputAvailable = false;
   bool autoPlay = false;
   bool inputHandlerAvailable = false;
@@ -39,6 +40,11 @@ enum class RealtimeGameplayTerminalAction {
 [[nodiscard]] RealtimeGameplayAuthorityPolicy
 makeRealtimeGameplayAuthorityPolicy(
     const RealtimeGameplayAuthorityPolicyInput &input) noexcept;
+
+[[nodiscard]] constexpr bool fallbackJudgementInvalidatesRanking(
+    Judgement judgement, bool realtimeAuthority, bool replayPlayback) noexcept {
+  return judgement != None && !realtimeAuthority && !replayPlayback;
+}
 
 [[nodiscard]] constexpr bool shouldAttemptRealtimeGameplayReset(
     bool laneControllerAvailable, bool inputHandlerAvailable,

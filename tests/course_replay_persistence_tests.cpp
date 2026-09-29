@@ -750,7 +750,10 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
          "result-first integration repositories initialize");
 
   CourseResultPersistence persistence(scoreRepository, replayRepository);
-  const auto partial = attempt();
+  auto partial = attempt();
+  for (auto &stage : partial.result.stages) stage.score.badPoints = 0;
+  partial.result.clearType = kClearTypeFailedRank;
+  partial.result.resultFingerprint = result_persistence::modernResultFingerprint(partial.result);
   const auto saved = persistence.persist(partial);
   expect(saved.state == CourseResultPersistenceState::SavedWithReplay &&
              saved.saved() && saved.receipt,
@@ -764,6 +767,8 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
                       partial.result.attemptId +
                       "' AND modern_result_id > 0") == 1,
          "course score row retains exact attempt/result ownership");
+  expect(queryInt(scorePath, "SELECT bad_points FROM course_scores") == 5,
+         "partial course BP includes every unattempted future-stage note");
   for (const std::string_view table :
        {"replays", "replay_events", "replay_touch_samples",
         "replay_lane_cover_events", "course_replays",
@@ -800,6 +805,9 @@ void testRealResultFirstPersistenceIsIdempotentAndReplayIndependent() {
              queryInt(completeProfile.path / "replay.db",
                       "SELECT COUNT(*) FROM modern_replay_files") == 1,
          "complete course saves its modern result, score, and one BRD");
+  expect(queryInt(completeProfile.path / "score.db",
+                  "SELECT bad_points IS NULL FROM course_scores") == 1,
+         "historical course stages without exact BP preserve a NULL projection");
 
   TemporaryDirectory summaryProfile;
   ReplayRepository summaryReplay(summaryProfile.path / "replay.db");

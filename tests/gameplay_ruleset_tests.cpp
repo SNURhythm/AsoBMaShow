@@ -38,7 +38,7 @@ void testStableDescriptors() {
   const RulesetDescriptor lr2 = RulesetDescriptor::For(GameplayRuleset::LR2);
   assert((lr2 == RulesetDescriptor{
                     .id = "lr2",
-                    .version = 3,
+                    .version = 4,
                     .scoringModel = "asobmashow-v1",
                     .judgementModel = "lr2-v1",
                     .gaugeModel = "lr2-gauge-v1",
@@ -50,7 +50,7 @@ void testStableDescriptors() {
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   assert((beatoraja == RulesetDescriptor{
                            .id = "beatoraja",
-                           .version = 2,
+                           .version = 3,
                            .scoringModel = "asobmashow-v1",
                            .judgementModel = "bms-rank-v1",
                            .gaugeModel = "beatoraja-profile-gauge-v2",
@@ -73,17 +73,17 @@ void testBeatorajaJudgeCharacterization() {
       {{PGreat, {-5000, 5000}},
        {Great, {-15000, 15000}},
        {Good, {-37500, 37500}},
-       {Bad, {-385000, 490000}},
+       {Bad, {-55000, 70000}},
        {Kpoor, {-500000, 150000}}},
       {{PGreat, {-10000, 10000}},
        {Great, {-30000, 30000}},
        {Good, {-75000, 75000}},
-       {Bad, {-330000, 420000}},
+       {Bad, {-110000, 140000}},
        {Kpoor, {-500000, 150000}}},
       {{PGreat, {-15000, 15000}},
        {Great, {-45000, 45000}},
        {Good, {-112500, 112500}},
-       {Bad, {-275000, 350000}},
+       {Bad, {-165000, 210000}},
        {Kpoor, {-500000, 150000}}},
       {{PGreat, {-20000, 20000}},
        {Great, {-60000, 60000}},

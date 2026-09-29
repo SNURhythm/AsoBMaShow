@@ -1872,6 +1872,117 @@ void testVersion13RetriesDurationBackfillAfterChartAttachFailure(
          12);
 }
 
+int *activeSummaryRebuildCount = nullptr;
+
+int traceSummaryRebuild(unsigned mask, void *context, void *rawStatement, void *) {
+  if (mask == SQLITE_TRACE_STMT && rawStatement != nullptr) {
+    const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(rawStatement));
+    if (sql != nullptr && std::string_view(sql) ==
+                              "DELETE FROM score_sha256_best_score_cache") {
+      ++*static_cast<int *>(context);
+    }
+  }
+  return 0;
+}
+
+int installSummaryRebuildTrace(sqlite3 *db, char **, const sqlite3_api_routines *) {
+  return sqlite3_trace_v2(db, SQLITE_TRACE_STMT, traceSummaryRebuild,
+                         activeSummaryRebuildCount);
+}
+
+void testDeferredDurationMigrationRebuildsSummariesOnlyOnce(
+    const std::filesystem::path &root) {
+  for (const bool historicalOnly : {false, true}) {
+    const auto label = historicalOnly ? "deferred-historic" : "deferred-current";
+    const auto scorePath = root / label / "score.db";
+    const auto chartPath = root / label / "chart.db";
+    const auto meta = sampleMeta(root, label);
+    {
+      ScoreRepository bootstrap(scorePath);
+      assert(bootstrap.SaveScore(meta, sampleState(20, 5), sampleProvenance(label)));
+      auto scores = openDatabase(scorePath);
+      execOrAbort(scores.get(), "UPDATE scores SET play_duration_seconds=0");
+      if (historicalOnly) {
+        execOrAbort(scores.get(), "UPDATE scores SET ruleset_version=3, "
+            "provenance_json=json_set(provenance_json,'$.ruleset.version',3)");
+      }
+      execOrAbort(scores.get(), "ALTER TABLE course_scores DROP COLUMN bad_points");
+      execOrAbort(scores.get(), "PRAGMA user_version=12");
+    }
+    {
+      auto charts = openDatabase(chartPath);
+      execOrAbort(charts.get(),
+          "CREATE TABLE chart_meta(path TEXT,md5 TEXT,sha256 TEXT,length INTEGER,"
+          "source_priority INTEGER,source_archive_size INTEGER)");
+      execOrAbort(charts.get(), "CREATE TABLE chart_meta_rebuild_state(required INTEGER)");
+      execOrAbort(charts.get(), "INSERT INTO chart_meta_rebuild_state VALUES(1)");
+    }
+    // A failed outer commit must roll back the BP column, rebuilt cache and
+    // completion marker together, allowing the next open to retry all work.
+    {
+      auto scores = openDatabase(scorePath);
+      const auto originalSchema = schemaSnapshot(scores.get());
+      const auto originalBest = queryInt(scores.get(),
+          "SELECT COUNT(*) FROM score_sha256_best_score_cache");
+      sqlite3_commit_hook(scores.get(), [](void *) { return 1; }, nullptr);
+      assert(!score_repository_detail::EnsureSchemaOnConnection(scores.get(), chartPath));
+      sqlite3_commit_hook(scores.get(), nullptr, nullptr);
+      assert(schemaSnapshot(scores.get()) == originalSchema);
+      assert(queryInt(scores.get(), "PRAGMA user_version") == 12);
+      assert(!columnExists(scores.get(), "course_scores", "bad_points"));
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM score_sha256_best_score_cache") ==
+             originalBest);
+    }
+    int rebuilds = 0;
+    activeSummaryRebuildCount = &rebuilds;
+    sqlite3_reset_auto_extension();
+    assert(sqlite3_auto_extension(reinterpret_cast<void (*)()>(installSummaryRebuildTrace)) == SQLITE_OK);
+    ScoreRepository repository(scorePath);
+    repository.SetChartDatabasePath(chartPath);
+    assert(repository.EnsureSchema());
+    assert(rebuilds == 1);
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      assert(repository.EnsureSchema());
+      assert(repository.LoadBestScore(meta).has_value() != historicalOnly);
+      (void)repository.LoadBestClearRanks();
+      assert(rebuilds == 1);
+    }
+    repository.Shutdown();
+    assert(repository.EnsureSchema());
+    assert(rebuilds == 1);
+    {
+      auto scores = openDatabase(scorePath);
+      assert(queryInt(scores.get(), "PRAGMA user_version") == 12);
+      assert(columnExists(scores.get(), "course_scores", "bad_points"));
+      assert(queryInt(scores.get(), "SELECT completed FROM score_v14_migration_state") == 1);
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM scores") == 1);
+      assert(queryInt(scores.get(), "SELECT COUNT(*) FROM score_sha256_best_score_cache") ==
+             (historicalOnly ? 0 : 1));
+    }
+    {
+      auto charts = openDatabase(chartPath);
+      execOrAbort(charts.get(), "INSERT INTO chart_meta VALUES('chart.bms','" +
+          meta.MD5 + "','" + meta.SHA256 + "',12999999,0,0)");
+      execOrAbort(charts.get(), "UPDATE chart_meta_rebuild_state SET required=0");
+    }
+    assert(repository.EnsureSchema());
+    assert(rebuilds == 1);
+    auto scores = openDatabase(scorePath);
+    assert(queryInt(scores.get(), "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
+    assert(queryInt(scores.get(), "SELECT play_duration_seconds FROM scores") == 12);
+    sqlite3_reset_auto_extension();
+    activeSummaryRebuildCount = nullptr;
+    repository.Shutdown();
+    execOrAbort(scores.get(), "CREATE TABLE sentinel(value TEXT NOT NULL)");
+    execOrAbort(scores.get(), "INSERT INTO sentinel VALUES('completion-schema')");
+    execOrAbort(scores.get(), "DROP TABLE score_v14_migration_state");
+    execOrAbort(scores.get(), "CREATE TABLE score_v14_migration_state(completed TEXT)");
+    execOrAbort(scores.get(), "INSERT INTO score_v14_migration_state VALUES('1')");
+    scores.reset();
+    expectScoreSchemaRejectedWithoutMutation(scorePath);
+  }
+}
+
 void testProjectedRetryUpdatesSummaryCachesOnce(
     const std::filesystem::path &root) {
   const auto path = root / "projected-score-summary-once" / "score.db";
@@ -1921,17 +2032,23 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
   pending.score.poor = 8;
   pending.score.kPoor = 40;
   pending.score.comboBreak = 22;
+  pending.score.good = 48;
+  pending.score.badPoints = 67; // Includes five unplayed notes at failure.
   pending.score.fast = 23;
   pending.score.slow = 29;
   pending.score.longNoteMode = 2;
   pending.averageJudgeMicros = 20'000;
   assert(helper.SaveProjectedScore(pending).status ==
          result_persistence::ProjectionStatus::Inserted);
+  assert(helper.SaveProjectedScore(pending).status ==
+         result_persistence::ProjectionStatus::AlreadyPresent);
 
   auto metricBest = samplePendingScore(root, "best-score-ir-bp", 15,
                                        "2026-07-18 12:35:56", 10, 5);
   metricBest.score.bad = 2;
   metricBest.score.poor = 1;
+  metricBest.score.good = 22;
+  metricBest.score.badPoints = 63; // Three misses plus sixty unplayed notes.
   metricBest.score.longNoteMode = 2;
   metricBest.averageJudgeMicros = 10'000;
   assert(helper.SaveProjectedScore(metricBest).status ==
@@ -1941,14 +2058,14 @@ void testBestScoreLoadsKpoorInclusiveBadPoints(
                                          std::nullopt, std::nullopt, 2);
   assert(best.has_value());
   assert(best->comboBreak == 22);
-  assert(best->badPoints == 62);
+  assert(best->badPoints == 67);
   assert(best->fast == 23 && best->slow == 29);
 
   const auto selectorBest = helper.LoadBestScores().bestForHash(
       pending.score.chartSha256, pending.score.longNoteMode);
   assert(selectorBest.has_value());
   assert(selectorBest->score == pending.score.score);
-  assert(selectorBest->badPoints == 3);
+  assert(selectorBest->badPoints == 63);
   assert(selectorBest->averageJudgeMicros == 10'000);
   assert(selectorBest->fast == 23 && selectorBest->slow == 29);
 }
@@ -2603,6 +2720,14 @@ void testCourseRecallUsesHistoricalScoreAndLamp(const std::filesystem::path &roo
   course.courseReplayData->courseId = 1;
   course.courseReplayData->longNoteMode = 1;
   course.courseReplayData->stages.front().replay.resultAttemptId = "current";
+  auto &playedMeta = course.courseReplayData->stages.front().replay.chartMeta;
+  playedMeta.TotalNotes = 99;
+  playedMeta.PlayLength = 111;
+  playedMeta.SHA256 = std::string(kShaA);
+  playedMeta.Rank = 3;
+  course.courseReplayData->completedCharts = 1;
+  course.courseReplayData->totalCharts = 3;
+  course.courseReplayData->entryFacts = {{100, 123}, {200, 456}, {300, 789}};
   const auto exported = result_presentation::previousBestsForReplayCourse(
       scores, *course.courseReplayData);
   assert(exported.score && exported.score->score == 200);
@@ -2610,6 +2735,15 @@ void testCourseRecallUsesHistoricalScoreAndLamp(const std::filesystem::path &roo
   scene.startCourseReplay();
   assert(scene.restartedSession && scene.restartedSession->modernCourseAttemptId == "current");
   assert(scene.restartedSession->modernCoursePlayedAtUnixMillis == 1'700'000'000'123LL);
+  assert(scene.restartedSession->entries.size() == 3);
+  assert(scene.restartedSession->entries[0].meta.TotalNotes == 100 &&
+         scene.restartedSession->entries[0].meta.PlayLength == 123 &&
+         scene.restartedSession->entries[0].meta.SHA256 == kShaA &&
+         scene.restartedSession->entries[0].meta.Rank == 3);
+  assert(scene.restartedSession->entries[1].meta.TotalNotes == 200 &&
+         scene.restartedSession->entries[1].meta.PlayLength == 456 &&
+         scene.restartedSession->entries[2].meta.TotalNotes == 300 &&
+         scene.restartedSession->entries[2].meta.PlayLength == 789);
   result_history_fixture::resetCourseForReplayRestart(scene.restartedSession.get());
   assert(scene.restartedSession->modernCourseAttemptId == "current" &&
          scene.restartedSession->modernCoursePlayedAtUnixMillis == 1'700'000'000'123LL);
@@ -3129,6 +3263,125 @@ void testModifiedPlaybackDoesNotUpdateBestScores(
                                  meta.LnMode) == kNoClearTypeRank);
   assert(!helper.LoadBestScore(meta).has_value());
   assert(!helper.LoadBestCourseScore(session).has_value());
+}
+
+void testVersion14CourseBadPointsMigration(const std::filesystem::path &root) {
+  const auto path = root / "course-bp-migration" / "score.db";
+  createVersion4ScoreFixture(path);
+  {
+    ScoreRepository repository(path);
+    assert(repository.EnsureSchema());
+  }
+  auto db = openDatabase(path);
+  assert(columnExists(db.get(), "course_scores", "bad_points"));
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
+                           "WHERE bad_points IS NULL") == 1);
+  const auto outcome = courseOutcome(db.get());
+  const auto provenance = queryText(db.get(),
+      "SELECT provenance_json FROM course_scores WHERE id=1");
+  execOrAbort(db.get(), "ALTER TABLE course_scores DROP COLUMN bad_points");
+  execOrAbort(db.get(), "PRAGMA user_version=13");
+  const auto denyAlter = [](void *, int action, const char *, const char *table,
+                            const char *, const char *) {
+    return action == SQLITE_ALTER_TABLE && table &&
+                   std::string_view(table) == "course_scores"
+               ? SQLITE_DENY : SQLITE_OK;
+  };
+  assert(sqlite3_set_authorizer(db.get(), denyAlter, nullptr) == SQLITE_OK);
+  assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(sqlite3_set_authorizer(db.get(), nullptr, nullptr) == SQLITE_OK);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 13);
+  assert(!columnExists(db.get(), "course_scores", "bad_points"));
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
+                           "WHERE bad_points IS NULL") == 1);
+  assert(courseOutcome(db.get()) == outcome);
+  assert(queryText(db.get(), "SELECT provenance_json FROM course_scores "
+                            "WHERE id=1") == provenance);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
+                           "WHERE result_fingerprint IS NULL") == 1);
+  assert(score_repository_detail::CurrentSchemaIsValid(db.get()));
+  const auto schema = schemaSnapshot(db.get());
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(schemaSnapshot(db.get()) == schema);
+}
+
+void testCurrentCourseBadPointsSchemaFailsClosed(const std::filesystem::path &root) {
+  const std::array definitions{"", "TEXT", "INTEGER DEFAULT 0",
+                               "INTEGER NOT NULL DEFAULT 0"};
+  for (std::size_t index = 0; index < definitions.size(); ++index) {
+    const auto path = root / ("course-bp-shape-" + std::to_string(index)) / "score.db";
+    {
+      ScoreRepository repository(path);
+      assert(repository.EnsureSchema());
+    }
+    auto db = openDatabase(path);
+    execOrAbort(db.get(), "ALTER TABLE course_scores DROP COLUMN bad_points");
+    if (std::string_view(definitions[index]).size() != 0) {
+      execOrAbort(db.get(), "ALTER TABLE course_scores ADD COLUMN bad_points " +
+                               std::string(definitions[index]));
+    }
+    const auto schema = schemaSnapshot(db.get());
+    assert(!score_repository_detail::CurrentSchemaIsValid(db.get()));
+    assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+    assert(schemaSnapshot(db.get()) == schema);
+  }
+}
+
+void testPreviousRulesetScoresRemainHistoryButNotBest(
+    const std::filesystem::path &root) {
+  const auto path = root / "previous-ruleset-best" / "score.db";
+  ScoreRepository initial(path);
+  assert(initial.EnsureSchema());
+  const auto meta = sampleMeta(root, "previous-ruleset-best");
+  const auto state = sampleState(20, 5);
+  const auto provenance = sampleProvenance("previous-ruleset-best");
+  assert(initial.SaveScore(meta, state, provenance));
+  CoursePlaySession session;
+  session.courseId = 93;
+  session.courseName = "Previous ruleset course";
+  session.constraintJson = "{}";
+  session.longNoteMode = meta.LnMode;
+  session.entries.push_back({.meta = meta});
+  session.courseKey = course_identity::makeCourseKey(session);
+  assert(initial.SaveCourseScore(session, state, 1, 1, provenance));
+  assert(initial.LoadBestScore(meta).has_value());
+  initial.Shutdown();
+
+  std::string savedProvenance;
+  {
+    auto db = openDatabase(path);
+    // Model a persisted, populated v13 database from the old LR2 revision.
+    for (const std::string table : {"scores", "course_scores"}) {
+      execOrAbort(db.get(), "UPDATE " + table +
+          " SET ruleset_version=3, provenance_json=json_set(provenance_json, "
+          "'$.ruleset.version', 3)");
+    }
+    savedProvenance = serializeScoreProvenance(
+        readStoredProvenance(db.get(), "scores", 1));
+    assert(queryInt(db.get(), "SELECT COUNT(*) FROM "
+                             "score_sha256_best_score_cache") == 1);
+    execOrAbort(db.get(), "PRAGMA user_version=13");
+  }
+
+  ScoreRepository migrated(path);
+  assert(migrated.EnsureSchema());
+  assert(!migrated.LoadBestScore(meta).has_value());
+  assert(!migrated.LoadBestCourseScore(session).has_value());
+  const auto ranks = migrated.LoadBestClearRanks();
+  assert(ranks.bestRankFor(meta) == kNoClearTypeRank);
+  assert(ranks.bestCourseRankFor(session.courseKey, session.courseId,
+                                meta.LnMode) == kNoClearTypeRank);
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM "
+                           "score_sha256_best_score_cache") == 0);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM "
+                           "score_sha256_clear_rank_cache") == 0);
+  assert(serializeScoreProvenance(readStoredProvenance(db.get(), "scores", 1)) ==
+         savedProvenance);
 }
 
 void testVersion8MigrationReclassifiesBeatorajaValidScores(
@@ -3780,6 +4033,7 @@ int main() {
   testVersion13RetriesDurationBackfillAfterChartMetadataRebuild(root);
   testVersion13RetriesDurationBackfillAfterEmptyChartLibrary(root);
   testVersion13RetriesDurationBackfillAfterChartAttachFailure(root);
+  testDeferredDurationMigrationRebuildsSummariesOnlyOnce(root);
   testProjectedRetryUpdatesSummaryCachesOnce(root);
   testBestScoreLoadsKpoorInclusiveBadPoints(root);
   testBestScoreCanFilterExactRuleset(root);
@@ -3805,6 +4059,9 @@ int main() {
   testFutureVersionIsRejected(root);
   testChartAndCourseRoundTripAndPathIsolation(root);
   testCourseSelectorOptionScoresMatchBeatorajaBuckets(root);
+  testVersion14CourseBadPointsMigration(root);
+  testCurrentCourseBadPointsSchemaFailsClosed(root);
+  testPreviousRulesetScoresRemainHistoryButNotBest(root);
   testModifiedPlaybackDoesNotUpdateBestScores(root);
   testVersion8MigrationReclassifiesBeatorajaValidScores(root);
   testFutureVersionRejectsWithoutSchemaMutation(root);

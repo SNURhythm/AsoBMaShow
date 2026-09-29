@@ -22,12 +22,12 @@ void testJudgeScaleRunsAfterCourseConstraint() {
           std::pair<long long, long long>(-18000, 18000)));
 }
 
-void testJudgeScaleRoundsSignedWindowEdges() {
+void testJudgeScaleLeavesBadWindowFixed() {
   Judge judge(0);
   judge.applyWindowScale(75, 45);
 
   assert((judge.timingWindows.at(Bad) ==
-          std::pair<long long, long long>(-129938, 165375)));
+          std::pair<long long, long long>(-55000, 70000)));
 }
 
 void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
@@ -112,7 +112,7 @@ void testZeroStartingGaugeResolvesAutoShiftImmediately() {
   RhythmState bestClear(&chart, false);
   bestClear.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::BestClear);
   bestClear.setStartingGaugePercent(0);
-  assert(bestClear.gaugeType == GaugeType::Normal);
+  assert(bestClear.gaugeType == GaugeType::AssistedEasy);
   assert(!bestClear.activeGaugeFailed());
 
   RhythmState survivalOnly(&chart, false);
@@ -121,7 +121,7 @@ void testZeroStartingGaugeResolvesAutoShiftImmediately() {
                               GaugeProfile::Standard, GaugeType::Hard);
   survivalOnly.setStartingGaugePercent(0);
   assert(survivalOnly.gaugeType == GaugeType::Hard);
-  assert(survivalOnly.activeGaugeFailed());
+  assert(!survivalOnly.activeGaugeFailed());
 }
 
 void testPracticeConfigurationCopiesGaugeAutoShiftToGameplayOptions() {
@@ -205,7 +205,7 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
 
 int main() {
   testJudgeScaleRunsAfterCourseConstraint();
-  testJudgeScaleRoundsSignedWindowEdges();
+  testJudgeScaleLeavesBadWindowFixed();
   testStartingGaugeUpdatesSelectedGaugeAndClamps();
   testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot();
   testSurvivalToGrooveStartsBothGaugeCandidates();

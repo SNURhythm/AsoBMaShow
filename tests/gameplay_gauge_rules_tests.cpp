@@ -355,6 +355,62 @@ void testBeatorajaCompiledRulesMatchLegacyHelpers() {
   }
 }
 
+void testUpstreamDamageModifiersAndLr2Practice() {
+  // Upstream Beatoraja intentionally differs from lr2oraja's piecewise
+  // damage modifier (including its OR loop termination condition).
+  for (const auto sample : {std::array<double, 3>{1000, 230, -11.1},
+                            std::array<double, 3>{21, 240, -10.0},
+                            std::array<double, 3>{10, 240, -33.119998}}) {
+    const auto rules = compileGameplayGaugeRules(
+        GameplayRuleset::Beatoraja, meta(static_cast<int>(sample[0]), sample[1], true, 5),
+        GaugeProfile::Standard);
+    require(close(rules.delta(GaugeType::ExHard, Bad, 100.0F), sample[2]),
+            "five-key EXHARD uses upstream Beatoraja MODIFY_DAMAGE");
+  }
+  const auto practice = compileGameplayGaugeRules(
+      GameplayRuleset::Beatoraja, meta(1000, 160.0), GaugeProfile::StandardLr2);
+  require(close(practice.delta(GaugeType::Hard, PGreat, 50.0F), 0.1F),
+          "LR2 practice recovery is not restricted by LIMIT_INCREMENT");
+  require(close(practice.delta(GaugeType::Hard, Bad, 29.0F), -7.2F) &&
+              close(practice.delta(GaugeType::Hard, Bad, 30.0F), -12.0F),
+          "Beatoraja LR2 category retains its thirty-percent guts");
+  for (const auto profile : {GaugeProfile::StandardLr2, GaugeProfile::CourseLR2}) {
+    const auto rules = compileGameplayGaugeRules(
+        GameplayRuleset::Beatoraja, meta(1000, 240.0), profile);
+    GameplayScoreState state({.gaugeRules = rules, .keyMode = 7});
+    state.configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None, profile);
+    state.setStartingGaugePercent(2);
+    state.applyGaugeDelta(-0.001F);
+    require(state.currentGauge > 0.0F && !state.activeGaugeFailed(),
+            "Beatoraja LR2 category has no fork-specific two-percent death");
+  }
+}
+
+void testLr2DamageUsesJavaFloatArithmetic() {
+  for (const auto sample : {std::pair{34, -40.40000152587890625F},
+                            std::pair{138, -23.37599945068359375F},
+                            std::pair{253, -17.9279994964599609375F},
+                            std::pair{503, -11.96399974822998046875F}}) {
+    const auto rules = compileGameplayGaugeRules(
+        GameplayRuleset::LR2, meta(sample.first, 240.0), GaugeProfile::Standard);
+    require(rules.delta(GaugeType::Hard, Bad, 100.0F) == sample.second,
+            "LR2 note damage preserves each Java float rounding step");
+  }
+}
+
+void testTotalRecoveryRoundsAfterDoubleArithmetic() {
+  const auto rules = compileGameplayGaugeRules(
+      GameplayRuleset::Beatoraja, meta(3, 200.1), GaugeProfile::Standard);
+  require(rules.delta(GaugeType::Normal, PGreat, 20.0F) ==
+              static_cast<float>(200.1 / 3.0),
+          "TOTAL modifier rounds once after double multiplication and division");
+  const auto lr2 = compileGameplayGaugeRules(
+      GameplayRuleset::LR2, meta(9, 200.0), GaugeProfile::Standard);
+  require(lr2.delta(GaugeType::Easy, PGreat, 20.0F) ==
+              static_cast<float>(static_cast<double>(1.2F) * 200.0 / 9.0),
+          "LR2 TOTAL modifier preserves double arithmetic until final rounding");
+}
+
 void testPracticeLr2CategoryUsesPinnedGradeGaugeTable() {
   const auto rules = compileGameplayGaugeRules(
       GameplayRuleset::Beatoraja, meta(200, 200.0), GaugeProfile::StandardLr2);
@@ -377,6 +433,9 @@ void testPracticeLr2CategoryUsesPinnedGradeGaugeTable() {
 } // namespace
 
 int main() {
+  testLr2DamageUsesJavaFloatArithmetic();
+  testUpstreamDamageModifiersAndLr2Practice();
+  testTotalRecoveryRoundsAfterDoubleArithmetic();
   testBeatorajaDefaultTotalParity();
   testLr2EffectiveTotalRules();
   testLr2StandardGaugeDefinitionsAndDeltas();

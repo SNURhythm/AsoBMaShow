@@ -413,7 +413,7 @@ inline float beatorajaDamageMultiplier(double total, int totalNotes) {
   float noteMultiplier = 1.0f;
   int note = 1000;
   float scale = 0.002f;
-  while (note > totalNotes && note > 1) {
+  while (note > totalNotes || note > 1) {
     noteMultiplier +=
         scale * static_cast<float>(
                     note - std::max(totalNotes, note / 2));
@@ -488,12 +488,12 @@ inline float gaugeDeltaForJudgement(GaugeType gaugeType, Judgement judgement,
     }
   }
   if (delta > 0.0f) {
-    if (gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard) {
+    if ((gaugeType == GaugeType::Hard || gaugeType == GaugeType::ExHard) &&
+        profile != GaugeProfile::StandardLr2) {
       delta *= beatorajaHardRecoveryMultiplier(total, totalNotes);
     } else if (gaugeType == GaugeType::AssistedEasy ||
                gaugeType == GaugeType::Easy || gaugeType == GaugeType::Normal) {
-      delta *= static_cast<float>(total) /
-               static_cast<float>(std::max(1, totalNotes));
+      delta = static_cast<float>(delta * total / std::max(1, totalNotes));
     }
   }
   if (gaugeType == GaugeType::Hard && profile != GaugeProfile::StandardLr2 &&
@@ -620,20 +620,37 @@ public:
     return gaugeHistoryOverflowed_;
   }
 
-  void commitJudge(const JudgeResult &judgeResult) {
+  void commitJudge(const JudgeResult &judgeResult,
+                   std::optional<bool> vanishes = std::nullopt) {
+    commitJudgeCounters(judgeResult, vanishes);
+    applyGaugeJudgement(judgeResult.judgement);
+  }
+
+  void commitJudgeCounters(const JudgeResult &judgeResult,
+                           std::optional<bool> vanishes = std::nullopt) {
     ++judgeCount[judgeResult.judgement];
-    ++stagePassedNotes;
-    if (judgeResult.isComboBreak()) {
+    const bool pms = gaugeRules_.ruleset == GameplayRuleset::Beatoraja &&
+                     (gaugeKeyMode == 9 || gaugeKeyMode == 18);
+    if (vanishes.value_or(judgeResult.isNotePlayed() &&
+                          !(pms && judgeResult.judgement == Bad))) {
+      ++stagePassedNotes;
+    }
+    const bool emptyPoorBreaksCombo =
+        gaugeRules_.ruleset == GameplayRuleset::Beatoraja &&
+        (gaugeKeyMode == 5 || gaugeKeyMode == 10 || pms);
+    if (judgeResult.isComboBreak() ||
+        (judgeResult.judgement == Kpoor && emptyPoorBreaksCombo)) {
       combo = 0;
       stageCombo = 0;
-      ++comboBreak;
-    } else if (judgeResult.judgement != Kpoor) {
+      if (judgeResult.isComboBreak()) {
+        ++comboBreak;
+      }
+    } else if (judgeResult.judgement != Kpoor && judgeResult.judgement != None) {
       ++combo;
       ++stageCombo;
       maxCombo = std::max(maxCombo, combo);
     }
     recordFastSlow(judgeResult);
-    applyGaugeJudgement(judgeResult.judgement);
   }
 
   int getScore() const {
@@ -688,14 +705,15 @@ public:
   }
 
   void recordFastSlow(const JudgeResult &judgeResult) {
-    if (judgeResult.judgement == None || judgeResult.judgement == Kpoor) {
+    if (judgeResult.judgement == None) {
       return;
     }
-    if (judgeResult.Diff < 0) {
-      fastCount++;
+    // JudgeManager's note-minus-input >= 0 includes exact hits in FAST.
+    if (judgeResult.Diff <= 0) {
+      if (judgeResult.judgement != PGreat) ++fastCount;
       judgementFastSlowCount[judgeResult.judgement].fast++;
-    } else if (judgeResult.Diff > 0) {
-      slowCount++;
+    } else {
+      if (judgeResult.judgement != PGreat) ++slowCount;
       judgementFastSlowCount[judgeResult.judgement].slow++;
     }
   }
@@ -901,7 +919,11 @@ public:
 
   [[nodiscard]] bool activeGaugeFailed() const {
     const int index = gaugeTypeIndex(gaugeType);
-    if (gaugeAutoShift == GaugeAutoShiftMode::Continue) {
+    if (gaugeAutoShift == GaugeAutoShiftMode::Continue ||
+        gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
+        gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder ||
+        (gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
+         gaugeProfileIsCourse(gaugeProfile))) {
       return false;
     }
     return gaugeDefinition(gaugeType).survival &&
@@ -1006,16 +1028,6 @@ private:
       if (clearTypeForCompiledGauge(type, gaugeValues[i],
                                     gaugeSurvivalFailed[i]) !=
           ClearType::Failed) {
-        return type;
-      }
-    }
-    return bestSurvivingGaugeType();
-  }
-
-  [[nodiscard]] GaugeType bestSurvivingGaugeType() const {
-    for (int i = autoShiftUpperIndex(); i >= autoShiftLowerIndex(); i--) {
-      const GaugeType type = gaugeTypeAtIndex(i);
-      if (!gaugeDefinition(type).survival || !gaugeSurvivalFailed[i]) {
         return type;
       }
     }

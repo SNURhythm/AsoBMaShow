@@ -186,7 +186,8 @@ private:
                                                 const SkinMenuInputs &,
                                                 float itemScrollPosition = 0.0F);
 [[nodiscard]] int sourcePracticeJudgeRank(int keyMode,
-                                          int bmsRank) noexcept;
+                                          int bmsRank,
+                                          std::optional<int> effectiveRankPercent = std::nullopt) noexcept;
 [[nodiscard]] gameplay::GameplayJudgeRules
 sourcePracticeJudgeRules(int keyMode, int judgeRank) noexcept;
 

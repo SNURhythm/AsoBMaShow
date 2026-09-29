@@ -57,8 +57,14 @@ inline bool judgementCountsAsPlayedNote(Judgement judgement) {
   return judgement != None && judgement != Kpoor;
 }
 
-inline bool replayEventCountsAsPlayedNote(const ReplayEvent &event) {
-  if (!judgementCountsAsPlayedNote(event.judgement)) {
+inline bool replayEventCountsAsPlayedNote(const ReplayEvent &event,
+                                         bool vanishBad = true) {
+  if (event.action == ReplayEventAction::Miss && event.judgement == None) {
+    return true;
+  }
+  if (!judgementCountsAsPlayedNote(event.judgement) ||
+      (!vanishBad && event.judgement == Bad &&
+       event.action == ReplayEventAction::Press)) {
     return false;
   }
   return event.action == ReplayEventAction::Press ||
@@ -67,25 +73,33 @@ inline bool replayEventCountsAsPlayedNote(const ReplayEvent &event) {
          event.action == ReplayEventAction::Miss;
 }
 
+inline bool replayVanishesBad(const ReplayData &replay, int keyMode) {
+  return gameplayRulesetFromId(replay.provenance.ruleset.id)
+             .value_or(GameplayRuleset::Beatoraja) != GameplayRuleset::Beatoraja ||
+         (keyMode != 9 && keyMode != 18);
+}
+
 // Replay export has no gameplay simulation to own its score state.  Reduce
 // each accepted replay judgement exactly once so normal and course export
 // expose the same pacemaker snapshot to gameplay skins.
 inline void applyReplayEventToState(RhythmState &state,
                                     const ReplayEvent &event) {
-  if (!replayEventCountsAsPlayedNote(event)) {
+  if (event.action == ReplayEventAction::Gauge ||
+      event.action == ReplayEventAction::Mine) {
+    return;
+  }
+  if (event.judgement == None) {
+    if (event.action == ReplayEventAction::Miss) ++state.stagePassedNotes;
     return;
   }
 
   const JudgeResult judgeResult(event.judgement, event.diffMicros);
-  state.judgeCount[event.judgement]++;
-  if (judgeResult.isComboBreak()) {
-    state.combo = 0;
-    state.comboBreak++;
-  } else if (event.judgement != Kpoor) {
-    state.combo++;
-    state.maxCombo = std::max(state.maxCombo, state.combo);
-  }
-  state.recordFastSlow(judgeResult);
+  // Use the same mode-specific nonvanishing BAD/empty POOR policy as live play.
+  // A judged release consumes its endpoint even for PMS BAD.
+  state.commitJudgeCounters(
+      judgeResult, event.action == ReplayEventAction::Release
+                       ? std::optional<bool>(judgeResult.isNotePlayed())
+                       : std::nullopt);
   state.combo = event.combo;
   state.maxCombo = std::max(state.maxCombo, event.combo);
   state.gaugeType = event.gaugeType;
@@ -131,8 +145,8 @@ inline bms_parser::Note *findReplayNote(
 inline bool replayEventCountsAsPlayedNote(
     bms_parser::Chart &chart,
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
-    const ReplayEvent &event) {
-  if (!replayEventCountsAsPlayedNote(event)) {
+    const ReplayEvent &event, bool vanishBad = true) {
+  if (!replayEventCountsAsPlayedNote(event, vanishBad)) {
     return false;
   }
   if (event.action != ReplayEventAction::Press) {
@@ -211,14 +225,7 @@ inline bool targetIsGrade(const std::string &targetId) {
 }
 
 inline int playedNotesForState(const RhythmState &state, int totalNotes) {
-  int played = 0;
-  for (const Judgement judgement : {PGreat, Great, Good, Bad, Poor}) {
-    const auto it = state.judgeCount.find(judgement);
-    if (it != state.judgeCount.end()) {
-      played += it->second;
-    }
-  }
-  return std::clamp(played, 0, std::max(0, totalNotes));
+  return std::clamp(state.stagePassedNotes, 0, std::max(0, totalNotes));
 }
 
 inline std::vector<int> buildReplayScoreProgression(const ReplayData &replay,
@@ -230,7 +237,8 @@ inline std::vector<int> buildReplayScoreProgression(const ReplayData &replay,
   std::vector<int> progression(static_cast<std::size_t>(totalNotes) + 1U, 0);
   int played = 0;
   for (const ReplayEvent &event : replay.events) {
-    if (!replayEventCountsAsPlayedNote(event)) {
+    if (!replayEventCountsAsPlayedNote(
+            event, replayVanishesBad(replay, replay.chartMeta.KeyMode))) {
       continue;
     }
     ++played;
@@ -258,7 +266,8 @@ inline std::vector<int> buildReplayScoreProgression(bms_parser::Chart &chart,
   std::vector<int> progression(static_cast<std::size_t>(totalNotes) + 1U, 0);
   int played = 0;
   for (const ReplayEvent &event : replay.events) {
-    if (!replayEventCountsAsPlayedNote(chart, lookup, event)) {
+    if (!replayEventCountsAsPlayedNote(
+            chart, lookup, event, replayVanishesBad(replay, chart.Meta.KeyMode))) {
       continue;
     }
     ++played;

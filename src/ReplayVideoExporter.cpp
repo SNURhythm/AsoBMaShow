@@ -87,6 +87,7 @@ extern "C" {
 #include <deque>
 #include <fstream>
 #include <functional>
+#include <limits>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -1399,19 +1400,35 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
     const std::vector<CourseReplayVideoStage> &stages) {
   int totalNotes = 0;
   long long playLength = 0;
-  for (const auto &stage : stages) {
-    if (stage.chart == nullptr) {
-      continue;
+  const auto addFacts = [&](int notes, long long length) {
+    totalNotes += std::min(std::numeric_limits<int>::max() - totalNotes,
+                           std::max(0, notes));
+    playLength += std::min(std::numeric_limits<long long>::max() - playLength,
+                           std::max(0LL, length));
+  };
+  // Only played stages have parsed charts. Saved facts also cover the
+  // unplayed suffix and remain authoritative for the recorded attempt.
+  if (!replay.entryFacts.empty()) {
+    for (const auto &entry : replay.entryFacts) {
+      addFacts(entry.totalNotes, entry.playLengthMicros);
     }
-    totalNotes += std::max(0, stage.chart->Meta.TotalNotes);
-    playLength += std::max(0LL, stage.chart->Meta.PlayLength);
+  } else {
+    for (const auto &stage : stages) {
+      if (stage.chart != nullptr) {
+        addFacts(stage.chart->Meta.TotalNotes, stage.chart->Meta.PlayLength);
+      }
+    }
   }
+  const auto chartCount = replay.entryFacts.empty()
+                              ? stages.size()
+                              : replay.entryFacts.size();
   auto meta = result_presentation::courseResultMeta(
-      replay.courseName, replay.courseGroupName, stages.size(), totalNotes,
+      replay.courseName, replay.courseGroupName, chartCount, totalNotes,
       playLength);
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;
     meta.Rank = lastMeta.Rank;
+    meta.RankType = lastMeta.RankType;
     meta.LnMode = lastMeta.LnMode;
     meta.BmsPath = lastMeta.BmsPath;
     meta.Folder = lastMeta.Folder;
@@ -1444,6 +1461,7 @@ RhythmState courseResultStateForReplayVideo(
       aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += state.comboBreak;
+    aggregate.stagePassedNotes += state.stagePassedNotes;
     aggregate.fastCount += state.fastCount;
     aggregate.slowCount += state.slowCount;
     aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);
@@ -2927,7 +2945,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       result_presentation::pacemakerTargetForReplay(
           chart, replay, selectedPacemakerTarget, previousBest,
           bestScoreReplay.get());
-  RhythmState pacemakerState(&chart, false);
+  RhythmState pacemakerState(
+      &chart, false, gameplayRulesetFromId(replay.provenance.ruleset.id)
+                         .value_or(GameplayRuleset::Beatoraja));
   pacemakerState.configureGauge(replay.initialGaugeType,
                                 replay.gaugeAutoShift,
                                 GaugeProfile::Standard,
@@ -3207,6 +3227,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           event.action == ReplayEventAction::Gauge) {
         replayGaugeType = event.gaugeType;
         replayGauge = event.gauge;
+      }
+      if (event.action == ReplayEventAction::Miss && event.judgement == None) {
+        pacemaker::applyReplayEventToState(pacemakerState, event);
       }
       if (appliedHud && event.judgement != None) {
         pacemaker::applyReplayEventToState(pacemakerState, event);
@@ -3940,7 +3963,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
         result_presentation::pacemakerTargetForReplay(
             chart, stageReplay, selectedPacemakerTarget, previousBest,
             bestScoreReplay.get());
-    RhythmState pacemakerState(&chart, false);
+    RhythmState pacemakerState(
+        &chart, false, gameplayRulesetFromId(stageReplay.provenance.ruleset.id)
+                           .value_or(GameplayRuleset::Beatoraja));
     pacemakerState.configureGauge(
         stageReplay.initialGaugeType, stageReplay.gaugeAutoShift,
         stage.initialGaugeState.gaugeProfile,
@@ -4034,6 +4059,9 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
             event.action == ReplayEventAction::Gauge) {
           replayGaugeType = event.gaugeType;
           replayGauge = event.gauge;
+        }
+        if (event.action == ReplayEventAction::Miss && event.judgement == None) {
+          pacemaker::applyReplayEventToState(pacemakerState, event);
         }
         if (appliedHud && event.judgement != None) {
           pacemaker::applyReplayEventToState(pacemakerState, event);

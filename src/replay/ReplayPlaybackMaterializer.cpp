@@ -300,6 +300,10 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     judged.score.kPoor = judgeCount(state, Kpoor);
     judged.score.fast = state.fastCount;
     judged.score.slow = state.slowCount;
+    if (savedResult.score.badPoints) {
+      judged.score.badPoints = judged.score.bad + judged.score.poor +
+          judged.score.kPoor + *maximumScore / 2 - state.stagePassedNotes;
+    }
     judged.score.finalGauge = state.currentGauge;
     judged.score.clearType = state.getClearTypeRank();
     judged.adoptedGaugeType = state.gaugeType;
@@ -335,6 +339,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   }
   ReplayData replay = std::move(*replayValue);
   replay.resultAttemptId = savedResult.attemptId;
+  replay.resultPassedNotes = simulation.scoreState().stagePassedNotes;
   replay.createdAt = scoreHistoryTime(savedResult.playedAtUnixMillis);
   replay.chartMeta.BmsPath = savedResult.score.chartPath;
   replay.chartMeta.MD5 = savedResult.score.chartMd5;

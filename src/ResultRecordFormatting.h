@@ -67,7 +67,9 @@ inline std::string detailLabel(const ResultRecordSummary &summary) {
   if (summary.modern.has_value()) {
     const auto &result = summary.modern->result;
     const auto &provenance = result.score.provenance;
-    return replay_summary_ui::detailLabel({
+    const std::string prefix = summary.replayState == replay::ReplayState::Obsolete
+                                   ? "Obsolete replay · " : "";
+    return prefix + replay_summary_ui::detailLabel({
         .initialGaugeType = provenance.gaugeType,
         .gaugeAutoShift = provenance.gaugeAutoShift,
         .finalGauge = result.score.finalGauge,
@@ -82,7 +84,9 @@ inline std::string detailLabel(const ResultRecordSummary &summary) {
   if (summary.modernCourse.has_value()) {
     const auto &result = summary.modernCourse->result;
     const auto &provenance = result.provenance;
-    return replay_summary_ui::detailLabel({
+    const std::string prefix = summary.replayState == replay::ReplayState::Obsolete
+                                   ? "Obsolete replay · " : "";
+    return prefix + replay_summary_ui::detailLabel({
         .initialGaugeType = result.initialGaugeType,
         .gaugeAutoShift = result.gaugeAutoShift,
         .finalGauge = result.finalGauge,

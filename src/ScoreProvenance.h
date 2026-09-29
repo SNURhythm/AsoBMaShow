@@ -71,6 +71,7 @@ struct ScoreStageProvenance {
   std::vector<int> chartRandomValues;
   JudgeRankSource judgeRankSource = JudgeRankSource::Unknown;
   std::optional<int> sourceJudgeRank;
+  std::optional<int> effectiveJudgeRankPercent;
   int totalNotes = 0;
   // PlayDataAccessor.writeScoreData() adds the last playable note's whole
   // second timestamp to PlayerData.playtime for each persisted local play.
@@ -159,6 +160,7 @@ struct ScoreProvenanceBuildInput {
   int longNoteMode = 0;
   JudgeRankSource judgeRankSource = JudgeRankSource::Chart;
   std::optional<int> sourceJudgeRank;
+  std::optional<int> effectiveJudgeRankPercent;
   std::map<Judgement, std::pair<long long, long long>> effectiveJudgeWindows;
   std::array<gameplay::JudgeWindowSet, 4> effectiveJudgeContexts{};
   int totalNotes = 0;

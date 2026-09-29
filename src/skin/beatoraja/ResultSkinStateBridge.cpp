@@ -58,6 +58,23 @@ std::optional<GaugeType> resultGaugeType(const ResultSkinData &data) {
                                : data.gaugeTypeOverride;
 }
 
+std::optional<int> resultBadPoints(const ResultSkinData &data,
+                                    std::optional<int> maximum) {
+  if (data.presentation && !data.state) return data.presentation->badPoints;
+  if (!data.state) return std::nullopt;
+  std::int64_t value = 0;
+  for (const auto judgement : {Bad, Poor, Kpoor}) {
+    const auto found = data.state->judgeCount.find(judgement);
+    if (found != data.state->judgeCount.end()) value += found->second;
+  }
+  const auto notes = data.meta ? std::optional<int>(data.meta->TotalNotes)
+                               : (maximum ? std::optional<int>(*maximum / 2)
+                                          : std::nullopt);
+  if (notes) value += static_cast<std::int64_t>(*notes) - data.state->stagePassedNotes;
+  return value >= 0 && value <= std::numeric_limits<int>::max()
+             ? std::optional<int>(static_cast<int>(value)) : std::nullopt;
+}
+
 std::optional<int> resultNextRank(int score, int maximum) {
   if (maximum <= 0) return std::nullopt;
   for (int rank = 0; rank < 27; rank += 3) {
@@ -585,14 +602,7 @@ SkinPropertyLookup<bool> ResultSkinStateBridge::booleanProperty(
                  : unsupported<bool>();
   }
   if ((*id == 332 || *id == 1332) && previousBadPoints) {
-    const auto currentBadPoints = data_.presentation && !data_.state
-                                      ? data_.presentation->badPoints
-                                      : (data_.state
-                                             ? std::optional<int>(
-                                                   count(Bad).value_or(0) +
-                                                   count(Poor).value_or(0) +
-                                                   count(Kpoor).value_or(0))
-                                             : std::nullopt);
+    const auto currentBadPoints = resultBadPoints(data_, maximum);
     if (!currentBadPoints) return unsupported<bool>();
     return supported(*id == 332 ? *currentBadPoints < *previousBadPoints
                                 : *currentBadPoints == *previousBadPoints);
@@ -974,12 +984,6 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
                                  ? std::optional<int>(data_.pacemaker->targetScore)
                                  : data_.state != nullptr ? std::optional<int>(0)
                                                           : std::nullopt;
-    const auto badPoints = [this]() -> std::optional<int> {
-      if (data_.presentation && !data_.state) return data_.presentation->badPoints;
-      if (!data_.state) return std::nullopt;
-      return count(Bad).value_or(0) + count(Poor).value_or(0) +
-             count(Kpoor).value_or(0);
-    };
     const auto scoreRate = [currentScore, maximum]() -> std::optional<double> {
       return currentScore && maximum && *maximum > 0
                  ? std::optional<double>(static_cast<double>(*currentScore) /
@@ -1133,7 +1137,7 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
     case 72: return maximum;
     case 74: case 106: return notes;
     case 75: case 105: case 174: return maxCombo();
-    case 76: case 177: return badPoints();
+    case 76: case 177: return resultBadPoints(data_, maximum);
     case 80: case 81: case 82: case 83: case 84:
       return count(beatorajaJudgement(*id - 80));
     case 85: case 86: case 87: case 88: case 89:
@@ -1192,11 +1196,13 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       return data_.previousBest && data_.previousBest->badPoints
                  ? data_.previousBest->badPoints
                  : std::optional<int>(std::numeric_limits<int>::min());
-    case 178:
-      return badPoints() && data_.previousBest && data_.previousBest->badPoints
-                 ? std::optional<int>(*badPoints() -
+    case 178: {
+      const auto badPoints = resultBadPoints(data_, maximum);
+      return badPoints && data_.previousBest && data_.previousBest->badPoints
+                 ? std::optional<int>(*badPoints -
                                       *data_.previousBest->badPoints)
                  : std::optional<int>(std::numeric_limits<int>::min());
+    }
     case 154:
       return currentScore && maximum ? resultNextRank(*currentScore, *maximum)
                                       : std::nullopt;

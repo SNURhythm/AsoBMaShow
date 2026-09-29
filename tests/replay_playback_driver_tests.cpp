@@ -185,6 +185,7 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   expect(matched.matched() && matched.replayData &&
              !matched.replayData->events.empty() &&
              matched.replayData->finalScore == saved.score.score &&
+             matched.replayData->resultPassedNotes == 1 &&
              matched.replayData->provenance == saved.score.provenance,
          "verified replay yields one in-memory judged track for consumers");
   expect(matched.replayData && matched.replayData->touchSamples.size() == 1 &&
@@ -209,6 +210,60 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   expect(alteredRate.matched() && alteredRate.replayData,
          std::string("altered-rate replay preserves the live assisted clear: ") +
              alteredRate.diagnostic);
+}
+
+void testConcreteMaterializerSettlesExactTimeMineInput() {
+  for (bool initiallyPressed : {false, true}) {
+    auto chart = oneNoteChart();
+    chart.Measures.front()->TimeLines.front()->SetLandmineNote(
+        1, new bms_parser::LandmineNote(4.0F));
+    auto replay = document();
+    replay.timeBounds = {.completionSongTimeMicros = 2'000'000};
+    replay.playback.input.clear();
+    if (initiallyPressed) {
+      replay.playback.input.push_back({.songTimeMicros = 100'000,
+          .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1},
+          .pressed = true});
+    }
+    replay.playback.input.push_back({.songTimeMicros = 500'000,
+        .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+        .pressed = true});
+    replay.playback.input.push_back({.songTimeMicros = 500'000,
+        .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1},
+        .pressed = !initiallyPressed});
+    replay.playback.input.push_back({.songTimeMicros = 510'000,
+        .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0},
+        .pressed = false});
+    auto saved = savedResult();
+    ScoreProvenanceBuildInput provenance;
+    provenance.chartMeta = chart.Meta;
+    provenance.longNoteMode = 1;
+    provenance.sourceJudgeRank = chart.Meta.Rank;
+    provenance.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(
+        GameplayRuleset::LR2, chart.Meta.Rank).contexts;
+    provenance.totalNotes = 1;
+    provenance.authoredGaugeTotal = 200.0;
+    provenance.effectiveGaugeTotal = 200.0;
+    provenance.inputDevices = {InputDeviceCategory::Keyboard};
+    saved.score.provenance = makeScoreProvenance(provenance);
+    saved.score.maxScore = 2;
+    replay.playback.setup.ruleset = saved.score.provenance.ruleset;
+    replay.playback.setup.candidateSelection = saved.score.provenance.stages.front().candidateSelection;
+    replay.playback.setup.gaugeProfile = saved.score.provenance.gaugeProfile;
+    replay.playback.setup.initialGaugeType = saved.score.provenance.gaugeType;
+    const auto outcome = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, chart);
+    expect(outcome.judgedResult.has_value() && outcome.replayData,
+           "mine boundary replay materializes after batched input preadvance");
+    if (!outcome.replayData || !outcome.judgedResult) continue;
+    int mines = 0;
+    for (const auto &event : outcome.replayData->events) {
+      if (event.action == ReplayEventAction::Mine) ++mines;
+    }
+    expect(mines == (initiallyPressed ? 0 : 1) &&
+               outcome.judgedResult->score.pGreat == 1 &&
+               outcome.judgedResult->score.finalGauge == (initiallyPressed ? 100.0F : 96.0F),
+           "materialized replay applies exact-time mine press/release after settling its entire input batch");
+  }
 }
 
 void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
@@ -859,6 +914,7 @@ void testEmptyAbortDriverUsesConfiguredPreRoll() {
 }
 
 int main() {
+  testConcreteMaterializerSettlesExactTimeMineInput();
   testEmptyAbortDriverUsesConfiguredPreRoll();
   testAuthoritativeAbortRejectsPostAbortStreams();
   testAbortedRawReplayReconstructsFailureWithoutTrustingSummary();

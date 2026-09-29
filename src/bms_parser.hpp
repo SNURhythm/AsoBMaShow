@@ -204,6 +204,8 @@ public:
 #include <vector>
 
 namespace bms_parser {
+enum class JudgeRankType { BmsRank, DefExRank };
+
 class ChartMeta {
 public:
   std::string SHA256;
@@ -216,7 +218,8 @@ public:
   std::string Genre;
   std::string Title;
   std::string SubTitle;
-  int Rank = 3;
+  int Rank = 2;
+  JudgeRankType RankType = JudgeRankType::BmsRank;
   double Total = 100;
   bool HasTotal = false;
   long long PlayLength = 0; // Timing of the last playable note, in microseconds

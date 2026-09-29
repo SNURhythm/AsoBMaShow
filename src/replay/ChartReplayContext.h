@@ -35,6 +35,7 @@ enum class ChartReplayContextState {
   FileIoFailure,
   DecodeFailed,
   UnsupportedExtension,
+  ObsoleteRuleset,
   ReplayInvalid,
   SharedFactsMismatch,
 };

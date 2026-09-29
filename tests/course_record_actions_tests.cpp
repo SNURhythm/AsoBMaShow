@@ -192,6 +192,53 @@ void testPartialCourseRetryAndOwnedState() {
           "session owns recalled charts and remains usable after preparation inputs expire");
 }
 
+void testRecallPreservesSavedFullCourseFacts() {
+  Fixture fixture;
+  for (std::size_t index = 0; index < fixture.result.entryFacts.size(); ++index) {
+    fixture.result.entryFacts[index].playLengthMicros =
+        1'234'000 + static_cast<long long>(index);
+    fixture.records[index].meta.TotalNotes = 500;
+    fixture.records[index].meta.PlayLength = 9'999'999;
+  }
+  fixture.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(fixture.result);
+  std::string diagnostic;
+  require(result_persistence::validateModernCourseResult(fixture.result, diagnostic),
+          "modified saved facts validate: " + diagnostic);
+  fixture.records.back().meta.Rank = 300;
+  fixture.records.back().meta.RankType = bms_parser::JudgeRankType::DefExRank;
+  ReplayRepository repository(fixture.directory / "replay.db");
+  require(repository.EnsureSchema(), "repository schema initializes");
+  require(repository.StageModernCourseResult(fixture.result, std::nullopt).status ==
+              ModernCourseStageStatus::Staged, "saved facts remain valid durable results");
+  std::atomic_bool cancelled{false};
+  auto prepared = course_records::prepareCourseResult(
+      repository, fixture.result.attemptId, fixture.selection(), true, cancelled);
+  require(prepared.session != nullptr, "saved course prepares: " + prepared.diagnostic);
+  const auto &entries = prepared.session->entries;
+  require(entries.size() == fixture.result.entryFacts.size(),
+          "recalled partial course retains the unplayed suffix");
+  // ResultScene uses completed result metadata for played entries and session
+  // entries for the unplayed suffix when computing its displayed denominator.
+  require(prepared.session->completedResults[0].meta.TotalNotes +
+              prepared.session->completedResults[1].meta.TotalNotes +
+              entries[2].meta.TotalNotes == fixture.result.maxScore / 2,
+          "recalled course display denominator includes saved unplayed notes");
+  for (std::size_t index = 0; index < entries.size(); ++index) {
+    require(entries[index].meta.TotalNotes == fixture.result.entryFacts[index].totalNotes &&
+                entries[index].meta.PlayLength == fixture.result.entryFacts[index].playLengthMicros,
+            "recalled course totals and duration use saved facts after all metadata overlays");
+    require(entries[index].meta.BmsPath == fixture.records[index].meta.BmsPath &&
+                entries[index].meta.SHA256 == fixture.records[index].meta.SHA256,
+            "saved fact overlay retains resolved chart identity");
+  }
+  require(entries.front().meta.Rank == 2 &&
+              entries.front().meta.RankType == bms_parser::JudgeRankType::BmsRank &&
+              entries.back().meta.Rank == 300 &&
+              entries.back().meta.RankType == bms_parser::JudgeRankType::DefExRank,
+          "saved fact overlay retains parsed and unplayed chart rank metadata");
+}
+
 void testVerifiedReplayOwnershipAndMissingFileFallback() {
   Fixture fixture;
   ReplayRepository repository(fixture.directory / "replay.db");
@@ -266,6 +313,78 @@ void testVerifiedReplayOwnershipAndMissingFileFallback() {
           "an absent optional replay preserves saved result state and chart graphs");
 }
 
+void testHistoricalPartialCoursePreservesDisplayedBadPoints() {
+  Fixture fixture;
+  --fixture.result.provenance.ruleset.version;
+  for (auto &stage : fixture.result.stages) {
+    --stage.score.provenance.ruleset.version;
+    stage.score.badPoints.reset();
+  }
+  fixture.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(fixture.result);
+  const auto fingerprint = fixture.result.resultFingerprint;
+  ReplayRepository repository(fixture.directory / "replay.db");
+  require(repository.EnsureSchema(), "historical course schema initializes");
+  require(repository.StageModernCourseResult(fixture.result, std::nullopt).status ==
+              ModernCourseStageStatus::Staged, "historical partial course stages");
+  std::atomic_bool cancelled{false};
+  auto prepared = course_records::prepareCourseResult(
+      repository, fixture.result.attemptId, fixture.selection(), true, cancelled);
+  require(prepared.session != nullptr, "historical course prepares");
+  auto &session = *prepared.session;
+  require(session.resultPassedNotes() == 15,
+          "historical partial course keeps BP zero instead of adding five unplayed notes");
+  require(session.completedResults[0].state.stagePassedNotes == 5 &&
+              session.completedResults[1].state.stagePassedNotes == 5,
+          "historical aggregate BP preservation does not alter individual stage counts");
+  const auto stored = repository.LoadModernCourseResultByAttempt(fixture.result.attemptId);
+  require(stored.record && stored.record->result.resultFingerprint == fingerprint &&
+              !stored.record->result.stages[0].score.badPoints,
+          "historical course recall leaves its fingerprint and absent BP facts intact");
+  session.modernCourseResultBrowsing = false;
+  require(session.resultPassedNotes() == 10,
+          "leaving saved result browsing restores the played-stage count");
+  session.modernCourseResultBrowsing = true;
+  session.resetModernCourseAttempt();
+  require(session.resultPassedNotes() == 10,
+          "restarting a course clears its historical presentation override");
+}
+
+void testExactPartialCourseIncludesFailedStageRemainderInBadPoints() {
+  Fixture fixture;
+  fixture.result.stages[0].score.badPoints = 0;
+  auto &failed = fixture.result.stages[1];
+  failed.score.pGreat = 1;
+  failed.score.great = 0;
+  failed.score.good = 0;
+  failed.score.bad = 1;
+  failed.score.score = 2;
+  failed.score.badPoints = 4;
+  failed.score.maxCombo = 4;
+  failed.score.finalGauge = 0.0F;
+  failed.score.clearType = kClearTypeFailedRank;
+  failed.adoptedGaugeHistory = {80.0F, 0.0F};
+  fixture.result.finalScore = 9;
+  fixture.result.maxCombo = 4;
+  fixture.result.finalGauge = 0.0F;
+  fixture.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(fixture.result);
+  std::string diagnostic;
+  require(result_persistence::validateModernCourseResult(fixture.result, diagnostic),
+          "failed-stage fixture validates: " + diagnostic);
+  ReplayRepository repository(fixture.directory / "replay.db");
+  require(repository.EnsureSchema(), "exact course schema initializes");
+  require(repository.StageModernCourseResult(fixture.result, std::nullopt).status ==
+              ModernCourseStageStatus::Staged, "exact partial course stages");
+  std::atomic_bool cancelled{false};
+  auto prepared = course_records::prepareCourseResult(
+      repository, fixture.result.attemptId, fixture.selection(), true, cancelled);
+  require(prepared.session && prepared.session->resultPassedNotes() == 7,
+          "exact partial course retains seven passed notes for BP nine: one BAD, three remaining, five unplayed");
+  require(prepared.session->completedResults[1].state.stagePassedNotes == 2,
+          "the failed stage retains its two consumed note identities");
+}
+
 void testFailureAndCancellation() {
   Fixture fixture;
   ReplayRepository repository(fixture.directory / "replay.db");
@@ -300,6 +419,9 @@ int main() {
 #if HAS_COURSE_RECORD_ACTIONS
     testCompletedPrefixValidation();
     testPartialCourseRetryAndOwnedState();
+    testRecallPreservesSavedFullCourseFacts();
+    testHistoricalPartialCoursePreservesDisplayedBadPoints();
+    testExactPartialCourseIncludesFailedStageRemainderInBadPoints();
     testFailureAndCancellation();
     testVerifiedReplayOwnershipAndMissingFileFallback();
 #else

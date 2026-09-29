@@ -14,6 +14,8 @@ struct JudgeCandidateDescriptor {
   std::int64_t timingMicros = 0;
   bool longNoteHead = false;
   JudgeResult judge = JudgeResult(None, 0);
+  bool selectable = true;
+  bool played = false;
 };
 
 struct Lr2CandidateResolution {

@@ -73,6 +73,7 @@ bool replayEventCountsInResult(
     const std::unordered_map<std::string, bms_parser::Note *> &lookup,
     const std::unordered_set<const bms_parser::LongNote *>
         &classicHeadsWithTailResult,
+    const ReplayData &replay,
     const ReplayEvent &event) {
   if (event.judgement == None) {
     return false;
@@ -88,8 +89,14 @@ bool replayEventCountsInResult(
   }
 
   auto *longNote = static_cast<bms_parser::LongNote *>(note);
+  const bool nonvanishingBad = event.judgement == Bad &&
+      (chart.Meta.KeyMode == 9 || chart.Meta.KeyMode == 18) &&
+      gameplayRulesetFromId(replay.provenance.ruleset.id)
+              .value_or(GameplayRuleset::Beatoraja) == GameplayRuleset::Beatoraja;
+  // PMS head BAD is already scored before recovery; the later tail only
+  // supplies the judgement for the accepted head.
   return longNote->IsTail() || !recordedJudge.isNotePlayed() ||
-         effectiveLongNoteIsCharge(longNote, chart) ||
+         effectiveLongNoteIsCharge(longNote, chart) || nonvanishingBad ||
          (event.judgement == Bad &&
           !classicHeadsWithTailResult.contains(longNote));
 }
@@ -219,11 +226,9 @@ RhythmState BuildInitialGaugeState(bms_parser::Chart &chart,
                                    const ReplayData &replay,
                                    GaugeProfile gaugeProfile,
                                    const GaugeStateSnapshot *carriedGauge) {
-  GameplayRuleset ruleset = GameplayRuleset::Beatoraja;
-  if (isSupportedRulesetDescriptor(replay.provenance.ruleset)) {
-    ruleset = gameplayRulesetFromId(replay.provenance.ruleset.id)
-                  .value_or(GameplayRuleset::Beatoraja);
-  }
+  const GameplayRuleset ruleset =
+      gameplayRulesetFromId(replay.provenance.ruleset.id)
+          .value_or(GameplayRuleset::Beatoraja);
   RhythmState state(&chart, false, ruleset, gaugeProfile);
   state.configureGauge(replay.initialGaugeType, replay.gaugeAutoShift,
                        gaugeProfile, replay.gaugeAutoShiftLowerBound);
@@ -253,6 +258,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
       BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
   state.combo = std::max(0, carriedCombo);
   state.maxCombo = std::max(state.combo, carriedMaxCombo);
+  state.stagePassedNotes = replay.resultPassedNotes.value_or(chart.Meta.TotalNotes);
 
   for (const auto &event : replay.events) {
     if (event.action == ReplayEventAction::Gauge) {
@@ -275,7 +281,7 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
     }
 
     if (!replayEventCountsInResult(chart, lookup, classicHeadsWithTailResult,
-                                   event)) {
+                                   replay, event)) {
       continue;
     }
 
@@ -323,7 +329,7 @@ SkinGameplayGraphState BuildSkinGameplayGraphState(
     if (event.action == ReplayEventAction::Gauge ||
         event.action == ReplayEventAction::Mine ||
         !replayEventCountsInResult(chart, lookup,
-                                   classicHeadsWithTailResult, event)) {
+                                   classicHeadsWithTailResult, replay, event)) {
       continue;
     }
     const ChartVisualNote *note = replayGraphNote(graphNotes, event);
@@ -379,14 +385,14 @@ FindGaugeFailureMicros(bms_parser::Chart &chart, const ReplayData &replay,
   if (replay.gaugeAutoShift == GaugeAutoShiftMode::Continue) {
     return std::nullopt;
   }
-  const RhythmState initialState =
+  RhythmState state =
       BuildInitialGaugeState(chart, replay, gaugeProfile, carriedGauge);
-  if (initialState.activeGaugeFailed()) {
+  if (state.activeGaugeFailed()) {
     return 0LL;
   }
   for (const ReplayEvent &event : replay.events) {
-    if (event.gauge <= 0.0f &&
-        gaugeIsSurvival(event.gaugeType, initialState.gaugeProfile)) {
+    syncReplayResultGaugeSnapshot(state, event);
+    if (state.activeGaugeFailed()) {
       return std::max(0LL, event.songTimeMicros);
     }
   }

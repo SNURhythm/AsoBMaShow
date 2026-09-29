@@ -315,9 +315,20 @@ void testProviderNeutralEligibilitySupportsOtherDrivers() {
          "other drivers receive only provider-neutral eligible snapshots");
 }
 
+void testProviderNeutralRejectsStaleVerifiedRuleset() {
+  auto stale = source(34);
+  stale.result.score.provenance.ruleset.version = 1;
+  refreshSnapshot(stale);
+  const auto candidates = ir::projectIrUploadCandidates(
+      std::vector{stale}, "fake", "https://fake.example.test");
+  expect(candidates.candidates.empty(),
+         "persisted Verified does not admit an unsupported ruleset revision");
+}
+
 } // namespace
 
 int main() {
+  testProviderNeutralRejectsStaleVerifiedRuleset();
   testSelectionIndexesCanonicalAttemptIdsOnce();
   testProjectsOnlySnapshotBackedModernAttempts();
   testStoredSnapshotSubmissionNeedsNoReplayFileOrChartHydration();

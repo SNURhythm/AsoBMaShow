@@ -134,6 +134,7 @@ createChartDatabase(const std::filesystem::path &databasePath) {
       "has_random_sequence INTEGER NOT NULL DEFAULT 0,"
       "most_prevalent_bpm REAL NOT NULL DEFAULT 0,"
       "has_bga INTEGER NOT NULL DEFAULT 0,"
+      "rank_type INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")");
@@ -223,6 +224,9 @@ void testRoundTripAndConnectionReuse() {
   const auto tracks = repository.SelectTracks(playlistId);
   assert(tracks.size() == 1);
   assert(tracks.front().representativeChart.Title == "Test Track");
+  assert(tracks.front().representativeChart.Rank == 2);
+  assert(tracks.front().representativeChart.RankType ==
+         bms_parser::JudgeRankType::BmsRank);
   assert(repository.SelectLibraryTracks().size() == 1);
   assert(repository.SelectLibraryGroupTracks(chartMeta).size() == 1);
   const int batchPlaylistId =

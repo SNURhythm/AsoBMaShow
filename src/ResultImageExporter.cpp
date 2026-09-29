@@ -446,16 +446,36 @@ bms_parser::ChartMeta courseResultMetaForReplay(
     const std::vector<std::unique_ptr<bms_parser::Chart>> &charts) {
   int totalNotes = 0;
   long long playLength = 0;
-  for (const auto &chart : charts) {
-    if (chart == nullptr) {
-      continue;
+  const auto addFacts = [&](int notes, long long length) {
+    totalNotes += std::min(std::numeric_limits<int>::max() - totalNotes,
+                           std::max(0, notes));
+    playLength += std::min(std::numeric_limits<long long>::max() - playLength,
+                           std::max(0LL, length));
+  };
+  // Only played stages have parsed charts. Saved facts also cover the
+  // unplayed suffix and remain authoritative for the recorded attempt.
+  if (!replay.entryFacts.empty()) {
+    for (const auto &entry : replay.entryFacts) {
+      addFacts(entry.totalNotes, entry.playLengthMicros);
     }
-    totalNotes += std::max(0, chart->Meta.TotalNotes);
-    playLength += std::max(0LL, chart->Meta.PlayLength);
+  } else {
+    for (const auto &chart : charts) {
+      if (chart != nullptr) {
+        addFacts(chart->Meta.TotalNotes, chart->Meta.PlayLength);
+      }
+    }
   }
-  return result_presentation::courseResultMeta(
-      replay.courseName, replay.courseGroupName, replay.stages.size(),
+  const auto chartCount = replay.entryFacts.empty()
+                              ? replay.stages.size()
+                              : replay.entryFacts.size();
+  auto meta = result_presentation::courseResultMeta(
+      replay.courseName, replay.courseGroupName, chartCount,
       totalNotes, playLength);
+  if (!charts.empty() && charts.back() != nullptr) {
+    meta.Rank = charts.back()->Meta.Rank;
+    meta.RankType = charts.back()->Meta.RankType;
+  }
+  return meta;
 }
 
 RhythmState courseResultStateForReplay(
@@ -477,6 +497,7 @@ RhythmState courseResultStateForReplay(
       aggregate.addJudgeCountFrom(state, static_cast<Judgement>(i));
     }
     aggregate.comboBreak += state.comboBreak;
+    aggregate.stagePassedNotes += state.stagePassedNotes;
     aggregate.fastCount += state.fastCount;
     aggregate.slowCount += state.slowCount;
     aggregate.maxCombo = std::max(aggregate.maxCombo, state.maxCombo);

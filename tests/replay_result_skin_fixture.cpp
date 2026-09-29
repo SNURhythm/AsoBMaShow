@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -107,23 +108,36 @@ struct ApplicationContext {
 };
 
 namespace bms_parser {
+enum class JudgeRankType { BmsRank, DefExRank };
 struct ChartMeta {
   int TotalNotes = 0, Rank = 0, LnMode = 0;
+  JudgeRankType RankType = JudgeRankType::BmsRank;
   int TotalLongNotes = 0, TotalBackSpinNotes = 0;
   long long PlayLength = 0;
+  double PlayLevel = 0;
   std::string BmsPath, Folder, StageFile, BackBmp, Banner;
 };
 struct Chart { ChartMeta Meta; };
 }
-struct CourseReplayData { std::string courseName, courseGroupName; };
+struct CourseReplayEntryFacts {
+  int totalNotes = 0;
+  long long playLengthMicros = 0;
+};
+struct CourseReplayData {
+  std::string courseName, courseGroupName;
+  int totalCharts = 0;
+  std::vector<int> stages;
+  std::vector<CourseReplayEntryFacts> entryFacts;
+};
 struct CourseReplayVideoStage { std::shared_ptr<bms_parser::Chart> chart; };
 namespace result_presentation {
 bms_parser::ChartMeta courseResultMeta(const std::string &, const std::string &,
-                                       std::size_t, int notes, long long length) {
-  return {.TotalNotes = notes, .PlayLength = length};
+                                       std::size_t count, int notes, long long length) {
+  return {.TotalNotes = notes, .PlayLength = length, .PlayLevel = static_cast<double>(count)};
 }
 }
 ASOBMS_COURSE_META
+ASOBMS_COURSE_IMAGE_META
 
 ASOBMS_RESULT_PRESENTATION
 
@@ -133,7 +147,8 @@ int main() {
     if (!value) { std::cerr << message << '\n'; ++failures; }
   };
   auto chart = std::make_shared<bms_parser::Chart>();
-  chart->Meta = {.TotalNotes = 100, .Rank = 3, .LnMode = 2,
+  chart->Meta = {.TotalNotes = 100, .Rank = 300, .LnMode = 2,
+                .RankType = bms_parser::JudgeRankType::DefExRank,
                 .TotalLongNotes = 5, .TotalBackSpinNotes = 1, .PlayLength = 123,
                 .BmsPath = "/charts/test.bms", .Folder = "/charts",
                 .StageFile = "stage.png", .BackBmp = "back.png", .Banner = "banner.png"};
@@ -141,8 +156,52 @@ int main() {
   check(courseMeta.TotalNotes == 200 && courseMeta.PlayLength == 246 &&
             courseMeta.StageFile == "stage.png" && courseMeta.BackBmp == "back.png" &&
             courseMeta.Banner == "banner.png" && courseMeta.BmsPath == "/charts/test.bms" &&
-            courseMeta.Rank == 3 && courseMeta.LnMode == 2,
+            courseMeta.Rank == 300 && courseMeta.LnMode == 2 &&
+            courseMeta.RankType == bms_parser::JudgeRankType::DefExRank,
         "course results retain aggregated totals and resolve last-stage artwork");
+  std::vector<std::unique_ptr<bms_parser::Chart>> imageCharts;
+  imageCharts.push_back(std::make_unique<bms_parser::Chart>(*chart));
+  imageCharts.push_back(std::make_unique<bms_parser::Chart>(*chart));
+  CourseReplayData partial;
+  partial.totalCharts = 3;
+  partial.stages.resize(2);
+  partial.entryFacts = {{110, 124}, {120, 125}, {300, 456}};
+  const auto partialVideo = courseResultMetaForReplayVideo(partial, {{chart}, {chart}});
+  const auto partialImage = courseResultMetaForReplay(partial, imageCharts);
+  check(partialVideo.TotalNotes == 530 && partialVideo.PlayLength == 705 && partialVideo.PlayLevel == 3,
+        "partial course video includes saved notes and duration of unplayed entries");
+  check(partialImage.TotalNotes == 530 && partialImage.PlayLength == 705 && partialImage.PlayLevel == 3,
+        "partial course image includes saved notes and duration of unplayed entries");
+  // With 150 past notes and 4 observed BAD/POOR/KPOOR, the result skin's
+  // full-course BP is 384, including the 300 unplayed notes.
+  check(4 + partialVideo.TotalNotes - 150 == 384 &&
+            4 + partialImage.TotalNotes - 150 == 384,
+        "both partial course export metadata yield full-course BP");
+  check(partialImage.Rank == 300 &&
+            partialImage.RankType == bms_parser::JudgeRankType::DefExRank,
+        "course image retains final-stage DEFEXRANK judging difficulty");
+  imageCharts.back()->Meta.Rank = 3;
+  imageCharts.back()->Meta.RankType = bms_parser::JudgeRankType::BmsRank;
+  const auto easyImage = courseResultMetaForReplay(partial, imageCharts);
+  check(easyImage.Rank == 3 && easyImage.RankType == bms_parser::JudgeRankType::BmsRank,
+        "course image retains final-stage EASY judging difficulty");
+  partial.entryFacts.back() = {};
+  const auto unknownVideo = courseResultMetaForReplayVideo(partial, {{chart}, {chart}});
+  const auto unknownImage = courseResultMetaForReplay(partial, imageCharts);
+  check(unknownVideo.TotalNotes == 230 && unknownImage.TotalNotes == 230 &&
+            unknownVideo.PlayLength == 249 && unknownImage.PlayLength == 249,
+        "historical unknown entry facts do not invent unplayed notes or duration");
+  partial.entryFacts.clear();
+  const auto fallbackImage = courseResultMetaForReplay(partial, imageCharts);
+  check(fallbackImage.TotalNotes == 200 && fallbackImage.PlayLength == 246,
+        "absent saved entry facts retain available played-chart totals");
+  partial.totalCharts = 2;
+  partial.entryFacts = {{100, std::numeric_limits<long long>::max()}, {100, 1}};
+  const auto longVideo = courseResultMetaForReplayVideo(partial, {{chart}, {chart}});
+  const auto longImage = courseResultMetaForReplay(partial, imageCharts);
+  check(longVideo.PlayLength == std::numeric_limits<long long>::max() &&
+            longImage.PlayLength == std::numeric_limits<long long>::max(),
+        "course export duration aggregation saturates without signed overflow");
   ApplicationContext app;
   RenderContext render;
   PreparedReplayResultPresentation presentation;

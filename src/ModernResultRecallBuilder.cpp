@@ -139,11 +139,8 @@ void applySavedDisplayFacts(const result_persistence::ChartScoreWrite &score,
 }
 
 GameplayRuleset rulesetFor(const ScoreProvenance &provenance) noexcept {
-  if (isSupportedRulesetDescriptor(provenance.ruleset)) {
-    return gameplayRulesetFromId(provenance.ruleset.id)
-        .value_or(GameplayRuleset::Beatoraja);
-  }
-  return GameplayRuleset::Beatoraja;
+  return gameplayRulesetFromId(provenance.ruleset.id)
+      .value_or(GameplayRuleset::Beatoraja);
 }
 
 RhythmState resultStateFrom(
@@ -182,6 +179,12 @@ RhythmState resultStateFrom(
   state.combo = 0;
   state.maxCombo = score.maxCombo;
   state.comboBreak = score.comboBreak;
+  // Old results retain their originally displayed BP; fresh captures restore
+  // the passed-note count, including PMS nonvanishing BAD judgments.
+  state.stagePassedNotes = score.badPoints
+      ? static_cast<int>(static_cast<std::int64_t>(score.bad) + score.poor +
+                         score.kPoor + score.maxScore / 2 - *score.badPoints)
+      : score.maxScore / 2;
 
   state.gaugeType = adoptedGaugeType;
   state.currentGauge = score.finalGauge;

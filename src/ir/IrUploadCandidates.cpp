@@ -101,7 +101,9 @@ bool isSubmissionEligibleForProvider(
 
   std::string diagnostic;
   return validateIrSubmission(submission, diagnostic) &&
-         submission.provenance.eligibility == ScoreEligibility::Verified;
+         submission.provenance.eligibility == ScoreEligibility::Verified &&
+         scoreEligibilityForProvenance(submission.provenance) ==
+             ScoreEligibility::Verified;
 }
 
 bool validateIrUploadCandidateSource(

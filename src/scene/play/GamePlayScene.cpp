@@ -1672,7 +1672,8 @@ bool GamePlayScene::enterPracticeMenu() {
                                  : playfieldChartVisualModel.timelines.back()
                                        .timeMicros,
        .judgeRank = practice::sourcePracticeJudgeRank(
-           chart->Meta.KeyMode, chart->Meta.Rank),
+           chart->Meta.KeyMode, chart->Meta.Rank,
+           rulesetPolicyBuild.policy->judge.rules().effectiveJudgeRankPercent),
        .chartTotal = playfieldChartVisualModel.staticMetadata.songInformation
                          .value_or(PlayfieldSongInformation{})
                          .total,
@@ -1767,6 +1768,13 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
   auto sourceJudgeRules =
       practice::sourcePracticeJudgeRules(chart->Meta.KeyMode, attempt.judgeRank);
   const auto &existingJudgeRules = rulesetPolicyBuild.policy->judge.rules();
+  sourceJudgeRules.ruleset = existingJudgeRules.ruleset;
+  sourceJudgeRules.keyMode = existingJudgeRules.keyMode;
+  sourceJudgeRules.comboKpoor = existingJudgeRules.comboKpoor;
+  sourceJudgeRules.singleMiss = existingJudgeRules.singleMiss;
+  sourceJudgeRules.vanishBad = existingJudgeRules.vanishBad;
+  sourceJudgeRules.normalReleaseMarginMicros = existingJudgeRules.normalReleaseMarginMicros;
+  sourceJudgeRules.scratchReleaseMarginMicros = existingJudgeRules.scratchReleaseMarginMicros;
   sourceJudgeRules.candidateSelection = existingJudgeRules.candidateSelection;
   sourceJudgeRules.repeatedKpoor = existingJudgeRules.repeatedKpoor;
   sourceJudgeRules.multiBad = existingJudgeRules.multiBad;
@@ -3077,6 +3085,13 @@ void GamePlayScene::init() {
     inputHandler = ownedInputHandler.get();
     inputHandler->setDragModeEnabled(
         assist_options::isDragMode(options.assistOption));
+    inputHandler->setLongNoteHeldCallback([this](int lane) -> std::optional<bool> {
+      if (!realtimeGameplayAuthorityActive()) {
+        return std::nullopt;
+      }
+      return RealtimeGameplaySession::scratchLongNoteHeld(
+          realtimeGameplaySession.get(), lane);
+    });
     inputHandler->setTouchEventCallback([this](SDL_FingerID fingerIndex,
                                                ReplayTouchAction action,
                                                Vector3 normalizedLocation) {
@@ -4524,6 +4539,7 @@ void GamePlayScene::finishReplayRecording() {
   }
 
   recordedReplay.finalScore = state->getScore();
+  recordedReplay.resultPassedNotes = state->stagePassedNotes;
   recordedReplay.maxCombo = state->maxCombo;
   recordedReplay.finalGauge = state->currentGauge;
   recordedReplay.clearType = state->getClearTypeRank();
@@ -5251,7 +5267,8 @@ void GamePlayScene::capturePlayfieldVisualState(
                          ? 0
                          : playfieldChartVisualModel.timelines.back().timeMicros,
                  .judgeRank = practice::sourcePracticeJudgeRank(
-                     chart->Meta.KeyMode, chart->Meta.Rank),
+                     chart->Meta.KeyMode, chart->Meta.Rank,
+                     rulesetPolicyBuild.policy->judge.rules().effectiveJudgeRankPercent),
                  .chartTotal = playfieldChartVisualModel.staticMetadata
                                    .songInformation
                                        .value_or(PlayfieldSongInformation{})
@@ -6978,6 +6995,12 @@ void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
   note->PlayedTime = judgeTimeMicros;
 
   if (state != nullptr) {
+    if (!realtimeGameplayAuthorityActive() && !isReplayPlayback() &&
+        attemptProvenance.eligibility == ScoreEligibility::Verified) {
+      attemptProvenance.eligibility = ScoreEligibility::Modified;
+      recordedReplay.provenance = attemptProvenance;
+      analyticsReplay.provenance = attemptProvenance;
+    }
     state->applyGaugeDelta(-note->Damage);
     updateGaugeStatusText();
   }
@@ -7001,6 +7024,16 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
                             const bms_parser::Note *graphNote) {
   if (state == nullptr || state->isEnding) {
     return;
+  }
+  if (gameplay::fallbackJudgementInvalidatesRanking(
+          judgeResult.judgement, realtimeGameplayAuthorityActive(),
+          isReplayPlayback()) &&
+      attemptProvenance.eligibility == ScoreEligibility::Verified) {
+    // Defer invalidation until fallback scoring actually occurs: iOS may
+    // obtain its touch layout and start the worker after the first skin frame.
+    attemptProvenance.eligibility = ScoreEligibility::Modified;
+    recordedReplay.provenance = attemptProvenance;
+    analyticsReplay.provenance = attemptProvenance;
   }
   const int previousCount = state->judgeCount[judgeResult.judgement];
   state->commitJudge(judgeResult);

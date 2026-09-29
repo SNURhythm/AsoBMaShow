@@ -183,8 +183,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
       return invalid("submission counters must not be negative");
     }
     if (submission.pGreatFast < 0 || submission.pGreatSlow < 0 ||
-        submission.pGreatFast > submission.fast ||
-        submission.pGreatSlow > submission.slow) {
+        static_cast<long long>(submission.pGreatFast) +
+                submission.pGreatSlow > submission.pGreat) {
       return invalid("submission PGREAT timing breakdown is invalid");
     }
     if (submission.judgementTimingBreakdownAvailable &&
@@ -225,9 +225,13 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
     if (expectedEx != submission.score) {
       return invalid("submission EX score disagrees with judgements");
     }
-    const long long badPoints = static_cast<long long>(submission.bad) +
-                                submission.poor + submission.kPoor;
-    if (badPoints > std::numeric_limits<int>::max()) {
+    // Supported 7K/14K judgements consume each note exactly once. This is
+    // BAD + POOR + empty POOR + (total notes - passed notes), including an
+    // unfinished remainder when a survival gauge ends the attempt early.
+    const long long badPoints = static_cast<long long>(submission.maxScore) / 2 -
+                                submission.pGreat - submission.great -
+                                submission.good + submission.kPoor;
+    if (badPoints < 0 || badPoints > std::numeric_limits<int>::max()) {
       return invalid("submission BP exceeds the supported range");
     }
     if (!std::isfinite(submission.finalGauge)) {
@@ -244,8 +248,8 @@ buildBatchManualDraft(const IrSubmission &submission) noexcept {
 
     const std::string &identifier =
         hasSha256 ? submission.chartSha256 : submission.chartMd5;
-    const int fast = submission.fast - submission.pGreatFast;
-    const int slow = submission.slow - submission.pGreatSlow;
+    const int fast = submission.fast;
+    const int slow = submission.slow;
     const auto sampledHistory = [&](std::span<const std::size_t> indices) {
       nlohmann::json history = nlohmann::json::array();
       for (const std::size_t index : indices) {

@@ -190,6 +190,22 @@ struct Harness {
   }
 };
 
+void testOldRulesetIsObsoleteAndPreservesSavedResult() {
+  Harness harness;
+  harness.result.score.provenance.ruleset.version = 3;
+  harness.result.resultFingerprint =
+      result_persistence::modernResultFingerprint(harness.result);
+  auto context = harness.makeContext();
+  const auto loaded = context.load(kAttemptId);
+  expect(loaded.state == ChartReplayContextState::ObsoleteRuleset &&
+             loaded.replayState() == ReplayState::Obsolete &&
+             loaded.result == harness.result && !loaded.verified &&
+             loaded.diagnostic.find("obsolete") != std::string::npos,
+         "retired rules retain the original result with an explicit obsolete status");
+  expect(harness.calls == std::vector<std::string>{"result"},
+         "obsolete replay is never decoded under current algorithms");
+}
+
 void testUserDeletedReferenceNeverTouchesFilesystem() {
   Harness harness;
   harness.userDeleted = true;
@@ -351,6 +367,7 @@ void testInvalidResultNeverTouchesReplayFile() {
 } // namespace
 
 int main() {
+  testOldRulesetIsObsoleteAndPreservesSavedResult();
   testVerifiedContextUsesStrictLoadOrder();
   testNoLongNoteScoreBucketUsesProvenanceSetupAuthority();
   testUserDeletedReferenceNeverTouchesFilesystem();

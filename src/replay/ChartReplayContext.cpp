@@ -42,6 +42,8 @@ ReplayState ChartReplayContextOutcome::replayState() const noexcept {
   switch (state) {
   case ChartReplayContextState::Ready:
     return ReplayState::Verified;
+  case ChartReplayContextState::ObsoleteRuleset:
+    return ReplayState::Obsolete;
   case ChartReplayContextState::FileCorrupt:
     return ReplayState::Corrupt;
   case ChartReplayContextState::UnsupportedExtension:
@@ -145,6 +147,14 @@ ChartReplayContextOutcome ChartReplayContext::load(
                      preservedResult, loaded.record->replayFile);
     }
 
+    if (isObsoleteRulesetDescriptor(stored.score.provenance.ruleset)) {
+      return failure(ChartReplayContextState::ObsoleteRuleset,
+                     "This replay uses an obsolete ruleset. The saved result "
+                     "and original replay are preserved; faithful playback "
+                     "is unavailable.",
+                     preservedResult, loaded.record->replayFile);
+    }
+
     std::optional<ModernReplayFileReference> reference =
         *loaded.record->replayFile;
     const auto referenceAgreement =
@@ -185,6 +195,10 @@ ChartReplayContextOutcome ChartReplayContext::load(
       return failure(ChartReplayContextState::DecodeFailed,
                      "Replay decoding failed.", preservedResult,
                      std::move(reference));
+    }
+    if (decoded.obsoleteRuleset) {
+      return failure(ChartReplayContextState::ObsoleteRuleset,
+                     decoded.diagnostic, preservedResult, std::move(reference));
     }
     if (decoded.unsupportedAsoExtension) {
       return failure(ChartReplayContextState::UnsupportedExtension,

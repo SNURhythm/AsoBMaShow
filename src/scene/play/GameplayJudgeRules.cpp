@@ -1,18 +1,11 @@
 #include "GameplayJudgeRules.h"
 
-#include "Judge.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <map>
-#include <utility>
 
 namespace gameplay {
 namespace {
-
-constexpr std::array<Judgement, 5> kWindowOrder = {
-    PGreat, Great, Good, Bad, Kpoor};
 
 constexpr std::size_t contextIndex(JudgeWindowContext context) noexcept {
   return static_cast<std::size_t>(context);
@@ -23,91 +16,82 @@ constexpr TimingWindow symmetric(Judgement judgement,
   return {judgement, -magnitude, magnitude};
 }
 
-JudgeWindowSet lr2NormalWindows(int rank) {
-  struct RankWindows {
-    std::int64_t pgreat;
-    std::int64_t great;
-    std::int64_t good;
-  };
-  constexpr std::array<RankWindows, 5> ranks = {{
-      {8000, 24000, 40000},
-      {15000, 30000, 60000},
-      {18000, 40000, 100000},
-      {21000, 60000, 120000},
-      {18000, 40000, 100000},
-  }};
-  if (rank < 0 || rank >= static_cast<int>(ranks.size())) {
+// Reference JudgeProperty stores (note - input); our windows use (input - note).
+// Tail tables have no empty-POOR judgement. The zero-width placeholder keeps
+// replay snapshots rectangular and is shadowed by PGREAT at zero.
+JudgeWindowSet makeWindows(std::int64_t pg, std::int64_t gr,
+                           std::int64_t gd, std::int64_t earlyBad,
+                           std::int64_t lateBad, std::int64_t earlyPoor = 0,
+                           std::int64_t latePoor = 0) {
+  return {.windows = {symmetric(PGreat, pg), symmetric(Great, gr),
+                      symmetric(Good, gd), {Bad, earlyBad, lateBad},
+                      {Kpoor, earlyPoor, latePoor}}};
+}
+
+int rankPercent(GameplayRuleset ruleset, int rank, int keyMode) {
+  if (rank < 0 || rank > 4) {
     rank = 2;
   }
-  const RankWindows selected = ranks[static_cast<std::size_t>(rank)];
-  return {.windows = {
-              symmetric(PGreat, selected.pgreat),
-              symmetric(Great, selected.great),
-              symmetric(Good, selected.good),
-              symmetric(Bad, 200000),
-              {Kpoor, -1000000, 0},
-          }};
+  constexpr std::array normal{25, 50, 75, 100, 125};
+  constexpr std::array pms{33, 50, 70, 100, 133};
+  constexpr std::array lr2{25, 50, 75, 100, 75};
+  return (ruleset == GameplayRuleset::LR2 ? lr2 : keyMode == 9 ? pms : normal)
+      [static_cast<std::size_t>(rank)];
 }
 
-JudgeWindowSet lr2TailWindows() {
-  return {.windows = {
-              symmetric(PGreat, 120000),
-              symmetric(Great, 120000),
-              symmetric(Good, 120000),
-              symmetric(Bad, 200000),
-              {Kpoor, -1000000, 0},
-          }};
-}
-
-JudgeWindowSet windowsFromMap(
-    const std::map<Judgement, std::pair<long long, long long>> &source) {
-  JudgeWindowSet result;
-  for (std::size_t index = 0; index < kWindowOrder.size(); ++index) {
-    const Judgement judgement = kWindowOrder[index];
-    const auto found = source.find(judgement);
-    result.windows[index] =
-        found == source.end()
-            ? TimingWindow{judgement, 1, 0}
-            : TimingWindow{judgement, found->second.first,
-                           found->second.second};
+void scaleWindows(JudgeWindowSet &set, int rank, int playbackRatePercent,
+                  int judgeScalePercent, bool pms, bool lr2) {
+  constexpr std::array<std::array<std::int64_t, 5>, 3> lr2Scaling{{
+      {0, 8000, 15000, 18000, 21000},
+      {0, 24000, 30000, 40000, 60000},
+      {0, 40000, 60000, 100000, 120000},
+  }};
+  for (std::size_t i = 0; i < 4; ++i) {
+    auto &window = set.windows[i];
+    if (lr2) {
+      if (i < 3) {
+        // Interpolate the LR2 rank table for DEFEXRANK percentages.
+        // A 120 ms tail edge follows GOOD scaling at every judgement tier.
+        const std::size_t row = window.lateMicros == 120000 ? 2 : i;
+        std::int64_t magnitude = 0;
+        if (rank >= 100) {
+          magnitude = window.lateMicros * rank / 100;
+        } else {
+          const int boundedRank = std::max(0, rank);
+          const std::size_t index = boundedRank / 25;
+          const auto low = lr2Scaling[row][index];
+          const auto high = lr2Scaling[row][index + 1];
+          magnitude = low + (high - low) * (boundedRank % 25) / 25;
+        }
+        window.earlyMicros = std::max(-magnitude, set.windows[3].earlyMicros);
+        window.lateMicros = std::min(magnitude, set.windows[3].lateMicros);
+      }
+    } else if (!pms || (i != 0 && i != 3)) {
+      window.earlyMicros = window.earlyMicros * rank / 100;
+      window.lateMicros = window.lateMicros * rank / 100;
+      if (pms) {
+        window.earlyMicros = std::clamp(window.earlyMicros,
+            set.windows[3].earlyMicros, set.windows[0].earlyMicros);
+        window.lateMicros = std::clamp(window.lateMicros,
+            set.windows[0].lateMicros, set.windows[3].lateMicros);
+      }
+    }
   }
-  return result;
-}
-
-std::int64_t scaleWindowEdge(std::int64_t value, int playbackRatePercent,
-                             int judgeScalePercent) noexcept {
-  constexpr std::int64_t denominator = 10000;
-  const std::int64_t numerator =
-      value * static_cast<std::int64_t>(playbackRatePercent) *
-      static_cast<std::int64_t>(judgeScalePercent);
-  constexpr std::int64_t roundingOffset = denominator / 2;
-  return numerator >= 0 ? (numerator + roundingOffset) / denominator
-                        : (numerator - roundingOffset) / denominator;
-}
-
-void scaleLr2Windows(JudgeWindowSet &set, int playbackRatePercent,
-                     int judgeScalePercent) {
-  const TimingWindow &bad = set.windows[3];
-  for (std::size_t index = 0; index < 3; ++index) {
-    TimingWindow &window = set.windows[index];
-    window.earlyMicros =
-        std::max(bad.earlyMicros,
-                 scaleWindowEdge(window.earlyMicros, playbackRatePercent,
-                                 judgeScalePercent));
-    window.lateMicros =
-        std::min(bad.lateMicros,
-                 scaleWindowEdge(window.lateMicros, playbackRatePercent,
-                                 judgeScalePercent));
+  // Custom judge rates affect PG/GREAT/GOOD only, with Java integer truncation.
+  const auto bad = set.windows[3];
+  for (std::size_t i = 0; i < 3; ++i) {
+    auto &window = set.windows[i];
+    window.earlyMicros = std::max(bad.earlyMicros,
+        window.earlyMicros * playbackRatePercent * judgeScalePercent / 10000);
+    window.lateMicros = std::min(bad.lateMicros,
+        window.lateMicros * playbackRatePercent * judgeScalePercent / 10000);
+    if (i > 0) {
+      window.earlyMicros = std::min(window.earlyMicros,
+                                   set.windows[i - 1].earlyMicros);
+      window.lateMicros = std::max(window.lateMicros,
+                                  set.windows[i - 1].lateMicros);
+    }
   }
-
-  set.windows[1].earlyMicros =
-      std::min(set.windows[1].earlyMicros, set.windows[0].earlyMicros);
-  set.windows[2].earlyMicros =
-      std::min(set.windows[2].earlyMicros, set.windows[1].earlyMicros);
-  set.windows[1].lateMicros =
-      std::max(set.windows[1].lateMicros, set.windows[0].lateMicros);
-  set.windows[2].lateMicros =
-      std::max(set.windows[2].lateMicros, set.windows[1].lateMicros);
 }
 
 void applyConstraint(JudgeWindowSet &set,
@@ -150,36 +134,65 @@ JudgeWindowContext windowContextForRole(NoteJudgeRole role) noexcept {
 GameplayJudgeRules compileGameplayJudgeRules(
     GameplayRuleset ruleset, int sourceRank, int playbackRatePercent,
     int judgeScalePercent, CourseJudgementConstraint constraint,
-    CandidateSelectionMode beatorajaSelection) {
+    CandidateSelectionMode beatorajaSelection, int keyMode,
+    std::optional<int> rankPercentOverride) {
+
   GameplayJudgeRules result;
   result.ruleset = ruleset;
-
-  if (ruleset == GameplayRuleset::Beatoraja) {
-    Judge judge(sourceRank);
-    judge.applyCourseJudgementConstraint(constraint);
-    judge.applyWindowScale(playbackRatePercent, judgeScalePercent);
-    const JudgeWindowSet windows = windowsFromMap(judge.timingWindows);
-    result.contexts.fill(windows);
-    result.candidateSelection = beatorajaSelection;
-    result.automaticPoorLateMicros = judge.timingWindows.at(Bad).second;
-    return result;
+  result.keyMode = keyMode;
+  result.effectiveJudgeRankPercent = rankPercentOverride;
+  const bool lr2 = ruleset == GameplayRuleset::LR2;
+  const bool pms = !lr2 && keyMode == 9;
+  const bool fiveKeys = !lr2 && (keyMode == 5 || keyMode == 10);
+  const bool keyboard = !lr2 && (keyMode == 24 || keyMode == 48);
+  auto &normal = result.contexts[contextIndex(JudgeWindowContext::Normal)];
+  auto &scratch = result.contexts[contextIndex(JudgeWindowContext::Scratch)];
+  auto &tail = result.contexts[contextIndex(JudgeWindowContext::LongNoteTail)];
+  auto &scratchTail = result.contexts[contextIndex(JudgeWindowContext::LongScratchTail)];
+  if (lr2) {
+    normal = makeWindows(21000, 60000, 120000, -200000, 200000, -1000000, 0);
+    tail = makeWindows(120000, 120000, 120000, -200000, 200000);
+    scratch = normal;
+    scratchTail = tail;
+  } else if (fiveKeys) {
+    normal = makeWindows(20000, 50000, 100000, -150000, 150000, -500000, 150000);
+    scratch = makeWindows(30000, 60000, 110000, -160000, 160000, -500000, 160000);
+    tail = makeWindows(120000, 150000, 200000, -250000, 250000);
+    scratchTail = makeWindows(130000, 160000, 110000, -260000, 260000);
+  } else if (pms) {
+    normal = makeWindows(20000, 50000, 117000, -183000, 183000, -500000, 175000);
+    tail = makeWindows(120000, 150000, 217000, -283000, 283000);
+    scratch = normal;
+    scratchTail = tail;
+  } else if (keyboard) {
+    normal = makeWindows(30000, 90000, 200000, -240000, 320000, -650000, 200000);
+    tail = makeWindows(160000, 200000, 260000, -240000, 320000);
+    tail.windows[0].earlyMicros = -25000;
+    tail.windows[1].earlyMicros = -75000;
+    tail.windows[2].earlyMicros = -140000;
+    scratch = normal;
+    scratchTail = tail;
+  } else {
+    normal = makeWindows(20000, 60000, 150000, -220000, 280000, -500000, 150000);
+    scratch = makeWindows(30000, 70000, 160000, -230000, 290000, -500000, 160000);
+    tail = makeWindows(120000, 160000, 200000, -220000, 280000);
+    scratchTail = makeWindows(130000, 170000, 210000, -230000, 290000);
   }
-
-  const JudgeWindowSet normal = lr2NormalWindows(sourceRank);
-  const JudgeWindowSet tail = lr2TailWindows();
-  result.contexts[contextIndex(JudgeWindowContext::Normal)] = normal;
-  result.contexts[contextIndex(JudgeWindowContext::Scratch)] = normal;
-  result.contexts[contextIndex(JudgeWindowContext::LongNoteTail)] = tail;
-  result.contexts[contextIndex(JudgeWindowContext::LongScratchTail)] = tail;
   for (JudgeWindowSet &context : result.contexts) {
-    scaleLr2Windows(context, playbackRatePercent, judgeScalePercent);
+    scaleWindows(context, rankPercentOverride.value_or(
+                              rankPercent(ruleset, sourceRank, keyMode)),
+                  playbackRatePercent, judgeScalePercent, pms, lr2);
     applyConstraint(context, constraint);
   }
-  result.candidateSelection = CandidateSelectionMode::LR2;
-  result.automaticPoorLateMicros = 200000;
-  result.repeatedKpoor = true;
-  result.multiBad = true;
-  result.rejectsLateBadForLongNoteHead = true;
+  result.candidateSelection = lr2 ? CandidateSelectionMode::LR2 : beatorajaSelection;
+  result.automaticPoorLateMicros = normal.windows[3].lateMicros;
+  result.comboKpoor = !fiveKeys && !pms;
+  result.singleMiss = pms;
+  result.vanishBad = !pms;
+  result.normalReleaseMarginMicros = pms ? 200000 : 0;
+  result.repeatedKpoor = !pms;
+  result.multiBad = lr2;
+  result.rejectsLateBadForLongNoteHead = lr2;
   return result;
 }
 

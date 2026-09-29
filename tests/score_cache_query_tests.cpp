@@ -28,6 +28,8 @@
 
 namespace {
 
+// These cache fixtures represent historical rows without a known ruleset.
+// Their zero indexed revision preserves the legacy participation policy.
 constexpr const char *kNeutralProvenanceJson =
     R"({"playback":{"percent":100}})";
 
@@ -140,6 +142,7 @@ bool createScoreDatabase(const std::filesystem::path &path,
                    "combo_break INTEGER NOT NULL,"
                    "final_gauge REAL NOT NULL DEFAULT 0,"
                    "clear_type INTEGER NOT NULL,"
+                   "ruleset_version INTEGER NOT NULL DEFAULT 0,"
                    "eligibility INTEGER NOT NULL DEFAULT 2,"
                    "provenance_json TEXT NOT NULL DEFAULT "
                    "'{\"playback\":{\"percent\":100}}',"
@@ -205,6 +208,7 @@ void attachScoreDatabaseForTest(sqlite3 *db) {
                   "slow INTEGER NOT NULL DEFAULT 0,"
                   "final_gauge REAL NOT NULL DEFAULT 0,"
                   "clear_type INTEGER NOT NULL,"
+                  "ruleset_version INTEGER NOT NULL DEFAULT 0,"
                   "eligibility INTEGER NOT NULL DEFAULT 2,"
                   "provenance_json TEXT NOT NULL DEFAULT "
                   "'{\"playback\":{\"percent\":100}}',"
@@ -219,9 +223,69 @@ void attachScoreDatabaseForTest(sqlite3 *db) {
   }
 }
 
+int testHistoricalOnlyAttachedCachesStayEmptyWithoutRebuilding() {
+  const auto path = std::filesystem::temp_directory_path() /
+                    "asobmashow_historical_attached_cache_test.sqlite";
+  std::filesystem::remove(path);
+  ASSERT_TRUE(createScoreDatabase(path, std::string(64, 'a'), 100),
+              "historical score fixture initializes");
+  sqlite3 *scores = nullptr;
+  ASSERT_EQ(SQLITE_OK, sqlite3_open(path.string().c_str(), &scores), "open history");
+  execOrAbort(scores, "UPDATE scores SET ruleset_version=3,eligibility=0,"
+      "provenance_json='{\"playback\":{\"percent\":100},\"ruleset\":{"
+      "\"id\":\"lr2\",\"version\":3,\"scoringModel\":\"asobmashow-v1\","
+      "\"judgementModel\":\"lr2-v1\",\"gaugeModel\":\"lr2-gauge-v1\"}}'");
+  // A large historical profile must not be rescanned for each menu lookup.
+  execOrAbort(scores, "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000) "
+      "INSERT INTO scores(chart_sha256,score,max_score,max_combo,combo_break,clear_type,"
+      "ruleset_version,eligibility,provenance_json) SELECT chart_sha256,score,max_score,"
+      "max_combo,combo_break,clear_type,ruleset_version,eligibility,provenance_json FROM scores,n");
+  sqlite3_close(scores);
+  sqlite3 *charts = nullptr;
+  ASSERT_EQ(SQLITE_OK, sqlite3_open(":memory:", &charts), "open chart connection");
+  ASSERT_FALSE(score_cache_queries::prepareScoreQueryDatabase(charts, path).has_value(),
+               "first attached history prepare succeeds");
+  struct RepairWork { int rebuilds = 0; int scannedRows = 0; } work;
+  sqlite3_trace_v2(charts, SQLITE_TRACE_STMT | SQLITE_TRACE_PROFILE,
+      [](unsigned mask, void *count, void *raw, void *) {
+        const std::string_view sql = sqlite3_sql(static_cast<sqlite3_stmt *>(raw));
+        auto &work = *static_cast<RepairWork *>(count);
+        if (mask == SQLITE_TRACE_STMT && sql.starts_with("DELETE FROM") &&
+            sql.find("score_sha256_best_score_cache") != std::string_view::npos) {
+          ++work.rebuilds;
+        }
+        if (mask == SQLITE_TRACE_PROFILE && sql.starts_with("SELECT 1 FROM") &&
+            sql.find("score_db.scores") != std::string_view::npos) {
+          work.scannedRows += sqlite3_stmt_status(static_cast<sqlite3_stmt *>(raw),
+                                                 SQLITE_STMTSTATUS_FULLSCAN_STEP, 0);
+        }
+        return 0;
+      }, &work);
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    ASSERT_FALSE(score_cache_queries::prepareScoreQueryDatabase(charts, path).has_value(),
+                 "repeated attached history prepare succeeds");
+  }
+  ASSERT_EQ(0, work.rebuilds, "legitimately empty attached caches do not rebuild");
+  ASSERT_EQ(0, work.scannedRows, "empty policy index avoids rescanning historical rows");
+  ASSERT_EQ(0, queryInt(charts, "SELECT COUNT(*) FROM score_db.score_sha256_best_score_cache"),
+            "old-policy scores remain excluded");
+  // Eligibility can change independently of the cached rows. Real missing
+  // summaries must still be repaired instead of trusting an empty cache forever.
+  execOrAbort(charts, "UPDATE score_db.scores SET ruleset_version=0 WHERE id=1");
+  ASSERT_FALSE(score_cache_queries::prepareScoreQueryDatabase(charts, path).has_value(),
+               "eligible history repair succeeds");
+  ASSERT_EQ(1, work.rebuilds, "eligible rows repair missing summaries once");
+  ASSERT_EQ(1, queryInt(charts, "SELECT COUNT(*) FROM score_db.score_sha256_best_score_cache"),
+            "repaired attached cache contains eligible score");
+  sqlite3_close(charts);
+  std::filesystem::remove(path);
+  return 0;
+}
+
 } // namespace
 
 int main() {
+  if (testHistoricalOnlyAttachedCachesStayEmptyWithoutRebuilding() != 0) return 1;
   sqlite3 *db = nullptr;
   if (sqlite3_open(":memory:", &db) != SQLITE_OK) {
     std::cerr << "open failed" << std::endl;

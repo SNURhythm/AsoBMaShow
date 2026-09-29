@@ -966,6 +966,7 @@ struct StageDecode {
   std::size_t stageCount = 1;
   ReplayStageDecodeSource source = ReplayStageDecodeSource::Stock;
   bool unsupportedExtension = false;
+  bool obsoleteRuleset = false;
 };
 
 bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
@@ -1079,6 +1080,12 @@ bool decodeStage(const Json &stage, bool course, std::size_t expectedIndex,
       (!course && output.restMicrosAfterStage != 0) ||
       output.playback.setup.chart.keyMode != expectedKeyMode) {
     return fail(diagnostic, "Replay extension context is inconsistent");
+  }
+  if (isObsoleteRulesetDescriptor(output.playback.setup.ruleset)) {
+    output.obsoleteRuleset = true;
+    return fail(diagnostic,
+                "Replay uses an obsolete ruleset; original input is preserved "
+                "but faithful playback is unavailable.");
   }
   const auto validation =
       validateReplayPlayback(output.playback, ReplaySetupSource::AsoExtension,
@@ -1292,6 +1299,7 @@ BeatorajaReplayCodec::decode(std::span<const std::byte> encoded,
                      outcome.diagnostic) ||
         !aggregate.include(stage.playback, limits_, outcome.diagnostic)) {
       outcome.unsupportedAsoExtension |= stage.unsupportedExtension;
+      outcome.obsoleteRuleset |= stage.obsoleteRuleset;
       return outcome;
     }
     stages.push_back(std::move(stage));

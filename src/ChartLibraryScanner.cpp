@@ -1884,6 +1884,28 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     }
   };
 
+  // A Full refresh may cover only an import destination or subfolder. Only a
+  // traversal covering every configured entry can finish a metadata rebuild
+  // or discard library-wide migration/cache state.
+  const auto coversFullLibrary = [&] {
+    const std::vector<ChartEntry> effectiveEntries =
+        session.SelectEffectiveEntries();
+    return std::ranges::all_of(effectiveEntries, [&](const ChartEntry &entry) {
+      const std::string entryText = checkpointPathTextForDb(entry.path);
+      const char separator =
+          static_cast<char>(std::filesystem::path::preferred_separator);
+      return std::ranges::any_of(roots, [&](const auto &root) {
+        const std::string rootText = checkpointPathTextForDb(root);
+        if (entryText == rootText) {
+          return true;
+        }
+        return entryText.size() > rootText.size() &&
+               entryText.compare(0, rootText.size(), rootText) == 0 &&
+               entryText[rootText.size()] == separator;
+      });
+    });
+  };
+
   const bool noScanWork =
       diffs.empty() && documentFlagUpdates.empty() &&
       sourcePreferenceRefreshPaths.empty() &&
@@ -1906,7 +1928,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     bool finalized = traversalHealthy && !shouldStop();
     if (reconcileMode == ReconcileMode::Full) {
       finalized = finalized && session.ClearScanCheckpoint();
-      if (finalized) {
+      if (finalized && coversFullLibrary()) {
         finalized = session.ClearChartMetadataRebuildRequired();
       }
     }
@@ -3311,9 +3333,10 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   bool committed = storageHealthy && traversalHealthy && commitSucceeded;
   if (!scanInterrupted && committed) {
     bool finalized = true;
+    const bool fullLibraryCoverage = coversFullLibrary();
     if (reconcileMode == ReconcileMode::Full) {
       finalized = session.ClearScanCheckpoint();
-      if (finalized) {
+      if (finalized && fullLibraryCoverage) {
         finalized = session.ClearChartMetadataRebuildRequired();
       }
     }
@@ -3325,29 +3348,6 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     // destination would otherwise delete index files for archives outside its
     // scope. Skipping the prune is always safe (the cache is simply left for a
     // later full-library pass).
-    const std::vector<ChartEntry> effectiveEntries =
-        session.SelectEffectiveEntries();
-    // Coverage uses the normalized DB path text (the same identity archive keys
-    // and checkpoints use) rather than a filesystem-relative comparison, so it
-    // still matches when the scan roots are platform-resolved differently from
-    // the stored entry path (e.g. iOS security-scoped containers). An entry is
-    // covered when it equals a root or starts with a root plus a separator;
-    // any uncovered entry conservatively skips the prune.
-    const bool fullLibraryCoverage = std::ranges::all_of(
-        effectiveEntries, [&](const ChartEntry &entry) {
-          const std::string entryText = checkpointPathTextForDb(entry.path);
-          const char separator =
-              static_cast<char>(std::filesystem::path::preferred_separator);
-          return std::ranges::any_of(roots, [&](const auto &root) {
-            const std::string rootText = checkpointPathTextForDb(root);
-            if (entryText == rootText) {
-              return true;
-            }
-            return entryText.size() > rootText.size() &&
-                   entryText.compare(0, rootText.size(), rootText) == 0 &&
-                   entryText[rootText.size()] == separator;
-          });
-        });
     if (committed && reconcileMode == ReconcileMode::Full &&
         fullLibraryCoverage) {
       const std::size_t pruned = archive_file::pruneArchiveIndexCache(

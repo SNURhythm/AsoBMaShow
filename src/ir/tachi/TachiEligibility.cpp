@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <ranges>
+#include <limits>
 
 namespace ir::tachi {
 namespace {
@@ -26,9 +27,14 @@ bool chartHashMatches(std::string_view submitted, std::string_view recorded) {
   return submitted.empty() ? recorded.empty() : submitted == recorded;
 }
 
-bool canonicalJudgeWindows(const ScoreStageProvenance &stage, int rank) {
+bool canonicalJudgeWindows(const ScoreStageProvenance &stage, int rank,
+                           int keyMode) {
   const auto expected =
-      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, rank);
+      gameplay::compileGameplayJudgeRules(
+          GameplayRuleset::LR2, rank, 100, 100,
+          CourseJudgementConstraint::None,
+          gameplay::CandidateSelectionMode::LR2, keyMode,
+          stage.effectiveJudgeRankPercent);
   if (stage.effectiveJudgeWindows.size() != 20) {
     return false;
   }
@@ -107,12 +113,20 @@ validateBokutachiEligibility(const IrSubmission &submission) noexcept {
                       "Score provenance does not match this chart.");
     }
     if (stage.judgeRankSource != JudgeRankSource::Chart ||
-        !stage.sourceJudgeRank.has_value() || *stage.sourceJudgeRank < 0 ||
-        *stage.sourceJudgeRank > 4) {
+        !stage.sourceJudgeRank.has_value() ||
+        (!stage.effectiveJudgeRankPercent.has_value() &&
+         (*stage.sourceJudgeRank < 0 || *stage.sourceJudgeRank > 4))) {
       return rejected(SubmissionEligibilityReason::UnverifiedProvenance,
                       "Chart judge rank could not be verified.");
     }
-    if (!canonicalJudgeWindows(stage, *stage.sourceJudgeRank)) {
+    if (stage.effectiveJudgeRankPercent.has_value() &&
+        (*stage.sourceJudgeRank <= 0 ||
+         *stage.sourceJudgeRank > std::numeric_limits<int>::max() / 75 ||
+         *stage.effectiveJudgeRankPercent != *stage.sourceJudgeRank * 75 / 100)) {
+      return rejected(SubmissionEligibilityReason::ModifiedJudgePolicy,
+                      "Modified judge rank cannot be submitted.");
+    }
+    if (!canonicalJudgeWindows(stage, *stage.sourceJudgeRank, submission.keyMode)) {
       return rejected(SubmissionEligibilityReason::ModifiedJudgePolicy,
                       "Modified judge windows cannot be submitted.");
     }

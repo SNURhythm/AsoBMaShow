@@ -47,7 +47,7 @@ result_persistence::ChartScoreWrite scoreFor(int index = 0) {
   score.pGreat = 3;
   score.great = 1;
   score.good = 1;
-  score.fast = 1;
+  score.fast = 0;
   score.slow = 1;
   score.finalGauge = index == 0 ? 72.5F : 62.5F;
   score.clearType = kClearTypeNormalClearRank;
@@ -199,6 +199,7 @@ std::unique_ptr<bms_parser::Chart> parsedUndefinedLongNoteChartFor(
 void testChartRecallReappliesSavedRandomAndLongNoteSetup() {
   auto saved = chartResult();
   saved.score.provenance = provenanceFor(saved.score, {2, 1, 3});
+  saved.score.provenance.ruleset.version = 3;
   saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
   std::atomic_bool cancelled{false};
 
@@ -208,6 +209,9 @@ void testChartRecallReappliesSavedRandomAndLongNoteSetup() {
           std::atomic_bool &) -> std::unique_ptr<bms_parser::Chart> {
         return parsedUndefinedLongNoteChartFor(saved.score, {2, 1, 3}, 6);
       });
+  expect(restored.value &&
+             restored.value->state.gaugeRules().ruleset == GameplayRuleset::LR2,
+         "historical LR2 recall retains its recorded ruleset identity");
   expect(restored.value && restored.value->chart->Meta.TotalNotes == 5 &&
              restored.value->chart->Meta.LnMode ==
                  long_note_mode::kLnValue,
@@ -230,6 +234,7 @@ void testChartRecallUsesOnlySavedFacts() {
   saved.score.maxCombo = saved.score.maxScore / 2;
   saved.score.comboBreak = 0;
   saved.score.clearType = kClearTypeFullComboRank;
+  saved.score.badPoints = 0;
   saved.resultFingerprint = result_persistence::modernResultFingerprint(saved);
   std::atomic_bool cancelled{false};
   int loads = 0;
@@ -259,6 +264,7 @@ void testChartRecallUsesOnlySavedFacts() {
   expect(view.state.getScore() == saved.score.score &&
              view.state.maxCombo == saved.score.maxCombo &&
              view.state.comboBreak == saved.score.comboBreak &&
+             view.state.stagePassedNotes == saved.score.maxScore / 2 &&
              view.state.judgeCount.at(PGreat) == saved.score.pGreat &&
              view.state.judgeCount.at(Great) == saved.score.great &&
              view.state.judgeCount.at(Good) == saved.score.good &&

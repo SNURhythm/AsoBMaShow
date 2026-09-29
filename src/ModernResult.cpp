@@ -141,9 +141,9 @@ bool validateTiming(const ChartScoreWrite &score,
       diagnostic = "judgement timing cannot be negative";
       return false;
     }
-    if (judgement == Kpoor || judgement == None) {
+    if (judgement == None) {
       if (count.fast != 0 || count.slow != 0) {
-        diagnostic = "KPOOR and NONE cannot have judgement timing";
+        diagnostic = "NONE cannot have judgement timing";
         return false;
       }
       continue;
@@ -153,10 +153,20 @@ bool validateTiming(const ChartScoreWrite &score,
       diagnostic = "judgement timing exceeds its result total";
       return false;
     }
-    fast += count.fast;
-    slow += count.slow;
+    if (judgement != PGreat) {
+      fast += count.fast;
+      slow += count.slow;
+    }
   }
-  if (fast != score.fast || slow != score.slow) {
+  const auto &pGreatTiming = timing->byJudgement[PGreat];
+  const auto &emptyPoorTiming = timing->byJudgement[Kpoor];
+  // Earlier durable results included PG in aggregate FAST/SLOW and did not
+  // retain empty POOR timing. Their absent BP fact identifies that contract.
+  const bool historicalTiming = !score.badPoints &&
+      emptyPoorTiming.fast == 0 && emptyPoorTiming.slow == 0 &&
+      fast + pGreatTiming.fast == score.fast &&
+      slow + pGreatTiming.slow == score.slow;
+  if ((fast != score.fast || slow != score.slow) && !historicalTiming) {
     diagnostic = "judgement timing disagrees with aggregate timing";
     return false;
   }
@@ -198,6 +208,16 @@ bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
     diagnostic = "chart result outcome facts are invalid or inconsistent";
     return false;
   }
+  if (score.badPoints &&
+      (*score.badPoints < 0 ||
+       static_cast<std::int64_t>(*score.badPoints) <
+           static_cast<std::int64_t>(score.bad) + score.poor + score.kPoor ||
+       static_cast<std::int64_t>(*score.badPoints) >
+           static_cast<std::int64_t>(score.bad) + score.poor + score.kPoor +
+               score.maxScore / 2)) {
+    diagnostic = "chart result BP is inconsistent with passed notes";
+    return false;
+  }
   if (!validateTiming(score, timing, diagnostic)) {
     return false;
   }
@@ -226,6 +246,11 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   encoder.float32(score.finalGauge);
   encoder.integer(static_cast<std::int32_t>(score.clearType));
   encoder.string(serializeScoreProvenance(score.provenance));
+  if (score.badPoints) {
+    // A negative marker cannot collide with the following positive key mode.
+    encoder.integer(static_cast<std::int32_t>(-1));
+    encoder.integer(static_cast<std::int32_t>(*score.badPoints));
+  }
 }
 
 void appendGaugeHistory(CanonicalEncoder &encoder,
@@ -258,7 +283,8 @@ bool sameScoreOutcome(const ChartScoreWrite &left,
          left.kPoor == right.kPoor && left.fast == right.fast &&
          left.slow == right.slow &&
          sameFloatBits(left.finalGauge, right.finalGauge) &&
-         left.clearType == right.clearType;
+         left.clearType == right.clearType &&
+         left.badPoints == right.badPoints;
 }
 
 } // namespace
@@ -305,6 +331,10 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
       meta.TotalNotes > 0 && derivedMaximum ? *derivedMaximum : -1;
   const int clearType = clear_policy::capRankForPlayback(
       state.getClearTypeRank(), provenance.playback);
+  const std::int64_t badPoints =
+      static_cast<std::int64_t>(judgementCount(state, Bad)) +
+      judgementCount(state, Poor) + judgementCount(state, Kpoor) +
+      meta.TotalNotes - state.stagePassedNotes;
   return {
       .chartPath =
           Utils::GetStoragePathUtf8RelativeToDocuments(meta.BmsPath, "BMS/"),
@@ -328,6 +358,8 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
       .finalGauge = state.currentGauge,
       .clearType = clearType,
       .provenance = provenance,
+      .badPoints = badPoints >= 0 && badPoints <= std::numeric_limits<int>::max()
+                       ? static_cast<int>(badPoints) : -1,
   };
 }
 

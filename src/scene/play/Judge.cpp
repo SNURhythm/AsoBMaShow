@@ -20,9 +20,7 @@ long long scaleWindowEdge(long long value, int playbackRatePercent,
   const long long numerator = value *
                               static_cast<long long>(playbackRatePercent) *
                               static_cast<long long>(judgeScalePercent);
-  const long long roundingOffset = denominator / 2;
-  return numerator >= 0 ? (numerator + roundingOffset) / denominator
-                        : (numerator - roundingOffset) / denominator;
+  return numerator / denominator;
 }
 } // namespace
 
@@ -48,11 +46,13 @@ void Judge::applyCourseJudgementConstraint(
 
 void Judge::applyWindowScale(int playbackRatePercent, int judgeScalePercent) {
   for (auto &[judgement, window] : timingWindows) {
-    (void)judgement;
-    window.first =
-        scaleWindowEdge(window.first, playbackRatePercent, judgeScalePercent);
-    window.second =
-        scaleWindowEdge(window.second, playbackRatePercent, judgeScalePercent);
+    if (judgement != PGreat && judgement != Great && judgement != Good) {
+      continue;
+    }
+    window.first = std::max(timingWindows.at(Bad).first,
+        scaleWindowEdge(window.first, playbackRatePercent, judgeScalePercent));
+    window.second = std::min(timingWindows.at(Bad).second,
+        scaleWindowEdge(window.second, playbackRatePercent, judgeScalePercent));
   }
 }
 
@@ -89,7 +89,7 @@ JudgeResult Judge::judgeNow(const bms_parser::Note *Note,
   return JudgeResult{None, diff};
 }
 
-int Judge::clampRank(const int rank) { return std::clamp(rank, 0, 3); };
+int Judge::clampRank(const int rank) { return rank >= 0 && rank <= 4 ? rank : 2; };
 
 std::string Judge::getRankDescription(const int Rank) {
   switch (clampRank(Rank)) {
@@ -101,6 +101,8 @@ std::string Judge::getRankDescription(const int Rank) {
     return "NORMAL";
   case 3:
     return "EASY";
+  case 4:
+    return "VERY EASY";
   default:
     return "EASY";
   }

@@ -41,6 +41,11 @@ prepare_bgfx_project() {
     rm "${build_dir}"
   fi
 
+  # Compiler and SDK paths in CMake's state can outlive an Xcode upgrade.
+  # Refresh that state while retaining build products outside CMakeFiles.
+  # CMake 3.22/3.23 lack --fresh, so remove its two metadata paths directly.
+  rm -f "${build_dir}/CMakeCache.txt"
+  rm -rf "${build_dir}/CMakeFiles"
   cmake \
     -S "${ROOT_DIR}/bgfx" \
     -B "${build_dir}" \

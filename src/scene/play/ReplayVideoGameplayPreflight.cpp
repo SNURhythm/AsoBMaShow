@@ -372,10 +372,7 @@ void ReplayJudgementAuthorityPlayback::recordApplied(const ReplayEvent &event) {
   if (judge.isComboBreak()) {
     ++comboBreak_;
   }
-  if (event.judgement == Kpoor) {
-    return;
-  }
-  if (event.diffMicros < 0) {
+  if (event.diffMicros <= 0) {
     ++judgementFastSlowCounters_[event.judgement].fast;
   } else if (event.diffMicros > 0) {
     ++judgementFastSlowCounters_[event.judgement].slow;

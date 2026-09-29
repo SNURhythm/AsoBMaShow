@@ -11,7 +11,6 @@
 
 namespace gameplay {
 namespace {
-constexpr std::int64_t kMaximumReplayWindowMagnitude = 2'000'000;
 constexpr std::array<Judgement, 5> kRequiredJudgements{
     PGreat, Great, Good, Bad, Kpoor};
 constexpr std::array<JudgeWindowContext, 4> kRequiredContexts{
@@ -39,6 +38,8 @@ bool chartIdentityMatches(const ScoreStageProvenance &stage,
 
 std::optional<std::array<JudgeWindowSet, kRequiredContexts.size()>>
 validatedReplayWindows(const ScoreStageProvenance &snapshot) {
+  const auto maximumMagnitude = maximumRecordedJudgeWindowMagnitude(
+      snapshot.effectiveJudgeRankPercent);
   if (snapshot.effectiveJudgeWindows.size() !=
       kRequiredContexts.size() * kRequiredJudgements.size()) {
     return std::nullopt;
@@ -65,8 +66,8 @@ validatedReplayWindows(const ScoreStageProvenance &snapshot) {
     if (found[index] || recorded.earlyMicros > 0 ||
         recorded.lateMicros < 0 ||
         recorded.earlyMicros > recorded.lateMicros ||
-        recorded.earlyMicros < -kMaximumReplayWindowMagnitude ||
-        recorded.lateMicros > kMaximumReplayWindowMagnitude) {
+        recorded.earlyMicros < -maximumMagnitude ||
+        recorded.lateMicros > maximumMagnitude) {
       return std::nullopt;
     }
     found[index] = true;
@@ -79,6 +80,22 @@ validatedReplayWindows(const ScoreStageProvenance &snapshot) {
   return result;
 }
 
+int normalRankPercent(const bms_parser::ChartMeta &meta,
+                      GameplayRuleset ruleset) {
+  return ruleset == GameplayRuleset::Beatoraja && meta.KeyMode == 9 ? 70 : 75;
+}
+
+std::optional<int> chartRankPercent(const bms_parser::ChartMeta &meta,
+                                    GameplayRuleset ruleset) {
+  if (meta.RankType != bms_parser::JudgeRankType::DefExRank) {
+    return std::nullopt;
+  }
+  const int normal = normalRankPercent(meta, ruleset);
+  return meta.Rank > 0
+             ? static_cast<int>(static_cast<std::int64_t>(meta.Rank) * normal / 100)
+             : normal;
+}
+
 std::optional<GameplayJudgeRules> compileJudge(
     const bms_parser::ChartMeta &meta,
     const GameplayRulesetPolicyBuildInput &input,
@@ -86,12 +103,20 @@ std::optional<GameplayJudgeRules> compileJudge(
   GameplayJudgeRules rules = compileGameplayJudgeRules(
       input.ruleset, input.sourceRank, input.playbackRatePercent,
       input.judgeScalePercent, input.courseJudgement,
-      input.beatorajaCandidateSelection);
+      input.beatorajaCandidateSelection, meta.KeyMode,
+      chartRankPercent(meta, input.ruleset));
   if (!input.replaySnapshot.has_value()) {
     return rules;
   }
 
   const auto &snapshot = *input.replaySnapshot;
+  if (snapshot.effectiveJudgeRankPercent.has_value()) {
+    if (*snapshot.effectiveJudgeRankPercent < 0) {
+      diagnostic = "Replay policy snapshot has an invalid judge rank.";
+      return std::nullopt;
+    }
+    rules.effectiveJudgeRankPercent = snapshot.effectiveJudgeRankPercent;
+  }
   if (!chartIdentityMatches(snapshot, meta)) {
     diagnostic = "Replay policy snapshot does not match this chart.";
     return std::nullopt;
@@ -134,6 +159,12 @@ GameplayPolicyBuildOutcome buildGameplayRulesetPolicy(
     return failure(GameplayPolicyBuildStatus::InvalidChart,
                    "The chart gauge TOTAL is not finite.");
   }
+  if (meta.RankType == bms_parser::JudgeRankType::DefExRank &&
+      meta.Rank > std::numeric_limits<int>::max() /
+                      normalRankPercent(meta, input.ruleset)) {
+    return failure(GameplayPolicyBuildStatus::InvalidChart,
+                   "The chart extended judge rank exceeds the supported range.");
+  }
   if (input.playbackRatePercent <= 0 || input.judgeScalePercent <= 0) {
     return failure(GameplayPolicyBuildStatus::InvalidChart,
                    "The gameplay timing scale is invalid.");
@@ -142,7 +173,8 @@ GameplayPolicyBuildOutcome buildGameplayRulesetPolicy(
   const GameplayJudgeRules canonicalJudge = compileGameplayJudgeRules(
       input.ruleset, input.sourceRank, input.playbackRatePercent,
       input.judgeScalePercent, input.courseJudgement,
-      input.beatorajaCandidateSelection);
+      input.beatorajaCandidateSelection, meta.KeyMode,
+      chartRankPercent(meta, input.ruleset));
   std::string replayDiagnostic;
   const auto judgeRules = compileJudge(meta, input, replayDiagnostic);
   if (!judgeRules.has_value()) {

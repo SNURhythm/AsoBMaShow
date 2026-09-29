@@ -72,6 +72,7 @@ enum class CourseReplayContextState {
   FileIoFailure,
   DecodeFailed,
   UnsupportedExtension,
+  ObsoleteRuleset,
   ReplayInvalid,
   SharedFactsMismatch,
 };
@@ -81,6 +82,8 @@ enum class CourseReplayContextState {
   switch (state) {
   case CourseReplayContextState::Ready:
     return ReplayState::Verified;
+  case CourseReplayContextState::ObsoleteRuleset:
+    return ReplayState::Obsolete;
   case CourseReplayContextState::FileCorrupt:
     return ReplayState::Corrupt;
   case CourseReplayContextState::UnsupportedExtension:

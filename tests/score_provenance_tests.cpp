@@ -76,6 +76,52 @@ void testBpmGuideOnlyModifiesVariableTempoAttempt() {
   assert(variableResult.eligibility == ScoreEligibility::Modified);
 }
 
+void testPreviousRulesetsCannotRemainVerified() {
+  for (const RulesetDescriptor previous : {
+           RulesetDescriptor{.id = "lr2", .version = 3,
+                             .scoringModel = "asobmashow-v1",
+                             .judgementModel = "lr2-v1",
+                             .gaugeModel = "lr2-gauge-v1"},
+           RulesetDescriptor{.id = "beatoraja", .version = 2,
+                             .scoringModel = "asobmashow-v1",
+                             .judgementModel = "bms-rank-v1",
+                             .gaugeModel = "beatoraja-profile-gauge-v2"}}) {
+    auto saved = sampleVerifiedProvenance("previous-rules");
+    saved.ruleset = previous;
+    assert(scoreEligibilityForProvenance(saved) == ScoreEligibility::Modified);
+  }
+}
+
+void testPreviousLr2ZeroTotalRemainsReadable() {
+  auto saved = sampleVerifiedProvenance("previous-zero-total");
+  saved.ruleset = {.id = "lr2", .version = 3,
+                   .scoringModel = "asobmashow-v1",
+                   .judgementModel = "lr2-v1",
+                   .gaugeModel = "lr2-gauge-v1"};
+  saved.stages.front().effectiveGaugeTotal = 0.0;
+  std::string error;
+  const auto serialized = serializeValidatedScoreProvenance(saved, error);
+  assert(serialized.has_value());
+  const auto decoded = deserializeScoreProvenance(*serialized, error);
+  assert(decoded.has_value());
+  assert(decoded->ruleset == saved.ruleset);
+  assert(scoreEligibilityForProvenance(*decoded) == ScoreEligibility::Modified);
+}
+
+void testExtendedJudgeRankPercentSurvivesRoundTrip() {
+  auto root = nlohmann::json::parse(
+      serializeScoreProvenance(sampleVerifiedProvenance("extended-rank")));
+  root["stages"][0]["effectiveJudgeRankPercent"] = 112;
+  std::string error;
+  const auto decoded = deserializeScoreProvenance(root.dump(), error);
+  assert(decoded.has_value());
+  const auto restored = nlohmann::json::parse(serializeScoreProvenance(*decoded));
+  assert(restored["stages"][0].contains("effectiveJudgeRankPercent"));
+  assert(restored["stages"][0]["effectiveJudgeRankPercent"] == 112);
+  root["stages"][0]["effectiveJudgeRankPercent"] = -1;
+  assert(!deserializeScoreProvenance(root.dump(), error).has_value());
+}
+
 void testRulesetContract() {
   const RulesetDescriptor rules = RulesetDescriptor::Current();
   assert(rules.id == "lr2");
@@ -88,7 +134,7 @@ void testRulesetContract() {
   const RulesetDescriptor beatoraja =
       RulesetDescriptor::For(GameplayRuleset::Beatoraja);
   assert(beatoraja.id == "beatoraja");
-  assert(beatoraja.version == 2);
+  assert(beatoraja.version == 3);
   assert(beatoraja.scoringModel == "asobmashow-v1");
   assert(beatoraja.judgementModel == "bms-rank-v1");
   assert(beatoraja.gaugeModel == "beatoraja-profile-gauge-v2");
@@ -593,6 +639,7 @@ void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {
   auto root = nlohmann::json::parse(
       serializeScoreProvenance(makeScoreProvenance(input)));
   root["schemaVersion"] = 3;
+  root["ruleset"]["version"] = 2;
   root["ruleset"].erase("id");
   auto &stage = root["stages"][0];
   stage.erase("totalNotes");
@@ -611,8 +658,10 @@ void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {
   const auto migrated = deserializeScoreProvenance(root.dump(), error);
   assert(error.empty());
   assert(migrated.has_value());
-  assert(migrated->ruleset ==
-         RulesetDescriptor::For(GameplayRuleset::Beatoraja));
+  assert(migrated->ruleset.id == "beatoraja");
+  assert(migrated->ruleset.version == 2);
+  assert(!isSupportedRulesetDescriptor(migrated->ruleset));
+  assert(scoreEligibilityForProvenance(*migrated) == ScoreEligibility::Modified);
   assert(migrated->stages.front().effectiveJudgeWindows.size() == 20);
   assert(migrated->stages.front().totalNotes == 0);
   assert(migrated->stages.front().effectiveGaugeTotal == 0.0);
@@ -622,13 +671,8 @@ void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {
   replay.provenance = *migrated;
   StartOptions options;
   applyReplayProvenanceToStartOptions(options, replay);
-  assert(options.replayRulesetOverride.has_value());
-  assert(options.replayRulesetOverride->totalNotes ==
-         input.chartMeta.TotalNotes);
-  assert(options.replayRulesetOverride->authoredGaugeTotal ==
-         input.chartMeta.Total);
-  assert(options.replayRulesetOverride->effectiveGaugeTotal ==
-         input.chartMeta.Total);
+  // Preserve readable historical proof without replaying retired algorithms.
+  assert(!options.replayRulesetOverride.has_value());
 
   replay.provenance.stages.front().totalNotes = 1;
   StartOptions partialProof;
@@ -1073,6 +1117,9 @@ void testTargetScoreOptionUsesPinnedScoreDataEncoding() {
 } // namespace
 
 int main() {
+  testExtendedJudgeRankPercentSurvivesRoundTrip();
+  testPreviousLr2ZeroTotalRemainsReadable();
+  testPreviousRulesetsCannotRemainVerified();
   testBeatorajaZeroTotalCannotBeSerialized();
   testRulesetContract();
   testBpmGuideOnlyModifiesVariableTempoAttempt();

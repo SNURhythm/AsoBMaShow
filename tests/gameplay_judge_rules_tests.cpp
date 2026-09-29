@@ -54,11 +54,11 @@ void assertRankWindows(int rank, std::int64_t pgreat, std::int64_t great,
   for (const JudgeWindowContext context :
        {JudgeWindowContext::LongNoteTail,
         JudgeWindowContext::LongScratchTail}) {
-    assertWindow(judge, context, PGreat, -120000, 120000);
-    assertWindow(judge, context, Great, -120000, 120000);
-    assertWindow(judge, context, Good, -120000, 120000);
+    assertWindow(judge, context, PGreat, -good, good);
+    assertWindow(judge, context, Great, -good, good);
+    assertWindow(judge, context, Good, -good, good);
     assertWindow(judge, context, Bad, -200000, 200000);
-    assertWindow(judge, context, Kpoor, -1000000, 0);
+    assertWindow(judge, context, Kpoor, 0, 0);
   }
 
   assert(judge.judgeAt(NoteJudgeRole::Normal, 0, -pgreat).judgement ==
@@ -154,51 +154,95 @@ void testLr2PracticeScalingAndCourseConstraints() {
          noGreat.window(JudgeWindowContext::Normal, PGreat)->lateMicros);
 }
 
-void testBeatorajaCharacterizationAcrossContexts() {
-  for (int rank = 0; rank < 4; ++rank) {
-    const Judge legacy(rank);
-    const auto rules = gameplay::compileGameplayJudgeRules(
-        GameplayRuleset::Beatoraja, rank, 100, 100,
-        CourseJudgementConstraint::None, CandidateSelectionMode::Score);
-    assert(rules.ruleset == GameplayRuleset::Beatoraja);
-    assert(rules.candidateSelection == CandidateSelectionMode::Score);
-    assert(!rules.repeatedKpoor);
-    assert(!rules.multiBad);
-    assert(!rules.rejectsLateBadForLongNoteHead);
-    assert(rules.automaticPoorLateMicros ==
-           legacy.timingWindows.at(Bad).second);
-
-    const auto compiled = CompiledGameplayJudge::from(rules);
-    for (const auto context : {JudgeWindowContext::Normal,
-                               JudgeWindowContext::Scratch,
-                               JudgeWindowContext::LongNoteTail,
-                               JudgeWindowContext::LongScratchTail}) {
-      for (const Judgement judgement : kJudgements) {
-        const auto expected = legacy.timingWindows.at(judgement);
-        assertWindow(compiled, context, judgement, expected.first,
-                     expected.second);
-      }
-    }
+void testBeatorajaReferenceWindowsAndBoundaries() {
+  assert(Judge(0).timingWindows.at(Bad).second == 70000);
+  assert(Judge(4).timingWindows.at(PGreat).second == 25000);
+  // Reference JudgeProperty.NORMAL scales BAD by rank, but fixes KPOOR.
+  const auto judge = CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 0));
+  assertWindow(judge, JudgeWindowContext::Normal, Bad, -55000, 70000);
+  assertWindow(judge, JudgeWindowContext::Normal, Kpoor, -500000, 150000);
+  assertWindow(judge, JudgeWindowContext::Scratch, PGreat, -7500, 7500);
+  assertWindow(judge, JudgeWindowContext::Scratch, Bad, -57500, 72500);
+  assertWindow(judge, JudgeWindowContext::LongNoteTail, PGreat, -30000, 30000);
+  assertWindow(judge, JudgeWindowContext::LongScratchTail, Good, -52500, 52500);
+  assert(judge.judgeAt(NoteJudgeRole::Normal, 0, 70000).judgement == Bad);
+  assert(judge.judgeAt(NoteJudgeRole::Normal, 0, 70001).judgement == Kpoor);
+  assert(judge.judgeAt(NoteJudgeRole::Scratch, 0, 7000).judgement == PGreat);
+  assert(judge.judgeAt(NoteJudgeRole::Normal, 0, 7000).judgement == Great);
+  assert(judge.judgeAt(NoteJudgeRole::LongNoteHead, 0, 50000).judgement == Bad);
+  assert(judge.judgeAt(NoteJudgeRole::LongNoteTail, 0, -500001).judgement == None);
+  const auto veryEasy = CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 4));
+  assertWindow(veryEasy, JudgeWindowContext::Normal, PGreat, -25000, 25000);
+  assertWindow(veryEasy, JudgeWindowContext::Normal, Bad, -275000, 350000);
+  for (int invalid : {-1, 5, 999}) {
+    const auto fallback = CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, invalid));
+    assertWindow(fallback, JudgeWindowContext::Normal, PGreat, -15000, 15000);
   }
-
-  Judge scaledLegacy(0);
-  scaledLegacy.applyWindowScale(75, 45);
   const auto scaled = CompiledGameplayJudge::from(
-      gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 0, 75,
-                                          45));
-  for (const Judgement judgement : kJudgements) {
-    const auto expected = scaledLegacy.timingWindows.at(judgement);
-    assertWindow(scaled, JudgeWindowContext::Normal, judgement,
-                 expected.first, expected.second);
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 0, 75, 45));
+  assertWindow(scaled, JudgeWindowContext::Normal, PGreat, -1687, 1687);
+  assertWindow(scaled, JudgeWindowContext::Normal, Bad, -55000, 70000);
+  assertWindow(scaled, JudgeWindowContext::Normal, Kpoor, -500000, 150000);
+}
+
+void testProfileSpecificWindowsAndReleaseDeadlines() {
+  const auto build = [](int keys, int rank) {
+    return CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+        GameplayRuleset::Beatoraja, rank, 100, 100,
+        CourseJudgementConstraint::None, CandidateSelectionMode::Lowest, keys));
+  };
+  for (int keys : {5, 10}) {
+    const auto judge = build(keys, 1);
+    assert(judge.judgeAt(NoteJudgeRole::Normal, 0, 26000).judgement == Good);
+    assert(judge.judgeAt(NoteJudgeRole::Scratch, 0, 26000).judgement == Great);
+    assertWindow(judge, JudgeWindowContext::LongScratchTail, Good, -80000, 80000);
+    assert(!judge.rules().comboKpoor);
   }
+  const auto pms = build(9, 0);
+  assertWindow(pms, JudgeWindowContext::Normal, PGreat, -20000, 20000);
+  assertWindow(pms, JudgeWindowContext::Normal, Great, -20000, 20000);
+  assertWindow(pms, JudgeWindowContext::Normal, Good, -38610, 38610);
+  assertWindow(pms, JudgeWindowContext::Normal, Bad, -183000, 183000);
+  assert(pms.rules().singleMiss && !pms.rules().vanishBad);
+  assert(pms.rules().normalReleaseMarginMicros == 200000);
+  const auto keyboard = build(24, 3);
+  assert(keyboard.judgeAt(NoteJudgeRole::LongNoteTail, 0, -25000).judgement == PGreat);
+  assert(keyboard.judgeAt(NoteJudgeRole::LongNoteTail, 0, -25001).judgement == Great);
+  assert(keyboard.judgeAt(NoteJudgeRole::LongNoteTail, 0, 160000).judgement == PGreat);
+  const auto seven = build(7, 1);
+  assert(seven.automaticPoorLateMicros(NoteJudgeRole::Normal) == 140000);
+  assert(seven.automaticPoorLateMicros(NoteJudgeRole::Scratch) == 145000);
+}
+
+void testExtendedRankInterpolation() {
+  const auto build = [](GameplayRuleset ruleset, int percent) {
+    return CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
+        ruleset, 2, 100, 100, CourseJudgementConstraint::None,
+        CandidateSelectionMode::Lowest, 7, percent));
+  };
+  const auto lr2 = build(GameplayRuleset::LR2, 60);
+  assertWindow(lr2, JudgeWindowContext::Normal, PGreat, -16200, 16200);
+  assertWindow(lr2, JudgeWindowContext::Normal, Great, -34000, 34000);
+  assertWindow(lr2, JudgeWindowContext::LongNoteTail, PGreat, -76000, 76000);
+  const auto generous = build(GameplayRuleset::LR2, 200);
+  assertWindow(generous, JudgeWindowContext::LongNoteTail, PGreat, -200000, 200000);
+  const auto beatoraja = build(GameplayRuleset::Beatoraja, 60);
+  assertWindow(beatoraja, JudgeWindowContext::Normal, PGreat, -12000, 12000);
+  assertWindow(beatoraja, JudgeWindowContext::Normal, Bad, -132000, 168000);
+  assert(beatoraja.rules().effectiveJudgeRankPercent == 60);
 }
 
 } // namespace
 
 int main() {
+  testExtendedRankInterpolation();
+  testProfileSpecificWindowsAndReleaseDeadlines();
   testLr2RankTablesAndSemantics();
   testRoleContextMapping();
   testLr2PracticeScalingAndCourseConstraints();
-  testBeatorajaCharacterizationAcrossContexts();
+  testBeatorajaReferenceWindowsAndBoundaries();
   return 0;
 }

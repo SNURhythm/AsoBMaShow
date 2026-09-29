@@ -36,7 +36,7 @@ ir::IrSubmission validSubmission() {
   submission.chartMd5 = repeated('b', 32);
   submission.chartSha256 = repeated('a', 64);
   submission.score = 1100;
-  submission.maxScore = 1200;
+  submission.maxScore = 1226;
   submission.maxCombo = 550;
   submission.comboBreak = 3;
   submission.pGreat = 500;
@@ -141,12 +141,12 @@ ir::IrOutboxEntry outboxEntry(ir::IrSubmission submission, std::int64_t id) {
 
 void refreshProof(ir::IrOutboxEntry &entry) {
   const std::string input =
-      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n4\n" +
       std::to_string(entry.attemptId.size()) + ":" + entry.attemptId + "\n" +
       std::to_string(entry.chartSha256.size()) + ":" + entry.chartSha256 +
       "\n" + std::to_string(entry.payloadJson.size()) + ":" + entry.payloadJson;
   entry.rulesetProof = {.rulesetId = "lr2",
-                        .rulesetRevision = 3,
+                        .rulesetRevision = 4,
                         .validationFingerprint = file_checksum::sha256(input)};
 }
 
@@ -274,6 +274,33 @@ void testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes() {
          "composer stops before the score that exceeds 64 KiB");
 }
 
+void testFailedAttemptIncludesUnplayedNotesInBadPoints() {
+  auto submission = validSubmission();
+  submission.score = 2;
+  submission.maxCombo = 1;
+  submission.pGreat = 1;
+  submission.great = 0;
+  submission.good = 0;
+  submission.bad = 1;
+  submission.poor = 0;
+  submission.kPoor = 2;
+  submission.fast = 2;
+  submission.slow = 1;
+  submission.pGreatFast = 1;
+  submission.pGreatSlow = 0;
+  submission.judgementTimingBreakdownAvailable = false;
+  submission.clearType = kClearTypeFailedRank;
+  const auto outcome = ir::tachi::buildBatchManualDraft(submission);
+  expect(outcome.draft.has_value(), "failed partial attempt can produce an IR payload");
+  if (outcome.draft) {
+    const auto score = nlohmann::json::parse(outcome.draft->payloadJson).at("scores").at(0);
+    expect(score.at("optional").at("bp") == 614,
+           "failed attempt BP includes all unplayed notes plus empty POOR");
+    expect(score.at("optional").at("fast") == 2,
+           "failed attempt does not subtract PG from an already non-PG aggregate");
+  }
+}
+
 void testBuildsOneScoreBatchManual() {
   const auto submission = validSubmission();
   const auto outcome = ir::tachi::buildBatchManualDraft(submission);
@@ -295,10 +322,10 @@ void testBuildsOneScoreBatchManual() {
   expect(outcome.reason == ir::SubmissionEligibilityReason::Eligible,
          "built draft is eligibility-normalized");
   expect(outcome.draft->rulesetProof.rulesetId == "lr2" &&
-             outcome.draft->rulesetProof.rulesetRevision == 3,
+             outcome.draft->rulesetProof.rulesetRevision == 4,
          "draft contains the canonical LR2 proof identity");
   std::string fingerprintInput =
-      "tachi-lr2-proof-v1\n3:lr2\n3\n" +
+      "tachi-lr2-proof-v1\n3:lr2\n4\n" +
       std::to_string(submission.attemptId.size()) + ":" + submission.attemptId +
       "\n" + std::to_string(submission.chartSha256.size()) + ":" +
       submission.chartSha256 + "\n" +
@@ -332,10 +359,10 @@ void testBuildsOneScoreBatchManual() {
          "payload includes max combo");
   expect(score.at("optional").at("gauge") == 82.0,
          "payload includes final gauge");
-  expect(score.at("optional").at("fast") == 25,
-         "submitted fast excludes early PGREAT");
-  expect(score.at("optional").at("slow") == 33,
-         "submitted slow excludes late PGREAT");
+  expect(score.at("optional").at("fast") == 30,
+         "submitted fast is already exclusive of PGREAT");
+  expect(score.at("optional").at("slow") == 40,
+         "submitted slow is already exclusive of PGREAT");
   expect(score.at("optional").at("epg") == 280 &&
              score.at("optional").at("lpg") == 220 &&
              score.at("optional").at("egr") == 60 &&
@@ -372,6 +399,20 @@ void testMapsPlaytypesAndHashFallback() {
          "unsupported key mode is not retryable invalid data");
   expect(!unsupported.draft.has_value(),
          "unsupported key mode creates no draft");
+}
+
+void testExtendedChartRankEligibility() {
+  auto submission = validSubmission();
+  auto &stage = submission.provenance.stages.front();
+  // DEFEXRANK 100 normalizes to NORMAL's 75% for LR2 7K/14K.
+  stage.sourceJudgeRank = 100;
+  stage.effectiveJudgeRankPercent = 75;
+  expect(ir::tachi::buildBatchManualDraft(submission).status ==
+             ir::BuildDraftStatus::Built,
+         "authored DEFEXRANK is eligible with canonical normalized windows");
+  stage.effectiveJudgeRankPercent = 76;
+  expectIneligible(submission,
+                   ir::SubmissionEligibilityReason::ModifiedJudgePolicy, {});
 }
 
 void testCanonicalLr2EligibilityMatrix() {
@@ -502,7 +543,7 @@ void testRejectsNonCanonicalLr2Proof() {
                    ir::SubmissionEligibilityReason::UnverifiedProvenance, {});
 
   submission = validSubmission();
-  submission.provenance.ruleset.version = 4;
+  submission.provenance.ruleset.version = 3;
   expectIneligible(submission,
                    ir::SubmissionEligibilityReason::UnsupportedRulesetRevision,
                    "This ruleset revision is not supported by Bokutachi.");
@@ -695,12 +736,12 @@ void testRejectsMalformedSubmission() {
   expectInvalid(submission, "non-finite gauge is invalid");
 
   submission = validSubmission();
-  submission.pGreatFast = submission.fast + 1;
-  expectInvalid(submission, "PGREAT fast cannot exceed aggregate fast");
+  submission.pGreatFast = submission.pGreat + 1;
+  expectInvalid(submission, "PGREAT fast cannot exceed PGREAT count");
 
   submission = validSubmission();
-  submission.pGreatSlow = submission.slow + 1;
-  expectInvalid(submission, "PGREAT slow cannot exceed aggregate slow");
+  submission.pGreatSlow = submission.pGreat + 1;
+  expectInvalid(submission, "PGREAT slow cannot exceed PGREAT count");
 
   submission = validSubmission();
   submission.pGreatFast = -1;
@@ -752,10 +793,12 @@ void testPayloadNeverContainsCredentialMaterial() {
 } // namespace
 
 int main() {
+  testFailedAttemptIncludesUnplayedNotesInBadPoints();
   testComposesCompatibleOutboxRows();
   testOutboxCompositionGroupsAndBoundsRows();
   testOutboxCompositionRejectsInvalidRowsAndSplitsByBytes();
   testBuildsOneScoreBatchManual();
+  testExtendedChartRankEligibility();
   testCanonicalLr2EligibilityMatrix();
   testReplayEligibilityAndMarkerCompatibility();
   testRejectsNonCanonicalLr2Proof();

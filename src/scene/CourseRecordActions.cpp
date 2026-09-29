@@ -95,12 +95,6 @@ PreparedCourseResult prepareCourseResult(
     session->constraintJson = view.result.constraintJson;
     session->entries.resize(
         static_cast<std::size_t>(view.result.totalCharts));
-    for (std::size_t index = 0; index < session->entries.size(); ++index) {
-      session->entries[index].meta.TotalNotes =
-          view.result.entryFacts[index].totalNotes;
-      session->entries[index].meta.PlayLength =
-          view.result.entryFacts[index].playLengthMicros;
-    }
     for (std::size_t index = 0; index < currentSelection->records.size() &&
                                 index < session->entries.size();
          ++index) {
@@ -131,9 +125,21 @@ PreparedCourseResult prepareCourseResult(
       session->stageProvenance[index] = stage.result.score.provenance;
       session->modernCourseChartPaths.push_back(stage.chart->Meta.BmsPath);
     }
+    // Preserve resolved chart identity and presentation metadata, then restore
+    // the recorded full-course denominator and duration, including unplayed stages.
+    for (std::size_t index = 0; index < session->entries.size(); ++index) {
+      session->entries[index].meta.TotalNotes =
+          view.result.entryFacts[index].totalNotes;
+      session->entries[index].meta.PlayLength =
+          view.result.entryFacts[index].playLengthMicros;
+    }
     session->modernCourseAttemptId = view.result.attemptId;
     session->modernCoursePlayedAtUnixMillis = view.result.playedAtUnixMillis;
     session->modernCourseResultBrowsing = true;
+    if (std::any_of(view.result.stages.begin(), view.result.stages.end(),
+                    [](const auto &stage) { return !stage.score.badPoints; })) {
+      session->recalledResultPassedNotes = view.result.maxScore / 2;
+    }
     session->restoreFinalClearTypeForResult(view.result.clearType);
     session->modernCourseRetrySameAllowed =
         retrySameAllowed && currentSelection->completeCourse;

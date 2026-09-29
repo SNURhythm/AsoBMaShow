@@ -1,4 +1,5 @@
 #include "../src/ResultRecordSummary.h"
+#include "../src/ResultRecordFormatting.h"
 #include "../src/replay/ReplayFileActionSelection.h"
 
 #include <climits>
@@ -307,6 +308,90 @@ result_persistence::ModernCourseResult validModernCourseResult() {
   result.playedAtUnixMillis = chart.playedAtUnixMillis + 1'000;
   result.resultFingerprint = std::string(64, 'd');
   return result;
+}
+
+void testOldRulesetRecordIsExplicitlyObsolete() {
+  ModernChartResultRecord record{.result = validModernResult()};
+  record.result.score.provenance.ruleset.version = 3;
+  const auto summary = makeModernChartResultRecord(
+      record, replay::ReplayState::Verified, ir::IrRecordState::Eligible);
+  expect(summary.replayState == replay::ReplayState::Obsolete &&
+             summary.modern->result == record.result &&
+             summary.capabilities.resultRecall && summary.capabilities.shareOrCopy &&
+             !summary.capabilities.watch && !summary.capabilities.irUpload,
+         "old ruleset row is obsolete without modifying its saved result");
+  expect(result_record_ui::detailLabel(summary).find("Obsolete replay") !=
+             std::string::npos,
+         "Records visibly labels an obsolete replay");
+}
+
+void testObsoleteRulesetHidesIrIndependentlyOfReplayFileState() {
+  using replay::ReplayState;
+  struct ReplayCase {
+    ReplayState probed;
+    ReplayState displayed;
+    bool share;
+    bool remove;
+  };
+  const ReplayCase cases[] = {
+      {ReplayState::Verified, ReplayState::Obsolete, true, true},
+      {ReplayState::Obsolete, ReplayState::Obsolete, true, true},
+      {ReplayState::Missing, ReplayState::Missing, false, false},
+      {ReplayState::Corrupt, ReplayState::Corrupt, false, true},
+      {ReplayState::UserDeleted, ReplayState::UserDeleted, false, false},
+      {ReplayState::Mismatched, ReplayState::Mismatched, false, true},
+      {ReplayState::UnsupportedExtension, ReplayState::UnsupportedExtension,
+       false, true},
+      {ReplayState::NotApplicable, ReplayState::NotApplicable, false, false},
+  };
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    auto obsoleteRuleset = RulesetDescriptor::For(ruleset);
+    --obsoleteRuleset.version;
+    ModernChartResultRecord chart{.result = validModernResult()};
+    chart.result.score.provenance.ruleset = obsoleteRuleset;
+    ModernCourseResultRecord course{.result = validModernCourseResult()};
+    course.result.provenance.ruleset = obsoleteRuleset;
+    for (auto &stage : course.result.stages) {
+      stage.score.provenance.ruleset = obsoleteRuleset;
+    }
+    for (const auto &entry : cases) {
+      for (const auto irState : {ir::IrRecordState::Eligible,
+                                ir::IrRecordState::Queued,
+                                ir::IrRecordState::Failed}) {
+        const auto summary = makeModernChartResultRecord(chart, entry.probed,
+                                                         irState);
+        expect(summary.irState == ir::IrRecordState::Hidden &&
+                   !summary.capabilities.irUpload &&
+                   resultRecordActionTarget(summary, ResultRecordAction::IrUpload) ==
+                       ResultRecordActionTarget::None,
+               "obsolete chart provenance hides IR regardless of replay file or pending upload state");
+        expect(summary.replayState == entry.displayed &&
+                   summary.capabilities.shareOrCopy == entry.share &&
+                   summary.capabilities.deleteReplayFile == entry.remove &&
+                   summary.capabilities.resultRecall &&
+                   summary.modern->result == chart.result,
+               "hiding obsolete chart IR preserves probed file actions and saved result");
+      }
+      const auto summary = makeModernCourseResultRecord(course, entry.probed);
+      expect(summary.irState == ir::IrRecordState::Hidden &&
+                 !summary.capabilities.irUpload &&
+                 summary.replayState == entry.displayed &&
+                 summary.capabilities.shareOrCopy == entry.share &&
+                 summary.capabilities.deleteReplayFile == entry.remove &&
+                 summary.capabilities.resultRecall &&
+                 summary.modernCourse->result == course.result,
+             "obsolete course retains file state and result while keeping IR hidden");
+    }
+  }
+  ModernChartResultRecord current{.result = validModernResult()};
+  for (const auto state : {ReplayState::Missing, ReplayState::Corrupt,
+                           ReplayState::UserDeleted}) {
+    const auto summary = makeModernChartResultRecord(
+        current, state, ir::IrRecordState::Queued);
+    expect(summary.irState == ir::IrRecordState::Queued &&
+               summary.capabilities.irUpload && summary.replayState == state,
+           "current chart pending IR remains available independently of replay file state");
+  }
 }
 
 void testModernConversionUsesSharedReplayCapabilities() {
@@ -820,6 +905,8 @@ int main() {
   testReplayFileActionsUseModernIdentityAndCapabilitiesOnly();
   testReplayDeleteConfirmationOwnsTheExactRequestedAttempt();
   testAutoPlayIsTheOnlyReplaySummaryBackedRecord();
+  testOldRulesetRecordIsExplicitlyObsolete();
+  testObsoleteRulesetHidesIrIndependentlyOfReplayFileState();
   testModernConversionUsesSharedReplayCapabilities();
   testModernChartProjectionUsesEffectiveLampAndBothPlayerOptions();
   testModernCourseConversionKeepsResultWithoutReplay();

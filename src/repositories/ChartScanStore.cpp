@@ -168,7 +168,8 @@ const char *insertChartMetaSql() {
          "most_prevalent_bpm,"
          "has_bga,"
          "source_priority,"
-         "source_archive_size"
+         "source_archive_size,"
+         "rank_type"
          ") VALUES("
          "@path,"
          "@md5,"
@@ -208,7 +209,8 @@ const char *insertChartMetaSql() {
          "@most_prevalent_bpm,"
          "@has_bga,"
          "@source_priority,"
-         "@source_archive_size"
+         "@source_archive_size,"
+         "@rank_type"
          ") ON CONFLICT(path) DO UPDATE SET "
          "md5=excluded.md5,"
          "sha256=excluded.sha256,"
@@ -231,6 +233,7 @@ const char *insertChartMetaSql() {
          "min_bpm=excluded.min_bpm,"
          "length=excluded.length,"
          "rank=excluded.rank,"
+         "rank_type=excluded.rank_type,"
          "player=excluded.player,"
          "keys=excluded.keys,"
          "total_notes=excluded.total_notes,"
@@ -315,6 +318,7 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int(statement, 38, sourcePreference.priority);
   sqlite3_bind_int64(statement, 39,
                      clampSqlInteger(sourcePreference.archiveSize));
+  sqlite3_bind_int(statement, 40, static_cast<int>(chartMeta.RankType));
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
     return false;
@@ -461,6 +465,16 @@ bool clearMetadataRebuildRequired(sqlite3 *database) {
   if (!exists) {
     return true;
   }
+  std::string error;
+  SqliteTransactionHandle transaction(
+      database, "SAVEPOINT chart_metadata_rebuild_completion", error,
+      "RELEASE chart_metadata_rebuild_completion",
+      "ROLLBACK TO chart_metadata_rebuild_completion; "
+      "RELEASE chart_metadata_rebuild_completion");
+  if (!transaction.active()) {
+    logSqlErrorText("starting chart metadata rebuild completion", error);
+    return false;
+  }
   const char *query =
       "INSERT INTO chart_meta_rebuild_state (id, required, updated_at) "
       "VALUES (1, ?, CURRENT_TIMESTAMP) "
@@ -475,6 +489,21 @@ bool clearMetadataRebuildRequired(sqlite3 *database) {
   sqlite3_bind_int(statement.get(), 1, 0);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("updating chart metadata rebuild state", database);
+    return false;
+  }
+  statement.reset();
+  // The scanner calls this only after a complete library traversal. Retain
+  // the date snapshot on any failure so a subsequent scan can still restore it.
+  for (const auto *cleanup : {
+           "DROP TRIGGER IF EXISTS restore_chart_meta_rebuild_add_date",
+           "DROP TABLE IF EXISTS chart_meta_rebuild_add_dates"}) {
+    if (const auto failure = executeSqlite(database, cleanup)) {
+      logSqlErrorText("finishing chart rebuild added-date restoration", *failure);
+      return false;
+    }
+  }
+  if (!transaction.commit(error)) {
+    logSqlErrorText("committing chart metadata rebuild completion", error);
     return false;
   }
   return true;

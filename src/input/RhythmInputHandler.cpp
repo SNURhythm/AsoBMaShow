@@ -146,7 +146,12 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
   const auto pressedIt = fingerLanePressed.find(fingerIndex);
   const bool hasActiveScratchPress =
       pressedIt != fingerLanePressed.end() && pressedIt->second;
-  const bool hasActiveLongScratchNote = hasActiveLongNote(flickState);
+  const auto authoritativeHold = longNoteHeldCallback
+                                     ? longNoteHeldCallback(lane)
+                                     : std::nullopt;
+  const bool hasActiveLongScratchNote = authoritativeHold.has_value()
+                                            ? *authoritativeHold
+                                            : hasActiveLongNote(flickState);
   const float flickThreshold =
       flickState.lastFlickDirection == 0 ? 0.001f
                                          : (hasActiveLongScratchNote ? 0.01f
@@ -466,6 +471,11 @@ int RhythmInputHandler::touchToLane(Vector3 location) {
   const int lane = clampLane(line);
   SDL_Log("Touch to lane: %d", lane);
   return lane;
+}
+
+void RhythmInputHandler::setLongNoteHeldCallback(
+    std::function<std::optional<bool>(int)> callback) {
+  longNoteHeldCallback = std::move(callback);
 }
 
 void RhythmInputHandler::setDragModeEnabled(bool enabled) {

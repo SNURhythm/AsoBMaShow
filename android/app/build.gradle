@@ -11,11 +11,15 @@ def vcpkgRoot = System.getenv('VCPKG_ROOT')
 if (vcpkgRoot == null || vcpkgRoot.trim().isEmpty()) {
     throw new GradleException('VCPKG_ROOT must point to a vcpkg checkout for Android native dependencies.')
 }
+vcpkgRoot = file(vcpkgRoot).canonicalPath
 def androidSdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
 def requiredAndroidNdkVersion = '28.2.13676358'
 def androidNdkRoot = System.getenv('ANDROID_NDK_HOME')
 if ((androidNdkRoot == null || androidNdkRoot.trim().isEmpty()) && androidSdkRoot != null) {
     androidNdkRoot = file("${androidSdkRoot}/ndk/${requiredAndroidNdkVersion}").absolutePath
+}
+if (androidNdkRoot != null && !androidNdkRoot.trim().isEmpty()) {
+    androidNdkRoot = file(androidNdkRoot).canonicalPath
 }
 def androidNdkProperties = new Properties()
 def androidNdkPropertiesFile = androidNdkRoot == null
@@ -104,6 +108,7 @@ android {
                 abiFilters 'arm64-v8a'
                 targets 'main'
                 arguments(
+                    '-DASOBMASHOW_SHARE_ANDROID_DEPENDENCIES=ON',
                     '-DANDROID_PLATFORM=android-28',
                     '-DANDROID_STL=c++_shared',
                     '-DASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=ON',

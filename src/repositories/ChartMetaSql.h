@@ -58,6 +58,11 @@ readChartMeta(sqlite3_stmt *stmt, AbsolutePathFromColumn absolutePathFromColumn,
   chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalBackSpinNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.LnMode = sqlite3_column_int(stmt, idx++);
+  if (sqlite3_column_count(stmt) > 37) {
+    chartMeta.RankType = sqlite3_column_int(stmt, 37) == 1
+                            ? bms_parser::JudgeRankType::DefExRank
+                            : bms_parser::JudgeRankType::BmsRank;
+  }
 
   return chartMeta;
 }

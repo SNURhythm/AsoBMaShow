@@ -115,12 +115,17 @@ void applyModernCoursePersistencePresentation(
   };
 }
 
-std::optional<int> rankingBadPoints(const RhythmState &state) {
+std::optional<int> rankingBadPoints(const RhythmState &state, int totalNotes) {
   const auto count = [&](Judgement judgement) {
     const auto it = state.judgeCount.find(judgement);
     return it == state.judgeCount.end() ? 0 : it->second;
   };
-  return ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+  const auto observed = ir::calculateIrBadPoints(count(Bad), count(Poor), count(Kpoor));
+  if (!observed) return std::nullopt;
+  const std::int64_t result = static_cast<std::int64_t>(*observed) +
+                              totalNotes - state.stagePassedNotes;
+  return result >= 0 && result <= std::numeric_limits<int>::max()
+             ? std::optional<int>(static_cast<int>(result)) : std::nullopt;
 }
 
 void projectResultIrRanking(
@@ -413,6 +418,7 @@ courseResultMetaForSession(const CoursePlaySession &session) {
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
     meta.Rank = currentMeta->Rank;
+    meta.RankType = currentMeta->RankType;
     meta.BmsPath = currentMeta->BmsPath;
     meta.Folder = currentMeta->Folder;
     meta.StageFile = currentMeta->StageFile;
@@ -423,6 +429,7 @@ courseResultMetaForSession(const CoursePlaySession &session) {
   } else if (!session.completedResults.empty()) {
     const auto &lastMeta = session.completedResults.back().meta;
     meta.Rank = lastMeta.Rank;
+    meta.RankType = lastMeta.RankType;
     meta.BmsPath = lastMeta.BmsPath;
     meta.Folder = lastMeta.Folder;
     meta.StageFile = lastMeta.StageFile;
@@ -467,6 +474,7 @@ RhythmState courseResultStateForSession(const CoursePlaySession &session) {
   aggregate.fastCount = 0;
   aggregate.slowCount = 0;
   aggregate.gaugeHistory.clear();
+  aggregate.stagePassedNotes = session.resultPassedNotes();
 
   for (const auto &result : session.completedResults) {
     for (int i = 0; i < JudgementCount; ++i) {
@@ -2658,7 +2666,7 @@ void ResultScene::openRankings() {
                           local->meta.TotalNotes)
                           .value_or(0),
           .clearType = local->resultState.getClearTypeRank(),
-          .badPoints = rankingBadPoints(local->resultState),
+          .badPoints = rankingBadPoints(local->resultState, local->meta.TotalNotes),
           .maxCombo = local->resultState.maxCombo,
       };
     }
@@ -3659,10 +3667,17 @@ void ResultScene::startCourseReplay() {
   replaySession->courseName = replayData->courseName;
   replaySession->courseGroupName = replayData->courseGroupName;
   replaySession->constraintJson = replayData->constraintJson;
-  replaySession->entries.reserve(replayData->stages.size());
-  for (const auto &stage : replayData->stages) {
-    replaySession->entries.push_back(
-        CoursePlayEntry{.meta = stage.replay.chartMeta});
+  replaySession->entries.resize(std::max(replayData->entryFacts.size(),
+                                         replayData->stages.size()));
+  for (std::size_t index = 0; index < replayData->stages.size(); ++index) {
+    replaySession->entries[index].meta =
+        replayData->stages[index].replay.chartMeta;
+  }
+  for (std::size_t index = 0; index < replayData->entryFacts.size(); ++index) {
+    replaySession->entries[index].meta.TotalNotes =
+        replayData->entryFacts[index].totalNotes;
+    replaySession->entries[index].meta.PlayLength =
+        replayData->entryFacts[index].playLengthMicros;
   }
   replaySession->snapshotRulesetFromReplay(replayData->stages.front().replay);
   const CourseConstraintSettings constraintSettings =

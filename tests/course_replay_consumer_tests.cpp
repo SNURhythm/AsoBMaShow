@@ -324,6 +324,14 @@ void testConsumerOwnsOneVerifiedCoursePipelineAndContinuation() {
              loaded.continuation->gauge.currentGauge ==
                  harness.listed.result.finalGauge,
          "verified stages yield one carried-state-checked compatibility course");
+  expect(loaded.replayData && loaded.replayData->entryFacts.size() == 3 &&
+             loaded.replayData->entryFacts[0].totalNotes == 5 &&
+             loaded.replayData->entryFacts[0].playLengthMicros == 1'000'000 &&
+             loaded.replayData->entryFacts[1].totalNotes == 5 &&
+             loaded.replayData->entryFacts[1].playLengthMicros == 2'000'000 &&
+             loaded.replayData->entryFacts[2].totalNotes == 5 &&
+             loaded.replayData->entryFacts[2].playLengthMicros == 3'000'000,
+         "partial course export adapter preserves saved facts for every entry");
   expect(harness.calls ==
              std::vector<std::string>{"parse-0", "parse-1", "context",
                                       "prepare-0", "materialize-0",
@@ -376,7 +384,10 @@ void testVerifiedLaunchAdaptersSeparateWatchFromRetrySame() {
   expect(watch && watch->courseReplayPlayback && watch->courseReplayData &&
              !watch->courseRetrySameData &&
              watch->entries.size() == 3 &&
+             watch->entries[0].meta.PlayLength == 1'000'000 &&
+             watch->entries[1].meta.PlayLength == 2'000'000 &&
              watch->entries[2].meta.TotalNotes == 5 &&
+             watch->entries[2].meta.PlayLength == 3'000'000 &&
              watch->preparedCourseCharts.size() == 2 &&
              watch->replayTouchVisualizationEnabled == true &&
              watch->replayGhostRenderingEnabled == true,

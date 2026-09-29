@@ -7552,12 +7552,60 @@ void testResultBridgeRecognizesScratchLongNotes() {
          "result LN options count scratch long notes as long notes");
 }
 
+void testResultBridgeCountsUnplayedPmsNotesInBadPoints() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[Bad] = 2;
+  state.judgeCount[Kpoor] = 3;
+  state.stagePassedNotes = 3;
+  bms_parser::ChartMeta meta{.KeyMode = 9, .TotalNotes = 5};
+  ResultSkinStateBridge bridge({.state = &state, .meta = &meta}, 1, 0);
+  const auto bp = bridge.integerProperty({76}, {});
+  expect(bp.supported && bp.value == 7,
+         "result BP includes unplayed PMS notes independently of BAD counts");
+}
+
+void testResultBridgeComparesExactBadPointsForRecordFlags() {
+  RhythmState state(nullptr, false);
+  state.judgeCount[PGreat] = 9;
+  state.judgeCount[Bad] = 1;
+  state.stagePassedNotes = 10;
+  bms_parser::ChartMeta meta{.KeyMode = 7, .TotalNotes = 100};
+  struct Case {
+    int previous;
+    bool updated;
+    bool drawn;
+  };
+  for (const auto test : {Case{5, false, false}, Case{1, false, false},
+                          Case{91, false, true}, Case{92, true, false}}) {
+    ResultSkinStateBridge bridge({
+        .state = &state,
+        .meta = &meta,
+        .previousBest = ResultPreviousBestData{.badPoints = test.previous},
+    }, 1, 0);
+    const auto bp = bridge.integerProperty({76}, {});
+    const auto resultBp = bridge.integerProperty({177}, {});
+    const auto observedMisses = bridge.integerProperty({427}, {});
+    const auto updated = bridge.booleanProperty({332});
+    const auto drawn = bridge.booleanProperty({1332});
+    expect(bp.supported && bp.value == 91 && resultBp.supported &&
+               resultBp.value == 91,
+           "aborted result BP includes ninety unplayed notes plus one BAD");
+    expect(observedMisses.supported && observedMisses.value == 1,
+           "judgement-specific miss total excludes unplayed notes");
+    expect(updated.supported && updated.value == test.updated,
+           "BP update flag compares exact BP including unplayed notes");
+    expect(drawn.supported && drawn.value == test.drawn,
+           "BP draw flag compares exact BP including unplayed notes");
+  }
+}
+
 void testResultBridgeMatchesBeatorajaResultScoreFamilies() {
   RhythmState state(nullptr, false);
   state.judgeCount[PGreat] = 10;
   state.judgeCount[Bad] = 2;
   state.judgeCount[Poor] = 3;
   state.judgeCount[Kpoor] = 4;
+  state.stagePassedNotes = 10;
   state.judgementFastSlowCount[Great].fast = 5;
   state.judgementFastSlowCount[Poor].slow = 6;
   bms_parser::ChartMeta meta{.KeyMode = 0, .TotalNotes = 10};
@@ -8681,6 +8729,12 @@ void testRequestedExternalResultSkinCreatesSession() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--result-bp-properties") {
+    testResultBridgeCountsUnplayedPmsNotesInBadPoints();
+    testResultBridgeComparesExactBadPointsForRecordFlags();
+    std::cout << "result BP properties: " << failures << " failure(s)\n";
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 4 && std::string_view(argv[1]) == "--music-select-callback-dispatch") {
     testMusicSelectLuaCallbackDispatch(
         argv[2], std::string_view(argv[3]) == "strict"
@@ -8816,6 +8870,8 @@ int main(int argc, char **argv) {
   testResultBridgeUsesPreparedArtworkAvailability();
   testResultBridgeKeepsAutoplayOptionsOffOnResultScreens();
   testResultBridgeRecognizesScratchLongNotes();
+  testResultBridgeCountsUnplayedPmsNotesInBadPoints();
+  testResultBridgeComparesExactBadPointsForRecordFlags();
   testResultBridgeMatchesBeatorajaResultScoreFamilies();
   testResultBridgeUsesProjectedKeyModeForScorePoint();
   testResultBridgeMatchesResultAliasesAndTimerUnits();
