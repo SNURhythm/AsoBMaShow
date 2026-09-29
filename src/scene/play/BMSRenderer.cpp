@@ -1989,11 +1989,13 @@ void BMSRenderer::recordCharacterizationSubmission(
 void BMSRenderer::drawLongNote(
     float headY, float tailY, bms_parser::LongNote *const &head,
     gameplay_note_submission_order::LongNoteOrder order,
-    bool renderBudgetReserved) {
+    bool renderBudgetReserved, bool headAtLowerBound) {
   if (!renderBudgetReserved) {
     return;
   }
-  headY = compensatedLaneY(headY);
+  // A retained missed head is anchored to the world clipping boundary.
+  // It is not a scroll coordinate and must not be perspective-remapped.
+  headY = headAtLowerBound ? lowerBound : compensatedLaneY(headY);
   tailY = compensatedLaneY(tailY);
   // assert head
   assert(!head->IsTail() && "head is tail");
@@ -3406,7 +3408,7 @@ void BMSRenderer::renderFrame(
 
     const auto drawProjectedLong =
         [&](const ProjectedLongNoteDescriptor &longNote, float frozenHeadY,
-            float frozenTailY) {
+            float frozenTailY, bool headAtLowerBound) {
       if (longNote.headSource == ChartVisualNoteSource::Invisible ||
           longNote.tailSource == ChartVisualNoteSource::Invisible) {
         if (longNote.headSource == ChartVisualNoteSource::Invisible) {
@@ -3441,7 +3443,8 @@ void BMSRenderer::renderFrame(
               gameplay_chart_entity_render_budget::kLongNoteReservationCost)) {
         return;
       }
-      const float headY = compensatedLaneY(frozenHeadY);
+      const float headY =
+          headAtLowerBound ? lowerBound : compensatedLaneY(frozenHeadY);
       const float tailY = compensatedLaneY(frozenTailY);
       if (!std::isfinite(headY) || !std::isfinite(tailY)) {
         return;
@@ -3449,7 +3452,7 @@ void BMSRenderer::renderFrame(
       const int lane = rendererLaneFor(longNote.lane);
       const float legacyHeadY =
           longNote.headTimeMicros < chartTimeMicros - latePoorTiming
-              ? compensatedLaneY(lowerBound)
+              ? lowerBound
               : headY;
       const float headRenderY =
           longNote.headPlayed && !longNote.headDead ? judgeY : legacyHeadY;
@@ -3609,7 +3612,8 @@ void BMSRenderer::renderFrame(
       }
       case BuiltInRendererPlanEntryKind::LongNote:
         drawProjectedLong(builtInPlan.longNotes[entry.descriptorIndex],
-                          entry.renderY, entry.tailRenderY);
+                          entry.renderY, entry.tailRenderY,
+                          entry.headAtLowerBound);
         break;
       }
     }
@@ -3629,9 +3633,10 @@ void BMSRenderer::renderFrame(
   longNoteLookahead.clear();
   const auto rememberLongNoteHead =
       [&](bms_parser::LongNote *longNote, float headY,
-          const auto &orderProvider) {
+          const auto &orderProvider, bool headAtLowerBound = false) {
         auto [it, inserted] = longNoteLookahead.try_emplace(longNote);
         it->second.headY = headY;
+        it->second.headAtLowerBound = headAtLowerBound;
         if (!inserted) {
           return;
         }
@@ -3645,7 +3650,7 @@ void BMSRenderer::renderFrame(
       };
   for (auto *orphanLongNote : state.orphanLongNotes) {
     rememberLongNoteHead(orphanLongNote, lowerBound,
-                         [&]() { return pastLongNoteOrder; });
+                         [&]() { return pastLongNoteOrder; }, true);
   }
   double futureY = static_cast<double>(judgeY);
   bool futureTraversalStarted = false;
@@ -3765,7 +3770,7 @@ void BMSRenderer::renderFrame(
           return false;
         }
         state.orphanLongNotes.insert(longNote);
-        rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
+        rememberLongNoteHead(longNote, lowerBound, ensureLongOrder, true);
         return true;
       };
       if (timeLine->Timing >= chartTimeMicros - latePoorTiming) {
@@ -3796,7 +3801,8 @@ void BMSRenderer::renderFrame(
                 it != longNoteLookahead.end()) {
               drawLongNote(it->second.headY, y, longNote->Head,
                            it->second.order,
-                           it->second.renderBudgetReserved);
+                           it->second.renderBudgetReserved,
+                           it->second.headAtLowerBound);
               // remove from lookahead
               longNoteLookahead.erase(longNote->Head);
             } else {
@@ -3805,7 +3811,7 @@ void BMSRenderer::renderFrame(
                       gameplay_chart_entity_render_budget::
                           kLongNoteReservationCost);
               drawLongNote(lowerBound, y, longNote->Head, pastLongNoteOrder,
-                           renderBudgetReserved);
+                           renderBudgetReserved, true);
             }
           } else {
             rememberLongNoteHead(longNote, y, ensureLongOrder);
@@ -3841,7 +3847,7 @@ void BMSRenderer::renderFrame(
 
             // setting to lowerBound in all cases is OK because the played
             // state will be correctly handled by drawLongNote
-            rememberLongNoteHead(longNote, lowerBound, ensureLongOrder);
+            rememberLongNoteHead(longNote, lowerBound, ensureLongOrder, true);
           }
         }
       }
@@ -3879,7 +3885,8 @@ void BMSRenderer::renderFrame(
   // render leftover long notes
   for (const auto &pair : longNoteLookahead) {
     drawLongNote(pair.second.headY, upperBound, pair.first,
-                 pair.second.order, pair.second.renderBudgetReserved);
+                 pair.second.order, pair.second.renderBudgetReserved,
+                 pair.second.headAtLowerBound);
   }
   }
 

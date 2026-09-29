@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -688,11 +689,15 @@ ScenarioResult renderScenario(
     std::uint64_t frameSerial = 0,
     bool seedPastInvisibleProbe = false,
     bool primeRendererTraversal = false,
-    bool accelerationCompensation = false) {
+    bool accelerationCompensation = false,
+    std::function<void(SyntheticChartFixture &)> configureFixture = {}) {
   configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
   SyntheticChartFixture fixture;
+  if (configureFixture) {
+    configureFixture(fixture);
+  }
   if (seedPastInvisibleProbe) {
     fixture.invisibleProbeNote->IsDead = false;
     fixture.invisibleProbeNote->IsPlayed = true;
@@ -1794,6 +1799,46 @@ void verifyAccelerationCompensation(const RenderTarget &target) {
   }
 }
 
+void verifyCompensatedMissedLongNotes(const RenderTarget &target) {
+  for (const bool held : {false, true}) {
+    for (const auto time : {1'750'000LL, 2'125'000LL, 2'625'000LL, 3'250'000LL}) {
+      for (const auto path : {ScenarioRenderPath::Legacy,
+                              ScenarioRenderPath::Captured}) {
+        const auto result = renderScenario(
+            target, kAfterCoverPercent, false, path, time, 3, false, true, true,
+            [held](SyntheticChartFixture &fixture) {
+              for (auto *note : chartVisualNoteSources(*fixture.chart)) {
+                auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
+                if (longNote == nullptr || longNote->IsTail()) {
+                  continue;
+                }
+                longNote->IsDead = !held;
+                longNote->IsPlayed = held;
+                longNote->IsHolding = held;
+                longNote->Tail->IsHolding = held;
+              }
+            });
+        const auto &frame = result.recorder.frames.back();
+        int bodies = 0;
+        for (const auto &draw : result.recorder.submissions) {
+          if (draw.kind != characterization::SubmissionKind::LongBody) {
+            continue;
+          }
+          ++bodies;
+          expect(std::abs(draw.rect.y -
+                          (held ? frame.judgeY : frame.lowerBound)) < 0.0001F,
+                 held ? "held compensated long notes stay at judgement"
+                      : "missed compensated long notes extend to the world "
+                        "clipping boundary, not toward judgement");
+          expect(draw.rect.height > 0.0F,
+                 "remaining long-note body stays visible before its tail");
+        }
+        expect(bodies == 3, "LN, CN, and HCN bodies survive after the head");
+      }
+    }
+  }
+}
+
 void verifyBehavioralCoverage(const ScenarioResult &before,
                               const ScenarioResult &after) {
   expect(after.chart.at("laneOrder") == Json::array({7, 0, 1, 2, 3, 4, 5, 6}),
@@ -2066,6 +2111,7 @@ int main() {
   if (failures == 0) {
     try {
       verifyAccelerationCompensation(target);
+      verifyCompensatedMissedLongNotes(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);
       verifySerialOrderingAndReset();

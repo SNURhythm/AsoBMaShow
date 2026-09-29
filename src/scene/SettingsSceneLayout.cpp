@@ -520,6 +520,11 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewScroll->setContentView(previewControls);
   previewPanel->addView(previewScroll);
 
+  previewControls->addView(makeWrappedText(
+      "Acceleration compensation", metrics.bodyTextSize,
+      ui_theme::textSecondary()));
+  previewControls->addView(buildAccelerationCompensationControls(metrics));
+
   if (previewPanelPage == 0) {
     previewControls->addView(
         makeSummaryRow(metrics, "Visible Time", &summaryVisibleTimeValueText));
@@ -1807,6 +1812,27 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
   return cardsColumn;
 }
 
+View *SettingsScene::buildAccelerationCompensationControls(
+    const LayoutMetrics &metrics) {
+  auto *compensationControls = new View();
+  compensationControls->setFlexDirection(FlexDirection::Row);
+  compensationControls->setAlignItems(YGAlignFlexStart);
+  auto *compensationButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(context.settings.accelerationCompensation ? "On" : "Off",
+               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::lime());
+  compensationButton->setOnClickListener([this]() {
+    context.settings.accelerationCompensation =
+        !context.settings.accelerationCompensation;
+    persistSettings();
+    lastLayoutWidth = -1;
+  });
+  compensationControls->addView(compensationButton);
+  return compensationControls;
+}
+
 View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -1908,28 +1934,13 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       metrics, "Note Start Position", "Set where notes enter the lane.",
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
-  if (showLegacyBuiltInGameplayControls) {
-  auto *compensationControls = new View();
-  compensationControls->setFlexDirection(FlexDirection::Row);
-  compensationControls->setAlignItems(YGAlignFlexStart);
-  auto *compensationButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(context.settings.accelerationCompensation ? "On" : "Off",
-               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE),
-      ui_theme::lime());
-  compensationButton->setOnClickListener([this]() {
-    context.settings.accelerationCompensation =
-        !context.settings.accelerationCompensation;
-    persistSettings();
-    lastLayoutWidth = -1;
-  });
-  compensationControls->addView(compensationButton);
   cardsColumn->addView(makeCard(
       metrics, "Acceleration compensation",
       "Keep note travel steady on screen by compensating for 3D perspective.",
-      compensationControls, metrics.modeCardHeight, metrics.cardsWidth));
+      buildAccelerationCompensationControls(metrics), metrics.modeCardHeight,
+      metrics.cardsWidth));
 
+  if (showLegacyBuiltInGameplayControls) {
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);
   angleControls->setFlexWrap(YGWrapWrap);

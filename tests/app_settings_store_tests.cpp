@@ -187,6 +187,29 @@ void testLegacyFixtureLoadsEverySetting() {
          "legacy fixture discriminates pacemaker persistence");
 }
 
+void testAccelerationCompensationDefaultsAndSavedChoice() {
+  TempDirectory temp;
+  const auto path = temp.path() / "settings.json";
+  expect(AppSettingsStore::Load(path).settings.accelerationCompensation,
+         "new profiles enable acceleration compensation");
+  writeFile(path, R"({"schemaVersion":7})");
+  expect(AppSettingsStore::Load(path).settings.accelerationCompensation,
+         "settings without a compensation preference use the enabled default");
+  expect(AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg"))
+             .settings.accelerationCompensation,
+         "legacy profiles without the preference enable compensation");
+  for (const bool enabled : {false, true}) {
+    AppSettings settings;
+    settings.accelerationCompensation = enabled;
+    std::string error;
+    expect(AppSettingsStore::Save(path, settings, error),
+           "compensation preference saves: " + error);
+    expect(AppSettingsStore::Load(path).settings.accelerationCompensation ==
+               enabled,
+           "an explicit saved compensation choice overrides the default");
+  }
+}
+
 void testJsonRoundTripIncludesAudioAndVideo() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
@@ -1729,6 +1752,7 @@ void testAtomicFirstSaveCreatesRelativeNestedParents() {
 int main() {
   testLegacyFixtureLoadsEverySetting();
   testJsonRoundTripIncludesAudioAndVideo();
+  testAccelerationCompensationDefaultsAndSavedChoice();
   testGameplaySkinPlayerConfigSelectorsRoundTrip();
   testGameplaySkinPlayerConfigSelectorsUseBeatorajaBounds();
   testPlayerConfigurationSkinStringsRoundTrip();

@@ -322,6 +322,7 @@ private:
       terminalScrollAnchor;
   struct LongNoteLookahead {
     float headY = 0.0F;
+    bool headAtLowerBound = false;
     gameplay_note_submission_order::LongNoteOrder order;
     bool renderBudgetReserved = false;
   };
@@ -447,7 +448,7 @@ private:
   void drawLongNote(
       float headY, float tailY, bms_parser::LongNote *const &head,
       gameplay_note_submission_order::LongNoteOrder order,
-      bool renderBudgetReserved);
+      bool renderBudgetReserved, bool headAtLowerBound);
   void drawNormalNote(float y, bms_parser::Note *const &note,
                       uint32_t submitDepth);
   void drawInvisibleNote(float y, bms_parser::Note *const &note,
