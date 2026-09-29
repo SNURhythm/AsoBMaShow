@@ -539,6 +539,7 @@ json settingsToJson(const AppSettings &settings) {
       {"bgaDisplayMode", static_cast<int>(settings.bgaDisplayMode)},
       {"laneAngleDegrees", settings.laneAngleDegrees},
       {"laneLength", settings.laneLength},
+      {"accelerationCompensation", settings.accelerationCompensation},
       {"laneBeamLengthPercent", settings.laneBeamLengthPercent},
       {"noteStartPositionPercent", settings.noteStartPositionPercent},
       {"laneCoverEnabled", settings.laneCoverEnabled},
@@ -717,6 +718,8 @@ AppSettings settingsFromJson(const json &document,
   readValue(document, "laneAngleDegrees", settings.laneAngleDegrees,
             diagnostics);
   readValue(document, "laneLength", settings.laneLength, diagnostics);
+  readValue(document, "accelerationCompensation",
+            settings.accelerationCompensation, diagnostics);
   readValue(document, "laneBeamLengthPercent", settings.laneBeamLengthPercent,
             diagnostics);
   readValue(document, "noteStartPositionPercent",

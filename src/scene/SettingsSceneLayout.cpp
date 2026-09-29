@@ -1909,6 +1909,27 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       noteStartPanel, metrics.offsetCardHeight, metrics.cardsWidth));
 
   if (showLegacyBuiltInGameplayControls) {
+  auto *compensationControls = new View();
+  compensationControls->setFlexDirection(FlexDirection::Row);
+  compensationControls->setAlignItems(YGAlignFlexStart);
+  auto *compensationButton = makeAccentButton(
+      metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(context.settings.accelerationCompensation ? "On" : "Off",
+               metrics.bodyTextSize + 4, ui_theme::textPrimary(),
+               TextView::CENTER, TextView::MIDDLE),
+      ui_theme::lime());
+  compensationButton->setOnClickListener([this]() {
+    context.settings.accelerationCompensation =
+        !context.settings.accelerationCompensation;
+    persistSettings();
+    lastLayoutWidth = -1;
+  });
+  compensationControls->addView(compensationButton);
+  cardsColumn->addView(makeCard(
+      metrics, "Acceleration compensation",
+      "Keep note travel steady on screen by compensating for 3D perspective.",
+      compensationControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *angleControls = new View();
   angleControls->setFlexDirection(FlexDirection::Row);
   angleControls->setFlexWrap(YGWrapWrap);

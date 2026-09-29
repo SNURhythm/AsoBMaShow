@@ -191,6 +191,7 @@ public:
   BgaDisplayMode bgaDisplayMode = BgaDisplayMode::Fit;
   float laneAngleDegrees = kDefaultLaneAngleDegrees;
   float laneLength = kDefaultLaneLength;
+  bool accelerationCompensation = false;
   int laneBeamLengthPercent = kDefaultLaneBeamLengthPercent;
   int noteStartPositionPercent = kDefaultNoteStartPositionPercent;
   bool laneCoverEnabled = true;

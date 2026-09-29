@@ -21,6 +21,7 @@
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayGaugeRules.h"
 #include "GameplayNoteSubmissionOrder.h"
+#include "LanePerspectiveCompensation.h"
 #include "BuiltInPlayfieldPresentation.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
@@ -375,6 +376,11 @@ private:
   float currentGaugeBorder = 80.0f;
   float currentGaugeReducedDamageZone = 0.0f;
   bool renderLaneBeams = true;
+  bool accelerationCompensation = false;
+  gameplay_scroll_geometry::LanePerspectiveCompensation
+  lanePerspectiveCompensation(float laneTop) const;
+  float compensatedLaneY(float linearY) const;
+  float linearLaneY(float worldY) const;
   float laneCoverHispeedFactor = 1.0F;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;

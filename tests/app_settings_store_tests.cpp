@@ -192,6 +192,7 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   const auto path = temp.path() / "settings.json";
   AppSettings expected = makeDistinctSettings();
   expected.selectedPlaybackRatePercent = 75;
+  expected.accelerationCompensation = true;
   expected.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
   expected.musicPlayerPlaybackRatePercent = 135;
   expected.musicPlayerPlaybackMode = audio::PlaybackMode::TimeStretch;

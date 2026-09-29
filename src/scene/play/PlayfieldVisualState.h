@@ -62,6 +62,7 @@ struct PlayfieldPresentationConfig {
       AppSettings::HiSpeedFixMode::Main;
   float playAreaWidth = 0.0F;
   bool laneBeamsEnabled = true;
+  bool accelerationCompensation = false;
   // Live LaneRenderer::getHispeed() cover factor.  It is intentionally kept
   // separate from noteStartPositionPercent because toggling lane cover in
   // Beatoraja does not reset Hi-Speed.

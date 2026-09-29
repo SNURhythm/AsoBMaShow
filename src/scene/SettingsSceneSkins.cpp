@@ -802,6 +802,26 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         body->addView(row);
       };
 
+  body->addView(makeGameplaySkinChoiceRow(
+      metrics, "Acceleration compensation", true,
+      {{.label = "Off",
+        .selected = !context.settings.accelerationCompensation,
+        .action = [this]() {
+          context.settings.accelerationCompensation = false;
+          persistSettings();
+          lastLayoutWidth = -1;
+        }},
+       {.label = "On",
+        .selected = context.settings.accelerationCompensation,
+        .action = [this]() {
+          context.settings.accelerationCompensation = true;
+          persistSettings();
+          lastLayoutWidth = -1;
+        }}}));
+  body->addView(makeWrappedText(
+      "Keep note travel steady on screen by compensating for 3D perspective.",
+      metrics.smallTextSize, ui_theme::textSecondary()));
+
   appendNumeric("Lane Angle (deg)",
                 formatFloatValue(context.settings.laneAngleDegrees, 1),
                 [this](const std::string &text) {
