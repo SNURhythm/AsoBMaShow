@@ -1112,8 +1112,8 @@ void testJukeboxSourceClassificationAndSeekOverlap() {
               audioBusForJukeboxSource(JukeboxAudioSource::ReplayKeysound) ==
                   audio::Bus::Keysound &&
               audioBusForJukeboxSource(JukeboxAudioSource::SettingsTestTone) ==
-                  audio::Bus::Keysound,
-          "direct, replay, and settings test sounds classify as keysounds");
+                  audio::Bus::System,
+          "gameplay keysounds use Keysound; settings tones use the clock-independent System bus");
 
   const auto overlapping = makeOverlappingAudioRequest(background, 1250, 1000);
   require(overlapping.has_value() && overlapping->wav == background.wav &&

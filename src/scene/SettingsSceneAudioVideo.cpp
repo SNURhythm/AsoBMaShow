@@ -870,6 +870,10 @@ bool SettingsScene::playSettingsTestSound() {
            [&](const path_t &path) {
              return runtime.playSound(
                  path, audioBusForJukeboxSource(
-                           JukeboxAudioSource::SettingsTestTone));
+                           JukeboxAudioSource::SettingsTestTone),
+                 0, audio::EffectiveGain(
+                        audio::Bus::Keysound,
+                        audio::VolumesFromSettings(
+                            context.settings.audioVideo.audio)));
            }});
 }
