@@ -218,7 +218,7 @@ public:
 
 class SessionResources final : public SkinPreparedResourceView {
 public:
-  void addImage(SkinResourceId id) {
+  void addImage(SkinResourceId id, image_alpha::Bounds bounds = {}) {
     const SkinSourceRect region{.x = 0, .y = 0, .w = 10, .h = 10};
     PreparedSkinResource resource;
     resource.id = id;
@@ -227,8 +227,18 @@ public:
     resource.width = 10;
     resource.height = 10;
     resource.regions = {region};
-    resource.regionMappings = {{.authored = region, .resolved = region}};
+    resource.regionMappings = {{.authored = region, .resolved = region,
+                                .visibleBounds = bounds}};
     resources_.emplace(id, std::move(resource));
+  }
+
+  void addImageFrame(SkinResourceId id, SkinSourceRect frame,
+                     image_alpha::Bounds bounds) {
+    auto &resource = resources_.at(id);
+    resource.width = std::max(resource.width, frame.x + frame.w);
+    resource.regions.push_back(frame);
+    resource.regionMappings.push_back(
+        {.authored = frame, .resolved = frame, .visibleBounds = bounds});
   }
 
   void addTextAtlas(SkinObjectId object, SkinTextAtlasId id) {
@@ -270,12 +280,13 @@ public:
     if (resource == nullptr || resource->regionMappings.empty()) {
       return nullptr;
     }
-    const auto &resolved = resource->regionMappings.front();
-    return resolved.authored.x == region.x && resolved.authored.y == region.y &&
-                   resolved.authored.w == region.w &&
-                   resolved.authored.h == region.h
-               ? &resolved
-               : nullptr;
+    for (const auto &resolved : resource->regionMappings) {
+      if (resolved.authored.x == region.x && resolved.authored.y == region.y &&
+          resolved.authored.w == region.w && resolved.authored.h == region.h) {
+        return &resolved;
+      }
+    }
+    return nullptr;
   }
   const PreparedSkinTextAtlas *
   findTextAtlas(SkinTextAtlasId id) const noexcept override {
@@ -5029,7 +5040,7 @@ return {
               .authoredOrdinal = 800}});
   }
 
-  void addReplayGhostNoteGeometry() {
+  void addReplayGhostNoteGeometry(bool paddedSprite = false) {
     const auto addVisuals = [](SkinLaneNotePresentation &lane) {
       constexpr std::array kinds{
           SkinNoteVisualKind::Normal,
@@ -5068,6 +5079,21 @@ return {
     };
     addVisuals(notes.lanes[0]);
     addVisuals(notes.lanes[1]);
+    if (paddedSprite) {
+      notes.lanes[0].authoredLane = 0;
+      notes.lanes[1].authoredLane = 1;
+      resources_.addImage(84, {0.2, 0.5, 0.9, 0.8});
+      resources_.addImageFrame(84, {.x = 10, .y = 0, .w = 10, .h = 10},
+                               {0, 0.5, 1, 1});
+      resources_.addImageFrame(84, {.x = 20, .y = 0, .w = 10, .h = 10},
+                               {0, 0, 0, 0});
+      notes.lanes[1].visuals[SkinNoteVisualKind::Normal] = SkinSpriteFrames{
+          .resource = 84,
+          .frames = {{.x = 0, .y = 0, .w = 10, .h = 10},
+                     {.x = 10, .y = 0, .w = 10, .h = 10},
+                     {.x = 20, .y = 0, .w = 10, .h = 10}},
+          .cycleMillis = 300};
+    }
     model_.model.objects.push_back(
         {.id = 83,
          .authoredName = "session-replay-ghost-notes",
@@ -5672,6 +5698,83 @@ void testEvaluatedSkinPublishesPerLaneReplayGhostGeometry() {
              geometry->lanes[1].normalNote.x == 80.0 &&
              geometry->lanes[1].normalNote.height == 17.0,
          "evaluated skin publishes the active note source's per-lane ghost geometry");
+}
+
+void testReplayGhostTrimsAndPositionsPaddedNoteSprite() {
+  SessionFixture fixture;
+  if (!fixture.ready()) return;
+  fixture.addReplayGhostNoteGeometry(true);
+  const auto projection = [](std::uint64_t serial) {
+    auto result = projectionAt(serial);
+    result.notes.push_back({.lane = 1, .scrollDelta = 120.0});
+    return result;
+  };
+  const auto usesFrame = [](const PlaySkinFrameTransactionResult &frame,
+                            float leftU, float rightU) {
+    if (!frame.evaluation.submitReady) return false;
+    for (const auto &command : frame.evaluation.submitReady->commands) {
+      const auto *quad = std::get_if<SkinTexturedQuadCommand>(&command.payload);
+      if (command.sourceObject != 83 || !quad || quad->resource != 84) continue;
+      float minimumU = 1.0F, maximumU = 0.0F;
+      for (const auto &vertex : quad->vertices) {
+        minimumU = std::min(minimumU, vertex.u);
+        maximumU = std::max(maximumU, vertex.u);
+      }
+      return std::abs(minimumU - leftU) < 0.0001F &&
+             std::abs(maximumU - rightU) < 0.0001F;
+    }
+    return false;
+  };
+  const auto frame = fixture.session().prepareFrame(stateAt(1), projection(1), {});
+  expect(usesFrame(frame, 0.0F, 1.0F / 3.0F),
+         "rendered note uses the same padded atlas frame as its ghost");
+  const auto &geometry = frame.evaluation.syntheticReplayGhostGeometry;
+  expect(frame.ready() && geometry.has_value(), "padded note publishes ghost geometry");
+  if (!geometry) return;
+  const std::array events{ReplayGhostEvent{.lane = 1,
+      .noteTimeMicros = 100, .judgeTimeMicros = 200,
+      .judgeScrollPosition = 1.0, .judgement = PGreat}};
+  const auto overlay = buildSyntheticReplayGhostOverlay(
+      *geometry, {.frameSerial = 1, .visualTimeMicros = 100,
+                  .currentScrollPosition = 1.0, .hispeed = 1.0,
+                  .enabled = true, .events = events});
+  expect(overlay.commands.size() == 4, "padded sprite produces four outline strips");
+  double left = 1e9, right = -1e9, top = 1e9, bottom = -1e9;
+  for (const auto &command : overlay.commands) {
+    const auto &strip = std::get<SkinPrimitiveCommand>(command.payload);
+    for (const auto &vertex : strip.vertices) {
+      left = std::min(left, double(vertex.x));
+      right = std::max(right, double(vertex.x));
+      top = std::min(top, double(vertex.y));
+      bottom = std::max(bottom, double(vertex.y));
+    }
+  }
+  // Authored sprite: (80,160), 54x17; bottom-up visible bounds:
+  // x=90.8..128.6, y=163.4..168.5. Viewport flips authored Y at 720.
+  expect(std::abs(left - 90.8) < 0.001 && std::abs(right - 128.6) < 0.001 &&
+             std::abs(top - 551.5) < 0.001 && std::abs(bottom - 556.6) < 0.001,
+         "ghost strips align to visible sprite pixels on all four edges");
+  expect(geometry->lanes[1].normalNote.x == 80.0 &&
+             geometry->lanes[1].normalNote.width == 54.0,
+         "alpha padding does not move the lane or HUD anchors");
+  const auto animated = fixture.session().prepareFrame(stateAt(15), projection(15), {});
+  expect(usesFrame(animated, 1.0F / 3.0F, 2.0F / 3.0F),
+         "rendered note advances to the lower-half atlas frame");
+  const auto &next = animated.evaluation.syntheticReplayGhostGeometry;
+  expect(animated.ready() && next && next->lanes[1].visibleBounds.left == 0 &&
+             next->lanes[1].visibleBounds.top == 0.5 &&
+             next->lanes[1].visibleBounds.bottom == 1,
+         "ghost bounds follow the same animation frame as the note sprite");
+  const auto blank = fixture.session().prepareFrame(stateAt(25), projection(25), {});
+  const auto &empty = blank.evaluation.syntheticReplayGhostGeometry;
+  expect(blank.ready() && empty, "fully transparent frame keeps its lane geometry");
+  if (empty) {
+    const auto invisible = buildSyntheticReplayGhostOverlay(
+        *empty, {.frameSerial = 25, .visualTimeMicros = 100,
+                 .currentScrollPosition = 1.0, .hispeed = 1.0,
+                 .enabled = true, .events = events});
+    expect(invisible.commands.empty(), "fully transparent note frame draws no ghost");
+  }
 }
 
 void testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts() {
@@ -8820,6 +8923,7 @@ int main(int argc, char **argv) {
   testSyntheticReplayGhostUsesSharedPlayAreaClip();
   testSyntheticReplayGhostRespectsLaneCoverVisibleHeight();
   testEvaluatedSkinPublishesPerLaneReplayGhostGeometry();
+  testReplayGhostTrimsAndPositionsPaddedNoteSprite();
   testSubmittedSkinRendersOptionGatedSyntheticReplayGhosts();
   testSubmittedSkinRendersPreparationIndicatorsFromItsLaneLayout();
   testInvalidSessionSerialDoesNotConsumeFrameOwners();

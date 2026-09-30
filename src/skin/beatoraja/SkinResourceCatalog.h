@@ -1,6 +1,7 @@
 #pragma once
 
 #include "BeatorajaSkinModel.h"
+#include "../../rendering/ImageAlphaBounds.h"
 #include "LuaSkinFileSystem.h"
 #include "PomyuCharaResource.h"
 #include "SkinDecodeCache.h"
@@ -176,6 +177,7 @@ void resetSkinImageAppCacheHitsForTesting() noexcept;
 struct SkinResolvedRegion {
   SkinSourceRect authored;
   SkinSourceRect resolved;
+  image_alpha::Bounds visibleBounds;
 };
 
 struct SkinDecodedImage {

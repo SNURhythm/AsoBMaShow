@@ -887,7 +887,12 @@ BMSRenderer::BMSRenderer(
     return uv;
   };
 
-  auto configureSheet = [&](NoteSheet &sheet, int textureW, int textureH) {
+  auto configureSheet = [&](NoteSheet &sheet, const SpriteLoader &loader) {
+    const int textureW = loader.getWidth();
+    const int textureH = loader.getHeight();
+    sheet.noteVisibleBounds = image_alpha::visibleBounds(
+        {loader.getData(), static_cast<std::size_t>(textureW) * textureH * 4},
+        textureW, textureH, 0, 0, 128, 40);
     sheet.note = makeUv(0, 0, 128, 40, textureW, textureH);
     sheet.longTail = makeUv(0, 40, 128, 40, textureW, textureH);
     sheet.longHead = makeUv(0, 80, 128, 40, textureW, textureH);
@@ -901,11 +906,9 @@ BMSRenderer::BMSRenderer(
     sheet.mine = makeUv(0, 296, 128, 40, textureW, textureH);
   };
 
-  configureSheet(graySheet, spriteLoader.getWidth(), spriteLoader.getHeight());
-  configureSheet(blueSheet, spriteLoader2.getWidth(),
-                 spriteLoader2.getHeight());
-  configureSheet(scratchSheet, spriteLoader3.getWidth(),
-                 spriteLoader3.getHeight());
+  configureSheet(graySheet, spriteLoader);
+  configureSheet(blueSheet, spriteLoader2);
+  configureSheet(scratchSheet, spriteLoader3);
 
   titleText = std::make_unique<TextView>(kHudFontPath, 26);
   titleText->setText(chart->Meta.Title);
@@ -2590,8 +2593,15 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   y = compensatedLaneY(y);
-  const float noteHeight = compensatedNoteHeight(y);
-  if (y + noteHeight < lowerBound || y > upperBound) {
+  const auto visible = image_alpha::trimBottomUp(
+      {laneToX(event.lane), y, noteRenderWidth, compensatedNoteHeight(y)},
+      sheetForLane(event.lane).noteVisibleBounds);
+  const float x = static_cast<float>(visible.x);
+  y = static_cast<float>(visible.y);
+  const float noteWidth = static_cast<float>(visible.width);
+  const float noteHeight = static_cast<float>(visible.height);
+  if (noteWidth <= 0.0f || noteHeight <= 0.0f ||
+      y + noteHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -2607,14 +2617,15 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
                 : Color(255, 40, 40, 220);
   }
 
-  const float x = laneToX(event.lane);
-  const float thickness = std::max(0.015f, noteHeight * 0.12f);
+  const float thickness =
+      std::min(std::max(0.015f, noteHeight * 0.12f),
+               std::min(noteWidth, noteHeight) * 0.5f);
   const uint32_t abgr = color.toABGR();
-  ghostBatchRenderer.addRect(x, y, noteRenderWidth, thickness, abgr);
+  ghostBatchRenderer.addRect(x, y, noteWidth, thickness, abgr);
   ghostBatchRenderer.addRect(x, y + noteHeight - thickness,
-                             noteRenderWidth, thickness, abgr);
+                             noteWidth, thickness, abgr);
   ghostBatchRenderer.addRect(x, y, thickness, noteHeight, abgr);
-  ghostBatchRenderer.addRect(x + noteRenderWidth - thickness, y, thickness,
+  ghostBatchRenderer.addRect(x + noteWidth - thickness, y, thickness,
                              noteHeight, abgr);
 }
 

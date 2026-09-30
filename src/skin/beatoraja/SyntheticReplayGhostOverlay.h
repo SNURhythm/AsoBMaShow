@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../ReplayGhostUtils.h"
+#include "../../rendering/ImageAlphaBounds.h"
 #include "SkinDrawCommand.h"
 
 #include <array>
@@ -20,6 +21,7 @@ struct SyntheticReplayGhostLaneGeometry {
   int lane = -1;
   AuthoredRect normalNote;
   AuthoredRect clip;
+  image_alpha::Bounds visibleBounds;
 };
 
 struct SyntheticReplayGhostGeometry {

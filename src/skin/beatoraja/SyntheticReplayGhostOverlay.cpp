@@ -350,24 +350,23 @@ SkinCommandBuffer buildSyntheticReplayGhostOverlay(
                                     .y = clipTop,
                                     .width = lane->clip.width,
                                     .height = clipBottom - clipTop};
-    const double y = lane->normalNote.y +
-                     (event.judgeScrollPosition - input.currentScrollPosition) *
-                         geometry.sharedLaneHeight * input.hispeed;
-    if (!std::isfinite(y)) {
+    // Source pixels run top-down, authored lane coordinates run bottom-up.
+    const auto visible = image_alpha::trimBottomUp(
+        {lane->normalNote.x, lane->normalNote.y,
+         lane->normalNote.width, lane->normalNote.height}, lane->visibleBounds);
+    const AuthoredRect outline{
+        .x = visible.x,
+        .y = visible.y +
+             (event.judgeScrollPosition - input.currentScrollPosition) *
+                 geometry.sharedLaneHeight * input.hispeed,
+        .width = visible.width,
+        .height = visible.height};
+    if (!validRect(outline)) {
       continue;
     }
     const double thickness =
-        std::max(0.015, lane->normalNote.height * 0.12);
-    if (!std::isfinite(thickness) || thickness <= 0.0 ||
-        thickness * 2.0 > lane->normalNote.height) {
-      continue;
-    }
-    const AuthoredRect outline{
-        .x = lane->normalNote.x,
-        .y = y,
-        .width = lane->normalNote.width,
-        .height = lane->normalNote.height,
-    };
+        std::min(std::max(0.015, outline.height * 0.12),
+                 std::min(outline.width, outline.height) * 0.5);
     if (!intersects(outline, playAreaClip)) {
       continue;
     }

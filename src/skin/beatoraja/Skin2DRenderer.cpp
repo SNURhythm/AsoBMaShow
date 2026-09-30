@@ -5963,7 +5963,9 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
                 layout->note->lanes.front().laneDestination.y,
             .sharedLaneHeight =
                 layout->note->lanes.front().laneDestination.height};
-        for (const auto &lane : layout->note->lanes) {
+        for (std::size_t laneIndex = 0; laneIndex < layout->note->lanes.size();
+             ++laneIndex) {
+          const auto &lane = layout->note->lanes[laneIndex];
           if (lane.authoredLane < 0) {
             continue;
           }
@@ -5987,10 +5989,26 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
               normalNote.height <= 0.0) {
             continue;
           }
+          image_alpha::Bounds visibleBounds;
+          const auto *visual = findNoteVisual(lane, SkinNoteVisualKind::Normal);
+          const auto *sprite =
+              visual ? std::get_if<SkinSpriteFrames>(visual) : nullptr;
+          if (sprite) {
+            const auto &selected = layout->preparedVisuals[laneIndex][
+                static_cast<std::size_t>(SkinNoteVisualKind::Normal)];
+            const auto *region =
+                selected.frame && !selected.suppressed
+                    ? inputs.resources.findResolvedRegion(sprite->resource,
+                                                          *selected.frame)
+                    : nullptr;
+            visibleBounds = region ? region->visibleBounds
+                                   : image_alpha::Bounds{0.0, 0.0, 0.0, 0.0};
+          }
           replayGhostGeometry.lanes.push_back(
               {.lane = lane.authoredLane,
                .normalNote = normalNote,
-               .clip = *clip});
+               .clip = *clip,
+               .visibleBounds = visibleBounds});
         }
         if (!replayGhostGeometry.lanes.empty() &&
             std::isfinite(replayGhostGeometry.sharedLaneHeight) &&

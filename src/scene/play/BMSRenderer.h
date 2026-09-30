@@ -12,6 +12,7 @@
 #include "../../bms_parser.hpp"
 #include "../../rendering/SimpleBatchRenderer.h"
 #include "../../rendering/TexBatchRenderer.h"
+#include "../../rendering/ImageAlphaBounds.h"
 #include "../../view/TextView.h"
 #include "../../rendering/Color.h"
 #include "../../rendering/Camera.h"
@@ -89,6 +90,7 @@ struct NoteSheet {
   bgfx::TextureHandle hellChargeBodyOnTexture = BGFX_INVALID_HANDLE;
   bgfx::TextureHandle hellChargeDamageTexture = BGFX_INVALID_HANDLE;
   NoteUvRegion note;
+  image_alpha::Bounds noteVisibleBounds;
   NoteUvRegion longHead;
   NoteUvRegion longBodyOff;
   NoteUvRegion longBodyOn;

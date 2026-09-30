@@ -128,9 +128,15 @@ readPlatformAsset(std::string_view path, std::size_t maximumBytes) {
 SkinDiagnostic diagnostic(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Error}; }
 SkinDiagnostic warning(std::string code, std::string message) { return {.code=std::move(code), .message=std::move(message), .severity=DiagnosticSeverity::Warning}; }
 
+auto regionKey(const SkinSourceRect &region) noexcept {
+  return std::array{region.x, region.y, region.w, region.h, region.gridColumn,
+                    region.gridRow, region.gridColumns, region.gridRows};
+}
+
 struct ResourceUse {
   bool critical = false;
   std::vector<SkinSourceRect> regions;
+  std::set<std::array<int, 8>> normalNoteRegions;
 };
 struct CollectedResourceUses {
   std::map<SkinResourceId, ResourceUse> images;
@@ -232,10 +238,16 @@ CollectedResourceUses collectResourceUses(
         return std::holds_alternative<SkinPracticeObject>(object.payload);
       });
   std::set<SkinObjectId> visited;
-  const auto addSprite = [&](const SkinSpriteFrames &sprite, bool critical) {
+  const auto addSprite = [&](const SkinSpriteFrames &sprite, bool critical,
+                             bool normalNote = false) {
     auto &use = result.images[sprite.resource];
     use.critical = use.critical || critical;
     use.regions.insert(use.regions.end(), sprite.frames.begin(), sprite.frames.end());
+    if (normalNote) {
+      for (const auto &frame : sprite.frames) {
+        use.normalNoteRegions.insert(regionKey(frame));
+      }
+    }
   };
   const auto addPracticeText = [&](SkinObjectId object) {
     result.fonts[kPracticeSystemFontResource] = false;
@@ -286,7 +298,18 @@ CollectedResourceUses collectResourceUses(
         result.builtinImages.insert(object.referenceId);
       }
       else if constexpr (std::is_same_v<T, SkinGaugeObject>) for (const auto &s: object.orderedNodes) addSprite(s, critical);
-      else if constexpr (std::is_same_v<T, SkinNoteObject>) { for (const auto &lane: object.lanes) for (const auto &[kind, visual]: lane.visuals) { (void)kind; if (const auto *s=std::get_if<SkinSpriteFrames>(&visual)) addSprite(*s, critical); } for (const auto &line: object.lines) if (line.sprite) addSprite(*line.sprite, critical); }
+      else if constexpr (std::is_same_v<T, SkinNoteObject>) {
+        for (const auto &lane : object.lanes) {
+          for (const auto &[kind, visual] : lane.visuals) {
+            if (const auto *sprite = std::get_if<SkinSpriteFrames>(&visual)) {
+              addSprite(*sprite, critical, kind == SkinNoteVisualKind::Normal);
+            }
+          }
+        }
+        for (const auto &line : object.lines) {
+          if (line.sprite) addSprite(*line.sprite, critical);
+        }
+      }
       else if constexpr (std::is_same_v<T, SkinCoverObject>) addSprite(object.sprite, critical);
       else if constexpr (std::is_same_v<T, SkinJudgeObject>) for (const auto &grade: object.grades) { if (grade.image) visit(grade.image->object, critical); if (grade.detailNumber) visit(grade.detailNumber->object, critical); }
     }, payload);
@@ -382,7 +405,8 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
                     std::vector<SkinSourceRect> &output,
                     std::vector<SkinResolvedRegion> *mappings,
                     std::vector<SkinDiagnostic> &diagnostics,
-                    const SkinSafetyPolicy &safetyPolicy) {
+                    const SkinSafetyPolicy &safetyPolicy,
+                    std::span<const unsigned char> rgba = {}) {
   const std::size_t maximumRegions = skinResourceLimit(
       safetyPolicy, SkinResourcePolicy::maximumRegions);
   if (use.regions.size() > maximumRegions ||
@@ -391,6 +415,10 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
     return false;
   }
   RegionIdentityMap identities;
+  // Analyze only normal-note frames while decoded pixels are available.
+  // Other UI images and validation-only calls do no alpha scanning.
+  std::map<SkinSourceRect, image_alpha::Bounds, decltype(&lessRect)>
+      alphaBounds(&lessRect);
   if (mappings != nullptr) {
     for (const SkinResolvedRegion &mapping : *mappings) {
       const auto [existing, inserted] = identities.emplace(
@@ -415,7 +443,19 @@ bool resolveRegions(const ResourceUse &use, int width, int height,
       }
     }
     output.push_back(resolved);
-    if (mappings) mappings->push_back({.authored=authored, .resolved=resolved});
+    if (mappings) {
+      image_alpha::Bounds visibleBounds;
+      if (!rgba.empty() && use.normalNoteRegions.contains(regionKey(authored))) {
+        auto [entry, inserted] = alphaBounds.try_emplace(resolved);
+        if (inserted) {
+          entry->second = image_alpha::visibleBounds(
+              rgba, width, height, resolved.x, resolved.y, resolved.w, resolved.h);
+        }
+        visibleBounds = entry->second;
+      }
+      mappings->push_back({.authored = authored, .resolved = resolved,
+                           .visibleBounds = visibleBounds});
+    }
   }
   return true;
 }
@@ -3320,7 +3360,8 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       std::vector<SkinSourceRect> regions;
       std::vector<SkinResolvedRegion> mappings;
       if (!resolveRegions(pending.use, decoded.width, decoded.height, regions,
-                          &mappings, result.diagnostics, input.safetyPolicy)) {
+                          &mappings, result.diagnostics, input.safetyPolicy,
+                          *decoded.rgba)) {
         continue;
       }
       if (!candidateSession.addImage(/*physicalResources=*/0,
@@ -3352,7 +3393,8 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
         std::vector<SkinResolvedRegion> aliasMappings;
         if (resolveRegions(pending.aliasUses[aliasIndex], image.pixels.width,
                            image.pixels.height, aliasRegions, &aliasMappings,
-                           result.diagnostics, input.safetyPolicy)) {
+                           result.diagnostics, input.safetyPolicy,
+                           *image.pixels.rgba)) {
           if (session.addImage(/*physicalResources=*/0,
                                /*logicalResources=*/0,
                                /*encodedBytes=*/0, /*decodedBytes=*/0,
@@ -3411,7 +3453,7 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
       std::vector<SkinResolvedRegion> mappings;
       if (resolveRegions(use->second,image.pixels.width,image.pixels.height,
                          regions,&mappings,result.diagnostics,
-                         input.safetyPolicy)) {
+                         input.safetyPolicy, *image.pixels.rgba)) {
         if (!session.addImage(/*physicalResources=*/0,
                               /*logicalResources=*/1,
                               /*encodedBytes=*/0, /*decodedBytes=*/0,
@@ -3549,7 +3591,8 @@ const auto prepareChartBuiltinImages = [&]() -> bool {
     std::vector<SkinSourceRect> regions;
     std::vector<SkinResolvedRegion> mappings;
     if (!resolveRegions(use->second, decoded->width, decoded->height, regions,
-                        &mappings, result.diagnostics, input.safetyPolicy)) {
+                        &mappings, result.diagnostics, input.safetyPolicy,
+                        *decoded->rgba)) {
       continue;
     }
     if (!candidateSession.addImage(/*physicalResources=*/0,
