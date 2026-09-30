@@ -955,6 +955,20 @@ constexpr bool kShowLaneStateOverlay = true;
 constexpr bool kShowLaneStateOverlay = false;
 #endif
 
+bool hasReachedFirstPlayableNote(const bms_parser::Chart &chart,
+                                 long long gameplayTimeMicros) {
+  for (const auto *measure : chart.Measures) {
+    if (measure == nullptr) continue;
+    for (const auto *timeline : measure->TimeLines) {
+      if (timeline == nullptr || timeline->Timing > gameplayTimeMicros) continue;
+      for (auto *note : timeline->Notes) {
+        if (note != nullptr && !note->IsLandmineNote()) return true;
+      }
+    }
+  }
+  return false;
+}
+
 std::vector<bms_parser::Note *>
 buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
   std::vector<bms_parser::Note *> result;
@@ -3184,14 +3198,19 @@ void GamePlayScene::init() {
       pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
       if (showsPausePenalty) {
-        auto penaltyText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-        penaltyText->setWidth(420);
-        penaltyText->setMinHeight(56);
-        penaltyText->setWrap(true);
-        penaltyText->setText(i18n::tr("gameplay.paused.penalty"));
-        penaltyText->setAlign(TextView::CENTER);
-        penaltyText->setVAlign(TextView::MIDDLE);
-        penaltyText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+        auto penaltyText = new View();
+        penaltyText->setSize(420, 56);
+        penaltyText->setFlexDirection(FlexDirection::Column);
+        std::istringstream lines(i18n::tr("gameplay.paused.penalty"));
+        for (std::string line; std::getline(lines, line);) {
+          auto label = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+          label->setSize(420, 28);
+          label->setText(line);
+          label->setAlign(TextView::CENTER);
+          label->setVAlign(TextView::MIDDLE);
+          label->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+          penaltyText->addView(label);
+        }
         pauseScreen->addView(penaltyText);
       }
       pauseScreen->addView(makePauseButton(
@@ -3686,8 +3705,16 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   }
   if (pausePlayback) {
     context.jukebox.pause();
+    int handledNotes = state != nullptr ? state->stagePassedNotes : 0;
+    if (realtimeGameplayAuthorityActive()) {
+      const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
+      if (snapshot) handledNotes = snapshot->attempt.stagePassedNotes;
+    }
     if (!isCoursePlayback() && !isReplayPlayback() && state != nullptr &&
-        state->isPlaying && !state->isEnding) {
+        state->isPlaying && !state->isEnding && chart != nullptr &&
+        handledNotes < chart->Meta.TotalNotes &&
+        hasReachedFirstPlayableNote(*chart,
+            getGameplayTimeMicros(context.jukebox.getTimeMicros()))) {
       if (!assist_options::isEnabled(attemptProvenance.assistOption)) {
         attemptProvenance.assistOption = assist_options::kAssisted;
       }

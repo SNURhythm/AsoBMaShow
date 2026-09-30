@@ -52,6 +52,7 @@ def main():
     ]
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     helpers = [
+        "bool hasReachedFirstPlayableNote(",
         "replay::ReplayTouchAction modernTouchAction(",
         "bool longNoteTailJudgedBeforeTiming(",
         "void markReplayMissedNote(",

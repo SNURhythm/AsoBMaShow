@@ -28,6 +28,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <tuple>
 #include <unordered_set>
 
 void require(bool condition, std::string_view message) {
@@ -461,6 +462,7 @@ void testPausePenaltyAndFreshAttemptBoundary() {
     scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
     require(scene.attemptProvenance.eligibility == ScoreEligibility::Verified,
             "unpaused manual attempt starts verified");
+    scene.context.jukebox.time = 2'500'000;
     scene.showPauseMenu(true);
     require(scene.context.jukebox.paused &&
                 scene.attemptProvenance.assistOption == assist_options::kAssisted &&
@@ -486,6 +488,11 @@ void testPausePenaltyAndFreshAttemptBoundary() {
                 scene.attemptProvenance.assistOption == assist_options::kAssisted &&
                 scene.state->lightAssistClearMark,
             "resume retains the pause penalty");
+    scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes;
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.assistOption == assist_options::kAssisted,
+            "a safe later pause cannot clear an earlier penalty");
+    scene.closePauseMenu();
     scene.useProductionResetBoundary = true;
     scene.restartCurrentPattern();
     require(scene.resets == 1 &&
@@ -493,6 +500,7 @@ void testPausePenaltyAndFreshAttemptBoundary() {
                 scene.attemptProvenance.eligibility == ScoreEligibility::Verified &&
                 !scene.state->lightAssistClearMark,
             "Retry Same and Retry without randomization reset the penalty at the real attempt boundary");
+    scene.context.jukebox.time = 2'500'000;
     scene.showPauseMenu(true);
     require(scene.attemptProvenance.assistOption == assist_options::kAssisted,
             "a fresh attempt can acquire its own pause penalty");
@@ -506,6 +514,7 @@ void testPausePenaltyAndFreshAttemptBoundary() {
         scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
     scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
         scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+    scene.context.jukebox.time = 2'500'000;
     scene.showPauseMenu(true);
     require(scene.attemptProvenance.assistOption == assist &&
                 scene.recordedReplay.assistOption == assist &&
@@ -523,6 +532,56 @@ void testPausePenaltyAndFreshAttemptBoundary() {
     require(scene.context.jukebox.paused == replay,
             "course menu leaves the song running while Watch remains pausable");
   }
+}
+
+void testPauseOnlyPenalizesUnfinishedNotePlay() {
+  for (const auto offset : {-100'000LL, 0LL, 100'000LL}) {
+    for (const auto &[time, handled, penalized] :
+         {std::tuple{1'999'999LL, 0, false},
+          std::tuple{2'000'000LL, 0, true},
+          std::tuple{2'500'000LL, 1, true},
+          std::tuple{3'050'000LL, 1, true},
+          std::tuple{2'950'000LL, 2, false},
+          std::tuple{3'500'000LL, 2, false}}) {
+      for (const bool realtime : {false, true}) {
+        GamePlayScene scene;
+        auto *leadIn = new bms_parser::TimeLine(8, false);
+        leadIn->Timing = 0;
+        leadIn->AddBackgroundNote(new bms_parser::Note(1));
+        leadIn->SetInvisibleNote(1, new bms_parser::Note(1));
+        auto &timelines = scene.chart->Measures.front()->TimeLines;
+        timelines.insert(timelines.begin(), leadIn);
+        scene.offset = offset;
+        scene.context.jukebox.time = time - offset;
+        if (!realtime) {
+          for (int i = 0; i < handled; ++i) {
+            scene.state->commitJudge(JudgeResult(i == 0 ? PGreat : Poor, 0));
+          }
+        }
+        if (realtime) {
+          scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+          auto &session = *scene.realtimeGameplaySession;
+          session.worker = std::make_unique<FixtureWorker>();
+          session.worker->snapshot.generation = 1;
+          session.worker->snapshot.attempt.stagePassedNotes = handled;
+        }
+        const auto before = scene.attemptProvenance;
+        scene.showPauseMenu(true);
+        require(scene.context.jukebox.paused, "pause remains available outside note play");
+        require(scene.state->lightAssistClearMark == penalized,
+                "pause penalty starts at the first note and ends only when all notes are handled");
+        if (!penalized) {
+          require(scene.attemptProvenance == before,
+                  "safe pauses preserve eligibility and assist metadata");
+        }
+      }
+    }
+  }
+  GamePlayScene empty;
+  empty.chart->Meta.TotalNotes = 0;
+  empty.context.jukebox.time = 2'500'000;
+  empty.showPauseMenu(true);
+  require(!empty.state->lightAssistClearMark, "empty charts never incur pause penalties");
 }
 
 void testPractice(bool loop, bool chartTerminal, long long offset) {
@@ -1153,6 +1212,7 @@ FLIP_IMPLEMENTATIONS
 int main(int argc, char **argv) {
   if (argc > 1 && std::string_view(argv[1]) == "pause-penalty") {
     testPausePenaltyAndFreshAttemptBoundary();
+    testPauseOnlyPenalizesUnfinishedNotePlay();
     return 0;
   }
   if (argc > 1 && std::string_view(argv[1]) == "partial-course-retry-same") {
@@ -1228,6 +1288,7 @@ int main(int argc, char **argv) {
   std::cout << "COR01 actual scene practice tests passed\n";
   testQueuedAbortLifetime();
   testPausePenaltyAndFreshAttemptBoundary();
+  testPauseOnlyPenalizesUnfinishedNotePlay();
   std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();

@@ -29,7 +29,8 @@ Record lists are bounded projections, not a signal to eagerly hydrate replay
 payloads. User actions that delete files or retrigger persistence require a
 specific confirmation/lifecycle boundary.
 
-Pausing a live single-chart attempt marks it as modified assisted play, excludes
+Pausing a live single-chart attempt after the first note is reached and before
+all notes have been judged or missed marks it as modified assisted play, excludes
 it from Internet Ranking and best-record updates, and caps successful clears at
 LIGHT ASSIST EASY. Saved results and replays retain this fact. Resume keeps the
 penalty; Retry and Retry Same start fresh attempts without it. The course menu
