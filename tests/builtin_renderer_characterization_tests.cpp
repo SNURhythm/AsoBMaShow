@@ -380,7 +380,9 @@ RenderTarget createRenderTarget() {
   return target;
 }
 
-void configureGeometryAndViews(bgfx::FrameBufferHandle framebuffer) {
+void configureGeometryAndViews(
+    bgfx::FrameBufferHandle framebuffer,
+    float laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees) {
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
   rendering::widthScale = 1.0F;
   rendering::heightScale = 1.0F;
@@ -410,7 +412,7 @@ void configureGeometryAndViews(bgfx::FrameBufferHandle framebuffer) {
 
   constexpr float cameraDepth = 2.1F;
   constexpr float laneLookAtY = AppSettings::kDefaultLaneLength * 0.25F;
-  const float laneAngle = bx::toRad(AppSettings::kDefaultLaneAngleDegrees);
+  const float laneAngle = bx::toRad(laneAngleDegrees);
   const bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0F};
   const bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
                         laneLookAtY - std::tan(laneAngle) * cameraDepth,
@@ -690,8 +692,9 @@ ScenarioResult renderScenario(
     bool seedPastInvisibleProbe = false,
     bool primeRendererTraversal = false,
     bool accelerationCompensation = false,
-    std::function<void(SyntheticChartFixture &)> configureFixture = {}) {
-  configureGeometryAndViews(target.framebuffer);
+    std::function<void(SyntheticChartFixture &)> configureFixture = {},
+    float laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees) {
+  configureGeometryAndViews(target.framebuffer, laneAngleDegrees);
   bgfx::touch(rendering::clear_view);
 
   SyntheticChartFixture fixture;
@@ -1800,12 +1803,30 @@ void verifyAccelerationCompensation(const RenderTarget &target) {
 }
 
 void verifyCompensatedNoteGaps(const RenderTarget &target) {
-  for (const auto path : {ScenarioRenderPath::Legacy,
-                          ScenarioRenderPath::Captured}) {
+  std::vector<unsigned char> sprite;
+  unsigned spriteWidth = 0;
+  unsigned spriteHeight = 0;
+  expect(lodepng::decode(sprite, spriteWidth, spriteHeight,
+                         "assets/img/simple_gray.png") == 0,
+         "gap regression loads the actual built-in note sprite");
+  const auto visibleBounds = image_alpha::visibleBounds(
+      sprite, spriteWidth, spriteHeight, 0, 0, 128, 40);
+  for (const auto [path, laneAngleDegrees] : {
+           std::pair{ScenarioRenderPath::Legacy,
+                     AppSettings::kDefaultLaneAngleDegrees},
+           std::pair{ScenarioRenderPath::Captured,
+                     AppSettings::kDefaultLaneAngleDegrees},
+           std::pair{ScenarioRenderPath::Legacy,
+                     AppSettings::kMaxLaneAngleDegrees},
+           std::pair{ScenarioRenderPath::Captured,
+                     AppSettings::kMaxLaneAngleDegrees}}) {
     std::optional<float> previousGap;
+    std::optional<float> previousHeight;
+    std::vector<int> pixelHeights;
+    std::vector<int> pixelGaps;
     for (const auto time : {1'650'000LL, 1'790'000LL}) {
       const auto result = renderScenario(
-          target, 0, false, path, time, 3, false, false, true,
+          target, 0, true, path, time, 3, false, false, true,
           [](SyntheticChartFixture &fixture) {
             auto *measure = fixture.chart->Measures.front();
             for (const auto noteTime : {1'800'000LL, 2'000'000LL, 2'200'000LL}) {
@@ -1829,7 +1850,7 @@ void verifyCompensatedNoteGaps(const RenderTarget &target) {
             std::ranges::sort(measure->TimeLines, {},
                               &bms_parser::TimeLine::Timing);
             fixture.chart->Meta.TotalNotes += 3;
-          });
+          }, laneAngleDegrees);
       std::vector<characterization::Submission> notes;
       for (const auto &draw : result.recorder.submissions) {
         if (draw.kind == characterization::SubmissionKind::NormalNote &&
@@ -1839,12 +1860,72 @@ void verifyCompensatedNoteGaps(const RenderTarget &target) {
       }
       std::ranges::sort(notes, {}, &characterization::Submission::timelineMicros);
       expect(notes.size() == 3, "equal-time gap probe renders all three notes");
+      std::vector<std::pair<int, int>> pixelExtents;
+      for (const auto &note : notes) {
+        const auto &rect = note.rect;
+        const auto visible = image_alpha::trimBottomUp(
+            {rect.x, rect.y, rect.width, rect.height}, visibleBounds);
+        const float height = rendering::game_camera.project(
+                                 {float(visible.x), float(visible.y), 0}).y -
+                             rendering::game_camera.project(
+                                 {float(visible.x),
+                                  float(visible.y + visible.height), 0}).y;
+        if (previousHeight) {
+          expect(std::abs(height - *previousHeight) < 0.02F,
+                 "visible note pixels retain constant projected height");
+        }
+        previousHeight = height;
+
+        const auto bottom = rendering::game_camera.project(
+            {rect.x + rect.width * 0.5F, rect.y, 0});
+        const auto top = rendering::game_camera.project(
+            {rect.x + rect.width * 0.5F, rect.y + rect.height, 0});
+        int firstPixel = kDrawableHeight;
+        int lastPixel = -1;
+        for (int y = std::max(0, int(std::floor(top.y)));
+             y <= std::min(int(kDrawableHeight) - 1, int(std::ceil(bottom.y)));
+             ++y) {
+          const float fraction = (y + 0.5F - top.y) / (bottom.y - top.y);
+          const int x = std::clamp(int(top.x + fraction * (bottom.x - top.x)),
+                                   0, int(kDrawableWidth) - 1);
+          const auto offset = (y * kDrawableWidth + x) * 4;
+          const int r = result.rgba[offset];
+          const int g = result.rgba[offset + 1];
+          const int b = result.rgba[offset + 2];
+          // The center of the real gray note is RGB 204. Ignore the dark
+          // lane and colored HUD; include the antialiased opaque edge.
+          if (r >= 160 && r <= 224 && std::abs(r - g) <= 2 &&
+              std::abs(r - b) <= 2) {
+            firstPixel = std::min(firstPixel, y);
+            lastPixel = std::max(lastPixel, y);
+          }
+        }
+        expect(lastPixel >= firstPixel,
+               "pixel readback contains the visible gray note strip");
+        if (lastPixel >= firstPixel) {
+          pixelExtents.emplace_back(firstPixel, lastPixel);
+          pixelHeights.push_back(lastPixel - firstPixel + 1);
+          expect(std::abs((lastPixel - firstPixel + 1) - height) <= 1.0F,
+                 "Metal readback matches the alpha-bound projected height");
+        }
+      }
+      for (std::size_t i = 1; i < pixelExtents.size(); ++i) {
+        pixelGaps.push_back(pixelExtents[i - 1].first -
+                           pixelExtents[i].second - 1);
+      }
       for (std::size_t i = 1; i < notes.size(); ++i) {
-        const auto &near = notes[i - 1].rect;
-        const auto &far = notes[i].rect;
+        const auto &nearRect = notes[i - 1].rect;
+        const auto &farRect = notes[i].rect;
+        const auto near = image_alpha::trimBottomUp(
+            {nearRect.x, nearRect.y, nearRect.width, nearRect.height},
+            visibleBounds);
+        const auto far = image_alpha::trimBottomUp(
+            {farRect.x, farRect.y, farRect.width, farRect.height},
+            visibleBounds);
         const float gap = rendering::game_camera.project(
-                              {near.x, near.y + near.height, 0}).y -
-                          rendering::game_camera.project({far.x, far.y, 0}).y;
+                              {float(near.x), float(near.y + near.height), 0}).y -
+                          rendering::game_camera.project(
+                              {float(far.x), float(far.y), 0}).y;
         expect(gap > 0.0F, "gap probe notes remain visually separated");
         if (previousGap) {
           expect(std::abs(gap - *previousGap) < 0.02F,
@@ -1853,6 +1934,14 @@ void verifyCompensatedNoteGaps(const RenderTarget &target) {
         }
         previousGap = gap;
       }
+    }
+    if (!pixelHeights.empty() && !pixelGaps.empty()) {
+      const auto [minHeight, maxHeight] = std::ranges::minmax(pixelHeights);
+      const auto [minGap, maxGap] = std::ranges::minmax(pixelGaps);
+      expect(maxHeight - minHeight <= 1,
+             "visible pixel heights vary by at most one rasterization pixel");
+      expect(maxGap - minGap <= 2,
+             "visible pixel gaps stay equal within edge rasterization rounding");
     }
   }
 }

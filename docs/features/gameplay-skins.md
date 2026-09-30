@@ -12,8 +12,10 @@ The built-in gameplay settings include an **Acceleration compensation** toggle
 (default on for profiles without a saved preference). It makes notes travel at
 constant screen-space speed for a constant chart scroll rate by mapping linear
 2D positions back onto the 3D lane.
-Notes retain perspective width and keep a constant screen height, matching their
-height at judgement, so equally spaced notes retain equal visible gaps.
+Notes retain perspective width and keep a constant visible screen height,
+matching their height at judgement, so equally spaced notes retain equal visible
+gaps. Compensation uses each sprite’s visible bounds, excluding transparent
+padding.
 Long notes, measure lines, replay markers, and lane cover use the same mapping;
 chart timing, BPM changes, and judgement are unaffected. The setting applies to preview, gameplay, and replay
 video export. Find it under **Lane**, **Skins → Built-in gameplay**, or in the

@@ -91,6 +91,7 @@ struct NoteSheet {
   bgfx::TextureHandle hellChargeDamageTexture = BGFX_INVALID_HANDLE;
   NoteUvRegion note;
   image_alpha::Bounds noteVisibleBounds;
+  image_alpha::Bounds mineVisibleBounds;
   NoteUvRegion longHead;
   NoteUvRegion longBodyOff;
   NoteUvRegion longBodyOn;
@@ -384,6 +385,8 @@ private:
   lanePerspectiveCompensation(float laneTop) const;
   float compensatedLaneY(float linearY) const;
   float compensatedNoteHeight(float worldY) const;
+  image_alpha::Rect compensatedNoteRectangle(
+      float x, float worldY, image_alpha::Bounds visibleBounds) const;
   float linearLaneY(float worldY) const;
   float laneCoverHispeedFactor = 1.0F;
   std::uint64_t touchLayoutRevision_ = 1;

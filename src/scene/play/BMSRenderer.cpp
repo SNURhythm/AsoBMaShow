@@ -893,6 +893,9 @@ BMSRenderer::BMSRenderer(
     sheet.noteVisibleBounds = image_alpha::visibleBounds(
         {loader.getData(), static_cast<std::size_t>(textureW) * textureH * 4},
         textureW, textureH, 0, 0, 128, 40);
+    sheet.mineVisibleBounds = image_alpha::visibleBounds(
+        {loader.getData(), static_cast<std::size_t>(textureW) * textureH * 4},
+        textureW, textureH, 0, 296, 128, 40);
     sheet.note = makeUv(0, 0, 128, 40, textureW, textureH);
     sheet.longTail = makeUv(0, 40, 128, 40, textureW, textureH);
     sheet.longHead = makeUv(0, 80, 128, 40, textureW, textureH);
@@ -2148,9 +2151,11 @@ void BMSRenderer::drawLongNote(
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
                                  uint32_t submitDepth) {
   y = compensatedLaneY(y);
-  const float noteHeight = compensatedNoteHeight(y);
-  const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteHeight, judgeY);
+  const NoteSheet &sheet = sheetForLane(note->Lane);
+  const auto rect = compensatedNoteRectangle(
+      laneToX(note->Lane), y, sheet.noteVisibleBounds);
+  const auto clip = noteRenderClip(note, currentRenderMicros, rect.y,
+                                   rect.height, judgeY);
   if (note->IsPlayed || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound))
@@ -2160,8 +2165,6 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
           gameplay_chart_entity_render_budget::kSingleRectangleEntityCost)) {
     return;
   }
-
-  const NoteSheet &sheet = sheetForLane(note->Lane);
 
   noteTextureBatchAtDepth(submitDepth).addRectUV(
       laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.note.u0,
@@ -2254,9 +2257,11 @@ void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note,
                                    uint32_t submitDepth) {
   y = compensatedLaneY(y);
-  const float noteHeight = compensatedNoteHeight(y);
-  const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteHeight, judgeY);
+  const NoteSheet &sheet = sheetForLane(note->Lane);
+  const auto rect = compensatedNoteRectangle(
+      laneToX(note->Lane), y, sheet.mineVisibleBounds);
+  const auto clip = noteRenderClip(note, currentRenderMicros, rect.y,
+                                   rect.height, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound)) {
@@ -2268,7 +2273,6 @@ void BMSRenderer::drawLandmineNote(float y,
     return;
   }
 
-  const NoteSheet &sheet = sheetForLane(note->Lane);
   noteTextureBatchAtDepth(submitDepth).addRectUV(
       laneToX(note->Lane), clip.y, noteRenderWidth, clip.height, sheet.mine.u0,
       sheet.mine.v0, sheet.mine.u1,
@@ -2594,7 +2598,8 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   y = compensatedLaneY(y);
   const auto visible = image_alpha::trimBottomUp(
-      {laneToX(event.lane), y, noteRenderWidth, compensatedNoteHeight(y)},
+      compensatedNoteRectangle(laneToX(event.lane), y,
+                               sheetForLane(event.lane).noteVisibleBounds),
       sheetForLane(event.lane).noteVisibleBounds);
   const float x = static_cast<float>(visible.x);
   y = static_cast<float>(visible.y);
@@ -2632,7 +2637,8 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
   y = compensatedLaneY(y);
   const auto visible = image_alpha::trimBottomUp(
-      {laneToX(marker.lane), y, noteRenderWidth, compensatedNoteHeight(y)},
+      compensatedNoteRectangle(laneToX(marker.lane), y,
+                               sheetForLane(marker.lane).noteVisibleBounds),
       sheetForLane(marker.lane).noteVisibleBounds);
   const float x = static_cast<float>(visible.x);
   y = static_cast<float>(visible.y);
@@ -3323,9 +3329,13 @@ void BMSRenderer::renderFrame(
             return;
           }
           noteY = compensatedLaneY(noteY);
-          const float noteHeight = compensatedNoteHeight(noteY);
+          const int lane = rendererLaneFor(note.lane);
+          const NoteSheet &sheet = sheetForLane(lane);
+          const auto rect = compensatedNoteRectangle(
+              laneToX(lane), noteY,
+              mine ? sheet.mineVisibleBounds : sheet.noteVisibleBounds);
           const auto clip = noteRenderClip(note.timeMicros, currentRenderMicros,
-                                           noteY, noteHeight, judgeY);
+                                           rect.y, rect.height, judgeY);
           if (note.judged || !clip.visible ||
               !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
                   clip.y, clip.height, lowerBound, upperBound)) {
@@ -3336,8 +3346,6 @@ void BMSRenderer::renderFrame(
                       kSingleRectangleEntityCost)) {
             return;
           }
-          const int lane = rendererLaneFor(note.lane);
-          const NoteSheet &sheet = sheetForLane(lane);
           const NoteUvRegion &uv = mine ? sheet.mine : sheet.note;
           noteTextureBatchAtDepth(note.builtInDepth).addRectUV(
               laneToX(lane), clip.y, noteRenderWidth, clip.height, uv.u0,
@@ -4569,6 +4577,32 @@ float BMSRenderer::compensatedNoteHeight(float worldY) const {
   const float height = compensation.toWorld(
       compensation.toLinear(worldY) + linearHeight) - worldY;
   return std::isfinite(height) && height > 0.0F ? height : noteRenderHeight;
+}
+
+image_alpha::Rect BMSRenderer::compensatedNoteRectangle(
+    float x, float worldY, image_alpha::Bounds visibleBounds) const {
+  image_alpha::Rect rect{x, worldY, noteRenderWidth, noteRenderHeight};
+  const double visibleFraction = visibleBounds.bottom - visibleBounds.top;
+  if (!accelerationCompensation || visibleFraction <= 0.0) {
+    return rect;
+  }
+  const auto compensation = lanePerspectiveCompensation(upperBound);
+  const float linearY = compensation.toLinear(worldY);
+  // Texture coordinates interpolate in world space. Keep the alpha-bearing
+  // edges linear on screen, then reconstruct the padded sprite around them.
+  const auto visibleEdge = [&](double fraction) {
+    const float referenceY = judgeY + noteRenderHeight * fraction;
+    return compensation.toWorld(
+        linearY + compensation.toLinear(referenceY) - judgeY);
+  };
+  const float bottom = visibleEdge(1.0 - visibleBounds.bottom);
+  const float top = visibleEdge(1.0 - visibleBounds.top);
+  const double height = (top - bottom) / visibleFraction;
+  if (std::isfinite(height) && height > 0.0) {
+    rect.height = height;
+    rect.y = bottom - height * (1.0 - visibleBounds.bottom);
+  }
+  return rect;
 }
 
 float BMSRenderer::linearLaneY(float worldY) const {
