@@ -3141,7 +3141,9 @@ void GamePlayScene::init() {
   {
     auto pauseScreen = new View();
     pauseScreen->setWidth(520);
-    pauseScreen->setHeight(options.practiceSession != nullptr ? 500 : 430);
+    const bool showsPausePenalty = !coursePlayback && !isReplayPlayback();
+    pauseScreen->setHeight((options.practiceSession != nullptr ? 500 : 430) +
+                            (showsPausePenalty ? 64 : 0));
     pauseScreen->setFlexDirection(FlexDirection::Column);
     pauseScreen->setAlignItems(YGAlignCenter);
     pauseScreen->setJustifyContent(YGJustifyCenter);
@@ -3181,6 +3183,17 @@ void GamePlayScene::init() {
       pauseText->setVAlign(TextView::MIDDLE);
       pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
+      if (showsPausePenalty) {
+        auto penaltyText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+        penaltyText->setWidth(420);
+        penaltyText->setMinHeight(56);
+        penaltyText->setWrap(true);
+        penaltyText->setText(i18n::tr("gameplay.paused.penalty"));
+        penaltyText->setAlign(TextView::CENTER);
+        penaltyText->setVAlign(TextView::MIDDLE);
+        penaltyText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+        pauseScreen->addView(penaltyText);
+      }
       pauseScreen->addView(makePauseButton(
           coursePlayback ? i18n::tr("gameplay.close.label") : i18n::tr("gameplay.resume.label"), Color(22, 132, 126, 238),
           Color(28, 151, 144, 248), Color(40, 173, 164, 255),
@@ -3343,6 +3356,12 @@ bool GamePlayScene::reset() {
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
+  // Retry and Retry Same both begin a new attempt. Rebuild all attempt facts
+  // so runtime modifiers (including pause use) never leak into the retry.
+  if (!isReplayPlayback() && rulesetPolicyBuild.policy.has_value()) {
+    attemptProvenance = captureScoreProvenanceAtPlayStart(
+        options, chart->Meta, *rulesetPolicyBuild.policy);
+  }
   ownedState.reset();
   state = nullptr;
   presentation->reset();
@@ -3667,6 +3686,18 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   }
   if (pausePlayback) {
     context.jukebox.pause();
+    if (!isCoursePlayback() && !isReplayPlayback() && state != nullptr &&
+        state->isPlaying && !state->isEnding) {
+      if (!assist_options::isEnabled(attemptProvenance.assistOption)) {
+        attemptProvenance.assistOption = assist_options::kAssisted;
+      }
+      attemptProvenance.eligibility = ScoreEligibility::Modified;
+      recordedReplay.provenance = attemptProvenance;
+      recordedReplay.assistOption = attemptProvenance.assistOption;
+      analyticsReplay.provenance = attemptProvenance;
+      analyticsReplay.assistOption = attemptProvenance.assistOption;
+      state->lightAssistClearMark = true;
+    }
   }
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->clearLiveTouchPoints();

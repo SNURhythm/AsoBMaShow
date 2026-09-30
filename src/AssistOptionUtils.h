@@ -9,6 +9,8 @@ namespace assist_options {
 inline constexpr const char *kOff = "OFF";
 inline constexpr const char *kDrag = "DRAG";
 inline constexpr const char *kBpmGuide = "BPM-GUIDE";
+// Result-only assist classification, without enabling an input/play aid.
+inline constexpr const char *kAssisted = "ASSISTED";
 
 inline std::string normalize(std::string option) {
   option.erase(option.begin(), std::find_if_not(option.begin(), option.end(),
@@ -32,6 +34,9 @@ inline std::string normalize(std::string option) {
   }
   if (option == "BPM-GUIDE" || option == "BPMGUIDE") {
     return kBpmGuide;
+  }
+  if (option == kAssisted) {
+    return kAssisted;
   }
   return kOff;
 }

@@ -3314,7 +3314,7 @@ void ResultScene::startRetry(bool samePattern) {
                 : retrySource.gaugeAutoShiftLowerBound;
         options.longNoteMode = resultRetryLongNoteMode(
             retrySource.chartMeta, local->attemptProvenance);
-        options.assistOption = retrySource.assistOption;
+        options.assistOption = resultRetryAssistOption(retrySource.assistOption);
         options.clubMode = local->attemptProvenance.clubMode;
         options.doublePlayFlip = local->attemptProvenance.doublePlayFlip;
         options.pacemakerTarget =

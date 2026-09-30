@@ -40,8 +40,12 @@ void require(bool condition, std::string_view message) {
 
 struct FixtureJukebox {
   long long time = 0;
+  bool paused = false;
   long long getTimeMicros() const { return time; }
   void stop() {}
+  void pause() { paused = true; }
+  void resume() { paused = false; }
+  bool isPaused() const { return paused; }
   void playKeySound(int) { require(false, "Watch must not request live keysounds"); }
 };
 
@@ -68,6 +72,8 @@ struct FixtureWorker {
     return std::make_shared<gameplay::RealtimeGameplaySnapshot>(snapshot);
   }
   std::function<void()> beforeStop;
+  bool suspend() { return native ? native->suspend() : true; }
+  bool resume() { return native ? native->resume() : true; }
   void stop() {
     if (beforeStop) beforeStop();
     native->stop();
@@ -98,6 +104,13 @@ struct FixturePresentation {
   void onLaneReleased(int, long long) {}
   void onJudge(JudgeResult, int, int, PlayfieldJudgeEventClock, bool) {}
   void applyGameplayGraphState(const SkinGameplayDynamicGraphState &) {}
+  void clearLiveTouchPoints() {}
+};
+
+struct FixturePauseView {
+  bool visible = false;
+  void setVisible(bool value) { visible = value; }
+  bool getVisible() const { return visible; }
 };
 
 class GamePlayScene {
@@ -106,7 +119,10 @@ public:
   bms_parser::Chart *chart = &ownedChart;
   std::unique_ptr<RhythmState> state;
   StartOptions options;
-  struct { FixtureJukebox jukebox; } context;
+  struct {
+    FixtureJukebox jukebox;
+    struct { void resetGyroscopeTurntableSession() {} } inputDeviceRegistry;
+  } context;
   FixtureInput *inputHandler = nullptr;
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
   std::optional<gameplay::StartSelectControl> startSelectControl;
@@ -133,6 +149,12 @@ public:
   std::optional<GaugeStateSnapshot> courseStageInitialGauge;
   bool playfieldLaneCoverEnabled = false;
   ScoreProvenance attemptProvenance = ScoreProvenance::Legacy();
+  FixturePauseView *pauseLayout = nullptr;
+  FixturePauseView *pauseButton = nullptr;
+  FixturePauseView *practiceRestartButton = nullptr;
+  bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
+  bool playbackInitializationFailed = false;
+  bool useProductionResetBoundary = false;
   int transitions = 0;
   int resets = 0;
   std::unique_ptr<RhythmState> stoppedSnapshot;
@@ -169,6 +191,14 @@ public:
   }
 
   void update(float dt);
+  void showPauseMenu(bool pausePlayback);
+  void closePauseMenu();
+  void togglePauseMenuFromInput();
+  void restartCurrentPattern();
+  void resetAttemptBoundaryForTest();
+  void resetCoursePauseHold() {}
+  void updateSkinResetLayoutVisibility() {}
+  template <typename Callback> void defer(Callback callback, int, bool) { callback(); }
   void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void completePracticeAttempt();
@@ -190,8 +220,7 @@ public:
   std::function<void()> onIngressClosed;
   std::function<void()> onTouchDrain;
   void setRealtimeGameplayIngressEnabled(bool enabled) {
-    require(!enabled, "terminal fixture only closes ingress");
-    if (onIngressClosed) onIngressClosed();
+    if (!enabled && onIngressClosed) onIngressClosed();
   }
   void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
@@ -300,6 +329,7 @@ public:
                          long long judgeTime, const JudgeResult &judge,
                          bool checkGaugeFailure = true);
   void reset() {
+    if (useProductionResetBoundary) resetAttemptBoundaryForTest();
     ++resets;
     state = std::make_unique<RhythmState>(chart, false);
     state->isPlaying = true;
@@ -314,7 +344,7 @@ public:
       }
     }
     recordedReplay = {};
-    options.practiceSession->beginAttempt();
+    if (options.practiceSession) options.practiceSession->beginAttempt();
   }
 };
 
@@ -412,6 +442,88 @@ void testAbortExportAdmission(const ReplayData &replay) {
 }
 
 #include "gameplay_terminal_persistence_fixture.h"
+
+void testPausePenaltyAndFreshAttemptBoundary() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    GamePlayScene scene;
+    scene.options.ruleset = ruleset;
+    scene.options.gaugeType = GaugeType::Hard;
+    const auto *selectedAssist = ruleset == GameplayRuleset::LR2
+                                    ? assist_options::kBpmGuide
+                                    : assist_options::kOff;
+    scene.options.assistOption = selectedAssist;
+    scene.chart->Meta.MinBpm = scene.chart->Meta.MaxBpm = 120;
+    scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+    require(scene.rulesetPolicyBuild.built(), "pause fixture has a canonical policy");
+    scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
+        scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+    scene.state->configureGauge(GaugeType::Hard, GaugeAutoShiftMode::None);
+    require(scene.attemptProvenance.eligibility == ScoreEligibility::Verified,
+            "unpaused manual attempt starts verified");
+    scene.showPauseMenu(true);
+    require(scene.context.jukebox.paused &&
+                scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                scene.attemptProvenance.eligibility == ScoreEligibility::Modified &&
+                scene.recordedReplay.provenance == scene.attemptProvenance &&
+                scene.analyticsReplay.provenance == scene.attemptProvenance &&
+                scene.recordedReplay.assistOption == assist_options::kAssisted &&
+                scene.analyticsReplay.assistOption == assist_options::kAssisted &&
+                scene.options.assistOption == selectedAssist &&
+                scene.state->getClearType() == ClearType::LightAssistedEasyClear,
+            "actual pause marks the attempt and its replay assisted and unranked");
+    scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+    auto &session = *scene.realtimeGameplaySession;
+    session.worker = std::make_unique<FixtureWorker>();
+    session.worker->snapshot.generation = 1;
+    session.worker->snapshot.gaugeState = scene.state->gaugeSnapshot();
+    scene.syncRealtimeGameplaySnapshotFromWorker();
+    require(scene.state->getClearType() == ClearType::LightAssistedEasyClear,
+            "worker snapshot synchronization cannot erase the pause lamp cap");
+    scene.realtimeGameplaySession.reset();
+    scene.closePauseMenu();
+    require(!scene.context.jukebox.paused &&
+                scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                scene.state->lightAssistClearMark,
+            "resume retains the pause penalty");
+    scene.useProductionResetBoundary = true;
+    scene.restartCurrentPattern();
+    require(scene.resets == 1 &&
+                scene.attemptProvenance.assistOption == assist_options::kOff &&
+                scene.attemptProvenance.eligibility == ScoreEligibility::Verified &&
+                !scene.state->lightAssistClearMark,
+            "Retry Same and Retry without randomization reset the penalty at the real attempt boundary");
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.assistOption == assist_options::kAssisted,
+            "a fresh attempt can acquire its own pause penalty");
+  }
+  for (const auto *assist : {assist_options::kDrag, assist_options::kBpmGuide}) {
+    GamePlayScene scene;
+    scene.options.assistOption = assist;
+    scene.chart->Meta.MinBpm = 120;
+    scene.chart->Meta.MaxBpm = 180;
+    scene.rulesetPolicyBuild = buildGameplayRulesetPolicyAtPlayStart(
+        scene.options, *scene.chart, AppSettings::NotePriorityMode::Lowest);
+    scene.attemptProvenance = captureScoreProvenanceAtPlayStart(
+        scene.options, scene.chart->Meta, *scene.rulesetPolicyBuild.policy);
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.assistOption == assist &&
+                scene.recordedReplay.assistOption == assist &&
+                scene.options.assistOption == assist,
+            "pause retains the effective assist option already in use");
+  }
+  for (const bool replay : {false, true}) {
+    GamePlayScene scene;
+    if (replay) scene.options.replayData = std::make_shared<ReplayData>();
+    else scene.options.courseSession = std::make_shared<CoursePlaySession>();
+    const auto before = scene.attemptProvenance;
+    scene.togglePauseMenuFromInput();
+    require(scene.attemptProvenance == before && !scene.state->lightAssistClearMark,
+            "course menus and pausing Watch never penalize a recorded attempt");
+    require(scene.context.jukebox.paused == replay,
+            "course menu leaves the song running while Watch remains pausable");
+  }
+}
 
 void testPractice(bool loop, bool chartTerminal, long long offset) {
   GamePlayScene scene;
@@ -1039,6 +1151,10 @@ PREPARATION_IMPLEMENTATIONS
 FLIP_IMPLEMENTATIONS
 
 int main(int argc, char **argv) {
+  if (argc > 1 && std::string_view(argv[1]) == "pause-penalty") {
+    testPausePenaltyAndFreshAttemptBoundary();
+    return 0;
+  }
   if (argc > 1 && std::string_view(argv[1]) == "partial-course-retry-same") {
     testPartialCourseRetrySameRestoresSavedOptions(argc > 2 ? argv[2] : "all");
     return 0;
@@ -1111,6 +1227,7 @@ int main(int argc, char **argv) {
   }
   std::cout << "COR01 actual scene practice tests passed\n";
   testQueuedAbortLifetime();
+  testPausePenaltyAndFreshAttemptBoundary();
   std::cout << "GAME01 actual scene queued-input lifetime tests passed\n";
   testAbortOutcome();
   testAuthoredCourseStageLiveCarry();

@@ -23,6 +23,10 @@ def main():
     args = parser.parse_args()
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
+        "void GamePlayScene::showPauseMenu(",
+        "void GamePlayScene::closePauseMenu()",
+        "void GamePlayScene::togglePauseMenuFromInput()",
+        "void GamePlayScene::restartCurrentPattern()",
         "void GamePlayScene::update(float dt)",
         "void GamePlayScene::completePracticeSection(",
         "void GamePlayScene::finalizePracticeRangeMisses()",
@@ -58,6 +62,10 @@ def main():
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
     methods += "\n\n".join(extract(source, signature) for signature in signatures)
+    reset_boundary = extract(source, "bool GamePlayScene::reset()")
+    reset_boundary = reset_boundary[reset_boundary.index("{") + 1:
+                                    reset_boundary.index("  ownedState.reset();")]
+    methods += "\nvoid GamePlayScene::resetAttemptBoundaryForTest() {\n" + reset_boundary + "\n}\n"
     sync_method = extract(source, "void GamePlayScene::syncRealtimeGameplaySnapshot()")
     methods += "\n" + sync_method.replace("syncRealtimeGameplaySnapshot()",
                                            "syncRealtimeGameplaySnapshotFromWorker()", 1)

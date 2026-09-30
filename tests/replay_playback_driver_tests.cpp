@@ -210,6 +210,22 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
   expect(alteredRate.matched() && alteredRate.replayData,
          std::string("altered-rate replay preserves the live assisted clear: ") +
              alteredRate.diagnostic);
+
+  auto assistedReplay = replay;
+  assistedReplay.playback.setup.assistOption = assist_options::kAssisted;
+  auto assistedSaved = saved;
+  assistedSaved.score.provenance.assistOption = assist_options::kAssisted;
+  assistedSaved.score.provenance.eligibility = ScoreEligibility::Modified;
+  assistedSaved.score.clearType = kClearTypeLightAssistedEasyClearRank;
+  assistedSaved.resultFingerprint =
+      result_persistence::modernResultFingerprint(assistedSaved);
+  const auto assisted = ReplayPlaybackMaterializer::materializeForConsumers(
+      assistedReplay, assistedSaved, chart);
+  expect(assisted.matched() && assisted.replayData &&
+             assisted.replayData->assistOption == assist_options::kAssisted &&
+             assisted.replayData->clearType == kClearTypeLightAssistedEasyClearRank,
+         std::string("paused play uses existing assist metadata during Watch: ") +
+             assisted.diagnostic);
 }
 
 void testConcreteMaterializerSettlesExactTimeMineInput() {

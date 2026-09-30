@@ -504,6 +504,12 @@ enforceCoursePlaybackRules(StartOptions options) {
   return options;
 }
 
+[[nodiscard]] inline std::string resultRetryAssistOption(
+    const std::string &recordedAssistOption) {
+  const auto option = assist_options::normalize(recordedAssistOption);
+  return option == assist_options::kAssisted ? assist_options::kOff : option;
+}
+
 [[nodiscard]] inline ScoreProvenance captureScoreProvenanceAtPlayStart(
     const StartOptions &options, const bms_parser::ChartMeta &chartMeta,
     const std::map<Judgement, std::pair<long long, long long>>

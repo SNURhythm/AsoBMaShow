@@ -29,6 +29,14 @@ Record lists are bounded projections, not a signal to eagerly hydrate replay
 payloads. User actions that delete files or retrigger persistence require a
 specific confirmation/lifecycle boundary.
 
+Pausing a live single-chart attempt marks it as modified assisted play, excludes
+it from Internet Ranking and best-record updates, and caps successful clears at
+LIGHT ASSIST EASY. Saved results and replays retain this fact. Resume keeps the
+penalty; Retry and Retry Same start fresh attempts without it. The course menu
+does not pause the song and is exempt, as is pausing replay viewing. This uses
+the existing assist-option metadata without changing the result or replay schema.
+Existing records keep their original interpretation and fingerprints.
+
 ## Verification
 
 Use `result_persistence_*_tests`, `result_record_*_tests`,

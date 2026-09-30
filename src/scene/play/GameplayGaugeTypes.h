@@ -140,7 +140,8 @@ assistClearRequired(const audio::PlaybackRate &playback) noexcept {
   if (assistClearRequired(playback)) {
     return AssistClearMark::LightAssistedEasy;
   }
-  if (assist_options::isDragMode(assistOption) ||
+  if (assist_options::normalize(assistOption) == assist_options::kAssisted ||
+      assist_options::isDragMode(assistOption) ||
       assist_options::bpmGuideAffectsClear(assistOption, minimumBpm,
                                             maximumBpm)) {
     return AssistClearMark::LightAssistedEasy;
