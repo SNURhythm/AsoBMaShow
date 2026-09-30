@@ -381,6 +381,7 @@ private:
   gameplay_scroll_geometry::LanePerspectiveCompensation
   lanePerspectiveCompensation(float laneTop) const;
   float compensatedLaneY(float linearY) const;
+  float compensatedNoteHeight(float worldY) const;
   float linearLaneY(float worldY) const;
   float laneCoverHispeedFactor = 1.0F;
   std::uint64_t touchLayoutRevision_ = 1;

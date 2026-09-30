@@ -1799,6 +1799,64 @@ void verifyAccelerationCompensation(const RenderTarget &target) {
   }
 }
 
+void verifyCompensatedNoteGaps(const RenderTarget &target) {
+  for (const auto path : {ScenarioRenderPath::Legacy,
+                          ScenarioRenderPath::Captured}) {
+    std::optional<float> previousGap;
+    for (const auto time : {1'650'000LL, 1'790'000LL}) {
+      const auto result = renderScenario(
+          target, 0, false, path, time, 3, false, false, true,
+          [](SyntheticChartFixture &fixture) {
+            auto *measure = fixture.chart->Measures.front();
+            for (const auto noteTime : {1'800'000LL, 2'000'000LL, 2'200'000LL}) {
+              auto found = std::ranges::find_if(measure->TimeLines,
+                  [noteTime](const auto *timeline) {
+                    return timeline->Timing == noteTime;
+                  });
+              bms_parser::TimeLine *timeline = nullptr;
+              if (found != measure->TimeLines.end()) {
+                timeline = *found;
+              } else {
+                timeline = new bms_parser::TimeLine(16, false);
+                timeline->Timing = noteTime;
+                timeline->BeatPosition = noteTime / 500'000.0;
+                timeline->Bpm = 120.0;
+                timeline->Scroll = 1.0;
+                measure->TimeLines.push_back(timeline);
+              }
+              timeline->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
+            }
+            std::ranges::sort(measure->TimeLines, {},
+                              &bms_parser::TimeLine::Timing);
+            fixture.chart->Meta.TotalNotes += 3;
+          });
+      std::vector<characterization::Submission> notes;
+      for (const auto &draw : result.recorder.submissions) {
+        if (draw.kind == characterization::SubmissionKind::NormalNote &&
+            draw.lane == 2 && draw.timelineMicros >= 1'800'000) {
+          notes.push_back(draw);
+        }
+      }
+      std::ranges::sort(notes, {}, &characterization::Submission::timelineMicros);
+      expect(notes.size() == 3, "equal-time gap probe renders all three notes");
+      for (std::size_t i = 1; i < notes.size(); ++i) {
+        const auto &near = notes[i - 1].rect;
+        const auto &far = notes[i].rect;
+        const float gap = rendering::game_camera.project(
+                              {near.x, near.y + near.height, 0}).y -
+                          rendering::game_camera.project({far.x, far.y, 0}).y;
+        expect(gap > 0.0F, "gap probe notes remain visually separated");
+        if (previousGap) {
+          expect(std::abs(gap - *previousGap) < 0.02F,
+                 "equal-time notes preserve edge-to-edge screen gaps along "
+                 "the lane and while approaching judgement");
+        }
+        previousGap = gap;
+      }
+    }
+  }
+}
+
 void verifyCompensatedMissedLongNotes(const RenderTarget &target) {
   for (const bool held : {false, true}) {
     for (const auto time : {1'750'000LL, 2'125'000LL, 2'625'000LL, 3'250'000LL}) {
@@ -2111,6 +2169,7 @@ int main() {
   if (failures == 0) {
     try {
       verifyAccelerationCompensation(target);
+      verifyCompensatedNoteGaps(target);
       verifyCompensatedMissedLongNotes(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);

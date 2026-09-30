@@ -2009,9 +2009,11 @@ void BMSRenderer::drawLongNote(
   const float headRenderY =
       head->IsPlayed && !head->IsDead ? judgeY : headY;
   const auto headClip = noteRenderClip(
-      head, currentRenderMicros, headRenderY, noteRenderHeight, judgeY);
+      head, currentRenderMicros, headRenderY,
+      compensatedNoteHeight(headRenderY), judgeY);
   const auto tailClip = noteRenderClip(
-      head->Tail, currentRenderMicros, tailY, noteRenderHeight, judgeY);
+      head->Tail, currentRenderMicros, tailY,
+      compensatedNoteHeight(tailY), judgeY);
   float bodyStartY = headRenderY;
   if (head->Timeline != nullptr &&
       head->Timeline->Timing >= currentRenderMicros) {
@@ -2143,8 +2145,9 @@ void BMSRenderer::drawLongNote(
 void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
                                  uint32_t submitDepth) {
   y = compensatedLaneY(y);
+  const float noteHeight = compensatedNoteHeight(y);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteRenderHeight, judgeY);
+                                   noteHeight, judgeY);
   if (note->IsPlayed || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound))
@@ -2179,8 +2182,9 @@ void BMSRenderer::drawNormalNote(float y, bms_parser::Note *const &note,
 void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
                                     uint32_t submitDepth) {
   y = compensatedLaneY(y);
+  const float noteHeight = compensatedNoteHeight(y);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteRenderHeight, judgeY);
+                                   noteHeight, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound)) {
@@ -2214,10 +2218,10 @@ void BMSRenderer::drawInvisibleNote(float y, bms_parser::Note *const &note,
 
   const float borderThickness =
       std::max(0.015F,
-               noteRenderHeight *
+               noteHeight *
                    gameplay_scroll_geometry::kInvisibleNoteBorderHeightRatio);
   const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
-      x, y, noteRenderWidth, noteRenderHeight, borderThickness, clip);
+      x, y, noteRenderWidth, noteHeight, borderThickness, clip);
   if (outline.count == 0U ||
       !chartEntityRenderBudget.tryConsume(
           static_cast<uint32_t>(outline.count))) {
@@ -2247,8 +2251,9 @@ void BMSRenderer::drawLandmineNote(float y,
                                    bms_parser::LandmineNote *const &note,
                                    uint32_t submitDepth) {
   y = compensatedLaneY(y);
+  const float noteHeight = compensatedNoteHeight(y);
   const auto clip = noteRenderClip(note, currentRenderMicros, y,
-                                   noteRenderHeight, judgeY);
+                                   noteHeight, judgeY);
   if (note->IsPlayed || note->IsDead || !clip.visible ||
       !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
           clip.y, clip.height, lowerBound, upperBound)) {
@@ -2585,7 +2590,8 @@ void BMSRenderer::drawReplayMissMarkers(float rxhs,
 
 void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   y = compensatedLaneY(y);
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+  const float noteHeight = compensatedNoteHeight(y);
+  if (y + noteHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -2602,19 +2608,20 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
   }
 
   const float x = laneToX(event.lane);
-  const float thickness = std::max(0.015f, noteRenderHeight * 0.12f);
+  const float thickness = std::max(0.015f, noteHeight * 0.12f);
   const uint32_t abgr = color.toABGR();
   ghostBatchRenderer.addRect(x, y, noteRenderWidth, thickness, abgr);
-  ghostBatchRenderer.addRect(x, y + noteRenderHeight - thickness,
+  ghostBatchRenderer.addRect(x, y + noteHeight - thickness,
                              noteRenderWidth, thickness, abgr);
-  ghostBatchRenderer.addRect(x, y, thickness, noteRenderHeight, abgr);
+  ghostBatchRenderer.addRect(x, y, thickness, noteHeight, abgr);
   ghostBatchRenderer.addRect(x + noteRenderWidth - thickness, y, thickness,
-                             noteRenderHeight, abgr);
+                             noteHeight, abgr);
 }
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
   y = compensatedLaneY(y);
-  if (y + noteRenderHeight < lowerBound || y > upperBound) {
+  const float noteHeight = compensatedNoteHeight(y);
+  if (y + noteHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -2627,9 +2634,9 @@ void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
   }
   const float x = laneToX(marker.lane);
   const float block =
-      std::max(0.018f, std::min(noteRenderWidth, noteRenderHeight) * 0.22f);
+      std::max(0.018f, std::min(noteRenderWidth, noteHeight) * 0.22f);
   const float maxX = std::max(0.0f, noteRenderWidth - block);
-  const float maxY = std::max(0.0f, noteRenderHeight - block);
+  const float maxY = std::max(0.0f, noteHeight - block);
   const uint32_t color = Color(255, 42, 42, 236).toABGR();
 
   for (int i = 0; i < kSteps; ++i) {
@@ -3298,9 +3305,9 @@ void BMSRenderer::renderFrame(
             return;
           }
           noteY = compensatedLaneY(noteY);
+          const float noteHeight = compensatedNoteHeight(noteY);
           const auto clip = noteRenderClip(note.timeMicros, currentRenderMicros,
-                                           noteY,
-                                           noteRenderHeight, judgeY);
+                                           noteY, noteHeight, judgeY);
           if (note.judged || !clip.visible ||
               !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
                   clip.y, clip.height, lowerBound, upperBound)) {
@@ -3341,9 +3348,9 @@ void BMSRenderer::renderFrame(
             return;
           }
           noteY = compensatedLaneY(noteY);
+          const float noteHeight = compensatedNoteHeight(noteY);
           const auto clip = noteRenderClip(timeMicros, currentRenderMicros,
-                                           noteY,
-                                           noteRenderHeight, judgeY);
+                                           noteY, noteHeight, judgeY);
           if (timeMicros < chartTimeMicros || dead || played || !clip.visible ||
               !gameplay_scroll_geometry::noteRectangleIntersectsViewport(
                   clip.y, clip.height, lowerBound, upperBound)) {
@@ -3376,11 +3383,11 @@ void BMSRenderer::renderFrame(
           }
           const float borderThickness =
               std::max(0.015F,
-                       noteRenderHeight *
+                       noteHeight *
                            gameplay_scroll_geometry::
                                kInvisibleNoteBorderHeightRatio);
           const auto outline = gameplay_scroll_geometry::noteOutlineRectangles(
-              x, noteY, noteRenderWidth, noteRenderHeight,
+              x, noteY, noteRenderWidth, noteHeight,
               borderThickness, clip);
           if (outline.count == 0U ||
               !chartEntityRenderBudget.tryConsume(
@@ -3458,10 +3465,11 @@ void BMSRenderer::renderFrame(
           longNote.headPlayed && !longNote.headDead ? judgeY : legacyHeadY;
       const auto headClip = noteRenderClip(longNote.headTimeMicros,
                                            currentRenderMicros, headRenderY,
-                                           noteRenderHeight, judgeY);
+                                           compensatedNoteHeight(headRenderY),
+                                           judgeY);
       const auto tailClip = noteRenderClip(longNote.tailTimeMicros,
                                            currentRenderMicros, tailY,
-                                           noteRenderHeight, judgeY);
+                                           compensatedNoteHeight(tailY), judgeY);
       float bodyStartY = headRenderY;
       if (longNote.headTimeMicros >= currentRenderMicros) {
         bodyStartY = std::max(bodyStartY, judgeY);
@@ -4529,6 +4537,20 @@ float BMSRenderer::compensatedLaneY(float linearY) const {
   return accelerationCompensation
              ? lanePerspectiveCompensation(upperBound).toWorld(linearY)
              : linearY;
+}
+
+float BMSRenderer::compensatedNoteHeight(float worldY) const {
+  if (!accelerationCompensation) {
+    return noteRenderHeight;
+  }
+  const auto compensation = lanePerspectiveCompensation(upperBound);
+  // Preserve the note's screen height at judgement along the entire lane.
+  // Mapping only its bottom edge lets perspective growth squeeze visible gaps.
+  const float linearHeight =
+      compensation.toLinear(judgeY + noteRenderHeight) - judgeY;
+  const float height = compensation.toWorld(
+      compensation.toLinear(worldY) + linearHeight) - worldY;
+  return std::isfinite(height) && height > 0.0F ? height : noteRenderHeight;
 }
 
 float BMSRenderer::linearLaneY(float worldY) const {
