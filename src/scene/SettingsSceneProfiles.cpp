@@ -651,7 +651,6 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       archiveBody, metrics.modeCardHeight, metrics.cardsWidth));
 
   for (const PlayerProfile &profile : profileController->profiles()) {
-    const bool selected = profile.id == profileController->selectedProfileId();
     const bool active = profile.id == profileController->activeProfileId();
     const bool confirmingDelete =
         phase == ProfileSettingsPhase::ConfirmDelete &&
@@ -671,8 +670,6 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
         i18n::message("settings.profiles.profile.summary",
                       {{"active", active ? i18n::message("settings.profiles.active.prefix")
                                            : i18n::Text("")},
-                       {"selected", selected ? i18n::message("settings.profiles.selected.prefix")
-                                               : i18n::Text("")},
                        {"lastUsed", i18n::message("settings.profiles.last_used.prefix")},
                        {"timestamp", profile.lastUsedAt}}),
         metrics.smallTextSize,
@@ -682,12 +679,6 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     actions->setFlexDirection(FlexDirection::Row);
     actions->setFlexWrap(YGWrapWrap);
     actions->setGap(metrics.compact ? 8.0f : 10.0f);
-    actions->addView(makeProfileActionButton(
-        metrics, selected ? i18n::message("settings.profiles.selected.label") : i18n::message("settings.profiles.select.label"), idle && !selected,
-        [this, id = profile.id]() {
-          profileController->select(id);
-          invalidateProfileLayout();
-        }));
     actions->addView(makeProfileActionButton(
         metrics, active ? i18n::message("settings.profiles.active.label") : i18n::message("settings.profiles.activate.label"), idle && !active,
         [this, id = profile.id]() { activateProfile(id); }));
@@ -797,9 +788,6 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     if (!disabledReason.empty()) {
       auto *reason = makeWrappedText(disabledReason, metrics.smallTextSize,
                                      ui_theme::textMuted());
-      if (selected) {
-        profileDeleteReasonText = reason;
-      }
       body->addView(reason);
     }
 

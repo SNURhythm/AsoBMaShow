@@ -385,7 +385,6 @@ void SettingsScene::cleanupScene() {
   archiveCacheCleanupStatusText = nullptr;
   profileTabText = nullptr;
   profileStatusText = nullptr;
-  profileDeleteReasonText = nullptr;
   profileCreateNameInput = nullptr;
   visibleTimeModeButton = nullptr;
   keysoundModeButton = nullptr;

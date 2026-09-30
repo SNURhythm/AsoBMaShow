@@ -158,7 +158,6 @@ private:
   TextView *archiveCacheCleanupStatusText = nullptr;
   TextView *profileTabText = nullptr;
   TextView *profileStatusText = nullptr;
-  TextView *profileDeleteReasonText = nullptr;
   TextInputBox *profileCreateNameInput = nullptr;
   Button *visibleTimeModeButton = nullptr;
   Button *keysoundModeButton = nullptr;
