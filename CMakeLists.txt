@@ -5513,6 +5513,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(localization_tests tests/localization_tests.cpp)
     target_include_directories(localization_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(localization_tests PRIVATE cxx_std_20)
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(localization_tests PRIVATE SDL2::SDL2)
+    elseif(TARGET SDL2::SDL2-static)
+        target_link_libraries(localization_tests PRIVATE SDL2::SDL2-static)
+    else()
+        target_link_libraries(localization_tests PRIVATE SDL2)
+    endif()
     add_test(NAME localization_catalog_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
 

@@ -3,6 +3,7 @@
 #include "../BmsSearchService.h"
 #include "../input/InputCaptureController.h"
 #include "../view/BlockingOverlayView.h"
+#include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
@@ -1478,7 +1479,7 @@ View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
       makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   prepMetronomeModeButton =
-      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeControlButton(kFitContentWidth, metrics.actionButtonHeight,
                         prepMetronomeModeText);
   prepMetronomeModeButton->setOnClickListener([this]() {
     context.settings.prepMetronomeEnabled =
@@ -2141,38 +2142,36 @@ View *SettingsScene::buildMiscTab(const LayoutMetrics &metrics) {
   languageControls->setFlexDirection(FlexDirection::Column);
   languageControls->setGap(metrics.compact ? 12.0F : 16.0F);
   languageControls->setAlignItems(YGAlignFlexStart);
-  auto languageLabel = [this]() -> const char * {
-    const auto &preference = context.applicationUiState.language;
-    return preference == "ko" ? "한국어"
-         : preference == "en" ? "English" : i18n::tr("settings.language.system.label");
-  };
-  auto *languageText = makeText(languageLabel(), metrics.bodyTextSize + 6,
-                               ui_theme::textPrimary(), TextView::CENTER,
-                               TextView::MIDDLE);
-  auto *languageButton = makeAccentButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, languageText,
-      ui_theme::cyan());
   auto *languageStatus = makeWrappedText(
       i18n::tr("settings.language.restart_notice"),
       metrics.bodyTextSize, ui_theme::textSecondary());
-  languageButton->setOnClickListener(
-      [this, languageText, languageStatus, languageLabel]() {
-        auto &preference = context.applicationUiState.language;
-        const auto previous = preference;
-        preference = preference == "system" ? "en"
-                   : preference == "en" ? "ko" : "system";
-        std::string error;
-        if (!context.saveApplicationUiState(&error)) {
-          preference = previous;
-          languageStatus->setText(i18n::tr("settings.language.save_error"));
-        } else {
-          languageStatus->setText(
-              i18n::tr("settings.language.restart_notice"));
-        }
-        languageText->setText(languageLabel());
-        rootLayout->applyYogaLayout();
-      });
-  languageControls->addView(languageButton);
+  auto *languageDropdown = new DropdownView(
+      {.onOptionSelectedResult =
+           [this, languageStatus](const std::string &id) {
+             auto &preference = context.applicationUiState.language;
+             const auto previous = preference;
+             preference = id;
+             std::string error;
+             const bool saved = context.saveApplicationUiState(&error);
+             if (!saved) {
+               preference = previous;
+             }
+             languageStatus->setText(i18n::tr(
+                 saved ? "settings.language.restart_notice"
+                       : "settings.language.save_error"));
+             rootLayout->applyYogaLayout();
+             return saved;
+           }},
+      overlayPortal);
+  languageDropdown->refresh(
+      {.selectedId = context.applicationUiState.language,
+       .options = {{.id = "system",
+                    .label = i18n::tr("settings.language.system.label")},
+                   {.id = "en", .label = "English"},
+                   {.id = "ko", .label = "한국어"},
+                   {.id = "ja", .label = "日本語"}},
+       .maxVisibleItems = 4});
+  languageControls->addView(languageDropdown);
   languageControls->addView(languageStatus);
   cardsColumn->addView(makeCard(
       metrics, i18n::tr("settings.language.title"), "", languageControls,

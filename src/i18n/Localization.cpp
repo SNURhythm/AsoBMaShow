@@ -17,6 +17,7 @@ struct Translation {
   std::string_view key;
   const char *english;
   const char *korean;
+  const char *japanese;
 };
 // Sorted by stable ID so lookup allocates nothing. Display text is never used
 // as an identifier; equal English values can have distinct contextual IDs.
@@ -32,8 +33,13 @@ const char *tr(const char *key) {
         return entry.key < value;
       });
   if (found == std::end(detail::messages) || found->key != key) return key;
-  return language() == Language::Korean && found->korean[0] != '\0'
-             ? found->korean : found->english;
+  const char *translated = found->english;
+  switch (language()) {
+  case Language::Korean: translated = found->korean; break;
+  case Language::Japanese: translated = found->japanese; break;
+  case Language::English: break;
+  }
+  return translated[0] != '\0' ? translated : found->english;
 }
 
 std::string tr(const std::string &key) {

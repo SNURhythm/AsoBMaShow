@@ -6,11 +6,12 @@
 #include <utility>
 
 namespace i18n {
-enum class Language { English, Korean };
+enum class Language { English, Korean, Japanese };
 
 // The preference is device-wide. Unknown preferences behave like System.
 inline bool isLanguagePreference(std::string_view preference) {
-  return preference == "system" || preference == "en" || preference == "ko";
+  return preference == "system" || preference == "en" ||
+         preference == "ko" || preference == "ja";
 }
 
 inline Language resolveLanguage(
@@ -18,10 +19,12 @@ inline Language resolveLanguage(
     std::initializer_list<std::string_view> preferredLanguages) {
   if (preference == "ko") return Language::Korean;
   if (preference == "en") return Language::English;
+  if (preference == "ja") return Language::Japanese;
   for (auto locale : preferredLanguages) {
     locale = locale.substr(0, locale.find_first_of("-_"));
     if (locale == "ko") return Language::Korean;
     if (locale == "en") return Language::English;
+    if (locale == "ja") return Language::Japanese;
   }
   return Language::English;
 }
@@ -31,7 +34,7 @@ Language language();
 
 // Stable, semantic IDs identify application-owned messages. English copy is
 // catalog data, never a lookup key. Unknown IDs are returned visibly to expose
-// mistakes; a missing Korean value falls back to the catalog's English value.
+// mistakes; a missing translation falls back to the catalog's English value.
 const char *tr(const char *key);
 std::string tr(const std::string &key);
 

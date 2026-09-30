@@ -20,7 +20,7 @@ class LocalizationCatalogTests(unittest.TestCase):
             for line in (ROOT / "src/i18n/Messages.inc").read_text().splitlines()
             if line.startswith("{")
         ]
-        cls.catalog = {key: (english, korean) for key, english, korean in cls.entries}
+        cls.catalog = {entry[0]: tuple(entry[1:]) for entry in cls.entries}
 
     def test_keys_are_unique_structural_and_sorted(self):
         keys = [entry[0] for entry in self.entries]
@@ -30,12 +30,14 @@ class LocalizationCatalogTests(unittest.TestCase):
             self.assertRegex(key, "^" + KEY.pattern + "$")
 
     def test_languages_preserve_named_placeholders(self):
-        for key, english, korean in self.entries:
+        for key, *values in self.entries:
             with self.subTest(key=key):
-                self.assertTrue(english)
-                self.assertTrue(korean)
-                self.assertEqual(Counter(re.findall(r"\{(\w+)\}", english)),
-                                 Counter(re.findall(r"\{(\w+)\}", korean)))
+                self.assertEqual(len(values), 3, "English, Korean, and Japanese are required")
+                english = values[0]
+                for translated in values:
+                    self.assertTrue(translated)
+                    self.assertEqual(Counter(re.findall(r"\{(\w+)\}", english)),
+                                     Counter(re.findall(r"\{(\w+)\}", translated)))
 
     def test_source_uses_catalog_ids_and_every_message_is_referenced(self):
         referenced = set()

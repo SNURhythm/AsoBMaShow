@@ -52,6 +52,10 @@ int main() {
     };
     fits();
     const int koreanWidth = button->getWidth();
+    label->setText("開始メトロノーム: オフ");
+    fits();
+    label->setText("시작 메트로놈 꺼짐");
+    fits();
     label->setText("Go");
     fits();
     assert(button->getWidth() < koreanWidth);
