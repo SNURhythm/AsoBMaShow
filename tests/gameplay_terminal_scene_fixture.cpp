@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GamePlayTiming.h"
 #include "scene/play/PracticeNoteFinalizer.h"

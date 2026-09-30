@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
 #if !ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -15,13 +16,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   body->setGap(static_cast<float>(metrics.cardGap));
   const bool available = skin::luaGameplaySkinsAvailable();
   body->addView(makeWrappedText(
-      available ? "Gameplay skin support is starting." :
-                  "Gameplay skins are unavailable in this build.",
+      available ? i18n::tr("settings.skins.gameplay_skin_support_starting.message") :
+                  i18n::tr("settings.skins.gameplay_skins_unavailable_in_build.message"),
       metrics.bodyTextSize, ui_theme::textSecondary()));
   body->addView(makeWrappedText(
-      "The built-in gameplay presentation remains active.",
+      i18n::tr("settings.skins.built_in_gameplay_presentation_remains_active.message"),
       metrics.smallTextSize, ui_theme::textMuted()));
-  column->addView(makeCard(metrics, "Skins", "Availability", body,
+  column->addView(makeCard(metrics, i18n::tr("settings.skins.skins.label"), i18n::tr("settings.skins.availability.label"), body,
                            metrics.modeCardHeight, metrics.cardsWidth));
   return column;
 }

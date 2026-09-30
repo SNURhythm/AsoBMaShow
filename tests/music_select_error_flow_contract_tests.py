@@ -19,7 +19,7 @@ def fixture_compile_command(compiler, frontend, compiler_id, source, executable,
     if frontend == "MSVC" or compiler_id == "MSVC":
         objects = (f"/Fo{source.parent}{os.sep}" if extra_sources
                    else f"/Fo{source.with_suffix('.obj')}")
-        return [compiler, "/nologo", "/std:c++20", "/EHsc", str(source),
+        return [compiler, "/nologo", "/std:c++20", "/EHsc", "/utf-8", str(source),
                 *map(str, extra_sources), objects, f"/Fe{executable}"]
     return [compiler, "-std=c++20", "-pthread", str(source),
             *map(str, extra_sources), "-o", str(executable)]
@@ -62,7 +62,7 @@ class MusicSelectErrorFlowContractTests(unittest.TestCase):
         initialization = function_body(
             self.source, "void MusicSelectSkinErrorScene::init()"
         )
-        self.assertIn('makeButton("Back")', initialization)
+        self.assertIn('makeButton(i18n::tr("music_select.skin_error.back.label"))', initialization)
         self.assertIn('changeScene("Intro")', initialization)
 
 
@@ -843,7 +843,8 @@ int main() {
             executable = Path(directory) / (
                 "scene.exe" if os.name == "nt" or frontend == "MSVC" or
                 compiler_id == "MSVC" else "scene")
-            program.write_text(source)
+            program.write_text('#include "' + (ROOT / "src/i18n/Localization.h").as_posix() + '"\n' + source)
+            extra_sources = [*extra_sources, ROOT / "src/i18n/Localization.cpp"]
             subprocess.run(
                 fixture_compile_command(compiler, frontend, compiler_id,
                                         program, executable, extra_sources),

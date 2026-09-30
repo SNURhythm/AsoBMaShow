@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "scene/FindBmsTask.h"
 
 #include <cassert>

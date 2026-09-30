@@ -40,8 +40,8 @@ class SettingsVirtualControllerUiContracts(unittest.TestCase):
         source = (ROOT / "src/scene/SettingsSceneInput.cpp").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"Player: 2P"', source)
-        self.assertIn('"Player: 1P"', source)
+        self.assertIn('"settings.input.player_2_p.label"', source)
+        self.assertIn('"settings.input.player_1_p.label"', source)
         self.assertIn("VirtualControllerPlayer::Player2", source)
 
     def test_hispeed_auto_adjust_button_measures_its_longest_label(self) -> None:
@@ -50,8 +50,8 @@ class SettingsVirtualControllerUiContracts(unittest.TestCase):
         )
         self.assertRegex(
             source,
-            r'hispeedAutoAdjustModeText\s*=\s*makeText\(\s*'
-            r'"Hi-Speed Auto Adjust: Off"[\s\S]{0,300}'
+            r'hispeedAutoAdjustModeText\s*=\s*makeText\(\s*i18n::tr\('
+            r'"settings.lane.hi_speed_auto_adjust_off.label"[\s\S]{0,300}'
             r'hispeedAutoAdjustButtonWidth\s*=\s*std::max\('
             r'metrics\.actionButtonWidth,\s*'
             r'hispeedAutoAdjustModeText->textureWidth\(\)\s*\+\s*'

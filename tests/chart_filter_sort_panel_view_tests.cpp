@@ -24,7 +24,7 @@ constexpr bool chartSortOptionsContain(ChartRecordSortCriterion criterion) {
 
 constexpr bool chartSortOptionsContainLabel(std::string_view label) {
   for (const auto &option : ChartSortPanelView::kSortOptions) {
-    if (std::string_view(option.label) == label) {
+    if (std::string_view(option.labelKey) == label) {
       return true;
     }
   }
@@ -58,7 +58,7 @@ static_assert(std::is_same_v<decltype(std::declval<ChartSortPanelView &>()
 static_assert(std::is_same_v<decltype(std::declval<ChartSortPanelView &>()
                                           .sortGridRows),
                              std::vector<View *>>);
-static_assert(!chartSortOptionsContainLabel("Max Combo"));
+static_assert(!chartSortOptionsContainLabel("library.sort.max_combo.label"));
 static_assert(chartSortOptionsContain(ChartRecordSortCriterion::MainBpm));
 
 int main() { return 0; }

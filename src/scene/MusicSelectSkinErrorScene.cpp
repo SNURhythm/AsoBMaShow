@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "MusicSelectSkinErrorScene.h"
 
 #include "SceneManager.h"
@@ -58,17 +59,17 @@ void MusicSelectSkinErrorScene::init() {
       ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
-  auto *title = makeText("Music-select skin failed", 38, ui_theme::coral);
+  auto *title = makeText(i18n::tr("music_select.skin_error.music_select_skin_failed.label"), 38, ui_theme::coral);
   title->setHeight(58);
   rootLayout_->addView(title);
   if (!selectedSkinPath_.empty()) {
-    auto *path = makeText("Selected skin: " + selectedSkinPath_, 20,
+    auto *path = makeText(i18n::tr("music_select.skin_error.selected_skin.prefix") + selectedSkinPath_, 20,
                           ui_theme::textSecondary);
     path->setHeight(44);
     rootLayout_->addView(path);
   }
   if (diagnostics_.empty()) {
-    auto *reason = makeText("No diagnostic was reported.", 20,
+    auto *reason = makeText(i18n::tr("music_select.skin_error.no_diagnostic_reported.message"), 20,
                             ui_theme::textSecondary);
     reason->setHeight(46);
     rootLayout_->addView(reason);
@@ -88,11 +89,11 @@ void MusicSelectSkinErrorScene::init() {
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(12);
-  auto *back = makeButton("Back");
+  auto *back = makeButton(i18n::tr("music_select.skin_error.back.label"));
   back->setOnClickListener(
       [this] { context.sceneManager->changeScene("Intro"); });
   actions->addView(back);
-  auto *settings = makeButton("Settings");
+  auto *settings = makeButton(i18n::tr("music_select.skin_error.settings.label"));
   settings->setOnClickListener([this] { openSettings(); });
   actions->addView(settings);
   rootLayout_->addView(actions);

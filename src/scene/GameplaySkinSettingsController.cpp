@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "GameplaySkinSettingsController.h"
 
 #include "../skin/SkinTargetTraits.h"
@@ -73,7 +74,7 @@ SkinPackageId automaticPackageId(SkinPackageNameSuggestion &suggestion) {
   // A picker normally supplies a valid basename. If a third-party provider
   // does not, continue with a stable, safe package root instead of requiring
   // the user to diagnose its malformed display name.
-  const auto fallback = normalizePackageId("Imported Skin");
+  const auto fallback = normalizePackageId(i18n::tr("settings.skins.imported_skin.label"));
   suggestion.suggestedPackageName = fallback.package->directoryName;
   suggestion.validationError.clear();
   return *fallback.package;
@@ -387,7 +388,7 @@ struct GameplaySkinSettingsController::Impl {
       std::terminate();
     }
     operationTicket = 0;
-    setError("Skin package preparation could not be queued.");
+    setError(i18n::tr("settings.skins.skin_package_preparation_failed_queued.message"));
   }
 
   bool beginInventory(std::string &error) {
@@ -395,18 +396,18 @@ struct GameplaySkinSettingsController::Impl {
       inventoryTicket =
           dependencies.profileSnapshots.beginSnapshotAllProfiles();
       if (inventoryTicket == 0) {
-        error = "Profile inventory could not be started.";
+        error = i18n::tr("settings.skins.profile_inventory_failed_started.message");
         return false;
       }
       phase = Phase::LoadingInventory;
       projected.hasPackageProgress = false;
-      setBusy("Loading profile inventory…");
+      setBusy(i18n::tr("settings.skins.loading_profile_inventory.progress"));
       return true;
     } catch (const std::exception &exception) {
       error = exception.what();
       return false;
     } catch (...) {
-      error = "Profile inventory could not be started.";
+      error = i18n::tr("settings.skins.profile_inventory_failed_started.message");
       return false;
     }
   }
@@ -415,19 +416,19 @@ struct GameplaySkinSettingsController::Impl {
     try {
       inventoryTicket = dependencies.profileSnapshots.beginSnapshotAllProfiles();
       if (inventoryTicket == 0) {
-        error = "Profile inventory could not be started.";
+        error = i18n::tr("settings.skins.profile_inventory_failed_started.message");
         return false;
       }
       removalPackage.emplace(std::move(package));
       phase = Phase::LoadingRemovalInventory;
       projected.hasPackageProgress = false;
-      setBusy("Checking skin selections…");
+      setBusy(i18n::tr("settings.skins.checking_skin_selections.progress"));
       return true;
     } catch (const std::exception &exception) {
       error = exception.what();
       return false;
     } catch (...) {
-      error = "Profile inventory could not be started.";
+      error = i18n::tr("settings.skins.profile_inventory_failed_started.message");
       return false;
     }
   }
@@ -442,14 +443,14 @@ struct GameplaySkinSettingsController::Impl {
       }
       transferPreparedDisposal(std::move(*handle.rejectedPrepared));
       handle.rejectedPrepared.reset();
-      setError("Skin package publication could not be queued.");
+      setError(i18n::tr("settings.skins.skin_package_publication_failed_queued.message"));
       return;
     }
     operationTicket = handle.ticket;
     progress = std::move(handle.progress);
     projected.hasPackageProgress = true;
     phase = Phase::Publishing;
-    setBusy("Publishing skin package…");
+    setBusy(i18n::tr("settings.skins.publishing_skin_package.progress"));
   }
 
   void pollHandoff() {
@@ -460,19 +461,19 @@ struct GameplaySkinSettingsController::Impl {
     handoff.close();
     if (!result) {
       releaseDisposalReservation();
-      setError("The document picker returned no result.");
+      setError(i18n::tr("settings.skins.document_picker_returned_no_result.message"));
       return;
     }
     if (result->cancelled()) {
       pickedSource =
           std::make_shared<PlatformDocumentHandoffResult>(std::move(*result));
       transferPickedCleanup();
-      setIdle("Skin import cancelled.");
+      setIdle(i18n::tr("settings.skins.skin_import_cancelled.message"));
       return;
     }
     if (!result->ok()) {
       const auto message = result->message.empty()
-                               ? "Skin source selection failed."
+                               ? i18n::tr("settings.skins.skin_source_selection_failed.message")
                                : result->message;
       pickedSource =
           std::make_shared<PlatformDocumentHandoffResult>(std::move(*result));
@@ -497,7 +498,7 @@ struct GameplaySkinSettingsController::Impl {
         phase = Phase::NameReady;
         projected.state = GameplaySkinSettingsState::Ready;
         projected.statusMessage =
-            "A package with this name is already installed. Confirm replacement.";
+            i18n::tr("settings.skins.package_name_already_installed_confirm_replacement.message");
         refreshProjection();
         return;
       }
@@ -508,7 +509,7 @@ struct GameplaySkinSettingsController::Impl {
   ControllerActionResult submitPreparedSource(const SkinPackageId &package,
                                               PackageCollisionPolicy policy) {
     if (!pickedSource || !disposalReservation) {
-      return rejected("No selected skin source is ready to import.");
+      return rejected(i18n::tr("settings.skins.no_selected_skin_source_ready_import.message"));
     }
     SkinPackageOperationHandle handle;
     const SkinSafetyPolicy safetyPolicy(
@@ -524,7 +525,7 @@ struct GameplaySkinSettingsController::Impl {
           pickedSource->localPath, package, sourceCleanup(pickedSource),
           safetyPolicy);
     } else {
-      return rejected("The selected source has no supported path kind.");
+      return rejected(i18n::tr("settings.skins.selected_source_has_no_supported_path_kind.message"));
     }
     if (handle.ticket == 0) {
       rejectPrepareSubmission(std::move(handle));
@@ -538,8 +539,8 @@ struct GameplaySkinSettingsController::Impl {
     phase = Phase::PreparingPackage;
     projected.preparedName.reset();
     projected.collisionPackage.reset();
-    setBusy("Preparing skin package…");
-    return accepted("Skin package preparation started.");
+    setBusy(i18n::tr("settings.skins.preparing_skin_package.progress"));
+    return accepted(i18n::tr("settings.skins.skin_package_preparation_started.message"));
   }
 
   void pollInventory() {
@@ -553,7 +554,7 @@ struct GameplaySkinSettingsController::Impl {
     if (result->cancelled || !result->complete || !result->inventory) {
       disposeLocalPrepared();
       setError(firstDiagnosticMessage(
-          result->diagnostics, "A complete profile inventory is required."));
+          result->diagnostics, i18n::tr("settings.skins.complete_profile_inventory_required.message")));
       return;
     }
     submitPublish(std::move(*result->inventory));
@@ -571,7 +572,7 @@ struct GameplaySkinSettingsController::Impl {
         !removalPackage) {
       removalPackage.reset();
       setError(firstDiagnosticMessage(
-          result->diagnostics, "A complete profile inventory is required."));
+          result->diagnostics, i18n::tr("settings.skins.complete_profile_inventory_required.message")));
       return;
     }
 
@@ -586,7 +587,7 @@ struct GameplaySkinSettingsController::Impl {
         });
     if (selectedByAnyProfile) {
       removalPackage.reset();
-      setError("Remove this skin from every profile before deleting it.");
+      setError(i18n::tr("settings.skins.remove_skin_from_every_profile_before_deleting.message"));
       return;
     }
 
@@ -598,14 +599,14 @@ struct GameplaySkinSettingsController::Impl {
     }
     if (!fence) {
       removalPackage.reset();
-      setError("Skin profile selections changed before package removal.");
+      setError(i18n::tr("settings.skins.skin_profile_selections_changed_before_package_removal.message"));
       return;
     }
 
     auto handle = dependencies.operations.submitRemove(*removalPackage);
     if (handle.ticket == 0) {
       removalPackage.reset();
-      setError("Skin package removal could not be queued.");
+      setError(i18n::tr("settings.skins.skin_package_removal_failed_queued.message"));
       return;
     }
     removalFence.emplace(std::move(*fence));
@@ -613,7 +614,7 @@ struct GameplaySkinSettingsController::Impl {
     operationTicket = handle.ticket;
     progress = std::move(handle.progress);
     phase = Phase::Removing;
-    setBusy("Removing skin package…");
+    setBusy(i18n::tr("settings.skins.removing_skin_package.progress"));
   }
 
   void pollPreparePackage(SkinPackageOperationCompletion completion) {
@@ -622,9 +623,9 @@ struct GameplaySkinSettingsController::Impl {
       releaseDisposalReservation();
       setError(result ? firstDiagnosticMessage(result->diagnostics,
                                                result->cancelled
-                                                   ? "Skin import cancelled."
-                                                   : "Skin package is invalid.")
-                      : "Unexpected package preparation result.");
+                                                   ? i18n::tr("settings.skins.skin_import_cancelled.message")
+                                                   : i18n::tr("settings.skins.skin_package_invalid.message"))
+                      : i18n::tr("settings.skins.unexpected_package_preparation_result.message"));
       return;
     }
     preparedPackage.emplace(std::move(*result->prepared));
@@ -639,14 +640,14 @@ struct GameplaySkinSettingsController::Impl {
     auto *result = std::get_if<PublishPackageResult>(&completion.payload);
     if (!result) {
       releaseDisposalReservation();
-      setError("Unexpected package publication result.");
+      setError(i18n::tr("settings.skins.unexpected_package_publication_result.message"));
       return;
     }
     if (result->published) {
       releaseDisposalReservation();
       projected.preparedName.reset();
       projected.collisionPackage.reset();
-      setIdle("Skin package installed.");
+      setIdle(i18n::tr("settings.skins.skin_package_installed.message"));
       return;
     }
     if (result->retryableInventoryRace && result->retryPrepared) {
@@ -665,7 +666,7 @@ struct GameplaySkinSettingsController::Impl {
       releaseDisposalReservation();
     }
     setError(firstDiagnosticMessage(result->diagnostics,
-                                    "Skin package publication failed."));
+                                    i18n::tr("settings.skins.skin_package_publication_failed.message")));
   }
 
   void pollPrepareActivation(SkinPackageOperationCompletion completion) {
@@ -674,21 +675,21 @@ struct GameplaySkinSettingsController::Impl {
       setError(result
                    ? firstDiagnosticMessage(
                          result->diagnostics,
-                         result->cancelled ? "Skin activation cancelled."
-                                           : "Skin configuration is invalid.")
-                   : "Unexpected activation preparation result.");
+                         result->cancelled ? i18n::tr("settings.skins.skin_activation_cancelled.message")
+                                           : i18n::tr("settings.skins.skin_configuration_invalid.message"))
+                   : i18n::tr("settings.skins.unexpected_activation_preparation_result.message"));
       return;
     }
     auto submitted = dependencies.commits.submitActivation(
         dependencies.clientId, std::move(*result->prepared));
     if (!submitted.accepted) {
       setError(firstDiagnosticMessage(
-          submitted.diagnostics, "Skin activation could not be committed."));
+          submitted.diagnostics, i18n::tr("settings.skins.skin_activation_failed_committed.message")));
       return;
     }
     phase = Phase::WaitingActivationCommit;
     projected.state = GameplaySkinSettingsState::Busy;
-    projected.statusMessage = "Saving selected skin…";
+    projected.statusMessage = i18n::tr("settings.skins.saving_selected_skin.progress");
     projected.canCancel = false;
   }
 
@@ -697,12 +698,12 @@ struct GameplaySkinSettingsController::Impl {
     removalPackage.reset();
     auto *result = std::get_if<RemovePackageResult>(&completion.payload);
     if (result && result->removed) {
-      setIdle("Skin package removed.");
+      setIdle(i18n::tr("settings.skins.skin_package_removed.message"));
       return;
     }
     setError(result ? firstDiagnosticMessage(result->diagnostics,
-                                             "Skin package removal failed.")
-                    : "Unexpected package removal result.");
+                                             i18n::tr("settings.skins.skin_package_removal_failed.message"))
+                    : i18n::tr("settings.skins.unexpected_package_removal_result.message"));
   }
 
   void pollPackageOperation() {
@@ -735,11 +736,11 @@ struct GameplaySkinSettingsController::Impl {
     if (!activations.empty() && phase == Phase::WaitingActivationCommit) {
       const auto disposition = activations.back().result.disposition;
       if (disposition == ActivationCommitDisposition::ActivatedRequested) {
-        setIdle("Selected skin saved.");
+        setIdle(i18n::tr("settings.skins.selected_skin_saved.message"));
       } else {
         setError(
             firstDiagnosticMessage(activations.back().result.diagnostics,
-                                   "Selected skin could not be activated."));
+                                   i18n::tr("settings.skins.selected_skin_failed_activated.message")));
       }
     }
     auto profiles =
@@ -747,41 +748,41 @@ struct GameplaySkinSettingsController::Impl {
     if (!profiles.empty() && phase == Phase::WaitingProfileCommit) {
       if (profiles.back().result.status ==
           SkinProfileCommitResult::Status::Persisted) {
-        setIdle("Gameplay skin settings saved.");
+        setIdle(i18n::tr("settings.skins.gameplay_skin_settings_saved.message"));
       } else {
-        setError("Gameplay skin settings could not be saved.");
+        setError(i18n::tr("settings.skins.gameplay_skin_settings_failed_saved.message"));
       }
     }
   }
 
   void pollRescan() {
     if (!dependencies.rescanProgress) {
-      setError("The gameplay skin rescan service is unavailable.");
+      setError(i18n::tr("settings.skins.gameplay_skin_rescan_service_unavailable.message"));
       return;
     }
     try {
       projected.rescanProgress = dependencies.rescanProgress();
     } catch (...) {
-      setError("The gameplay skin rescan could not be observed.");
+      setError(i18n::tr("settings.skins.gameplay_skin_rescan_failed_observed.message"));
       return;
     }
     switch (projected.rescanProgress.phase) {
     case SkinRescanProgressPhase::Idle:
       return;
     case SkinRescanProgressPhase::LoadingProfileInventory:
-      projected.statusMessage = "Loading skin profile inventory…";
+      projected.statusMessage = i18n::tr("settings.skins.loading_skin_profile_inventory.progress");
       return;
     case SkinRescanProgressPhase::ReconcilingActivations:
-      projected.statusMessage = "Reconciling skin activations…";
+      projected.statusMessage = i18n::tr("settings.skins.reconciling_skin_activations.progress");
       return;
     case SkinRescanProgressPhase::ScanningVisiblePackages:
-      projected.statusMessage = "Scanning skin packages…";
+      projected.statusMessage = i18n::tr("settings.skins.scanning_skin_packages.progress");
       return;
     case SkinRescanProgressPhase::Succeeded:
-      setIdle("Skin scan complete.");
+      setIdle(i18n::tr("settings.skins.skin_scan_complete.message"));
       return;
     case SkinRescanProgressPhase::Failed:
-      setError("Skin scan did not complete. Check diagnostics.");
+      setError(i18n::tr("settings.skins.skin_scan_did_not_complete_check_diagnostics.message"));
       return;
     }
   }
@@ -809,14 +810,14 @@ struct GameplaySkinSettingsController::Impl {
 
   ControllerActionResult beginImport(bool archive) {
     if (closed) {
-      return rejected("Gameplay skin settings are closed.");
+      return rejected(i18n::tr("settings.skins.gameplay_skin_settings_closed.message"));
     }
     if (hasControllerOperation()) {
-      return rejected("Another gameplay skin operation is active.");
+      return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
     }
     auto reservation = dependencies.operations.reservePreparedDisposal();
     if (!reservation) {
-      return rejected("Skin staging disposal is currently unavailable.");
+      return rejected(i18n::tr("settings.skins.skin_staging_disposal_currently_unavailable.message"));
     }
     disposalReservation.emplace(std::move(*reservation));
     projected.preparedName.reset();
@@ -884,7 +885,7 @@ struct GameplaySkinSettingsController::Impl {
   confirmPreparedImport(PackageCollisionPolicy requestedPolicy) {
     if (closed || phase != Phase::NameReady || !pickedSource ||
         !projected.preparedName || !disposalReservation) {
-      return rejected("No selected skin source is ready to import.");
+      return rejected(i18n::tr("settings.skins.no_selected_skin_source_ready_import.message"));
     }
     auto normalized =
         normalizePackageId(projected.preparedName->suggestedPackageName);
@@ -917,7 +918,7 @@ struct GameplaySkinSettingsController::Impl {
                                            SkinProfileSettings candidate,
                                            std::string message) {
     if (closed || hasControllerOperation()) {
-      return rejected("Another gameplay skin operation is active.");
+      return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
     }
     auto base = dependencies.profileOwner.snapshot(dependencies.profileId);
     candidate.sanitize();
@@ -936,7 +937,7 @@ struct GameplaySkinSettingsController::Impl {
 
   ControllerActionResult submitProfileOnly(SkinProfileSettings candidate) {
     if (closed || hasControllerOperation()) {
-      return rejected("Another gameplay skin operation is active.");
+      return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
     }
     const auto base =
         dependencies.profileOwner.snapshot(dependencies.profileId);
@@ -1103,7 +1104,7 @@ ControllerActionResult GameplaySkinSettingsController::requestRescan() {
   try {
     impl_->projected.rescanProgress = impl_->dependencies.rescanProgress();
   } catch (...) {
-    impl_->setError("The gameplay skin rescan could not be observed.");
+    impl_->setError(i18n::tr("settings.skins.gameplay_skin_rescan_failed_observed.message"));
     return rejected(impl_->projected.statusMessage);
   }
   impl_->setBusy("Preparing skin scan…");
@@ -1135,7 +1136,7 @@ ControllerActionResult
 GameplaySkinSettingsController::selectGameplayTrait(int skinType,
                                                     const SkinEntryId &entry) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   if (!skinTargetTraitForType(skinType)) {
     return rejected("The requested skin trait is unavailable.");
@@ -1158,7 +1159,7 @@ GameplaySkinSettingsController::selectGameplayTrait(int skinType,
 ControllerActionResult
 GameplaySkinSettingsController::clearGameplayTrait(int skinType) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   if (!skinTargetTraitForType(skinType)) {
     return rejected("The requested skin trait is unavailable.");
@@ -1177,7 +1178,7 @@ GameplaySkinSettingsController::clearGameplayTrait(int skinType) {
 ControllerActionResult
 GameplaySkinSettingsController::setCompatibilityEnabled(bool enabled) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
@@ -1211,7 +1212,7 @@ GameplaySkinSettingsController::setCompatibilityEnabled(bool enabled) {
 ControllerActionResult
 GameplaySkinSettingsController::setSafetyLevel(SkinSafetyLevel level) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   if (level == SkinSafetyLevel::Unrestricted &&
       impl_->projected.safetyLevel != SkinSafetyLevel::Unrestricted) {
@@ -1257,7 +1258,7 @@ ControllerActionResult
 GameplaySkinSettingsController::setOption(const SkinEntryId &entry,
                                           std::string name, int value) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
@@ -1276,7 +1277,7 @@ GameplaySkinSettingsController::setOption(const SkinEntryId &entry,
 ControllerActionResult GameplaySkinSettingsController::setFileChoice(
     const SkinEntryId &entry, std::string name, std::string value) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
@@ -1295,7 +1296,7 @@ ControllerActionResult GameplaySkinSettingsController::setFileChoice(
 ControllerActionResult GameplaySkinSettingsController::setOffset(
     const SkinEntryId &entry, std::string name, ConfigOffset value) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
@@ -1315,7 +1316,7 @@ ControllerActionResult
 GameplaySkinSettingsController::setViewport(const SkinEntryId &entry,
                                             ViewportSettings viewport) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   auto candidate =
       impl_->dependencies.profileOwner.snapshot(impl_->dependencies.profileId)
@@ -1327,7 +1328,7 @@ GameplaySkinSettingsController::setViewport(const SkinEntryId &entry,
 ControllerActionResult
 GameplaySkinSettingsController::requestRemoval(const SkinPackageId &package) {
   if (impl_->closed || impl_->hasControllerOperation()) {
-    return rejected("Another gameplay skin operation is active.");
+    return rejected(i18n::tr("settings.skins.another_gameplay_skin_operation_active.message"));
   }
   std::string error;
   if (!impl_->beginRemovalInventory(package, error)) {

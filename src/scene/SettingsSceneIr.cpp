@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
 #include "../ir/IrRankingService.h"
@@ -43,19 +44,19 @@ Button *makeIrButton(const LayoutMetrics &metrics, std::string label,
 std::string queueStateLabel(ir::IrOutboxState state) {
   switch (state) {
   case ir::IrOutboxState::Pending:
-    return "Pending";
+    return i18n::tr("settings.ir.pending.label");
   case ir::IrOutboxState::Uploading:
-    return "Uploading";
+    return i18n::tr("settings.ir.uploading.label");
   case ir::IrOutboxState::AwaitingRemoteResult:
-    return "Awaiting remote result";
+    return i18n::tr("settings.ir.awaiting_remote_result.label");
   case ir::IrOutboxState::BlockedConfiguration:
-    return "Blocked by configuration";
+    return i18n::tr("settings.ir.blocked_by_configuration.label");
   case ir::IrOutboxState::FailedPermanent:
-    return "Failed";
+    return i18n::tr("settings.ir.failed.label");
   case ir::IrOutboxState::Succeeded:
-    return "Succeeded";
+    return i18n::tr("settings.ir.succeeded.label");
   }
-  return "Unknown";
+  return i18n::tr("settings.ir.unknown.label");
 }
 
 bool canDiscardStatus(ir::IrOutboxState state) {
@@ -73,9 +74,9 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   const auto driver = context.irDrivers.find(kProviderId);
   if (!driver) {
     auto *body =
-        makeWrappedText("The Bokutachi driver is unavailable in this build.",
+        makeWrappedText(i18n::tr("settings.ir.bokutachi_driver_unavailable_in_build.message"),
                         metrics.bodyTextSize, ui_theme::textSecondary());
-    column->addView(makeCard(metrics, "Internet Ranking", "", body, 180,
+    column->addView(makeCard(metrics, i18n::tr("settings.ir.internet_ranking.label"), "", body, 180,
                              metrics.cardsWidth));
     return column;
   }
@@ -124,7 +125,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           [this](const ir::IrProviderSettings &candidate,
                  std::string &diagnostic) {
             if (!context.profileReady()) {
-              diagnostic = "The active profile is unavailable.";
+              diagnostic = i18n::tr("settings.ir.active_profile_unavailable.message");
               return false;
             }
             AppSettings next = context.settings;
@@ -141,7 +142,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
           [this](std::optional<std::string> &apiKey, std::string &diagnostic) {
             apiKey.reset();
             if (!context.profileReady()) {
-              diagnostic = "The active profile is unavailable.";
+              diagnostic = i18n::tr("settings.ir.active_profile_unavailable.message");
               return false;
             }
             return context.loadIrCredential(
@@ -151,7 +152,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       .invalidateProviderIdentity =
           [this](std::string_view providerId, std::string &diagnostic) {
             if (!context.profileReady()) {
-              diagnostic = "The active profile is unavailable.";
+              diagnostic = i18n::tr("settings.ir.active_profile_unavailable.message");
               return false;
             }
             const auto imported =
@@ -160,7 +161,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                 imported.status !=
                     ImportedIrScoreProjectionStatus::AlreadyCurrent) {
               diagnostic = imported.diagnostic.empty()
-                               ? "Imported IR scores could not be cleared."
+                               ? i18n::tr("settings.ir.imported_ir_scores_failed_cleared.message")
                                : imported.diagnostic;
               return false;
             }
@@ -170,7 +171,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             if (cleared.status != ir::IrOutboxMutationStatus::Updated &&
                 cleared.status != ir::IrOutboxMutationStatus::NotFound) {
               diagnostic = cleared.diagnostic.empty()
-                               ? "IR account evidence could not be cleared."
+                               ? i18n::tr("settings.ir.ir_account_evidence_failed_cleared.message")
                                : cleared.diagnostic;
               return false;
             }
@@ -178,7 +179,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                 !context.bokutachiCacheStore->clearUserIds(diagnostic)) {
               if (diagnostic.empty()) {
                 diagnostic =
-                    "The cached Bokutachi identity could not be invalidated.";
+                    i18n::tr("settings.ir.cached_bokutachi_identity_failed_invalidated.message");
               }
               return false;
             }
@@ -194,7 +195,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       .replaceCredential =
           [this](std::string_view apiKey, std::string &diagnostic) {
             if (!context.profileReady()) {
-              diagnostic = "The active profile is unavailable.";
+              diagnostic = i18n::tr("settings.ir.active_profile_unavailable.message");
               return false;
             }
             return context.replaceIrCredential(
@@ -204,7 +205,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       .removeCredential =
           [this](std::string &diagnostic) {
             if (!context.profileReady()) {
-              diagnostic = "The active profile is unavailable.";
+              diagnostic = i18n::tr("settings.ir.active_profile_unavailable.message");
               return false;
             }
             return context.removeIrCredential(
@@ -220,7 +221,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       .reactivateRemoteWork =
           [this](std::string &diagnostic) {
             if (!context.profileReady()) {
-              diagnostic = "The active profile is unavailable.";
+              diagnostic = i18n::tr("settings.ir.active_profile_unavailable.message");
               return false;
             }
             return context.activateIrProfileServices(
@@ -232,7 +233,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             if (!context.irSubmissionService) {
               return ir::IrOutboxMutationOutcome{
                   .status = ir::IrOutboxMutationStatus::StorageFailure,
-                  .diagnostic = "The submission service is unavailable."};
+                  .diagnostic = i18n::tr("settings.ir.submission_service_unavailable.message")};
             }
             return context.irSubmissionService->retryAll(kProviderId);
           },
@@ -241,7 +242,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
             if (!context.irSubmissionService) {
               return ir::IrOutboxMutationOutcome{
                   .status = ir::IrOutboxMutationStatus::StorageFailure,
-                  .diagnostic = "The submission service is unavailable."};
+                  .diagnostic = i18n::tr("settings.ir.submission_service_unavailable.message")};
             }
             return context.irSubmissionService->discard(rowId);
           },
@@ -275,7 +276,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     irStatusMessage = result.succeeded()
                           ? std::move(successMessage)
                           : (result.diagnostic.empty()
-                                 ? "The IR setting could not be changed."
+                                 ? i18n::tr("settings.ir.ir_setting_failed_changed.message")
                                  : result.diagnostic);
     lastLayoutWidth = -1;
   };
@@ -285,10 +286,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   settingsBody->setGap(metrics.compact ? 12.0F : 16.0F);
 
   auto *enableRow = makeActionRow(metrics);
-  enableRow->addView(makeWrappedText("Provider", metrics.bodyTextSize,
+  enableRow->addView(makeWrappedText(i18n::tr("settings.ir.provider.label"), metrics.bodyTextSize,
                                      ui_theme::textSecondary()));
   auto *enabledButton =
-      makeIrButton(metrics, presentation.enabled ? "Enabled" : "Disabled",
+      makeIrButton(metrics, presentation.enabled ? i18n::tr("settings.ir.enabled.label") : i18n::tr("settings.ir.disabled.label"),
                    presentation.enabled ? ui_theme::lime() : ui_theme::coral());
   enabledButton->setOnClickListener([this, publishResult]() {
     if (!irSettingsModel) {
@@ -296,18 +297,18 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     }
     publishResult(
         irSettingsModel->setEnabled(!irSettingsModel->settings().enabled),
-        "Bokutachi enablement saved.");
+        i18n::tr("settings.ir.bokutachi_enablement_saved.message"));
   });
   enableRow->addView(enabledButton);
   settingsBody->addView(enableRow);
 
   if (presentation.showAutoSubmit) {
     auto *autoRow = makeActionRow(metrics);
-    autoRow->addView(makeWrappedText("Automatic score submission",
+    autoRow->addView(makeWrappedText(i18n::tr("settings.ir.automatic_score_submission.label"),
                                      metrics.bodyTextSize,
                                      ui_theme::textSecondary()));
     auto *autoButton = makeIrButton(
-        metrics, presentation.autoSubmit ? "Auto Submit On" : "Auto Submit Off",
+        metrics, presentation.autoSubmit ? i18n::tr("settings.ir.auto_submit_on.label") : i18n::tr("settings.ir.auto_submit_off.label"),
         presentation.autoSubmit ? ui_theme::lime() : ui_theme::amber());
     autoButton->setEnabled(presentation.authenticatedActionsAvailable);
     autoButton->setOnClickListener([this, publishResult]() {
@@ -316,13 +317,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       }
       publishResult(irSettingsModel->setAutoSubmit(
                         !irSettingsModel->settings().autoSubmit),
-                    "Automatic submission preference saved.");
+                    i18n::tr("settings.ir.automatic_submission_preference_saved.message"));
     });
     autoRow->addView(autoButton);
     settingsBody->addView(autoRow);
   }
 
-  settingsBody->addView(makeWrappedText("Server Origin", metrics.bodyTextSize,
+  settingsBody->addView(makeWrappedText(i18n::tr("settings.ir.server_origin.label"), metrics.bodyTextSize,
                                         ui_theme::textSecondary()));
   auto *originRow = makeActionRow(metrics);
   irServerOriginInput = makeTextInput(
@@ -330,22 +331,20 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                                  metrics.cardPadding * 2 - 24));
   irServerOriginInput->setEditingText(presentation.serverOrigin);
   originRow->addView(irServerOriginInput);
-  auto *saveOrigin = makeIrButton(metrics, "Save Origin");
+  auto *saveOrigin = makeIrButton(metrics, i18n::tr("settings.ir.save_origin.label"));
   saveOrigin->setOnClickListener([this, publishResult]() {
     if (!irSettingsModel || !irServerOriginInput) {
       return;
     }
     publishResult(
         irSettingsModel->setServerOrigin(irServerOriginInput->getText()),
-        "Server origin saved.");
+        i18n::tr("settings.ir.server_origin_saved.message"));
   });
   originRow->addView(saveOrigin);
   settingsBody->addView(originRow);
   if (presentation.insecureServerOrigin) {
     settingsBody->addView(makeWrappedText(
-        "HTTP origin: authenticated actions are disabled until you save an "
-        "HTTPS origin. Remove the saved API key to use anonymous public "
-        "rankings over HTTP.",
+        i18n::tr("settings.ir.server_origin.http_restrictions_notice"),
         metrics.smallTextSize, ui_theme::coral()));
   }
 
@@ -361,7 +360,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                                                  metrics.cardPadding * 2 - 36));
     irApiKeyInput->setEditingText("");
     keyRow->addView(irApiKeyInput);
-    auto *saveKey = makeIrButton(metrics, "Save Key", ui_theme::lime());
+    auto *saveKey = makeIrButton(metrics, i18n::tr("settings.ir.save_key.label"), ui_theme::lime());
     saveKey->setEnabled(presentation.authenticatedActionsAvailable);
     saveKey->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel || !irApiKeyInput) {
@@ -373,10 +372,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       if (result.succeeded()) {
         irKeyEditorActive = false;
       }
-      publishResult(result, "API key saved to this device.");
+      publishResult(result, i18n::tr("settings.ir.api_key_saved_device.message"));
     });
     keyRow->addView(saveKey);
-    auto *cancelKey = makeIrButton(metrics, "Cancel", ui_theme::amber());
+    auto *cancelKey = makeIrButton(metrics, i18n::tr("settings.ir.cancel.label"), ui_theme::amber());
     cancelKey->setOnClickListener([this]() {
       if (irApiKeyInput) {
         std::string apiKey = irApiKeyInput->getText();
@@ -384,7 +383,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
         irApiKeyInput->setEditingText("");
       }
       irKeyEditorActive = false;
-      irStatusMessage = "API key edit cancelled.";
+      irStatusMessage = i18n::tr("settings.ir.api_key_edit_cancelled.message");
       irStatusIsError = false;
       lastLayoutWidth = -1;
     });
@@ -393,7 +392,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   } else {
     auto *keyActions = makeActionRow(metrics);
     auto *replaceKey = makeIrButton(
-        metrics, presentation.hasCredential ? "Replace Key" : "Add Key");
+        metrics, presentation.hasCredential ? i18n::tr("settings.ir.replace_key.label") : i18n::tr("settings.ir.add_key.label"));
     replaceKey->setEnabled(presentation.authenticatedActionsAvailable);
     replaceKey->setOnClickListener([this]() {
       irKeyEditorActive = true;
@@ -402,13 +401,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     });
     keyActions->addView(replaceKey);
     if (presentation.hasCredential) {
-      auto *removeKey = makeIrButton(metrics, "Remove Key", ui_theme::coral());
+      auto *removeKey = makeIrButton(metrics, i18n::tr("settings.ir.remove_key.label"), ui_theme::coral());
       removeKey->setOnClickListener([this, publishResult]() {
         if (!irSettingsModel) {
           return;
         }
         publishResult(irSettingsModel->removeCredential(),
-                      "API key removed from this device.");
+                      i18n::tr("settings.ir.api_key_removed_from_device.message"));
       });
       keyActions->addView(removeKey);
     }
@@ -416,13 +415,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   }
 
   settingsBody->addView(makeWrappedText(
-      "API keys are device-local and are excluded from profile exports.",
+      i18n::tr("settings.ir.credentials.device_storage_notice"),
       metrics.smallTextSize, ui_theme::textMuted()));
   column->addView(makeCard(
       metrics, "Bokutachi",
       presentation.readOnly
-          ? "Read-only chart ranking provider."
-          : "Direct Manual chart rankings and durable score submission.",
+          ? i18n::tr("settings.ir.read_only_chart_ranking_provider.message")
+          : i18n::tr("settings.ir.direct_manual_chart_rankings_durable_score_submission.message"),
       settingsBody, metrics.compact ? 620 : 680, metrics.cardsWidth));
 
   if (presentation.showQueueActions) {
@@ -442,14 +441,14 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     queueBody->addView(irBlockedCountText);
     queueBody->addView(irFailedCountText);
 
-    auto *retryAll = makeIrButton(metrics, "Retry All Now", ui_theme::lime());
+    auto *retryAll = makeIrButton(metrics, i18n::tr("settings.ir.retry_all_now.label"), ui_theme::lime());
     retryAll->setEnabled(presentation.canRetryAll);
     retryAll->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel) {
         return;
       }
       publishResult(irSettingsModel->retryAll(),
-                    "Queued submissions scheduled for retry.");
+                    i18n::tr("settings.ir.queued_submissions_scheduled_retry.message"));
     });
     queueBody->addView(retryAll);
 
@@ -473,7 +472,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                                    ui_theme::textSecondary()));
       if (irPendingDiscardRowId == snapshot.rowId) {
         auto *confirm =
-            makeIrButton(metrics, "Confirm Discard", ui_theme::coral());
+            makeIrButton(metrics, i18n::tr("settings.ir.confirm_discard.label"), ui_theme::coral());
         confirm->setOnClickListener(
             [this, publishResult, rowId = snapshot.rowId]() {
               if (!irSettingsModel) {
@@ -483,20 +482,20 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               if (result.succeeded()) {
                 irPendingDiscardRowId.reset();
               }
-              publishResult(result, "Queued submission discarded.");
+              publishResult(result, i18n::tr("settings.ir.queued_submission_discarded.message"));
             });
         row->addView(confirm);
-        auto *cancel = makeIrButton(metrics, "Cancel", ui_theme::amber());
+        auto *cancel = makeIrButton(metrics, i18n::tr("settings.ir.cancel.label"), ui_theme::amber());
         cancel->setOnClickListener([this]() {
           irPendingDiscardRowId.reset();
           lastLayoutWidth = -1;
         });
         row->addView(cancel);
       } else {
-        auto *discard = makeIrButton(metrics, "Discard", ui_theme::coral());
+        auto *discard = makeIrButton(metrics, i18n::tr("settings.ir.discard.label"), ui_theme::coral());
         discard->setOnClickListener([this, rowId = snapshot.rowId]() {
           irPendingDiscardRowId = rowId;
-          irStatusMessage = "Confirm permanent removal of this queued score.";
+          irStatusMessage = i18n::tr("settings.ir.confirm_permanent_removal_queued_score.message");
           irStatusIsError = true;
           lastLayoutWidth = -1;
         });
@@ -506,12 +505,12 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     }
     if (shown == 0) {
       queueBody->addView(
-          makeWrappedText("No discardable submissions are currently queued.",
+          makeWrappedText(i18n::tr("settings.ir.no_discardable_submissions_currently_queued.message"),
                           metrics.smallTextSize, ui_theme::textMuted()));
     }
     column->addView(makeCard(
-        metrics, "Submission Queue",
-        "Scores remain durable across offline sessions and app restarts.",
+        metrics, i18n::tr("settings.ir.submission_queue.label"),
+        i18n::tr("settings.ir.scores_remain_durable_across_offline_sessions_app_restarts.message"),
         queueBody, metrics.compact ? 360 : 420, metrics.cardsWidth));
   }
 
@@ -544,8 +543,8 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     });
     syncBody->addView(syncRecords);
     column->addView(makeCard(
-        metrics, "IR Record Import",
-        "Import Bokutachi history and reconcile existing upload receipts.",
+        metrics, i18n::tr("settings.ir.ir_record_import.label"),
+        i18n::tr("settings.ir.remote_history.description"),
         syncBody, metrics.compact ? 240 : 280, metrics.cardsWidth));
   }
 
@@ -555,7 +554,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                         irStatusIsError ? ui_theme::coral() : ui_theme::lime());
     auto *statusBody = new View();
     statusBody->addView(irStatusText);
-    column->addView(makeCard(metrics, "IR Status", "", statusBody, 120,
+    column->addView(makeCard(metrics, i18n::tr("settings.ir.ir_status.label"), "", statusBody, 120,
                              metrics.cardsWidth));
   }
 
@@ -570,18 +569,18 @@ void SettingsScene::refreshIrSettingsPresentation() {
   const ir::IrOutboxCounts counts =
       context.irSubmissionService->counts(kProviderId);
   if (irPendingCountText) {
-    irPendingCountText->setText("Pending: " + std::to_string(counts.pending));
+    irPendingCountText->setText(i18n::tr("settings.ir.pending.prefix") + std::to_string(counts.pending));
   }
   if (irAwaitingCountText) {
-    irAwaitingCountText->setText("Awaiting remote result: " +
+    irAwaitingCountText->setText(i18n::tr("settings.ir.awaiting_remote_result.prefix") +
                                  std::to_string(counts.awaitingRemoteResult));
   }
   if (irBlockedCountText) {
-    irBlockedCountText->setText("Blocked by configuration: " +
+    irBlockedCountText->setText(i18n::tr("settings.ir.blocked_by_configuration.prefix") +
                                 std::to_string(counts.blockedConfiguration));
   }
   if (irFailedCountText) {
-    irFailedCountText->setText("Failed: " +
+    irFailedCountText->setText(i18n::tr("settings.ir.failed.prefix") +
                                std::to_string(counts.failedPermanent));
   }
   const auto status =

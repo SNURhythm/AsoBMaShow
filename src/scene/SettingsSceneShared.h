@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 
 #include "SettingsScene.h"
 #include "SettingsPreviewChart.h"
@@ -369,7 +370,7 @@ inline Button *makeStepButton(const LayoutMetrics &metrics, int width,
 
 inline Button *makeResetButton(const LayoutMetrics &metrics) {
   return makeAccentButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
-                          makeText("Reset", metrics.bodyTextSize + 4,
+                          makeText(i18n::tr("settings.options.reset.label"), metrics.bodyTextSize + 4,
                                    ui_theme::textPrimary(), TextView::CENTER,
                                    TextView::MIDDLE),
                           ui_theme::coral());
@@ -624,17 +625,17 @@ inline std::string formatVisibleTimeBpmStrategyLabel(
     AppSettings::HiSpeedFixMode mode) {
   switch (mode) {
   case AppSettings::HiSpeedFixMode::Off:
-    return "Off";
+    return i18n::tr("settings.options.off.label");
   case AppSettings::HiSpeedFixMode::Start:
-    return "Start BPM";
+    return i18n::tr("settings.options.start_bpm.label");
   case AppSettings::HiSpeedFixMode::Max:
-    return "Max BPM";
+    return i18n::tr("settings.options.max_bpm.label");
   case AppSettings::HiSpeedFixMode::Main:
-    return "Main BPM";
+    return i18n::tr("settings.options.main_bpm.label");
   case AppSettings::HiSpeedFixMode::Min:
-    return "Min BPM";
+    return i18n::tr("settings.options.min_bpm.label");
   }
-  return "Main BPM";
+  return i18n::tr("settings.options.main_bpm.label");
 }
 
 inline std::string formatFloatValue(float value, int precision = 1) {
@@ -679,102 +680,103 @@ inline std::string formatJudgementIndicatorRenderModeLabel(
     AppSettings::JudgementIndicatorRenderMode mode) {
   switch (mode) {
   case AppSettings::JudgementIndicatorRenderMode::World3D:
-    return "3D Space";
+    return i18n::tr("settings.options.hud.position.world.label");
   case AppSettings::JudgementIndicatorRenderMode::Hud2D:
-    return "2D HUD";
+    return i18n::tr("settings.options.hud.position.overlay.label");
   }
-  return "3D Space";
+  return i18n::tr("settings.options.hud.position.world.label");
 }
 
 inline std::string formatJudgementCounterPositionLabel(
     AppSettings::JudgementCounterPosition position) {
   switch (position) {
   case AppSettings::JudgementCounterPosition::Top:
-    return "Top";
+    return i18n::tr("settings.options.top.label");
   case AppSettings::JudgementCounterPosition::Left:
-    return "Left";
+    return i18n::tr("settings.options.left.label");
   case AppSettings::JudgementCounterPosition::Right:
-    return "Right";
+    return i18n::tr("settings.options.right.label");
   }
-  return "Top";
+  return i18n::tr("settings.options.top.label");
 }
 
 inline std::string formatJudgementTimingDisplayCriteriaLabel(
     AppSettings::JudgementTimingDisplayCriteria criteria) {
   switch (criteria) {
   case AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow:
-    return "PGREAT OR BELOW";
+    return i18n::tr("settings.options.pgreat_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::GreatOrBelow:
-    return "GREAT OR BELOW";
+    return i18n::tr("settings.options.great_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::GoodOrBelow:
-    return "GOOD OR BELOW";
+    return i18n::tr("settings.options.good_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::BadOrBelow:
-    return "BAD OR BELOW";
+    return i18n::tr("settings.options.bad_below.badge");
   case AppSettings::JudgementTimingDisplayCriteria::Off:
     return "OFF";
   }
-  return "GREAT OR BELOW";
+  return i18n::tr("settings.options.great_below.badge");
 }
 
 inline std::string
 formatGaugeBarPositionLabel(AppSettings::GaugeBarPosition position) {
   switch (position) {
   case AppSettings::GaugeBarPosition::World:
-    return "World";
+    return i18n::tr("settings.options.world.label");
   case AppSettings::GaugeBarPosition::Left:
-    return "Left HUD";
+    return i18n::tr("settings.options.left_hud.label");
   case AppSettings::GaugeBarPosition::Right:
-    return "Right HUD";
+    return i18n::tr("settings.options.right_hud.label");
   }
-  return "World";
+  return i18n::tr("settings.options.world.label");
 }
 
 inline std::string formatBgaDisplayModeLabel(AppSettings::BgaDisplayMode mode) {
   switch (mode) {
   case AppSettings::BgaDisplayMode::Fit:
-    return "Fit";
+    return i18n::tr("settings.options.fit.label");
   case AppSettings::BgaDisplayMode::Fill:
-    return "Fill";
+    return i18n::tr("settings.options.fill.label");
   case AppSettings::BgaDisplayMode::Stretch:
-    return "Stretch";
+    return i18n::tr("settings.options.stretch.label");
   case AppSettings::BgaDisplayMode::NoExpand:
-    return "No expansion";
+    return i18n::tr("settings.options.no_expansion.label");
   }
-  return "Fit";
+  return i18n::tr("settings.options.fit.label");
 }
 
 inline std::string
 formatNotePriorityModeLabel(AppSettings::NotePriorityMode mode) {
   switch (mode) {
   case AppSettings::NotePriorityMode::Lowest:
-    return "Lowest";
+    return i18n::tr("settings.options.lowest.label");
   case AppSettings::NotePriorityMode::Combo:
-    return "Combo";
+    return i18n::tr("settings.options.combo.label");
   case AppSettings::NotePriorityMode::Duration:
-    return "Duration";
+    return i18n::tr("settings.options.duration.label");
   case AppSettings::NotePriorityMode::Score:
-    return "Score";
+    return i18n::tr("settings.options.score.label");
   }
-  return "Lowest";
+  return i18n::tr("settings.options.lowest.label");
 }
 
 inline std::string formatUiThemeModeLabel(AppSettings::UiThemeMode mode) {
   switch (mode) {
   case AppSettings::UiThemeMode::Dark:
-    return "Dark";
+    return i18n::tr("settings.options.dark.label");
   case AppSettings::UiThemeMode::Light:
-    return "Light";
+    return i18n::tr("settings.options.light.label");
   }
-  return "Dark";
+  return i18n::tr("settings.options.dark.label");
 }
 
 inline std::string formatTableCount(int chartCount) {
-  return std::to_string(chartCount) + (chartCount == 1 ? " chart" : " charts");
+  return i18n::format(chartCount == 1 ? "settings.options.chart_count.one" : "settings.options.chart_count.other",
+                      {{"count", std::to_string(chartCount)}});
 }
 
 inline std::string formatTableSource(const std::string &sourceUrl) {
   if (sourceUrl.empty()) {
-    return "No source URL";
+    return i18n::tr("settings.options.no_source_url.label");
   }
   return sourceUrl;
 }
@@ -785,7 +787,7 @@ inline std::string formatChartEntryPath(const ChartEntry &entry) {
 
 inline std::string formatChartEntryName(const ChartEntry &entry) {
   if (!entry.removable) {
-    return "Default BMS";
+    return i18n::tr("settings.options.default_bms.label");
   }
   const std::filesystem::path path(entry.path);
   const std::filesystem::path name = path.filename();
@@ -799,12 +801,11 @@ inline std::string formatChartEntrySource(const ChartEntry &entry) {
   const std::string pathText = formatChartEntryPath(entry);
   if (!entry.removable) {
     return pathText +
-           "\nBuilt-in folder. Find BMS uses this as a fallback when no "
-           "writable library folder is available.";
+           i18n::tr("settings.options.folder.builtin_download_fallback_notice");
   }
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (!entry.iosBookmark.empty()) {
-    return pathText + "\nFiles access saved for future scans.";
+    return pathText + i18n::tr("settings.options.folder.access_saved_notice");
   }
 #endif
   return pathText;
@@ -812,11 +813,13 @@ inline std::string formatChartEntrySource(const ChartEntry &entry) {
 
 inline std::string formatImportProgressText(int current, int total) {
   if (total <= 0) {
-    return "Preparing";
+    return i18n::tr("settings.options.preparing.label");
   }
   const int safeCurrent = std::clamp(current, 0, total);
-  return std::to_string(safeCurrent) + " / " + std::to_string(total) +
-         (total == 1 ? " table" : " tables");
+  return i18n::format(total == 1 ? "settings.options.import.progress.one"
+                                 : "settings.options.import.progress.other",
+                      {{"current", std::to_string(safeCurrent)},
+                       {"total", std::to_string(total)}});
 }
 
 inline AppSettings::BgaDisplayMode

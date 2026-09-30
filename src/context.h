@@ -1,4 +1,5 @@
 #pragma once
+#include "i18n/PlatformLocale.h"
 #include <atomic>
 #include <chrono>
 #include <cerrno>
@@ -586,6 +587,7 @@ public:
         musicPlayer(musicPlaylistRepository, chartRepository),
         temporaryPathCleanupService(
             platform_document_handoff::CreatePlatformTemporaryPathCleanupService()) {
+    i18n::initializePlatformLanguage(applicationUiState.language);
     std::string irDriverDiagnostic;
     if (!irDrivers.registerDriver(
             std::make_shared<ir::tachi::TachiDriver>(bokutachiCacheStore),

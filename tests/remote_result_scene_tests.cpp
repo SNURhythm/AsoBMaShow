@@ -416,7 +416,7 @@ void testLocalRegressionContractsRemainPresent() {
       result, "applyResultTableContext(replayOptions, local->tableContext);",
       "result replay restores table context");
   for (const char *localToken :
-       {"Retry Same", "Replay", "Practice Section",
+       {"result.retry_same.label", "result.replay.label", "result.practice_section.label",
         "addResultPersistenceStatus();", "addIrResultStatus();",
         "addCourseButtons();", "showSavedCourseStage();",
         "showCourseResult();"}) {

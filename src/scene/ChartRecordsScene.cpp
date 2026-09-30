@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ChartRecordsScene.h"
 
 #include "SceneManager.h"
@@ -63,10 +64,10 @@ void ChartRecordsScene::buildView() {
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(14);
-  auto *back = makeButton("Back");
+  auto *back = makeButton(i18n::tr("records.back.label"));
   back->setOnClickListener([this] { goBack(); });
   header->addView(back);
-  auto *title = makeText("Records", 34, ui_theme::textPrimary);
+  auto *title = makeText(i18n::tr("records.records.label"), 34, ui_theme::textPrimary);
   title->setWidth(160)->setHeight(52)->setFlexShrink(0);
   header->addView(title);
   auto *chartTitle = makeText(record_.meta.Title, 20, ui_theme::textSecondary);
@@ -81,7 +82,7 @@ void ChartRecordsScene::buildView() {
   recordsView_->setBorderWidth(1);
   rootLayout_->addView(recordsView_);
 
-  emptyText_ = makeText("No records.", 20, ui_theme::textSecondary);
+  emptyText_ = makeText(i18n::tr("records.no_records.message"), 20, ui_theme::textSecondary);
   emptyText_->setHeight(48);
   emptyText_->setAlign(TextView::CENTER);
   emptyText_->setVisible(false);

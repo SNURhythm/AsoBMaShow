@@ -1,3 +1,4 @@
+#include "../../i18n/Localization.h"
 //
 // Created by XF on 8/25/2024.
 //
@@ -276,7 +277,7 @@ gameplaySkinSessionServices(ApplicationContext &context) {
 }
 
 std::string gameplaySkinFailureMessage(const skin::SkinDiagnostic &diagnostic) {
-  std::string message = "The selected gameplay skin could not be used.";
+  std::string message = i18n::tr("gameplay.selected_gameplay_skin_failed_used.message");
   if (!diagnostic.message.empty()) {
     message.append("\n\n");
     message.append(diagnostic.message);
@@ -294,7 +295,7 @@ const char *
 resultPersistenceStateName(result_persistence::SaveState state) noexcept {
   switch (state) {
   case result_persistence::SaveState::Saved:
-    return "Saved";
+    return i18n::tr("gameplay.saved.label");
   case result_persistence::SaveState::InvalidAttempt:
     return "InvalidAttempt";
   case result_persistence::SaveState::Unstaged:
@@ -308,7 +309,7 @@ resultPersistenceStateName(result_persistence::SaveState state) noexcept {
   case result_persistence::SaveState::PendingConflict:
     return "PendingConflict";
   }
-  return "Unknown";
+  return i18n::tr("gameplay.unknown.label");
 }
 
 const char *chartReplayPersistenceStateName(
@@ -329,7 +330,7 @@ const char *chartReplayPersistenceStateName(
   case replay::ChartReplayPersistenceState::IntegrityConflict:
     return "IntegrityConflict";
   }
-  return "Unknown";
+  return i18n::tr("gameplay.unknown.label");
 }
 
 replay::ReplayTouchAction modernTouchAction(ReplayTouchAction action) noexcept {
@@ -2835,7 +2836,7 @@ void GamePlayScene::init() {
   if (!rulesetPolicyBuild.built()) {
     showPlaybackInitializationFailure(
         rulesetPolicyBuild.diagnostic.empty()
-            ? "The selected gameplay ruleset could not be started."
+            ? i18n::tr("gameplay.selected_gameplay_ruleset_failed_started.message")
             : rulesetPolicyBuild.diagnostic);
     return;
   }
@@ -3176,26 +3177,26 @@ void GamePlayScene::init() {
 
       auto pauseText = new TextView("assets/fonts/notosanscjkjp.ttf", 46);
       pauseText->setSize(420, 72);
-      pauseText->setText(coursePlayback ? "COURSE MENU" : "PAUSED");
+      pauseText->setText(coursePlayback ? i18n::tr("gameplay.course_menu.badge") : i18n::tr("gameplay.paused.badge"));
       pauseText->setAlign(TextView::CENTER);
       pauseText->setVAlign(TextView::MIDDLE);
       pauseText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
       pauseScreen->addView(pauseText);
       pauseScreen->addView(makePauseButton(
-          coursePlayback ? "Close" : "Resume", Color(22, 132, 126, 238),
+          coursePlayback ? i18n::tr("gameplay.close.label") : i18n::tr("gameplay.resume.label"), Color(22, 132, 126, 238),
           Color(28, 151, 144, 248), Color(40, 173, 164, 255),
           ui_theme::accentBorderStrong(), [this]() { closePauseMenu(); }));
       if (options.practiceSession != nullptr) {
         pauseScreen->addView(makePauseButton(
-            "Restart Section", Color(57, 105, 42, 238), Color(72, 127, 51, 248),
+            i18n::tr("gameplay.restart_section.label"), Color(57, 105, 42, 238), Color(72, 127, 51, 248),
             Color(91, 153, 61, 255), ui_theme::lime(),
             [this]() { restartCurrentPattern(); }));
         pauseScreen->addView(makePauseButton(
-            "Finish Practice", ui_theme::primaryAction(),
+            i18n::tr("gameplay.finish_practice.label"), ui_theme::primaryAction(),
             ui_theme::primaryActionHover(), ui_theme::primaryActionPressed(),
             ui_theme::cyan(), [this]() { finishPractice(); }));
         pauseScreen->addView(makePauseButton(
-            "Exit Without Summary", Color(119, 45, 46, 238),
+            i18n::tr("gameplay.exit_without_summary.label"), Color(119, 45, 46, 238),
             Color(145, 53, 51, 248), Color(174, 64, 57, 255), ui_theme::coral(),
             [this]() { exitPracticeWithoutSummary(); }));
       } else {
@@ -3204,8 +3205,8 @@ void GamePlayScene::init() {
             chart != nullptr &&
             gameplayHasSamePatternRandomization(*chart, options);
         pauseScreen->addView(makePauseButton(
-            coursePlayback ? "Restart Course"
-                           : (isReplayPlayback() ? "Replay" : "Retry"),
+            coursePlayback ? i18n::tr("gameplay.restart_course.label")
+                           : (isReplayPlayback() ? i18n::tr("gameplay.replay.label") : i18n::tr("gameplay.retry.label")),
             Color(57, 105, 42, 238), Color(72, 127, 51, 248),
             Color(91, 153, 61, 255), ui_theme::lime(), [this, canRetrySame]() {
               if (isCoursePlayback()) {
@@ -3219,12 +3220,12 @@ void GamePlayScene::init() {
             }));
         if (canRetrySame) {
           pauseScreen->addView(makePauseButton(
-              "Retry Same", ui_theme::control(), ui_theme::controlHover(),
+              i18n::tr("gameplay.retry_same.label"), ui_theme::control(), ui_theme::controlHover(),
               ui_theme::controlPressed(), ui_theme::hairline(),
               [this]() { restartCurrentPattern(); }));
         }
         pauseScreen->addView(makePauseButton(
-            "Exit", Color(119, 45, 46, 238), Color(145, 53, 51, 248),
+            i18n::tr("gameplay.exit.label"), Color(119, 45, 46, 238), Color(145, 53, 51, 248),
             Color(174, 64, 57, 255), ui_theme::coral(), [this]() {
               context.jukebox.stop();
               defer(
@@ -3277,7 +3278,7 @@ void GamePlayScene::init() {
   addView(skinResetLayoutButton);
   auto resetLayoutText =
       new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  resetLayoutText->setText("Reset Layout");
+  resetLayoutText->setText(i18n::tr("gameplay.reset_layout.label"));
   resetLayoutText->setAlign(TextView::CENTER);
   resetLayoutText->setVAlign(TextView::MIDDLE);
   resetLayoutText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -3598,7 +3599,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
   playbackFailureLayout->setBackgroundColor(Color(2, 5, 9, 255));
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 38);
-  title->setText("PLAYBACK UNAVAILABLE");
+  title->setText(i18n::tr("gameplay.playback_unavailable.badge"));
   title->setAlign(TextView::CENTER);
   title->setVAlign(TextView::MIDDLE);
   title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -3615,7 +3616,7 @@ void GamePlayScene::showPlaybackInitializationFailure(
 
   auto *returnButton = new Button();
   auto *returnText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  returnText->setText("Return");
+  returnText->setText(i18n::tr("gameplay.return.label"));
   returnText->setAlign(TextView::CENTER);
   returnText->setVAlign(TextView::MIDDLE);
   returnText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -5815,8 +5816,7 @@ void GamePlayScene::update(float dt) {
         state->isEnding = true;
       }
       showPlaybackInitializationFailure(
-          "Realtime input integrity failed. This attempt was invalidated; "
-          "return and retry.");
+          i18n::tr("gameplay.input.integrity_failure_notice"));
       return;
     }
     const auto terminalAction = gameplay::classifyRealtimeGameplayTerminal(
@@ -5852,8 +5852,7 @@ void GamePlayScene::update(float dt) {
         state->isEnding = true;
       }
       showPlaybackInitializationFailure(
-          "Realtime input integrity failed. This attempt was invalidated; "
-          "return and retry.");
+          i18n::tr("gameplay.input.integrity_failure_notice"));
       return;
     }
     stopRealtimeGameplayAuthority(true);

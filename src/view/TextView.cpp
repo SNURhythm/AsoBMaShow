@@ -109,7 +109,7 @@ std::vector<std::string> fontFallbackPaths(const std::string &primaryPath) {
   std::vector<std::string> paths;
   addUniquePath(paths, primaryPath);
   addUniquePath(paths, "assets/fonts/notosansjp.ttf");
-  addUniquePath(paths, "assets/fonts/notosanskr.ttf");
+  addUniquePath(paths, "assets/fonts/notosanskr.otf");
   addUniquePath(paths, "assets/fonts/notosanssymbols2.ttf");
   addUniquePath(paths, "assets/fonts/arial.ttf");
   for (auto &path : systemFontFallbackPaths()) {

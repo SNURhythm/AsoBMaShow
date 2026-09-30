@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "GameplaySkinSettingsPresentation.h"
 #include "../skin/beatoraja/GameplaySkinSourceFormat.h"
 
@@ -181,15 +182,15 @@ void encodeSettings(PresentationKeyEncoder &encoder,
 const char *progressPhaseLabel(SkinProgressPhase phase) {
   switch (phase) {
   case SkinProgressPhase::Inspecting:
-    return "Inspecting skin files";
+    return i18n::tr("settings.skins.inspecting_skin_files.label");
   case SkinProgressPhase::Copying:
-    return "Copying skin files";
+    return i18n::tr("settings.skins.copying_skin_files.label");
   case SkinProgressPhase::Validating:
-    return "Validating skin";
+    return i18n::tr("settings.skins.validating_skin.label");
   case SkinProgressPhase::Publishing:
-    return "Publishing skin";
+    return i18n::tr("settings.skins.publishing_skin.label");
   }
-  return "Working on skin";
+  return i18n::tr("settings.skins.working_on_skin.label");
 }
 
 std::string formatProgressBytes(std::uint64_t bytes) {
@@ -298,7 +299,7 @@ gameplaySkinSettingsCatalogItems(const SkinEntryMetadataSnapshot &metadata) {
       (hasUngrouped(groupedOptions) || hasUngrouped(groupedFiles) ||
        hasUngrouped(groupedOffsets))) {
     result.push_back(
-        {.kind = GameplaySkinCatalogItemKind::CategoryHeading, .label = "Other"});
+        {.kind = GameplaySkinCatalogItemKind::CategoryHeading, .label = i18n::tr("settings.skins.other.label")});
   }
 
   const auto appendUngrouped =
@@ -515,17 +516,17 @@ gameplaySkinRescanProgressDisplayText(const SkinRescanProgress &progress) {
   case SkinRescanProgressPhase::Idle:
     return {};
   case SkinRescanProgressPhase::LoadingProfileInventory:
-    return "Loading skin profile inventory";
+    return i18n::tr("settings.skins.loading_skin_profile_inventory.label");
   case SkinRescanProgressPhase::ReconcilingActivations:
-    return "Reconciling skin activations";
+    return i18n::tr("settings.skins.reconciling_skin_activations.label");
   case SkinRescanProgressPhase::ScanningVisiblePackages:
     return gameplaySkinPackageProgressDisplayText(progress.packageProgress);
   case SkinRescanProgressPhase::Succeeded:
-    return "Skin scan complete.";
+    return i18n::tr("settings.skins.skin_scan_complete.message");
   case SkinRescanProgressPhase::Failed:
-    return "Skin scan did not complete.";
+    return i18n::tr("settings.skins.skin_scan_did_not_complete.message");
   }
-  return "Scanning skin packages";
+  return i18n::tr("settings.skins.scanning_skin_packages.label");
 }
 
 ViewportSettings gameplaySkinViewportWithMode(ViewportSettings current,

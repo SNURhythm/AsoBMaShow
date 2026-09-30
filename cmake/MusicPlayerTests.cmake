@@ -11,6 +11,7 @@ add_custom_command(
     VERBATIM
 )
 add_executable(music_player_video_lifecycle_tests ${music_player_video_lifecycle_source})
+target_include_directories(music_player_video_lifecycle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(music_player_video_lifecycle_tests PRIVATE cxx_std_23)
 target_link_libraries(music_player_video_lifecycle_tests PRIVATE Threads::Threads)
 asobmashow_register_test(music_player_video_lifecycle_tests)

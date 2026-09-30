@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "PlayOptionSectionView.h"
 
 #include "../PlayOptionUtils.h"
@@ -83,7 +84,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   setAlignItems(YGAlignStretch);
   setGap(10);
 
-  auto *heading = makeText("Play Option", 20);
+  auto *heading = makeText(i18n::tr("play_options.section.play_option.label"), 20);
   heading->setThemedColor(ui_theme::textSecondary);
   heading->setAlign(TextView::LEFT);
   heading->setHeight(28);
@@ -122,7 +123,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneRow->setGap(10);
   laneRow->setHeight(52);
 
-  auto *laneLabel = makeText("Lane Order", 17);
+  auto *laneLabel = makeText(i18n::tr("play_options.section.lane_order.label"), 17);
   laneLabel->setThemedColor(ui_theme::textSecondary);
   laneLabel->setAlign(TextView::LEFT);
   laneLabel->setWidth(90);
@@ -160,7 +161,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneActionRow->setHeight(46);
 
   TextView *applyText = nullptr;
-  applyLaneOrderButton = makeButton("Apply", 17, &applyText);
+  applyLaneOrderButton = makeButton(i18n::tr("play_options.section.apply.label"), 17, &applyText);
   applyLaneOrderButton->setFlexGrow(0.0f);
   applyLaneOrderButton->setWidth(96.0f);
   applyLaneOrderButton->setFlexShrink(0.0f);
@@ -172,7 +173,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneActionRow->addView(applyLaneOrderButton);
 
   TextView *resetText = nullptr;
-  resetLaneOrderButton = makeButton("Reset", 17, &resetText);
+  resetLaneOrderButton = makeButton(i18n::tr("play_options.section.reset.label"), 17, &resetText);
   resetLaneOrderButton->setFlexGrow(0.0f);
   resetLaneOrderButton->setWidth(96.0f);
   resetLaneOrderButton->setFlexShrink(0.0f);
@@ -214,7 +215,7 @@ void PlayOptionSectionView::refresh(const std::string &selectedOption,
     resetLaneOrderButton->setEnabled(true);
   }
   if (!laneOrderEnabled) {
-    setLaneOrderMessage("Lane order is unavailable for this selection.");
+    setLaneOrderMessage(i18n::tr("play_options.section.lane_order_unavailable_selection.message"));
   } else if (laneOrderMessage != nullptr) {
     laneOrderMessage->setText("");
   }

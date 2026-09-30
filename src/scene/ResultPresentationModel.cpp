@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ResultPresentationModel.h"
 
 #include "../ResultContracts.h"
@@ -242,11 +243,11 @@ localScoreComparison(int currentScore, int maxScore,
     target = {.label = options.pacemaker->label,
               .value = std::to_string(options.pacemaker->targetScore),
               .detail = options.pacemaker->usesReplayProgression
-                            ? "PACEMAKER GHOST"
-                            : "PACEMAKER",
+                            ? i18n::tr("result.summary.pacemaker_ghost.badge")
+                            : i18n::tr("result.summary.pacemaker.badge"),
               .accent = ui_theme::cyan()};
   } else {
-    target = {.label = "BEST",
+    target = {.label = i18n::tr("result.summary.score.best.badge"),
               .value = hasPrevious ? std::to_string(previousScore) : "NO PLAY",
               .detail = hasPrevious ? score_rank::displayLabelForScore(
                                           previousScore, previousMax)
@@ -256,9 +257,9 @@ localScoreComparison(int currentScore, int maxScore,
   }
 
   return {
-      .title = hasPacemaker ? "PACEMAKER" : "SCORE COMPARISON",
+      .title = hasPacemaker ? i18n::tr("result.summary.pacemaker.badge") : i18n::tr("result.summary.score_comparison.badge"),
       .target = std::move(target),
-      .current = {.label = "CURRENT",
+      .current = {.label = i18n::tr("result.summary.score.current.badge"),
                   .value = std::to_string(currentScore),
                   .detail = "MAX " + std::to_string(maxScore),
                   .accent = ui_theme::textPrimary()},
@@ -286,10 +287,10 @@ localLampComparison(const RhythmState &state,
       options.currentClearLabelOverride.value_or(state.getClearTypeLabel());
 
   return {
-      .title = "CLEAR LAMP COMPARISON",
+      .title = i18n::tr("result.summary.clear_lamp_comparison.badge"),
       .target =
           ResultComparisonValue{
-              .label = "BEST",
+              .label = i18n::tr("result.summary.lamp.best.badge"),
               .value = clearTypeRankToLabel(previousRank),
               .detail =
                   hasPrevious
@@ -297,7 +298,7 @@ localLampComparison(const RhythmState &state,
                       : std::string{},
               .accent = hasPrevious ? clearLampColorForRank(previousRank)
                                     : ui_theme::textMuted()},
-      .current = {.label = "CURRENT",
+      .current = {.label = i18n::tr("result.summary.lamp.current.badge"),
                   .value = currentLabel,
                   .detail = "GAUGE " + formatGauge(state.currentGauge),
                   .accent = clearLampColorForRank(currentRank)},
@@ -313,10 +314,10 @@ localComboComparison(const RhythmState &state,
   const int breakDelta =
       hasPrevious ? state.comboBreak - options.previousBest->comboBreak : 0;
   return {
-      .title = "COMBO / BREAK COMPARISON",
+      .title = i18n::tr("result.summary.combo_break_comparison.badge"),
       .target =
           ResultComparisonValue{
-              .label = "BEST",
+              .label = i18n::tr("result.summary.combo.best.badge"),
               .value = hasPrevious
                            ? std::to_string(options.previousBest->maxCombo)
                            : "NO PLAY",
@@ -325,7 +326,7 @@ localComboComparison(const RhythmState &state,
                                              options.previousBest->comboBreak)
                             : std::string{},
               .accent = hasPrevious ? ui_theme::lime() : ui_theme::textMuted()},
-      .current = {.label = "CURRENT",
+      .current = {.label = i18n::tr("result.summary.combo.current.badge"),
                   .value = std::to_string(state.maxCombo),
                   .detail = "BREAK " + std::to_string(state.comboBreak),
                   .accent = ui_theme::lime()},
@@ -408,20 +409,20 @@ makeLocalResultPresentation(const bms_parser::ChartMeta &meta,
                                     std::to_string(meta.TotalLongNotes) + " LN")
                               : std::nullopt;
   model.infoTiles = {
-      infoTile("NEXT GRADE", nextRank.first, formatSignedDelta(nextRank.second),
+      infoTile(i18n::tr("result.summary.next_grade.badge"), nextRank.first, formatSignedDelta(nextRank.second),
                ui_theme::amber()),
-      infoTile("TOTAL NOTES", std::to_string(meta.TotalNotes), longNotes,
+      infoTile(i18n::tr("result.summary.total_notes.badge"), std::to_string(meta.TotalNotes), longNotes,
                ui_theme::lime()),
       infoTile("BPM", formatBpm(meta), std::nullopt, ui_theme::amber()),
-      infoTile("JUDGE RANK", Judge::getRankDescription(meta.Rank), std::nullopt,
+      infoTile(i18n::tr("result.summary.judge_rank.badge"), Judge::getRankDescription(meta.Rank), std::nullopt,
                ui_theme::cyan()),
-      infoTile("DURATION", formatDuration(meta.PlayLength),
+      infoTile(i18n::tr("result.summary.duration.badge"), formatDuration(meta.PlayLength),
                meta.TotalLength > meta.PlayLength
                    ? std::optional<std::string>(
                          "BGA " + formatDuration(meta.TotalLength))
                    : std::nullopt,
                ui_theme::violetActionHover()),
-      infoTile("PLAY MODE",
+      infoTile(i18n::tr("result.summary.play_mode.badge"),
                options.playModeLabel.empty() ? "NORMAL" : options.playModeLabel,
                nonEmptyText(options.laneOrderLabel), ui_theme::amber()),
   };
@@ -461,8 +462,8 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   if (score.noteCount > 0 && maximumScore) {
     model.maxScore = *maximumScore;
     model.scoreComparison = ResultComparisonCard{
-        .title = "SCORE",
-        .current = {.label = "CURRENT",
+        .title = i18n::tr("result.summary.score.badge"),
+        .current = {.label = i18n::tr("result.summary.remote.current.badge"),
                     .value = std::to_string(score.score),
                     .detail = "MAX " + std::to_string(*model.maxScore),
                     .accent = ui_theme::textPrimary()},
@@ -472,8 +473,8 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   if (knownLampRank(score.lampRank)) {
     model.lampRank = score.lampRank;
     model.lampComparison = ResultComparisonCard{
-        .title = "CLEAR LAMP",
-        .current = {.label = "CURRENT",
+        .title = i18n::tr("result.summary.clear_lamp.badge"),
+        .current = {.label = i18n::tr("result.summary.remote.current.badge"),
                     .value = clearTypeRankToLabel(score.lampRank),
                     .detail = score.finalGauge
                                   ? "GAUGE " + formatGauge(*score.finalGauge)
@@ -488,8 +489,8 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   model.badPoints = score.badPoints;
   if (hasComboBreakCard(model)) {
     model.comboComparison = ResultComparisonCard{
-        .title = "COMBO / BREAK",
-        .current = {.label = "CURRENT",
+        .title = i18n::tr("result.summary.combo_break.badge"),
+        .current = {.label = i18n::tr("result.summary.remote.current.badge"),
                     .value = std::to_string(*model.maxCombo),
                     .detail = "BREAK " + std::to_string(*model.comboBreak),
                     .accent = ui_theme::lime()},
@@ -497,7 +498,7 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
   }
 
   if (score.noteCount > 0) {
-    model.infoTiles.push_back(infoTile("TOTAL NOTES",
+    model.infoTiles.push_back(infoTile(i18n::tr("result.summary.total_notes.badge"),
                                        std::to_string(score.noteCount),
                                        std::nullopt, ui_theme::lime()));
   }
@@ -509,13 +510,13 @@ makeRemoteResultPresentation(const ir::IrRemoteScore &score) {
                           ui_theme::cyan());
   addOptionalMetadataTile(model.infoTiles, "CLIENT", model.client,
                           ui_theme::cyan());
-  addOptionalMetadataTile(model.infoTiles, "INPUT DEVICE", model.inputDevice,
+  addOptionalMetadataTile(model.infoTiles, i18n::tr("result.summary.input_device.badge"), model.inputDevice,
                           ui_theme::amber());
   addOptionalMetadataTile(model.infoTiles, "RANDOM", model.random,
                           ui_theme::amber());
-  addOptionalMetadataTile(model.infoTiles, "GAUGE TYPE", model.gaugeType,
+  addOptionalMetadataTile(model.infoTiles, i18n::tr("result.summary.gauge_type.badge"), model.gaugeType,
                           ui_theme::lime());
-  addOptionalMetadataTile(model.infoTiles, "LEVEL",
+  addOptionalMetadataTile(model.infoTiles, i18n::tr("result.summary.level.badge"),
                           nonEmptyOptional(score.level), ui_theme::amber());
 
   model.judgements = remoteJudgementRows(score);

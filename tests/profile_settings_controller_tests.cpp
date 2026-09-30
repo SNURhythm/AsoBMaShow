@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "scene/ProfileSettingsController.h"
 #include "scene/ProfileRuntimeReapply.h"
 #include "scene/ProfileArchiveWorker.h"

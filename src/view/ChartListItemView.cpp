@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ChartListItemView.h"
 #include "Button.h"
 #include "ClearLampColors.h"
@@ -262,19 +263,19 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   scoreRankColumn->setVisible(false);
   if (record.courseStart) {
     levelView->setText(record.difficultyTableLabels.empty()
-                           ? "Course"
+                           ? i18n::tr("library.chart.course.label")
                            : record.difficultyTableLabels);
-    keyModeView->setText("COURSE");
+    keyModeView->setText(i18n::tr("library.chart.course.badge"));
   } else if (solidArchive) {
     levelView->setText(record.difficultyTableLabels.empty()
-                           ? "Unzip required"
+                           ? i18n::tr("library.chart.unzip_required.label")
                            : record.difficultyTableLabels);
-    keyModeView->setText("ARCHIVE");
+    keyModeView->setText(i18n::tr("library.chart.archive.badge"));
   } else {
     levelView->setText(record.difficultyTableLabels.empty()
                            ? formatPlayLevel(meta.PlayLevel)
                            : record.difficultyTableLabels);
-    keyModeView->setText(unavailable ? "MISSING"
+    keyModeView->setText(unavailable ? i18n::tr("library.chart.missing.badge")
                                      : keyModeDescription(meta.KeyMode));
   }
   if (!unavailable && !solidArchive && !meta.StageFile.empty()) {

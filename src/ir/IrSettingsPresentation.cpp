@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IrSettingsPresentation.h"
 
 #include "IrCredentialStore.h"
@@ -47,34 +48,34 @@ recordSyncMutationSummary(const IrReconciliationStatusSnapshot &status) {
 std::string recordSyncFailureSummary(std::string_view diagnostic) {
   const std::string bounded = sanitizeDiagnostic(diagnostic);
   if (bounded.empty()) {
-    return "Sync failed. Existing records and receipts were left unchanged.";
+    return i18n::tr("settings.ir.sync_failed_existing_records_receipts_left_unchanged.message");
   }
-  return "Sync failed: " + bounded +
-         " Existing records and receipts were left unchanged.";
+  return i18n::tr("settings.ir.sync_failed.prefix") + bounded +
+         i18n::tr("settings.ir.existing_records_receipts_left_unchanged.suffix");
 }
 
 std::string recordSyncStatusText(const IrReconciliationStatusSnapshot &status,
                                  bool cooldownActive) {
   switch (status.phase) {
   case IrReconciliationPhase::Idle:
-    return "Ready to import remote records and reconcile upload receipts.";
+    return i18n::tr("settings.ir.ready_import_remote_records_reconcile_upload_receipts.message");
   case IrReconciliationPhase::Queued:
-    return "Sync queued. Waiting for active uploads to finish.";
+    return i18n::tr("settings.ir.sync_queued_waiting_active_uploads_finish.message");
   case IrReconciliationPhase::Fetching7K:
-    return "Request 1 of 2: fetching 7K records.";
+    return i18n::tr("settings.ir.request_1_2_fetching_7_k_records.message");
   case IrReconciliationPhase::Fetching14K:
-    return "Request 2 of 2: fetching 14K records.";
+    return i18n::tr("settings.ir.request_2_2_fetching_14_k_records.message");
   case IrReconciliationPhase::Applying:
-    return "Both requests validated. Applying records and receipts atomically.";
+    return i18n::tr("settings.ir.remote_history.applying_status");
   case IrReconciliationPhase::Succeeded:
     return recordSyncMutationSummary(status);
   case IrReconciliationPhase::Failed:
     return recordSyncFailureSummary(status.diagnostic);
   case IrReconciliationPhase::Cooldown:
-    return cooldownActive ? "Sync cooldown is active."
-                          : "Sync cooldown complete. Record sync is available.";
+    return cooldownActive ? i18n::tr("settings.ir.sync_cooldown_active.message")
+                          : i18n::tr("settings.ir.sync_cooldown_complete_record_sync_available.message");
   }
-  return "Record sync status is unavailable.";
+  return i18n::tr("settings.ir.record_sync_status_unavailable.message");
 }
 
 std::string recordSyncCooldownText(const IrReconciliationStatusSnapshot &status,
@@ -87,8 +88,10 @@ std::string recordSyncCooldownText(const IrReconciliationStatusSnapshot &status,
   if (seconds < remaining) {
     seconds += std::chrono::seconds{1};
   }
-  return "Available again in " + std::to_string(seconds.count()) +
-         (seconds == std::chrono::seconds{1} ? " second." : " seconds.");
+  return i18n::format(seconds == std::chrono::seconds{1}
+                          ? "settings.ir.remote_history.cooldown.one"
+                          : "settings.ir.remote_history.cooldown.other",
+                      {{"seconds", std::to_string(seconds.count())}});
 }
 
 class RemoteWorkReactivationGuard {
@@ -112,7 +115,7 @@ public:
     try {
       succeeded_ = callback_ && callback_(diagnostic);
     } catch (...) {
-      diagnostic = "IR account work could not be reactivated.";
+      diagnostic = i18n::tr("settings.ir.ir_account_work_failed_reactivated.message");
       succeeded_ = false;
     }
     return succeeded_;
@@ -183,12 +186,10 @@ makeIrSettingsPresentation(IrSettingsPresentationInput input) {
           input.settings.serverOrigin.starts_with("http://"),
       .serverOrigin = std::move(input.settings.serverOrigin),
       .credentialLabel =
-          input.hasCredential ? "API key saved (••••••••)" : "No API key saved",
-      .recordSyncButtonLabel = "Import & Reconcile",
+          input.hasCredential ? i18n::tr("settings.ir.api_key_saved.label") : i18n::tr("settings.ir.no_api_key_saved.label"),
+      .recordSyncButtonLabel = i18n::tr("settings.ir.import_reconcile.label"),
       .recordSyncHelperText =
-          "Uses exactly two requests (7K, then 14K) to import remote score "
-          "history and reconcile existing upload receipts. Local scores are "
-          "not uploaded.",
+          i18n::tr("settings.ir.remote_history.sync_description"),
       .recordSyncStatusText = std::move(syncStatus),
       .recordSyncCooldownText =
           recordSyncCooldownText(input.reconciliationStatus, input.now),
@@ -245,12 +246,12 @@ IrSettingsActionResult IrSettingsActionModel::setEnabled(bool enabled) {
 
 IrSettingsActionResult IrSettingsActionModel::setAutoSubmit(bool autoSubmit) {
   if (!supportsSubmissionActions()) {
-    return unsupported("This IR provider is read-only.");
+    return unsupported(i18n::tr("settings.ir.ir_provider_read_only.message"));
   }
   if (autoSubmit && !isHttpsServerOrigin(settings_.serverOrigin)) {
     return {.status = IrSettingsActionResult::Status::Invalid,
             .diagnostic =
-                "Use an HTTPS server origin before enabling submissions."};
+                i18n::tr("settings.ir.use_https_server_origin_before_enabling_submissions.message")};
   }
   IrProviderSettings candidate = settings_;
   candidate.autoSubmit = autoSubmit;
@@ -262,7 +263,7 @@ IrSettingsActionModel::setServerOrigin(std::string_view serverOrigin) {
   const auto normalized = normalizeServerOrigin(serverOrigin);
   if (!normalized.has_value()) {
     return {.status = IrSettingsActionResult::Status::Invalid,
-            .diagnostic = "Enter an HTTP or HTTPS server origin."};
+            .diagnostic = i18n::tr("settings.ir.enter_http_https_server_origin.message")};
   }
   if (*normalized != settings_.serverOrigin) {
     std::optional<std::string> credential;
@@ -277,14 +278,12 @@ IrSettingsActionModel::setServerOrigin(std::string_view serverOrigin) {
     }
     if (!credentialLoaded) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The saved API key could not be checked; the "
-                            "server origin was not changed."};
+              .diagnostic = i18n::tr("settings.ir.saved_api_key_failed_checked_server_origin_not_changed.message")};
     }
     hasCredential_ = credential.has_value();
     if (hasCredential_) {
       return {.status = IrSettingsActionResult::Status::Invalid,
-              .diagnostic = "Remove the saved API key before changing the server "
-                            "origin, then save a key for the new origin."};
+              .diagnostic = i18n::tr("settings.ir.server_origin.credential_removal_required")};
     }
   }
   IrProviderSettings candidate = settings_;
@@ -299,23 +298,23 @@ IrSettingsActionResult
 IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
   if (!IrCredentialStore::isApiKeyFormatValid(apiKey)) {
     return {.status = IrSettingsActionResult::Status::Invalid,
-            .diagnostic = "Enter a valid API key."};
+            .diagnostic = i18n::tr("settings.ir.enter_valid_api_key.message")};
   }
   if (!isHttpsServerOrigin(settings_.serverOrigin)) {
     return {.status = IrSettingsActionResult::Status::Invalid,
             .diagnostic =
-                "Use an HTTPS server origin before saving an API key."};
+                i18n::tr("settings.ir.use_https_server_origin_before_saving_api_key.message")};
   }
   if (!dependencies_.replaceCredential) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "API key storage is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.api_key_storage_unavailable.message")};
   }
   if (!dependencies_.quiesceRemoteWork || !dependencies_.loadCredential ||
       !dependencies_.invalidateProviderIdentity ||
       !dependencies_.removeCredential ||
       !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account mutation isolation is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_mutation_isolation_unavailable.message")};
   }
   std::string ignoredDiagnostic;
   RemoteWorkReactivationGuard reactivation(
@@ -323,11 +322,11 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
   try {
     if (!dependencies_.quiesceRemoteWork(ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "IR account work could not be paused."};
+              .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_paused.message")};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account work could not be paused."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_paused.message")};
   }
   std::optional<std::string> previousCredential;
   try {
@@ -336,28 +335,28 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
         (previousCredential && !IrCredentialStore::isApiKeyFormatValid(
                                    *previousCredential))) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The existing API key could not be read."};
+              .diagnostic = i18n::tr("settings.ir.existing_api_key_failed_read.message")};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "The existing API key could not be read."};
+            .diagnostic = i18n::tr("settings.ir.existing_api_key_failed_read.message")};
   }
   if (previousCredential && *previousCredential == apiKey) {
     hasCredential_ = true;
     if (!reactivation.reactivate(ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "IR account work could not be reactivated."};
+              .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_reactivated.message")};
     }
     return {.status = IrSettingsActionResult::Status::Succeeded};
   }
   try {
     if (!dependencies_.replaceCredential(apiKey, ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "API key could not be saved."};
+              .diagnostic = i18n::tr("settings.ir.api_key_failed_saved.message")};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "API key could not be saved."};
+            .diagnostic = i18n::tr("settings.ir.api_key_failed_saved.message")};
   }
   bool identityInvalidated = false;
   try {
@@ -381,13 +380,11 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
       reactivation.leavePaused();
       return {.status = IrSettingsActionResult::Status::StorageFailure,
               .diagnostic =
-                  "IR account evidence could not be invalidated and the "
-                  "previous API key could not be restored; IR work remains "
-                  "paused."};
+                  i18n::tr("settings.ir.credentials.replace_rollback_failed")};
     }
     hasCredential_ = previousCredential.has_value();
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account evidence could not be invalidated."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_evidence_failed_invalidated.message")};
   }
   hasCredential_ = true;
   if (dependencies_.credentialCommitted) {
@@ -396,13 +393,12 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
     } catch (...) {
       reactivation.leavePaused();
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The saved API key could not be activated; IR "
-                            "work remains paused."};
+              .diagnostic = i18n::tr("settings.ir.saved_api_key_failed_activated_ir_work_remains_paused.message")};
     }
   }
   if (!reactivation.reactivate(ignoredDiagnostic)) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account work could not be reactivated."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_reactivated.message")};
   }
   return {.status = IrSettingsActionResult::Status::Succeeded};
 }
@@ -410,14 +406,14 @@ IrSettingsActionModel::replaceCredential(std::string_view apiKey) {
 IrSettingsActionResult IrSettingsActionModel::removeCredential() {
   if (!dependencies_.removeCredential) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "API key storage is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.api_key_storage_unavailable.message")};
   }
   if (!dependencies_.quiesceRemoteWork || !dependencies_.loadCredential ||
       !dependencies_.invalidateProviderIdentity ||
       !dependencies_.replaceCredential ||
       !dependencies_.reactivateRemoteWork) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account mutation isolation is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_mutation_isolation_unavailable.message")};
   }
   std::string ignoredDiagnostic;
   RemoteWorkReactivationGuard reactivation(
@@ -425,11 +421,11 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
   try {
     if (!dependencies_.quiesceRemoteWork(ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "IR account work could not be paused."};
+              .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_paused.message")};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account work could not be paused."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_paused.message")};
   }
   std::optional<std::string> previousCredential;
   try {
@@ -438,20 +434,20 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
         (previousCredential && !IrCredentialStore::isApiKeyFormatValid(
                                    *previousCredential))) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The existing API key could not be read."};
+              .diagnostic = i18n::tr("settings.ir.existing_api_key_failed_read.message")};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "The existing API key could not be read."};
+            .diagnostic = i18n::tr("settings.ir.existing_api_key_failed_read.message")};
   }
   try {
     if (!dependencies_.removeCredential(ignoredDiagnostic)) {
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "API key could not be removed."};
+              .diagnostic = i18n::tr("settings.ir.api_key_failed_removed.message")};
     }
   } catch (...) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "API key could not be removed."};
+            .diagnostic = i18n::tr("settings.ir.api_key_failed_removed.message")};
   }
   bool identityInvalidated = false;
   try {
@@ -475,12 +471,11 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
       reactivation.leavePaused();
       return {.status = IrSettingsActionResult::Status::StorageFailure,
               .diagnostic =
-                  "IR account evidence could not be invalidated and the API "
-                  "key could not be restored; IR work remains paused."};
+                  i18n::tr("settings.ir.credentials.remove_rollback_failed")};
     }
     hasCredential_ = previousCredential.has_value();
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account evidence could not be invalidated."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_evidence_failed_invalidated.message")};
   }
   hasCredential_ = false;
   if (dependencies_.credentialCommitted) {
@@ -489,44 +484,43 @@ IrSettingsActionResult IrSettingsActionModel::removeCredential() {
     } catch (...) {
       reactivation.leavePaused();
       return {.status = IrSettingsActionResult::Status::StorageFailure,
-              .diagnostic = "The removed API key could not be activated; IR "
-                            "work remains paused."};
+              .diagnostic = i18n::tr("settings.ir.removed_api_key_failed_activated_ir_work_remains_paused.message")};
     }
   }
   if (!reactivation.reactivate(ignoredDiagnostic)) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR account work could not be reactivated."};
+            .diagnostic = i18n::tr("settings.ir.ir_account_work_failed_reactivated.message")};
   }
   return {.status = IrSettingsActionResult::Status::Succeeded};
 }
 
 IrSettingsActionResult IrSettingsActionModel::retryAll() {
   if (!supportsSubmissionActions() || !capabilities_.deferredSubmission) {
-    return unsupported("This IR provider has no submission queue.");
+    return unsupported(i18n::tr("settings.ir.ir_provider_has_no_submission_queue.message"));
   }
   if (!isHttpsServerOrigin(settings_.serverOrigin)) {
     return {.status = IrSettingsActionResult::Status::Invalid,
             .diagnostic =
-                "Use an HTTPS server origin before retrying submissions."};
+                i18n::tr("settings.ir.use_https_server_origin_before_retrying_submissions.message")};
   }
   if (!dependencies_.retryAll) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "The submission queue is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.submission_queue_unavailable.message")};
   }
   return mutationResult(dependencies_.retryAll());
 }
 
 IrSettingsActionResult IrSettingsActionModel::discard(std::int64_t rowId) {
   if (!supportsSubmissionActions() || !capabilities_.deferredSubmission) {
-    return unsupported("This IR provider has no submission queue.");
+    return unsupported(i18n::tr("settings.ir.ir_provider_has_no_submission_queue.message"));
   }
   if (rowId <= 0) {
     return {.status = IrSettingsActionResult::Status::Invalid,
-            .diagnostic = "Select a queued submission to discard."};
+            .diagnostic = i18n::tr("settings.ir.select_queued_submission_discard.message")};
   }
   if (!dependencies_.discard) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "The submission queue is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.submission_queue_unavailable.message")};
   }
   return mutationResult(dependencies_.discard(rowId));
 }
@@ -539,7 +533,7 @@ IrSettingsActionModel::commitSettings(IrProviderSettings candidate) {
   }
   if (!dependencies_.storeSettings) {
     return {.status = IrSettingsActionResult::Status::StorageFailure,
-            .diagnostic = "IR settings storage is unavailable."};
+            .diagnostic = i18n::tr("settings.ir.ir_settings_storage_unavailable.message")};
   }
   std::string diagnostic;
   if (!dependencies_.storeSettings(candidate, diagnostic)) {

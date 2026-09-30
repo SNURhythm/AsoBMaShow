@@ -1,4 +1,5 @@
 // Production resource acquisition/release with controlled media and UI effects.
+#include "i18n/Localization.h"
 #include <atomic>
 #include <cassert>
 #include <functional>

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "FindBmsProgressPresentation.h"
 
 #include <algorithm>
@@ -43,7 +44,8 @@ std::string findBmsProgressDisplayText(const std::string &message,
     const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
                                         static_cast<double>(totalBytes),
                                     0.0, 1.0);
-    std::string text = "Downloading archive - " + progressPercentText(ratio);
+    std::string text = i18n::format("library.find_bms.progress.download_percentage",
+                                    {{"progress", progressPercentText(ratio)}});
     if (includeBytes) {
       text += " (" + formatFindBmsBytes(downloadedBytes) + " / " +
               formatFindBmsBytes(totalBytes) + ")";
@@ -51,14 +53,23 @@ std::string findBmsProgressDisplayText(const std::string &message,
     return text;
   }
   if (message == "Downloading archive" && downloadedBytes > 0) {
-    return "Downloading archive (" + formatFindBmsBytes(downloadedBytes) +
-           ")";
+    return i18n::format("library.find_bms.progress.download_size",
+                        {{"size", formatFindBmsBytes(downloadedBytes)}});
   }
   if (message == "Download complete" && totalBytes > 0) {
     const double ratio = std::clamp(static_cast<double>(downloadedBytes) /
                                         static_cast<double>(totalBytes),
                                     0.0, 1.0);
-    return "Download complete - " + progressPercentText(ratio);
+    return i18n::format("library.find_bms.progress.download_complete_percentage",
+                        {{"progress", progressPercentText(ratio)}});
   }
+  if (message == "Preparing lookup") return i18n::tr("library.find_bms.progress.preparing_lookup.status");
+  if (message == "Opening BMS Search pattern page") return i18n::tr("library.find_bms.progress.opening_bms_search_pattern_page.status");
+  if (message == "Opening BMS Search details page") return i18n::tr("library.find_bms.progress.opening_bms_search_details_page.status");
+  if (message == "Downloading archive") return i18n::tr("library.find_bms.progress.downloading_archive.status");
+  if (message == "Download complete") return i18n::tr("library.find_bms.progress.download_complete.status");
+  if (message == "Extracting archive") return i18n::tr("library.find_bms.progress.extracting_archive.status");
+  if (message == "Archive finished") return i18n::tr("library.find_bms.progress.archive_finished.status");
+  if (message == "Download failed") return i18n::tr("library.find_bms.progress.download_failed.status");
   return message;
 }

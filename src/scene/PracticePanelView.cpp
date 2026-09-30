@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "PracticePanelView.h"
 
 #include "../view/Button.h"
@@ -115,7 +116,7 @@ PracticePanelView::PracticePanelView(
 }
 
 void PracticePanelView::build(OverlayPortal *portal) {
-  auto *header = makeText("Practice", 26, ui_theme::textPrimary());
+  auto *header = makeText(i18n::tr("practice.controls.practice.label"), 26, ui_theme::textPrimary());
   header->setHeight(54);
   header->setPadding(Edge::Left, 18);
   addView(header);
@@ -144,7 +145,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   }
 
   content->addView(
-      makeRow("Preset", dropdowns[static_cast<size_t>(DropDownIndex::Preset)]));
+      makeRow(i18n::tr("practice.controls.preset.label"), dropdowns[static_cast<size_t>(DropDownIndex::Preset)]));
 
   rangeText = makeText("", 16, ui_theme::textSecondary());
   rangeText->setHeight(30);
@@ -158,7 +159,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *markerRow = new View();
   markerRow->setFlexDirection(FlexDirection::Row);
   markerRow->setGap(8);
-  auto *startMarkerButton = makeButton("Set Start", 0);
+  auto *startMarkerButton = makeButton(i18n::tr("practice.controls.set_start.label"), 0);
   startMarkerButton->setFlex(1.0f);
   startMarkerButton->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
                                      ui_theme::cyan());
@@ -170,7 +171,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
     refreshControls();
   });
   markerRow->addView(startMarkerButton);
-  auto *endMarkerButton = makeButton("Set End", 0);
+  auto *endMarkerButton = makeButton(i18n::tr("practice.controls.set_end.label"), 0);
   endMarkerButton->setFlex(1.0f);
   endMarkerButton->setBorderColors(ui_theme::amber(), ui_theme::amber(),
                                    ui_theme::amber());
@@ -184,28 +185,28 @@ void PracticePanelView::build(OverlayPortal *portal) {
   markerRow->addView(endMarkerButton);
   content->addView(markerRow);
 
-  loopButton = makeButton("Off", 0, &loopButtonText);
+  loopButton = makeButton(i18n::tr("practice.controls.off.label"), 0, &loopButtonText);
   loopButton->setOnClickListener([this]() {
     currentConfiguration.loop = !currentConfiguration.loop;
     publishConfiguration();
     refreshControls();
   });
-  content->addView(makeRow("Loop", loopButton));
+  content->addView(makeRow(i18n::tr("practice.controls.loop.label"), loopButton));
 
   countInSlider = new SnappedSlider([this](int value) {
     currentConfiguration.countInBeats = value;
     publishConfiguration();
     refreshControls();
   });
-  content->addView(makeSliderRow("Count-in", countInSlider, &countInValueText));
+  content->addView(makeSliderRow(i18n::tr("practice.controls.count_in.label"), countInSlider, &countInValueText));
 
   content->addView(
-      makeRow("Gauge", dropdowns[static_cast<size_t>(DropDownIndex::Gauge)]));
+      makeRow(i18n::tr("practice.controls.gauge.label"), dropdowns[static_cast<size_t>(DropDownIndex::Gauge)]));
   content->addView(makeRow(
-      "Auto Shift",
+      i18n::tr("practice.controls.auto_shift.label"),
       dropdowns[static_cast<size_t>(DropDownIndex::GaugeAutoShift)]));
   gaugeLowerBoundRow = makeRow(
-      "Auto Shift Lower Bound",
+      i18n::tr("practice.controls.auto_shift_lower_bound.label"),
       dropdowns[static_cast<size_t>(DropDownIndex::GaugeLowerBound)]);
   gaugeLowerBoundRow->setDisplay(YGDisplayNone);
   gaugeLowerBoundRow->setVisible(false);
@@ -216,10 +217,10 @@ void PracticePanelView::build(OverlayPortal *portal) {
     publishConfiguration();
     refreshControls();
   });
-  auto *startingGaugeGroup = makeSliderRow("Start gauge", startingGaugeSlider,
+  auto *startingGaugeGroup = makeSliderRow(i18n::tr("practice.controls.start_gauge.label"), startingGaugeSlider,
                                            &startingGaugeValueText);
   startingGaugeDefaultButton =
-      makeButton("Use Default", 0, &startingGaugeDefaultText);
+      makeButton(i18n::tr("practice.controls.use_default.label"), 0, &startingGaugeDefaultText);
   startingGaugeDefaultButton->setWidthPercent(100.0F);
   startingGaugeDefaultButton->setOnClickListener([this]() {
     currentConfiguration.startingGaugePercent.reset();
@@ -235,17 +236,17 @@ void PracticePanelView::build(OverlayPortal *portal) {
     publishConfiguration();
     refreshControls();
   });
-  content->addView(makeSliderRow("Judge", judgeSlider, &judgeValueText));
+  content->addView(makeSliderRow(i18n::tr("practice.controls.judge.label"), judgeSlider, &judgeValueText));
 
   rateSlider = new SnappedSlider([this](int value) {
     currentConfiguration.playback.percent = value;
     publishConfiguration();
     refreshControls();
   });
-  content->addView(makeSliderRow("Rate", rateSlider, &rateValueText));
+  content->addView(makeSliderRow(i18n::tr("practice.controls.rate.label"), rateSlider, &rateValueText));
 
   content->addView(
-      makeRow("Mode", dropdowns[static_cast<size_t>(DropDownIndex::Mode)]));
+      makeRow(i18n::tr("practice.controls.mode.label"), dropdowns[static_cast<size_t>(DropDownIndex::Mode)]));
 
   presetNameInput = new TextInputBox(kFont, 17);
   presetNameInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
@@ -257,7 +258,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   presetNameInput->setPadding(Edge::Right, 12);
   presetNameInput->setHeight(44);
   presetNameInput->setOverflow(TextView::TextOverflow::Hidden);
-  content->addView(makeRow("Name", presetNameInput));
+  content->addView(makeRow(i18n::tr("practice.controls.name.label"), presetNameInput));
 
   presetMessageText = makeText("", 14, ui_theme::textSecondary());
   presetMessageText->setWrap(true);
@@ -272,7 +273,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *saveRow = new View();
   saveRow->setFlexDirection(FlexDirection::Row);
   saveRow->setGap(8);
-  auto *saveButton = makeButton("Save", 0);
+  auto *saveButton = makeButton(i18n::tr("practice.controls.save.label"), 0);
   saveButton->setFlex(1.0f);
   saveButton->setOnClickListener([this]() {
     if (callbacks.onSaveAs && presetNameInput != nullptr) {
@@ -280,7 +281,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
     }
   });
   saveRow->addView(saveButton);
-  renameButton = makeButton("Rename", 0);
+  renameButton = makeButton(i18n::tr("practice.controls.rename.label"), 0);
   renameButton->setFlex(1.0f);
   renameButton->setOnClickListener([this]() {
     if (callbacks.onRename && presetNameInput != nullptr) {
@@ -293,7 +294,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *mutationRow = new View();
   mutationRow->setFlexDirection(FlexDirection::Row);
   mutationRow->setGap(8);
-  updateButton = makeButton("Update", 0);
+  updateButton = makeButton(i18n::tr("practice.controls.update.label"), 0);
   updateButton->setFlex(1.0f);
   updateButton->setOnClickListener([this]() {
     if (callbacks.onUpdateNamed) {
@@ -301,7 +302,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
     }
   });
   mutationRow->addView(updateButton);
-  deleteButton = makeButton("Delete", 0);
+  deleteButton = makeButton(i18n::tr("practice.controls.delete.label"), 0);
   deleteButton->setFlex(1.0f);
   deleteButton->setOnClickListener([this]() {
     if (callbacks.onDeleteNamed) {
@@ -311,7 +312,7 @@ void PracticePanelView::build(OverlayPortal *portal) {
   mutationRow->addView(deleteButton);
   content->addView(mutationRow);
 
-  startButton = makeButton("Start", 0);
+  startButton = makeButton(i18n::tr("practice.controls.start.label"), 0);
   startButton->setWidthPercent(100.0f);
   startButton->setHeight(52);
   startButton->setBorderColors(ui_theme::cyan(), ui_theme::cyan(),
@@ -472,11 +473,11 @@ void PracticePanelView::refreshControls() {
   };
 
   std::vector<DropdownView::Option> presetOptions = {
-      {.id = std::string(kLastUsedPresetId), .label = "Last Used"}};
+      {.id = std::string(kLastUsedPresetId), .label = i18n::tr("practice.controls.last_used.label")}};
   for (const auto &preset : namedPresets) {
     presetOptions.push_back({.id = preset.id, .label = preset.name});
   }
-  refresh(DropDownIndex::Preset, "Preset",
+  refresh(DropDownIndex::Preset, i18n::tr("practice.controls.preset.label"),
           selectedNamedPresetId.value_or(std::string(kLastUsedPresetId)),
           std::move(presetOptions));
   std::vector<DropdownView::Option> practiceGaugeOptions;
@@ -484,7 +485,7 @@ void PracticePanelView::refreshControls() {
     practiceGaugeOptions.push_back(
         {.id = std::string(option.id), .label = std::string(option.label)});
   }
-  refresh(DropDownIndex::Gauge, "Gauge",
+  refresh(DropDownIndex::Gauge, i18n::tr("practice.controls.gauge.label"),
           practice::practiceGaugeOptionId(currentConfiguration),
           std::move(practiceGaugeOptions));
   std::vector<DropdownView::Option> autoShiftOptions;
@@ -492,7 +493,7 @@ void PracticePanelView::refreshControls() {
     autoShiftOptions.push_back(
         {.id = std::string(option.id), .label = std::string(option.label)});
   }
-  refresh(DropDownIndex::GaugeAutoShift, "Auto Shift",
+  refresh(DropDownIndex::GaugeAutoShift, i18n::tr("practice.controls.auto_shift.label"),
           practice::practiceGaugeAutoShiftOptionId(currentConfiguration),
           std::move(autoShiftOptions));
   std::vector<DropdownView::Option> lowerBoundOptions;
@@ -500,7 +501,7 @@ void PracticePanelView::refreshControls() {
     lowerBoundOptions.push_back(
         {.id = std::string(option.id), .label = std::string(option.label)});
   }
-  refresh(DropDownIndex::GaugeLowerBound, "Auto Shift Lower Bound",
+  refresh(DropDownIndex::GaugeLowerBound, i18n::tr("practice.controls.auto_shift_lower_bound.label"),
           practice::practiceGaugeLowerBoundOptionId(currentConfiguration),
           std::move(lowerBoundOptions));
   if (gaugeLowerBoundRow != nullptr) {
@@ -516,14 +517,14 @@ void PracticePanelView::refreshControls() {
       currentConfiguration.playback.mode == audio::PlaybackMode::TimeStretch
           ? "stretch"
           : "pitch";
-  refresh(DropDownIndex::Mode, "Mode", modeId,
-          {{.id = "pitch", .label = "Pitch Shift"},
+  refresh(DropDownIndex::Mode, i18n::tr("practice.controls.mode.label"), modeId,
+          {{.id = "pitch", .label = i18n::tr("practice.controls.pitch_shift.label")},
            {.id = "stretch",
-            .label = "Time Stretch (Unavailable)",
+            .label = i18n::tr("practice.controls.time_stretch_unavailable.label"),
             .available = false}});
 
   if (loopButton != nullptr && loopButtonText != nullptr) {
-    loopButtonText->setText(currentConfiguration.loop ? "On" : "Off");
+    loopButtonText->setText(currentConfiguration.loop ? i18n::tr("practice.controls.on.label") : i18n::tr("practice.controls.off.label"));
     loopButton->setBackgroundColors(
         currentConfiguration.loop ? ui_theme::primaryAction()
                                   : ui_theme::control(),
@@ -557,7 +558,7 @@ void PracticePanelView::refreshControls() {
   if (startingGaugeValueText != nullptr) {
     startingGaugeValueText->setText(
         usesDefaultGauge
-            ? "Default"
+            ? i18n::tr("practice.controls.default.label")
             : std::to_string(std::min(
                   *currentConfiguration.startingGaugePercent,
                   startingGaugeMaximum)) +
@@ -565,8 +566,8 @@ void PracticePanelView::refreshControls() {
   }
   if (startingGaugeDefaultButton != nullptr &&
       startingGaugeDefaultText != nullptr) {
-    startingGaugeDefaultText->setText(usesDefaultGauge ? "Default ✓"
-                                                       : "Use Default");
+    startingGaugeDefaultText->setText(usesDefaultGauge ? i18n::tr("practice.controls.preset.default_selected.label")
+                                                       : i18n::tr("practice.controls.use_default.label"));
     startingGaugeDefaultButton->setBackgroundColors(
         usesDefaultGauge ? ui_theme::primaryAction() : ui_theme::control(),
         usesDefaultGauge ? ui_theme::primaryActionHover()
@@ -614,7 +615,7 @@ void PracticePanelView::refreshControls() {
                            startingGaugeMaximum)
             .playable());
     if (diagnosticText != nullptr) {
-      diagnosticText->setText(issue.value_or("Ready to start practice."));
+      diagnosticText->setText(issue.value_or(i18n::tr("practice.controls.ready_start_practice.message")));
       diagnosticText->setColor(
           ui_theme::sdl(issue ? ui_theme::coral() : ui_theme::cyan()));
     }

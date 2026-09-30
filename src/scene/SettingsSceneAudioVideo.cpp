@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
 #include "../RAII.h"
@@ -121,15 +122,15 @@ std::string audioApplyMessage(const audio::ApplyResult &result) {
   }
   switch (result.status) {
   case audio::ApplyStatus::Applied:
-    return "Audio saved.";
+    return i18n::tr("settings.audio_video.audio_saved.message");
   case audio::ApplyStatus::Unsupported:
-    return "Audio option unavailable.";
+    return i18n::tr("settings.audio_video.audio_option_unavailable.message");
   case audio::ApplyStatus::FailedRolledBack:
-    return "Could not apply audio. Previous settings restored.";
+    return i18n::tr("settings.audio_video.could_not_apply_audio_previous_settings_restored.message");
   case audio::ApplyStatus::FailedStopped:
-    return "Could not restore audio. Playback stopped.";
+    return i18n::tr("settings.audio_video.could_not_restore_audio_playback_stopped.message");
   }
-  return "Audio settings were not applied.";
+  return i18n::tr("settings.audio_video.audio_settings_not_applied.message");
 }
 
 SDL_Color audioApplyColor(audio::ApplyStatus status) {
@@ -143,19 +144,19 @@ std::string displayApplyMessage(const display::ApplyResult &result) {
   }
   switch (result.status) {
   case display::ApplyStatus::Applied:
-    return "Display saved.";
+    return i18n::tr("settings.audio_video.display_saved.message");
   case display::ApplyStatus::PreviewPending:
-    return "Confirm within 15 seconds.";
+    return i18n::tr("settings.audio_video.confirm_within_15_seconds.message");
   case display::ApplyStatus::Unsupported:
-    return "Display option unavailable.";
+    return i18n::tr("settings.audio_video.display_option_unavailable.message");
   case display::ApplyStatus::FailedRolledBack:
-    return "Could not apply display. Previous settings restored.";
+    return i18n::tr("settings.audio_video.display.apply_failed_restored");
   case display::ApplyStatus::RollbackPending:
-    return "Restoring the previous display...";
+    return i18n::tr("settings.audio_video.restoring_previous_display.progress");
   case display::ApplyStatus::FailedUnrecoverable:
-    return "Could not restore the previous display.";
+    return i18n::tr("settings.audio_video.could_not_restore_previous_display.message");
   }
-  return "Display settings were not applied.";
+  return i18n::tr("settings.audio_video.display_settings_not_applied.message");
 }
 
 SDL_Color displayApplyColor(display::ApplyStatus status) {
@@ -222,8 +223,8 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeAudioVideoCardsColumn(metrics);
   if (audioVideoSession == nullptr) {
     cardsColumn->addView(makeCard(
-        metrics, "Audio", "Still initializing.",
-        makeWrappedText("Try again shortly.",
+        metrics, i18n::tr("settings.audio.audio.label"), i18n::tr("settings.audio.still_initializing.message"),
+        makeWrappedText(i18n::tr("settings.audio.try_again_shortly.message"),
                         metrics.bodyTextSize, ui_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
@@ -294,18 +295,18 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   const float dropdownWidth = static_cast<float>(
       std::max(260, metrics.cardsWidth - metrics.cardPadding * 2));
   refreshDropdown(audioDeviceDropdown, model.devices, audioDeviceDropdownOpen,
-                  "Output", dropdownWidth);
+                  i18n::tr("settings.audio.output.label"), dropdownWidth);
   refreshDropdown(audioSampleRateDropdown, model.sampleRates,
-                  audioSampleRateDropdownOpen, "Rate", dropdownWidth);
+                  audioSampleRateDropdownOpen, i18n::tr("settings.audio.rate.label"), dropdownWidth);
   refreshDropdown(audioBufferDropdown, model.bufferFrames,
-                  audioBufferDropdownOpen, "Buffer", dropdownWidth);
-  streamControls->addView(makeChoiceField(metrics, "Output device",
+                  audioBufferDropdownOpen, i18n::tr("settings.audio.buffer.label"), dropdownWidth);
+  streamControls->addView(makeChoiceField(metrics, i18n::tr("settings.audio.output_device.label"),
                                           audioDeviceDropdown,
                                           model.devices.explanation));
-  streamControls->addView(makeChoiceField(metrics, "Sample rate",
+  streamControls->addView(makeChoiceField(metrics, i18n::tr("settings.audio.sample_rate.label"),
                                           audioSampleRateDropdown,
                                           model.sampleRates.explanation));
-  streamControls->addView(makeChoiceField(metrics, "Buffer size",
+  streamControls->addView(makeChoiceField(metrics, i18n::tr("settings.audio.buffer_size.label"),
                                           audioBufferDropdown,
                                           model.bufferFrames.explanation));
 
@@ -313,14 +314,14 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
       model.bufferFrames.enabled) {
     auto *applyButton = makeAccentButton(
         metrics.actionButtonWidth, metrics.actionButtonHeight,
-        makeText("Apply", metrics.bodyTextSize + 2,
+        makeText(i18n::tr("settings.audio.apply.label"), metrics.bodyTextSize + 2,
                  ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
         ui_theme::cyan());
     applyButton->setOnClickListener([this]() { applyAudioStreamDraft(); });
     streamControls->addView(applyButton);
   }
   cardsColumn->addView(makeCard(
-      metrics, "Audio Output", "Choose output and latency.",
+      metrics, i18n::tr("settings.audio.audio_output.label"), i18n::tr("settings.audio.choose_output_latency.message"),
       streamControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *volumeControls = new View();
@@ -362,7 +363,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   volumeControls->addView(
       makeVolumeRow("Keysound (%)", 2, &keysoundVolumeInput));
   cardsColumn->addView(makeCard(
-      metrics, "Volume", "",
+      metrics, i18n::tr("settings.audio.volume.label"), "",
       volumeControls, metrics.modeCardHeight, metrics.cardsWidth));
 
   auto *diagnostics = new View();
@@ -373,13 +374,13 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   diagnostics->addView(audioEffectiveText);
   auto *testSoundButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Test Sound", metrics.bodyTextSize + 2,
+      makeText(i18n::tr("settings.audio.test_sound.label"), metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
   testSoundButton->setOnClickListener([this]() {
     const bool played =
         audioVideoSession != nullptr && audioVideoSession->playTestSound();
-    setAudioStatus(played ? "Sound played." : "Could not play sound.",
+    setAudioStatus(played ? i18n::tr("settings.audio.sound_played.message") : i18n::tr("settings.audio.could_not_play_sound.message"),
                    played ? SDL_Color{157, 220, 176, 255}
                           : SDL_Color{255, 177, 170, 255});
   });
@@ -388,7 +389,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
       makeWrappedText("", metrics.bodyTextSize, ui_theme::textSecondary());
   diagnostics->addView(audioStatusText);
   cardsColumn->addView(makeCard(
-      metrics, "Current Audio", "",
+      metrics, i18n::tr("settings.audio.current_audio.label"), "",
       diagnostics, metrics.modeCardHeight, metrics.cardsWidth));
 
   refreshAudioVideoControls();
@@ -401,8 +402,8 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   if (audioVideoSession == nullptr ||
       context.displaySettingsManager == nullptr) {
     cardsColumn->addView(makeCard(
-        metrics, "Display", "Still initializing.",
-        makeWrappedText("Try again shortly.",
+        metrics, i18n::tr("settings.display.display.label"), i18n::tr("settings.display.still_initializing.message"),
+        makeWrappedText(i18n::tr("settings.display.try_again_shortly.message"),
                         metrics.bodyTextSize, ui_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
@@ -512,32 +513,32 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   const float dropdownWidth = static_cast<float>(
       std::max(260, metrics.cardsWidth - metrics.cardPadding * 2));
   refreshDropdown(displayModeDropdown, model.modes, displayModeDropdownOpen,
-                  "Mode", dropdownWidth);
+                  i18n::tr("settings.display.mode.label"), dropdownWidth);
   refreshDropdown(displayIndexDropdown, model.displays,
-                  displayIndexDropdownOpen, "Display", dropdownWidth);
+                  displayIndexDropdownOpen, i18n::tr("settings.display.display.label"), dropdownWidth);
   refreshDropdown(displayResolutionDropdown, model.resolutions,
-                  displayResolutionDropdownOpen, "Resolution", dropdownWidth);
+                  displayResolutionDropdownOpen, i18n::tr("settings.display.resolution.label"), dropdownWidth);
   refreshDropdown(displayVsyncDropdown, model.vsync, displayVsyncDropdownOpen,
                   "VSync", dropdownWidth);
   refreshDropdown(displayFrameCapDropdown, model.frameCaps,
-                  displayFrameCapDropdownOpen, "Frame cap", dropdownWidth);
+                  displayFrameCapDropdownOpen, i18n::tr("settings.display.frame_cap.label"), dropdownWidth);
 
-  controls->addView(makeChoiceField(metrics, "Window mode", displayModeDropdown,
+  controls->addView(makeChoiceField(metrics, i18n::tr("settings.display.window_mode.label"), displayModeDropdown,
                                     model.modes.explanation));
-  controls->addView(makeChoiceField(metrics, "Display", displayIndexDropdown,
+  controls->addView(makeChoiceField(metrics, i18n::tr("settings.display.display.label"), displayIndexDropdown,
                                     model.displays.explanation));
-  controls->addView(makeChoiceField(metrics, "Resolution",
+  controls->addView(makeChoiceField(metrics, i18n::tr("settings.display.resolution.label"),
                                     displayResolutionDropdown,
                                     model.resolutions.explanation));
   controls->addView(makeChoiceField(
-      metrics, "Vertical sync", displayVsyncDropdown, model.vsync.explanation));
-  controls->addView(makeChoiceField(metrics, "Frame cap",
+      metrics, i18n::tr("settings.display.vertical_sync.label"), displayVsyncDropdown, model.vsync.explanation));
+  controls->addView(makeChoiceField(metrics, i18n::tr("settings.display.frame_cap.label"),
                                     displayFrameCapDropdown,
                                     model.frameCaps.explanation));
 
   auto *applyButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Apply", metrics.bodyTextSize + 2,
+      makeText(i18n::tr("settings.display.apply.label"), metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::cyan());
   applyButton->setOnClickListener([this]() { applyDisplayDraft(); });
@@ -547,7 +548,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   controls->addView(displayStatusText);
 
   cardsColumn->addView(makeCard(
-      metrics, "Display", "Changes preview for 15 seconds.",
+      metrics, i18n::tr("settings.display.display.label"), i18n::tr("settings.display.changes_preview_15_seconds.message"),
       controls, metrics.modeCardHeight, metrics.cardsWidth));
   refreshAudioVideoControls();
   return cardsColumn;
@@ -578,11 +579,11 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
   panel->setThemedBorderColor(ui_theme::hairline);
   panel->setBorderWidth(1);
-  panel->addView(makeWrappedText("Keep display changes?",
+  panel->addView(makeWrappedText(i18n::tr("settings.display.keep_display_changes.label"),
                                  metrics.sectionTitleSize,
                                  ui_theme::textPrimary()));
   displayPreviewCountdownText =
-      makeWrappedText("Reverting in 15 seconds", metrics.bodyTextSize + 4,
+      makeWrappedText(i18n::tr("settings.display.reverting_in_15_seconds.label"), metrics.bodyTextSize + 4,
                       ui_theme::amber(), TextView::CENTER);
   panel->addView(displayPreviewCountdownText);
   displayPreviewStatusText =
@@ -596,14 +597,14 @@ void SettingsScene::buildDisplayPreviewOverlay(const LayoutMetrics &metrics) {
   actions->setJustifyContent(YGJustifyCenter);
   auto *revertButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Revert", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::tr("settings.display.revert.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
       ui_theme::coral());
   revertButton->setOnClickListener([this]() { revertDisplayPreview(); });
   actions->addView(revertButton);
   displayPreviewKeepButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText("Keep", metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::tr("settings.display.keep.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
   displayPreviewKeepButton->setOnClickListener(
@@ -633,22 +634,22 @@ void SettingsScene::refreshAudioVideoControls() {
   const float dropdownWidth =
       static_cast<float>(std::max(260, cardsWidth - metrics.cardPadding * 2));
   refreshDropdown(audioDeviceDropdown, audioModel.devices,
-                  audioDeviceDropdownOpen, "Output", dropdownWidth);
+                  audioDeviceDropdownOpen, i18n::tr("settings.audio.output.label"), dropdownWidth);
   refreshDropdown(audioSampleRateDropdown, audioModel.sampleRates,
-                  audioSampleRateDropdownOpen, "Rate", dropdownWidth);
+                  audioSampleRateDropdownOpen, i18n::tr("settings.audio.rate.label"), dropdownWidth);
   refreshDropdown(audioBufferDropdown, audioModel.bufferFrames,
-                  audioBufferDropdownOpen, "Buffer", dropdownWidth);
+                  audioBufferDropdownOpen, i18n::tr("settings.audio.buffer.label"), dropdownWidth);
 
   if (audioEffectiveText != nullptr) {
     std::ostringstream text;
-    text << "Output: " << audioModel.effectiveDeviceLabel << "\n";
+    text << i18n::tr("settings.audio.output.prefix") << audioModel.effectiveDeviceLabel << "\n";
     if (audioModel.effectiveSampleRate > 0) {
-      text << "Format: " << audioModel.effectiveSampleRate << " Hz · "
+      text << i18n::tr("settings.audio.format.prefix") << audioModel.effectiveSampleRate << " Hz · "
            << audioModel.effectiveBufferFrames << " frames\n";
       text << std::fixed << std::setprecision(2)
-           << "Latency: " << audioModel.effectiveLatencyMs << " ms";
+           << i18n::tr("settings.audio.latency.prefix") << audioModel.effectiveLatencyMs << " ms";
     } else {
-      text << "Format unavailable.";
+      text << i18n::tr("settings.audio.format_unavailable.message");
     }
     audioEffectiveText->setText(text.str());
   }
@@ -662,15 +663,15 @@ void SettingsScene::refreshAudioVideoControls() {
     const auto displayModel = BuildDisplayControlModel(
         displayDraft, context.displaySettingsManager->capabilities());
     refreshDropdown(displayModeDropdown, displayModel.modes,
-                    displayModeDropdownOpen, "Mode", dropdownWidth);
+                    displayModeDropdownOpen, i18n::tr("settings.audio.mode.label"), dropdownWidth);
     refreshDropdown(displayIndexDropdown, displayModel.displays,
-                    displayIndexDropdownOpen, "Display", dropdownWidth);
+                    displayIndexDropdownOpen, i18n::tr("settings.audio.display.label"), dropdownWidth);
     refreshDropdown(displayResolutionDropdown, displayModel.resolutions,
-                    displayResolutionDropdownOpen, "Resolution", dropdownWidth);
+                    displayResolutionDropdownOpen, i18n::tr("settings.audio.resolution.label"), dropdownWidth);
     refreshDropdown(displayVsyncDropdown, displayModel.vsync,
                     displayVsyncDropdownOpen, "VSync", dropdownWidth);
     refreshDropdown(displayFrameCapDropdown, displayModel.frameCaps,
-                    displayFrameCapDropdownOpen, "Frame cap", dropdownWidth);
+                    displayFrameCapDropdownOpen, i18n::tr("settings.audio.frame_cap.label"), dropdownWidth);
   }
   if (displayStatusText != nullptr) {
     displayStatusText->setText(displayStatusMessage);
@@ -703,9 +704,10 @@ void SettingsScene::updateDisplayPreviewUi() {
       std::chrono::steady_clock::now());
   if (displayPreviewCountdownText != nullptr) {
     displayPreviewCountdownText->setText(
-        confirmable ? "Reverting in " + std::to_string(seconds) +
-                          (seconds == 1 ? " second" : " seconds")
-                    : "Restoring the previous display settings...");
+        confirmable ? i18n::format(seconds == 1 ? "settings.display.preview.countdown.one"
+                                                 : "settings.display.preview.countdown.other",
+                                   {{"seconds", std::to_string(seconds)}})
+                    : i18n::tr("settings.display.restoring_previous_display_settings.progress"));
   }
 }
 

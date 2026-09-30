@@ -364,6 +364,10 @@ function(asobmashow_enable_lua_skin_java_pattern target_name)
     endif()
 endfunction()
 
+add_library(asobmashow_localization STATIC src/i18n/Localization.cpp)
+target_compile_features(asobmashow_localization PRIVATE cxx_std_17)
+set_target_properties(asobmashow_localization PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_library(TinyFileDialogs STATIC ${SRC_DIR}/tinyfiledialogs.c)
 add_library(SQLite3 STATIC ${SRC_DIR}/sqlite3.c)
 
@@ -396,6 +400,8 @@ endif()
 # Refresh the source identity before every build. The refresh script only
 # replaces its generated header when Git identity changes, preserving normal
 # incremental compilation while keeping acceptance evidence honest.
+target_link_libraries(main PRIVATE asobmashow_localization)
+
 include("${CMAKE_SOURCE_DIR}/cmake/BuildIdentity.cmake")
 add_library(asobmashow_build_identity OBJECT "${SRC_DIR}/BuildIdentity.cpp")
 target_compile_features(asobmashow_build_identity PRIVATE cxx_std_23)
@@ -5481,6 +5487,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     target_link_libraries(app_settings_store_tests PRIVATE utf8proc::utf8proc)
 
+    add_executable(localization_tests tests/localization_tests.cpp)
+    target_include_directories(localization_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(localization_tests PRIVATE cxx_std_20)
+    add_test(NAME localization_catalog_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
+
     add_executable(application_ui_state_store_tests
         tests/application_ui_state_store_tests.cpp
         src/ApplicationUiState.cpp
@@ -7943,6 +7955,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         get_property(test_target_prepared TARGET ${target_name}
             PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED)
         if(NOT test_target_prepared)
+            target_link_libraries(${target_name} PRIVATE asobmashow_localization)
             target_compile_definitions(${target_name} PRIVATE SDL_MAIN_HANDLED)
             # Many legacy fixtures use assert() for setup as well as validation.
             # Release's NDEBUG would otherwise remove database/resource setup calls
@@ -8585,6 +8598,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_capture_startup_failure_tests)
     set_tests_properties(foundation_input_capture PROPERTIES TIMEOUT 15)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
+    asobmashow_register_test(localization_tests)
     asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)

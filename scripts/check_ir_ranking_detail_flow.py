@@ -57,14 +57,14 @@ require(
 )
 require(
     "class RankingTableHeaderView" in source
-    and 'makeHeaderLabel("Rank"' in source
-    and 'makeHeaderLabel("Player"' in source
-    and 'makeHeaderLabel("EX Score"' in source
-    and 'makeHeaderLabel("EX Rate"' in source
-    and 'makeHeaderLabel("Lamp"' in source
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.rank.label")' in source
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.player.label")' in source
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.ex_score.label")' in source
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.ex_rate.label")' in source
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.lamp.label")' in source
     and 'makeHeaderLabel("BP"' in source
-    and 'makeHeaderLabel("Max Combo"' in source
-    and 'makeHeaderLabel("Achieved"' in source,
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.max_combo.label")' in source
+    and 'makeHeaderLabel(i18n::tr("ir.ranking.table.achieved.label")' in source,
     "ranking list must have a pinned header for every visible column",
 )
 require(
@@ -80,9 +80,9 @@ require(
     and 'makeJudgementRow("GOOD"' in source
     and 'makeJudgementRow("BAD"' in source
     and 'makeJudgementRow("POOR"' in source
-    and 'setText("Total")' in source
-    and 'setText("Early")' in source
-    and 'setText("Late")' in source,
+    and 'setText(i18n::tr("ir.ranking.score_detail.total.label"))' in source
+    and 'setText(i18n::tr("ir.ranking.score_detail.early.label"))' in source
+    and 'setText(i18n::tr("ir.ranking.score_detail.late.label"))' in source,
     "score details must arrange every supported judgment in semantic rows",
 )
 require(
@@ -107,11 +107,11 @@ require(
     "TextView *makeRankingLampBadge()" in source
     and "TextView *makeScoreDetailLampBadge()" in source
     and "configureIrRankingDetailLampBadge(*lamp);" in source
-    and '"Lamp", scoreDetailLamp, makeScoreDetailLampBadge())' in source,
+    and 'i18n::tr("ir.ranking.score_detail.lamp.label"), scoreDetailLamp, makeScoreDetailLampBadge())' in source,
     "score details must use a padded clear-lamp badge that fits its metric card",
 )
 require(
-    "KPOOR is not exposed separately by Bokutachi; BP remains aggregate."
+    "ir.ranking.score_detail.judgements.kpoor_unavailable_notice"
     in source,
     "score details must explain the Bokutachi KPOOR capability boundary",
 )

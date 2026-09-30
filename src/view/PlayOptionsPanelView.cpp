@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "PlayOptionsPanelView.h"
 
 #include "../AssistOptionUtils.h"
@@ -124,7 +125,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   setAlignItems(YGAlignStretch);
   setGap(12);
 
-  auto *rulesetSectionLabel = makeLabel("Ruleset");
+  auto *rulesetSectionLabel = makeLabel(i18n::tr("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
   addView(rulesetSectionLabel);
   auto *rulesetRow = makeRow();
@@ -148,7 +149,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(rulesetRow);
 
   if (layout.showGauge) {
-    gaugeSectionLabel = makeLabel("Gauge");
+    gaugeSectionLabel = makeLabel(i18n::tr("play_options.gauge.label"));
     gaugeSectionLabel->setName("gauge-section-label");
     addView(gaugeSectionLabel);
     auto addGaugeButton = [this](View *row, GaugeType type) {
@@ -178,7 +179,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addGaugeButton(gaugeRowB, GaugeType::Hazard);
     addView(gaugeRowB);
 
-    addView(makeLabel("Auto Shift"));
+    addView(makeLabel(i18n::tr("play_options.auto_shift.label")));
     auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
       TextView *text = nullptr;
       const std::string label = gaugeAutoShiftMenuLabel(mode);
@@ -213,7 +214,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     gaugeAutoShiftBoundsSection->setGap(12);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(false);
-    gaugeAutoShiftBoundsSection->addView(makeLabel("Auto Shift Lower Bound"));
+    gaugeAutoShiftBoundsSection->addView(makeLabel(i18n::tr("play_options.auto_shift_lower_bound.label")));
     auto addLowerBoundButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -265,7 +266,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playOptionSection->setWidth(layout.width);
   addView(playOptionSection);
 
-  addView(makeLabel("Long Note Mode"));
+  addView(makeLabel(i18n::tr("play_options.long_note_mode.label")));
   auto *longNoteModeRow = makeRow();
   for (const char *mode : long_note_mode::kPlayableIds) {
     TextView *text = nullptr;
@@ -280,7 +281,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   }
   addView(longNoteModeRow);
 
-  assistOptionLabel = makeLabel("Assist Option");
+  assistOptionLabel = makeLabel(i18n::tr("play_options.assist_option.label"));
   addView(assistOptionLabel);
   auto *assistRow = makeRow();
   for (const char *option : {assist_options::kOff, assist_options::kDrag,
@@ -308,7 +309,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
       ->setBorderWidth(1)
       ->setCornerRadius(ui_theme::controlRadius());
-  playbackGroup->addView(makeLabel("Playback Rate"));
+  playbackGroup->addView(makeLabel(i18n::tr("play_options.playback_rate.label")));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
@@ -342,10 +343,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->addView(playbackModeDropdown);
   addView(playbackGroup);
 
-  addView(makeLabel("Club Mode"));
+  addView(makeLabel(i18n::tr("play_options.club_mode.label")));
   clubModeButton = makeButton("", 18, nullptr);
   clubModeButton->setName("club-mode");
-  clubModeButtonContent = new CheckboxButtonContent("Club Beat", 18, 17);
+  clubModeButtonContent = new CheckboxButtonContent(i18n::tr("play_options.club_beat.label"), 18, 17);
   clubModeButton->setContentView(clubModeButtonContent);
   clubModeButton->setWidthPercent(100.0f);
   clubModeButton->setOnClickListener([this]() {
@@ -356,7 +357,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
-    addView(makeLabel("Pacemaker"));
+    addView(makeLabel(i18n::tr("play_options.pacemaker.label")));
     View *row = nullptr;
     for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
       if (i % 3 == 0) {
@@ -399,7 +400,7 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     gaugeSectionLabel->setText(
         state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder
             ? "Gauge / Auto Shift Upper Bound"
-            : "Gauge");
+            : i18n::tr("play_options.gauge.label"));
   }
   if (gaugeAutoShiftBoundsSection != nullptr) {
     gaugeAutoShiftBoundsSection->setDisplay(showsBounds ? YGDisplayFlex
@@ -426,11 +427,11 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   }
   if (assistOptionLabel != nullptr) {
     if (state.playbackRatePercent != 100) {
-      assistOptionLabel->setText("Assist Option - Light Assist Easy");
+      assistOptionLabel->setText(i18n::tr("play_options.assist_option_light_assist_easy.label"));
     } else if (assist_options::isEnabled(state.assistOption)) {
-      assistOptionLabel->setText("Assist Option - Light Assist Easy");
+      assistOptionLabel->setText(i18n::tr("play_options.assist_option_light_assist_easy.label"));
     } else {
-      assistOptionLabel->setText("Assist Option");
+      assistOptionLabel->setText(i18n::tr("play_options.assist_option.label"));
     }
   }
   if (playbackRateText != nullptr) {
@@ -445,11 +446,11 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   }
   if (playbackModeDropdown != nullptr) {
     playbackModeDropdown->refresh(
-        {.label = "Mode",
+        {.label = i18n::tr("play_options.mode.label"),
          .selectedId = "pitch-shift",
-         .options = {{.id = "pitch-shift", .label = "Pitch Shift"},
+         .options = {{.id = "pitch-shift", .label = i18n::tr("play_options.pitch_shift.label")},
                      {.id = "time-stretch",
-                      .label = "Time Stretch (Unavailable)",
+                      .label = i18n::tr("play_options.time_stretch_unavailable.label"),
                       .available = false}},
          .open = playbackModeDropdownOpen,
          .enabled = !state.playbackLocked,

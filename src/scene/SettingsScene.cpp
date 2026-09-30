@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "../ArchiveFile.h"
 #include "../library/ChartLibraryPlatform.h"
@@ -36,19 +37,18 @@ std::string formatCacheCleanupResult(
     const archive_file::TemporaryCacheCleanupResult &result) {
   if (!result.cacheExisted || result.removedEntries == 0) {
     return result.skippedEntries == 0
-               ? "Temporary archive cache is already empty."
-               : "Temporary archive cache only contains active files.";
+               ? i18n::tr("settings.temporary_archive_cache_already_empty.message")
+               : i18n::tr("settings.temporary_archive_cache_only_contains_active_files.message");
   }
-  std::string message = "Removed " + formatCacheBytes(result.removedBytes) +
-                        " (" + std::to_string(result.removedEntries) +
-                        " entries).";
+  std::string message = i18n::format(
+      "settings.cache.cleanup.summary",
+      {{"size", formatCacheBytes(result.removedBytes)},
+       {"count", std::to_string(result.removedEntries)}});
   if (result.skippedEntries > 0) {
-    message +=
-        " Skipped " + std::to_string(result.skippedEntries) + " active file";
-    if (result.skippedEntries != 1) {
-      message += "s";
-    }
-    message += ".";
+    message += i18n::format(
+        result.skippedEntries == 1 ? "settings.cache.cleanup.skipped.one"
+                                   : "settings.cache.cleanup.skipped.other",
+        {{"count", std::to_string(result.skippedEntries)}});
   }
   return message;
 }
@@ -56,10 +56,11 @@ std::string formatCacheCleanupResult(
 std::string
 formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
   if (!result.cacheExisted || result.entries == 0) {
-    return "Temporary archive cache is empty.";
+    return i18n::tr("settings.temporary_archive_cache_empty.message");
   }
-  return "Temporary archive cache uses " + formatCacheBytes(result.bytes) +
-         " (" + std::to_string(result.entries) + " entries).";
+  return i18n::format("settings.cache.usage.summary",
+                      {{"size", formatCacheBytes(result.bytes)},
+                       {"count", std::to_string(result.entries)}});
 }
 } // namespace
 
@@ -87,8 +88,8 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   const bool cleanup =
       completion->operation == SettingsCacheMaintenance::Operation::Cleanup;
   if (!completion->succeeded) {
-    archiveCacheCleanupStatusMessage = cleanup ? "Archive cache cleanup failed"
-                                               : "Archive cache measurement failed";
+    archiveCacheCleanupStatusMessage = cleanup ? i18n::tr("settings.archive_cache_cleanup_failed.label")
+                                               : i18n::tr("settings.archive_cache_measurement_failed.label");
     archiveCacheCleanupStatusMessage +=
         completion->error.empty() ? "." : ": " + completion->error;
     archiveCacheCleanupStatusColor = {255, 177, 170, 255};
@@ -106,7 +107,7 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   }
   if (archiveCacheCleanupButtonText != nullptr) {
     archiveCacheCleanupButtonText->setText(
-        archiveCacheMaintenance.cleanupRunning() ? "Cleaning..." : "Clean Up");
+        archiveCacheMaintenance.cleanupRunning() ? i18n::tr("settings.cleaning.progress") : i18n::tr("settings.clean_up.label"));
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -121,14 +122,14 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
     return;
   }
 
-  archiveCacheCleanupStatusMessage = "Cleaning temporary archive cache...";
+  archiveCacheCleanupStatusMessage = i18n::tr("settings.cleaning_temporary_archive_cache.progress");
   archiveCacheCleanupStatusColor = {239, 244, 251, 255};
   if (archiveCacheCleanupStatusText != nullptr) {
     archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
-    archiveCacheCleanupButtonText->setText("Cleaning...");
+    archiveCacheCleanupButtonText->setText(i18n::tr("settings.cleaning.progress"));
   }
 }
 
@@ -137,7 +138,7 @@ void SettingsScene::measureTemporaryArchiveCache() {
     return;
   }
 
-  archiveCacheCleanupStatusMessage = "Measuring temporary archive cache...";
+  archiveCacheCleanupStatusMessage = i18n::tr("settings.measuring_temporary_archive_cache.progress");
   archiveCacheCleanupStatusColor = {239, 244, 251, 255};
   if (archiveCacheCleanupStatusText != nullptr) {
     archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
@@ -158,14 +159,13 @@ void SettingsScene::init() {
   context.profileSwitchBlockers.scene = [this]() -> std::optional<std::string> {
     if (audioVideoSession != nullptr &&
         audioVideoSession->hasDisplayPreview()) {
-      return "Confirm or revert the pending display preview before switching "
-             "profiles.";
+      return i18n::tr("settings.profile_switch.display_preview_blocker");
     }
     if (libraryTask.running()) {
-      return "A difficulty table library update is active.";
+      return i18n::tr("settings.difficulty_table_library_update_active.message");
     }
     if (archiveCacheMaintenance.running()) {
-      return "Archive cache maintenance is active.";
+      return i18n::tr("settings.archive_cache_maintenance_active.message");
     }
     return std::nullopt;
   };
@@ -199,8 +199,7 @@ void SettingsScene::update(float dt) {
                            ? SDL_Color{157, 220, 176, 255}
                            : SDL_Color{255, 177, 170, 255});
     } else if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
-      setDisplayStatus("The display preview ended and the previous settings "
-                       "were restored.",
+      setDisplayStatus(i18n::tr("settings.display_preview_ended_previous_settings_restored.message"),
                        {255, 209, 128, 255});
     }
     if (hadPreview && !audioVideoSession->hasDisplayPreview()) {
@@ -279,7 +278,7 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     displayDraft = context.settings.audioVideo.video;
     setDisplayStatus(result.has_value() && !result->message.empty()
                          ? result->message
-                         : "Display preview was restored after focus loss.",
+                         : i18n::tr("settings.display_preview_restored_after_focus_loss.message"),
                      {255, 209, 128, 255});
     updateDisplayPreviewUi();
   }

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IrRankingModal.h"
 
 #include "IrRankingService.h"
@@ -276,21 +277,21 @@ public:
     setThemedBackgroundColor(ui_theme::fieldInk);
     setCornerRadius(ui_theme::controlRadius());
 
-    rank_ = makeHeaderLabel("Rank", TextView::CENTER);
+    rank_ = makeHeaderLabel(i18n::tr("ir.ranking.table.rank.label"), TextView::CENTER);
     rank_->setWidth(kRankColumnWidth);
-    player_ = makeHeaderLabel("Player", TextView::LEFT);
+    player_ = makeHeaderLabel(i18n::tr("ir.ranking.table.player.label"), TextView::LEFT);
     player_->setFlex(1);
-    score_ = makeHeaderLabel("EX Score", TextView::RIGHT);
+    score_ = makeHeaderLabel(i18n::tr("ir.ranking.table.ex_score.label"), TextView::RIGHT);
     score_->setWidth(kScoreColumnWidth);
-    rate_ = makeHeaderLabel("EX Rate", TextView::RIGHT);
+    rate_ = makeHeaderLabel(i18n::tr("ir.ranking.table.ex_rate.label"), TextView::RIGHT);
     rate_->setWidth(kRateColumnWidth);
-    lamp_ = makeHeaderLabel("Lamp", TextView::CENTER);
+    lamp_ = makeHeaderLabel(i18n::tr("ir.ranking.table.lamp.label"), TextView::CENTER);
     lamp_->setWidth(kLampColumnWidth);
     badPoints_ = makeHeaderLabel("BP", TextView::RIGHT);
     badPoints_->setWidth(kBadPointsColumnWidth);
-    combo_ = makeHeaderLabel("Max Combo", TextView::RIGHT);
+    combo_ = makeHeaderLabel(i18n::tr("ir.ranking.table.max_combo.label"), TextView::RIGHT);
     combo_->setWidth(kMaxComboColumnWidth);
-    time_ = makeHeaderLabel("Achieved", TextView::RIGHT);
+    time_ = makeHeaderLabel(i18n::tr("ir.ranking.table.achieved.label"), TextView::RIGHT);
     time_->setWidth(kAchievedColumnWidth);
 
     addView(rank_);
@@ -432,12 +433,12 @@ struct IrRankingModal::Impl {
     header->setHeight(52);
     header->setFlexShrink(0);
     headerTitle = makeText(28);
-    headerTitle->setText("Bokutachi Ranking");
+    headerTitle->setText(i18n::tr("ir.ranking.bokutachi_ranking.label"));
     headerTitle->setFlex(1);
     fetchedAt = makeText(15, TextView::RIGHT);
     fetchedAt->setThemedColor(ui_theme::textMuted);
     fetchedAt->setWidth(220);
-    refreshButton = makeActionButton("Refresh", 112, [this]() { refresh(); });
+    refreshButton = makeActionButton(i18n::tr("ir.ranking.refresh.label"), 112, [this]() { refresh(); });
     closeButton =
         makeIconActionButton(kIconXmark, [this]() { requestClose(); });
     header->addView(headerTitle);
@@ -476,7 +477,7 @@ struct IrRankingModal::Impl {
     detail->setHeight(54);
     detail->setFlexShrink(0);
     panel->addView(detail);
-    retryButton = makeActionButton("Retry", 140, [this]() { refresh(); });
+    retryButton = makeActionButton(i18n::tr("ir.ranking.retry.label"), 140, [this]() { refresh(); });
     retryButton->setAlignSelf(YGAlignCenter);
     panel->addView(retryButton);
 
@@ -570,10 +571,10 @@ struct IrRankingModal::Impl {
     };
     auto *summary = makeMetricRow();
     summary->setHeight(82);
-    summary->addView(makeMetricCard("EX Score", scoreDetailScore));
-    summary->addView(makeMetricCard("Rate", scoreDetailRate));
+    summary->addView(makeMetricCard(i18n::tr("ir.ranking.score_detail.ex_score.label"), scoreDetailScore));
+    summary->addView(makeMetricCard(i18n::tr("ir.ranking.score_detail.rate.label"), scoreDetailRate));
     summary->addView(makeMetricCardWithValue(
-        "Lamp", scoreDetailLamp, makeScoreDetailLampBadge()));
+        i18n::tr("ir.ranking.score_detail.lamp.label"), scoreDetailLamp, makeScoreDetailLampBadge()));
 
     scoreDetailJudgements = new View();
     scoreDetailJudgements->setFlexDirection(FlexDirection::Column);
@@ -597,19 +598,19 @@ struct IrRankingModal::Impl {
     judgementHeader->setPadding(Edge::Left, 10);
     judgementHeader->setPadding(Edge::Right, 10);
     auto *judgementHeading = makeText(14);
-    judgementHeading->setText("Judgment");
+    judgementHeading->setText(i18n::tr("ir.ranking.score_detail.judgment.label"));
     judgementHeading->setThemedColor(ui_theme::textMuted);
     judgementHeading->setWidth(152);
     scoreDetailJudgementLabels[0] = judgementHeading;
     auto *totalHeading = makeJudgementHeaderCell();
-    totalHeading->setText("Total");
+    totalHeading->setText(i18n::tr("ir.ranking.score_detail.total.label"));
     scoreDetailJudgementHeadings[0] = totalHeading;
     auto *earlyHeading = makeJudgementHeaderCell();
-    earlyHeading->setText("Early");
+    earlyHeading->setText(i18n::tr("ir.ranking.score_detail.early.label"));
     earlyHeading->setThemedColor(ui_theme::fastFeedback);
     scoreDetailJudgementHeadings[1] = earlyHeading;
     auto *lateHeading = makeJudgementHeaderCell();
-    lateHeading->setText("Late");
+    lateHeading->setText(i18n::tr("ir.ranking.score_detail.late.label"));
     lateHeading->setThemedColor(ui_theme::slowFeedback);
     scoreDetailJudgementHeadings[2] = lateHeading;
     judgementHeader->addView(judgementHeading);
@@ -653,7 +654,7 @@ struct IrRankingModal::Impl {
 
     scoreDetailJudgementUnavailable = makeText(17, TextView::CENTER);
     scoreDetailJudgementUnavailable->setText(
-        "Judgement breakdown unavailable from Bokutachi rankings.");
+        i18n::tr("ir.ranking.score_detail.judgement_breakdown_unavailable_from_bokutachi_rankings.message"));
     scoreDetailJudgementUnavailable->setWrap(true);
     scoreDetailJudgementUnavailable->setHeight(88);
     scoreDetailJudgementUnavailable->setFlexShrink(0);
@@ -665,7 +666,7 @@ struct IrRankingModal::Impl {
 
     scoreDetailKpoorNote = makeText(14, TextView::CENTER);
     scoreDetailKpoorNote->setText(
-        "KPOOR is not exposed separately by Bokutachi; BP remains aggregate.");
+        i18n::tr("ir.ranking.score_detail.judgements.kpoor_unavailable_notice"));
     scoreDetailKpoorNote->setWrap(true);
     scoreDetailKpoorNote->setHeight(32);
     scoreDetailKpoorNote->setFlexShrink(0);
@@ -674,9 +675,9 @@ struct IrRankingModal::Impl {
     auto *metadata = makeMetricRow();
     metadata->setHeight(82);
     metadata->addView(makeMetricCard("BP", scoreDetailBadPoints));
-    metadata->addView(makeMetricCard("Max Combo", scoreDetailMaxCombo));
+    metadata->addView(makeMetricCard(i18n::tr("ir.ranking.score_detail.max_combo.label"), scoreDetailMaxCombo));
     metadata->addView(
-        makeMetricCard("Achieved", scoreDetailAchievementTime, 16));
+        makeMetricCard(i18n::tr("ir.ranking.score_detail.achieved.label"), scoreDetailAchievementTime, 16));
 
     scoreDetailPanel->addView(detailHeader);
     scoreDetailPanel->addView(summary);

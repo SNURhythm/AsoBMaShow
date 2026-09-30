@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "SettingsScenePreviewAuthority.h"
 #include "../library/ChartLibraryPlatform.h"
@@ -178,7 +179,7 @@ void SettingsScene::syncPreviewAuthority() {
       .gaugeAutoShift = GaugeAutoShiftMode::None,
       .currentGauge = 74.0F,
       .gaugeRules = *previewGaugeRules,
-      .playOptionLabel = "PREVIEW",
+      .playOptionLabel = i18n::tr("settings.preview.preview.badge"),
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
   });

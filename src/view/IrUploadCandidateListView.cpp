@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IrUploadCandidateListView.h"
 
 #include "../ScoreRankUtils.h"
@@ -234,7 +235,7 @@ void IrUploadCandidateListItemView::setCandidate(
   jacketImage_->freeImage();
 
   const bool failed = candidate.state == ir::IrRecordState::Failed;
-  statusText_->setText(failed ? "Retry" : "Eligible");
+  statusText_->setText(failed ? i18n::tr("ir.upload.candidate.retry.label") : i18n::tr("ir.upload.candidate.eligible.label"));
   if (failed) {
     statusText_->setThemedBackgroundColor(ui_theme::coral);
     statusText_->setThemedColor(

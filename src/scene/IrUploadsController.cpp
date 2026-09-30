@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IrUploadsController.h"
 
 #include <algorithm>
@@ -27,22 +28,22 @@ ProviderAvailability
 evaluateProviderAvailability(const ProviderAvailabilityInput &input) {
   if (!input.enabled) {
     return {.statusText =
-                "Bokutachi is disabled. Enable it before uploading."};
+                i18n::tr("ir.upload.bokutachi_disabled_enable_before_uploading.message")};
   }
   if (!input.hasCredential) {
     return {.statusText =
-                "A Bokutachi API key is required before uploading."};
+                i18n::tr("ir.upload.bokutachi_api_key_required_before_uploading.message")};
   }
   if (!input.httpsOrigin) {
     return {.statusText =
-                "Use an HTTPS server origin before uploading."};
+                i18n::tr("ir.upload.use_https_server_origin_before_uploading.message")};
   }
   if (!input.driverCanSubmit || !input.submissionServiceAvailable) {
-    return {.statusText = "Bokutachi score submission is unavailable."};
+    return {.statusText = i18n::tr("ir.upload.bokutachi_score_submission_unavailable.message")};
   }
   return {
       .canSubmit = true,
-      .statusText = "Ready to queue verified scores for batch delivery.",
+      .statusText = i18n::tr("ir.upload.ready_queue_verified_scores_batch_delivery.message"),
   };
 }
 
@@ -140,12 +141,12 @@ PreparationOutcome prepareSelectedCandidates(
         if (dependencies.verify) {
           verified = dependencies.verify(candidates[index], stopToken);
         } else {
-          verified.diagnostic = "Saved result verification is unavailable.";
+          verified.diagnostic = i18n::tr("ir.upload.saved_result_verification_unavailable.message");
         }
       } catch (const std::exception &) {
-        verified.diagnostic = "This saved result could not be verified for IR.";
+        verified.diagnostic = i18n::tr("ir.upload.saved_result_failed_verified_ir.message");
       } catch (...) {
-        verified.diagnostic = "This saved result could not be verified for IR.";
+        verified.diagnostic = i18n::tr("ir.upload.saved_result_failed_verified_ir.message");
       }
       if (stopToken.stop_requested()) {
         cancel();
@@ -156,7 +157,7 @@ PreparationOutcome prepareSelectedCandidates(
         submissions.push_back(std::move(*verified.submission));
       } else {
         recordFailure(candidates[index].attemptId(), verified.diagnostic,
-                      "This saved result could not be verified for IR.");
+                      i18n::tr("ir.upload.saved_result_failed_verified_ir.message"));
       }
       if (dependencies.progress) {
         dependencies.progress(index + 1, candidates.size());
@@ -172,7 +173,7 @@ PreparationOutcome prepareSelectedCandidates(
     }
     if (!dependencies.enqueueBatch) {
       for (const std::string &attemptId : submissionAttemptIds) {
-        recordFailure(attemptId, {}, "IR batch enqueue is unavailable.");
+        recordFailure(attemptId, {}, i18n::tr("ir.upload.ir_batch_enqueue_unavailable.message"));
       }
       return outcome;
     }
@@ -258,12 +259,12 @@ PreparationOutcome prepareSelectedCandidates(
     return outcome;
   } catch (const std::exception &) {
     for (const std::string &attemptId : outcome.failedAttemptIds) {
-      recordFailure(attemptId, {}, "IR upload preparation failed.");
+      recordFailure(attemptId, {}, i18n::tr("ir.upload.ir_upload_preparation_failed.message"));
     }
     return outcome;
   } catch (...) {
     for (const std::string &attemptId : outcome.failedAttemptIds) {
-      recordFailure(attemptId, {}, "IR upload preparation failed.");
+      recordFailure(attemptId, {}, i18n::tr("ir.upload.ir_upload_preparation_failed.message"));
     }
     return outcome;
   }
@@ -362,7 +363,7 @@ void Controller::setPreparationProgress(std::size_t completed,
 
 void Controller::markCancellationRequested() {
   if (preparing_) {
-    statusText_ = "Cancelling...";
+    statusText_ = i18n::tr("ir.upload.cancelling.progress");
   }
 }
 
@@ -375,7 +376,7 @@ void Controller::completePreparation(const PreparationOutcome &outcome) {
                              outcome.failedAttemptIds.end());
   preparing_ = false;
   if (outcome.cancelled) {
-    statusText_ = "Upload cancelled.";
+    statusText_ = i18n::tr("ir.upload.upload_cancelled.message");
     return;
   }
   std::unordered_set<std::string> queuedAttemptIds;
@@ -393,7 +394,7 @@ void Controller::completePreparation(const PreparationOutcome &outcome) {
     if (!failure.attemptId.empty() &&
         failedAttemptIds.contains(failure.attemptId)) {
       sessionFailureReasons_[failure.attemptId] = normalizedFailureReason(
-          failure.diagnostic, "IR upload preparation failed.");
+          failure.diagnostic, i18n::tr("ir.upload.ir_upload_preparation_failed.message"));
     }
   }
   for (auto &candidate : candidates_) {

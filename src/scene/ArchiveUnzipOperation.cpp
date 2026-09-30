@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ArchiveUnzipOperation.h"
 
 #include "../ArchiveSourceIdentity.h"
@@ -33,7 +34,7 @@ ArchiveUnzipResult extractArchive(
   try {
     if (!stopToken.stop_requested()) {
       if (!eligible(record)) {
-        result.message = "Selected item is not a solid archive.";
+        result.message = i18n::tr("library.archive.operation.selected_item_not_solid_archive.message");
         return result;
       }
       std::string error;
@@ -46,18 +47,18 @@ ArchiveUnzipResult extractArchive(
         result.reusedCompletedFolder = extracted->reusedCompletedFolder;
         result.success = true;
       } else {
-        result.message = error.empty() ? "Unzip failed" : "Unzip failed: " + error;
+        result.message = error.empty() ? i18n::tr("library.archive.operation.unzip_failed.label") : i18n::tr("library.archive.operation.unzip_failed.prefix") + error;
       }
     }
   } catch (const std::exception &error) {
-    result.message = "Unzip failed: " + std::string(error.what());
+    result.message = i18n::tr("library.archive.operation.unzip_failed.prefix") + std::string(error.what());
   } catch (...) {
-    result.message = "Unzip failed";
+    result.message = i18n::tr("library.archive.operation.unzip_failed.label");
   }
   if (stopToken.stop_requested()) {
     result.success = false;
     result.cancelled = true;
-    result.message = "Unzip cancelled";
+    result.message = i18n::tr("library.archive.operation.unzip_cancelled.label");
   }
   return result;
 }
@@ -76,24 +77,24 @@ bool deleteCompletedArchive(const ArchiveUnzipResult &result,
   }
   if (!result.success || result.outputFolder.empty() || result.cancelled ||
       result.archivePath.empty() || stopToken.stop_requested()) {
-    message = "Archive is unavailable for deletion";
+    message = i18n::tr("library.archive.operation.archive_unavailable_deletion.label");
     return false;
   }
   if (!archiveIdentityMatches(result)) {
-    message = "Archive changed or is unavailable. Original archive kept.";
+    message = i18n::tr("library.archive.operation.extract.source_changed_error");
     return false;
   }
   if (stopToken.stop_requested()) {
-    message = "Unzip cancelled. Original archive kept.";
+    message = i18n::tr("library.archive.operation.unzip_cancelled_original_archive_kept.message");
     return false;
   }
   std::error_code error;
   if (!std::filesystem::remove(result.archivePath, error)) {
-    message = "Could not delete archive" +
+    message = i18n::tr("library.archive.operation.could_not_delete_archive.label") +
               (error ? ": " + error.message() : std::string());
     return false;
   }
-  message = "Original archive deleted";
+  message = i18n::tr("library.archive.operation.original_archive_deleted.label");
   return true;
 }
 
@@ -227,15 +228,15 @@ bool ArchiveUnzipOperation::startDeleteArchive() {
       try {
         auto operationLock = archive_unzip_recovery::acquireOperationLock(stopToken);
         if (!operationLock.owns_lock() || stopToken.stop_requested()) {
-          result.message = "Deletion cancelled. Original archive kept.";
+          result.message = i18n::tr("library.archive.operation.deletion_cancelled_original_archive_kept.message");
         } else {
           auto session = repository_.OpenSession();
           if (!session || !session->EnsureSchema()) {
-            result.message = "Could not open library. Original archive kept.";
+            result.message = i18n::tr("library.archive.operation.could_not_open_library_original_archive_kept.message");
           } else {
             result.deleted = deleteCompletedArchive(completed, stopToken, result.message);
             if (result.deleted && !session->DeleteArchiveRecords(completed.archivePath)) {
-              result.message = "Original archive deleted. Failed to refresh library.";
+              result.message = i18n::tr("library.archive.operation.delete.library_refresh_failed");
             }
           }
         }
@@ -243,8 +244,8 @@ bool ArchiveUnzipOperation::startDeleteArchive() {
                           archiveIdentityMatches(completed);
       } catch (...) {
         result.message = result.deleted
-            ? "Original archive deleted. Failed to refresh library."
-            : "Could not delete archive. Original archive kept.";
+            ? i18n::tr("library.archive.operation.delete.library_refresh_failed")
+            : i18n::tr("library.archive.operation.delete.failed_original_kept");
       }
       std::lock_guard lock(mutex_);
       libraryChangedPending_ = libraryChangedPending_ || result.deleted;
@@ -296,7 +297,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
     if (!stopToken.stop_requested()) {
       auto session = repository.OpenSession();
       if (!session || !session->EnsureSchema()) {
-        lastError = "Could not open library. Original archives kept.";
+        lastError = i18n::tr("library.archive.operation.extract.library_open_failed");
       } else {
         ChartMetaQuery query;
         query.solidArchivesOnly = true;
@@ -345,7 +346,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
               progress(snapshot);
             }
           };
-          publish({.fraction = 0.0, .message = "Preparing unzip"});
+          publish({.fraction = 0.0, .message = i18n::tr("library.archive.operation.preparing_unzip.label")});
           const auto archiveResult = extractArchive(record, workersStop.get_token(),
               [&](const archive_file::UnzipProgress &archiveProgress) { publish(archiveProgress); },
               !deleteAfterUnzip,
@@ -389,7 +390,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
               }
             }
           }
-          publish({.message = "Archive finished"}, true, completed);
+          publish({.message = i18n::tr("library.archive.operation.archive_finished.label")}, true, completed);
         };
         const auto workerCount = std::min(archives.size(), plan.archiveWorkers);
         std::atomic_size_t nextArchive{workerCount};
@@ -407,7 +408,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
             workersStop.request_stop();
           } catch (...) {
             std::lock_guard resultLock(resultMutex);
-            lastError = "Unzip All failed";
+            lastError = i18n::tr("library.archive.operation.unzip_all_failed.label");
             workersStop.request_stop();
           }
         };
@@ -431,14 +432,14 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
   } catch (const std::exception &error) {
     lastError = error.what();
   } catch (...) {
-    lastError = "Unzip All failed";
+    lastError = i18n::tr("library.archive.operation.unzip_all_failed.label");
   }
   const auto extractionLimitError = budget.exhausted ? budget.failureMessage : std::string();
   if (!completedFolders.empty()) {
     try {
       if (progress) {
         progress({.fraction = 0.9, .total = completedFolders.size(),
-                  .message = "Indexing extracted folders", .indexing = true});
+                  .message = i18n::tr("library.archive.operation.indexing_extracted_folders.label"), .indexing = true});
       }
       auto session = repository.OpenSession();
       if (!session || !session->EnsureSchema()) {
@@ -460,7 +461,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::RunAll(
                     .fraction = 0.95,
                     .current = static_cast<std::uint64_t>(scanProgress.current),
                     .total = static_cast<std::uint64_t>(scanProgress.total),
-                    .message = "Indexing extracted charts",
+                    .message = i18n::tr("library.archive.operation.indexing_extracted_charts.label"),
                     .indexing = true,
                 });
               }
@@ -536,7 +537,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
   auto cancel = [&]() {
     result.success = false;
     result.cancelled = true;
-    result.message = "Unzip cancelled";
+    result.message = i18n::tr("library.archive.operation.unzip_cancelled.label");
     result.chartPath.clear();
   };
   if (!result.success) return finish();
@@ -548,11 +549,11 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
     }
     auto session = repository.OpenSession();
     if (!session || !session->EnsureSchema()) {
-      result.message = "Unzipped archive. Failed to refresh library.";
+      result.message = i18n::tr("library.archive.operation.unzipped_archive_failed_refresh_library.message");
       return finish();
     }
     if (progress) {
-      progress({.fraction = 0.98, .message = "Refreshing library"});
+      progress({.fraction = 0.98, .message = i18n::tr("library.archive.operation.refreshing_library.label")});
     }
     ChartLibraryScanner scanner;
     const auto scan = scanner.ScanAddedWithResult(
@@ -564,8 +565,8 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
                 .current = static_cast<std::uint64_t>(scanProgress.current),
                 .total = static_cast<std::uint64_t>(scanProgress.total),
                 .message = scanProgress.stage == ChartScanProgressStage::ParsingCharts
-                               ? "Indexing extracted charts"
-                               : "Refreshing library",
+                               ? i18n::tr("library.archive.operation.indexing_extracted_charts.label")
+                               : i18n::tr("library.archive.operation.refreshing_library.label"),
             });
           }
         }, nullptr, nullptr, nullptr, true);
@@ -576,7 +577,7 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
       return finish();
     }
     if (!scan.completed || !scan.committed) {
-      result.message = "Unzipped archive. Failed to refresh library.";
+      result.message = i18n::tr("library.archive.operation.unzipped_archive_failed_refresh_library.message");
       return finish();
     }
     ChartMetaQuery query;
@@ -598,12 +599,12 @@ ArchiveUnzipResult ArchiveUnzipOperation::Run(
     }
     result.success = true;
     result.message = scan.changedCount > 0
-                         ? "Unzipped archive. Library refreshed."
-                         : "Unzipped archive. Library already current.";
+                         ? i18n::tr("library.archive.operation.unzipped_archive_library_refreshed.message")
+                         : i18n::tr("library.archive.operation.unzipped_archive_library_already_current.message");
   } catch (const std::exception &error) {
-    result.message = "Unzip failed: " + std::string(error.what());
+    result.message = i18n::tr("library.archive.operation.unzip_failed.prefix") + std::string(error.what());
   } catch (...) {
-    result.message = "Unzip failed";
+    result.message = i18n::tr("library.archive.operation.unzip_failed.label");
   }
   if (stopToken.stop_requested()) {
     cancel();

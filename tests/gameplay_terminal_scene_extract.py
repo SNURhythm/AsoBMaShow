@@ -118,7 +118,7 @@ def main():
         'bool ChartViewerScene::applyViewerPlayOptions(',
     ]).replace('ChartViewerScene::', 'PreparedViewerFixture::')
     viewer_start = viewer_source.index('        std::atomic_bool parseCancelled = false;',
-                                        viewer_source.index('Preparing auto play...'))
+                                        viewer_source.index('chart_viewer.preparing_auto_play.progress'))
     viewer_end = viewer_source.index('        context.jukebox.stop();', viewer_start)
     viewer_prefix = viewer_source[viewer_start:viewer_end].replace(
         '        std::unique_ptr<bms_parser::Chart> practiceChart;', '')

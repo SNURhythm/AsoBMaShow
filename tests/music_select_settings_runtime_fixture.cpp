@@ -1,3 +1,4 @@
+#include "i18n/Localization.h"
 #include "skin/GameplaySkinActivationRequest.h"
 #include "skin/beatoraja/LuaSkinRuntime.h"
 #include "skin/beatoraja/LuaSkinFileSystem.h"

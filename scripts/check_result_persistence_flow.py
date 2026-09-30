@@ -379,9 +379,9 @@ require(
     "course recovery must reuse stored-result identity and score projection authorities",
 )
 
-require(result_source.count('"Retry Save"') == 1, "missing exact Retry Save action")
+require(result_source.count('"result.retry_save.label"') == 1, "missing exact Retry Save action")
 require(
-    result_source.count('"Continue Without Saving"') == 1,
+    result_source.count('"result.continue_without_saving.label"') == 1,
     "missing exact Continue Without Saving action",
 )
 status_body = function_body(result_source, "ResultScene", "addResultPersistenceStatus")

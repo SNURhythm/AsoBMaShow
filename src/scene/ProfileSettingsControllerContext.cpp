@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "ProfileSettingsController.h"
 
 #include "../context.h"
@@ -14,7 +15,7 @@ applicationDependencies(ApplicationContext &context) {
           return ProfileListResult{
               .error = ProfileError::SwitchBlocked,
               .message = context.profileInitializationResult.message.empty()
-                             ? "Player profiles are not initialized."
+                             ? i18n::tr("settings.profiles.player_profiles_not_initialized.message")
                              : context.profileInitializationResult.message};
         }
         return ProfileListResult{
@@ -129,7 +130,7 @@ applicationDependencies(ApplicationContext &context) {
       .flushInput = [&context](std::string &errorMessage) {
         if (!context.profileReady()) {
           errorMessage = context.profileInitializationResult.message.empty()
-                             ? "Player profiles are not initialized."
+                             ? i18n::tr("settings.profiles.player_profiles_not_initialized.message")
                              : context.profileInitializationResult.message;
           return false;
         }

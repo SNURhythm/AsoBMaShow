@@ -1,4 +1,5 @@
 #pragma once
+#include "i18n/Localization.h"
 
 #include "repositories/ChartRepository.h"
 #include "ReplayData.h"
@@ -248,8 +249,8 @@ inline bms_parser::ChartMeta courseResultMeta(
     const std::string &courseName, const std::string &courseGroupName,
     std::size_t chartCount, int totalNotes, long long playLength) {
   bms_parser::ChartMeta meta;
-  meta.Title = courseName.empty() ? "Course Result" : courseName;
-  meta.Artist = courseGroupName.empty() ? "Course Mode" : courseGroupName;
+  meta.Title = courseName.empty() ? i18n::tr("result.course.course_result.label") : courseName;
+  meta.Artist = courseGroupName.empty() ? i18n::tr("result.course.course_mode.label") : courseGroupName;
   meta.TotalNotes = totalNotes;
   meta.PlayLevel = static_cast<double>(chartCount);
   meta.PlayLength = playLength;

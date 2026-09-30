@@ -99,19 +99,19 @@ public:
 
 private:
   struct SortOptionDefinition {
-    const char *label = "";
+    const char *labelKey = "";
     ChartRecordSortCriterion criterion = ChartRecordSortCriterion::Default;
   };
 
   inline static constexpr std::array<SortOptionDefinition, 8> kSortOptions = {{
-      {.label = "Default", .criterion = ChartRecordSortCriterion::Default},
-      {.label = "Clear Mark", .criterion = ChartRecordSortCriterion::ClearMark},
-      {.label = "Score", .criterion = ChartRecordSortCriterion::Score},
-      {.label = "Title", .criterion = ChartRecordSortCriterion::Title},
-      {.label = "Min BPM", .criterion = ChartRecordSortCriterion::MinBpm},
-      {.label = "Max BPM", .criterion = ChartRecordSortCriterion::MaxBpm},
-      {.label = "Main BPM", .criterion = ChartRecordSortCriterion::MainBpm},
-      {.label = "Difficulty", .criterion = ChartRecordSortCriterion::Difficulty},
+      {.labelKey = "library.sort.default.label", .criterion = ChartRecordSortCriterion::Default},
+      {.labelKey = "library.sort.clear_mark.label", .criterion = ChartRecordSortCriterion::ClearMark},
+      {.labelKey = "library.sort.score.label", .criterion = ChartRecordSortCriterion::Score},
+      {.labelKey = "library.sort.title.label", .criterion = ChartRecordSortCriterion::Title},
+      {.labelKey = "library.sort.min_bpm.label", .criterion = ChartRecordSortCriterion::MinBpm},
+      {.labelKey = "library.sort.max_bpm.label", .criterion = ChartRecordSortCriterion::MaxBpm},
+      {.labelKey = "library.sort.main_bpm.label", .criterion = ChartRecordSortCriterion::MainBpm},
+      {.labelKey = "library.sort.difficulty.label", .criterion = ChartRecordSortCriterion::Difficulty},
   }};
 
   struct SortButton {

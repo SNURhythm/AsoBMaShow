@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
@@ -301,16 +302,16 @@ Button *makeButton(std::string label) {
 
 const char *taskProgressStageText(ChartScanProgressStage stage) {
   switch (stage) {
-  case ChartScanProgressStage::Preparing: return "Preparing library scan";
-  case ChartScanProgressStage::ScanningRoots: return "Scanning folders";
-  case ChartScanProgressStage::IndexingArchives: return "Indexing archives";
+  case ChartScanProgressStage::Preparing: return i18n::tr("music_select.preparing_library_scan.label");
+  case ChartScanProgressStage::ScanningRoots: return i18n::tr("music_select.scanning_folders.label");
+  case ChartScanProgressStage::IndexingArchives: return i18n::tr("music_select.indexing_archives.label");
   case ChartScanProgressStage::PreparingUpdates:
-    return "Preparing chart updates";
-  case ChartScanProgressStage::RemovingDeleted: return "Removing deleted charts";
-  case ChartScanProgressStage::ParsingCharts: return "Parsing charts";
-  case ChartScanProgressStage::ReadingArchive: return "Reading archive entries";
+    return i18n::tr("music_select.preparing_chart_updates.label");
+  case ChartScanProgressStage::RemovingDeleted: return i18n::tr("music_select.removing_deleted_charts.label");
+  case ChartScanProgressStage::ParsingCharts: return i18n::tr("music_select.parsing_charts.label");
+  case ChartScanProgressStage::ReadingArchive: return i18n::tr("music_select.reading_archive_entries.label");
   }
-  return "Refreshing library";
+  return i18n::tr("music_select.refreshing_library.label");
 }
 
 std::filesystem::path resolveChartAsset(const ChartMetaRecord &record,
@@ -1968,7 +1969,7 @@ void MusicSelectScene::buildSearchPrompt() {
       ->setThemedBorderColor(ui_theme::hairlineStrong)
       ->setBorderWidth(1);
 
-  auto *title = makeText("Search", 28, ui_theme::textPrimary);
+  auto *title = makeText(i18n::tr("music_select.search.label"), 28, ui_theme::textPrimary);
   title->setHeight(40);
   panel->addView(title);
 
@@ -3207,7 +3208,7 @@ void MusicSelectScene::executeEvent(
       if (tableId && context.chartLibraryTasks) {
         context.chartLibraryTasks->enqueue({
             .kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
-            .title = "Update Difficulty Table",
+            .title = i18n::tr("music_select.update_difficulty_table.label"),
             .tableId = *tableId,
         });
         break;
@@ -3219,7 +3220,7 @@ void MusicSelectScene::executeEvent(
       if (path && context.chartLibraryTasks) {
         context.chartLibraryTasks->enqueue({
             .kind = chart_library_tasks::TaskKind::RefreshPath,
-            .title = "Update Folder",
+            .title = i18n::tr("music_select.update_folder.label"),
             .refreshPath = *path,
         });
       }
@@ -3432,17 +3433,17 @@ void MusicSelectScene::buildErrorView() {
       ->setGap(12)
       ->setPadding(Edge::All, 32)
       ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
-  auto *title = makeText("Music-select skin failed", 38, ui_theme::coral);
+  auto *title = makeText(i18n::tr("music_select.music_select_skin_failed.label"), 38, ui_theme::coral);
   title->setHeight(58);
   root->addView(title);
   if (!selectedSkinPath_.empty()) {
-    auto *path = makeText("Selected skin: " + selectedSkinPath_, 20,
+    auto *path = makeText(i18n::tr("music_select.selected_skin.prefix") + selectedSkinPath_, 20,
                           ui_theme::textSecondary);
     path->setHeight(44);
     root->addView(path);
   }
   if (diagnostics_.empty()) {
-    auto *reason = makeText("No diagnostic was reported.", 20,
+    auto *reason = makeText(i18n::tr("music_select.no_diagnostic_reported.message"), 20,
                             ui_theme::textSecondary);
     reason->setHeight(44);
     root->addView(reason);
@@ -3456,7 +3457,7 @@ void MusicSelectScene::buildErrorView() {
       root->addView(reasonView);
     }
   }
-  auto *settings = makeButton("Settings");
+  auto *settings = makeButton(i18n::tr("music_select.settings.label"));
   settings->setHeight(64);
   settings->setOnClickListener([this] { openSettings(); });
   root->addView(settings);
@@ -3539,10 +3540,10 @@ void MusicSelectScene::revealChart() {
   revealContextMenu_->propagateThemeChange();
   revealContextMenu_->show(
       revealChartAnchor(),
-      {{.id = "show-same-folder", .label = "Show Same Folder",
+      {{.id = "show-same-folder", .label = i18n::tr("music_select.show_same_folder.label"),
         .enabled = chartSession_.has_value() && !selected.chart->solidArchive &&
                    !folder.empty()},
-       {.id = "reveal-file", .label = "Reveal File"}}, 220);
+       {.id = "reveal-file", .label = i18n::tr("music_select.reveal_file.label")}}, 220);
 }
 
 void MusicSelectScene::revealSelectedChartInFileManager() {
@@ -3592,11 +3593,11 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
       recent.push_back(task);
     }
   }
-  if (active.empty() && recent.empty()) return "No parsing tasks.";
+  if (active.empty() && recent.empty()) return i18n::tr("music_select.no_parsing_tasks.message");
 
   std::ostringstream text;
   if (active.empty()) {
-    text << "No active tasks.\n\nRecent tasks\n\n";
+    text << i18n::tr("music_select.no_active_tasks_recent_tasks.label");
   } else {
     text << active.size()
          << (active.size() == 1 ? " active task" : " active tasks")
@@ -3606,11 +3607,11 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
                               const chart_library_tasks::TaskInfo &task) {
     std::string status;
     switch (task.status) {
-    case chart_library_tasks::TaskStatus::Queued: status = "Queued"; break;
-    case chart_library_tasks::TaskStatus::Running: status = "Running"; break;
-    case chart_library_tasks::TaskStatus::Complete: status = "Complete"; break;
-    case chart_library_tasks::TaskStatus::Failed: status = "Failed"; break;
-    case chart_library_tasks::TaskStatus::Paused: status = "Paused"; break;
+    case chart_library_tasks::TaskStatus::Queued: status = i18n::tr("music_select.queued.label"); break;
+    case chart_library_tasks::TaskStatus::Running: status = i18n::tr("music_select.running.label"); break;
+    case chart_library_tasks::TaskStatus::Complete: status = i18n::tr("music_select.complete.label"); break;
+    case chart_library_tasks::TaskStatus::Failed: status = i18n::tr("music_select.failed.label"); break;
+    case chart_library_tasks::TaskStatus::Paused: status = i18n::tr("music_select.paused.label"); break;
     }
     text << task.title << "\n" << status;
     if (task.status == chart_library_tasks::TaskStatus::Running) {
@@ -3634,7 +3635,7 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
     text << "\n\n";
   };
   for (const auto &task : active) appendTask(task);
-  if (!active.empty() && !recent.empty()) text << "Recent tasks\n\n";
+  if (!active.empty() && !recent.empty()) text << i18n::tr("music_select.recent_tasks.label");
   constexpr std::size_t kMaxRecentTasksShown = 8;
   for (std::size_t index = 0;
        index < recent.size() && index < kMaxRecentTasksShown; ++index) {
@@ -3670,7 +3671,7 @@ void MusicSelectScene::showTasksModal() {
         ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
         ->setThemedBorderColor(ui_theme::hairlineStrong)
         ->setBorderWidth(1);
-    auto *title = makeText("Tasks", 30, ui_theme::textPrimary);
+    auto *title = makeText(i18n::tr("music_select.tasks.label"), 30, ui_theme::textPrimary);
     title->setHeight(42);
     panel->addView(title);
 
@@ -3697,7 +3698,7 @@ void MusicSelectScene::showTasksModal() {
         ->setJustifyContent(YGJustifyFlexEnd)
         ->setGap(12)
         ->setHeight(56);
-    auto *refresh = makeButton("Refresh List");
+    auto *refresh = makeButton(i18n::tr("music_select.refresh_list.label"));
     refresh->setOnClickListener([this] {
       if (context.chartLibraryTasks &&
           context.chartLibraryTasks->snapshot().activeCount > 0) {
@@ -3708,7 +3709,7 @@ void MusicSelectScene::showTasksModal() {
       selectedBarMoved();
       if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
     });
-    auto *close = makeButton("Close");
+    auto *close = makeButton(i18n::tr("music_select.close.label"));
     close->setOnClickListener([this] {
       if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
     });
@@ -3945,7 +3946,7 @@ void MusicSelectScene::buildSkinLoadingView() {
       ->setJustifyContent(YGJustifyCenter)
       ->setPadding(Edge::All, 32)
       ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
-  auto *label = makeText("Loading music-select skin…", 28,
+  auto *label = makeText(i18n::tr("music_select.loading_music_select_skin.progress"), 28,
                          ui_theme::textPrimary);
   label->setHeight(56);
   label->setAlign(TextView::CENTER);
@@ -4024,7 +4025,7 @@ bool MusicSelectScene::activateSkin(
       !context.skinLiveResourceCounters) {
     enterError({skin::SkinDiagnostic{
         .code = "skin.music_select.session_services_unavailable",
-        .message = "Music-select skin session services are unavailable."}});
+        .message = i18n::tr("music_select.music_select_skin_session_services_unavailable.message")}});
     return false;
   }
   activeSkinIdentity_ = identity;
@@ -4069,7 +4070,7 @@ bool MusicSelectScene::reactivateSkinAfterSettings() {
         .diagnostic = skin::SkinDiagnostic{
             .code = "skin.music_select.lifecycle_unavailable",
             .message =
-                "The selected music-select skin service is unavailable."}};
+                i18n::tr("music_select.selected_music_select_skin_service_unavailable.message")}};
   }
   auto decision = decideMusicSelectLaunch(std::move(acquisition));
   if (decision.kind == MusicSelectLaunchKind::BuiltIn) {

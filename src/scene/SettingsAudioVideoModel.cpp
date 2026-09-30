@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsAudioVideoModel.h"
 
 #include <algorithm>
@@ -51,12 +52,12 @@ findAudioDevice(const audio::Capabilities &capabilities,
 std::string deviceLabel(const audio::Capabilities &capabilities,
                         const std::string &deviceId) {
   if (deviceId.empty()) {
-    return "System Default";
+    return i18n::tr("settings.audio_video.system_default.label");
   }
   if (const auto *device = findAudioDevice(capabilities, deviceId)) {
     return device->name.empty() ? device->id : device->name;
   }
-  return deviceId + " (Unavailable)";
+  return deviceId + i18n::tr("settings.audio_video.unavailable.suffix");
 }
 
 ChoiceControlModel
@@ -74,7 +75,7 @@ buildUnsignedChoices(std::uint32_t selected,
     addChoiceIfMissing(
         control,
         {.persistedValue = std::to_string(selected),
-         .label = std::to_string(selected) + suffix + " (Unavailable)",
+         .label = std::to_string(selected) + suffix + i18n::tr("settings.audio_video.unavailable.suffix"),
          .available = false},
         true);
   }
@@ -131,12 +132,12 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   if (!persistedDeviceAvailable) {
     addChoiceIfMissing(model.devices,
                        {.persistedValue = intent.outputDeviceId,
-                        .label = intent.outputDeviceId + " (Unavailable)",
+                        .label = intent.outputDeviceId + i18n::tr("settings.audio_video.unavailable.suffix"),
                         .available = false},
                        true);
   }
   addChoiceIfMissing(model.devices,
-                     {.persistedValue = "", .label = "System Default"});
+                     {.persistedValue = "", .label = i18n::tr("settings.audio_video.system_default.label")});
   for (const auto &device : capabilities.outputDevices) {
     addChoiceIfMissing(
         model.devices,
@@ -146,9 +147,9 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   model.devices.enabled =
       capabilities.canSelectOutputDevice && !capabilities.outputDevices.empty();
   if (!capabilities.canSelectOutputDevice) {
-    model.devices.explanation = "Managed by the system.";
+    model.devices.explanation = i18n::tr("settings.audio_video.managed_by_system.message");
   } else if (capabilities.outputDevices.empty()) {
-    model.devices.explanation = "No output available.";
+    model.devices.explanation = i18n::tr("settings.audio_video.no_output_available.message");
   }
 
   const auto *selectedDevice =
@@ -162,26 +163,26 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   std::string sampleRateExplanation;
   bool sampleRateEnabled = capabilities.canSelectSampleRate;
   if (!capabilities.canSelectSampleRate) {
-    sampleRateExplanation = "Managed by the system.";
+    sampleRateExplanation = i18n::tr("settings.audio_video.managed_by_system.message");
   } else if (selectedDevice == nullptr) {
     sampleRateEnabled = false;
-    sampleRateExplanation = "Choose an output first.";
+    sampleRateExplanation = i18n::tr("settings.audio_video.choose_output_first.message");
   }
   model.sampleRates = buildUnsignedChoices(
       intent.requestedSampleRate, sampleRates, sampleRateEnabled,
-      std::move(sampleRateExplanation), "Automatic", " Hz");
+      std::move(sampleRateExplanation), i18n::tr("settings.audio_video.automatic.label"), " Hz");
 
   std::string bufferExplanation;
   bool bufferEnabled = capabilities.canSelectBufferFrames;
   if (!capabilities.canSelectBufferFrames) {
-    bufferExplanation = "Managed by the system.";
+    bufferExplanation = i18n::tr("settings.audio_video.managed_by_system.message");
   } else if (selectedDevice == nullptr) {
     bufferEnabled = false;
-    bufferExplanation = "Choose an output first.";
+    bufferExplanation = i18n::tr("settings.audio_video.choose_output_first.message");
   }
   model.bufferFrames = buildUnsignedChoices(
       intent.requestedBufferFrames, bufferFrames, bufferEnabled,
-      std::move(bufferExplanation), "Automatic", " frames");
+      std::move(bufferExplanation), i18n::tr("settings.audio_video.automatic.label"), " frames");
 
   model.masterVolume.value = intent.masterVolume;
   model.bgmVolume.value = intent.bgmVolume;
@@ -205,22 +206,22 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   DisplayControlModel model;
   model.modes.selectedValue = modeValue(intent.mode);
   model.modes.options = {
-      {.persistedValue = "windowed", .label = "Windowed"},
-      {.persistedValue = "borderless", .label = "Borderless Fullscreen"},
-      {.persistedValue = "exclusive", .label = "Exclusive Fullscreen"},
+      {.persistedValue = "windowed", .label = i18n::tr("settings.audio_video.windowed.label")},
+      {.persistedValue = "borderless", .label = i18n::tr("settings.audio_video.borderless_fullscreen.label")},
+      {.persistedValue = "exclusive", .label = i18n::tr("settings.audio_video.exclusive_fullscreen.label")},
   };
   model.modes.enabled = capabilities.canChangeMode;
   if (!model.modes.enabled) {
-    model.modes.explanation = "Managed by the system.";
+    model.modes.explanation = i18n::tr("settings.audio_video.managed_by_system.message");
   }
 
   model.displays.selectedValue = std::to_string(intent.displayIndex);
   if (findDisplay(capabilities, intent.displayIndex) == nullptr) {
     addChoiceIfMissing(model.displays,
                        {.persistedValue = std::to_string(intent.displayIndex),
-                        .label = "Display " +
+                        .label = i18n::tr("settings.audio_video.display.prefix") +
                                  std::to_string(intent.displayIndex) +
-                                 " (Unavailable)",
+                                 i18n::tr("settings.audio_video.unavailable.suffix"),
                         .available = false},
                        true);
   }
@@ -229,15 +230,15 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
         model.displays,
         {.persistedValue = std::to_string(display.index),
          .label = display.name.empty()
-                      ? "Display " + std::to_string(display.index)
+                      ? i18n::tr("settings.audio_video.display.prefix") + std::to_string(display.index)
                       : display.name});
   }
   model.displays.enabled =
       capabilities.canSelectDisplay && !capabilities.displays.empty();
   if (!capabilities.canSelectDisplay) {
-    model.displays.explanation = "Managed by the system.";
+    model.displays.explanation = i18n::tr("settings.audio_video.managed_by_system.message");
   } else if (capabilities.displays.empty()) {
-    model.displays.explanation = "No display available.";
+    model.displays.explanation = i18n::tr("settings.audio_video.no_display_available.message");
   }
 
   model.resolutions.selectedValue =
@@ -264,24 +265,24 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
     const std::string value = resolutionValue(intent.width, intent.height);
     addChoiceIfMissing(model.resolutions,
                        {.persistedValue = value,
-                        .label = value + " (Unavailable)",
+                        .label = value + i18n::tr("settings.audio_video.unavailable.suffix"),
                         .available = false},
                        true);
   }
   model.resolutions.enabled =
       capabilities.canSelectResolution && selectedDisplay != nullptr;
   if (!capabilities.canSelectResolution) {
-    model.resolutions.explanation = "Managed by the system.";
+    model.resolutions.explanation = i18n::tr("settings.audio_video.managed_by_system.message");
   } else if (selectedDisplay == nullptr) {
-    model.resolutions.explanation = "Choose a display first.";
+    model.resolutions.explanation = i18n::tr("settings.audio_video.choose_display_first.message");
   }
 
   model.vsync.selectedValue = intent.vsync ? "on" : "off";
-  model.vsync.options = {{.persistedValue = "off", .label = "Off"},
-                         {.persistedValue = "on", .label = "On"}};
+  model.vsync.options = {{.persistedValue = "off", .label = i18n::tr("settings.audio_video.off.label")},
+                         {.persistedValue = "on", .label = i18n::tr("settings.audio_video.on.label")}};
   model.vsync.enabled = capabilities.canChangeVsync;
   if (!model.vsync.enabled) {
-    model.vsync.explanation = "Managed by the system.";
+    model.vsync.explanation = i18n::tr("settings.audio_video.managed_by_system.message");
   }
 
   model.frameCaps.selectedValue = std::to_string(intent.frameCap);
@@ -298,11 +299,11 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
     addChoiceIfMissing(
         model.frameCaps,
         {.persistedValue = std::to_string(cap),
-         .label = cap == 0 ? "Uncapped" : std::to_string(cap) + " FPS"});
+         .label = cap == 0 ? i18n::tr("settings.audio_video.uncapped.label") : std::to_string(cap) + " FPS"});
   }
   model.frameCaps.enabled = capabilities.canSetFrameCap;
   if (!model.frameCaps.enabled) {
-    model.frameCaps.explanation = "Unavailable on this platform.";
+    model.frameCaps.explanation = i18n::tr("settings.audio_video.unavailable_on_platform.message");
   }
   return model;
 }

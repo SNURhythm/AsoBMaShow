@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 
 #include "../repositories/ChartRepository.h"
 #include "../ir/IrSettingsPresentation.h"
@@ -337,7 +338,7 @@ private:
   std::string chartFolderStatusMessage;
   SDL_Color chartFolderStatusColor{157, 177, 200, 255};
   std::string archiveCacheCleanupStatusMessage =
-      "Temporary archive cache has not been cleaned yet.";
+      i18n::tr("settings.temporary_archive_cache_has_not_cleaned_yet.message");
   SDL_Color archiveCacheCleanupStatusColor{157, 177, 200, 255};
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;

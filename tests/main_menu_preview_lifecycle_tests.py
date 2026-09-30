@@ -62,13 +62,13 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
             program = Path(directory) / "preview.cpp"
             executable = Path(directory) / ("preview.exe" if os.name == "nt" or msvc
                                              else "preview")
-            program.write_text(fixture)
-            sources = [str(program),
+            program.write_text('#include "i18n/Localization.h"\n' + fixture)
+            sources = [str(program), str(ROOT / "src/i18n/Localization.cpp"),
                 str(ROOT / "src/scene/ChartPreloadWorker.cpp"),
                 str(ROOT / "src/scene/MainMenuPreviewController.cpp"),
                 str(ROOT / "src/path.cpp")]
             if msvc:
-                command = [compiler, "/nologo", "/std:c++latest", "/EHsc",
+                command = [compiler, "/nologo", "/std:c++latest", "/EHsc", "/utf-8",
                            f"/I{ROOT / 'include'}", f"/I{ROOT / 'src'}", *sources,
                            f"/Fo{directory}{os.sep}", f"/Fe{executable}"]
             else:

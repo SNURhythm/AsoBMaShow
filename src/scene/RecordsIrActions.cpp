@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "RecordsIrActions.h"
 
 #include "../context.h"
@@ -20,15 +21,15 @@ ir::IrRecordActivity recordActivity(ir::IrActiveRequestKind request) noexcept {
 std::string_view irStatusFeedback(ir::IrRecordState state) noexcept {
   switch (state) {
   case ir::IrRecordState::Queued:
-    return "IR upload is queued.";
+    return i18n::tr("records.ir.ir_upload_queued.message");
   case ir::IrRecordState::Uploading:
-    return "IR upload is in progress.";
+    return i18n::tr("records.ir.ir_upload_in_progress.message");
   case ir::IrRecordState::AwaitingRemote:
-    return "IR is awaiting the remote result.";
+    return i18n::tr("records.ir.ir_awaiting_remote_result.message");
   case ir::IrRecordState::Blocked:
-    return "IR upload is blocked. Check Settings > IR.";
+    return i18n::tr("records.ir.ir_upload_blocked_check_settings_ir.message");
   case ir::IrRecordState::Uploaded:
-    return "IR upload is complete.";
+    return i18n::tr("records.ir.ir_upload_complete.message");
   case ir::IrRecordState::Hidden:
   case ir::IrRecordState::Eligible:
   case ir::IrRecordState::Failed:
@@ -42,16 +43,16 @@ irUploadUnavailable(const ApplicationContext &context) {
   const auto provider = context.settings.irProviders.find(
       std::string(ir::kTachiProviderId));
   if (provider == context.settings.irProviders.end() || !provider->second.enabled) {
-    return "Enable Bokutachi in Settings > IR before uploading.";
+    return i18n::tr("records.ir.enable_bokutachi_in_settings_ir_before_uploading.message");
   }
   const auto driver = context.irDrivers.find(ir::kTachiProviderId);
   if (driver == nullptr) {
-    return "Bokutachi IR is unavailable.";
+    return i18n::tr("records.ir.bokutachi_ir_unavailable.message");
   }
   const auto capabilities = driver->capabilities();
   if (capabilities.readOnly || !capabilities.scoreSubmission ||
       context.irSubmissionService == nullptr) {
-    return "Bokutachi score submission is unavailable.";
+    return i18n::tr("records.ir.bokutachi_score_submission_unavailable.message");
   }
   return std::nullopt;
 }
@@ -62,7 +63,7 @@ std::string uploadSavedResult(ApplicationContext &context,
       context.replayRepository.LoadModernIrSubmissionSnapshot(attemptId);
   if (snapshot.status != ModernIrSnapshotReadStatus::Loaded ||
       !snapshot.snapshot.has_value()) {
-    return "This saved result has no verified IR snapshot.";
+    return i18n::tr("records.ir.saved_result_has_no_verified_ir_snapshot.message");
   }
   const ir::IrSavedResultUploadDependencies dependencies{
       .loadOutbox = [&context](std::string_view provider, std::string_view attempt) {

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/UiTheme.h"
@@ -153,7 +154,7 @@ View *SettingsScene::buildAccelerationCompensationControls(
   compensationControls->setFlexDirection(FlexDirection::Row);
   compensationControls->setAlignItems(YGAlignFlexStart);
   auto *label = makeText(
-      context.settings.accelerationCompensation ? "On" : "Off",
+      context.settings.accelerationCompensation ? i18n::tr("settings.controls.on.label") : i18n::tr("settings.controls.off.label"),
       metrics.bodyTextSize + 4, ui_theme::textPrimary(), TextView::CENTER,
       TextView::MIDDLE);
   auto *compensationButton = makeControlButton(
@@ -183,11 +184,11 @@ void SettingsScene::refreshSettingsText() {
       visibleTimeDurationMilliseconds,
       context.settings.visibleTimeUseMilliseconds);
   const std::string keysoundLabel =
-      context.settings.inputKeysoundEnabled ? "Input Trigger" : "Auto Timed";
+      context.settings.inputKeysoundEnabled ? i18n::tr("settings.controls.keysound.input_trigger.label") : i18n::tr("settings.controls.keysound.auto_timed.label");
   const std::string prepMetronomeLabel =
-      context.settings.prepMetronomeEnabled ? "Prep On" : "Prep Off";
+      context.settings.prepMetronomeEnabled ? i18n::tr("settings.controls.prep_metronome.prep_on.label") : i18n::tr("settings.controls.prep_metronome.prep_off.label");
   const std::string bgaLabel =
-      context.settings.bgaEnabled ? "Enabled" : "Disabled";
+      context.settings.bgaEnabled ? i18n::tr("settings.controls.bga.enabled.label") : i18n::tr("settings.controls.bga.disabled.label");
   const std::string bgaDisplayLabel =
       formatBgaDisplayModeLabel(context.settings.bgaDisplayMode);
   const std::string bgaBrightnessLabel =
@@ -218,23 +219,23 @@ void SettingsScene::refreshSettingsText() {
   const std::string notePriorityLabel =
       formatNotePriorityModeLabel(context.settings.notePriorityMode);
   const std::string invisibleNotesLabel =
-      context.settings.showInvisibleNotes ? "Shown" : "Hidden";
+      context.settings.showInvisibleNotes ? i18n::tr("settings.controls.invisible_notes.shown.label") : i18n::tr("settings.controls.invisible_notes.hidden.label");
   const std::string markProcessedNotesLabel =
-      context.settings.markProcessedNotes ? "Enabled" : "Disabled";
+      context.settings.markProcessedNotes ? i18n::tr("settings.controls.mark_processed_notes.enabled.label") : i18n::tr("settings.controls.mark_processed_notes.disabled.label");
   const std::string startLaneIndicatorsLabel =
-      context.settings.startLaneIndicatorsEnabled ? "Shown" : "Hidden";
+      context.settings.startLaneIndicatorsEnabled ? i18n::tr("settings.controls.start_lane_indicators.shown.label") : i18n::tr("settings.controls.start_lane_indicators.hidden.label");
   const std::string touchVisualizationLabel =
-      context.settings.touchVisualizationEnabled ? "Shown" : "Hidden";
+      context.settings.touchVisualizationEnabled ? i18n::tr("settings.controls.touch_visualization.shown.label") : i18n::tr("settings.controls.touch_visualization.hidden.label");
   const std::string hispeedAutoAdjustLabel =
-      context.settings.hispeedAutoAdjust ? "Hi-Speed Auto Adjust: On"
-                                         : "Hi-Speed Auto Adjust: Off";
+      context.settings.hispeedAutoAdjust ? i18n::tr("settings.controls.hispeed_auto_adjust.hi_speed_auto_adjust_on.label")
+                                         : i18n::tr("settings.controls.hispeed_auto_adjust.hi_speed_auto_adjust_off.label");
   const std::string archiveChartPreviewLabel =
-      context.settings.archiveChartPreviewEnabled ? "Enabled" : "Disabled";
+      context.settings.archiveChartPreviewEnabled ? i18n::tr("settings.controls.archive_chart_preview.enabled.label") : i18n::tr("settings.controls.archive_chart_preview.disabled.label");
   const std::string findBmsSkipUnarchivingLabel =
-      context.settings.findBmsSkipUnarchivingForNonSolidArchives ? "On"
-                                                                 : "Off";
+      context.settings.findBmsSkipUnarchivingForNonSolidArchives ? i18n::tr("settings.controls.find_bms_skip_unarchiving.on.label")
+                                                                 : i18n::tr("settings.controls.find_bms_skip_unarchiving.off.label");
   const std::string judgementIndicatorLabel =
-      context.settings.judgementIndicatorEnabled ? "Enabled" : "Disabled";
+      context.settings.judgementIndicatorEnabled ? i18n::tr("settings.controls.judgement_indicator.enabled.label") : i18n::tr("settings.controls.judgement_indicator.disabled.label");
   const std::string judgementIndicatorRenderModeLabel =
       formatJudgementIndicatorRenderModeLabel(
           context.settings.judgementIndicatorRenderMode);
@@ -242,10 +243,10 @@ void SettingsScene::refreshSettingsText() {
       formatJudgementCounterPositionLabel(
           context.settings.judgementCounterPosition);
   const std::string judgementCounterModeLabel =
-      context.settings.judgementCounterEnabled ? "Enabled" : "Disabled";
+      context.settings.judgementCounterEnabled ? i18n::tr("settings.controls.judgement_counter_mode.enabled.label") : i18n::tr("settings.controls.judgement_counter_mode.disabled.label");
   const std::string judgementCounterSummaryLabel =
       context.settings.judgementCounterEnabled ? judgementCounterPositionLabel
-                                               : "Disabled";
+                                               : i18n::tr("settings.controls.judgement_counter_summary.disabled.label");
   const std::string judgementTimingFastSlowLabel =
       formatJudgementTimingDisplayCriteriaLabel(
           context.settings.judgementTimingFastSlowCriteria);
@@ -407,8 +408,8 @@ void SettingsScene::refreshSettingsText() {
   }
   if (visibleTimeModeText != nullptr) {
     visibleTimeModeText->setText(context.settings.visibleTimeUseMilliseconds
-                                     ? "Milliseconds"
-                                     : "Green Number");
+                                     ? i18n::tr("settings.controls.milliseconds.label")
+                                     : i18n::tr("settings.controls.green_number.label"));
   }
   applySemanticButtonStyle(visibleTimeModeButton, visibleTimeModeText,
                            context.settings.visibleTimeUseMilliseconds

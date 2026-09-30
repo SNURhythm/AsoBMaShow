@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 enum class MusicSelectToolbarMode { Expanded, Collapsed, Hidden };
 
 struct MusicSelectToolbarState {
@@ -14,6 +16,7 @@ struct MusicSelectToolbarState {
 struct ApplicationUiState {
   static constexpr int kSchemaVersion = 1;
   MusicSelectToolbarState musicSelectToolbar;
+  std::string language = "system";
 
   bool operator==(const ApplicationUiState &) const = default;
 };

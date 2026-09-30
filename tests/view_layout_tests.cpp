@@ -1022,8 +1022,8 @@ void testGyroscopeSettingsLayoutAndPresentation() {
   assert(settings_scene::shouldShowGyroscopeSettingsCard(
       "builtin:gyroscope-turntable"));
   assert(!settings_scene::shouldShowGyroscopeSettingsCard("keyboard"));
-  assert(settings_scene::kGyroscopeStepAngleLabel == "Step angle (°)");
-  assert(settings_scene::kGyroscopeReleaseDelayLabel == "Release delay (ms)");
+  assert(i18n::tr(std::string(settings_scene::kGyroscopeStepAngleLabelKey)) == "Step angle (°)");
+  assert(i18n::tr(std::string(settings_scene::kGyroscopeReleaseDelayLabelKey)) == "Release delay (ms)");
   assert(settings_scene::gyroscopeSettingsErrorLabel("").empty());
   assert(settings_scene::gyroscopeSettingsErrorLabel("disk full") ==
          "Not saved: disk full");

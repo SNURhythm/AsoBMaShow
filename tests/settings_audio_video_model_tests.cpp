@@ -1,4 +1,5 @@
 #include "scene/SettingsAudioVideoModel.h"
+#include "i18n/Localization.h"
 
 #include <array>
 #include <chrono>
@@ -253,6 +254,18 @@ player_settings::VideoSettings riskyDisplayCandidate() {
   candidate.vsync = true;
   candidate.frameCap = 120;
   return candidate;
+}
+
+void testKoreanDeviceChoicesPreserveDeviceNamesAndIds() {
+  auto capabilities = desktopAudioCapabilities();
+  capabilities.outputDevices[0].name = "Settings";
+  i18n::setLanguage(i18n::Language::Korean);
+  const auto model = BuildAudioControlModel({}, capabilities, {});
+  require(findOption(model.devices, "")->label == "시스템 기본값",
+          "application labels use the Korean catalog");
+  require(findOption(model.devices, "builtin:output")->label == "Settings",
+          "device-provided names remain verbatim");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testAudioModelPreservesUnavailableStableIdAndFriendlyLabels() {
@@ -733,6 +746,7 @@ void testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes() {
 } // namespace
 
 int main() {
+  testKoreanDeviceChoicesPreserveDeviceNamesAndIds();
   testAudioModelPreservesUnavailableStableIdAndFriendlyLabels();
   testAudioModelShowsFixedControlsDisabledWithExplanations();
   testDisplayModelUsesFriendlyLabelsAndShowsFixedFields();

@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectRecords.h"
 #include "MusicSelectGhostBattle.h"
@@ -125,13 +126,13 @@ void MusicSelectScene::publishRecordsDiagnostic(const std::string &diagnostic) c
   const auto message = ir::sanitizeDiagnostic(diagnostic);
   if (!message.empty()) {
     SDL_Log("Records: %s", message.c_str());
-    archive_file::appendDebugLogLine("Records: " + message);
+    archive_file::appendDebugLogLine(i18n::tr("music_select.records.records.prefix") + message);
   }
 }
 
 void MusicSelectScene::finishRecordsFailure(const std::string &diagnostic) {
   finishRecordsLoading();
-  const auto message = replay_records::diagnosticOr(diagnostic, "Result unavailable.");
+  const auto message = replay_records::diagnosticOr(diagnostic, i18n::tr("music_select.records.result_unavailable.message"));
   publishRecordsDiagnostic(message);
   if (recordsModal_) {
     recordsModal_->reloadRecords(true);
@@ -171,7 +172,7 @@ void MusicSelectScene::launchChartReplay(
         if (cancelled->load()) return;
         if (!loaded.ready() || !loaded.chart) {
           const auto diagnostic = replay_records::diagnosticOr(
-              loaded.diagnostic, "Replay playback could not be prepared.");
+              loaded.diagnostic, i18n::tr("music_select.records.replay_playback_failed_prepared.message"));
           recordsTask_.publish([this, diagnostic] { finishRecordsFailure(diagnostic); });
           return;
         }
@@ -208,7 +209,7 @@ void MusicSelectScene::launchChartReplay(
           context.sceneManager->changeScene(std::make_unique<GamePlayScene>(
               context, std::move(prepared->chart), std::move(options)), true);
         });
-      }, "Replay playback could not be prepared.");
+      }, i18n::tr("music_select.records.replay_playback_failed_prepared.message"));
 }
 
 void MusicSelectScene::launchChartGhostBattle(
@@ -251,7 +252,7 @@ void MusicSelectScene::recallChartResult(
           context.jukebox.stop();
           context.sceneManager->changeScene(std::move(scene), true);
         });
-      }, "Saved chart result could not be recalled.");
+      }, i18n::tr("music_select.records.saved_chart_result_failed_recalled.message"));
 }
 
 void MusicSelectScene::launchCourseReplay(
@@ -275,7 +276,7 @@ void MusicSelectScene::launchCourseReplay(
         if (cancelled->load()) return;
         if (!loaded.ready()) {
           const auto diagnostic = replay_records::diagnosticOr(
-              loaded.diagnostic, "Course replay playback could not be prepared.");
+              loaded.diagnostic, i18n::tr("music_select.records.course_replay_playback_failed_prepared.message"));
           recordsTask_.publish([this, diagnostic] { finishRecordsFailure(diagnostic); });
           return;
         }
@@ -285,7 +286,7 @@ void MusicSelectScene::launchCourseReplay(
             renderTouchPoints, renderGhosts);
         if (!session || !session->hasCourseReplayStage(session->currentIndex)) {
           recordsTask_.publish([this] {
-            finishRecordsFailure("Prepared course replay session is unavailable.");
+            finishRecordsFailure(i18n::tr("music_select.records.prepared_course_replay_session_unavailable.message"));
           });
           return;
         }
@@ -293,7 +294,7 @@ void MusicSelectScene::launchCourseReplay(
         auto chart = session->takePreparedCourseChart(session->currentIndex);
         if (!stageReplay || !chart) {
           recordsTask_.publish([this] {
-            finishRecordsFailure("Prepared course replay chart is unavailable.");
+            finishRecordsFailure(i18n::tr("music_select.records.prepared_course_replay_chart_unavailable.message"));
           });
           return;
         }
@@ -313,7 +314,7 @@ void MusicSelectScene::launchCourseReplay(
           context.sceneManager->changeScene(std::make_unique<GamePlayScene>(
               context, std::move(*preparedChart), std::move(options)), true);
         });
-      }, "Course replay playback could not be prepared.");
+      }, i18n::tr("music_select.records.course_replay_playback_failed_prepared.message"));
 }
 
 void MusicSelectScene::recallCourseResult(
@@ -355,7 +356,7 @@ void MusicSelectScene::recallCourseResult(
           context.jukebox.stop();
           context.sceneManager->changeScene(std::move(scene), true);
         });
-      }, "Saved course result could not be recalled.");
+      }, i18n::tr("music_select.records.saved_course_result_failed_recalled.message"));
 }
 
 void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
@@ -384,7 +385,7 @@ void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
     auto chart = play_options::parseChart(meta, *cancelled, "autoplay");
     if (cancelled->load()) return;
     if (!chart) {
-      recordsTask_.publish([this] { finishRecordsFailure("Autoplay chart could not be prepared."); });
+      recordsTask_.publish([this] { finishRecordsFailure(i18n::tr("music_select.records.autoplay_chart_failed_prepared.message")); });
       return;
     }
     const auto playInfo = play_options::applySelectedPlayOptions(*chart, selections.playOption);
@@ -420,7 +421,7 @@ void MusicSelectScene::launchAutoPlay(const ChartMetaRecord &record) {
       if (recordsModal_) recordsModal_->hide();
       context.sceneManager->changeScene(std::move(scene), true);
     });
-  }, "Autoplay chart could not be prepared.");
+  }, i18n::tr("music_select.records.autoplay_chart_failed_prepared.message"));
 }
 
 bool MusicSelectScene::beginRecordsExport(const std::string &title) {
@@ -432,7 +433,7 @@ bool MusicSelectScene::beginRecordsExport(const std::string &title) {
   stopPreloadWorker();
   if (recordsModal_ != nullptr) {
     recordsModal_->setExportInProgress(true);
-    recordsModal_->showExportProgress(title, "Preparing export");
+    recordsModal_->showExportProgress(title, i18n::tr("music_select.records.preparing_export.label"));
   }
   return true;
 }
@@ -440,7 +441,7 @@ bool MusicSelectScene::beginRecordsExport(const std::string &title) {
 void MusicSelectScene::launchChartReplayExport(
     const ChartMetaRecord &record, const ModernChartResultRecord &modern,
     ReplayVideoExportOptions options) {
-  if (!beginRecordsExport("Exporting Replay")) {
+  if (!beginRecordsExport(i18n::tr("music_select.records.exporting_replay.label"))) {
     return;
   }
   recordsExportJob_.start(std::move(options),
@@ -451,13 +452,13 @@ void MusicSelectScene::launchChartReplayExport(
         auto loaded = consumer.load(modern, record.meta.BmsPath, cancelled);
         if (cancelled) {
           return {.success = false,
-                  .message = "Replay export preparation was cancelled."};
+                  .message = i18n::tr("music_select.records.replay_export_preparation_cancelled.message")};
         }
         if (!loaded.ready() || loaded.chart == nullptr) {
           return {.success = false,
                   .message = replay_records::diagnosticOr(
                       loaded.diagnostic,
-                      "Replay export playback could not be prepared.")};
+                      i18n::tr("music_select.records.replay_export_playback_failed_prepared.message"))};
         }
         if (!loaded.diagnostic.empty()) {
           publishRecordsDiagnostic(loaded.diagnostic);
@@ -474,7 +475,7 @@ void MusicSelectScene::launchCourseReplayExport(
     finishRecordsFailure("current course charts are unavailable");
     return;
   }
-  if (!beginRecordsExport("Exporting Course Replay")) {
+  if (!beginRecordsExport(i18n::tr("music_select.records.exporting_course_replay.label"))) {
     return;
   }
   recordsExportJob_.start(std::move(options),
@@ -486,13 +487,13 @@ void MusicSelectScene::launchCourseReplayExport(
         auto loaded = consumer.load(modern, paths, cancelled);
         if (cancelled) {
           return {.success = false,
-                  .message = "Course replay export preparation was cancelled."};
+                  .message = i18n::tr("music_select.records.course_replay_export_preparation_cancelled.message")};
         }
         if (!loaded.ready()) {
           return {.success = false,
                   .message = replay_records::diagnosticOr(
                       loaded.diagnostic,
-                      "Course replay export playback could not be prepared.")};
+                      i18n::tr("music_select.records.course_replay_export_playback_failed_prepared.message"))};
         }
         if (!loaded.diagnostic.empty()) {
           publishRecordsDiagnostic(loaded.diagnostic);
@@ -504,7 +505,7 @@ void MusicSelectScene::launchCourseReplayExport(
 
 void MusicSelectScene::launchAutoPlayExport(const ChartMetaRecord &record,
                                             ReplayVideoExportOptions options) {
-  if (!beginRecordsExport("Exporting Replay")) {
+  if (!beginRecordsExport(i18n::tr("music_select.records.exporting_replay.label"))) {
     return;
   }
   const auto selections =
@@ -523,7 +524,7 @@ void MusicSelectScene::launchAutoPlayExport(const ChartMetaRecord &record,
         auto chart = play_options::parseChart(record.meta, cancelled,
                                               "autoplay export");
         if (!chart || cancelled) {
-          return {.success = false, .message = "Autoplay export failed."};
+          return {.success = false, .message = i18n::tr("music_select.records.autoplay_export_failed.message")};
         }
         const auto playInfo = play_options::applySelectedPlayOptions(
             *chart, selections.playOption);
@@ -558,10 +559,10 @@ void MusicSelectScene::applyRecordsExportResult() {
     recordsModal_->setExportInProgress(false);
     if (result->success) {
       recordsModal_->returnToList(
-          result->message == "Saved to Photos" ? "Saved" : "Exported");
+          result->message == "Saved to Photos" ? i18n::tr("music_select.records.saved.label") : i18n::tr("music_select.records.exported.label"));
     } else {
       recordsModal_->returnToList(
-          replay_records::diagnosticOr(result->message, "Replay export failed."));
+          replay_records::diagnosticOr(result->message, i18n::tr("music_select.records.replay_export_failed.message")));
     }
   }
 }
@@ -597,7 +598,7 @@ void MusicSelectScene::recallRemoteResult(IrRemoteRecordId identity,
       };
       (void)executeRemoteResultRecall(request, callbacks);
     });
-  }, "Synchronized result could not be opened.");
+  }, i18n::tr("music_select.records.synchronized_result_failed_opened.message"));
 }
 
 void MusicSelectScene::uploadRecord(const ModernChartResultRecord &modern) {
@@ -609,7 +610,7 @@ void MusicSelectScene::uploadRecord(const ModernChartResultRecord &modern) {
   if (recordsModal_) {
     recordsModal_->setLoadInProgress(false);
     recordsModal_->setIrUploadInProgress(true);
-    recordsModal_->showIrFeedback("Preparing IR...");
+    recordsModal_->showIrFeedback(i18n::tr("music_select.records.preparing_ir.progress"));
   }
   // Submission captures UI-owned settings and credentials on the UI thread.
   defer([this, attemptId = modern.result.attemptId] {
@@ -621,13 +622,13 @@ void MusicSelectScene::uploadRecord(const ModernChartResultRecord &modern) {
       if (recordsModal_) {
         recordsModal_->reloadRecords(true);
         recordsModal_->showIrFeedback(replay_records::diagnosticOr(
-            message, "IR upload could not be queued."));
+            message, i18n::tr("music_select.records.ir_upload_failed_queued.message")));
       }
     } catch (const std::exception &error) {
       finishRecordsFailure(replay_records::diagnosticOr(
-          error.what(), "IR upload could not be prepared."));
+          error.what(), i18n::tr("music_select.records.ir_upload_failed_prepared.message")));
     } catch (...) {
-      finishRecordsFailure("IR upload could not be prepared.");
+      finishRecordsFailure(i18n::tr("music_select.records.ir_upload_failed_prepared.message"));
     }
     return true;
   }, 1, true);

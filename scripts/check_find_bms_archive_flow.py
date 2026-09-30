@@ -68,8 +68,8 @@ require(
     "Find BMS mismatch UI must expose Keep and Delete",
 )
 require(
-    'makeModalButton("Keep Files"' in main_menu_source
-    and 'makeModalButton("Delete Files"' in main_menu_source,
+    'makeModalButton(i18n::tr("library.find_bms.keep_files.label")' in main_menu_source
+    and 'makeModalButton(i18n::tr("library.find_bms.delete_files.label")' in main_menu_source,
     "Find BMS mismatch actions must use the approved visible labels",
 )
 require(
@@ -108,12 +108,12 @@ require(
     "Find BMS hide path must apply queued results before dismissal policy",
 )
 require(
-    'makeText("Use for Downloads"' in settings_source
-    and '"Download folder"' in settings_source,
+    'makeText(i18n::tr("settings.bms_library.use_downloads.label")' in settings_source
+    and '"settings.bms_library.download_folder.label"' in settings_source,
     "BMS Library rows must expose download-folder selection",
 )
 require(
-    '"Not writable by Find BMS"' in settings_source,
+    '"settings.bms_library.not_writable_by_find_bms.label"' in settings_source,
     "ineligible Android tree rows must explain why selection is disabled",
 )
 require(

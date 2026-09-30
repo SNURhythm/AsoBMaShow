@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "DefaultSkin.h"
 
 #include "../scene/ResultLayoutGeometry.h"
@@ -837,7 +838,7 @@ void DefaultSkin::buildPresentationResultLayout(
 
   auto *button = new Button(0, 0, 232, 64);
   auto *buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  buttonText->setText("Back to Menu");
+  buttonText->setText(i18n::tr("result.builtin.back_menu.label"));
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   buttonText->setColor(

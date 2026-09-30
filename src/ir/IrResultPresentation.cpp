@@ -1,3 +1,4 @@
+#include "../i18n/Localization.h"
 #include "IrResultPresentation.h"
 
 #include <utility>
@@ -18,9 +19,10 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
   result.visible = true;
   if (input.capabilities.readOnly || !input.capabilities.scoreSubmission) {
     result.state = IrResultState::Unsupported;
-    result.statusText = "Submission unsupported";
+    result.statusText = i18n::tr("ir.result.submission_unsupported.label");
     result.detailText =
-        result.providerDisplayName + " is configured for score reading only.";
+        i18n::format("ir.result.submission.read_only_notice",
+                         {{"provider", result.providerDisplayName}});
     return result;
   }
 
@@ -30,13 +32,13 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
     const bool eligible = !input.draftOutcome.has_value() ||
                           input.draftOutcome->status == BuildDraftStatus::Built;
     result.canSubmit = eligible;
-    result.statusText = eligible ? "Not submitted" : "Not eligible";
+    result.statusText = eligible ? i18n::tr("ir.result.not_submitted.label") : i18n::tr("ir.result.not_eligible.label");
     result.detailText =
         eligible
-            ? "Submit this saved result to " + result.providerDisplayName +
-                  "."
+            ? i18n::format("ir.result.submission.confirmation",
+                         {{"provider", result.providerDisplayName}})
             : (input.draftOutcome->diagnostic.empty()
-                   ? "This saved result is not eligible for submission."
+                   ? i18n::tr("ir.result.saved_result_not_eligible_submission.message")
                    : input.draftOutcome->diagnostic);
     return result;
   }
@@ -46,56 +48,60 @@ IrResultPresentation makeIrResultPresentation(IrResultPresentationInput input) {
   case IrOutboxState::Pending:
     result.state = IrResultState::Queued;
     result.canRetry = true;
-    result.statusText = "Queued";
-    result.detailText = "Waiting for the next submission attempt.";
+    result.statusText = i18n::tr("ir.result.queued.label");
+    result.detailText = i18n::tr("ir.result.waiting_next_submission_attempt.message");
     break;
   case IrOutboxState::Uploading:
     if (input.snapshot.activeRequest == IrActiveRequestKind::Poll) {
       result.state = IrResultState::Polling;
-      result.statusText = "Polling " + result.providerDisplayName;
-      result.detailText = "Checking the queued import result with " +
-                          result.providerDisplayName + ".";
+      result.statusText = i18n::format("ir.result.polling.status",
+                         {{"provider", result.providerDisplayName}});
+      result.detailText = i18n::format("ir.result.polling.description",
+                         {{"provider", result.providerDisplayName}});
     } else {
       result.state = IrResultState::Submitting;
-      result.statusText = "Submitting";
+      result.statusText = i18n::tr("ir.result.submitting.label");
       result.detailText =
-          "Sending this score to " + result.providerDisplayName + ".";
+          i18n::format("ir.result.submission.progress",
+                         {{"provider", result.providerDisplayName}});
     }
     break;
   case IrOutboxState::AwaitingRemoteResult:
     result.state = IrResultState::Waiting;
     result.canRetry = true;
-    result.statusText = "Waiting for " + result.providerDisplayName;
-    result.detailText = "The import was queued remotely and is being polled.";
+    result.statusText = i18n::format("ir.result.remote_wait.status",
+                         {{"provider", result.providerDisplayName}});
+    result.detailText = i18n::tr("ir.result.import_queued_remotely_being_polled.message");
     break;
   case IrOutboxState::BlockedConfiguration:
     result.state = IrResultState::AuthenticationRequired;
     if (input.snapshot.errorCode == "legacy_ruleset_proof_missing") {
       result.canRetry = false;
-      result.statusText = "Submission blocked";
+      result.statusText = i18n::tr("ir.result.submission_blocked.label");
       result.detailText = input.snapshot.diagnostic.empty()
-                              ? "The queued score has no valid ruleset proof."
+                              ? i18n::tr("ir.result.queued_score_has_no_valid_ruleset_proof.message")
                               : input.snapshot.diagnostic;
     } else {
       result.canRetry = true;
-      result.statusText = "Authentication required";
+      result.statusText = i18n::tr("ir.result.authentication_required.label");
       result.detailText =
-          "Add or replace the API key in Settings > IR, then retry.";
+          i18n::tr("ir.result.add_replace_api_key_in_settings_ir_then_retry.message");
     }
     break;
   case IrOutboxState::FailedPermanent:
     result.state = IrResultState::Failed;
     result.canRetry = true;
-    result.statusText = "Submission failed";
+    result.statusText = i18n::tr("ir.result.submission_failed.label");
     result.detailText = input.snapshot.diagnostic.empty()
-                            ? "The score was not accepted. You can retry it."
+                            ? i18n::tr("ir.result.score_not_accepted_can_retry.message")
                             : input.snapshot.diagnostic;
     break;
   case IrOutboxState::Succeeded:
     result.state = IrResultState::Submitted;
-    result.statusText = "Submitted";
+    result.statusText = i18n::tr("ir.result.submitted.label");
     result.detailText =
-        "This score was accepted by " + result.providerDisplayName + ".";
+        i18n::format("ir.result.submission.success",
+                         {{"provider", result.providerDisplayName}});
     break;
   }
   return result;

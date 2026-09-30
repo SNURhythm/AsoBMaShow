@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 
 #include "../input/ChartLaneBinding.h"
 #include "../input/InputTypes.h"
@@ -46,7 +47,7 @@ inline std::vector<InputActionDefinition> inputActionsForScope(
     }
     result.push_back(
         {.action = {input::LogicalActionKind::Lane, physicalLane},
-         .label = "Lane " + std::to_string(localLane + 1)});
+         .label = i18n::tr("settings.input.actions.lane.prefix") + std::to_string(localLane + 1)});
   }
 
   if (std::ranges::any_of(bindings, [scope](const auto &binding) {
@@ -55,26 +56,26 @@ inline std::vector<InputActionDefinition> inputActionsForScope(
     result.push_back(
         {.action = {input::LogicalActionKind::Lane,
                     scope.player == 1 ? 7 : 15},
-         .label = "Scratch (legacy digital)",
+         .label = i18n::tr("settings.input.actions.scratch_legacy_digital.label"),
          .bindable = false});
   }
   result.push_back({.action = {input::LogicalActionKind::ScratchClockwise, 0},
-                    .label = "Scratch clockwise"});
+                    .label = i18n::tr("settings.input.actions.scratch_clockwise.label")});
   result.push_back(
       {.action = {input::LogicalActionKind::ScratchCounterClockwise, 0},
-       .label = "Scratch counter-clockwise"});
+       .label = i18n::tr("settings.input.actions.scratch_counter_clockwise.label")});
   result.push_back(
-      {.action = {input::LogicalActionKind::Start, 0}, .label = "Start"});
+      {.action = {input::LogicalActionKind::Start, 0}, .label = i18n::tr("settings.input.actions.start.label")});
   result.push_back(
-      {.action = {input::LogicalActionKind::Select, 0}, .label = "Select"});
+      {.action = {input::LogicalActionKind::Select, 0}, .label = i18n::tr("settings.input.actions.select.label")});
   result.push_back(
-      {.action = {input::LogicalActionKind::Pause, 0}, .label = "Pause"});
+      {.action = {input::LogicalActionKind::Pause, 0}, .label = i18n::tr("settings.input.actions.pause.label")});
   result.push_back(
-      {.action = {input::LogicalActionKind::Retry, 0}, .label = "Retry"});
+      {.action = {input::LogicalActionKind::Retry, 0}, .label = i18n::tr("settings.input.actions.retry.label")});
   result.push_back({.action = {input::LogicalActionKind::LaneCoverIncrease, 0},
-                    .label = "Lane cover increase"});
+                    .label = i18n::tr("settings.input.actions.lane_cover_increase.label")});
   result.push_back({.action = {input::LogicalActionKind::LaneCoverDecrease, 0},
-                    .label = "Lane cover decrease"});
+                    .label = i18n::tr("settings.input.actions.lane_cover_decrease.label")});
   return result;
 }
 
