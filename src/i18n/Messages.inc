@@ -732,7 +732,7 @@
 {"records.exporting.label", "Exporting", "내보내는 중"},
 {"records.filter_sort.label", "Filter / Sort", "필터 / 정렬"},
 {"records.frame_rate.label", "Frame Rate", "프레임 레이트"},
-{"records.full_resolution.label", "Full Resolution", "전체 해상도"},
+{"records.full_resolution.label", "Device Resolution", "기기 해상도"},
 {"records.ghosts.label", "Ghosts", "고스트"},
 {"records.hide.label", "Hide", "숨기기"},
 {"records.include.label", "Include", "포함"},

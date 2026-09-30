@@ -556,13 +556,17 @@ elseif (PLATFORM_MACOS AND BUILD_MACOS_BUNDLE)
     add_custom_command(
         TARGET main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_BUNDLE_DIR:main>/Contents/Resources
-        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/select.wav
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/select.wav
+            $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets/audio/sample.wav
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_BUNDLE_DIR:main>/Contents/Resources/assets
     )
 else()
     add_custom_command(
         TARGET main POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E rm -f $<TARGET_FILE_DIR:main>/assets/select.wav
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            $<TARGET_FILE_DIR:main>/assets/select.wav
+            $<TARGET_FILE_DIR:main>/assets/audio/sample.wav
         COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:main>/assets
     )
 endif()
@@ -5057,6 +5061,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(view_layout_tests PRIVATE cxx_std_23)
     target_link_libraries(view_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_executable(settings_button_layout_tests
+        tests/settings_button_layout_tests.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/UniformCache.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+    )
+    target_include_directories(settings_button_layout_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(settings_button_layout_tests PRIVATE cxx_std_23)
+    target_link_libraries(settings_button_layout_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+
     add_executable(button_enabled_tests
         tests/button_enabled_tests.cpp
         src/rendering/Color.cpp
@@ -8664,6 +8683,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_scene_preview_authority_tests)
     asobmashow_register_test(input_timestamp_tests foundation_input_timestamp)
     asobmashow_register_test(windows_realtime_input_mapping_tests foundation_input_windows_realtime_mapping)
+    asobmashow_register_test(settings_button_layout_tests)
+    set_tests_properties(settings_button_layout_tests PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}")
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)

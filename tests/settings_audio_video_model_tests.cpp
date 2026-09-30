@@ -430,43 +430,53 @@ void testSettingsTestSoundUsesInjectedKeysoundPath() {
           "settings session routes test sound through its keysound callback");
 }
 
-void testSettingsTestSoundLoadsPlatformAssetBytes() {
-  const path_t soundPath = PATH("assets/audio/sample.wav");
-  const std::vector<unsigned char> assetBytes = {0x52, 0x49, 0x46, 0x46};
-  int step = 0;
-
-  const bool played = PlaySettingsTestSoundAsset(
-      soundPath,
-      {.readAssetBytes =
-           [&](const path_t &requested) {
-             require(requested == soundPath,
-                     "platform reader receives asset path");
-             require(step == 0, "asset bytes are read before decoding");
-             step = 1;
-             return std::optional{assetBytes};
-           },
-       .loadSoundFromMemory =
-           [&](const path_t &requested,
-               const std::vector<unsigned char> &bytes) {
-             require(requested == soundPath,
-                     "memory decoder keeps the sound cache key");
-             require(bytes == assetBytes,
-                     "platform asset bytes are passed to memory decoding");
-             require(step == 1, "memory decoding follows platform asset read");
-             step = 2;
-             return true;
-           },
-       .playKeysound =
-           [&](const path_t &requested) {
-             require(requested == soundPath,
-                     "playback uses the decoded cache key");
-             require(step == 2, "playback starts only after memory decoding");
-             step = 3;
-             return true;
-           }});
-
-  require(played && step == 3,
-          "settings test sound uses platform bytes and memory decoding");
+void testSettingsTestSoundSynthesizesCMajorNotes() {
+  int loads = 0;
+  int plays = 0;
+  path_t soundKey;
+  const bool played = PlaySettingsTestSound({
+      .loadGeneratedSound = [&](const path_t &key, const std::vector<short> &pcm,
+                                int channels, int sampleRate) {
+        ++loads;
+        soundKey = key;
+        require(channels == 2 && sampleRate == 48000,
+                "test tone provides stereo PCM at a supported source rate");
+        require(pcm.size() == 86400, "three short notes last 0.9 seconds");
+        const std::array expectedCycles{65, 82, 98}; // C4, E4, G4 over 250 ms.
+        for (int note = 0; note < 3; ++note) {
+          const int start = note * 14400;
+          int positiveCrossings = 0;
+          int peak = 0;
+          for (int frame = 0; frame < 14400; ++frame) {
+            const int sample = pcm[(start + frame) * 2];
+            require(sample == pcm[(start + frame) * 2 + 1],
+                    "both output channels receive the tone");
+            peak = std::max(peak, std::abs(sample));
+            if (frame > 0 && sample > 0 && pcm[(start + frame - 1) * 2] <= 0) {
+              ++positiveCrossings;
+            }
+            if (frame >= 12000) require(sample == 0, "notes have a silent gap");
+          }
+          require(std::abs(positiveCrossings - expectedCycles[note]) <= 1,
+                  "test melody plays do, mi, sol at their expected pitches");
+          require(peak > 1000 && peak <= 8192, "test tone is audible without clipping");
+          require(pcm[start * 2] == 0 && pcm[(start + 11999) * 2] == 0,
+                  "each note fades in and out without a discontinuity");
+        }
+        return true;
+      },
+      .playSound = [&](const path_t &key) {
+        require(loads == 1 && key == soundKey, "generated sound is loaded before playback");
+        ++plays;
+        return true;
+      }});
+  require(played && plays == 1, "synthetic test sound starts successfully");
+  require(!PlaySettingsTestSound({
+              .loadGeneratedSound = [](const path_t &, std::vector<short>, int, int) {
+                return false;
+              },
+              .playSound = [&](const path_t &) { ++plays; return true; }}) && plays == 1,
+          "failed loading never starts playback");
 }
 
 void testDisplayPreviewPersistsOnlyWhenKept() {
@@ -753,7 +763,7 @@ int main() {
   testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent();
   testStreamIntentPersistsOnlyAfterSuccessfulApply();
   testSettingsTestSoundUsesInjectedKeysoundPath();
-  testSettingsTestSoundLoadsPlatformAssetBytes();
+  testSettingsTestSoundSynthesizesCMajorNotes();
   testDisplayPreviewPersistsOnlyWhenKept();
   testSafeFrameCapOnlyChangePersistsWithoutOverlay();
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();

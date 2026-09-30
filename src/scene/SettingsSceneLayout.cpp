@@ -2415,7 +2415,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   folderActions->setAlignItems(YGAlignFlexStart);
 
   auto *refreshFoldersButton = makeAccentButton(
-      metrics.compact ? 170 : 190, metrics.actionButtonHeight,
+      kFitContentWidth, metrics.actionButtonHeight,
       makeText(i18n::tr("settings.bms_library.rebuild_library.label"), metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::lime());
@@ -2437,7 +2437,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
 #endif
   if (showAddFolderButton) {
     auto *addFolderButton = makeAccentButton(
-        metrics.compact ? 150 : 170, metrics.actionButtonHeight,
+        kFitContentWidth, metrics.actionButtonHeight,
         makeText(addFolderButtonLabel, metrics.bodyTextSize + 2,
                  ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
         ui_theme::cyan());

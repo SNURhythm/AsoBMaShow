@@ -1,14 +1,12 @@
 #include "../i18n/Localization.h"
 #include "SettingsSceneShared.h"
 
-#include "../RAII.h"
 #include "../path.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
 #include "../view/ScrollView.h"
 
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -174,18 +172,6 @@ int volumePercent(float value) {
   return static_cast<int>(std::lround(std::clamp(value, 0.0F, 1.0F) * 100.0F));
 }
 
-std::optional<std::vector<unsigned char>>
-readPlatformAssetBytes(const path_t &path) {
-  const std::string assetPath = path_t_to_utf8(path);
-  size_t size = 0;
-  UniqueResource<void, SDL_free> data(
-      SDL_LoadFile_RW(SDL_RWFromFile(assetPath.c_str(), "rb"), &size, 1));
-  if (!data || size == 0) {
-    return std::nullopt;
-  }
-  const auto *begin = static_cast<const unsigned char *>(data.get());
-  return std::vector<unsigned char>(begin, begin + size);
-}
 } // namespace
 
 void SettingsScene::ensureAudioVideoSession() {
@@ -858,21 +844,19 @@ void SettingsScene::adjustVolume(int busIndex, int deltaPercent) {
 }
 
 bool SettingsScene::playSettingsTestSound() {
-  static const path_t kTestSoundPath = PATH("assets/audio/sample.wav");
-  std::atomic_bool cancelled = false;
   auto &runtime = context.jukebox.audioRuntime();
-  return PlaySettingsTestSoundAsset(
-      kTestSoundPath,
-      {.readAssetBytes = readPlatformAssetBytes,
-       .loadSoundFromMemory =
-           [&](const path_t &path, const std::vector<unsigned char> &bytes) {
-             return runtime.loadSoundFromMemory(path, bytes, cancelled);
+  return PlaySettingsTestSound(
+      {.loadGeneratedSound =
+           [&](const path_t &key, std::vector<short> pcm, int channels,
+               int sampleRate) {
+             return runtime.loadGeneratedSound(key, std::move(pcm), channels,
+                                               sampleRate);
            },
-       .playKeysound =
-           [&](const path_t &path) {
+       .playSound =
+           [&](const path_t &key) {
              return runtime.playSound(
-                 path, audioBusForJukeboxSource(
-                           JukeboxAudioSource::SettingsTestTone),
+                 key, audioBusForJukeboxSource(
+                          JukeboxAudioSource::SettingsTestTone),
                  0, audio::EffectiveGain(
                         audio::Bus::Keysound,
                         audio::VolumesFromSettings(

@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <numbers>
 #include <set>
 #include <utility>
 
@@ -308,18 +310,38 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
   return model;
 }
 
-bool PlaySettingsTestSoundAsset(
-    const path_t &path, const SettingsTestSoundAssetCallbacks &callbacks) {
-  if (!callbacks.readAssetBytes || !callbacks.loadSoundFromMemory ||
-      !callbacks.playKeysound) {
+bool PlaySettingsTestSound(const SettingsTestSoundCallbacks &callbacks) {
+  if (!callbacks.loadGeneratedSound || !callbacks.playSound) {
     return false;
   }
-  const auto bytes = callbacks.readAssetBytes(path);
-  if (!bytes.has_value() || bytes->empty() ||
-      !callbacks.loadSoundFromMemory(path, *bytes)) {
+  // An original C4–E4–G4 sine-wave arpeggio, generated without audio assets.
+  constexpr int sampleRate = 48000;
+  constexpr int channels = 2;
+  constexpr int framesPerNote = 14400; // 300 ms, including a 50 ms gap.
+  constexpr int soundingFrames = 12000;
+  constexpr int attackFrames = 480;
+  constexpr int releaseFrames = 1920;
+  constexpr std::array frequencies{261.625565, 329.627557, 391.995436};
+  std::vector<short> pcm(frequencies.size() * framesPerNote * channels, 0);
+  for (std::size_t note = 0; note < frequencies.size(); ++note) {
+    for (int frame = 0; frame < soundingFrames; ++frame) {
+      const double envelope = std::min(
+          {1.0, static_cast<double>(frame) / attackFrames,
+           static_cast<double>(soundingFrames - 1 - frame) / releaseFrames});
+      const double phase = 2.0 * std::numbers::pi * frequencies[note] *
+                           static_cast<double>(frame) / sampleRate;
+      const auto sample = static_cast<short>(
+          std::sin(phase) * envelope * 0.25 * std::numeric_limits<short>::max());
+      const auto offset = (note * framesPerNote + frame) * channels;
+      pcm[offset] = sample;
+      pcm[offset + 1] = sample;
+    }
+  }
+  static const path_t key = PATH("@settings_test_c_major");
+  if (!callbacks.loadGeneratedSound(key, std::move(pcm), channels, sampleRate)) {
     return false;
   }
-  return callbacks.playKeysound(path);
+  return callbacks.playSound(key);
 }
 
 SettingsAudioVideoSession::SettingsAudioVideoSession(

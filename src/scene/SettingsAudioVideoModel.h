@@ -65,16 +65,13 @@ DisplayControlModel
 BuildDisplayControlModel(const player_settings::VideoSettings &intent,
                          const display::Capabilities &capabilities);
 
-struct SettingsTestSoundAssetCallbacks {
-  std::function<std::optional<std::vector<unsigned char>>(const path_t &)>
-      readAssetBytes;
-  std::function<bool(const path_t &, const std::vector<unsigned char> &)>
-      loadSoundFromMemory;
-  std::function<bool(const path_t &)> playKeysound;
+struct SettingsTestSoundCallbacks {
+  std::function<bool(const path_t &, std::vector<short>, int channels,
+                     int sampleRate)> loadGeneratedSound;
+  std::function<bool(const path_t &)> playSound;
 };
 
-bool PlaySettingsTestSoundAsset(
-    const path_t &path, const SettingsTestSoundAssetCallbacks &callbacks);
+bool PlaySettingsTestSound(const SettingsTestSoundCallbacks &callbacks);
 
 class SettingsAudioVideoSession {
 public:

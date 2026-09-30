@@ -24,6 +24,8 @@
 #include <string>
 
 namespace settings_scene {
+// Let Yoga size the button from its content and horizontal padding.
+inline constexpr int kFitContentWidth = -1;
 inline constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
 
 struct SafeAreaInsets {
@@ -279,10 +281,22 @@ inline Button *makeButton(int width, int height, TextView *label,
                           const Color &pressedBackground,
                           const Color &normalBorder, const Color &hoverBorder,
                           const Color &pressedBorder, int borderWidth = 1) {
-  auto *button = new Button(0, 0, width, height);
+  const bool fitContent = width == kFitContentWidth;
+  auto *button = fitContent ? new Button() : new Button(0, 0, width, height);
   label->setAlign(TextView::CENTER);
   label->setVAlign(TextView::MIDDLE);
-  button->setContentView(label);
+  if (fitContent) {
+    button->setHeight(height);
+    button->setPadding(Edge::Left, 16.0f);
+    button->setPadding(Edge::Right, 16.0f);
+    button->setAlignSelf(YGAlignFlexStart);
+    button->setAlignItems(YGAlignCenter);
+    button->setJustifyContent(YGJustifyCenter);
+    button->setFlexShrink(0.0f);
+    button->addView(label);
+  } else {
+    button->setContentView(label);
+  }
   button->setCornerRadius(ui_theme::controlRadius());
   button->setBackgroundColors(normalBackground, hoverBackground,
                               pressedBackground);
