@@ -16,7 +16,7 @@ required = [
     "Button *resultButton_ = nullptr;",
     "modal->resultButton_ = resultButton;",
     "replayResultRecallInProgress",
-    'makeModalButton(i18n::tr("records.view_result.label")',
+    'makeModalButton(i18n::message("records.view_result.label")',
     "resultRecordActionTarget(",
     "startModernReplayResultRecall",
     "startModernCourseReplayResultRecall",

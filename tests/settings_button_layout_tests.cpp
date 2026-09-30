@@ -29,6 +29,36 @@ int main() {
   init.resolution.height = 64;
   assert(bgfx::init(init));
   {
+    i18n::setLanguage(i18n::Language::English);
+    View row;
+    row.setSize(600, 200);
+    row.setFlexDirection(FlexDirection::Row);
+    auto *label = settings_scene::makeText(
+        i18n::message("settings.options.reset.label"), 22,
+        ui_theme::textPrimary());
+    auto *button = settings_scene::makeControlButton(
+        settings_scene::kFitContentWidth, 60, label);
+    row.addView(button);
+    auto *input = settings_scene::makeTextInput(
+        settings_scene::resolveLayoutMetrics(), 240);
+    input->setEditingText("Reset");
+    row.addView(input);
+    const std::string englishLabel = label->getText();
+
+    i18n::setLanguage(i18n::Language::Korean);
+    row.propagateLanguageChange();
+    assert(label->getText() == i18n::tr("settings.options.reset.label"));
+    assert(label->getText() != englishLabel);
+    assert(input->getText() == "Reset");
+    assert(button->getWidth() >= label->measureTextWidth(label->getText()) + 32);
+
+    i18n::setLanguage(i18n::Language::Japanese);
+    row.propagateLanguageChange();
+    assert(label->getText() == i18n::tr("settings.options.reset.label"));
+    assert(input->getText() == "Reset");
+    i18n::setLanguage(i18n::Language::English);
+  }
+  {
     View row;
     row.setSize(400, 200);
     row.setFlexDirection(FlexDirection::Row);

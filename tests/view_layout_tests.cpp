@@ -945,7 +945,7 @@ void testLegacyDigitalScratchBindingsRemainManageable() {
         return definition.action == playerOneLegacy.action;
       });
   assert(playerOneRow != playerOneActions.end());
-  assert(playerOneRow->label == "Scratch (legacy digital)");
+  assert(playerOneRow->label.resolve() == "Scratch (legacy digital)");
   assert(!playerOneRow->bindable);
 
   const input::InputBinding playerTwoLegacy{
@@ -957,14 +957,14 @@ void testLegacyDigitalScratchBindingsRemainManageable() {
       {2, 14}, std::span<const input::InputBinding>(&playerTwoLegacy, 1));
   assert(std::ranges::any_of(playerTwoActions, [&](const auto &definition) {
     return definition.action == playerTwoLegacy.action &&
-           definition.label == "Scratch (legacy digital)" &&
+           definition.label.resolve() == "Scratch (legacy digital)" &&
            !definition.bindable;
   }));
 
   const auto newProfileActions = settings_scene::inputActionsForScope(
       {1, 7}, std::span<const input::InputBinding>{});
   assert(std::ranges::none_of(newProfileActions, [](const auto &definition) {
-    return definition.label == "Scratch (legacy digital)";
+    return definition.label.resolve() == "Scratch (legacy digital)";
   }));
 }
 
@@ -987,26 +987,26 @@ void testGyroscopeSettingsLayoutAndPresentation() {
   assert(empty.stackEditors);
   assert(empty.editorWidth == 0);
 
-  assert(settings_scene::deviceClassLabel(input::DeviceClass::Gyroscope) ==
+  assert(settings_scene::deviceClassLabel(input::DeviceClass::Gyroscope).resolve() ==
          "Gyroscope");
   assert(settings_scene::axisControlLabel(input::DeviceClass::Gyroscope, 0,
-                                          input::ControlDirection::Positive) ==
+                                          input::ControlDirection::Positive).resolve() ==
          "Turntable +");
   assert(settings_scene::axisControlLabel(input::DeviceClass::Gyroscope, 0,
-                                          input::ControlDirection::Negative) ==
+                                          input::ControlDirection::Negative).resolve() ==
          "Turntable -");
   assert(settings_scene::axisControlLabel(input::DeviceClass::Joystick, 2,
-                                          input::ControlDirection::Any) ==
+                                          input::ControlDirection::Any).resolve() ==
          "Axis 2");
 
   assert(settings_scene::inputDeviceStatusLabel(
-             input::InputDeviceStatus::Ready) == "Ready");
+             input::InputDeviceStatus::Ready).resolve() == "Ready");
   assert(settings_scene::inputDeviceStatusLabel(
-             input::InputDeviceStatus::Calibrating) == "Calibrating");
+             input::InputDeviceStatus::Calibrating).resolve() == "Calibrating");
   assert(settings_scene::inputDeviceStatusLabel(
-             input::InputDeviceStatus::Disconnected) == "Disconnected");
+             input::InputDeviceStatus::Disconnected).resolve() == "Disconnected");
   assert(settings_scene::inputDeviceStatusLabel(
-             input::InputDeviceStatus::Retrying) == "Retrying");
+             input::InputDeviceStatus::Retrying).resolve() == "Retrying");
 
   assert(settings_scene::parseGyroscopeSettingInteger("3") ==
          std::optional<int>{3});

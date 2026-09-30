@@ -264,6 +264,13 @@ void Button::propagateThemeChange() {
 }
 
 Button::~Button() = default;
+void Button::propagateLanguageChange() {
+  View::propagateLanguageChange();
+  if (contentView) {
+    contentView->propagateLanguageChange();
+  }
+}
+
 void Button::onLayout() { syncContentFrame(*this, contentView.get(), true); }
 
 void Button::onMove(int newX, int newY) {

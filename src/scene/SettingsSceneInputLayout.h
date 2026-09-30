@@ -118,51 +118,55 @@ resolveGyroscopeSettingsLayout(int availableWidth, bool compact) {
               stackEditors ? width : std::max(0, (width - editorGap) / 2)};
 }
 
-inline std::string_view deviceClassLabel(input::DeviceClass deviceClass) {
+inline i18n::Text deviceClassLabel(input::DeviceClass deviceClass) {
   switch (deviceClass) {
   case input::DeviceClass::Keyboard:
-    return i18n::tr("settings.input.keyboard.label");
+    return i18n::message("settings.input.keyboard.label");
   case input::DeviceClass::GameController:
-    return i18n::tr("settings.input.controller.label");
+    return i18n::message("settings.input.controller.label");
   case input::DeviceClass::Joystick:
-    return i18n::tr("settings.input.joystick.label");
+    return i18n::message("settings.input.joystick.label");
   case input::DeviceClass::Touch:
-    return i18n::tr("settings.input.touch.label");
+    return i18n::message("settings.input.touch.label");
   case input::DeviceClass::Midi:
     return "MIDI";
   case input::DeviceClass::Gyroscope:
-    return i18n::tr("settings.input.gyroscope.label");
+    return i18n::message("settings.input.gyroscope.label");
   }
-  return i18n::tr("settings.input.input.label");
+  return i18n::message("settings.input.input.label");
 }
 
-inline std::string axisControlLabel(input::DeviceClass deviceClass, int index,
+inline i18n::Text axisControlLabel(input::DeviceClass deviceClass, int index,
                                     input::ControlDirection direction) {
-  std::string result =
+  i18n::Text result =
       deviceClass == input::DeviceClass::Gyroscope && index == 0
-          ? i18n::tr("settings.input.turntable.label")
-          : i18n::tr("settings.input.axis.prefix") + std::to_string(index);
+          ? i18n::message("settings.input.turntable.label")
+          : i18n::message("settings.input.control.number",
+                          {{"kind", i18n::message("settings.input.axis.prefix")},
+                           {"number", std::to_string(index)}});
   if (direction == input::ControlDirection::Positive) {
-    result += " +";
+    return i18n::message("settings.input.control.direction",
+                         {{"control", result}, {"direction", "+"}});
   } else if (direction == input::ControlDirection::Negative) {
-    result += " -";
+    return i18n::message("settings.input.control.direction",
+                         {{"control", result}, {"direction", "-"}});
   }
   return result;
 }
 
-inline std::string_view
+inline i18n::Text
 inputDeviceStatusLabel(input::InputDeviceStatus status) {
   switch (status) {
   case input::InputDeviceStatus::Ready:
-    return i18n::tr("settings.input.ready.label");
+    return i18n::message("settings.input.ready.label");
   case input::InputDeviceStatus::Calibrating:
-    return i18n::tr("settings.input.calibrating.label");
+    return i18n::message("settings.input.calibrating.label");
   case input::InputDeviceStatus::Disconnected:
-    return i18n::tr("settings.input.disconnected.label");
+    return i18n::message("settings.input.disconnected.label");
   case input::InputDeviceStatus::Retrying:
-    return i18n::tr("settings.input.retrying.label");
+    return i18n::message("settings.input.retrying.label");
   }
-  return i18n::tr("settings.input.disconnected.label");
+  return i18n::message("settings.input.disconnected.label");
 }
 
 inline std::optional<int> parseGyroscopeSettingInteger(std::string_view text) {

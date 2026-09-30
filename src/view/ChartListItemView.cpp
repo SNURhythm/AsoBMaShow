@@ -262,20 +262,20 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   scoreRankColumn->setDisplay(YGDisplayNone);
   scoreRankColumn->setVisible(false);
   if (record.courseStart) {
-    levelView->setText(record.difficultyTableLabels.empty()
-                           ? i18n::tr("library.chart.course.label")
+    levelView->setLocalizedText(record.difficultyTableLabels.empty()
+                           ? i18n::message("library.chart.course.label")
                            : record.difficultyTableLabels);
-    keyModeView->setText(i18n::tr("library.chart.course.badge"));
+    keyModeView->setLocalizedText(i18n::message("library.chart.course.badge"));
   } else if (solidArchive) {
-    levelView->setText(record.difficultyTableLabels.empty()
-                           ? i18n::tr("library.chart.unzip_required.label")
+    levelView->setLocalizedText(record.difficultyTableLabels.empty()
+                           ? i18n::message("library.chart.unzip_required.label")
                            : record.difficultyTableLabels);
-    keyModeView->setText(i18n::tr("library.chart.archive.badge"));
+    keyModeView->setLocalizedText(i18n::message("library.chart.archive.badge"));
   } else {
     levelView->setText(record.difficultyTableLabels.empty()
                            ? formatPlayLevel(meta.PlayLevel)
                            : record.difficultyTableLabels);
-    keyModeView->setText(unavailable ? i18n::tr("library.chart.missing.badge")
+    keyModeView->setLocalizedText(unavailable ? i18n::message("library.chart.missing.badge")
                                      : keyModeDescription(meta.KeyMode));
   }
   if (!unavailable && !solidArchive && !meta.StageFile.empty()) {

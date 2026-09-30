@@ -274,17 +274,17 @@ std::string selectorName(
   return {};
 }
 
-TextView *makeText(std::string value, int size,
+TextView *makeText(i18n::Text value, int size,
                    View::ThemeColorProvider color) {
   auto *result = new TextView(kFontPath, size);
-  result->setText(std::move(value));
+  result->setLocalizedText(std::move(value));
   result->setThemedColor(std::move(color));
   result->setWrap(true);
   result->setVAlign(TextView::MIDDLE);
   return result;
 }
 
-Button *makeButton(std::string label) {
+Button *makeButton(i18n::Text label) {
   auto *result = new Button();
   result->setWidth(180)->setHeight(56)->setCornerRadius(
       ui_theme::controlRadius());
@@ -705,6 +705,14 @@ void MusicSelectScene::onResume() {
     selectedBarMoved();
     startInputListening();
   }
+}
+
+void MusicSelectScene::onLanguageChanged() {
+  Scene::onLanguageChanged();
+  // Native retained controls update in place; skin content, playback, and
+  // in-progress directory work belong to the active selector session.
+  refreshTasksModal(true);
+  if (modalLayer_ != nullptr) modalLayer_->applyYogaLayout();
 }
 
 void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
@@ -1969,7 +1977,7 @@ void MusicSelectScene::buildSearchPrompt() {
       ->setThemedBorderColor(ui_theme::hairlineStrong)
       ->setBorderWidth(1);
 
-  auto *title = makeText(i18n::tr("music_select.search.label"), 28, ui_theme::textPrimary);
+  auto *title = makeText(i18n::message("music_select.search.label"), 28, ui_theme::textPrimary);
   title->setHeight(40);
   panel->addView(title);
 
@@ -1993,10 +2001,10 @@ void MusicSelectScene::buildSearchPrompt() {
       ->setFlexDirection(FlexDirection::Row)
       ->setJustifyContent(YGJustifyFlexEnd)
       ->setGap(12);
-  auto *cancel = makeButton("Cancel");
+  auto *cancel = makeButton(i18n::message("music_select.cancel.label"));
   cancel->setOnClickListener([this] { hideSearchPrompt(); });
   actions->addView(cancel);
-  auto *submit = makeButton("Search");
+  auto *submit = makeButton(i18n::message("music_select.search.label"));
   submit->setOnClickListener([this] {
     const std::string text = searchInput_ ? searchInput_->getText() : "";
     hideSearchPrompt();
@@ -3433,17 +3441,18 @@ void MusicSelectScene::buildErrorView() {
       ->setGap(12)
       ->setPadding(Edge::All, 32)
       ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
-  auto *title = makeText(i18n::tr("music_select.music_select_skin_failed.label"), 38, ui_theme::coral);
+  auto *title = makeText(i18n::message("music_select.music_select_skin_failed.label"), 38, ui_theme::coral);
   title->setHeight(58);
   root->addView(title);
   if (!selectedSkinPath_.empty()) {
-    auto *path = makeText(i18n::tr("music_select.selected_skin.prefix") + selectedSkinPath_, 20,
+    auto *path = makeText(i18n::message("music_select.selected_skin.message",
+                                        {{"path", selectedSkinPath_}}), 20,
                           ui_theme::textSecondary);
     path->setHeight(44);
     root->addView(path);
   }
   if (diagnostics_.empty()) {
-    auto *reason = makeText(i18n::tr("music_select.no_diagnostic_reported.message"), 20,
+    auto *reason = makeText(i18n::message("music_select.no_diagnostic_reported.message"), 20,
                             ui_theme::textSecondary);
     reason->setHeight(44);
     root->addView(reason);
@@ -3457,7 +3466,7 @@ void MusicSelectScene::buildErrorView() {
       root->addView(reasonView);
     }
   }
-  auto *settings = makeButton(i18n::tr("music_select.settings.label"));
+  auto *settings = makeButton(i18n::message("music_select.settings.label"));
   settings->setHeight(64);
   settings->setOnClickListener([this] { openSettings(); });
   root->addView(settings);
@@ -3540,10 +3549,10 @@ void MusicSelectScene::revealChart() {
   revealContextMenu_->propagateThemeChange();
   revealContextMenu_->show(
       revealChartAnchor(),
-      {{.id = "show-same-folder", .label = i18n::tr("music_select.show_same_folder.label"),
+      {{.id = "show-same-folder", .label = i18n::message("music_select.show_same_folder.label"),
         .enabled = chartSession_.has_value() && !selected.chart->solidArchive &&
                    !folder.empty()},
-       {.id = "reveal-file", .label = i18n::tr("music_select.reveal_file.label")}}, 220);
+       {.id = "reveal-file", .label = i18n::message("music_select.reveal_file.label")}}, 220);
 }
 
 void MusicSelectScene::revealSelectedChartInFileManager() {
@@ -3671,7 +3680,7 @@ void MusicSelectScene::showTasksModal() {
         ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
         ->setThemedBorderColor(ui_theme::hairlineStrong)
         ->setBorderWidth(1);
-    auto *title = makeText(i18n::tr("music_select.tasks.label"), 30, ui_theme::textPrimary);
+    auto *title = makeText(i18n::message("music_select.tasks.label"), 30, ui_theme::textPrimary);
     title->setHeight(42);
     panel->addView(title);
 
@@ -3698,7 +3707,7 @@ void MusicSelectScene::showTasksModal() {
         ->setJustifyContent(YGJustifyFlexEnd)
         ->setGap(12)
         ->setHeight(56);
-    auto *refresh = makeButton(i18n::tr("music_select.refresh_list.label"));
+    auto *refresh = makeButton(i18n::message("music_select.refresh_list.label"));
     refresh->setOnClickListener([this] {
       if (context.chartLibraryTasks &&
           context.chartLibraryTasks->snapshot().activeCount > 0) {
@@ -3709,7 +3718,7 @@ void MusicSelectScene::showTasksModal() {
       selectedBarMoved();
       if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
     });
-    auto *close = makeButton(i18n::tr("music_select.close.label"));
+    auto *close = makeButton(i18n::message("music_select.close.label"));
     close->setOnClickListener([this] {
       if (tasksModal_ != nullptr) tasksModal_->setVisible(false);
     });
@@ -3729,12 +3738,12 @@ void MusicSelectScene::showTasksModal() {
   tasksModal_->applyYogaLayout();
 }
 
-void MusicSelectScene::refreshTasksModal() {
+void MusicSelectScene::refreshTasksModal(bool force) {
   if (tasksModal_ == nullptr || tasksModalText_ == nullptr) return;
   const auto snapshot = context.chartLibraryTasks
                             ? context.chartLibraryTasks->snapshot()
                             : chart_library_tasks::Snapshot{};
-  if (snapshot.revision == displayedTasksRevision_ &&
+  if (!force && snapshot.revision == displayedTasksRevision_ &&
       snapshot.progress.revision == displayedTaskProgressRevision_) {
     return;
   }
@@ -3756,7 +3765,8 @@ PlayOptionsPanelState MusicSelectScene::playOptionsState() const {
       .assistOption = selections.assistOption,
       .playbackRatePercent = context.settings.selectedPlaybackRatePercent,
       .clubMode = context.settings.gameplayClubModeEnabled,
-      .pacemakerTarget = selections.pacemakerTarget};
+      .pacemakerTarget = selections.pacemakerTarget,
+      .profileId = context.profileManager.activeProfile().id};
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return state;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
@@ -3946,7 +3956,7 @@ void MusicSelectScene::buildSkinLoadingView() {
       ->setJustifyContent(YGJustifyCenter)
       ->setPadding(Edge::All, 32)
       ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
-  auto *label = makeText(i18n::tr("music_select.loading_music_select_skin.progress"), 28,
+  auto *label = makeText(i18n::message("music_select.loading_music_select_skin.progress"), 28,
                          ui_theme::textPrimary);
   label->setHeight(56);
   label->setAlign(TextView::CENTER);

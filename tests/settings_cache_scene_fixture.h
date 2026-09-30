@@ -12,6 +12,7 @@ struct CacheTextView {
   void setText(const std::string &value) {
     assert(owner == std::this_thread::get_id()); text = value;
   }
+  void setLocalizedText(const i18n::Text &value) { setText(value.resolve()); }
   void setColor(SDL_Color value) {
     assert(owner == std::this_thread::get_id()); color = value;
   }

@@ -1,4 +1,5 @@
 #pragma once
+#include "../i18n/Localization.h"
 #include "../BmsSearchService.h"
 #include "../ChartLibraryScanner.h"
 #include "../library/ChartLibraryPlatform.h"
@@ -77,6 +78,7 @@ public:
   void init() override;
   void onPause() override;
   void onResume() override;
+  void onLanguageChanged() override;
   void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
 
@@ -524,7 +526,7 @@ private:
   void buildTasksModal();
   void showTasksModal();
   void hideTasksModal();
-  void refreshTasksModal();
+  void refreshTasksModal(bool force = false);
   std::string tasksModalTextSnapshot();
   void buildFindBmsModal();
   void showFindBmsModal(const ChartMetaRecord &record);
@@ -532,7 +534,7 @@ private:
   void startFindBmsPendingArtifactResolution(
       BmsSearchPendingArtifactDecision decision);
   void hideFindBmsModal();
-  void refreshFindBmsModal();
+  void refreshFindBmsModal(bool refreshCandidates = true);
   void applyFindBmsUpdates();
   void openFindBmsResultUrl(const std::string &url);
   std::filesystem::path preferredBmsDownloadRoot();
@@ -549,9 +551,9 @@ private:
   ReplayRecordsModalCallbacks makeRecordsModalCallbacks();
   std::vector<ResultRecordSummary>
   loadRecordsForModal(const ChartMetaRecord &record);
-  bool beginReplayExport(const std::string &progressTitle,
-                         const std::string &progressMessage,
-                         const std::string &statusMessage);
+  bool beginReplayExport(const i18n::Text &progressTitle,
+                         const i18n::Text &progressMessage,
+                         const i18n::Text &statusMessage);
   void preparePreviewForReplayExport();
   bms_parser::ChartMeta
   replayLoadMetaForRecord(const ChartMetaRecord &record) const;

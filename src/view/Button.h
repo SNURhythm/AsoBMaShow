@@ -46,6 +46,7 @@ public:
   void onMove(int newX, int newY) override;
   void onResize(int newWidth, int newHeight) override;
   void propagateThemeChange() override;
+  void propagateLanguageChange() override;
 
   void setOnClickListener(std::function<void()> listener);
   void setEnabled(bool enabled);

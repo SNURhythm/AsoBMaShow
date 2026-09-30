@@ -672,9 +672,9 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
   }
 }
 
-TextView *makeModalLabel(const std::string &text) {
+TextView *makeModalLabel(const i18n::Text &text) {
   auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  label->setText(text);
+  label->setLocalizedText(text);
   label->setThemedColor(ui_theme::textSecondary);
   label->setHeight(28);
   return label;
@@ -689,11 +689,11 @@ View *makeModalOptionRow(float height = 58.0f) {
   return row;
 }
 
-Button *makeModalButton(const std::string &label, int fontSize,
+Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, 160, 58);
   auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
@@ -926,10 +926,10 @@ void MainMenuScene::onApplicationBackgroundChanged(bool background) {
     archiveUnzipModal_->cancelAndWait();
     if (wasRunning) {
       if (unzipButtonText != nullptr) {
-        unzipButtonText->setText(i18n::tr("menu.unzip.label"));
+        unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
       }
       if (replayStatusText != nullptr) {
-        replayStatusText->setText(i18n::tr("menu.unzip_cancelled.label"));
+        replayStatusText->setLocalizedText(i18n::message("menu.unzip_cancelled.label"));
       }
     }
   }
@@ -997,6 +997,20 @@ void MainMenuScene::onResume() {
     return true;
   }, 0, true);
 #endif
+}
+
+void MainMenuScene::onLanguageChanged() {
+  Scene::onLanguageChanged();
+  // Rebind presentation only: reinitializing the scene would cancel workers,
+  // discard selection, and replace the user's filter and lane-order input.
+  if (folderRecyclerView != nullptr) folderRecyclerView->rebindVisibleItems();
+  if (recyclerView != nullptr) recyclerView->rebindVisibleItems();
+  refreshReadySettingsSummary();
+  refreshTasksButton();
+  refreshTasksModal(true);
+  refreshMusicModal();
+  refreshFindBmsModal(false);
+  if (rootLayout != nullptr) rootLayout->applyYogaLayout();
 }
 
 void MainMenuScene::reloadProfileSelectionsFromSettings() {
@@ -1110,13 +1124,9 @@ void MainMenuScene::refreshTasksButton() {
     return;
   }
   const int count = activeLibraryTaskCount();
-  std::string label = std::to_string(count);
-  label += count == 1 ? " Task" : " Tasks";
-  if (label == displayedLibraryTasksButtonText) {
-    return;
-  }
-  displayedLibraryTasksButtonText = label;
-  tasksButtonText->setText(label);
+  tasksButtonText->setLocalizedText(i18n::message(
+      count == 1 ? "menu.task_count.one" : "menu.task_count.other",
+      {{"count", std::to_string(count)}}));
 }
 
 void MainMenuScene::initView(ApplicationContext &context) {
@@ -1412,7 +1422,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (archiveVirtualPath && !context.settings.archiveChartPreviewEnabled) {
       jacketView->freeImage();
       if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setText(i18n::tr("menu.archive_preview_disabled.label"));
+        replayStatusText->setLocalizedText(i18n::message("menu.archive_preview_disabled.label"));
       }
       archive_file::appendDebugLogLine(
           "Preview skipped by archive chart preview setting: " +
@@ -1435,7 +1445,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     }
     if (suppressPreview) {
       if (!replayExportJob_.inProgress() && replayStatusText != nullptr) {
-        replayStatusText->setText(i18n::tr("menu.unzipped_chart_selected.label"));
+        replayStatusText->setLocalizedText(i18n::message("menu.unzipped_chart_selected.label"));
       }
       archive_file::appendDebugLogLine(
           "Preview suppressed for auto-selected unzipped chart: " +
@@ -1467,7 +1477,31 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                       int idx, bool isSelected) {
     auto *folderView = dynamic_cast<LibraryFolderItemView *>(view);
     if (folderView != nullptr) {
-      folderView->setItem(item.label, item.depth, item.count, isSelected,
+      // Folder metadata stays raw; only application-owned folder kinds have
+      // translated labels. Rebinding preserves the list's selection and scroll.
+      std::string label = item.label;
+      switch (item.type) {
+      case LibraryFolderItem::Type::AllSongs:
+        label = i18n::tr("library.folders.all_songs.label");
+        break;
+      case LibraryFolderItem::Type::Favorites:
+        label = i18n::tr("library.folders.favorites.label");
+        break;
+      case LibraryFolderItem::Type::SolidArchives:
+        label = i18n::tr("library.folders.solid_archive.label");
+        break;
+      case LibraryFolderItem::Type::CoursesRoot:
+        label = i18n::tr("library.folders.courses.label");
+        break;
+      case LibraryFolderItem::Type::CourseGroup:
+        if (item.courseGroupName.empty()) {
+          label = i18n::tr("library.folders.ungrouped.label");
+        }
+        break;
+      default:
+        break;
+      }
+      folderView->setItem(label, item.depth, item.count, isSelected,
                           item.clearMarkFolder ? item.clearMarkRank
                                                : clearRankForFolder(item.key),
                           item.clearMarkFolder, item.expandable,
@@ -1594,19 +1628,19 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   nav->setBorderWidth(1);
 
   bool showAddFolderButton = false;
-  std::string addFolderButtonLabel = i18n::tr("menu.add_folder.label");
+  i18n::Text addFolderButtonLabel = i18n::message("menu.add_folder.label");
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showAddFolderButton = true;
 #elif TARGET_OS_ANDROID
   const bool androidFullFileAccessBuild = AndroidBuildHasManageExternalStorage();
   showAddFolderButton = true;
   addFolderButtonLabel =
-      androidFullFileAccessBuild ? i18n::tr("menu.add_folder.label") : i18n::tr("menu.import_folder.label");
+      androidFullFileAccessBuild ? i18n::message("menu.add_folder.label") : i18n::message("menu.import_folder.label");
 #endif
   if (showAddFolderButton) {
     auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, 50);
     auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-    addFolderText->setText(addFolderButtonLabel);
+    addFolderText->setLocalizedText(addFolderButtonLabel);
     addFolderText->setAlign(TextView::CENTER);
     addFolderText->setVAlign(TextView::MIDDLE);
     addFolderButton->setContentView(addFolderText);
@@ -1627,7 +1661,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 #if TARGET_OS_ANDROID
   auto *importArchiveButton = new Button(0, 0, kLibraryControlWidth, 50);
   auto *importArchiveText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  importArchiveText->setText(i18n::tr("menu.import_archive.label"));
+  importArchiveText->setLocalizedText(i18n::message("menu.import_archive.label"));
   importArchiveText->setAlign(TextView::CENTER);
   importArchiveText->setVAlign(TextView::MIDDLE);
   importArchiveButton->setContentView(importArchiveText);
@@ -1672,13 +1706,13 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->setHeight(58);
 
   auto *libraryTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 44);
-  libraryTitle->setText(i18n::tr("menu.song_select.label"));
+  libraryTitle->setLocalizedText(i18n::message("menu.song_select.label"));
   libraryTitle->setThemedColor(ui_theme::textPrimary);
   libraryTitle->setVAlign(TextView::MIDDLE);
   libraryTitle->setFlex(1);
   libraryHeader->addView(libraryTitle);
 
-  parseLogButton = makeModalButton(i18n::tr("menu.log.label"), 20, &parseLogButtonText);
+  parseLogButton = makeModalButton(i18n::message("menu.log.label"), 20, &parseLogButtonText);
   parseLogButton->setWidth(112);
   parseLogButton->setHeight(50);
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
@@ -1687,7 +1721,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                           ui_theme::controlPressed, ui_theme::hairlineStrong);
   libraryHeader->addView(parseLogButton);
 
-  musicButton = makeModalButton(i18n::tr("menu.music.label"), 20, &musicButtonText);
+  musicButton = makeModalButton(i18n::message("menu.music.label"), 20, &musicButtonText);
   musicButton->setWidth(122);
   musicButton->setHeight(50);
   musicButton->setOnClickListener([this, &context]() {
@@ -1708,7 +1742,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   libraryHeader->addView(musicButton);
 
   irUploadsButton =
-      makeModalButton(i18n::tr("menu.ir_uploads.label"), 20, &irUploadsButtonText);
+      makeModalButton(i18n::message("menu.ir_uploads.label"), 20, &irUploadsButtonText);
   irUploadsButton->setWidth(154);
   irUploadsButton->setHeight(50);
   irUploadsButton->setOnClickListener([this, &context]() {
@@ -1729,7 +1763,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
                           ui_theme::hairlineStrong);
   libraryHeader->addView(irUploadsButton);
 
-  tasksButton = makeModalButton(i18n::tr("menu.task_count.empty"), 20, &tasksButtonText);
+  tasksButton = makeModalButton(i18n::message("menu.task_count.empty"), 20, &tasksButtonText);
   tasksButton->setWidth(142);
   tasksButton->setHeight(50);
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
@@ -1784,7 +1818,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   filterRow->addView(chartSortButton);
 
   auto *filterLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  filterLabel->setText(i18n::tr("menu.search.label"));
+  filterLabel->setLocalizedText(i18n::message("menu.search.label"));
   filterLabel->setThemedColor(ui_theme::textSecondary);
   left->addView(filterLabel);
   left->addView(filterRow);
@@ -1887,7 +1921,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   readyGaugeRow->setGap(6);
   readyGaugeRow->setHeight(28);
   auto *readyGaugeLabelText = makeReadyStatusText();
-  readyGaugeLabelText->setText(i18n::tr("menu.gauge.label"));
+  readyGaugeLabelText->setLocalizedText(i18n::message("menu.gauge.label"));
   readyGaugeLabelText->setThemedColor(ui_theme::textSecondary);
   readyGaugeLabelText->setWidth(70);
   readyGaugeText = makeReadyStatusText();
@@ -1948,7 +1982,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   startButton = new Button(0, 0, 220, 86);
   auto buttonText = new TextView("assets/fonts/notosanscjkjp.ttf", 32);
   startButtonText = buttonText;
-  buttonText->setText(i18n::tr("menu.start.label"));
+  buttonText->setLocalizedText(i18n::message("menu.start.label"));
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
   startButton->setContentView(buttonText);
@@ -1979,7 +2013,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   replayButton = new Button(0, 0, 220, 58);
   replayButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  replayButtonText->setText(i18n::tr("menu.records.label"));
+  replayButtonText->setLocalizedText(i18n::message("menu.records.label"));
   replayButtonText->setAlign(TextView::CENTER);
   replayButtonText->setVAlign(TextView::MIDDLE);
   replayButton->setContentView(replayButtonText);
@@ -2015,7 +2049,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   findBmsButton = new Button(0, 0, 220, 58);
   findBmsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  findBmsButtonText->setText(i18n::tr("menu.find_bms.label"));
+  findBmsButtonText->setLocalizedText(i18n::message("menu.find_bms.label"));
   findBmsButtonText->setAlign(TextView::CENTER);
   findBmsButtonText->setVAlign(TextView::MIDDLE);
   findBmsButton->setContentView(findBmsButtonText);
@@ -2033,7 +2067,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   unzipButton = new Button(0, 0, 220, 58);
   unzipButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  unzipButtonText->setText(i18n::tr("menu.unzip.label"));
+  unzipButtonText->setLocalizedText(i18n::message("menu.unzip.label"));
   unzipButtonText->setAlign(TextView::CENTER);
   unzipButtonText->setVAlign(TextView::MIDDLE);
   unzipButton->setContentView(unzipButtonText);
@@ -2070,7 +2104,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   rankingsButton = new Button(0, 0, 220, 58);
   rankingsButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  rankingsButtonText->setText(i18n::tr("menu.rankings.label"));
+  rankingsButtonText->setLocalizedText(i18n::message("menu.rankings.label"));
   rankingsButtonText->setAlign(TextView::CENTER);
   rankingsButtonText->setVAlign(TextView::MIDDLE);
   rankingsButton->setContentView(rankingsButtonText);
@@ -2093,7 +2127,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   auto *viewerButton = new Button(0, 0, 105, 58);
   viewerButton->setFlex(1);
   auto *viewerButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  viewerButtonText->setText(i18n::tr("menu.viewer.label"));
+  viewerButtonText->setLocalizedText(i18n::message("menu.viewer.label"));
   viewerButtonText->setAlign(TextView::CENTER);
   viewerButtonText->setVAlign(TextView::MIDDLE);
   viewerButton->setContentView(viewerButtonText);
@@ -2106,7 +2140,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   revealButton = new Button(0, 0, 105, 58);
   revealButton->setFlex(1);
   auto *revealButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
-  revealButtonText->setText(i18n::tr("menu.reveal.label"));
+  revealButtonText->setLocalizedText(i18n::message("menu.reveal.label"));
   revealButtonText->setAlign(TextView::CENTER);
   revealButtonText->setVAlign(TextView::MIDDLE);
   revealButton->setContentView(revealButtonText);
@@ -2135,7 +2169,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 
   auto *settingsButton = new Button(0, 0, 220, 64);
   auto *settingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 26);
-  settingsText->setText(i18n::tr("menu.settings.label"));
+  settingsText->setLocalizedText(i18n::message("menu.settings.label"));
   settingsText->setAlign(TextView::CENTER);
   settingsText->setVAlign(TextView::MIDDLE);
   settingsButton->setContentView(settingsText);
@@ -3506,7 +3540,7 @@ void MainMenuScene::openRankingsForSelection() {
       selectedLongNoteMode);
   if (best) {
     comparison = ir::IrLocalComparison{
-        .label = i18n::tr("menu.local_pb.label"),
+        .label = i18n::message("menu.local_pb.label"),
         .score = best->score,
         .maxScore = best->maxScore > 0
                         ? best->maxScore
@@ -3796,7 +3830,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackRatePercent = playbackRate,
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
-       .pacemakerTarget = profileSelections.pacemakerTarget});
+       .pacemakerTarget = profileSelections.pacemakerTarget,
+       .profileId = context.profileManager.activeProfile().id});
 }
 
 bool MainMenuScene::playbackSelectionLockedForCourse() const {
@@ -3853,7 +3888,7 @@ void MainMenuScene::refreshReadySettingsSummary() {
     const bool optionEnabled =
         assist_options::isEnabled(effective.assistOption);
     if (!optionEnabled && percent == 100) {
-      readyAssistOptionText->setText(i18n::tr("menu.assist_off.label"));
+      readyAssistOptionText->setLocalizedText(i18n::message("menu.assist_off.label"));
     } else {
       std::string reasons;
       if (optionEnabled) {
@@ -3928,23 +3963,23 @@ void MainMenuScene::refreshStartButtonForActiveFolder() {
   }
   if (activeFolder.type != LibraryFolderItem::Type::Course ||
       activeFolder.courseId <= 0) {
-    startButtonText->setText(i18n::tr("library.folders.start.label"));
+    startButtonText->setLocalizedText(i18n::message("library.folders.start.label"));
     return;
   }
   const auto selectedRecord = selectedRecordSnapshot();
   if (selectedRecord.has_value() && !selectedRecord->courseStart) {
-    startButtonText->setText(i18n::tr("library.folders.start.label"));
+    startButtonText->setLocalizedText(i18n::message("library.folders.start.label"));
     return;
   }
 
   const CourseValidationCache &validation = courseValidationForActiveFolder();
   if (validation.empty) {
-    startButtonText->setText(i18n::tr("library.folders.no_course.label"));
+    startButtonText->setLocalizedText(i18n::message("library.folders.no_course.label"));
     return;
   }
 
-  startButtonText->setText(validation.firstMissingIndex >= 0 ? i18n::tr("library.folders.missing.label")
-                                                             : i18n::tr("library.folders.start_course.label"));
+  startButtonText->setLocalizedText(validation.firstMissingIndex >= 0 ? i18n::message("library.folders.missing.label")
+                                                             : i18n::message("library.folders.start_course.label"));
 }
 
 void MainMenuScene::startSelectedCourse() {
@@ -3961,7 +3996,7 @@ void MainMenuScene::startSelectedCourse() {
   const CourseValidationCache &validation = courseValidationForActiveFolder();
   if (validation.empty) {
     if (replayStatusText != nullptr) {
-      replayStatusText->setText(i18n::tr("menu.no_course_charts.label"));
+      replayStatusText->setLocalizedText(i18n::message("menu.no_course_charts.label"));
     }
     refreshStartButtonForActiveFolder();
     return;
@@ -3971,7 +4006,7 @@ void MainMenuScene::startSelectedCourse() {
   const int firstMissingIndex = validation.firstMissingIndex;
   if (firstMissingIndex >= 0) {
     if (replayStatusText != nullptr) {
-      replayStatusText->setText(i18n::tr("menu.course_has_missing_charts.label"));
+      replayStatusText->setLocalizedText(i18n::message("menu.course_has_missing_charts.label"));
     }
     int visibleMissingIndex = -1;
     const auto &missingRecord =
@@ -4033,7 +4068,7 @@ void MainMenuScene::startCourseDirect(
   }
 
   if (startButtonText != nullptr) {
-    startButtonText->setText(i18n::tr("menu.loading.progress"));
+    startButtonText->setLocalizedText(i18n::message("menu.loading.progress"));
   }
   ImageView::dropAllCache();
   if (previewWorker_ != nullptr) {
@@ -4080,7 +4115,7 @@ void MainMenuScene::startCourseDirect(
         }
         if (preparedChart == nullptr || parseCancelled) {
           if (replayStatusText != nullptr) {
-            replayStatusText->setText(i18n::tr("menu.course_start_failed.label"));
+            replayStatusText->setLocalizedText(i18n::message("menu.course_start_failed.label"));
           }
           return finishStart();
         }
@@ -4168,7 +4203,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   }
 
   if (startButtonText != nullptr) {
-    startButtonText->setText(i18n::tr("menu.loading.progress"));
+    startButtonText->setLocalizedText(i18n::message("menu.loading.progress"));
   }
   if (decideOverlay_ != nullptr) {
     decideOverlay_->setChart(record);
@@ -4431,9 +4466,9 @@ void MainMenuScene::toggleRevealContextMenu() {
        .width = revealButton->getWidth(),
        .height = revealButton->getHeight()},
       {{.id = "show-same-folder",
-        .label = i18n::tr("menu.show_same_folder.label"),
+        .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
-       {.id = "reveal-file", .label = i18n::tr("menu.reveal_file.label")}},
+       {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")}},
       220);
 }
 
@@ -4619,7 +4654,7 @@ void MainMenuScene::setUnzipButtonVisible(bool visible) {
   unzipButtonSlot->setVisible(show);
   unzipButtonSlot->setHeight(show ? 58.0f : 0.0f);
   if (unzipButtonText != nullptr && archiveUnzipInProgress()) {
-    unzipButtonText->setText(i18n::tr("library.archive.unzipping.progress"));
+    unzipButtonText->setLocalizedText(i18n::message("library.archive.unzipping.progress"));
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -4634,8 +4669,8 @@ void MainMenuScene::refreshUnzipButtonForSelection(
     visible = record->solidArchive;
   }
   if (unzipButtonText != nullptr && !archiveUnzipInProgress()) {
-    unzipButtonText->setText(record != nullptr && record->unzipAll
-                                ? i18n::tr("library.archive.unzip_all.label") : i18n::tr("library.archive.unzip.label"));
+    unzipButtonText->setLocalizedText(record != nullptr && record->unzipAll
+                                ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzip.label"));
   }
   setUnzipButtonVisible(visible);
 }
@@ -4678,12 +4713,12 @@ void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
     return;
   }
   if (unzipButtonText != nullptr) {
-    unzipButtonText->setText(record.unzipAll ? i18n::tr("library.archive.unzip_all.label") : i18n::tr("library.archive.unzipping.progress"));
+    unzipButtonText->setLocalizedText(record.unzipAll ? i18n::message("library.archive.unzip_all.label") : i18n::message("library.archive.unzipping.progress"));
   }
   if (replayStatusText != nullptr) {
-    replayStatusText->setText(record.unzipAll
-                                 ? i18n::tr("library.archive.choose_whether_keep_delete_archives.message")
-                                 : i18n::tr("library.archive.unzipping_full_archive.progress"));
+    replayStatusText->setLocalizedText(record.unzipAll
+                                 ? i18n::message("library.archive.choose_whether_keep_delete_archives.message")
+                                 : i18n::message("library.archive.unzipping_full_archive.progress"));
   }
   setUnzipButtonVisible(true);
 }
@@ -4697,7 +4732,7 @@ void MainMenuScene::buildUnzipProgressModal() {
   callbacks.libraryChanged = [this]() { requestLibraryReload(true); };
   callbacks.finished = [this](const ArchiveUnzipResult &result) {
     if (unzipButtonText != nullptr) {
-      unzipButtonText->setText(result.success ? i18n::tr("library.archive.unzipped.label") : i18n::tr("library.archive.unzip.label"));
+      unzipButtonText->setLocalizedText(result.success ? i18n::message("library.archive.unzipped.label") : i18n::message("library.archive.unzip.label"));
     }
     if (result.success && !result.chartPath.empty()) {
       pendingSelectChartPath = result.chartPath;
@@ -4814,7 +4849,7 @@ void MainMenuScene::buildParseLogModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText(i18n::tr("menu.parsing_logs.label"));
+  title->setLocalizedText(i18n::message("menu.parsing_logs.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
@@ -4860,13 +4895,13 @@ void MainMenuScene::buildParseLogModal() {
   footer->addView(parseLogExportStatusText);
 
   parseLogExportButton =
-      makeModalButton(i18n::tr("menu.export_log.label"), 20, &parseLogExportButtonText);
+      makeModalButton(i18n::message("menu.export_log.label"), 20, &parseLogExportButtonText);
   parseLogExportButton->setWidth(160);
   parseLogExportButton->setOnClickListener(
       [this]() { startParseLogExport(); });
   footer->addView(parseLogExportButton);
 
-  parseLogCloseButton = makeModalButton(i18n::tr("menu.parse_log.close.label"), 20, &parseLogCloseButtonText);
+  parseLogCloseButton = makeModalButton(i18n::message("menu.parse_log.close.label"), 20, &parseLogCloseButtonText);
   parseLogCloseButton->setWidth(130);
   parseLogCloseButton->setOnClickListener([this]() { hideParseLogModal(); });
   styleThemedActionButton(parseLogCloseButton, parseLogCloseButtonText, true,
@@ -4905,7 +4940,7 @@ void MainMenuScene::startParseLogExport() {
     return;
   }
   if (parseLogExportStatusText != nullptr) {
-    parseLogExportStatusText->setText(i18n::tr("menu.preparing_performance_log.progress"));
+    parseLogExportStatusText->setLocalizedText(i18n::message("menu.preparing_performance_log.progress"));
   }
   std::string logText = archive_file::debugLogText();
   const std::uint64_t exportLimit = std::max<std::uint64_t>(
@@ -4927,9 +4962,9 @@ void MainMenuScene::applyParseLogDocumentHandoff() {
   parseLogDocumentHandoff.close();
   if (parseLogExportStatusText != nullptr && result) {
     if (result->ok()) {
-      parseLogExportStatusText->setText(i18n::tr("menu.performance_log_exported.message"));
+      parseLogExportStatusText->setLocalizedText(i18n::message("menu.performance_log_exported.message"));
     } else if (result->cancelled()) {
-      parseLogExportStatusText->setText(i18n::tr("menu.log_export_cancelled.message"));
+      parseLogExportStatusText->setLocalizedText(i18n::message("menu.log_export_cancelled.message"));
     } else {
       const std::string message =
           result->message.empty() ? i18n::tr("menu.log_export_failed.message") : result->message;
@@ -4945,7 +4980,7 @@ void MainMenuScene::refreshParseLogExportControls() {
     return;
   }
   const bool enabled = !static_cast<bool>(parseLogDocumentHandoff);
-  parseLogExportButtonText->setText(enabled ? i18n::tr("menu.export_log.label") : i18n::tr("menu.exporting.progress"));
+  parseLogExportButtonText->setLocalizedText(enabled ? i18n::message("menu.export_log.label") : i18n::message("menu.exporting.progress"));
   styleThemedActionButton(
       parseLogExportButton, parseLogExportButtonText, enabled,
       ui_theme::primaryAction, ui_theme::primaryActionHover,
@@ -5033,7 +5068,7 @@ void MainMenuScene::buildMusicModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText(i18n::tr("menu.music_player.label"));
+  title->setLocalizedText(i18n::message("menu.music_player.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
@@ -5060,11 +5095,11 @@ void MainMenuScene::buildMusicModal() {
 
   auto *sourceRow = makeModalOptionRow();
   musicSelectedButton =
-      makeModalButton(i18n::tr("menu.play_selected.label"), 18, &musicSelectedButtonText);
+      makeModalButton(i18n::message("menu.play_selected.label"), 18, &musicSelectedButtonText);
   musicSelectedButton->setFlex(1);
   musicSelectedButton->setOnClickListener(
       [this]() { playSelectedChartAsMusic(); });
-  musicRandomButton = makeModalButton(i18n::tr("menu.random_all.label"), 20, &musicRandomButtonText);
+  musicRandomButton = makeModalButton(i18n::message("menu.random_all.label"), 20, &musicRandomButtonText);
   musicRandomButton->setFlex(1);
   musicRandomButton->setOnClickListener([this]() { playRandomMusicLibrary(); });
   sourceRow->addView(musicSelectedButton);
@@ -5073,22 +5108,22 @@ void MainMenuScene::buildMusicModal() {
 
   auto *playlistRow = makeModalOptionRow();
   musicAddSelectedButton =
-      makeModalButton(i18n::tr("menu.add_selected.label"), 18, &musicAddSelectedButtonText);
+      makeModalButton(i18n::message("menu.add_selected.label"), 18, &musicAddSelectedButtonText);
   musicAddSelectedButton->setFlex(1);
   musicAddSelectedButton->setOnClickListener(
       [this]() { addSelectedChartToMusicPlaylist(); });
   musicRemoveSelectedButton =
-      makeModalButton(i18n::tr("menu.remove_selected.label"), 16, &musicRemoveSelectedButtonText);
+      makeModalButton(i18n::message("menu.remove_selected.label"), 16, &musicRemoveSelectedButtonText);
   musicRemoveSelectedButton->setFlex(1);
   musicRemoveSelectedButton->setOnClickListener(
       [this]() { removeSelectedChartFromMusicPlaylist(); });
   musicPlaylistButton =
-      makeModalButton(i18n::tr("menu.play_playlist.label"), 18, &musicPlaylistButtonText);
+      makeModalButton(i18n::message("menu.play_playlist.label"), 18, &musicPlaylistButtonText);
   musicPlaylistButton->setFlex(1);
   musicPlaylistButton->setOnClickListener(
       [this]() { playSavedMusicPlaylist(); });
   musicClearPlaylistButton =
-      makeModalButton(i18n::tr("menu.clear.label"), 18, &musicClearPlaylistButtonText);
+      makeModalButton(i18n::message("menu.clear.label"), 18, &musicClearPlaylistButtonText);
   musicClearPlaylistButton->setFlex(1);
   musicClearPlaylistButton->setOnClickListener(
       [this]() { clearSavedMusicPlaylist(); });
@@ -5100,7 +5135,7 @@ void MainMenuScene::buildMusicModal() {
 
   auto *transportRow = makeModalOptionRow();
   musicPreviousButton =
-      makeModalButton(i18n::tr("menu.previous.label"), 16, &musicPreviousButtonText);
+      makeModalButton(i18n::message("menu.previous.label"), 16, &musicPreviousButtonText);
   musicPreviousButton->setFlex(1);
   musicPreviousButton->setOnClickListener(
       [this]() { playPreviousMusicTrack(); });
@@ -5109,7 +5144,7 @@ void MainMenuScene::buildMusicModal() {
   musicSeekBackwardButton->setFlex(1);
   musicSeekBackwardButton->setOnClickListener(
       [this]() { seekMusicRelative(-10000000LL); });
-  musicPlayPauseButton = makeModalButton(i18n::tr("menu.play.label"), 20, &musicPlayPauseButtonText);
+  musicPlayPauseButton = makeModalButton(i18n::message("menu.play.label"), 20, &musicPlayPauseButtonText);
   musicPlayPauseButton->setFlex(1);
   musicPlayPauseButton->setOnClickListener([this]() { toggleMusicPlayback(); });
   musicSeekForwardButton =
@@ -5117,10 +5152,10 @@ void MainMenuScene::buildMusicModal() {
   musicSeekForwardButton->setFlex(1);
   musicSeekForwardButton->setOnClickListener(
       [this]() { seekMusicRelative(10000000LL); });
-  musicNextButton = makeModalButton(i18n::tr("menu.next.label"), 20, &musicNextButtonText);
+  musicNextButton = makeModalButton(i18n::message("menu.next.label"), 20, &musicNextButtonText);
   musicNextButton->setFlex(1);
   musicNextButton->setOnClickListener([this]() { playNextMusicTrack(); });
-  musicStopButton = makeModalButton(i18n::tr("menu.stop.label"), 18, &musicStopButtonText);
+  musicStopButton = makeModalButton(i18n::message("menu.stop.label"), 18, &musicStopButtonText);
   musicStopButton->setFlex(1);
   musicStopButton->setOnClickListener([this]() { stopMusicPlayback(); });
   transportRow->addView(musicPreviousButton);
@@ -5138,7 +5173,7 @@ void MainMenuScene::buildMusicModal() {
   footer->setGap(12);
   footer->setHeight(58);
 
-  musicCloseButton = makeModalButton(i18n::tr("menu.music_player.close.label"), 20, &musicCloseButtonText);
+  musicCloseButton = makeModalButton(i18n::message("menu.music_player.close.label"), 20, &musicCloseButtonText);
   musicCloseButton->setWidth(130);
   musicCloseButton->setOnClickListener([this]() { hideMusicModal(); });
   footer->addView(musicCloseButton);
@@ -5208,8 +5243,8 @@ void MainMenuScene::refreshMusicModal() {
           context.musicPlayer.DefaultPlaylistTracksSnapshot()));
 
   if (musicPlayPauseButtonText != nullptr) {
-    musicPlayPauseButtonText->setText(
-        playback.playing ? i18n::tr("menu.pause.label") : (playback.loaded ? i18n::tr("menu.resume.label") : i18n::tr("menu.play.label")));
+    musicPlayPauseButtonText->setLocalizedText(
+        playback.playing ? i18n::message("menu.pause.label") : (playback.loaded ? i18n::message("menu.resume.label") : i18n::message("menu.play.label")));
   }
 
   styleThemedActionButton(musicSelectedButton, musicSelectedButtonText, true,
@@ -5513,7 +5548,7 @@ void MainMenuScene::buildTasksModal() {
       ->setBorderWidth(1);
 
   auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  title->setText(i18n::tr("menu.tasks.label"));
+  title->setLocalizedText(i18n::message("menu.tasks.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(42);
   panel->addView(title);
@@ -5549,7 +5584,7 @@ void MainMenuScene::buildTasksModal() {
   footer->setHeight(58);
 
   tasksRefreshButton =
-      makeModalButton(i18n::tr("menu.refresh_list.label"), 18, &tasksRefreshButtonText);
+      makeModalButton(i18n::message("menu.refresh_list.label"), 18, &tasksRefreshButtonText);
   tasksRefreshButton->setWidth(150);
   tasksRefreshButton->setOnClickListener([this]() {
     requestLibraryScanFlush();
@@ -5561,7 +5596,7 @@ void MainMenuScene::buildTasksModal() {
                           ui_theme::successActionPressed,
                           ui_theme::accentBorder);
 
-  tasksCloseButton = makeModalButton(i18n::tr("menu.tasks.close.label"), 20, &tasksCloseButtonText);
+  tasksCloseButton = makeModalButton(i18n::message("menu.tasks.close.label"), 20, &tasksCloseButtonText);
   tasksCloseButton->setWidth(130);
   tasksCloseButton->setOnClickListener([this]() { hideTasksModal(); });
   styleThemedActionButton(tasksCloseButton, tasksCloseButtonText, true,
@@ -5596,7 +5631,7 @@ void MainMenuScene::hideTasksModal() {
   }
 }
 
-void MainMenuScene::refreshTasksModal() {
+void MainMenuScene::refreshTasksModal(bool force) {
   if (tasksModalRoot == nullptr || tasksText == nullptr) {
     return;
   }
@@ -5604,7 +5639,7 @@ void MainMenuScene::refreshTasksModal() {
   const auto snapshot = context.chartLibraryTasks
                             ? context.chartLibraryTasks->snapshot()
                             : chart_library_tasks::Snapshot{};
-  if (snapshot.revision == displayedLibraryTasksRevision &&
+  if (!force && snapshot.revision == displayedLibraryTasksRevision &&
       snapshot.progress.revision == displayedLibraryProgressRevision) {
     return;
   }
@@ -5746,13 +5781,13 @@ void MainMenuScene::buildFindBmsModal() {
       ->setBorderWidth(1);
 
   findBmsModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
-  findBmsModalTitleText->setText(i18n::tr("library.find_bms.find_bms.label"));
+  findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
   findBmsModalTitleText->setThemedColor(ui_theme::textPrimary);
   findBmsModalTitleText->setHeight(42);
   panel->addView(findBmsModalTitleText);
 
   findBmsStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  findBmsStatusText->setText(i18n::tr("library.find_bms.preparing_lookup.label"));
+  findBmsStatusText->setLocalizedText(i18n::message("library.find_bms.preparing_lookup.label"));
   findBmsStatusText->setThemedColor(ui_theme::textPrimary);
   findBmsStatusText->setWrap(true);
   findBmsStatusText->setOverflow(TextView::TextOverflow::Hidden);
@@ -5818,15 +5853,15 @@ void MainMenuScene::buildFindBmsModal() {
   footer->setGap(12);
   footer->setHeight(58);
 
-  findBmsCloseButton = makeModalButton(i18n::tr("library.find_bms.cancel.label"), 20, &findBmsCloseButtonText);
+  findBmsCloseButton = makeModalButton(i18n::message("library.find_bms.cancel.label"), 20, &findBmsCloseButtonText);
   findBmsKeepFilesButton =
-      makeModalButton(i18n::tr("library.find_bms.keep_files.label"), 18, &findBmsKeepFilesButtonText);
+      makeModalButton(i18n::message("library.find_bms.keep_files.label"), 18, &findBmsKeepFilesButtonText);
   findBmsDeleteFilesButton =
-      makeModalButton(i18n::tr("library.find_bms.delete_files.label"), 18, &findBmsDeleteFilesButtonText);
-  findBmsOpenButton = makeModalButton(i18n::tr("library.find_bms.source.label"), 18, &findBmsOpenButtonText);
-  findBmsGoogleButton = makeModalButton(i18n::tr("library.find_bms.search.label"), 18, &findBmsGoogleButtonText);
+      makeModalButton(i18n::message("library.find_bms.delete_files.label"), 18, &findBmsDeleteFilesButtonText);
+  findBmsOpenButton = makeModalButton(i18n::message("library.find_bms.source.label"), 18, &findBmsOpenButtonText);
+  findBmsGoogleButton = makeModalButton(i18n::message("library.find_bms.search.label"), 18, &findBmsGoogleButtonText);
   findBmsRefreshButton =
-      makeModalButton(i18n::tr("library.find_bms.refresh.label"), 18, &findBmsRefreshButtonText);
+      makeModalButton(i18n::message("library.find_bms.refresh.label"), 18, &findBmsRefreshButtonText);
 
   findBmsCloseButton->setWidth(130);
   findBmsKeepFilesButton->setWidth(150);
@@ -5990,7 +6025,7 @@ void MainMenuScene::hideFindBmsModal() {
   findBmsModalRoot->setVisible(false);
 }
 
-void MainMenuScene::refreshFindBmsModal() {
+void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
   if (findBmsModalRoot == nullptr) {
     return;
   }
@@ -5999,7 +6034,7 @@ void MainMenuScene::refreshFindBmsModal() {
   const auto policy =
       findBmsDialogPolicy(findBmsTask.running(), findBmsResult);
   if (findBmsModalTitleText != nullptr) {
-    findBmsModalTitleText->setText(i18n::tr("library.find_bms.find_bms.label"));
+    findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
   }
 
   std::string statusText;
@@ -6094,7 +6129,7 @@ void MainMenuScene::refreshFindBmsModal() {
     findBmsDetailText->setText(detail);
   }
 
-  if (findBmsCandidateRecyclerView != nullptr) {
+  if (refreshCandidates && findBmsCandidateRecyclerView != nullptr) {
     findBmsCandidateRecyclerView->setVisible(showCandidateList);
     const int visibleRows =
         showCandidateList
@@ -6135,7 +6170,7 @@ void MainMenuScene::refreshFindBmsModal() {
   const bool hasRefreshAction =
       policy.showNormalResultActions && !running && !downloaded;
   if (findBmsCloseButtonText != nullptr) {
-    findBmsCloseButtonText->setText(running ? i18n::tr("library.find_bms.cancel.label") : i18n::tr("library.find_bms.close.label"));
+    findBmsCloseButtonText->setLocalizedText(running ? i18n::message("library.find_bms.cancel.label") : i18n::message("library.find_bms.close.label"));
   }
   if (findBmsCloseButton != nullptr) {
     findBmsCloseButton->setVisible(policy.showCloseOrCancel);
@@ -6158,9 +6193,9 @@ void MainMenuScene::refreshFindBmsModal() {
         findBmsResult.fallbackUrl.empty() && !findBmsResult.downloadUrl.empty();
     const bool bmsSearchSource =
         manualSourceUrl.find("bmssearch.net") != std::string::npos;
-    findBmsOpenButtonText->setText(
-        downloadSource ? i18n::tr("library.find_bms.download.label")
-                       : (bmsSearchSource ? i18n::tr("library.find_bms.bms_search.label") : i18n::tr("library.find_bms.source.label")));
+    findBmsOpenButtonText->setLocalizedText(
+        downloadSource ? i18n::message("library.find_bms.download.label")
+                       : (bmsSearchSource ? i18n::message("library.find_bms.bms_search.label") : i18n::message("library.find_bms.source.label")));
   }
   if (findBmsOpenButton != nullptr) {
     findBmsOpenButton->setVisible(!running && hasSource);
@@ -7107,9 +7142,9 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
       true);
 }
 
-bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
-                                      const std::string &progressMessage,
-                                      const std::string &statusMessage) {
+bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,
+                                      const i18n::Text &progressMessage,
+                                      const i18n::Text &statusMessage) {
   if (!replayExportJob_.tryBegin()) {
     return false;
   }
@@ -7126,7 +7161,7 @@ bool MainMenuScene::beginReplayExport(const std::string &progressTitle,
     recordsModal_->setStatus(statusMessage);
   }
   if (replayStatusText != nullptr) {
-    replayStatusText->setText(statusMessage);
+    replayStatusText->setLocalizedText(statusMessage);
   }
   return true;
 }
@@ -7140,8 +7175,8 @@ void MainMenuScene::preparePreviewForReplayExport() {
 
 void MainMenuScene::startAutoPlayVideoExport(
     const ChartMetaRecord &record, ReplayVideoExportOptions options) {
-  if (!beginReplayExport(i18n::tr("menu.exporting_replay.label"), i18n::tr("menu.preparing_export.label"),
-                         i18n::tr("menu.exporting.progress"))) {
+  if (!beginReplayExport(i18n::message("menu.exporting_replay.label"), i18n::message("menu.preparing_export.label"),
+                         i18n::message("menu.exporting.progress"))) {
     return;
   }
 
@@ -7202,8 +7237,8 @@ void MainMenuScene::startAutoPlayVideoExport(
 void MainMenuScene::startModernReplayVideoExport(
     const ChartMetaRecord &record, ModernChartResultRecord modern,
     ReplayVideoExportOptions options) {
-  if (!beginReplayExport(i18n::tr("menu.exporting_replay.label"), i18n::tr("menu.preparing_export.label"),
-                         i18n::tr("menu.exporting.progress"))) {
+  if (!beginReplayExport(i18n::message("menu.exporting_replay.label"), i18n::message("menu.preparing_export.label"),
+                         i18n::message("menu.exporting.progress"))) {
     return;
   }
 
@@ -7246,8 +7281,8 @@ void MainMenuScene::startModernCourseReplayVideoExport(
     return;
   }
   auto chartPaths = std::move(currentSelection->completedChartPaths);
-  if (!beginReplayExport(i18n::tr("menu.exporting_course_replay.label"), i18n::tr("menu.preparing_export.label"),
-                         i18n::tr("menu.exporting.progress"))) {
+  if (!beginReplayExport(i18n::message("menu.exporting_course_replay.label"), i18n::message("menu.preparing_export.label"),
+                         i18n::message("menu.exporting.progress"))) {
     return;
   }
 
@@ -7344,7 +7379,7 @@ void MainMenuScene::startModernReplayIrUpload(
   replayIrUploadInProgress = true;
   if (recordsModal_ != nullptr) {
     recordsModal_->setIrUploadInProgress(true);
-    recordsModal_->showIrFeedback(i18n::tr("menu.preparing_ir.progress"));
+    recordsModal_->showIrFeedback(i18n::message("menu.preparing_ir.progress"));
   }
   if (previewWorker_ != nullptr) {
     previewWorker_->cancel();
@@ -7633,10 +7668,10 @@ void MainMenuScene::applyReplayExportResult() {
 
   if (replayStatusText != nullptr) {
     if (result->success) {
-      replayStatusText->setText(
-          result->message == "Saved to Photos" ? i18n::tr("menu.saved.label") : i18n::tr("menu.exported.label"));
+      replayStatusText->setLocalizedText(
+          result->message == "Saved to Photos" ? i18n::message("menu.saved.label") : i18n::message("menu.exported.label"));
     } else if (result->message == "No Chart") {
-      replayStatusText->setText(i18n::tr("menu.no_chart.label"));
+      replayStatusText->setLocalizedText(i18n::message("menu.no_chart.label"));
     } else {
       replayStatusText->setText(replay_records::diagnosticOr(
           result->message, i18n::tr("menu.replay_export_failed.message")));
@@ -7646,11 +7681,12 @@ void MainMenuScene::applyReplayExportResult() {
     recordsModal_->setExportInProgress(false);
     recordsModal_->returnToList(
         result->success
-            ? (result->message == "Saved to Photos" ? i18n::tr("menu.saved.label") : i18n::tr("menu.exported.label"))
+            ? (result->message == "Saved to Photos" ? i18n::message("menu.saved.label") : i18n::message("menu.exported.label"))
             : (result->message == "No Chart"
-                   ? i18n::tr("menu.no_chart.label")
-                   : replay_records::diagnosticOr(result->message,
-                                        i18n::tr("menu.replay_export_failed.message"))));
+                   ? i18n::message("menu.no_chart.label")
+                   : (result->message.empty()
+                          ? i18n::message("menu.replay_export_failed.message")
+                          : i18n::Text(result->message))));
   }
 
   if (result->success) {

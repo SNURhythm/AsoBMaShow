@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ArchiveUnzipOperation.h"
+#include "../i18n/Localization.h"
 
 #include <SDL2/SDL.h>
 #include <functional>
@@ -44,7 +45,7 @@ private:
   void beginAll(bool deleteAfterUnzip);
   void setAllChoiceVisible(bool visible);
   void setDeleteVisible(bool visible);
-  void updateProgress(double fraction, const std::string &message,
+  void updateProgress(double fraction, const i18n::Text &message,
                       std::uint64_t current = 0, std::uint64_t total = 0);
 
   ArchiveUnzipOperation operation_;

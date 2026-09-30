@@ -26,7 +26,7 @@ class SettingsInputBindingUiContracts(unittest.TestCase):
             source,
             re.compile(
                 r"for \(const auto &binding : visibleBindings\) \{"
-                r"[\s\S]*?makeText\(i18n::tr\(\"settings.input.unbind.label\""
+                r"[\s\S]*?makeText\(i18n::message\(\"settings.input.unbind.label\""
                 r"[\s\S]*?setOnClickListener\("
                 r"\[this, bindingId = binding\.id\]\(\) \{"
                 r"[\s\S]*?inputCaptureController->cancel\(\);"

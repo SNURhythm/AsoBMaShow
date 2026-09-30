@@ -108,6 +108,7 @@ void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
     pendingRegisteredSceneChange_.reset();
     resumingScene_ = true;
     try {
+      currentScene->refreshLanguageIfNeeded();
       currentScene->onResume();
     } catch (...) {
       resumingScene_ = false;
@@ -147,14 +148,19 @@ EventHandleResult SceneManager::handleEvents(SDL_Event &event) {
   EventHandleResult result;
   View::dispatchTemporaryEventListeners(event);
   if (currentScene) {
+    currentScene->refreshLanguageIfNeeded();
     result = currentScene->handleEvents(event);
   }
   View::dispatchDeferredEventCallbacks();
+  if (currentScene) {
+    currentScene->refreshLanguageIfNeeded();
+  }
   return result;
 }
 
 void SceneManager::update(float dt) {
   if (currentScene) {
+    currentScene->refreshLanguageIfNeeded();
     currentScene->update(dt);
   }
 }

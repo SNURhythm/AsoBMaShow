@@ -50,7 +50,7 @@ class SettingsVirtualControllerUiContracts(unittest.TestCase):
         )
         self.assertRegex(
             source,
-            r'hispeedAutoAdjustModeText\s*=\s*makeText\(\s*i18n::tr\('
+            r'hispeedAutoAdjustModeText\s*=\s*makeText\(\s*i18n::message\('
             r'"settings.lane.hi_speed_auto_adjust_off.label"[\s\S]{0,300}'
             r'hispeedAutoAdjustButtonWidth\s*=\s*std::max\('
             r'metrics\.actionButtonWidth,\s*'

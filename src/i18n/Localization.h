@@ -1,6 +1,8 @@
 #pragma once
 
 #include <initializer_list>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -31,6 +33,34 @@ inline Language resolveLanguage(
 
 void setLanguage(Language language);
 Language language();
+std::uint64_t revision();
+
+namespace detail { struct Message; }
+
+// Presentation text retains its identity across language changes. Raw values
+// (including user input and chart metadata) never become translation keys.
+class Text {
+public:
+  Text() = default;
+  Text(const char *literal) : literal_(literal) {}
+  Text(std::string literal) : literal_(std::move(literal)) {}
+  Text(std::string_view literal) : literal_(literal) {}
+
+  [[nodiscard]] std::string resolve() const;
+  [[nodiscard]] bool empty() const { return resolve().empty(); }
+  [[nodiscard]] bool isLocalized() const { return message_ != nullptr; }
+  friend bool operator==(const Text &left, const Text &right);
+
+private:
+  std::string literal_;
+  std::shared_ptr<const detail::Message> message_;
+  friend Text message(const char *key,
+      std::initializer_list<std::pair<std::string_view, Text>> values);
+};
+
+// Named arguments are owned, and can themselves be localized messages.
+Text message(const char *key,
+    std::initializer_list<std::pair<std::string_view, Text>> values = {});
 
 // Stable, semantic IDs identify application-owned messages. English copy is
 // catalog data, never a lookup key. Unknown IDs are returned visibly to expose

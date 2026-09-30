@@ -3,16 +3,28 @@
 #include <algorithm>
 #include <atomic>
 #include <iterator>
+#include <vector>
 
 namespace i18n {
 namespace {
 std::atomic<Language> currentLanguage{Language::English};
+std::atomic<std::uint64_t> languageRevision{0};
 } // namespace
 
-void setLanguage(Language language) { currentLanguage.store(language); }
+void setLanguage(Language language) {
+  if (currentLanguage.exchange(language) != language) {
+    languageRevision.fetch_add(1);
+  }
+}
 Language language() { return currentLanguage.load(); }
+std::uint64_t revision() { return languageRevision.load(); }
 
 namespace detail {
+struct Message {
+  std::string key;
+  std::vector<std::pair<std::string, Text>> arguments;
+};
+
 struct Translation {
   std::string_view key;
   const char *english;
@@ -44,6 +56,50 @@ const char *tr(const char *key) {
 
 std::string tr(const std::string &key) {
   return tr(key.c_str());
+}
+
+Text message(const char *key,
+    std::initializer_list<std::pair<std::string_view, Text>> values) {
+  auto owned = std::make_shared<detail::Message>();
+  owned->key = key;
+  owned->arguments.reserve(values.size());
+  for (const auto &[name, value] : values) {
+    owned->arguments.emplace_back(name, value);
+  }
+  Text result;
+  result.message_ = std::move(owned);
+  return result;
+}
+
+bool operator==(const Text &left, const Text &right) {
+  if (left.message_ == right.message_) return left.literal_ == right.literal_;
+  if (!left.message_ || !right.message_) return false;
+  return left.message_->key == right.message_->key &&
+         left.message_->arguments == right.message_->arguments;
+}
+
+std::string Text::resolve() const {
+  if (!message_) return literal_;
+  const std::string_view pattern(tr(message_->key.c_str()));
+  std::string result;
+  for (std::size_t position = 0; position < pattern.size();) {
+    if (pattern[position] == '{') {
+      const auto end = pattern.find('}', position + 1);
+      if (end != std::string_view::npos) {
+        const auto name = pattern.substr(position + 1, end - position - 1);
+        const auto value = std::find_if(
+            message_->arguments.begin(), message_->arguments.end(),
+            [name](const auto &entry) { return entry.first == name; });
+        if (value != message_->arguments.end()) {
+          result += value->second.resolve();
+          position = end + 1;
+          continue;
+        }
+      }
+    }
+    result += pattern[position++];
+  }
+  return result;
 }
 
 // Named placeholders allow each language to reorder complete sentences.

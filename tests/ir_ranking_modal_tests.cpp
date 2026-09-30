@@ -1,4 +1,5 @@
 #include "ir/IrRankingModal.h"
+#include "i18n/Localization.h"
 #include "view/RecyclerView.h"
 
 #include <cmath>
@@ -480,6 +481,58 @@ void testRecyclerUsesPreciseWheelDeltaAndNaturalDirection() {
   REQUIRE(std::abs(recycler.scrollOffset - 103.75F) < 0.001F);
 }
 
+void testRecyclerLanguageRefreshKeepsBoundRowsAndSelection() {
+  struct Row : View {
+    int languageChanges = 0;
+    void onLanguageChanged() override { ++languageChanges; }
+  };
+  RecyclerView<int> recycler([](int left, int right) { return left == right; });
+  recycler.setWidth(800)->setHeight(200)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  int bindings = 0;
+  recycler.onCreateView = [](const int &) { return new Row(); };
+  recycler.onBind = [&](View *, const int &, int, bool) { ++bindings; };
+  recycler.setItems(std::vector<int>{1, 2, 3, 4, 5, 6, 7, 8});
+  recycler.selectedIndex = 1;
+  recycler.scrollOffset = 64.0F;
+  recycler.rebindVisibleItems();
+  auto *row = static_cast<Row *>(recycler.getViewByIndex(1));
+  REQUIRE(row != nullptr);
+  const int bindingsBefore = bindings;
+  recycler.propagateLanguageChange();
+  REQUIRE(row == recycler.getViewByIndex(1));
+  REQUIRE(row->languageChanges == 1);
+  REQUIRE(bindings == bindingsBefore);
+  REQUIRE(recycler.selectedIndex == 1);
+  REQUIRE(recycler.scrollOffset == 64.0F);
+}
+
+void testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest() {
+  i18n::setLanguage(i18n::Language::English);
+  ir::IrRankingModalModel model;
+  model.open(request(), "Raw chart title");
+  ir::IrRankingSnapshot snapshot;
+  snapshot.request = request();
+  snapshot.generation = request().generation;
+  snapshot.revision = 4;
+  snapshot.state = ir::IrRankingSnapshotState::ChartNotFound;
+  snapshot.diagnostic = "Raw provider diagnostic";
+  REQUIRE(model.apply(snapshot));
+  const std::string before = model.presentation().statusText;
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(model.apply(snapshot));
+  REQUIRE(model.presentation().statusText != before);
+  REQUIRE(model.presentation().chartTitle == "Raw chart title");
+  REQUIRE(model.presentation().detailText == "Raw provider diagnostic");
+  REQUIRE(model.presentation().generation == snapshot.generation);
+  REQUIRE(model.presentation().revision == snapshot.revision);
+  REQUIRE(!model.apply(snapshot));
+  i18n::setLanguage(i18n::Language::Japanese);
+  --snapshot.revision;
+  REQUIRE(!model.apply(snapshot));
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
   bms_parser::ChartMeta meta;
   meta.KeyMode = 7;
@@ -504,6 +557,8 @@ void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
 } // namespace
 
 int main() {
+  testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest();
+  testRecyclerLanguageRefreshKeepsBoundRowsAndSelection();
   testModalStateMappingAndActions();
   testFullRequestIdentityAndRefreshGenerationGuard();
   testComparisonStaysSeparateAndYouEntryIsHighlighted();

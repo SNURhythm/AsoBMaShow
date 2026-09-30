@@ -46,10 +46,10 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"NO PLAY", kNoClearTypeRank},
 };
 
-TextView *makeText(std::string text, int size,
+TextView *makeText(i18n::Text text, int size,
                    View::ThemeColorProvider color) {
   auto *view = new TextView(kFontPath, size);
-  view->setText(std::move(text));
+  view->setLocalizedText(text);
   view->setThemedColor(std::move(color));
   view->setVAlign(TextView::MIDDLE);
   view->setWrap(true);
@@ -96,9 +96,9 @@ void styleOptionButton(Button *button, TextView *text, bool selected) {
   }
 }
 
-TextView *makeModalLabel(const std::string &text) {
+TextView *makeModalLabel(const i18n::Text &text) {
   auto *label = new TextView(kFontPath, 20);
-  label->setText(text);
+  label->setLocalizedText(text);
   label->setThemedColor(ui_theme::textSecondary);
   label->setHeight(28);
   return label;
@@ -113,11 +113,11 @@ View *makeModalOptionRow(float height = 58.0f) {
   return row;
 }
 
-Button *makeModalButton(const std::string &label, int fontSize,
+Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, 160, 58);
   auto *text = new TextView(kFontPath, fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
@@ -201,7 +201,7 @@ ReplayRecordsModal::Create(View *parent,
       ->setGap(10)
       ->setHeight(54);
   auto *title = new TextView(kFontPath, 30);
-  title->setText(i18n::tr("records.records.label"));
+  title->setLocalizedText(i18n::message("records.records.label"));
   title->setThemedColor(ui_theme::textPrimary);
   title->setHeight(54);
   title->setFlexGrow(1.0f);
@@ -309,7 +309,7 @@ ReplayRecordsModal::Create(View *parent,
   filterContent->setGap(10);
   filterContent->setWidth(kFilterContentWidth);
 
-  auto makeFilterButton = [](const std::string &label, int fontSize,
+  auto makeFilterButton = [](const i18n::Text &label, int fontSize,
                              TextView **textOut) {
     auto *button = makeModalButton(label, fontSize, textOut);
     button->setHeight(46);
@@ -330,11 +330,11 @@ ReplayRecordsModal::Create(View *parent,
     ++index;
   };
 
-  filterContent->addView(makeModalLabel(i18n::tr("records.clear_mark.label")));
+  filterContent->addView(makeModalLabel(i18n::message("records.clear_mark.label")));
   View *filterRow = nullptr;
   size_t filterIndex = 0;
   auto makeClearFilterButton = [&modal, &makeFilterButton](
-                                   const std::string &label,
+                                   const i18n::Text &label,
                                    std::optional<int> rank,
                                    std::vector<replay_records_modal::ClearFilterButton> &out) {
     TextView *text = nullptr;
@@ -349,7 +349,7 @@ ReplayRecordsModal::Create(View *parent,
   };
   std::vector<replay_records_modal::ClearFilterButton> clearFilterButtons;
   addFilterButton(filterRow, filterIndex, 3,
-                  makeClearFilterButton(i18n::tr("records.all.label"), std::nullopt,
+                  makeClearFilterButton(i18n::message("records.all.label"), std::nullopt,
                                         clearFilterButtons),
                   filterContent);
   for (const auto &filter : kDifficultyClearMarkFilters) {
@@ -362,11 +362,11 @@ ReplayRecordsModal::Create(View *parent,
                     filterContent);
   }
 
-  filterContent->addView(makeModalLabel(i18n::tr("records.play_option.label")));
+  filterContent->addView(makeModalLabel(i18n::message("records.play_option.label")));
   filterRow = nullptr;
   filterIndex = 0;
   auto makePlayOptionFilterButton = [&modal, &makeFilterButton](
-                                        const std::string &label,
+                                        const i18n::Text &label,
                                         std::optional<std::string> option,
                                         std::vector<replay_records_modal::OptionFilterButton>
                                             &out) {
@@ -386,7 +386,7 @@ ReplayRecordsModal::Create(View *parent,
   };
   std::vector<replay_records_modal::OptionFilterButton> playOptionFilterButtons;
   addFilterButton(filterRow, filterIndex, 4,
-                  makePlayOptionFilterButton(i18n::tr("records.all.label"), std::nullopt,
+                  makePlayOptionFilterButton(i18n::message("records.all.label"), std::nullopt,
                                              playOptionFilterButtons),
                   filterContent);
   for (std::string_view option : play_options::kPlayOptions) {
@@ -397,11 +397,11 @@ ReplayRecordsModal::Create(View *parent,
                     filterContent);
   }
 
-  filterContent->addView(makeModalLabel(i18n::tr("records.score_rank.label")));
+  filterContent->addView(makeModalLabel(i18n::message("records.score_rank.label")));
   filterRow = nullptr;
   filterIndex = 0;
   auto makeScoreRankFilterButton = [&modal, &makeFilterButton](
-                                       const std::string &label,
+                                       const i18n::Text &label,
                                        std::optional<std::string> rank,
                                        std::vector<replay_records_modal::ScoreRankFilterButton>
                                            &out) {
@@ -420,7 +420,7 @@ ReplayRecordsModal::Create(View *parent,
   };
   std::vector<replay_records_modal::ScoreRankFilterButton> scoreRankFilterButtons;
   addFilterButton(filterRow, filterIndex, 4,
-                  makeScoreRankFilterButton(i18n::tr("records.all.label"), std::nullopt,
+                  makeScoreRankFilterButton(i18n::message("records.all.label"), std::nullopt,
                                             scoreRankFilterButtons),
                   filterContent);
   constexpr std::array<const char *, 10> kScoreRankFilterLabels = {
@@ -432,11 +432,11 @@ ReplayRecordsModal::Create(View *parent,
                     filterContent);
   }
 
-  filterContent->addView(makeModalLabel(i18n::tr("records.sort.label")));
+  filterContent->addView(makeModalLabel(i18n::message("records.sort.label")));
   filterRow = nullptr;
   filterIndex = 0;
   auto makeSortButton = [&modal, &makeFilterButton](
-                            const std::string &label,
+                            const i18n::Text &label,
                             ReplayRecordSortCriterion criterion,
                             std::vector<replay_records_modal::SortButton> &out) {
     TextView *text = nullptr;
@@ -451,20 +451,20 @@ ReplayRecordsModal::Create(View *parent,
   };
   std::vector<replay_records_modal::SortButton> sortButtons;
   addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton(i18n::tr("records.newest.label"), ReplayRecordSortCriterion::Newest,
+                  makeSortButton(i18n::message("records.newest.label"), ReplayRecordSortCriterion::Newest,
                                  sortButtons),
                   filterContent);
   addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton(i18n::tr("records.clear_mark.label"),
+                  makeSortButton(i18n::message("records.clear_mark.label"),
                                  ReplayRecordSortCriterion::ClearMark,
                                  sortButtons),
                   filterContent);
   addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton(i18n::tr("records.score.label"), ReplayRecordSortCriterion::Score,
+                  makeSortButton(i18n::message("records.score.label"), ReplayRecordSortCriterion::Score,
                                  sortButtons),
                   filterContent);
   addFilterButton(filterRow, filterIndex, 2,
-                  makeSortButton(i18n::tr("records.max_combo.label"),
+                  makeSortButton(i18n::message("records.max_combo.label"),
                                  ReplayRecordSortCriterion::MaxCombo,
                                  sortButtons),
                   filterContent);
@@ -485,15 +485,15 @@ ReplayRecordsModal::Create(View *parent,
       ->setGap(12);
   watchOptionsContent->setVisible(false);
 
-  watchOptionsContent->addView(makeModalLabel(i18n::tr("records.watch_visualization.label")));
+  watchOptionsContent->addView(makeModalLabel(i18n::message("records.watch_visualization.label")));
   auto *replayTouchRow = makeModalOptionRow(52.0f);
-  auto *replayTouchLabel = makeModalLabel(i18n::tr("records.touch_points.label"));
+  auto *replayTouchLabel = makeModalLabel(i18n::message("records.touch_points.label"));
   replayTouchLabel->setWidth(180);
   replayTouchLabel->setHeight(52);
   replayTouchLabel->setVAlign(TextView::MIDDLE);
-  auto *touchShowButton = makeModalButton(i18n::tr("records.show.label"), 18,
+  auto *touchShowButton = makeModalButton(i18n::message("records.show.label"), 18,
                                           &modal->touchShowButtonText_);
-  auto *touchHideButton = makeModalButton(i18n::tr("records.hide.label"), 18,
+  auto *touchHideButton = makeModalButton(i18n::message("records.hide.label"), 18,
                                           &modal->touchHideButtonText_);
   touchShowButton->setFlex(1);
   touchHideButton->setFlex(1);
@@ -516,13 +516,13 @@ ReplayRecordsModal::Create(View *parent,
   replayTouchRow->addView(touchHideButton);
   watchOptionsContent->addView(replayTouchRow);
   auto *replayGhostRow = makeModalOptionRow(52.0f);
-  auto *replayGhostLabel = makeModalLabel(i18n::tr("records.ghosts.label"));
+  auto *replayGhostLabel = makeModalLabel(i18n::message("records.ghosts.label"));
   replayGhostLabel->setWidth(180);
   replayGhostLabel->setHeight(52);
   replayGhostLabel->setVAlign(TextView::MIDDLE);
-  auto *ghostShowButton = makeModalButton(i18n::tr("records.show.label"), 18,
+  auto *ghostShowButton = makeModalButton(i18n::message("records.show.label"), 18,
                                           &modal->ghostShowButtonText_);
-  auto *ghostHideButton = makeModalButton(i18n::tr("records.hide.label"), 18,
+  auto *ghostHideButton = makeModalButton(i18n::message("records.hide.label"), 18,
                                           &modal->ghostHideButtonText_);
   ghostShowButton->setFlex(1);
   ghostHideButton->setFlex(1);
@@ -558,7 +558,7 @@ ReplayRecordsModal::Create(View *parent,
       ->setGap(6);
   exportOptionsContent->setVisible(false);
 
-  exportOptionsContent->addView(makeModalLabel(i18n::tr("records.frame_rate.label")));
+  exportOptionsContent->addView(makeModalLabel(i18n::message("records.frame_rate.label")));
   auto *fpsRow = makeModalOptionRow();
   auto *fps60Button = makeModalButton("60 fps", 20, &modal->fps60ButtonText_);
   auto *fps120Button =
@@ -583,12 +583,12 @@ ReplayRecordsModal::Create(View *parent,
   fpsRow->addView(fps120Button);
   exportOptionsContent->addView(fpsRow);
 
-  exportOptionsContent->addView(makeModalLabel(i18n::tr("records.resolution.label")));
+  exportOptionsContent->addView(makeModalLabel(i18n::message("records.resolution.label")));
   auto *resolutionRow = makeModalOptionRow();
   auto *resolution1080Button = makeModalButton(
       "1080p", 20, &modal->resolution1080ButtonText_);
   auto *resolutionFullButton = makeModalButton(
-      i18n::tr("records.full_resolution.label"), 20, &modal->resolutionFullButtonText_);
+      i18n::message("records.full_resolution.label"), 20, &modal->resolutionFullButtonText_);
   resolution1080Button->setFlex(1);
   resolutionFullButton->setFlex(1);
   resolution1080Button->setOnClickListener([raw = modal.get()]() {
@@ -609,12 +609,12 @@ ReplayRecordsModal::Create(View *parent,
   resolutionRow->addView(resolutionFullButton);
   exportOptionsContent->addView(resolutionRow);
 
-  exportOptionsContent->addView(makeModalLabel(i18n::tr("records.result_screen.label")));
+  exportOptionsContent->addView(makeModalLabel(i18n::message("records.result_screen.label")));
   auto *resultRow = makeModalOptionRow();
   auto *resultIncludeButton = makeModalButton(
-      i18n::tr("records.include.label"), 20, &modal->resultIncludeButtonText_);
+      i18n::message("records.include.label"), 20, &modal->resultIncludeButtonText_);
   auto *resultSkipButton =
-      makeModalButton(i18n::tr("records.skip.label"), 20, &modal->resultSkipButtonText_);
+      makeModalButton(i18n::message("records.skip.label"), 20, &modal->resultSkipButtonText_);
   resultIncludeButton->setFlex(1);
   resultSkipButton->setFlex(1);
   resultIncludeButton->setOnClickListener([raw = modal.get()]() {
@@ -636,14 +636,14 @@ ReplayRecordsModal::Create(View *parent,
   exportOptionsContent->addView(resultRow);
 
   auto *exportTouchRow = makeModalOptionRow();
-  auto *exportTouchLabel = makeModalLabel(i18n::tr("records.touch_points.label"));
+  auto *exportTouchLabel = makeModalLabel(i18n::message("records.touch_points.label"));
   exportTouchLabel->setWidth(180);
   exportTouchLabel->setHeight(58);
   exportTouchLabel->setVAlign(TextView::MIDDLE);
   auto *exportTouchShowButton = makeModalButton(
-      i18n::tr("records.show.label"), 18, &modal->exportTouchShowButtonText_);
+      i18n::message("records.show.label"), 18, &modal->exportTouchShowButtonText_);
   auto *exportTouchHideButton = makeModalButton(
-      i18n::tr("records.hide.label"), 18, &modal->exportTouchHideButtonText_);
+      i18n::message("records.hide.label"), 18, &modal->exportTouchHideButtonText_);
   exportTouchShowButton->setFlex(1);
   exportTouchHideButton->setFlex(1);
   exportTouchShowButton->setOnClickListener([raw = modal.get()]() {
@@ -666,14 +666,14 @@ ReplayRecordsModal::Create(View *parent,
   exportOptionsContent->addView(exportTouchRow);
 
   auto *exportGhostRow = makeModalOptionRow();
-  auto *exportGhostLabel = makeModalLabel(i18n::tr("records.ghosts.label"));
+  auto *exportGhostLabel = makeModalLabel(i18n::message("records.ghosts.label"));
   exportGhostLabel->setWidth(180);
   exportGhostLabel->setHeight(58);
   exportGhostLabel->setVAlign(TextView::MIDDLE);
   auto *exportGhostShowButton = makeModalButton(
-      i18n::tr("records.show.label"), 18, &modal->exportGhostShowButtonText_);
+      i18n::message("records.show.label"), 18, &modal->exportGhostShowButtonText_);
   auto *exportGhostHideButton = makeModalButton(
-      i18n::tr("records.hide.label"), 18, &modal->exportGhostHideButtonText_);
+      i18n::message("records.hide.label"), 18, &modal->exportGhostHideButtonText_);
   exportGhostShowButton->setFlex(1);
   exportGhostHideButton->setFlex(1);
   exportGhostShowButton->setOnClickListener([raw = modal.get()]() {
@@ -709,7 +709,7 @@ ReplayRecordsModal::Create(View *parent,
   exportProgressContent->setVisible(false);
 
   auto *exportProgressMessageText = new TextView(kFontPath, 24);
-  exportProgressMessageText->setText(i18n::tr("records.preparing_export.label"));
+  exportProgressMessageText->setLocalizedText(i18n::message("records.preparing_export.label"));
   exportProgressMessageText->setColor(
       ui_theme::sdl(ui_theme::textPrimary()));
   exportProgressMessageText->setHeight(38);
@@ -750,15 +750,15 @@ ReplayRecordsModal::Create(View *parent,
   deleteConfirmationContent->setVisible(false);
 
   auto *deleteQuestion = new TextView(kFontPath, 28);
-  deleteQuestion->setText(i18n::tr("records.delete_brd_replay_file.label"));
+  deleteQuestion->setLocalizedText(i18n::message("records.delete_brd_replay_file.label"));
   deleteQuestion->setThemedColor(ui_theme::textPrimary);
   deleteQuestion->setAlign(TextView::CENTER);
   deleteQuestion->setHeight(44);
   deleteConfirmationContent->addView(deleteQuestion);
 
   auto *deleteDetail = new TextView(kFontPath, 20);
-  deleteDetail->setText(
-      i18n::tr("records.replay.delete_warning"));
+  deleteDetail->setLocalizedText(
+      i18n::message("records.replay.delete_warning"));
   deleteDetail->setThemedColor(ui_theme::textSecondary);
   deleteDetail->setAlign(TextView::CENTER);
   deleteDetail->setWrap(true);
@@ -768,9 +768,9 @@ ReplayRecordsModal::Create(View *parent,
   auto *deleteConfirmationActions = makeModalOptionRow();
   deleteConfirmationActions->setJustifyContent(YGJustifyCenter);
   auto *deleteCancelButton =
-      makeModalButton(i18n::tr("records.cancel.label"), 20, &modal->deleteCancelButtonText_);
+      makeModalButton(i18n::message("records.cancel.label"), 20, &modal->deleteCancelButtonText_);
   auto *deleteConfirmButton =
-      makeModalButton(i18n::tr("records.delete_replay.label"), 18, &modal->deleteConfirmButtonText_);
+      makeModalButton(i18n::message("records.delete_replay.label"), 18, &modal->deleteConfirmButtonText_);
   deleteCancelButton->setWidth(190);
   deleteConfirmButton->setWidth(210);
   deleteCancelButton->setOnClickListener(
@@ -812,13 +812,13 @@ ReplayRecordsModal::Create(View *parent,
   footer->setGap(8);
   footer->setHeight(58);
 
-  auto *watchButton = makeModalButton(i18n::tr("records.watch.label"), 20, &modal->watchButtonText_);
+  auto *watchButton = makeModalButton(i18n::message("records.watch.label"), 20, &modal->watchButtonText_);
   auto *gbattleButton =
       makeModalButton("G-BATTLE", 18, &modal->gbattleButtonText_);
   auto *resultButton =
-      makeModalButton(i18n::tr("records.view_result.label"), 18, &modal->resultButtonText_);
+      makeModalButton(i18n::message("records.view_result.label"), 18, &modal->resultButtonText_);
   auto *exportButton =
-      makeModalButton(i18n::tr("records.export_video.label"), 18, &modal->exportButtonText_);
+      makeModalButton(i18n::message("records.export_video.label"), 18, &modal->exportButtonText_);
 
   closeButton->setOnClickListener([raw = modal.get()]() {
     if (raw->operationInProgress()) {
@@ -880,7 +880,7 @@ ReplayRecordsModal::Create(View *parent,
       raw->dispatchWatch(*raw->selected_);
       return;
     }
-    raw->title_->setText(i18n::tr("records.watch_options.label"));
+    raw->title_->setLocalizedText(i18n::message("records.watch_options.label"));
     raw->listContent_->setVisible(false);
     raw->filterSortContent_->setVisible(false);
     raw->watchOptionsContent_->setVisible(true);
@@ -1020,7 +1020,7 @@ void ReplayRecordsModal::showChart(const ChartMetaRecord &record) {
   selectedReplayRenderGhosts_ = true;
   filters_ = {};
   reloadRecords(false);
-  if (title_ != nullptr) title_->setText(i18n::tr("records.records.label"));
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));
   showListPage();
   setStatus({});
   resize(rendering::window_width, rendering::window_height);
@@ -1045,10 +1045,10 @@ void ReplayRecordsModal::hide() {
   }
   clearSelection();
   exportSelection_.reset();
-  if (watchButtonText_ != nullptr) watchButtonText_->setText(i18n::tr("records.watch.label"));
+  if (watchButtonText_ != nullptr) watchButtonText_->setLocalizedText(i18n::message("records.watch.label"));
   if (gbattleButtonText_ != nullptr) gbattleButtonText_->setText("G-BATTLE");
-  if (resultButtonText_ != nullptr) resultButtonText_->setText(i18n::tr("records.view_result.label"));
-  if (exportButtonText_ != nullptr) exportButtonText_->setText(i18n::tr("records.export_video.label"));
+  if (resultButtonText_ != nullptr) resultButtonText_->setLocalizedText(i18n::message("records.view_result.label"));
+  if (exportButtonText_ != nullptr) exportButtonText_->setLocalizedText(i18n::message("records.export_video.label"));
   setStatus({});
 }
 
@@ -1070,11 +1070,11 @@ bool ReplayRecordsModal::handleEvents(SDL_Event &event) {
 
 void ReplayRecordsModal::update() { updateTitleReset(); }
 
-void ReplayRecordsModal::setStatus(std::string text) {
+void ReplayRecordsModal::setStatus(i18n::Text text) {
   if (status_ == nullptr) {
     return;
   }
-  status_->setText(std::move(text));
+  status_->setLocalizedText(text);
   status_->setVisible(!text.empty());
   if (root_ != nullptr) {
     root_->applyYogaLayoutFromRoot();
@@ -1133,12 +1133,12 @@ void ReplayRecordsModal::setDocumentHandoffActive(bool active) {
   refreshActions();
 }
 
-void ReplayRecordsModal::showExportProgress(const std::string &title,
-                                            const std::string &message) {
+void ReplayRecordsModal::showExportProgress(const i18n::Text &title,
+                                            const i18n::Text &message) {
   if (root_ == nullptr) {
     return;
   }
-  if (title_ != nullptr) title_->setText(title);
+  if (title_ != nullptr) title_->setLocalizedText(title);
   showListPage();
   if (listContent_ != nullptr) listContent_->setVisible(false);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
@@ -1156,11 +1156,11 @@ void ReplayRecordsModal::showExportProgress(const std::string &title,
 }
 
 void ReplayRecordsModal::updateExportProgress(double fraction,
-                                              const std::string &message) {
+                                              const i18n::Text &message) {
   const double clamped = std::clamp(fraction, 0.0, 1.0);
   const int displayedPercent = static_cast<int>(std::lround(clamped * 100.0));
   if (exportProgressMessageText_ != nullptr) {
-    exportProgressMessageText_->setText(message);
+    exportProgressMessageText_->setLocalizedText(message);
   }
   if (exportProgressPercentText_ != nullptr) {
     exportProgressPercentText_->setText(std::to_string(displayedPercent) + "%");
@@ -1173,11 +1173,11 @@ void ReplayRecordsModal::updateExportProgress(double fraction,
   }
 }
 
-void ReplayRecordsModal::returnToList(const std::string &status) {
+void ReplayRecordsModal::returnToList(const i18n::Text &status) {
   if (root_ == nullptr) {
     return;
   }
-  if (title_ != nullptr) title_->setText(i18n::tr("records.records.label"));
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));
   showListPage();
   exportSelection_.reset();
   if (list_ != nullptr) {
@@ -1192,9 +1192,9 @@ void ReplayRecordsModal::returnToList(const std::string &status) {
   }
 }
 
-void ReplayRecordsModal::showIrFeedback(const std::string &message) {
+void ReplayRecordsModal::showIrFeedback(const i18n::Text &message) {
   if (title_ != nullptr) {
-    title_->setText(message);
+    title_->setLocalizedText(message);
   }
   titleResetPending_ = true;
   titleResetAt_ = SDL_GetTicks64() + 1400;
@@ -1382,18 +1382,18 @@ void ReplayRecordsModal::refreshActions() {
     deleteButtonText_->setText(ui_icons::textForCodepoint(kIconTrash));
   }
   if (watchButtonText_ != nullptr && !loadInProgress_) {
-    watchButtonText_->setText(i18n::tr("records.watch.label"));
+    watchButtonText_->setLocalizedText(i18n::message("records.watch.label"));
   }
   if (gbattleButtonText_ != nullptr && !loadInProgress_) {
     gbattleButtonText_->setText("G-BATTLE");
   }
   if (resultButtonText_ != nullptr) {
-    resultButtonText_->setText(resultRecallInProgress_ ? i18n::tr("records.loading.progress")
-                                                       : i18n::tr("records.view_result.label"));
+    resultButtonText_->setLocalizedText(resultRecallInProgress_ ? i18n::message("records.loading.progress")
+                                                       : i18n::message("records.view_result.label"));
   }
   if (exportButtonText_ != nullptr) {
-    exportButtonText_->setText(exportInProgress_ ? i18n::tr("records.exporting.label")
-                                                 : i18n::tr("records.export_video.label"));
+    exportButtonText_->setLocalizedText(exportInProgress_ ? i18n::message("records.exporting.label")
+                                                 : i18n::message("records.export_video.label"));
   }
 
   if (filterButton_ != nullptr) {
@@ -1577,7 +1577,7 @@ void ReplayRecordsModal::showFilterSortOptions() {
   if (root_ == nullptr || filterSortContent_ == nullptr) {
     return;
   }
-  if (title_ != nullptr) title_->setText(i18n::tr("records.filter_sort.label"));
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.filter_sort.label"));
   if (listContent_ != nullptr) listContent_->setVisible(false);
   filterSortContent_->setVisible(true);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);
@@ -1599,7 +1599,7 @@ void ReplayRecordsModal::showExportOptions() {
     return;
   }
   exportSelection_ = selected_;
-  if (title_ != nullptr) title_->setText(i18n::tr("records.export_options.label"));
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.export_options.label"));
   if (listContent_ != nullptr) listContent_->setVisible(false);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);
@@ -1631,7 +1631,7 @@ void ReplayRecordsModal::showDeleteConfirmation() {
       !deleteConfirmation_.begin(selection)) {
     return;
   }
-  if (title_ != nullptr) title_->setText(i18n::tr("records.confirm_replay_deletion.label"));
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.confirm_replay_deletion.label"));
   if (listContent_ != nullptr) listContent_->setVisible(false);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);
@@ -1648,7 +1648,7 @@ void ReplayRecordsModal::cancelDeleteConfirmation() {
     deleteConfirmationContent_->setVisible(false);
   }
   showListPage();
-  if (title_ != nullptr) title_->setText(i18n::tr("records.records.label"));
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));
   if (list_ != nullptr) {
     list_->restoreSelection(selectedIndex_);
   }
@@ -1794,7 +1794,7 @@ void ReplayRecordsModal::updateTitleReset() {
   titleResetPending_ = false;
   if (root_ != nullptr && root_->getVisible() && listContent_ != nullptr &&
       listContent_->getVisible() && title_ != nullptr) {
-    title_->setText(i18n::tr("records.records.label"));
+    title_->setLocalizedText(i18n::message("records.records.label"));
     root_->applyYogaLayoutFromRoot();
   }
 }

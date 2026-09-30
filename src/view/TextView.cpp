@@ -350,6 +350,23 @@ void TextView::releaseFontResources() {
 }
 
 void TextView::setText(const std::string &newText) {
+  localizedText_ = i18n::Text("");
+  setResolvedText(newText);
+}
+
+void TextView::setLocalizedText(const i18n::Text &newText) {
+  localizedText_ = newText;
+  setResolvedText(localizedText_.resolve());
+}
+
+void TextView::onLanguageChanged() {
+  View::onLanguageChanged();
+  if (localizedText_.isLocalized()) {
+    setResolvedText(localizedText_.resolve());
+  }
+}
+
+void TextView::setResolvedText(const std::string &newText) {
   if (newText == text) {
     return;
   }

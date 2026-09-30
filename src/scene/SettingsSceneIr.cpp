@@ -32,7 +32,7 @@ View *makeActionRow(const LayoutMetrics &metrics) {
   return row;
 }
 
-Button *makeIrButton(const LayoutMetrics &metrics, std::string label,
+Button *makeIrButton(const LayoutMetrics &metrics, i18n::Text label,
                      const Color &accent = ui_theme::cyan()) {
   return makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           makeText(label, metrics.bodyTextSize + 2,
@@ -41,22 +41,22 @@ Button *makeIrButton(const LayoutMetrics &metrics, std::string label,
                           accent);
 }
 
-std::string queueStateLabel(ir::IrOutboxState state) {
+i18n::Text queueStateLabel(ir::IrOutboxState state) {
   switch (state) {
   case ir::IrOutboxState::Pending:
-    return i18n::tr("settings.ir.pending.label");
+    return i18n::message("settings.ir.pending.label");
   case ir::IrOutboxState::Uploading:
-    return i18n::tr("settings.ir.uploading.label");
+    return i18n::message("settings.ir.uploading.label");
   case ir::IrOutboxState::AwaitingRemoteResult:
-    return i18n::tr("settings.ir.awaiting_remote_result.label");
+    return i18n::message("settings.ir.awaiting_remote_result.label");
   case ir::IrOutboxState::BlockedConfiguration:
-    return i18n::tr("settings.ir.blocked_by_configuration.label");
+    return i18n::message("settings.ir.blocked_by_configuration.label");
   case ir::IrOutboxState::FailedPermanent:
-    return i18n::tr("settings.ir.failed.label");
+    return i18n::message("settings.ir.failed.label");
   case ir::IrOutboxState::Succeeded:
-    return i18n::tr("settings.ir.succeeded.label");
+    return i18n::message("settings.ir.succeeded.label");
   }
-  return i18n::tr("settings.ir.unknown.label");
+  return i18n::message("settings.ir.unknown.label");
 }
 
 bool canDiscardStatus(ir::IrOutboxState state) {
@@ -74,9 +74,9 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   const auto driver = context.irDrivers.find(kProviderId);
   if (!driver) {
     auto *body =
-        makeWrappedText(i18n::tr("settings.ir.bokutachi_driver_unavailable_in_build.message"),
+        makeWrappedText(i18n::message("settings.ir.bokutachi_driver_unavailable_in_build.message"),
                         metrics.bodyTextSize, ui_theme::textSecondary());
-    column->addView(makeCard(metrics, i18n::tr("settings.ir.internet_ranking.label"), "", body, 180,
+    column->addView(makeCard(metrics, i18n::message("settings.ir.internet_ranking.label"), "", body, 180,
                              metrics.cardsWidth));
     return column;
   }
@@ -286,10 +286,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   settingsBody->setGap(metrics.compact ? 12.0F : 16.0F);
 
   auto *enableRow = makeActionRow(metrics);
-  enableRow->addView(makeWrappedText(i18n::tr("settings.ir.provider.label"), metrics.bodyTextSize,
+  enableRow->addView(makeWrappedText(i18n::message("settings.ir.provider.label"), metrics.bodyTextSize,
                                      ui_theme::textSecondary()));
   auto *enabledButton =
-      makeIrButton(metrics, presentation.enabled ? i18n::tr("settings.ir.enabled.label") : i18n::tr("settings.ir.disabled.label"),
+      makeIrButton(metrics, presentation.enabled ? i18n::message("settings.ir.enabled.label") : i18n::message("settings.ir.disabled.label"),
                    presentation.enabled ? ui_theme::lime() : ui_theme::coral());
   enabledButton->setOnClickListener([this, publishResult]() {
     if (!irSettingsModel) {
@@ -304,11 +304,11 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
 
   if (presentation.showAutoSubmit) {
     auto *autoRow = makeActionRow(metrics);
-    autoRow->addView(makeWrappedText(i18n::tr("settings.ir.automatic_score_submission.label"),
+    autoRow->addView(makeWrappedText(i18n::message("settings.ir.automatic_score_submission.label"),
                                      metrics.bodyTextSize,
                                      ui_theme::textSecondary()));
     auto *autoButton = makeIrButton(
-        metrics, presentation.autoSubmit ? i18n::tr("settings.ir.auto_submit_on.label") : i18n::tr("settings.ir.auto_submit_off.label"),
+        metrics, presentation.autoSubmit ? i18n::message("settings.ir.auto_submit_on.label") : i18n::message("settings.ir.auto_submit_off.label"),
         presentation.autoSubmit ? ui_theme::lime() : ui_theme::amber());
     autoButton->setEnabled(presentation.authenticatedActionsAvailable);
     autoButton->setOnClickListener([this, publishResult]() {
@@ -323,7 +323,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     settingsBody->addView(autoRow);
   }
 
-  settingsBody->addView(makeWrappedText(i18n::tr("settings.ir.server_origin.label"), metrics.bodyTextSize,
+  settingsBody->addView(makeWrappedText(i18n::message("settings.ir.server_origin.label"), metrics.bodyTextSize,
                                         ui_theme::textSecondary()));
   auto *originRow = makeActionRow(metrics);
   irServerOriginInput = makeTextInput(
@@ -331,7 +331,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                                  metrics.cardPadding * 2 - 24));
   irServerOriginInput->setEditingText(presentation.serverOrigin);
   originRow->addView(irServerOriginInput);
-  auto *saveOrigin = makeIrButton(metrics, i18n::tr("settings.ir.save_origin.label"));
+  auto *saveOrigin = makeIrButton(metrics, i18n::message("settings.ir.save_origin.label"));
   saveOrigin->setOnClickListener([this, publishResult]() {
     if (!irSettingsModel || !irServerOriginInput) {
       return;
@@ -344,7 +344,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   settingsBody->addView(originRow);
   if (presentation.insecureServerOrigin) {
     settingsBody->addView(makeWrappedText(
-        i18n::tr("settings.ir.server_origin.http_restrictions_notice"),
+        i18n::message("settings.ir.server_origin.http_restrictions_notice"),
         metrics.smallTextSize, ui_theme::coral()));
   }
 
@@ -360,7 +360,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                                                  metrics.cardPadding * 2 - 36));
     irApiKeyInput->setEditingText("");
     keyRow->addView(irApiKeyInput);
-    auto *saveKey = makeIrButton(metrics, i18n::tr("settings.ir.save_key.label"), ui_theme::lime());
+    auto *saveKey = makeIrButton(metrics, i18n::message("settings.ir.save_key.label"), ui_theme::lime());
     saveKey->setEnabled(presentation.authenticatedActionsAvailable);
     saveKey->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel || !irApiKeyInput) {
@@ -375,7 +375,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       publishResult(result, i18n::tr("settings.ir.api_key_saved_device.message"));
     });
     keyRow->addView(saveKey);
-    auto *cancelKey = makeIrButton(metrics, i18n::tr("settings.ir.cancel.label"), ui_theme::amber());
+    auto *cancelKey = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), ui_theme::amber());
     cancelKey->setOnClickListener([this]() {
       if (irApiKeyInput) {
         std::string apiKey = irApiKeyInput->getText();
@@ -392,7 +392,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   } else {
     auto *keyActions = makeActionRow(metrics);
     auto *replaceKey = makeIrButton(
-        metrics, presentation.hasCredential ? i18n::tr("settings.ir.replace_key.label") : i18n::tr("settings.ir.add_key.label"));
+        metrics, presentation.hasCredential ? i18n::message("settings.ir.replace_key.label") : i18n::message("settings.ir.add_key.label"));
     replaceKey->setEnabled(presentation.authenticatedActionsAvailable);
     replaceKey->setOnClickListener([this]() {
       irKeyEditorActive = true;
@@ -401,7 +401,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     });
     keyActions->addView(replaceKey);
     if (presentation.hasCredential) {
-      auto *removeKey = makeIrButton(metrics, i18n::tr("settings.ir.remove_key.label"), ui_theme::coral());
+      auto *removeKey = makeIrButton(metrics, i18n::message("settings.ir.remove_key.label"), ui_theme::coral());
       removeKey->setOnClickListener([this, publishResult]() {
         if (!irSettingsModel) {
           return;
@@ -415,13 +415,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   }
 
   settingsBody->addView(makeWrappedText(
-      i18n::tr("settings.ir.credentials.device_storage_notice"),
+      i18n::message("settings.ir.credentials.device_storage_notice"),
       metrics.smallTextSize, ui_theme::textMuted()));
   column->addView(makeCard(
       metrics, "Bokutachi",
       presentation.readOnly
-          ? i18n::tr("settings.ir.read_only_chart_ranking_provider.message")
-          : i18n::tr("settings.ir.direct_manual_chart_rankings_durable_score_submission.message"),
+          ? i18n::message("settings.ir.read_only_chart_ranking_provider.message")
+          : i18n::message("settings.ir.direct_manual_chart_rankings_durable_score_submission.message"),
       settingsBody, metrics.compact ? 620 : 680, metrics.cardsWidth));
 
   if (presentation.showQueueActions) {
@@ -441,7 +441,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     queueBody->addView(irBlockedCountText);
     queueBody->addView(irFailedCountText);
 
-    auto *retryAll = makeIrButton(metrics, i18n::tr("settings.ir.retry_all_now.label"), ui_theme::lime());
+    auto *retryAll = makeIrButton(metrics, i18n::message("settings.ir.retry_all_now.label"), ui_theme::lime());
     retryAll->setEnabled(presentation.canRetryAll);
     retryAll->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel) {
@@ -463,16 +463,17 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       }
       ++shown;
       auto *row = makeActionRow(metrics);
-      std::string label = queueStateLabel(snapshot.state) + " · Queue #" +
-                          std::to_string(snapshot.rowId);
-      if (!snapshot.diagnostic.empty()) {
-        label += " · " + snapshot.diagnostic;
-      }
+      const auto label = i18n::message(
+          "settings.ir.outbox.entry",
+          {{"state", queueStateLabel(snapshot.state)},
+           {"id", std::to_string(snapshot.rowId)},
+           {"diagnostic", snapshot.diagnostic.empty()
+                              ? std::string{} : " · " + snapshot.diagnostic}});
       row->addView(makeWrappedText(label, metrics.smallTextSize,
                                    ui_theme::textSecondary()));
       if (irPendingDiscardRowId == snapshot.rowId) {
         auto *confirm =
-            makeIrButton(metrics, i18n::tr("settings.ir.confirm_discard.label"), ui_theme::coral());
+            makeIrButton(metrics, i18n::message("settings.ir.confirm_discard.label"), ui_theme::coral());
         confirm->setOnClickListener(
             [this, publishResult, rowId = snapshot.rowId]() {
               if (!irSettingsModel) {
@@ -485,14 +486,14 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               publishResult(result, i18n::tr("settings.ir.queued_submission_discarded.message"));
             });
         row->addView(confirm);
-        auto *cancel = makeIrButton(metrics, i18n::tr("settings.ir.cancel.label"), ui_theme::amber());
+        auto *cancel = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), ui_theme::amber());
         cancel->setOnClickListener([this]() {
           irPendingDiscardRowId.reset();
           lastLayoutWidth = -1;
         });
         row->addView(cancel);
       } else {
-        auto *discard = makeIrButton(metrics, i18n::tr("settings.ir.discard.label"), ui_theme::coral());
+        auto *discard = makeIrButton(metrics, i18n::message("settings.ir.discard.label"), ui_theme::coral());
         discard->setOnClickListener([this, rowId = snapshot.rowId]() {
           irPendingDiscardRowId = rowId;
           irStatusMessage = i18n::tr("settings.ir.confirm_permanent_removal_queued_score.message");
@@ -505,12 +506,12 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     }
     if (shown == 0) {
       queueBody->addView(
-          makeWrappedText(i18n::tr("settings.ir.no_discardable_submissions_currently_queued.message"),
+          makeWrappedText(i18n::message("settings.ir.no_discardable_submissions_currently_queued.message"),
                           metrics.smallTextSize, ui_theme::textMuted()));
     }
     column->addView(makeCard(
-        metrics, i18n::tr("settings.ir.submission_queue.label"),
-        i18n::tr("settings.ir.scores_remain_durable_across_offline_sessions_app_restarts.message"),
+        metrics, i18n::message("settings.ir.submission_queue.label"),
+        i18n::message("settings.ir.scores_remain_durable_across_offline_sessions_app_restarts.message"),
         queueBody, metrics.compact ? 360 : 420, metrics.cardsWidth));
   }
 
@@ -543,8 +544,8 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     });
     syncBody->addView(syncRecords);
     column->addView(makeCard(
-        metrics, i18n::tr("settings.ir.ir_record_import.label"),
-        i18n::tr("settings.ir.remote_history.description"),
+        metrics, i18n::message("settings.ir.ir_record_import.label"),
+        i18n::message("settings.ir.remote_history.description"),
         syncBody, metrics.compact ? 240 : 280, metrics.cardsWidth));
   }
 
@@ -554,7 +555,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                         irStatusIsError ? ui_theme::coral() : ui_theme::lime());
     auto *statusBody = new View();
     statusBody->addView(irStatusText);
-    column->addView(makeCard(metrics, i18n::tr("settings.ir.ir_status.label"), "", statusBody, 120,
+    column->addView(makeCard(metrics, i18n::message("settings.ir.ir_status.label"), "", statusBody, 120,
                              metrics.cardsWidth));
   }
 
@@ -569,19 +570,28 @@ void SettingsScene::refreshIrSettingsPresentation() {
   const ir::IrOutboxCounts counts =
       context.irSubmissionService->counts(kProviderId);
   if (irPendingCountText) {
-    irPendingCountText->setText(i18n::tr("settings.ir.pending.prefix") + std::to_string(counts.pending));
+    irPendingCountText->setLocalizedText(i18n::message(
+        "settings.ir.outbox.count",
+        {{"label", i18n::message("settings.ir.pending.prefix")},
+         {"count", std::to_string(counts.pending)}}));
   }
   if (irAwaitingCountText) {
-    irAwaitingCountText->setText(i18n::tr("settings.ir.awaiting_remote_result.prefix") +
-                                 std::to_string(counts.awaitingRemoteResult));
+    irAwaitingCountText->setLocalizedText(i18n::message(
+        "settings.ir.outbox.count",
+        {{"label", i18n::message("settings.ir.awaiting_remote_result.prefix")},
+         {"count", std::to_string(counts.awaitingRemoteResult)}}));
   }
   if (irBlockedCountText) {
-    irBlockedCountText->setText(i18n::tr("settings.ir.blocked_by_configuration.prefix") +
-                                std::to_string(counts.blockedConfiguration));
+    irBlockedCountText->setLocalizedText(i18n::message(
+        "settings.ir.outbox.count",
+        {{"label", i18n::message("settings.ir.blocked_by_configuration.prefix")},
+         {"count", std::to_string(counts.blockedConfiguration)}}));
   }
   if (irFailedCountText) {
-    irFailedCountText->setText(i18n::tr("settings.ir.failed.prefix") +
-                               std::to_string(counts.failedPermanent));
+    irFailedCountText->setLocalizedText(i18n::message(
+        "settings.ir.outbox.count",
+        {{"label", i18n::message("settings.ir.failed.prefix")},
+         {"count", std::to_string(counts.failedPermanent)}}));
   }
   const auto status =
       context.irSubmissionService->reconciliationStatus(kProviderId);

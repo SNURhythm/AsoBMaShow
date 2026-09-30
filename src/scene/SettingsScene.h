@@ -75,6 +75,7 @@ public:
 
   void init() override;
   void update(float dt) override;
+  void onLanguageChanged() override;
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
@@ -446,7 +447,7 @@ private:
   void toggleChartEntryICloudBackup(const std::string &entryPathText);
   void measureTemporaryArchiveCache();
   void cleanupTemporaryArchiveCache();
-  void refreshSettingsText();
+  void refreshSettingsText(bool syncInputs = true);
   void refreshIrSettingsPresentation();
   void ensureProfileController();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -485,7 +486,7 @@ private:
   void invalidateProfileLayout();
   void persistSettings();
   void ensureAudioVideoSession();
-  void refreshAudioVideoControls();
+  void refreshAudioVideoControls(bool syncInputs = true);
   void updateDisplayPreviewUi();
   void applyAudioStreamDraft();
   void applyDisplayDraft();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "View.h"
+#include "../i18n/Localization.h"
 #include <bgfx/bgfx.h>
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
@@ -19,6 +20,7 @@ public:
   ~TextView() override;
 
   void setText(const std::string &newText);
+  void setLocalizedText(const i18n::Text &newText);
   [[nodiscard]] const std::string &getText() const { return text; }
   void setDeferredTextureMaterialization(bool deferred);
   void setColor(SDL_Color newColor);
@@ -57,6 +59,7 @@ protected:
 
   void renderImpl(RenderContext &context) override;
   void onThemeChanged() override;
+  void onLanguageChanged() override;
   [[nodiscard]] SDL_Rect resolvedTextRect() const;
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
@@ -124,5 +127,7 @@ protected:
   void createTexture();
 
 private:
+  i18n::Text localizedText_{""};
+  void setResolvedText(const std::string &newText);
   void releaseFontResources();
 };

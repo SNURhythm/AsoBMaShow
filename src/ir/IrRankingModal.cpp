@@ -224,10 +224,13 @@ bool IrRankingModalModel::apply(const IrRankingSnapshot &snapshot) {
       snapshot.generation != expectedRequest_->generation ||
       !snapshot.request || *snapshot.request != *expectedRequest_ ||
       (presentation_.revision != 0 &&
-       snapshot.revision <= presentation_.revision)) {
+       (snapshot.revision < presentation_.revision ||
+        (snapshot.revision == presentation_.revision &&
+         languageRevision_ == i18n::revision())))) {
     return false;
   }
 
+  languageRevision_ = i18n::revision();
   presentation_.revision = snapshot.revision;
   presentation_.generation = snapshot.generation;
   presentation_.detailText = snapshot.diagnostic;

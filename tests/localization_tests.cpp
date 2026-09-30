@@ -30,6 +30,36 @@ std::map<std::string_view, int> placeholders(std::string_view text) {
 
 int main() {
   using namespace i18n;
+  setLanguage(Language::English);
+  const auto originalRevision = revision();
+  setLanguage(Language::English);
+  assert(revision() == originalRevision);
+  const auto gameplayRetry = message("result.gameplay.retry.label");
+  const auto irRetry = message("result.ir.retry.label");
+  const Text rawRetry("Retry");
+  assert(gameplayRetry.resolve() == "Retry");
+  assert(irRetry.resolve() == "Retry");
+  const auto ownedMessage = [] {
+    std::string seconds = "7";
+    return message("settings.display.preview.countdown.other",
+                   {{"seconds", seconds}});
+  }();
+  const auto nestedMessage = message("music_player.display_option.enabled",
+      {{"name", message("settings.navigation.settings.label")}});
+  setLanguage(Language::Korean);
+  assert(revision() > originalRevision);
+  assert(gameplayRetry.resolve() == "재도전");
+  assert(irRetry.resolve() == "다시 시도");
+  assert(rawRetry.resolve() == "Retry");
+  assert(ownedMessage.resolve() == "7초 후 이전 설정으로 돌아갑니다");
+  assert(nestedMessage.resolve() == "설정: 켜짐");
+  setLanguage(Language::Japanese);
+  assert(ownedMessage.resolve() == "7秒後に元の設定に戻ります");
+  assert(nestedMessage.resolve() == "設定: オン");
+  assert(message("settings.navigation.settings.label") ==
+         message("settings.navigation.settings.label"));
+  assert(!(gameplayRetry == irRetry));
+  assert(Text("Settings") != message("settings.navigation.settings.label"));
   assert(isLanguagePreference("ja"));
   assert(resolveLanguage("system", {"ko-KR", "en-US"}) == Language::Korean);
   assert(resolveLanguage("system", {"ja-JP", "en-US", "ko"}) == Language::Japanese);

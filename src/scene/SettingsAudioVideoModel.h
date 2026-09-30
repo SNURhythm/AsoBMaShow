@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../AppSettings.h"
+#include "../i18n/Localization.h"
 #include "../audio/AudioDeviceManager.h"
 #include "../path.h"
 #include "../video/DisplaySettingsManager.h"
@@ -13,7 +14,7 @@
 
 struct ChoiceOption {
   std::string persistedValue;
-  std::string label;
+  i18n::Text label;
   bool available = true;
   bool operator==(const ChoiceOption &) const = default;
 };
@@ -22,14 +23,14 @@ struct ChoiceControlModel {
   std::string selectedValue;
   std::vector<ChoiceOption> options;
   bool enabled = true;
-  std::string explanation;
+  i18n::Text explanation;
   bool operator==(const ChoiceControlModel &) const = default;
 };
 
 struct VolumeControlModel {
   float value = 1.0F;
   bool enabled = true;
-  std::string explanation;
+  i18n::Text explanation;
   bool operator==(const VolumeControlModel &) const = default;
 };
 

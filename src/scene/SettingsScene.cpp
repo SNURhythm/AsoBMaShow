@@ -106,8 +106,8 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
-    archiveCacheCleanupButtonText->setText(
-        archiveCacheMaintenance.cleanupRunning() ? i18n::tr("settings.cleaning.progress") : i18n::tr("settings.clean_up.label"));
+    archiveCacheCleanupButtonText->setLocalizedText(
+        archiveCacheMaintenance.cleanupRunning() ? i18n::message("settings.cleaning.progress") : i18n::message("settings.clean_up.label"));
   }
   if (rootLayout != nullptr) {
     rootLayout->applyYogaLayout();
@@ -129,7 +129,7 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
-    archiveCacheCleanupButtonText->setText(i18n::tr("settings.cleaning.progress"));
+    archiveCacheCleanupButtonText->setLocalizedText(i18n::message("settings.cleaning.progress"));
   }
 }
 
@@ -182,6 +182,16 @@ void SettingsScene::init() {
       });
   observedLibraryRevision = context.chartRepository.GetLibraryRevision();
   ensureLayoutUpToDate();
+}
+
+void SettingsScene::onLanguageChanged() {
+  View::LayoutBatchScope batch;
+  Scene::onLanguageChanged();
+  // Refresh presentation without committing input drafts or rebuilding views.
+  refreshSettingsText(false);
+  refreshAudioVideoControls(false);
+  refreshInputMonitorText();
+  updateDisplayPreviewUi();
 }
 
 void SettingsScene::update(float dt) {

@@ -148,7 +148,7 @@ void ContextMenuView::rebuildActions() {
     button->setEnabled(action.enabled);
 
     auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-    text->setText(action.label);
+    text->setLocalizedText(action.label);
     text->setAlign(TextView::LEFT);
     text->setVAlign(TextView::MIDDLE);
     text->setPadding(Edge::Left, 14);

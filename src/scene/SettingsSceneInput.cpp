@@ -58,65 +58,80 @@ std::string directionLabel(input::ControlDirection direction) {
   return {};
 }
 
-std::string controlLabel(const input::PhysicalControl &control) {
-  std::string controlName;
+i18n::Text controlLabel(const input::PhysicalControl &control) {
+  i18n::Text controlName;
   switch (control.kind) {
   case input::ControlKind::Key: {
     const char *name = SDL_GetScancodeName(
         static_cast<SDL_Scancode>(std::max(0, control.index)));
     controlName = name != nullptr && *name != '\0'
                       ? std::string(name)
-                      : i18n::tr("settings.input.scancode.prefix") + std::to_string(control.index);
+                      : i18n::message("settings.input.control.number",
+                            {{"kind", i18n::message("settings.input.scancode.prefix")},
+                             {"number", std::to_string(control.index)}});
     break;
   }
   case input::ControlKind::Button:
-    controlName = i18n::tr("settings.input.button.prefix") + std::to_string(control.index);
+    controlName = i18n::message("settings.input.control.number",
+                            {{"kind", i18n::message("settings.input.button.prefix")},
+                             {"number", std::to_string(control.index)}});
     break;
   case input::ControlKind::Axis:
     return axisControlLabel(control.deviceClass, control.index,
                             control.direction);
   case input::ControlKind::Hat:
-    controlName = i18n::tr("settings.input.hat.prefix") + std::to_string(control.index);
+    controlName = i18n::message("settings.input.control.number",
+                            {{"kind", i18n::message("settings.input.hat.prefix")},
+                             {"number", std::to_string(control.index)}});
     break;
   case input::ControlKind::TouchRegion:
-    controlName = i18n::tr("settings.input.touch_region.prefix") + std::to_string(control.index);
+    controlName = i18n::message("settings.input.control.number",
+                            {{"kind", i18n::message("settings.input.touch_region.prefix")},
+                             {"number", std::to_string(control.index)}});
     break;
   case input::ControlKind::MidiNote:
-    controlName = i18n::tr("settings.input.note_ch.prefix") + std::to_string(control.index / 128 + 1) + " #" +
-                  std::to_string(control.index % 128);
+    controlName = i18n::message("settings.input.control.channel",
+                          {{"kind", i18n::message("settings.input.note_ch.prefix")},
+                           {"channel", std::to_string(control.index / 128 + 1)},
+                           {"number", std::to_string(control.index % 128)}});
     break;
   case input::ControlKind::MidiControl:
-    controlName = i18n::tr("settings.input.cc_ch.prefix") + std::to_string(control.index / 128 + 1) + " #" +
-                  std::to_string(control.index % 128);
+    controlName = i18n::message("settings.input.control.channel",
+                          {{"kind", i18n::message("settings.input.cc_ch.prefix")},
+                           {"channel", std::to_string(control.index / 128 + 1)},
+                           {"number", std::to_string(control.index % 128)}});
     break;
   }
   const std::string direction = directionLabel(control.direction);
   if (!direction.empty()) {
-    controlName += " " + direction;
+    return i18n::message("settings.input.control.direction",
+                         {{"control", controlName}, {"direction", direction}});
   }
   return controlName;
 }
 
-std::string actionLabel(input::LogicalAction action) {
+i18n::Text actionLabel(input::LogicalAction action) {
   switch (action.kind) {
   case input::LogicalActionKind::Lane:
-    return i18n::tr("settings.input.lane.prefix") + std::to_string(action.lane);
+    return i18n::message("settings.input.control.number",
+                         {{"kind", i18n::message("settings.input.lane.prefix")},
+                          {"number", std::to_string(action.lane)}});
   case input::LogicalActionKind::ScratchClockwise:
-    return i18n::tr("settings.input.scratch_clockwise.label");
+    return i18n::message("settings.input.scratch_clockwise.label");
   case input::LogicalActionKind::ScratchCounterClockwise:
-    return i18n::tr("settings.input.scratch_counter_clockwise.label");
+    return i18n::message("settings.input.scratch_counter_clockwise.label");
   case input::LogicalActionKind::Start:
-    return i18n::tr("settings.input.start.label");
+    return i18n::message("settings.input.start.label");
   case input::LogicalActionKind::Select:
-    return i18n::tr("settings.input.select.label");
+    return i18n::message("settings.input.select.label");
   case input::LogicalActionKind::Pause:
-    return i18n::tr("settings.input.pause.label");
+    return i18n::message("settings.input.pause.label");
   case input::LogicalActionKind::Retry:
-    return i18n::tr("settings.input.retry.label");
+    return i18n::message("settings.input.retry.label");
   case input::LogicalActionKind::LaneCoverIncrease:
-    return i18n::tr("settings.input.lane_cover_increase.label");
+    return i18n::message("settings.input.lane_cover_increase.label");
   case input::LogicalActionKind::LaneCoverDecrease:
-    return i18n::tr("settings.input.lane_cover_decrease.label");
+    return i18n::message("settings.input.lane_cover_decrease.label");
   }
   return "action";
 }
@@ -329,11 +344,11 @@ void SettingsScene::refreshInputMonitorText() {
            << inputGyroscopeAxisValue;
       inputMonitorText->setText(text.str());
     } else if (!sample.has_value()) {
-      inputMonitorText->setText(i18n::tr("settings.input.waiting_input.progress"));
+      inputMonitorText->setLocalizedText(i18n::message("settings.input.waiting_input.progress"));
     } else {
       std::ostringstream text;
-      text << deviceClassLabel(sample->control.deviceClass) << " · "
-           << controlLabel(sample->control) << " · " << std::fixed
+      text << deviceClassLabel(sample->control.deviceClass).resolve() << " · "
+           << controlLabel(sample->control).resolve() << " · " << std::fixed
            << std::setprecision(3) << sample->rawValue << " / "
            << sample->normalizedValue;
       inputMonitorText->setText(text.str());
@@ -345,7 +360,7 @@ void SettingsScene::refreshInputMonitorText() {
       inputCaptureStateText->setText("");
       break;
     case InputCaptureController::State::Listening:
-      inputCaptureStateText->setText(i18n::tr("settings.input.press_control.message"));
+      inputCaptureStateText->setLocalizedText(i18n::message("settings.input.press_control.message"));
       break;
     case InputCaptureController::State::AwaitingConflictConfirmation:
       inputCaptureStateText->setText("");
@@ -365,23 +380,26 @@ void SettingsScene::refreshInputMonitorText() {
 
 void SettingsScene::refreshInputDropdowns() {
   const std::vector<DropdownView::Option> playerOptions = {
-      {.id = "1", .label = i18n::tr("settings.input.player_1.label")},
-      {.id = "2", .label = i18n::tr("settings.input.player_2.label")},
+      {.id = "1", .label = i18n::message("settings.input.player_1.label")},
+      {.id = "2", .label = i18n::message("settings.input.player_2.label")},
   };
   std::vector<DropdownView::Option> keyModeOptions;
   for (const int keyMode : kInputKeyModes) {
     keyModeOptions.push_back({.id = std::to_string(keyMode),
-                              .label = i18n::format("settings.input.key_mode.label", {{"count", std::to_string(keyMode)}})});
+                              .label = i18n::message("settings.input.key_mode.label", {{"count", std::to_string(keyMode)}})});
   }
 
   std::vector<DropdownView::Option> deviceOptions = {
-      {.id = "", .label = i18n::tr("settings.input.all_devices.label")}};
+      {.id = "", .label = i18n::message("settings.input.all_devices.label")}};
   std::set<std::string> included;
   const auto devices = context.inputDeviceRegistry.snapshot();
   for (const auto &device : devices) {
-    std::string label =
-        device.displayName.empty() ? device.stableId : device.displayName;
-    label += device.connected ? "" : i18n::tr("settings.input.missing.suffix");
+    i18n::Text label = device.displayName.empty() ? device.stableId : device.displayName;
+    if (!device.connected) {
+      label = i18n::message("settings.input.device.missing",
+                            {{"prefix", ""}, {"name", label},
+                             {"suffix", i18n::message("settings.input.missing.suffix")}});
+    }
     deviceOptions.push_back({.id = device.stableId, .label = std::move(label)});
     included.insert(device.stableId);
   }
@@ -398,32 +416,34 @@ void SettingsScene::refreshInputDropdowns() {
     if (!included.contains(binding.control.deviceId)) {
       deviceOptions.push_back(
           {.id = binding.control.deviceId,
-           .label = i18n::tr("settings.input.missing.prefix") + binding.control.deviceId});
+           .label = i18n::message("settings.input.device.missing",
+                                 {{"prefix", i18n::message("settings.input.missing.prefix")},
+                                  {"name", binding.control.deviceId}, {"suffix", ""}})});
       included.insert(binding.control.deviceId);
     }
   }
   if (blankStableIdIncluded) {
     deviceOptions.push_back({.id = std::string(kBlankStableIdFilter),
-                             .label = i18n::tr("settings.input.missing_stable_id.label")});
+                             .label = i18n::message("settings.input.missing_stable_id.label")});
   }
 
   if (inputPlayerDropdown != nullptr) {
     inputPlayerDropdown->refresh(
-        {.label = i18n::tr("settings.input.player.label"),
+        {.label = i18n::message("settings.input.player.label"),
          .selectedId = std::to_string(inputSelectedPlayer),
          .options = playerOptions,
          .open = inputPlayerDropdownOpen});
   }
   if (inputKeyModeDropdown != nullptr) {
     inputKeyModeDropdown->refresh(
-        {.label = i18n::tr("settings.input.mode.label"),
+        {.label = i18n::message("settings.input.mode.label"),
          .selectedId = std::to_string(inputSelectedKeyMode),
          .options = std::move(keyModeOptions),
          .open = inputKeyModeDropdownOpen,
          .maxVisibleItems = 7});
   }
   if (inputDeviceDropdown != nullptr) {
-    inputDeviceDropdown->refresh({.label = i18n::tr("settings.input.device.label"),
+    inputDeviceDropdown->refresh({.label = i18n::message("settings.input.device.label"),
                                   .selectedId = inputSelectedDeviceId,
                                   .options = std::move(deviceOptions),
                                   .open = inputDeviceDropdownOpen,
@@ -527,7 +547,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   resetRow->setAlignItems(YGAlignCenter);
   auto *resetButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::tr("settings.input.reset_scope.label"), metrics.bodyTextSize + 2,
+      makeText(i18n::message("settings.input.reset_scope.label"), metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
       ui_theme::coral());
   resetButton->setOnClickListener([this]() {
@@ -540,7 +560,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   resetRow->addView(resetButton);
   selectorBody->addView(resetRow);
   cards->addView(makeCard(
-      metrics, i18n::tr("settings.input.binding_scope.label"), i18n::tr("settings.input.choose_player_key_mode_device.message"),
+      metrics, i18n::message("settings.input.binding_scope.label"), i18n::message("settings.input.choose_player_key_mode_device.message"),
       selectorBody, metrics.compact ? 280 : 220, metrics.cardsWidth));
 
   if (gameplay::virtualControllerTouchInputSupported()) {
@@ -551,8 +571,8 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     auto *virtualControllerToggle = makeAccentButton(
         std::min(bodyWidth, metrics.actionButtonWidth),
         metrics.actionButtonHeight,
-        makeText(virtualControllerConfig.enabled ? i18n::tr("settings.input.virtual_controller_on.label")
-                                                 : i18n::tr("settings.input.virtual_controller_off.label"),
+        makeText(virtualControllerConfig.enabled ? i18n::message("settings.input.virtual_controller_on.label")
+                                                 : i18n::message("settings.input.virtual_controller_off.label"),
                  metrics.bodyTextSize + 1, ui_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE),
         virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
@@ -569,7 +589,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       auto *scratchModeButton = makeControlButton(
           std::min(bodyWidth, metrics.actionButtonWidth),
           metrics.actionButtonHeight,
-          makeText(spinScratch ? i18n::tr("settings.input.scratch_spin_mode.label") : i18n::tr("settings.input.scratch_flick_mode.label"),
+          makeText(spinScratch ? i18n::message("settings.input.scratch_spin_mode.label") : i18n::message("settings.input.scratch_flick_mode.label"),
                    metrics.bodyTextSize + 1, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       scratchModeButton->setOnClickListener(
@@ -586,7 +606,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       auto *playerButton = makeControlButton(
           std::min(bodyWidth, metrics.actionButtonWidth),
           metrics.actionButtonHeight,
-          makeText(playerTwo ? i18n::tr("settings.input.player_2_p.label") : i18n::tr("settings.input.player_1_p.label"),
+          makeText(playerTwo ? i18n::message("settings.input.player_2_p.label") : i18n::message("settings.input.player_1_p.label"),
                    metrics.bodyTextSize + 1, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       playerButton->setOnClickListener(
@@ -600,7 +620,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       auto *editButton =
           makeControlButton(std::min(bodyWidth, metrics.actionButtonWidth),
                             metrics.actionButtonHeight,
-                            makeText(i18n::tr("settings.input.edit_layout.label"), metrics.bodyTextSize + 1,
+                            makeText(i18n::message("settings.input.edit_layout.label"), metrics.bodyTextSize + 1,
                                      ui_theme::textPrimary(), TextView::CENTER,
                                      TextView::MIDDLE));
       editButton->setOnClickListener([this]() {
@@ -612,10 +632,12 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     virtualControllerBody->addView(makeWrappedText(
         inputVirtualControllerSettingsError.empty()
             ? ""
-            : i18n::tr("settings.input.not_saved.prefix") + inputVirtualControllerSettingsError,
+            : i18n::message("settings.input.setting.error",
+                            {{"prefix", i18n::message("settings.input.not_saved.prefix")},
+                             {"error", inputVirtualControllerSettingsError}}),
         metrics.smallTextSize, ui_theme::coral()));
     cards->addView(makeCard(
-        metrics, i18n::tr("settings.input.virtual_controller.label"), "", virtualControllerBody,
+        metrics, i18n::message("settings.input.virtual_controller.label"), "", virtualControllerBody,
         virtualControllerConfig.enabled ? (metrics.compact ? 340 : 300)
                                         : (metrics.compact ? 220 : 200),
         metrics.cardsWidth));
@@ -640,10 +662,12 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     gyroscopeBody->setFlexDirection(FlexDirection::Column);
     gyroscopeBody->setGap(metrics.compact ? 10.0F : 12.0F);
     gyroscopeBody->addView(makeWrappedText(
-        i18n::tr("settings.input.status.prefix") + std::string(inputDeviceStatusLabel(status)),
+        i18n::message("settings.input.gyroscope.status",
+                      {{"prefix", i18n::message("settings.input.status.prefix")},
+                       {"status", inputDeviceStatusLabel(status)}}),
         metrics.bodyTextSize, ui_theme::textPrimary()));
     inputMonitorText = makeWrappedText(
-        i18n::tr("settings.input.turntable_0_000.label"), metrics.bodyTextSize, ui_theme::textSecondary());
+        i18n::message("settings.input.turntable_0_000.label"), metrics.bodyTextSize, ui_theme::textSecondary());
     gyroscopeBody->addView(inputMonitorText);
 
     const GyroscopeSettingsLayout gyroscopeLayout =
@@ -662,7 +686,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       field->setGap(4.0F);
       field->setWidth(static_cast<float>(gyroscopeLayout.editorWidth));
       field->setFlexGrow(gyroscopeLayout.stackEditors ? 0.0F : 1.0F);
-      field->addView(makeText(i18n::tr(std::string(labelKey)), metrics.smallTextSize,
+      field->addView(makeText(i18n::message(std::string(labelKey).c_str()), metrics.smallTextSize,
                               ui_theme::textMuted()));
       auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
       input->setEditingText(std::to_string(value));
@@ -691,7 +715,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         gyroscopeSettingsErrorLabel(inputGyroscopeSettingsError),
         metrics.smallTextSize, ui_theme::coral()));
     cards->addView(makeCard(
-        metrics, i18n::tr("settings.input.gyroscope_turntable.label"), i18n::tr("settings.input.use_device_rotation_as_turntable.message"),
+        metrics, i18n::message("settings.input.gyroscope_turntable.label"), i18n::message("settings.input.use_device_rotation_as_turntable.message"),
         gyroscopeBody, metrics.compact ? 300 : 240, metrics.cardsWidth));
   }
 
@@ -706,7 +730,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
     if (!showGyroscopeSettings) {
       inputMonitorText =
-          makeWrappedText(i18n::tr("settings.input.waiting_input.progress"), metrics.smallTextSize,
+          makeWrappedText(i18n::message("settings.input.waiting_input.progress"), metrics.smallTextSize,
                           ui_theme::textSecondary());
     }
     inputErrorText =
@@ -720,7 +744,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         InputCaptureController::State::Idle) {
       auto *cancelButton = makeControlButton(
           metrics.actionButtonWidth, metrics.actionButtonHeight,
-          makeText(i18n::tr("settings.input.cancel.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+          makeText(i18n::message("settings.input.cancel.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       cancelButton->setOnClickListener([this]() {
         inputCaptureController->cancel();
@@ -729,7 +753,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       });
       monitorBody->addView(cancelButton);
     }
-    cards->addView(makeCard(metrics, i18n::tr("settings.input.input_monitor.label"), "", monitorBody,
+    cards->addView(makeCard(metrics, i18n::message("settings.input.input_monitor.label"), "", monitorBody,
                             metrics.compact ? 210 : 190, metrics.cardsWidth));
   }
 
@@ -773,7 +797,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           *inputCaptureAction == definition.action;
       auto *bindButton = makeAccentButton(
           metrics.compact ? 150 : 190, metrics.actionButtonHeight,
-          makeText(listeningForAction ? i18n::tr("settings.input.listening.progress") : i18n::tr("settings.input.bind.label"),
+          makeText(listeningForAction ? i18n::message("settings.input.listening.progress") : i18n::message("settings.input.bind.label"),
                    metrics.bodyTextSize + 1, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
           listeningForAction ? ui_theme::amber() : ui_theme::cyan());
@@ -796,8 +820,8 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     }
     if (visibleBindings.empty()) {
       actionGroup->addView(makeWrappedText(
-          inputSelectedDeviceId.empty() ? i18n::tr("settings.input.unbound.label")
-                                        : i18n::tr("settings.input.no_binding_device_filter.message"),
+          inputSelectedDeviceId.empty() ? i18n::message("settings.input.unbound.label")
+                                        : i18n::message("settings.input.no_binding_device_filter.message"),
           metrics.smallTextSize, ui_theme::textMuted()));
     }
 
@@ -812,9 +836,9 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       const auto device = devices.find(binding.control.deviceId);
       const bool missing =
           inputCaptureController->isBindingDeviceMissing(binding.id);
-      std::string deviceLabel;
+      i18n::Text deviceLabel;
       if (binding.control.deviceId.empty()) {
-        deviceLabel = i18n::tr("settings.input.unknown_device.label");
+        deviceLabel = i18n::message("settings.input.unknown_device.label");
       } else if (device != devices.end() &&
                  !device->second.displayName.empty()) {
         deviceLabel = device->second.displayName;
@@ -822,11 +846,15 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         deviceLabel = binding.control.deviceId;
       }
       if (missing) {
-        deviceLabel = i18n::tr("settings.input.missing.prefix") + deviceLabel;
+        deviceLabel = i18n::message("settings.input.device.missing",
+                                    {{"prefix", i18n::message("settings.input.missing.prefix")},
+                                     {"name", deviceLabel}, {"suffix", ""}});
       }
       bindingRow->addView(makeWrappedText(
-          std::string(deviceClassLabel(binding.control.deviceClass)) + " · " +
-              controlLabel(binding.control) + " · " + deviceLabel,
+          i18n::message("settings.input.binding.summary",
+                        {{"class", deviceClassLabel(binding.control.deviceClass)},
+                         {"control", controlLabel(binding.control)},
+                         {"device", deviceLabel}}),
           metrics.smallTextSize,
           missing ? ui_theme::amber() : ui_theme::textSecondary()));
 
@@ -842,7 +870,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           settings_scene::resolveInputBindingEditorControlWidth(
               layout, editorCapabilities);
 
-      auto makeThresholdField = [&](std::string label, float value,
+      auto makeThresholdField = [&](const i18n::Text &label, float value,
                                     auto onCommit) {
         auto *field = new View();
         field->setFlexDirection(FlexDirection::Column);
@@ -870,7 +898,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
 
       if (editorCapabilities.deadZone) {
         editor->addView(
-            makeThresholdField(i18n::tr("settings.input.dead_zone.label"), binding.deadZone,
+            makeThresholdField(i18n::message("settings.input.dead_zone.label"), binding.deadZone,
                                [this, bindingId = binding.id](float value) {
                                  inputCaptureController->updateBinding(
                                      bindingId, {.deadZone = value});
@@ -879,7 +907,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       }
       if (editorCapabilities.activationThreshold) {
         editor->addView(makeThresholdField(
-            i18n::tr("settings.input.activate.label"), binding.activationThreshold,
+            i18n::message("settings.input.activate.label"), binding.activationThreshold,
             [this, bindingId = binding.id](float value) {
               inputCaptureController->updateBinding(
                   bindingId, {.activationThreshold = value});
@@ -888,7 +916,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       }
       if (editorCapabilities.releaseThreshold) {
         editor->addView(
-            makeThresholdField(i18n::tr("settings.input.release.label"), binding.releaseThreshold,
+            makeThresholdField(i18n::message("settings.input.release.label"), binding.releaseThreshold,
                                [this, bindingId = binding.id](float value) {
                                  inputCaptureController->updateBinding(
                                      bindingId, {.releaseThreshold = value});
@@ -898,7 +926,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       if (editorCapabilities.inversion) {
         auto *invertButton = makeControlButton(
             editorControlWidth, metrics.actionButtonHeight,
-            makeText(binding.inverted ? i18n::tr("settings.input.inverted_on.label") : i18n::tr("settings.input.inverted_off.label"),
+            makeText(binding.inverted ? i18n::message("settings.input.inverted_on.label") : i18n::message("settings.input.inverted_off.label"),
                      metrics.smallTextSize, ui_theme::textPrimary(),
                      TextView::CENTER, TextView::MIDDLE));
         invertButton->setOnClickListener([this, bindingId = binding.id]() {
@@ -909,7 +937,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       }
       auto *unbindButton = makeAccentButton(
           editorControlWidth, metrics.actionButtonHeight,
-          makeText(i18n::tr("settings.input.unbind.label"), metrics.smallTextSize, ui_theme::textPrimary(),
+          makeText(i18n::message("settings.input.unbind.label"), metrics.smallTextSize, ui_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
           ui_theme::coral());
       unbindButton->setOnClickListener([this, bindingId = binding.id]() {
@@ -925,7 +953,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     bindingsBody->addView(actionGroup);
   }
   cards->addView(makeCard(
-      metrics, i18n::tr("settings.input.bindings.label"), i18n::tr("settings.input.select_bind_then_press_control.message"),
+      metrics, i18n::message("settings.input.bindings.label"), i18n::message("settings.input.select_bind_then_press_control.message"),
       bindingsBody, metrics.compact ? 400 : 360, metrics.cardsWidth));
 
   refreshInputMonitorText();
@@ -965,12 +993,12 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
   panel->setThemedBorderColor(ui_theme::hairline);
   panel->setBorderWidth(1);
-  panel->addView(makeWrappedText(i18n::tr("settings.input.binding_conflict.label"), metrics.sectionTitleSize,
+  panel->addView(makeWrappedText(i18n::message("settings.input.binding_conflict.label"), metrics.sectionTitleSize,
                                  ui_theme::textPrimary()));
 
   for (const auto &conflict : inputCaptureController->pendingConflicts()) {
     panel->addView(makeWrappedText(
-        i18n::format("settings.input.binding_conflict.description",
+        i18n::message("settings.input.binding_conflict.description",
                      {{"control", controlLabel(conflict.control)},
                       {"action", actionLabel(conflict.action)}}),
         metrics.bodyTextSize, ui_theme::amber()));
@@ -983,7 +1011,7 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   actions->setJustifyContent(YGJustifyCenter);
   auto *replaceButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::tr("settings.input.replace.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.input.replace.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
       ui_theme::amber());
   replaceButton->setOnClickListener([this]() {
@@ -998,7 +1026,7 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
 
   auto *keepButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::tr("settings.input.keep.label"), metrics.bodyTextSize + 2,
+      makeText(i18n::message("settings.input.keep.label"), metrics.bodyTextSize + 2,
                ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   keepButton->setOnClickListener([this]() {
     inputCaptureController->rejectReplace();
@@ -1051,16 +1079,16 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   title->setFlexDirection(FlexDirection::Column);
   title->setFlex(1.0F);
   title->setGap(4.0F);
-  title->addView(makeText(i18n::tr("settings.input.virtual_controller_layout.label"), metrics.sectionTitleSize,
+  title->addView(makeText(i18n::message("settings.input.virtual_controller_layout.label"), metrics.sectionTitleSize,
                            ui_theme::textPrimary()));
   title->addView(makeWrappedText(
-      i18n::tr("settings.input.virtual_controller.layout_help"),
+      i18n::message("settings.input.virtual_controller.layout_help"),
       metrics.smallTextSize, ui_theme::textSecondary()));
   header->addView(title);
 
   auto *doneButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::tr("settings.input.done.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.input.done.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
       ui_theme::cyan());
   doneButton->setFlexShrink(0.0F);
@@ -1072,7 +1100,7 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   inputVirtualControllerEditorOverlayRoot->addView(header);
 
   inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(
-      i18n::tr("settings.input.virtual_controller.handle_legend"),
+      i18n::message("settings.input.virtual_controller.handle_legend"),
       metrics.smallTextSize, ui_theme::textSecondary()));
 
   auto *editor = new VirtualControllerEditorView(

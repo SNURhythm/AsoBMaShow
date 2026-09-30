@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ChartRecordFilters.h"
+#include "../i18n/Localization.h"
 #include "../repositories/ChartRepository.h"
 #include "../view/View.h"
 
@@ -119,7 +120,7 @@ private:
     Button *button = nullptr;
     TextView *text = nullptr;
     TextView *icon = nullptr;
-    std::string label;
+    i18n::Text label;
     ChartRecordSortCriterion criterion = ChartRecordSortCriterion::Default;
   };
 

@@ -5069,6 +5069,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UiBatchRenderer.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -5094,6 +5095,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
+        src/view/DropdownView.cpp
+        src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
@@ -5520,6 +5523,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     else()
         target_link_libraries(localization_tests PRIVATE SDL2)
     endif()
+    set(scene_language_lifecycle_source
+        ${CMAKE_CURRENT_BINARY_DIR}/generated/scene_language_lifecycle_tests.cpp)
+    add_custom_command(
+        OUTPUT ${scene_language_lifecycle_source}
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/scene_language_lifecycle_extract.py
+                --root ${CMAKE_SOURCE_DIR} --output ${scene_language_lifecycle_source}
+        DEPENDS tests/scene_language_lifecycle_extract.py tests/scene_language_lifecycle_fixture.cpp
+                src/scene/Scene.h src/scene/SceneManager.h src/scene/SceneManager.cpp
+        VERBATIM
+    )
+    add_executable(scene_language_lifecycle_tests ${scene_language_lifecycle_source})
+    target_include_directories(scene_language_lifecycle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(scene_language_lifecycle_tests PRIVATE cxx_std_23)
     add_test(NAME localization_catalog_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
 
@@ -8630,6 +8646,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(app_settings_store_tests foundation_profile_settings)
     asobmashow_register_test(image_alpha_bounds_tests)
     asobmashow_register_test(localization_tests)
+    asobmashow_register_test(scene_language_lifecycle_tests)
     asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)

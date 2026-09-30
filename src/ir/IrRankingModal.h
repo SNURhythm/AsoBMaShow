@@ -138,6 +138,7 @@ public:
 private:
   std::optional<IrRankingRequest> expectedRequest_;
   IrRankingModalPresentation presentation_;
+  std::uint64_t languageRevision_ = 0;
 };
 
 class IrRankingModal {

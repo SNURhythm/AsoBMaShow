@@ -4,8 +4,8 @@
 #include <SDL2/SDL.h>
 
 namespace i18n {
-// Resolve once at application startup. A preference change is saved for the
-// next launch, keeping retained scenes and in-flight tasks in one language.
+// Resolve device preferences at startup and after a saved language change.
+// Retained scenes refresh their presentation using the language revision.
 inline void initializePlatformLanguage(std::string_view preference) {
   Language resolved = resolveLanguage(preference, {});
   if (preference != "en" && preference != "ko" && preference != "ja") {

@@ -19,9 +19,9 @@
 namespace {
 constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
 
-TextView *makeLabel(const std::string &label) {
+TextView *makeLabel(const i18n::Text &label) {
   auto *text = new TextView(kFont, 20);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setThemedColor(ui_theme::textSecondary);
   text->setVAlign(TextView::MIDDLE);
   text->setHeight(28);
@@ -37,7 +37,7 @@ View *makeRow(float height = 58.0f) {
   return row;
 }
 
-Button *makeButton(const std::string &label, int fontSize, TextView **textOut) {
+Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
   auto *button = new Button(0, 0, 0, 54);
   button->setFlexGrow(1.0f);
   button->setFlexBasis(0.0f);
@@ -50,7 +50,7 @@ Button *makeButton(const std::string &label, int fontSize, TextView **textOut) {
                                 ui_theme::hairlineStrong,
                                 ui_theme::accentBorder);
   auto *text = new TextView(kFont, fontSize);
-  text->setText(label);
+  text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
@@ -125,7 +125,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   setAlignItems(YGAlignStretch);
   setGap(12);
 
-  auto *rulesetSectionLabel = makeLabel(i18n::tr("play_options.ruleset.label"));
+  auto *rulesetSectionLabel = makeLabel(i18n::message("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
   addView(rulesetSectionLabel);
   auto *rulesetRow = makeRow();
@@ -149,7 +149,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(rulesetRow);
 
   if (layout.showGauge) {
-    gaugeSectionLabel = makeLabel(i18n::tr("play_options.gauge.label"));
+    gaugeSectionLabel = makeLabel(i18n::message("play_options.gauge.label"));
     gaugeSectionLabel->setName("gauge-section-label");
     addView(gaugeSectionLabel);
     auto addGaugeButton = [this](View *row, GaugeType type) {
@@ -179,7 +179,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addGaugeButton(gaugeRowB, GaugeType::Hazard);
     addView(gaugeRowB);
 
-    addView(makeLabel(i18n::tr("play_options.auto_shift.label")));
+    addView(makeLabel(i18n::message("play_options.auto_shift.label")));
     auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
       TextView *text = nullptr;
       const std::string label = gaugeAutoShiftMenuLabel(mode);
@@ -214,7 +214,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     gaugeAutoShiftBoundsSection->setGap(12);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(false);
-    gaugeAutoShiftBoundsSection->addView(makeLabel(i18n::tr("play_options.auto_shift_lower_bound.label")));
+    gaugeAutoShiftBoundsSection->addView(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label")));
     auto addLowerBoundButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -266,7 +266,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playOptionSection->setWidth(layout.width);
   addView(playOptionSection);
 
-  addView(makeLabel(i18n::tr("play_options.long_note_mode.label")));
+  addView(makeLabel(i18n::message("play_options.long_note_mode.label")));
   auto *longNoteModeRow = makeRow();
   for (const char *mode : long_note_mode::kPlayableIds) {
     TextView *text = nullptr;
@@ -281,7 +281,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   }
   addView(longNoteModeRow);
 
-  assistOptionLabel = makeLabel(i18n::tr("play_options.assist_option.label"));
+  assistOptionLabel = makeLabel(i18n::message("play_options.assist_option.label"));
   addView(assistOptionLabel);
   auto *assistRow = makeRow();
   for (const char *option : {assist_options::kOff, assist_options::kDrag,
@@ -309,7 +309,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       ->setThemedBorderColor(ui_theme::hairlineSubtle)
       ->setBorderWidth(1)
       ->setCornerRadius(ui_theme::controlRadius());
-  playbackGroup->addView(makeLabel(i18n::tr("play_options.playback_rate.label")));
+  playbackGroup->addView(makeLabel(i18n::message("play_options.playback_rate.label")));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
@@ -343,10 +343,11 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->addView(playbackModeDropdown);
   addView(playbackGroup);
 
-  addView(makeLabel(i18n::tr("play_options.club_mode.label")));
+  addView(makeLabel(i18n::message("play_options.club_mode.label")));
   clubModeButton = makeButton("", 18, nullptr);
   clubModeButton->setName("club-mode");
-  clubModeButtonContent = new CheckboxButtonContent(i18n::tr("play_options.club_beat.label"), 18, 17);
+  clubModeButtonContent = new CheckboxButtonContent("", 18, 17);
+  clubModeButtonContent->labelView()->setLocalizedText(i18n::message("play_options.club_beat.label"));
   clubModeButton->setContentView(clubModeButtonContent);
   clubModeButton->setWidthPercent(100.0f);
   clubModeButton->setOnClickListener([this]() {
@@ -357,7 +358,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
-    addView(makeLabel(i18n::tr("play_options.pacemaker.label")));
+    addView(makeLabel(i18n::message("play_options.pacemaker.label")));
     View *row = nullptr;
     for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
       if (i % 3 == 0) {
@@ -381,6 +382,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 }
 
 void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
+  if (playOptionSection != nullptr &&
+      (state.profileId != newState.profileId || state.ruleset != newState.ruleset)) {
+    playOptionSection->resetLaneOrderDraft();
+  }
   state = newState;
   for (const auto &item : rulesetButtons) {
     styleButton(item.button, item.text, item.ruleset == state.ruleset, true);
@@ -397,10 +402,10 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
       state.gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
       state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder;
   if (gaugeSectionLabel != nullptr) {
-    gaugeSectionLabel->setText(
+    gaugeSectionLabel->setLocalizedText(
         state.gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder
             ? "Gauge / Auto Shift Upper Bound"
-            : i18n::tr("play_options.gauge.label"));
+            : i18n::message("play_options.gauge.label"));
   }
   if (gaugeAutoShiftBoundsSection != nullptr) {
     gaugeAutoShiftBoundsSection->setDisplay(showsBounds ? YGDisplayFlex
@@ -427,11 +432,11 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   }
   if (assistOptionLabel != nullptr) {
     if (state.playbackRatePercent != 100) {
-      assistOptionLabel->setText(i18n::tr("play_options.assist_option_light_assist_easy.label"));
+      assistOptionLabel->setLocalizedText(i18n::message("play_options.assist_option_light_assist_easy.label"));
     } else if (assist_options::isEnabled(state.assistOption)) {
-      assistOptionLabel->setText(i18n::tr("play_options.assist_option_light_assist_easy.label"));
+      assistOptionLabel->setLocalizedText(i18n::message("play_options.assist_option_light_assist_easy.label"));
     } else {
-      assistOptionLabel->setText(i18n::tr("play_options.assist_option.label"));
+      assistOptionLabel->setLocalizedText(i18n::message("play_options.assist_option.label"));
     }
   }
   if (playbackRateText != nullptr) {
@@ -446,11 +451,11 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   }
   if (playbackModeDropdown != nullptr) {
     playbackModeDropdown->refresh(
-        {.label = i18n::tr("play_options.mode.label"),
+        {.label = i18n::message("play_options.mode.label"),
          .selectedId = "pitch-shift",
-         .options = {{.id = "pitch-shift", .label = i18n::tr("play_options.pitch_shift.label")},
+         .options = {{.id = "pitch-shift", .label = i18n::message("play_options.pitch_shift.label")},
                      {.id = "time-stretch",
-                      .label = i18n::tr("play_options.time_stretch_unavailable.label"),
+                      .label = i18n::message("play_options.time_stretch_unavailable.label"),
                       .available = false}},
          .open = playbackModeDropdownOpen,
          .enabled = !state.playbackLocked,

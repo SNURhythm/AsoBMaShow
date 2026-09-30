@@ -3805,7 +3805,8 @@ void ChartViewerScene::refreshViewerOptionControls() {
        .assistOptionLocked = false,
        .playbackRatePercent = practiceConfiguration.playback.percent,
        .playbackLocked = false,
-       .clubMode = context.settings.gameplayClubModeEnabled});
+       .clubMode = context.settings.gameplayClubModeEnabled,
+       .profileId = context.profileManager.activeProfile().id});
 }
 
 void ChartViewerScene::setViewerNamedPlayOption(const std::string &option) {

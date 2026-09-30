@@ -261,10 +261,17 @@ void testKoreanDeviceChoicesPreserveDeviceNamesAndIds() {
   capabilities.outputDevices[0].name = "Settings";
   i18n::setLanguage(i18n::Language::Korean);
   const auto model = BuildAudioControlModel({}, capabilities, {});
-  require(findOption(model.devices, "")->label == "시스템 기본값",
+  require(findOption(model.devices, "")->label.resolve() == "시스템 기본값",
           "application labels use the Korean catalog");
-  require(findOption(model.devices, "builtin:output")->label == "Settings",
+  require(findOption(model.devices, "builtin:output")->label.resolve() == "Settings",
           "device-provided names remain verbatim");
+  i18n::setLanguage(i18n::Language::Japanese);
+  require(findOption(model.devices, "")->label.resolve() ==
+              i18n::tr("settings.audio_video.system_default.label"),
+          "retained device choices resolve the current language");
+  require(findOption(model.devices, "builtin:output")->label.resolve() == "Settings" &&
+              model.devices.selectedValue.empty(),
+          "changing language preserves device names and selected stable IDs");
   i18n::setLanguage(i18n::Language::English);
 }
 
@@ -289,12 +296,12 @@ void testAudioModelPreservesUnavailableStableIdAndFriendlyLabels() {
   require(!model.devices.options.empty(), "device choices remain visible");
   require(model.devices.options.front().persistedValue == "missing:device",
           "missing stable ID remains the persisted choice");
-  require(model.devices.options.front().label == "missing:device (Unavailable)",
+  require(model.devices.options.front().label.resolve() == "missing:device (Unavailable)",
           "missing stable ID has an explicit unavailable label");
   require(!model.devices.options.front().available,
           "missing stable ID is not presented as selectable");
   const auto *friendly = findOption(model.devices, "usb:studio-dac");
-  require(friendly != nullptr && friendly->label == "Studio DAC",
+  require(friendly != nullptr && friendly->label.resolve() == "Studio DAC",
           "available stable IDs use friendly labels");
   require(model.devices.selectedValue == "missing:device",
           "selection preserves imported unavailable intent");
@@ -343,11 +350,11 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
   const auto desktop =
       BuildDisplayControlModel(intent, desktopDisplayCapabilities());
   require(desktop.displays.options.front().persistedValue == "9" &&
-              desktop.displays.options.front().label ==
+              desktop.displays.options.front().label.resolve() ==
                   "Display 9 (Unavailable)",
           "missing display intent remains the first unavailable choice");
   require(findOption(desktop.displays, "0") != nullptr &&
-              findOption(desktop.displays, "0")->label == "Laptop Display",
+              findOption(desktop.displays, "0")->label.resolve() == "Laptop Display",
           "display indices use friendly runtime names");
   require(findOption(desktop.frameCaps, "75") != nullptr,
           "valid custom frame caps remain selectable");

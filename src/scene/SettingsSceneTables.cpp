@@ -269,28 +269,30 @@ void SettingsScene::refreshDifficultyTableImportModal() {
           : 0.0f;
 
   if (difficultyTableImportTitleText != nullptr) {
-    difficultyTableImportTitleText->setText(
-        !finished ? i18n::tr("settings.difficulty_tables.importing_difficulty_tables.label")
-                  : (succeeded ? i18n::tr("settings.difficulty_tables.import_complete.label") : i18n::tr("settings.difficulty_tables.import_failed.label")));
+    difficultyTableImportTitleText->setLocalizedText(
+        !finished ? i18n::message("settings.difficulty_tables.importing_difficulty_tables.label")
+                  : (succeeded ? i18n::message("settings.difficulty_tables.import_complete.label") : i18n::message("settings.difficulty_tables.import_failed.label")));
   }
   if (difficultyTableImportStatusText != nullptr) {
     if (!difficultyTableImportStatusMessage.empty()) {
       difficultyTableImportStatusText->setText(
           difficultyTableImportStatusMessage);
     } else {
-      difficultyTableImportStatusText->setText(
-          !finished ? i18n::tr("settings.difficulty_tables.downloading_importing_tables.progress")
-                    : (succeeded ? i18n::tr("settings.difficulty_tables.import_finished.message") : i18n::tr("settings.difficulty_tables.import_failed.message")));
+      difficultyTableImportStatusText->setLocalizedText(
+          !finished ? i18n::message("settings.difficulty_tables.downloading_importing_tables.progress")
+                    : (succeeded ? i18n::message("settings.difficulty_tables.import_finished.message") : i18n::message("settings.difficulty_tables.import_failed.message")));
     }
   }
   if (difficultyTableImportTableText != nullptr) {
-    difficultyTableImportTableText->setText(
+    difficultyTableImportTableText->setLocalizedText(
         difficultyTableImportName.empty()
-            ? i18n::tr("settings.difficulty_tables.current_table_resolving_table_url.label")
-            : i18n::tr("settings.difficulty_tables.current_table.prefix") + difficultyTableImportName);
+            ? i18n::message("settings.difficulty_tables.current_table_resolving_table_url.label")
+            : i18n::message("settings.difficulty_tables.current_table",
+                            {{"prefix", i18n::message("settings.difficulty_tables.current_table.prefix")},
+                             {"name", difficultyTableImportName}}));
   }
   if (difficultyTableImportProgressText != nullptr) {
-    difficultyTableImportProgressText->setText(
+    difficultyTableImportProgressText->setLocalizedText(
         formatImportProgressText(current, total));
   }
   if (difficultyTableImportProgressFill != nullptr) {

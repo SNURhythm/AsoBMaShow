@@ -652,6 +652,17 @@ void View::propagateThemeChange() {
   }
 }
 
+void View::onLanguageChanged() {}
+
+void View::propagateLanguageChange() {
+  onLanguageChanged();
+  for (auto *child : children) {
+    if (child != nullptr) {
+      child->propagateLanguageChange();
+    }
+  }
+}
+
 void View::renderBoxDecoration(RenderContext &context) const {
   if ((!hasBackground && (!hasBorder || borderWidth <= 0) && !hasShadow) ||
       getWidth() <= 0 || getHeight() <= 0) {

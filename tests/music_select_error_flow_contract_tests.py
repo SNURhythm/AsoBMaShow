@@ -722,7 +722,7 @@ struct Toolbar : View {
 };
 struct OverlayPortal {};
 struct ContextMenuView {
-  struct Action { std::string id, label; bool enabled = true; };
+  struct Action { std::string id; i18n::Text label; bool enabled = true; };
   struct Callbacks { std::function<void(bool)> onOpenChanged;
                      std::function<void(const std::string &)> onActionSelected; } callbacks;
   bool open = false;
@@ -812,8 +812,8 @@ int main() {
   assert(platform_open::calls == 3 && scene.revealContextMenu_->isOpen());
   const auto &menu = *scene.revealContextMenu_;
   assert(menu.width == 220 && menu.actions.size() == 2);
-  assert(menu.actions[0].label == "Show Same Folder" && menu.actions[0].enabled);
-  assert(menu.actions[1].label == "Reveal File" && menu.actions[1].enabled);
+  assert(menu.actions[0].label.resolve() == "Show Same Folder" && menu.actions[0].enabled);
+  assert(menu.actions[1].label.resolve() == "Reveal File" && menu.actions[1].enabled);
   scene.revealChart();
   assert(!menu.isOpen());
   scene.revealChart();

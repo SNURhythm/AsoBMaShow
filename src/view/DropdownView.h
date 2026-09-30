@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../rendering/Color.h"
+#include "../i18n/Localization.h"
 #include "View.h"
 
 #include <functional>
@@ -20,13 +21,13 @@ public:
 
   struct Option {
     std::string id;
-    std::string label;
+    i18n::Text label;
     bool available = true;
     std::optional<Color> leadingColor;
   };
 
   struct State {
-    std::string label;
+    i18n::Text label;
     std::string selectedId;
     std::vector<Option> options;
     bool open = false;
@@ -100,4 +101,5 @@ private:
   bool handleEventsImpl(SDL_Event &event) override;
   void onMove(int newX, int newY) override;
   void onThemeChanged() override;
+  void onLanguageChanged() override;
 };

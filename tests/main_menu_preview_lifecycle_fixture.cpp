@@ -25,6 +25,7 @@ struct View {
   void freeImage() {}
   void setImageAsync(const std::filesystem::path &, bool) {}
   void setText(const std::string &) {}
+  void setLocalizedText(const i18n::Text &) {}
 };
 
 struct RecyclerView {

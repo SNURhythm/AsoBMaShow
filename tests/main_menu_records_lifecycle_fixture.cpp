@@ -1,4 +1,5 @@
 #include "REPOSITORY_ROOT/src/replay/ReplayExportJob.h"
+#include "REPOSITORY_ROOT/src/i18n/Localization.h"
 #include "REPOSITORY_ROOT/src/scene/ReplayRecordTask.h"
 #include "REPOSITORY_ROOT/src/scene/FindBmsTask.h"
 #include "REPOSITORY_ROOT/tests/support/AllocationFailure.h"
@@ -29,6 +30,7 @@ struct View {
   std::string text;
   void setVisible(bool value) { visible = value; }
   void setText(const std::string &value) { text = value; }
+  void setLocalizedText(const i18n::Text &value) { text = value.resolve(); }
   void dismiss() {}
   void close() {}
 };
@@ -45,10 +47,10 @@ struct ReplayRecordsModal {
   std::string status;
   void refreshActions() {}
   void clearSelection() {}
-  void setStatus(const std::string &value) { status = value; }
+  void setStatus(i18n::Text value) { status = value.resolve(); }
   void reloadRecords(bool) {}
-  void returnToList(const std::string &value) { status = value; }
-  void showExportProgress(const std::string &, const std::string &) { root.visible = true; }
+  void returnToList(const i18n::Text &value) { status = value.resolve(); }
+  void showExportProgress(const i18n::Text &, const i18n::Text &) { root.visible = true; }
   auto selection() { return std::optional<ResultRecordSummary>(ResultRecordSummary{}); }
   void hide();
   void setLoadInProgress(bool);
@@ -298,7 +300,7 @@ struct MainMenuScene {
   void applyReplayLoadCompletion();
   void stopReplayLoadWorker();
   void stopReplayAndPreviewWork();
-  bool beginReplayExport(const std::string &, const std::string &, const std::string &);
+  bool beginReplayExport(const i18n::Text &, const i18n::Text &, const i18n::Text &);
   void applyReplayExportResult();
   void onPause();
   void onResume();

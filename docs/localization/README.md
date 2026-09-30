@@ -3,7 +3,7 @@
 The built-in interface supports English, Korean, and Japanese. On a new
 installation the app uses the first supported language in SDL's device language
 preferences, falling back to English. Settings → Misc → Language provides a
-dropdown with System language, English, 한국어, and 日本語. Restart the app to apply a change.
+dropdown with System language, English, 한국어, and 日本語. Changes apply immediately, including when returning to an already open screen.
 
 Language is saved in `application-ui-state.json`, independently of player
 profiles. Existing files without a language preference keep the System default.
@@ -13,7 +13,7 @@ Use stable semantic IDs for application-owned labels and messages, for example
 `i18n::tr("settings.audio.test_sound.label")`. `src/i18n/Messages.inc` contains
 explicit `{ID, English, Korean, Japanese}` entries sorted by ID. Names follow
 the owning screen or component, control or state, and purpose. For example,
-`settings.language.restart_notice` is separate from the language control label.
+`settings.language.change_notice` is separate from the language control label.
 Do not use sentence text, hashes, random values, or numbered placeholders as IDs.
 Keep IDs unchanged when editing English copy or moving implementation code.
 
@@ -27,7 +27,15 @@ reject missing IDs.
 Do not pass chart metadata, file paths, profile/playlist names, typed text,
 serialized values, or third-party skin text through translation lookup.
 
-For sentences containing values, use `i18n::format` with an ID and named values:
+Retained UI labels use `TextView::setLocalizedText(i18n::message("settings.audio.test_sound.label"))`.
+The descriptor owns its ID and named arguments, so language changes can refresh
+text in place without replacing views. Use nested `i18n::message` arguments for
+translated values and raw strings for user content. Ordinary `setText` clears
+any existing binding. Dropdown and context-menu labels also accept descriptors.
+Scene language hooks refresh dynamic presentation while preserving input drafts,
+selection, scroll, playback, and ongoing work.
+
+For one-time sentences containing values, use `i18n::format` with an ID and named values:
 `i18n::format("settings.display.preview.countdown.other", {{"seconds", "3"}})`.
 The catalog value is `Reverting in {seconds} seconds`. Translate the entire sentence so that
 word order can change. Replacement values are inserted verbatim, even when they

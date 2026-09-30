@@ -49,9 +49,9 @@ class LocalizationCatalogTests(unittest.TestCase):
                 value = literal[1:-1]
                 if value in self.catalog:
                     referenced.add(value)
-            for match in re.finditer(r"i18n::(?:tr|format)\(\s*(" + LITERAL + ")", source):
+            for match in re.finditer(r"i18n::(?:tr|format|message)\(\s*(" + LITERAL + ")", source):
                 key = json.loads(match[1])
-                self.assertIn(key, self.catalog, f"{path}: unknown message ID {key!r}")
+                self.assertTrue(key in self.catalog, f"{path}: unknown message ID {key!r}")
         self.assertEqual(set(self.catalog) - referenced, set())
 
     def test_equal_english_labels_have_independent_contextual_ids(self):

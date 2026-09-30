@@ -604,6 +604,7 @@ public:
   void applyYogaLayout();
   void applyYogaLayoutFromRoot();
   virtual void propagateThemeChange();
+  virtual void propagateLanguageChange();
   static void beginLayoutBatch() { ++layoutBatchDepth; }
   static void endLayoutBatch() {
     if (layoutBatchDepth == 0) {
@@ -628,6 +629,7 @@ protected:
   virtual void renderImpl(RenderContext &context) {};
   virtual inline bool handleEventsImpl(SDL_Event &event) { return true; };
   virtual void onThemeChanged();
+  virtual void onLanguageChanged();
   // onResize
   virtual void onResize(int newWidth, int newHeight) {}
   // onMove

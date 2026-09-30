@@ -126,6 +126,15 @@ public:
     }
   }
 
+  void propagateLanguageChange() override {
+    View::propagateLanguageChange();
+    for (auto *overlay : presented) {
+      if (overlay != nullptr) {
+        overlay->propagateLanguageChange();
+      }
+    }
+  }
+
 protected:
   void renderImpl(RenderContext &context) override {
     for (auto *overlay : presented) {
