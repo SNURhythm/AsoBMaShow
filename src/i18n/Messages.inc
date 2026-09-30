@@ -74,7 +74,7 @@
 {"gameplay.input.integrity_failure_notice", "Realtime input integrity failed. This attempt was invalidated; return and retry.", "실시간 입력 검증에 실패하여 이번 플레이가 무효 처리되었습니다. 돌아가서 다시 시도하세요.", "リアルタイム入力の整合性検証に失敗したため、今回のプレイは無効になりました。戻って再試行してください。"},
 {"gameplay.loading.loading.progress", "Loading...", "불러오는 중...", "読み込み中..."},
 {"gameplay.paused.badge", "PAUSED", "일시 정지", "一時停止中"},
-{"gameplay.paused.penalty", "Pausing during notes: assisted play; no IR.\nMax clear: LIGHT ASSIST EASY.", "노트 구간 일시 정지: 보조 플레이 · IR 불가\n최대 클리어: LIGHT ASSIST EASY", "ノーツ中の一時停止：アシスト・IR不可\nクリア上限：LIGHT ASSIST EASY"},
+{"gameplay.paused.penalty", "Pausing counts as assisted play; no IR.\nMax clear: LIGHT ASSIST EASY.", "일시 정지: 보조 플레이 · IR 등록 불가\n최대 클리어: LIGHT ASSIST EASY", "一時停止：アシスト扱い・IR登録不可\nクリア上限：LIGHT ASSIST EASY"},
 {"gameplay.playback_unavailable.badge", "PLAYBACK UNAVAILABLE", "재생 불가", "再生できません"},
 {"gameplay.replay.label", "Replay", "리플레이", "リプレイ"},
 {"gameplay.reset_layout.label", "Reset Layout", "배치 초기화", "レイアウトをリセット"},

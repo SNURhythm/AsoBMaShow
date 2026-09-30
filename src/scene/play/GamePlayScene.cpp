@@ -3199,6 +3199,9 @@ void GamePlayScene::init() {
       pauseScreen->addView(pauseText);
       if (showsPausePenalty) {
         auto penaltyText = new View();
+        pausePenaltyText = penaltyText;
+        penaltyText->setVisible(false);
+        penaltyText->setDisplay(YGDisplayNone);
         penaltyText->setSize(420, 56);
         penaltyText->setFlexDirection(FlexDirection::Column);
         std::istringstream lines(i18n::tr("gameplay.paused.penalty"));
@@ -3725,6 +3728,12 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
       analyticsReplay.assistOption = attemptProvenance.assistOption;
       state->lightAssistClearMark = true;
     }
+  }
+  if (pausePenaltyText != nullptr) {
+    const bool showPenalty = state != nullptr &&
+                            (state->lightAssistClearMark || state->assistClearMark);
+    pausePenaltyText->setVisible(showPenalty);
+    pausePenaltyText->setDisplay(showPenalty ? YGDisplayFlex : YGDisplayNone);
   }
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->clearLiveTouchPoints();

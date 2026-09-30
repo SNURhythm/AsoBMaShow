@@ -18,6 +18,7 @@
 #include "replay/CourseReplayConsumer.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
 #include <SDL2/SDL_log.h>
+#include <yoga/Yoga.h>
 
 #include <atomic>
 #include <chrono>
@@ -110,6 +111,8 @@ struct FixturePresentation {
 
 struct FixturePauseView {
   bool visible = false;
+  YGDisplay display = YGDisplayFlex;
+  void setDisplay(YGDisplay value) { display = value; }
   void setVisible(bool value) { visible = value; }
   bool getVisible() const { return visible; }
 };
@@ -151,6 +154,7 @@ public:
   bool playfieldLaneCoverEnabled = false;
   ScoreProvenance attemptProvenance = ScoreProvenance::Legacy();
   FixturePauseView *pauseLayout = nullptr;
+  FixturePauseView *pausePenaltyText = nullptr;
   FixturePauseView *pauseButton = nullptr;
   FixturePauseView *practiceRestartButton = nullptr;
   bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
@@ -447,6 +451,8 @@ void testAbortExportAdmission(const ReplayData &replay) {
 void testPausePenaltyAndFreshAttemptBoundary() {
   for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
     GamePlayScene scene;
+    FixturePauseView warning;
+    scene.pausePenaltyText = &warning;
     scene.options.ruleset = ruleset;
     scene.options.gaugeType = GaugeType::Hard;
     const auto *selectedAssist = ruleset == GameplayRuleset::LR2
@@ -474,6 +480,7 @@ void testPausePenaltyAndFreshAttemptBoundary() {
                 scene.options.assistOption == selectedAssist &&
                 scene.state->getClearType() == ClearType::LightAssistedEasyClear,
             "actual pause marks the attempt and its replay assisted and unranked");
+    require(warning.getVisible(), "assisted pause shows the warning");
     scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
     auto &session = *scene.realtimeGameplaySession;
     session.worker = std::make_unique<FixtureWorker>();
@@ -490,8 +497,9 @@ void testPausePenaltyAndFreshAttemptBoundary() {
             "resume retains the pause penalty");
     scene.state->stagePassedNotes = scene.chart->Meta.TotalNotes;
     scene.showPauseMenu(true);
-    require(scene.attemptProvenance.assistOption == assist_options::kAssisted,
-            "a safe later pause cannot clear an earlier penalty");
+    require(scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                warning.getVisible(),
+            "a safe later pause retains the earlier penalty and warning");
     scene.closePauseMenu();
     scene.useProductionResetBoundary = true;
     scene.restartCurrentPattern();
@@ -500,10 +508,16 @@ void testPausePenaltyAndFreshAttemptBoundary() {
                 scene.attemptProvenance.eligibility == ScoreEligibility::Verified &&
                 !scene.state->lightAssistClearMark,
             "Retry Same and Retry without randomization reset the penalty at the real attempt boundary");
+    scene.context.jukebox.time = 0;
+    scene.showPauseMenu(true);
+    require(!warning.getVisible() && warning.display == YGDisplayNone,
+            "safe pause after retry hides the previous attempt's warning");
+    scene.closePauseMenu();
     scene.context.jukebox.time = 2'500'000;
     scene.showPauseMenu(true);
-    require(scene.attemptProvenance.assistOption == assist_options::kAssisted,
-            "a fresh attempt can acquire its own pause penalty");
+    require(scene.attemptProvenance.assistOption == assist_options::kAssisted &&
+                warning.getVisible() && warning.display == YGDisplayFlex,
+            "a fresh attempt can acquire its own pause penalty and warning");
   }
   for (const auto *assist : {assist_options::kDrag, assist_options::kBpmGuide}) {
     GamePlayScene scene;
@@ -545,6 +559,8 @@ void testPauseOnlyPenalizesUnfinishedNotePlay() {
           std::tuple{3'500'000LL, 2, false}}) {
       for (const bool realtime : {false, true}) {
         GamePlayScene scene;
+        FixturePauseView warning;
+        scene.pausePenaltyText = &warning;
         auto *leadIn = new bms_parser::TimeLine(8, false);
         leadIn->Timing = 0;
         leadIn->AddBackgroundNote(new bms_parser::Note(1));
@@ -570,6 +586,9 @@ void testPauseOnlyPenalizesUnfinishedNotePlay() {
         require(scene.context.jukebox.paused, "pause remains available outside note play");
         require(scene.state->lightAssistClearMark == penalized,
                 "pause penalty starts at the first note and ends only when all notes are handled");
+        require(warning.getVisible() == penalized &&
+                    warning.display == (penalized ? YGDisplayFlex : YGDisplayNone),
+                "safe unassisted pauses hide the penalty warning");
         if (!penalized) {
           require(scene.attemptProvenance == before,
                   "safe pauses preserve eligibility and assist metadata");
