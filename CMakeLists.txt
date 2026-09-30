@@ -2228,19 +2228,33 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(beatoraja_music_select_skin_ledger PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    # Runtime C++ fixtures should share the compiler cache selected for this
+    # build. Encode the launcher argv without shell quoting or splitting paths.
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c
+                "import json, sys; print(json.dumps(sys.argv[1:]))"
+                ${CMAKE_CXX_COMPILER_LAUNCHER}
+        OUTPUT_VARIABLE ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    string(REPLACE ";" "\\;" ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER
+        "${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER}")
+    set(ASOBMASHOW_TEST_CXX_ENVIRONMENT
+        "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID};ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER=${ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER}")
+
     add_test(NAME music_select_error_flow_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/music_select_error_flow_contract_tests.py -v)
     set_tests_properties(music_select_error_flow_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME music_select_export_preload
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/music_select_scene_export_preload_tests.py -v)
     set_tests_properties(music_select_export_preload PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     if (TARGET lua_music_select_skin_decoder_tests)
         set(SELECTOR_SETTINGS_FIXTURE ${CMAKE_CURRENT_BINARY_DIR}/music_select_settings_runtime_fixture.cpp)
@@ -2261,7 +2275,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME music_select_settings_runtime
             COMMAND lua_music_select_skin_decoder_tests --settings-retention)
         set_tests_properties(music_select_settings_runtime PROPERTIES
-            ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+            ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         )
     endif()
     add_test(NAME main_menu_preview_lifecycle
@@ -2269,28 +2283,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest tests/main_menu_preview_lifecycle_tests.py -v)
     set_tests_properties(main_menu_preview_lifecycle PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME main_menu_records_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/main_menu_records_lifecycle_tests.py -v)
     set_tests_properties(main_menu_records_lifecycle PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME settings_sound_set_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/settings_sound_set_lifecycle_tests.py -v)
     set_tests_properties(settings_sound_set_lifecycle PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     add_test(NAME gameplay_builtin_image_batch
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/gameplay_builtin_image_batch_tests.py -v)
     set_tests_properties(gameplay_builtin_image_batch PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        ENVIRONMENT "ASOBMASHOW_TEST_CXX_COMPILER=${CMAKE_CXX_COMPILER};ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT=${CMAKE_CXX_COMPILER_FRONTEND_VARIANT};ASOBMASHOW_TEST_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
     if (TARGET beatoraja_skin_model_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger

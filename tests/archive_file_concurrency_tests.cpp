@@ -133,6 +133,22 @@ private:
   std::filesystem::path path_;
 };
 
+// Avoid per-byte stream iterator overhead while still checking every byte of
+// the multi-megabyte extraction fixtures.
+std::string readTestFile(const std::filesystem::path &path) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  assert(input);
+  const auto size = input.tellg();
+  assert(size >= 0);
+  std::string bytes(static_cast<std::size_t>(size), '\0');
+  input.seekg(0);
+  input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  assert(input);
+  assert(input.peek() == std::char_traits<char>::eof());
+  assert(input.eof());
+  return bytes;
+}
+
 void writeSevenZip(const std::filesystem::path &path,
                    const std::string &contents, bool multipleEntries = false) {
   auto writer = makeArchiveWriteHandle();
@@ -718,11 +734,14 @@ void writeZipWithEmptyDeflateBlocks(const std::filesystem::path &archivePath,
                                     bool emptyPrefix) {
   constexpr std::string_view name = "payload.bin";
   const std::string emptyBlock("\0\0\0\xff\xff", 5);
-  std::string emptyBlocks;
-  for (std::size_t block = 0; block < 1024 * 1024; ++block) {
-    emptyBlocks += emptyBlock;
+  std::string emptyBlocks = emptyBlock;
+  emptyBlocks.reserve(emptyBlock.size() * 1024 * 1024);
+  for (std::size_t blocks = 1; blocks < 1024 * 1024; blocks *= 2) {
+    emptyBlocks += emptyBlocks;
   }
   std::string compressed;
+  compressed.reserve(emptyBlocks.size() + payload.size() +
+                     5 * ((payload.size() + 65534) / 65535 + 1));
   if (emptyPrefix) {
     compressed += emptyBlocks;
   }
@@ -878,10 +897,7 @@ void testZipChunkedReadBoundaryIntegrity(bool deflated) {
                          files.front().bytes.end()) == payload);
     }
 
-    std::ifstream input(archivePath, std::ios::binary);
-    assert(input);
-    std::string archiveBytes((std::istreambuf_iterator<char>(input)),
-                             std::istreambuf_iterator<char>());
+    std::string archiveBytes = readTestFile(archivePath);
     const auto centralOffset = archiveBytes.rfind(std::string("PK\1\2", 4));
     assert(centralOffset != std::string::npos);
     assert(centralOffset + 46 <= archiveBytes.size());
@@ -2162,8 +2178,7 @@ void testSingleArchiveOverlapsDecodingAndWriting(const std::string &extension) {
       }, false, nullptr, &budget);
   assert(result && threads.size() == 2 && budget.writtenBytes == 2 * 1024 * 1024);
   for (const auto *name : {"first.bin", "second.bin"}) {
-    std::ifstream input(result->outputFolder / name, std::ios::binary);
-    const std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    const auto bytes = readTestFile(result->outputFolder / name);
     assert(bytes == std::string(1024 * 1024, 'x'));
   }
 }
@@ -2289,8 +2304,7 @@ void testFullSevenZipKeepsCompressionBlocksTogether(const unsigned char *fixture
   assert(std::filesystem::is_directory(result->outputFolder / "emptydir"));
   assert(std::filesystem::file_size(result->outputFolder / "empty.bin") == 0);
   for (std::size_t index = 0; index < 8; ++index) {
-    std::ifstream input(result->outputFolder / ("file" + std::to_string(index) + ".bin"), std::ios::binary);
-    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    const auto actual = readTestFile(result->outputFolder / ("file" + std::to_string(index) + ".bin"));
     assert(actual == std::string(256 * 1024, static_cast<char>('a' + index / 2)));
   }
   std::cerr << "7z extraction progress threads: " << threads.size() << " expected=" << expectedThreads << '\n';
@@ -2367,8 +2381,7 @@ void testFullRarUsesIndependentEntryWorkers(bool rar4, bool solid, std::size_t w
   for (std::size_t index = 0; index < fileCount; ++index) {
     const std::string name = rar4 ? index == 0 ? "test.txt" :
         index == 1 ? "testlink" : "testdir/test.txt" : "file" + std::to_string(index) + ".bin";
-    std::ifstream input(result->outputFolder / name, std::ios::binary);
-    const std::string actual((std::istreambuf_iterator<char>(input)), {});
+    const auto actual = readTestFile(result->outputFolder / name);
     const std::string expected = rar4 ? index == 1 ? "test.txt" : "test text document\r\n" :
         std::string(1024 * 1024, static_cast<char>('a' + index));
     assert(actual == expected);
@@ -2403,8 +2416,7 @@ void testFullRarSerializesLargeDictionaries() {
         }
       }, nullptr, false, nullptr, &budget);
   assert(result && threads.size() == 1 && budget.writtenBytes == 4 * 1024 * 1024);
-  std::ifstream input(result->outputFolder / "file0.bin", std::ios::binary);
-  const std::string actual((std::istreambuf_iterator<char>(input)), {});
+  const auto actual = readTestFile(result->outputFolder / "file0.bin");
   assert(actual == std::string(1024 * 1024, 'a'));
 }
 
@@ -2660,8 +2672,7 @@ void testFullUnzipOutputCollisions(const std::string &extension, std::size_t wor
           assert(std::filesystem::is_directory(destination));
           continue;
         }
-        std::ifstream input(destination, std::ios::binary);
-        const std::string actual((std::istreambuf_iterator<char>(input)), {});
+        const auto actual = readTestFile(destination);
         assert(actual == std::string(payloadSize, static_cast<char>('a' + index)));
       }
     }
@@ -2703,8 +2714,7 @@ void testFullUnzipKeepsReservedOutputIdentities(const std::string &extension,
   for (std::size_t index = 0; index < names.size(); ++index) {
     const auto identity = identities / std::to_string(index);
     assert(std::filesystem::equivalent(identity, result->outputFolder / names[index]));
-    std::ifstream input(identity, std::ios::binary);
-    assert(std::string((std::istreambuf_iterator<char>(input)), {}) ==
+    assert(readTestFile(identity) ==
            std::string(payloadSize, static_cast<char>('a' + index)));
   }
 }

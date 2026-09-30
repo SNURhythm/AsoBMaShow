@@ -5,6 +5,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+if __package__:
+    from .support.fixture_compiler import FixtureCompiler
+else:
+    from support.fixture_compiler import FixtureCompiler
+
 
 root = pathlib.Path(__file__).resolve().parents[1]
 source = (root / "src/scene/play/GamePlayScene.cpp").read_text(encoding="utf-8")
@@ -107,23 +112,13 @@ int main() {
 }
 '''
 def run_fixture():
-    compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
-    frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
-    compiler_id = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_ID", "")
-    msvc = frontend == "MSVC" or compiler_id == "MSVC"
+    compiler = FixtureCompiler.from_environment()
     with tempfile.TemporaryDirectory(prefix="gameplay-builtin-batch-") as temporary:
         folder = pathlib.Path(temporary)
         translation_unit = folder / "batch.cpp"
         translation_unit.write_text(fixture.replace("CALLBACK", callback), encoding="utf-8")
-        executable = folder / ("batch.exe" if os.name == "nt" or msvc else "batch")
-        if msvc:
-            command = [compiler, "/nologo", "/std:c++latest", "/EHsc",
-                       str(translation_unit), f"/Fo{translation_unit.with_suffix('.obj')}",
-                       f"/Fe{executable}"]
-        else:
-            command = [compiler, "-std=c++23", "-pthread", str(translation_unit),
-                       "-o", str(executable)]
-        subprocess.run(command, cwd=folder, check=True)
+        executable = folder / ("batch" + compiler.executable_suffix)
+        compiler.build([translation_unit], executable, folder, standard=23)
         subprocess.run([str(executable)], cwd=folder, check=True)
 
 
@@ -143,19 +138,25 @@ class GameplayBuiltinImageBatchTests(unittest.TestCase):
                     "ASOBMASHOW_TEST_CXX_COMPILER": "/configured/compiler",
                     "ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT": frontend,
                     "ASOBMASHOW_TEST_CXX_COMPILER_ID": compiler_id,
+                    "ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER": '["/cache path/launcher", "--flag"]',
                 }), patch.object(subprocess, "run", return_value=
                     subprocess.CompletedProcess([], 0)) as run:
                     run_fixture()
                     command = run.call_args_list[0].args[0]
-                    self.assertEqual(command[0], "/configured/compiler")
+                    self.assertEqual(command[:3], ["/cache path/launcher", "--flag",
+                                                  "/configured/compiler"])
+                    self.assertEqual(len(run.call_args_list), 3)
+                    link = run.call_args_list[1].args[0]
+                    self.assertEqual(link[0], "/configured/compiler")
+                    self.assertNotIn("/cache path/launcher", link)
                     self.assertIn(standard, command)
                     if frontend == "MSVC" or compiler_id == "MSVC":
                         self.assertNotIn("-pthread", command)
                         self.assertNotIn("-o", command)
                         self.assertTrue(any(flag.startswith("/Fo") for flag in command))
                         self.assertTrue(any(flag.startswith("/Fe") and flag.endswith(".exe")
-                                            for flag in command))
-                    self.assertEqual(run.call_args_list[1].kwargs["cwd"],
+                                            for flag in link))
+                    self.assertEqual(run.call_args_list[2].kwargs["cwd"],
                                      run.call_args_list[0].kwargs["cwd"])
 
 

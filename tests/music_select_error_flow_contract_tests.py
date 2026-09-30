@@ -4,6 +4,12 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
+
+if __package__:
+    from .support.fixture_compiler import FixtureCompiler
+else:
+    from support.fixture_compiler import FixtureCompiler
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,22 +18,6 @@ ROOT = Path(__file__).resolve().parents[1]
 def read_music_select_scene():
     return "\n".join((ROOT / path).read_text() for path in (
         "src/scene/MusicSelectScene.cpp", "src/scene/MusicSelectSceneRecords.cpp"))
-
-
-def fixture_compile_command(compiler, frontend, compiler_id, source, executable,
-                            extra_sources=(), compile_only=False):
-    if frontend == "MSVC" or compiler_id == "MSVC":
-        command = [compiler, "/nologo", "/std:c++20", "/EHsc", "/utf-8", str(source),
-                   *map(str, extra_sources)]
-        if compile_only:
-            return [*command, "/c", f"/Fo{executable}"]
-        objects = (f"/Fo{source.parent}{os.sep}" if extra_sources
-                   else f"/Fo{source.with_suffix('.obj')}")
-        return [*command, objects, f"/Fe{executable}"]
-    command = [compiler, "-std=c++20", "-pthread", str(source), *map(str, extra_sources)]
-    if compile_only:
-        command.append("-c")
-    return [*command, "-o", str(executable)]
 
 
 def function_body(source: str, signature: str) -> str:
@@ -576,32 +566,45 @@ int main() {
 
     def test_fixture_uses_configured_msvc_and_clang_cl_frontends(self):
         for compiler_id in ("MSVC", "Clang"):
-            command = fixture_compile_command(
-                "C:/Program Files/compiler.exe", "MSVC", compiler_id,
-                Path("scene.cpp"), Path("scene.exe"))
-            self.assertEqual(command[0], "C:/Program Files/compiler.exe")
-            self.assertIn("/std:c++20", command)
-            self.assertIn("/Foscene.obj", command)
-            self.assertIn("/Fescene.exe", command)
-            self.assertNotIn("-pthread", command)
-            object_command = fixture_compile_command(
-                "C:/Program Files/compiler.exe", "MSVC", compiler_id,
-                Path("Localization.cpp"), Path("Localization.obj"), compile_only=True)
-            self.assertIn("/c", object_command)
-            self.assertIn("/FoLocalization.obj", object_command)
-            self.assertFalse(any(flag.startswith("/Fe") for flag in object_command))
+            for launcher in ((), ("C:/Program Files/cache.exe", "--flag")):
+                compiler = FixtureCompiler("C:/Program Files/compiler.exe", "MSVC",
+                                           compiler_id, launcher)
+                command = compiler.compile_command(Path("scene.cpp"), Path("scene.obj"))
+                self.assertEqual(command[:len(launcher) + 1],
+                                 [*launcher, "C:/Program Files/compiler.exe"])
+                self.assertIn("/std:c++20", command)
+                self.assertIn("/c", command)
+                self.assertIn("/Foscene.obj", command)
+                self.assertNotIn("-pthread", command)
+                self.assertFalse(any(flag.startswith("/Fe") for flag in command))
+                self.assertEqual(compiler.link_command([Path("scene.obj")], Path("scene.exe")),
+                                 ["C:/Program Files/compiler.exe", "/nologo", "scene.obj",
+                                  "/Fescene.exe"])
 
     def test_fixture_uses_configured_gnu_frontend(self):
-        command = fixture_compile_command(
-            "/toolchain/bin/clang++", "GNU", "Clang",
-            Path("scene.cpp"), Path("scene"))
-        self.assertEqual(command, ["/toolchain/bin/clang++", "-std=c++20",
-                                  "-pthread", "scene.cpp", "-o", "scene"])
-        object_command = fixture_compile_command(
-            "/toolchain/bin/clang++", "GNU", "Clang",
-            Path("Localization.cpp"), Path("Localization.obj"), compile_only=True)
-        self.assertEqual(object_command, ["/toolchain/bin/clang++", "-std=c++20", "-pthread",
-                                          "Localization.cpp", "-c", "-o", "Localization.obj"])
+        for encoded, expected in ((None, ()), ("", ()), ("[]", ()), ('[""]', ()),
+                                  ('["/cache path/ccache", "--flag", ""]',
+                                   ("/cache path/ccache", "--flag", ""))):
+            with self.subTest(launcher_environment=encoded), patch.dict(os.environ, {}, clear=True):
+                if encoded is not None:
+                    os.environ["ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER"] = encoded
+                compiler = FixtureCompiler.from_environment()
+                self.assertEqual(compiler.launcher, expected)
+                self.assertEqual(compiler.compile_command("scene.cpp", "scene.obj")[:len(expected) + 1],
+                                 [*expected, "c++"])
+        for encoded in ('"ccache"', "{}", "[null]", "[5]", "invalid json"):
+            with self.subTest(invalid_launcher_environment=encoded), patch.dict(os.environ, {
+                "ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER": encoded,
+            }):
+                with self.assertRaises(ValueError):
+                    FixtureCompiler.from_environment()
+        for launcher in ((), ("/cache path/ccache", "--flag")):
+            compiler = FixtureCompiler("/toolchain/bin/clang++", "GNU", "Clang", launcher)
+            command = compiler.compile_command(Path("scene.cpp"), Path("scene.obj"))
+            self.assertEqual(command, [*launcher, "/toolchain/bin/clang++", "-std=c++20",
+                                       "-pthread", "scene.cpp", "-c", "-o", "scene.obj"])
+            self.assertEqual(compiler.link_command([Path("scene.obj")], Path("scene")),
+                             ["/toolchain/bin/clang++", "-pthread", "scene.obj", "-o", "scene"])
 
     def test_pause_joins_preload_before_handoff_and_clears_publication(self):
         self.run_scene_fixture("music_select_scene_pause_fixture.cpp", [
@@ -867,39 +870,30 @@ int main() {
 
     def _compile_and_run(self, source, extra_sources, arguments,
                          fixture_directory, fixture_executables, fixture_objects=None):
-        compiler = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++")
-        frontend = os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", "")
-        compiler_id = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_ID", "")
+        compiler = FixtureCompiler.from_environment()
         extra_sources = (*extra_sources, ROOT / "src/i18n/Localization.cpp")
-        key = (source, extra_sources, compiler, frontend, compiler_id)
+        key = (source, extra_sources, compiler)
         executable = fixture_executables.get(key)
         if executable is None:
             # Cases from the same fixture share a build, but never process state.
             directory = Path(tempfile.mkdtemp(dir=fixture_directory))
             program = directory / "scene.cpp"
-            executable = directory / (
-                "scene.exe" if os.name == "nt" or frontend == "MSVC" or
-                compiler_id == "MSVC" else "scene")
+            executable = directory / ("scene" + compiler.executable_suffix)
             program.write_text('#include "' + (ROOT / "src/i18n/Localization.h").as_posix() + '"\n' + source)
+            objects = []
             if fixture_objects is not None:
-                object_key = (compiler, frontend, compiler_id)
-                localization_object = fixture_objects.get(object_key)
+                localization_object = fixture_objects.get(compiler)
                 if localization_object is None:
                     localization_object = directory / "Localization.obj"
                     subprocess.run(
-                        fixture_compile_command(
-                            compiler, frontend, compiler_id,
-                            ROOT / "src/i18n/Localization.cpp", localization_object,
-                            compile_only=True),
+                        compiler.compile_command(ROOT / "src/i18n/Localization.cpp",
+                                                 localization_object.name),
                         cwd=directory, check=True, capture_output=True, text=True,
                     )
-                    fixture_objects[object_key] = localization_object
-                extra_sources = (*extra_sources[:-1], localization_object)
-            subprocess.run(
-                fixture_compile_command(compiler, frontend, compiler_id,
-                                        program, executable, extra_sources),
-                cwd=directory, check=True, capture_output=True, text=True,
-            )
+                    fixture_objects[compiler] = localization_object
+                extra_sources = extra_sources[:-1]
+                objects.append(localization_object)
+            compiler.build([program, *extra_sources], executable, directory, objects=objects)
             fixture_executables[key] = executable
         # Fixture-created files (e.g. replay slots) remain isolated per case too.
         with tempfile.TemporaryDirectory(dir=fixture_directory) as directory:
