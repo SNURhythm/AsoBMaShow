@@ -1,4 +1,5 @@
 #include "ThreadCompat.h"
+#include "i18n/Localization.h"
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -64,9 +65,9 @@ public:
   void StopSleepTimerWorker();
   void SleepTimerWorker(const std::stop_token &stopToken);
   bool StopPlaybackInternal(std::string &message) { return onExpiry(message); }
-  void PublishNativeControlStatus(const std::string &message) {
+  void PublishNativeControlStatus(const i18n::Text &message) {
     std::lock_guard lock(statusMutex);
-    statuses.push_back(message);
+    statuses.push_back(message.resolve());
     statusCv.notify_all();
   }
   std::string waitForStatus(std::size_t count) {

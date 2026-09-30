@@ -274,6 +274,8 @@ void testDestructionJoinsCleanupBeforeItsDependenciesDie() {
 #include "settings_cache_scene_fixture.h"
 
 int main() {
+  testCacheStatusRetainsLanguageIdentityAcrossWorkerCompletion();
+  testCacheFailureTranslatesItsCaptionButPreservesRawDiagnostic();
   testSceneAppliesTypedResultsOnTheApplicationThread();
   testSceneShowsOperationErrorsAndHandlesAbsentViews();
   testSceneShowsThrownOperationErrorsAndAllowsRetry();

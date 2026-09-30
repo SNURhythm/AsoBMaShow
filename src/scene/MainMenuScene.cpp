@@ -1267,7 +1267,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.0;
   findBmsProgressLog.clear();
-  musicStatusMessage.clear();
+  musicStatusMessage = {};
   chartRecordFilters = {};
   chartFilterPanelVisible = false;
   chartSortPanelVisible = false;
@@ -5218,7 +5218,7 @@ void MainMenuScene::refreshMusicModal() {
 
   std::string status;
   if (!musicStatusMessage.empty()) {
-    status += musicStatusMessage + "\n";
+    status += musicStatusMessage.resolve() + "\n";
   }
   if (!playback.supported) {
     status += i18n::tr("menu.native_music_playback_unavailable_on_platform.message");
@@ -5305,7 +5305,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
 
   const int selected = recyclerView->selectedIndex;
   if (selected < 0 || selected >= recyclerView->size()) {
-    musicStatusMessage = i18n::tr("menu.select_chart_first.message");
+    musicStatusMessage = i18n::message("menu.select_chart_first.message");
     refreshMusicModal();
     return;
   }
@@ -5313,7 +5313,7 @@ void MainMenuScene::playSelectedChartAsMusic() {
   const ChartMetaRecord record = recyclerView->get(selected);
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
-    musicStatusMessage = i18n::tr("menu.selected_chart_unable_played_as_music.message");
+    musicStatusMessage = i18n::message("menu.selected_chart_unable_played_as_music.message");
     refreshMusicModal();
     return;
   }
@@ -5327,9 +5327,8 @@ void MainMenuScene::playSelectedChartAsMusic() {
                                .chartCount = 1};
   context.musicPlayer.SetNowPlaying({music_playlist::MakeTrack(musicRecord)});
 
-  std::string statusMessage;
-  context.musicPlayer.PlayCurrentAsync(statusMessage, i18n::tr("menu.playing_selected_chart.message"));
-  musicStatusMessage = statusMessage;
+  context.musicPlayer.PlayCurrentAsync(
+      musicStatusMessage, i18n::message("menu.playing_selected_chart.message"));
   refreshMusicModal();
 }
 
@@ -5341,7 +5340,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
 
   const int selected = recyclerView->selectedIndex;
   if (selected < 0 || selected >= recyclerView->size()) {
-    musicStatusMessage = i18n::tr("menu.music_player.select_chart_first.message");
+    musicStatusMessage = i18n::message("menu.music_player.select_chart_first.message");
     refreshMusicModal();
     return;
   }
@@ -5349,7 +5348,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
   const ChartMetaRecord record = recyclerView->get(selected);
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
-    musicStatusMessage = i18n::tr("menu.music_player.selected_chart_unable_added_playlist.message");
+    musicStatusMessage = i18n::message("menu.music_player.selected_chart_unable_added_playlist.message");
     refreshMusicModal();
     return;
   }
@@ -5357,7 +5356,7 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.AddChartToDefaultPlaylist(record.meta,
                                                     errorMessage)) {
-    musicStatusMessage = i18n::tr("menu.music_player.added_selected_chart_my_playlist.message");
+    musicStatusMessage = i18n::message("menu.music_player.added_selected_chart_my_playlist.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5372,7 +5371,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
 
   const int selected = recyclerView->selectedIndex;
   if (selected < 0 || selected >= recyclerView->size()) {
-    musicStatusMessage = i18n::tr("menu.music_player.select_chart_first.message");
+    musicStatusMessage = i18n::message("menu.music_player.select_chart_first.message");
     refreshMusicModal();
     return;
   }
@@ -5380,7 +5379,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
   const ChartMetaRecord record = recyclerView->get(selected);
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
-    musicStatusMessage = i18n::tr("menu.music_player.selected_chart_unable_removed_from_playlist.message");
+    musicStatusMessage = i18n::message("menu.music_player.selected_chart_unable_removed_from_playlist.message");
     refreshMusicModal();
     return;
   }
@@ -5388,7 +5387,7 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.RemoveChartFromDefaultPlaylist(record.meta,
                                                          errorMessage)) {
-    musicStatusMessage = i18n::tr("menu.music_player.removed_selected_chart_from_my_playlist.message");
+    musicStatusMessage = i18n::message("menu.music_player.removed_selected_chart_from_my_playlist.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5405,8 +5404,9 @@ void MainMenuScene::playSavedMusicPlaylist() {
   if (!context.musicPlayer.StartDefaultPlaylist(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    context.musicPlayer.PlayCurrentAsync(errorMessage, i18n::tr("menu.music_player.playing_my_playlist.message"));
-    musicStatusMessage = errorMessage;
+    context.musicPlayer.PlayCurrentAsync(
+        musicStatusMessage,
+        i18n::message("menu.music_player.playing_my_playlist.message"));
   }
   refreshMusicModal();
 }
@@ -5414,7 +5414,7 @@ void MainMenuScene::playSavedMusicPlaylist() {
 void MainMenuScene::clearSavedMusicPlaylist() {
   std::string errorMessage;
   if (context.musicPlayer.ClearDefaultPlaylist(errorMessage)) {
-    musicStatusMessage = i18n::tr("menu.music_player.cleared_my_playlist.message");
+    musicStatusMessage = i18n::message("menu.music_player.cleared_my_playlist.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5432,9 +5432,8 @@ void MainMenuScene::playRandomMusicLibrary() {
       !context.musicPlayer.StartRandomLibrary(errorMessage)) {
     musicStatusMessage = errorMessage;
   } else {
-    context.musicPlayer.PlayCurrentAsync(errorMessage,
-                                         i18n::tr("menu.playing_now_playing.message"));
-    musicStatusMessage = errorMessage;
+    context.musicPlayer.PlayCurrentAsync(
+        musicStatusMessage, i18n::message("menu.playing_now_playing.message"));
   }
   refreshMusicModal();
 }
@@ -5442,23 +5441,23 @@ void MainMenuScene::playRandomMusicLibrary() {
 void MainMenuScene::toggleMusicPlayback() {
   std::string errorMessage;
   const auto playback = context.musicPlayer.PlaybackState();
-  bool ok = false;
   if (playback.playing) {
-    ok = context.musicPlayer.Pause(errorMessage);
+    context.musicPlayer.Pause(errorMessage);
+    musicStatusMessage = errorMessage;
   } else if (playback.loaded) {
-    ok = context.musicPlayer.Resume(errorMessage);
+    context.musicPlayer.Resume(errorMessage);
+    musicStatusMessage = errorMessage;
   } else {
-    ok = context.musicPlayer.PlayCurrentAsync(errorMessage,
-                                              i18n::tr("menu.playing_current_track.message"));
+    context.musicPlayer.PlayCurrentAsync(
+        musicStatusMessage, i18n::message("menu.playing_current_track.message"));
   }
-  musicStatusMessage = errorMessage;
   refreshMusicModal();
 }
 
 void MainMenuScene::seekMusicRelative(long long deltaMicros) {
   const auto playback = context.musicPlayer.PlaybackState();
   if (!playback.supported || !playback.loaded) {
-    musicStatusMessage = i18n::tr("menu.playback.no_track_error");
+    musicStatusMessage = i18n::message("menu.playback.no_track_error");
     refreshMusicModal();
     return;
   }
@@ -5470,7 +5469,9 @@ void MainMenuScene::seekMusicRelative(long long deltaMicros) {
 
   std::string errorMessage;
   if (context.musicPlayer.Seek(targetMicros, errorMessage)) {
-    musicStatusMessage = "Seeked to " + formatMusicTime(targetMicros) + ".";
+    musicStatusMessage = i18n::message(
+        "menu.music_player.seeked_to.message",
+        {{"time", formatMusicTime(targetMicros)}});
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -5483,9 +5484,8 @@ void MainMenuScene::playNextMusicTrack() {
   }
   context.jukebox.stop();
 
-  std::string errorMessage;
-  context.musicPlayer.PlayNextAsync(errorMessage, i18n::tr("menu.playing_next_track.message"));
-  musicStatusMessage = errorMessage;
+  context.musicPlayer.PlayNextAsync(
+      musicStatusMessage, i18n::message("menu.playing_next_track.message"));
   refreshMusicModal();
 }
 
@@ -5495,17 +5495,15 @@ void MainMenuScene::playPreviousMusicTrack() {
   }
   context.jukebox.stop();
 
-  std::string errorMessage;
-  context.musicPlayer.PlayPreviousAsync(errorMessage,
-                                        i18n::tr("menu.playing_previous_track.message"));
-  musicStatusMessage = errorMessage;
+  context.musicPlayer.PlayPreviousAsync(
+      musicStatusMessage, i18n::message("menu.playing_previous_track.message"));
   refreshMusicModal();
 }
 
 void MainMenuScene::stopMusicPlayback() {
   std::string errorMessage;
   if (context.musicPlayer.Stop(errorMessage)) {
-    musicStatusMessage = i18n::tr("menu.stopped.message");
+    musicStatusMessage = i18n::message("menu.stopped.message");
   } else {
     musicStatusMessage = errorMessage;
   }
@@ -7731,7 +7729,7 @@ void MainMenuScene::update(float dt) {
   if (parseLogModalRoot != nullptr && parseLogModalRoot->getVisible()) {
     refreshParseLogModal();
   }
-  std::string nativeMusicStatusMessage;
+  i18n::Text nativeMusicStatusMessage;
   if (context.musicPlayer.ProcessNativeControlEvents(
           nativeMusicStatusMessage)) {
     musicStatusMessage = nativeMusicStatusMessage;

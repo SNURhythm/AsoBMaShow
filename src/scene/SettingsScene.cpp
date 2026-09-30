@@ -33,32 +33,35 @@ std::string formatCacheBytes(std::uint64_t bytes) {
   return stream.str();
 }
 
-std::string formatCacheCleanupResult(
+i18n::Text formatCacheCleanupResult(
     const archive_file::TemporaryCacheCleanupResult &result) {
   if (!result.cacheExisted || result.removedEntries == 0) {
     return result.skippedEntries == 0
-               ? i18n::tr("settings.temporary_archive_cache_already_empty.message")
-               : i18n::tr("settings.temporary_archive_cache_only_contains_active_files.message");
+               ? i18n::message("settings.temporary_archive_cache_already_empty.message")
+               : i18n::message("settings.temporary_archive_cache_only_contains_active_files.message");
   }
-  std::string message = i18n::format(
+  const auto summary = i18n::message(
       "settings.cache.cleanup.summary",
       {{"size", formatCacheBytes(result.removedBytes)},
        {"count", std::to_string(result.removedEntries)}});
   if (result.skippedEntries > 0) {
-    message += i18n::format(
-        result.skippedEntries == 1 ? "settings.cache.cleanup.skipped.one"
-                                   : "settings.cache.cleanup.skipped.other",
-        {{"count", std::to_string(result.skippedEntries)}});
+    return i18n::message(
+        "settings.cache.cleanup.result",
+        {{"summary", summary},
+         {"skipped", i18n::message(
+             result.skippedEntries == 1 ? "settings.cache.cleanup.skipped.one"
+                                        : "settings.cache.cleanup.skipped.other",
+             {{"count", std::to_string(result.skippedEntries)}})}});
   }
-  return message;
+  return summary;
 }
 
-std::string
+i18n::Text
 formatCacheUsageResult(const archive_file::TemporaryCacheUsageResult &result) {
   if (!result.cacheExisted || result.entries == 0) {
-    return i18n::tr("settings.temporary_archive_cache_empty.message");
+    return i18n::message("settings.temporary_archive_cache_empty.message");
   }
-  return i18n::format("settings.cache.usage.summary",
+  return i18n::message("settings.cache.usage.summary",
                       {{"size", formatCacheBytes(result.bytes)},
                        {"count", std::to_string(result.entries)}});
 }
@@ -88,10 +91,12 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   const bool cleanup =
       completion->operation == SettingsCacheMaintenance::Operation::Cleanup;
   if (!completion->succeeded) {
-    archiveCacheCleanupStatusMessage = cleanup ? i18n::tr("settings.archive_cache_cleanup_failed.label")
-                                               : i18n::tr("settings.archive_cache_measurement_failed.label");
-    archiveCacheCleanupStatusMessage +=
-        completion->error.empty() ? "." : ": " + completion->error;
+    archiveCacheCleanupStatusMessage = i18n::message(
+        "settings.cache.operation.failure",
+        {{"operation", i18n::message(
+             cleanup ? "settings.archive_cache_cleanup_failed.label"
+                     : "settings.archive_cache_measurement_failed.label")},
+         {"details", completion->error.empty() ? "." : ": " + completion->error}});
     archiveCacheCleanupStatusColor = {255, 177, 170, 255};
   } else if (cleanup) {
     archiveCacheCleanupStatusMessage = formatCacheCleanupResult(completion->cleanup);
@@ -102,7 +107,7 @@ void SettingsScene::applyPendingArchiveCacheCleanupStatus() {
   }
 
   if (archiveCacheCleanupStatusText != nullptr) {
-    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
@@ -122,10 +127,10 @@ void SettingsScene::cleanupTemporaryArchiveCache() {
     return;
   }
 
-  archiveCacheCleanupStatusMessage = i18n::tr("settings.cleaning_temporary_archive_cache.progress");
+  archiveCacheCleanupStatusMessage = i18n::message("settings.cleaning_temporary_archive_cache.progress");
   archiveCacheCleanupStatusColor = {239, 244, 251, 255};
   if (archiveCacheCleanupStatusText != nullptr) {
-    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
   if (archiveCacheCleanupButtonText != nullptr) {
@@ -138,10 +143,10 @@ void SettingsScene::measureTemporaryArchiveCache() {
     return;
   }
 
-  archiveCacheCleanupStatusMessage = i18n::tr("settings.measuring_temporary_archive_cache.progress");
+  archiveCacheCleanupStatusMessage = i18n::message("settings.measuring_temporary_archive_cache.progress");
   archiveCacheCleanupStatusColor = {239, 244, 251, 255};
   if (archiveCacheCleanupStatusText != nullptr) {
-    archiveCacheCleanupStatusText->setText(archiveCacheCleanupStatusMessage);
+    archiveCacheCleanupStatusText->setLocalizedText(archiveCacheCleanupStatusMessage);
     archiveCacheCleanupStatusText->setColor(archiveCacheCleanupStatusColor);
   }
 }

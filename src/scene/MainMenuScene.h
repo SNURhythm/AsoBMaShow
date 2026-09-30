@@ -370,7 +370,7 @@ private:
   int lastSafeRight = -1;
   std::uint64_t parseLogDisplayedRevision = 0;
   ui_theme::ThemeMode appliedUiThemeMode = ui_theme::ThemeMode::Dark;
-  std::string musicStatusMessage;
+  i18n::Text musicStatusMessage;
 
   void initView(ApplicationContext &context);
   void applyThemeChange();

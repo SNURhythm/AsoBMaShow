@@ -962,7 +962,10 @@ bool hasReachedFirstPlayableNote(const bms_parser::Chart &chart,
     for (const auto *timeline : measure->TimeLines) {
       if (timeline == nullptr || timeline->Timing > gameplayTimeMicros) continue;
       for (auto *note : timeline->Notes) {
-        if (note != nullptr && !note->IsLandmineNote()) return true;
+        if (note != nullptr) return true;
+      }
+      for (auto *mine : timeline->LandmineNotes) {
+        if (mine != nullptr) return true;
       }
     }
   }
@@ -3708,16 +3711,63 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
   }
   if (pausePlayback) {
     context.jukebox.pause();
+    const long long gameplayTimeMicros =
+        getGameplayTimeMicros(context.jukebox.getTimeMicros());
     int handledNotes = state != nullptr ? state->stagePassedNotes : 0;
+    // TotalNotes excludes mines, and an early HCN tail judgement can finish
+    // the score count before its gauge interval ends. Those effects still
+    // make pausing an advantage after the last counted judgement.
+    const auto hasRemainingEffect = [&](bms_parser::Note *note, bool played,
+                                         bool dead, long long playedTime) {
+      if (note == nullptr) return false;
+      if (note->IsLandmineNote()) return !dead;
+      const auto *tail = dynamic_cast<bms_parser::LongNote *>(note);
+      if (tail == nullptr || !tail->IsTail()) return false;
+      if (!played && !dead) return true;
+      return chart != nullptr && tail->Timeline != nullptr &&
+             tail->Head != nullptr && tail->Head->Timeline != nullptr &&
+             effectiveLongNoteIsHellCharge(tail, chart, options.longNoteMode) &&
+             tail->Timeline->Timing > tail->Head->Timeline->Timing &&
+             gameplayTimeMicros >= tail->Head->Timeline->Timing &&
+             gameplayTimeMicros < tail->Timeline->Timing && played &&
+             playedTime < tail->Timeline->Timing;
+    };
+    bool remainingEffect = false;
     if (realtimeGameplayAuthorityActive()) {
       const auto snapshot = realtimeGameplaySession->worker->acquireLatestSnapshot();
-      if (snapshot) handledNotes = snapshot->attempt.stagePassedNotes;
+      if (snapshot) {
+        handledNotes = snapshot->attempt.stagePassedNotes;
+        const auto &notes = realtimeGameplaySession->notes;
+        for (std::size_t index = 0; index < notes.size(); ++index) {
+          if (index >= snapshot->noteStates.size()) {
+            remainingEffect = true;
+            break;
+          }
+          const auto &runtime = snapshot->noteStates[index];
+          if (hasRemainingEffect(notes[index], runtime.played, runtime.dead,
+                                 runtime.playedTimeMicros)) {
+            remainingEffect = true;
+            break;
+          }
+        }
+      } else {
+        // Do not declare completion from the stale UI copy when the worker
+        // is the score authority but cannot provide its suspended snapshot.
+        remainingEffect = true;
+      }
+    } else if (chart != nullptr) {
+      for (auto *note : buildRealtimeGameplayNoteLookup(*chart)) {
+        if (hasRemainingEffect(note, note->IsPlayed, note->IsDead,
+                               note->PlayedTime)) {
+          remainingEffect = true;
+          break;
+        }
+      }
     }
     if (!isCoursePlayback() && !isReplayPlayback() && state != nullptr &&
         state->isPlaying && !state->isEnding && chart != nullptr &&
-        handledNotes < chart->Meta.TotalNotes &&
-        hasReachedFirstPlayableNote(*chart,
-            getGameplayTimeMicros(context.jukebox.getTimeMicros()))) {
+        (handledNotes < chart->Meta.TotalNotes || remainingEffect) &&
+        hasReachedFirstPlayableNote(*chart, gameplayTimeMicros)) {
       if (!assist_options::isEnabled(attemptProvenance.assistOption)) {
         attemptProvenance.assistOption = assist_options::kAssisted;
       }

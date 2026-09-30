@@ -69,6 +69,11 @@ std::string findBmsProgressDisplayText(const std::string &message,
   if (message == "Downloading archive") return i18n::tr("library.find_bms.progress.downloading_archive.status");
   if (message == "Download complete") return i18n::tr("library.find_bms.progress.download_complete.status");
   if (message == "Extracting archive") return i18n::tr("library.find_bms.progress.extracting_archive.status");
+  constexpr std::string_view extractionPrefix = "Extracting ";
+  if (message.starts_with(extractionPrefix)) {
+    return i18n::format("library.find_bms.progress.extracting_file.status",
+                        {{"filename", std::string_view(message).substr(extractionPrefix.size())}});
+  }
   if (message == "Archive finished") return i18n::tr("library.find_bms.progress.archive_finished.status");
   if (message == "Download failed") return i18n::tr("library.find_bms.progress.download_failed.status");
   return message;

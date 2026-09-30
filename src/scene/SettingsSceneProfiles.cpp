@@ -647,7 +647,8 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   archiveBody->addView(archiveActions);
 
   cardsColumn->addView(makeCard(
-      metrics, "Import / Export", i18n::message("settings.profiles.move_profiles_between_devices.message"),
+      metrics, i18n::message("settings.profiles.import_export.title"),
+      i18n::message("settings.profiles.move_profiles_between_devices.message"),
       archiveBody, metrics.modeCardHeight, metrics.cardsWidth));
 
   for (const PlayerProfile &profile : profileController->profiles()) {

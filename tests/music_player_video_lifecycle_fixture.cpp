@@ -33,7 +33,7 @@ struct NativeMusic {
   std::optional<MusicTrack> current = MusicTrack{};
   Playback PlaybackState() const { return playback; }
   std::optional<MusicTrack> CurrentTrackSnapshot() const { return current; }
-  void PlayCurrentAsync(std::string &, const char *) { playback.loaded = true; }
+  void PlayCurrentAsync(std::string &, const i18n::Text &) { playback.loaded = true; }
 };
 struct ApplicationContext {
   Evidence e;
@@ -83,7 +83,7 @@ public:
   }
   void setStatus(std::string) {}
   void refreshActiveQueueList(bool) {}
-  void playNowPlaying(std::vector<MusicTrack>, int, const char *, const char *) {}
+  void playNowPlaying(std::vector<MusicTrack>, int, const char *, const i18n::Text &) {}
   void showVideoControls(Uint64 = 4000) {}
   void updateVideoFullscreen() {}
   void refreshVideoOverlay() {}

@@ -5,6 +5,7 @@
 #include "bms_search/PackageDownloadCandidate.h"
 #include "scene/FindBmsDialogPolicy.h"
 #include "scene/FindBmsProgressPresentation.h"
+#include "i18n/Localization.h"
 
 #include <cassert>
 #include <filesystem>
@@ -1180,6 +1181,26 @@ void testDownloadFailureDetailPreservesCause() {
          "Open the source or try again.");
 }
 
+void testExtractionProgressLocalizesWithoutChangingFilenames() {
+  const std::string filename = "音楽/{filename}/Settings.wav";
+  const std::string status = "Extracting " + filename;
+  for (const auto language : {i18n::Language::English, i18n::Language::Korean,
+                              i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    const auto rendered = findBmsProgressDisplayText(status, 12, 40, true);
+    assert(rendered.find(filename) != std::string::npos);
+    if (language == i18n::Language::English) {
+      assert(rendered == status);
+    } else {
+      assert(rendered != status);
+      assert(rendered.find("Extracting ") == std::string::npos);
+    }
+    const std::string diagnostic = "Cannot read 音楽/Settings.wav";
+    assert(findBmsProgressDisplayText(diagnostic, 12, 40, true) == diagnostic);
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testFindBmsDownloadProgressDisplaysSizes() {
   assert(findBmsProgressDisplayText("Downloading archive", 19503513,
                                     46451917, true) ==
@@ -1248,5 +1269,6 @@ int main(int argc, char **argv) {
   testPendingMismatchCannotDismiss();
   testDownloadFailureDetailPreservesCause();
   testFindBmsDownloadProgressDisplaysSizes();
+  testExtractionProgressLocalizesWithoutChangingFilenames();
   return 0;
 }

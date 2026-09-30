@@ -13,8 +13,8 @@ def main():
     source = (args.root / "src/scene/SettingsScene.cpp").read_text()
     signatures = [
         "std::string formatCacheBytes(",
-        "std::string formatCacheCleanupResult(",
-        "std::string\nformatCacheUsageResult(",
+        "i18n::Text formatCacheCleanupResult(",
+        "i18n::Text\nformatCacheUsageResult(",
         "void SettingsScene::applyPendingArchiveCacheCleanupStatus()",
         "void SettingsScene::cleanupTemporaryArchiveCache()",
         "void SettingsScene::measureTemporaryArchiveCache()",

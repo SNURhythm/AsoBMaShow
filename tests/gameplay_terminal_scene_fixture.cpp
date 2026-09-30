@@ -603,6 +603,97 @@ void testPauseOnlyPenalizesUnfinishedNotePlay() {
   require(!empty.state->lightAssistClearMark, "empty charts never incur pause penalties");
 }
 
+void testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects() {
+  // All scored notes can be resolved while a trailing mine can still damage
+  // the gauge. The worker's latest note flags override stale presentation.
+  for (const bool realtime : {false, true}) {
+    for (const bool resolved : {false, true}) {
+      GamePlayScene scene;
+      auto *timeline = new bms_parser::TimeLine(8, false);
+      timeline->Timing = 4'000'000;
+      auto *mine = new bms_parser::LandmineNote(20);
+      timeline->SetLandmineNote(1, mine);
+      scene.chart->Measures.front()->TimeLines.push_back(timeline);
+      scene.chart->Meta.TotalLandmineNotes = 1;
+      scene.context.jukebox.time = resolved ? 4'100'000 : 3'500'000;
+      for (int i = 0; i < 2; ++i) scene.state->commitJudge(JudgeResult(PGreat, 0));
+      mine->IsDead = resolved;
+      if (realtime) {
+        scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+        auto &session = *scene.realtimeGameplaySession;
+        session.worker = std::make_unique<FixtureWorker>();
+        session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+        session.worker->snapshot.noteStates.resize(session.notes.size());
+        session.worker->snapshot.attempt.stagePassedNotes = 2;
+        session.worker->snapshot.noteStates.back().dead = resolved;
+        mine->IsDead = !resolved;
+      }
+      scene.showPauseMenu(true);
+      require(scene.state->lightAssistClearMark == !resolved,
+              "trailing mine keeps pause assisted until authoritative mine resolution");
+    }
+  }
+  for (const long long time : {999'999LL, 1'000'000LL}) {
+    GamePlayScene scene;
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = 1'000'000;
+    timeline->SetLandmineNote(1, new bms_parser::LandmineNote(20));
+    scene.chart->Measures.front()->TimeLines.insert(
+        scene.chart->Measures.front()->TimeLines.begin(), timeline);
+    scene.context.jukebox.time = time;
+    scene.showPauseMenu(true);
+    require(scene.state->lightAssistClearMark == (time == 1'000'000),
+            "lead-in exemption ends at a leading mine's score-affecting timing");
+  }
+  for (const auto type : {bms_parser::LongNoteType::LongNote,
+                         bms_parser::LongNoteType::ChargeNote,
+                         bms_parser::LongNoteType::HellChargeNote}) {
+    for (const bool realtime : {false, true}) {
+      for (const long long time : {2'800'000LL, 3'000'000LL}) {
+        GamePlayScene scene;
+        auto &timelines = scene.chart->Measures.front()->TimeLines;
+        for (auto *timeline : timelines) {
+          delete timeline->Notes[0];
+          timeline->Notes[0] = nullptr;
+        }
+        auto *head = new bms_parser::LongNote(1, type);
+        auto *tail = new bms_parser::LongNote(1, type);
+        head->Tail = tail;
+        tail->Head = head;
+        timelines[0]->SetNote(1, head);
+        timelines[1]->SetNote(1, tail);
+        scene.chart->Meta.TotalNotes = type == bms_parser::LongNoteType::LongNote ? 1 : 2;
+        scene.context.jukebox.time = time;
+        for (int i = 0; i < scene.chart->Meta.TotalNotes; ++i) {
+          scene.state->commitJudge(JudgeResult(PGreat, 0));
+        }
+        head->IsPlayed = true;
+        head->PlayedTime = 2'000'000;
+        tail->IsPlayed = true;
+        tail->IsDead = true;
+        tail->PlayedTime = 2'750'000;
+        if (realtime) {
+          scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+          auto &session = *scene.realtimeGameplaySession;
+          session.worker = std::make_unique<FixtureWorker>();
+          session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+          session.worker->snapshot.attempt.stagePassedNotes = scene.chart->Meta.TotalNotes;
+          session.worker->snapshot.noteStates = {
+              {.played = true, .playedTimeMicros = 2'000'000},
+              {.played = true, .dead = true, .playedTimeMicros = 2'750'000}};
+          // The UI copy has already lost the early-release timing.
+          tail->PlayedTime = 3'000'000;
+        }
+        scene.showPauseMenu(true);
+        const bool hasGaugeInterval =
+            type == bms_parser::LongNoteType::HellChargeNote && time < 3'000'000;
+        require(scene.state->lightAssistClearMark == hasGaugeInterval,
+                "early-resolved HCN tail keeps pause assisted only through its remaining gauge interval");
+      }
+    }
+  }
+}
+
 void testPractice(bool loop, bool chartTerminal, long long offset) {
   GamePlayScene scene;
   scene.offset = offset;
@@ -1232,6 +1323,7 @@ int main(int argc, char **argv) {
   if (argc > 1 && std::string_view(argv[1]) == "pause-penalty") {
     testPausePenaltyAndFreshAttemptBoundary();
     testPauseOnlyPenalizesUnfinishedNotePlay();
+    testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects();
     return 0;
   }
   if (argc > 1 && std::string_view(argv[1]) == "partial-course-retry-same") {
@@ -1315,6 +1407,9 @@ int main(int argc, char **argv) {
   testAbortCaptureRejectsLateEvidence();
   testEffectiveCourseFactsPersistThroughResultScene();
   testPartialCourseRetrySameRestoresSavedOptions();
+  testPausePenaltyAndFreshAttemptBoundary();
+  testPauseOnlyPenalizesUnfinishedNotePlay();
+  testPausePenaltyIncludesRemainingMinesAndLongNoteGaugeEffects();
   for (const auto path : {"constructors", "retry", "practice", "skin-practice", "viewer", "in-game-retry"}) {
     testActualChartPreparationOrdering(path);
   }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ThreadCompat.h"
+#include "../i18n/Localization.h"
 #include "ChartMusicCache.h"
 #include "../repositories/ChartRepository.h"
 #include "../repositories/MusicPlaylistRepository.h"
@@ -107,13 +108,26 @@ public:
   bool PlayCurrent(std::string &errorMessage);
   bool PlayNext(std::string &errorMessage);
   bool PlayPrevious(std::string &errorMessage);
+  bool PlayCurrentAsync(i18n::Text &statusMessage,
+                        i18n::Text successMessage = i18n::message(
+                            "music_player.service.playing.message"));
+  bool PlayNextAsync(i18n::Text &statusMessage,
+                     i18n::Text successMessage = i18n::message(
+                         "music_player.playing_next_track.message"));
+  bool PlayPreviousAsync(i18n::Text &statusMessage,
+                         i18n::Text successMessage = i18n::message(
+                             "music_player.playing_previous_track.message"));
+  // Legacy display consumers can resolve immediately while queued completion
+  // messages still retain their explicitly supplied catalog identity.
   bool PlayCurrentAsync(std::string &statusMessage,
-                        std::string successMessage = "Playing music.");
+                        i18n::Text successMessage = i18n::message(
+                            "music_player.service.playing.message"));
   bool PlayNextAsync(std::string &statusMessage,
-                     std::string successMessage = "Playing next track.");
+                     i18n::Text successMessage = i18n::message(
+                         "music_player.playing_next_track.message"));
   bool PlayPreviousAsync(std::string &statusMessage,
-                         std::string successMessage =
-                             "Playing previous track.");
+                         i18n::Text successMessage = i18n::message(
+                             "music_player.playing_previous_track.message"));
   bool Resume(std::string &errorMessage);
   bool Pause(std::string &errorMessage);
   bool Stop(std::string &errorMessage);
@@ -125,7 +139,9 @@ public:
   bool SetSleepTimer(long long durationMicros, std::string &statusMessage);
   void ClearSleepTimer();
   [[nodiscard]] long long SleepTimerRemainingMicros() const;
+  bool ProcessNativeControlEvents(i18n::Text &statusMessage);
   bool ProcessNativeControlEvents(std::string &statusMessage);
+  bool ConsumeNativeControlStatus(i18n::Text &statusMessage);
   bool ConsumeNativeControlStatus(std::string &statusMessage);
   void CancelRender();
 
@@ -139,12 +155,12 @@ private:
   bool PlayTrackLocked(const music_playlist::MusicTrack &track,
                        std::string &errorMessage);
   bool StopPlaybackInternal(std::string &errorMessage);
-  bool StartPlaybackAsync(PlaybackRequest request, std::string &statusMessage,
-                          std::string successMessage);
+  bool StartPlaybackAsync(PlaybackRequest request, i18n::Text &statusMessage,
+                          i18n::Text successMessage);
   void PlaybackWorker(music_playlist::MusicTrack track,
                       std::uint64_t requestRevision,
                       bool requestedClubMode,
-                      std::string successMessage,
+                      i18n::Text successMessage,
                       const std::stop_token &stopToken);
   void ClubModeSwitchWorker(music_playlist::MusicTrack track,
                             std::uint64_t requestRevision,
@@ -176,7 +192,7 @@ private:
   void EnsureNativeControlEventPump();
   void StopNativeControlEventPump();
   void NativeControlEventLoop(const std::stop_token &stopToken);
-  void PublishNativeControlStatus(const std::string &statusMessage);
+  void PublishNativeControlStatus(const i18n::Text &statusMessage);
 
   MusicPlaylistRepository &repository;
   ChartRepository &charts;
@@ -208,7 +224,7 @@ private:
   std::jthread nativeControlEventThread;
   std::optional<std::chrono::steady_clock::time_point> sleepTimerDeadline;
   bool nativeControlEventThreadStopping = false;
-  std::string nativeControlStatusMessage;
+  i18n::Text nativeControlStatusMessage;
   std::uint64_t nativeControlStatusRevision = 0;
   std::uint64_t consumedNativeControlStatusRevision = 0;
   std::atomic_bool renderCancelled{false};

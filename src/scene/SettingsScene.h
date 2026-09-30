@@ -337,8 +337,8 @@ private:
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string chartFolderStatusMessage;
   SDL_Color chartFolderStatusColor{157, 177, 200, 255};
-  std::string archiveCacheCleanupStatusMessage =
-      i18n::tr("settings.temporary_archive_cache_has_not_cleaned_yet.message");
+  i18n::Text archiveCacheCleanupStatusMessage =
+      i18n::message("settings.temporary_archive_cache_has_not_cleaned_yet.message");
   SDL_Color archiveCacheCleanupStatusColor{157, 177, 200, 255};
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;

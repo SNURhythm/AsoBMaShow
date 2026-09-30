@@ -3777,7 +3777,7 @@ void MusicPlayerScene::replaceNowPlaying(std::vector<MusicTrack> tracks,
 void MusicPlayerScene::playNowPlaying(std::vector<MusicTrack> tracks,
                                       std::size_t startIndex,
                                       const std::string &emptyMessage,
-                                      const std::string &successMessage) {
+                                      const i18n::Text &successMessage) {
   if (tracks.empty()) {
     setStatus(emptyMessage);
     return;
@@ -3807,7 +3807,7 @@ void MusicPlayerScene::playTrackBrowserTrack(TrackBrowserKind kind) {
                  kind == TrackBrowserKind::Library
                      ? i18n::tr("music_player.select_library_track_first.message")
                      : i18n::tr("music_player.select_favorite_track_first.message"),
-                 i18n::tr("music_player.playing_now_playing.message"));
+                 i18n::message("music_player.playing_now_playing.message"));
 }
 
 void MusicPlayerScene::playPlaylist() {
@@ -3821,7 +3821,7 @@ void MusicPlayerScene::playPlaylist() {
             ? static_cast<std::size_t>(selectedPlaylistIndex)
             : 0;
     playNowPlaying(playlistTracks, startIndex, i18n::tr("music_player.playlist.now_playing_empty.message"),
-                   i18n::tr("music_player.playlist.playing_now_playing.message"));
+                   i18n::message("music_player.playlist.playing_now_playing.message"));
     return;
   }
 
@@ -3832,7 +3832,8 @@ void MusicPlayerScene::playPlaylist() {
     return;
   }
   context.musicPlayer.PlayCurrentAsync(
-      status, i18n::tr("music_player.playlist.playing.prefix") + selectedPlaylistName() + ".");
+      status, i18n::message("music_player.playlist.playing_named.message",
+                            {{"name", selectedPlaylistName()}}));
   refreshActiveQueueList(true);
   setStatus(status);
 }
@@ -3846,7 +3847,7 @@ void MusicPlayerScene::playSelectedPlaylistTrack() {
   if (isNowPlayingPlaylistId(selectedPlaylistId)) {
     playNowPlaying(playlistTracks,
                    static_cast<std::size_t>(selectedPlaylistIndex),
-                   i18n::tr("music_player.playlist.now_playing_empty.message"), i18n::tr("music_player.playlist.playing_now_playing.message"));
+                   i18n::tr("music_player.playlist.now_playing_empty.message"), i18n::message("music_player.playlist.playing_now_playing.message"));
     return;
   }
 
@@ -3855,7 +3856,7 @@ void MusicPlayerScene::playSelectedPlaylistTrack() {
       playlistTracks, static_cast<std::size_t>(selectedPlaylistIndex),
       selectedPlaylistName());
   std::string status;
-  context.musicPlayer.PlayCurrentAsync(status, i18n::tr("music_player.playlist.playing_playlist_track.message"));
+  context.musicPlayer.PlayCurrentAsync(status, i18n::message("music_player.playlist.playing_playlist_track.message"));
   refreshActiveQueueList(true);
   setStatus(status);
 }
@@ -3871,7 +3872,7 @@ void MusicPlayerScene::playSelectedQueueTrack() {
                                   static_cast<std::size_t>(selectedQueueIndex),
                                   queueDisplayName(displayedQueueName));
   std::string status;
-  context.musicPlayer.PlayCurrentAsync(status, i18n::tr("music_player.queue.playing_queue_track.message"));
+  context.musicPlayer.PlayCurrentAsync(status, i18n::message("music_player.queue.playing_queue_track.message"));
   refreshActiveQueueList(true);
   setStatus(status);
 }
@@ -3896,7 +3897,7 @@ void MusicPlayerScene::playRandomTrackBrowser(TrackBrowserKind kind) {
                  kind == TrackBrowserKind::Library
                      ? i18n::tr("music_player.no_library_tracks_available.message")
                      : i18n::tr("music_player.no_favorite_tracks_available.message"),
-                 i18n::tr("music_player.playing_now_playing.message"));
+                 i18n::message("music_player.playing_now_playing.message"));
 }
 
 void MusicPlayerScene::shuffleQueue() {
@@ -4360,12 +4361,12 @@ void MusicPlayerScene::watchVideo() {
     if (currentTrack) {
       context.jukebox.stop();
       std::string status;
-      context.musicPlayer.PlayCurrentAsync(status, i18n::tr("music_player.playing_current_track.message"));
+      context.musicPlayer.PlayCurrentAsync(status, i18n::message("music_player.playing_current_track.message"));
       refreshActiveQueueList(true);
       setStatus(status);
     } else {
       playNowPlaying({*track}, 0, i18n::tr("music_player.select_track_first.message"),
-                     i18n::tr("music_player.playing_now_playing.message"));
+                     i18n::message("music_player.playing_now_playing.message"));
     }
   } else {
     context.jukebox.stop();
@@ -4721,7 +4722,7 @@ bool MusicPlayerScene::handleVideoFullscreenEvents(SDL_Event &event) {
 void MusicPlayerScene::playNext() {
   context.jukebox.stop();
   std::string status;
-  context.musicPlayer.PlayNextAsync(status, i18n::tr("music_player.playing_next_track.message"));
+  context.musicPlayer.PlayNextAsync(status, i18n::message("music_player.playing_next_track.message"));
   refreshActiveQueueList(true);
   setStatus(status);
 }
@@ -4729,7 +4730,7 @@ void MusicPlayerScene::playNext() {
 void MusicPlayerScene::playPrevious() {
   context.jukebox.stop();
   std::string status;
-  context.musicPlayer.PlayPreviousAsync(status, i18n::tr("music_player.playing_previous_track.message"));
+  context.musicPlayer.PlayPreviousAsync(status, i18n::message("music_player.playing_previous_track.message"));
   refreshActiveQueueList(true);
   setStatus(status);
 }
