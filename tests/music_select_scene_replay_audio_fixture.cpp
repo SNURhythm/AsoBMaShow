@@ -419,4 +419,13 @@ void testAutoPlayAudio() {
   }
 }
 
-int main() { SCENE_TEST; }
+int main(int argc, char **argv) {
+  if (argc != 2) return 2;
+  const std::string test = argv[1];
+  if (test == "0") testReplayAudio(0);
+  else if (test == "1") testReplayAudio(1);
+  else if (test == "2") testReplayAudio(2);
+  else if (test == "3") testReplayAudio(3);
+  else if (test == "4") testAutoPlayAudio();
+  else return 2;
+}

@@ -561,6 +561,16 @@ void testCourseWorkerAdmissionFailure() {
   }
 }
 
-int main() {
-  SCENE_TEST;
+int main(int argc, char **argv) {
+  if (argc != 2) return 2;
+  const std::string test = argv[1];
+  if (test == "testCourseAudioFailure(false)") testCourseAudioFailure(false);
+  else if (test == "testCourseAudioFailure(true)") testCourseAudioFailure(true);
+  else if (test == "testCancelledCourseAudio()") testCancelledCourseAudio();
+  else if (test == "testAsyncCourseLifecycle()") testAsyncCourseLifecycle();
+  else if (test == "testAsyncCourseLifecycle(true)") testAsyncCourseLifecycle(true);
+  else if (test == "testAsyncCourseOptionsAndParseRetry()") testAsyncCourseOptionsAndParseRetry();
+  else if (test == "testCourseFailureWhileApplicationBackgrounded()") testCourseFailureWhileApplicationBackgrounded();
+  else if (test == "testCourseWorkerAdmissionFailure()") testCourseWorkerAdmissionFailure();
+  else return 2;
 }

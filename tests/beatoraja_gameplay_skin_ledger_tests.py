@@ -3,9 +3,13 @@
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
+
+if __package__:
+    from .support.ledger_test_evidence import executed_coverage
+else:
+    from support.ledger_test_evidence import executed_coverage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -80,35 +84,6 @@ def validate_executed_coverage(
         if expected[identifier] != observed[identifier]
     }
     assert not wrong, f"ledger assertions were emitted by wrong runners: {wrong}"
-
-
-def executed_coverage(build_dir: Path, runners: set[str]) -> dict[str, list[str]]:
-    emitted: dict[str, list[str]] = {}
-    for runner in sorted(runners):
-        executable = build_dir / runner
-        assert executable.is_file(), f"executed ledger evidence is unbuilt: {runner}"
-        completed = subprocess.run(
-            [str(executable), "--list-ledger-assertions"], cwd=ROOT, text=True,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-        )
-        assert completed.returncode == 0, (
-            f"executed ledger evidence failed: {runner}\n{completed.stdout}"
-        )
-        try:
-            payload = json.loads(completed.stdout.splitlines()[-1])
-        except (IndexError, json.JSONDecodeError) as error:
-            raise AssertionError(
-                f"{runner} emitted no machine-readable ledger evidence"
-            ) from error
-        assert payload.get("runner") == runner, (
-            f"{runner} emitted evidence for a different runner"
-        )
-        identifiers = payload.get("assertionIds")
-        assert isinstance(identifiers, list) and all(
-            isinstance(identifier, str) and identifier for identifier in identifiers
-        ), f"{runner} emitted invalid assertion IDs"
-        emitted[runner] = identifiers
-    return emitted
 
 
 def main() -> None:

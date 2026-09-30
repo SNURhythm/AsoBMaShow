@@ -218,12 +218,18 @@ std::string shortWave(unsigned frames = 64, std::int16_t sample = 1000) {
 
 void writeChartArchive(
     const std::filesystem::path &path,
-    const std::vector<std::pair<std::string, std::string>> &files) {
+    const std::vector<std::pair<std::string, std::string>> &files,
+    bool store = false) {
   archive *writer = archive_write_new();
   require(writer != nullptr, "archive visual fixture creates a writer");
   if (path.extension() == ".7z") {
     require(archive_write_set_format_7zip(writer) == ARCHIVE_OK,
             "archive visual fixture selects 7-Zip");
+    if (store) {
+      require(archive_write_set_options(writer, "7zip:compression=store") ==
+                  ARCHIVE_OK,
+              "archive visual fixture selects 7-Zip storage");
+    }
   } else {
     require(archive_write_set_format_zip(writer) == ARCHIVE_OK,
             "archive visual fixture selects ZIP");
@@ -454,9 +460,12 @@ void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
   for (unsigned offset = 0; offset < 4; ++offset) {
     wave[4 + offset] = static_cast<char>(riffBytes >> (offset * 8));
   }
+  // Scheduling uses extracted WAV bytes; compressing the padding adds no coverage.
+  // The smaller archive fixtures retain the default 7-Zip compression.
   writeChartArchive(fixture.archivePath,
                     {{"song/large.wav", wave}, {"song/small.wav", shortWave()},
-                     {"song/third.wav", shortWave()}, {"song/fourth.wav", shortWave()}});
+                     {"song/third.wav", shortWave()}, {"song/fourth.wav", shortWave()}},
+                    true);
   Stopwatch stopwatch;
   Jukebox jukebox(&stopwatch,
                   std::make_unique<TestFactory>(std::make_shared<BackendControl>()));

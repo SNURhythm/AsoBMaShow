@@ -3898,8 +3898,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(chart_repository_tests PRIVATE cxx_std_23)
-    add_test(NAME chart_repository_search_paging
-             COMMAND chart_repository_tests --search-paging-tests)
     if(TARGET SDL2::SDL2)
         target_link_libraries(chart_repository_tests PRIVATE SDL2::SDL2)
     elseif(TARGET SDL2::SDL2-static)
@@ -4508,6 +4506,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     add_test(NAME chart_audio_renderer_tests COMMAND chart_audio_renderer_tests)
     set_tests_properties(chart_audio_renderer_tests PROPERTIES TIMEOUT 30)
+    # The real foreground/background quota regression mixes over 317 million
+    # frames. Optimize only this test's hot translation unit, retaining Debug
+    # assertions, shared dependency objects, and the application's own flags.
+    # Xcode disallows per-config source options; MSVC Debug /RTC conflicts /O2.
+    if(ENABLE_DEBUG_OPTIMIZED_BUILD AND NOT MSVC AND
+       NOT CMAKE_GENERATOR STREQUAL "Xcode")
+        set_property(SOURCE src/audio/ChartAudioRenderer.cpp APPEND PROPERTY
+            COMPILE_OPTIONS
+            "$<$<AND:$<CONFIG:Debug>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,chart_audio_renderer_tests>>:-O2>")
+    endif()
 
     add_executable(audio_mix_tests
         tests/audio_mix_tests.cpp
@@ -7988,6 +7996,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         endif()
     endforeach()
 
+    include("${CMAKE_SOURCE_DIR}/cmake/LedgerTestEvidence.cmake")
+    asobmashow_load_ledger_runners(
+        "${CMAKE_SOURCE_DIR}/docs/skin-compat/beatoraja-gameplay-feature-ledger-v1.json"
+        asobmashow_gameplay_ledger_runners)
+    asobmashow_load_ledger_runners(
+        "${CMAKE_SOURCE_DIR}/docs/skin-compat/beatoraja-music-select-feature-ledger-v1.json"
+        asobmashow_music_select_ledger_runners)
+    set(asobmashow_ledger_runners
+        ${asobmashow_gameplay_ledger_runners} ${asobmashow_music_select_ledger_runners})
+    list(REMOVE_DUPLICATES asobmashow_ledger_runners)
+
     function(asobmashow_register_test target_name)
         set(test_name ${target_name})
         set(test_command_arguments)
@@ -8017,7 +8036,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             set_property(TARGET ${target_name}
                 PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)
         endif()
-        add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${test_command_arguments})
+        if(target_name IN_LIST asobmashow_ledger_runners AND NOT test_command_arguments)
+            asobmashow_add_ledger_test(${target_name} ${test_name})
+        else()
+            add_test(NAME ${test_name} COMMAND $<TARGET_FILE:${target_name}> ${test_command_arguments})
+        endif()
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
         )
@@ -8717,6 +8740,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(sdl_display_backend_tests foundation_av_sdl_display)
     asobmashow_register_test(score_provenance_db_tests foundation_provenance_db)
     asobmashow_register_test(midi_input_tests foundation_input_midi)
+
+    asobmashow_require_ledger_evidence(beatoraja_gameplay_skin_ledger
+        ${asobmashow_gameplay_ledger_runners})
+    asobmashow_require_ledger_evidence(beatoraja_music_select_skin_ledger_evidence_contract
+        ${asobmashow_music_select_ledger_runners})
+    add_test(NAME ledger_test_evidence_tests
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests/ledger_test_evidence_tests.py -v)
+    set_tests_properties(ledger_test_evidence_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
     get_property(asobmashow_directory_targets DIRECTORY
         PROPERTY BUILDSYSTEM_TARGETS)

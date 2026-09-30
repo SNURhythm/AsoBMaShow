@@ -192,6 +192,12 @@ void testHealthySettingsRetainsSelector() {
   assert(scene.manager.settingsReturn.retained == &scene && scene.reactivateSkinOnResume_);
 }
 
-int main() {
-  SCENE_TEST();
+int main(int argc, char **argv) {
+  if (argc != 2) return 2;
+  const std::string test = argv[1];
+  if (test == "testSettingsRecovery") testSettingsRecovery();
+  else if (test == "testBackRecovery") testBackRecovery();
+  else if (test == "testErrorModalIsolation") testErrorModalIsolation();
+  else if (test == "testHealthySettingsRetainsSelector") testHealthySettingsRetainsSelector();
+  else return 2;
 }

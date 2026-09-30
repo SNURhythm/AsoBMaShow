@@ -209,8 +209,17 @@ import java.util.regex.PatternSyntaxException;
 
 public final class LuaSkinJavaPatternOracle {
   public static void main(String[] args) {
+    if (args.length == 0 || args.length % 2 != 0) {
+      throw new IllegalArgumentException("expected PATTERN SUBJECT pairs");
+    }
+    for (int index = 0; index < args.length; index += 2) {
+      printResult(args[index], args[index + 1]);
+    }
+  }
+
+  private static void printResult(String pattern, String subject) {
     try {
-      var matcher = Pattern.compile(args[0]).matcher(args[1]);
+      var matcher = Pattern.compile(pattern).matcher(subject);
       if (!matcher.find()) {
         System.out.println("NO_MATCH");
         return;
@@ -273,27 +282,34 @@ class LuaSkinJavaPatternOracleTests(unittest.TestCase):
             source.write_text(textwrap.dedent(JAVA_SOURCE), encoding="utf-8")
             subprocess.run([str(javac_executable), str(source)], check=True)
 
-            for pattern, subject in CASES:
+            # Keep each implementation independent, but amortize process startup
+            # across the cases. Results are hex/status lines, even for multiline input.
+            arguments = [value for case in CASES for value in case]
+            java_results = subprocess.run(
+                [
+                    str(java_executable),
+                    "-cp",
+                    str(directory),
+                    "LuaSkinJavaPatternOracle",
+                    *arguments,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            native_results = subprocess.run(
+                [str(native), *arguments],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            self.assertEqual(len(java_results), len(CASES), "Java result count")
+            self.assertEqual(len(native_results), len(CASES), "native result count")
+
+            for (pattern, subject), java_result, actual in zip(
+                CASES, java_results, native_results
+            ):
                 with self.subTest(pattern=pattern, subject=subject):
-                    java_result = subprocess.run(
-                        [
-                            str(java_executable),
-                            "-cp",
-                            str(directory),
-                            "LuaSkinJavaPatternOracle",
-                            pattern,
-                            subject,
-                        ],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    ).stdout.strip()
-                    actual = subprocess.run(
-                        [str(native), pattern, subject],
-                        check=True,
-                        capture_output=True,
-                        text=True,
-                    ).stdout.strip()
                     self.assertEqual(actual, java_result)
 
 

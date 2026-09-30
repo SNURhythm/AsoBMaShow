@@ -595,6 +595,20 @@ void testFailedSceneCancelsReadyAutoplay() {
          "discarded autoplay results must not launch on later updates");
 }
 
-int main() {
-  SCENE_TEST();
+int main(int argc, char **argv) {
+  if (argc != 2) return 2;
+  const std::string test = argv[1];
+  if (test == "testArchiveConfirmation") testArchiveConfirmation();
+  else if (test == "testSolidArchiveDirectory") testSolidArchiveDirectory();
+  else if (test == "testUnzipAllConfirmation") testUnzipAllConfirmation();
+  else if (test == "testFailedPageRecovery") testFailedPageRecovery();
+  else if (test == "testSearchOpensAsynchronouslyAndRestores") testSearchOpensAsynchronouslyAndRestores();
+  else if (test == "testAutoplayCompletion") testAutoplayCompletion();
+  else if (test == "testPointerTargetsClickedFolder") testPointerTargetsClickedFolder();
+  else if (test == "testEmptyCategoryAutoplay") testEmptyCategoryAutoplay();
+  else if (test == "testLatestRequestIntent") testLatestRequestIntent();
+  else if (test == "testRestoreSurvivesAnotherRevision") testRestoreSurvivesAnotherRevision();
+  else if (test == "testForegroundResumesDirectoryRestore") testForegroundResumesDirectoryRestore();
+  else if (test == "testFailedSceneCancelsReadyAutoplay") testFailedSceneCancelsReadyAutoplay();
+  else return 2;
 }
