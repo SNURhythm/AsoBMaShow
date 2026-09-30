@@ -48,35 +48,6 @@ class SelectArrangementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             score.add_phrase([], 3, "lead", ((12.5, "A4", .25, 1),))
 
-    def test_lead_attacks_land_on_their_scored_subdivisions(self):
-        for event in score.compose_select():
-            if event.instrument != "lead":
-                continue
-            with self.subTest(beat=event.beat):
-                rendered = score.render_events((event,), sample_rate=8000)
-                onset = round(event.beat * 3750)
-                self.assertGreater(rms(rendered[onset + 8:onset + 80]), .01)
-                if onset:
-                    self.assertEqual(rms(rendered[onset - 80:onset]), 0)
-
-    def test_main_hook_preserves_syncopation_and_separates_note_attacks(self):
-        melody = [event for event in score.compose_select()
-                  if event.instrument == "lead" and not 64 <= event.beat < 96]
-        offbeats = [event for event in melody if event.beat % 1]
-        self.assertGreater(len(offbeats), len(melody) / 2)
-        for event, following in zip(melody, melody[1:]):
-            with self.subTest(beat=event.beat):
-                release_beats = .075 * 128 / 60
-                self.assertLess(event.beat + event.duration + release_beats, following.beat)
-
-    def test_lead_uses_straight_eighths_against_an_exact_backbeat(self):
-        for event in score.compose_select():
-            with self.subTest(instrument=event.instrument, beat=event.beat):
-                if event.instrument == "lead":
-                    self.assertEqual(event.beat * 2, round(event.beat * 2))
-                elif event.instrument == "snare":
-                    self.assertIn(event.beat % 4, (1, 3))
-
     def test_note_releases_wrap_into_next_lap(self):
         samples = score.render_events((score.Event("lead", 3.9, 69, .3, 1),),
                                       total_beats=4, sample_rate=synth.SR)

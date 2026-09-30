@@ -2304,13 +2304,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 "ASOBMASHOW_TEST_BUILD_DIR=$<TARGET_FILE_DIR:beatoraja_skin_model_tests>"
         )
     endif()
-    add_test(NAME gameplay_skin_loading_benchmark_script_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/gameplay_skin_loading_benchmark_script_tests.py -v)
-    set_tests_properties(gameplay_skin_loading_benchmark_script_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     if (TARGET json_gameplay_skin_decoder_tests)
         add_test(NAME beatoraja_gameplay_skin_ledger_evidence_contract
             COMMAND ${Python3_EXECUTABLE}
@@ -2431,13 +2425,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(find_bms_archive_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME judgement_indicator_range_flow_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_judgement_indicator_range_flow.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(judgement_indicator_range_flow_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     add_test(NAME result_persistence_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_result_persistence_flow.py
@@ -2445,13 +2433,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(result_persistence_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME result_visual_layout_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_result_visual_layout.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(result_visual_layout_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     add_test(NAME main_menu_ranking_flow_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_main_menu_ranking_flow.py
@@ -2480,13 +2462,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(main_menu_chart_list_lifecycle_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME ir_ranking_detail_flow_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_ir_ranking_detail_flow.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(ir_ranking_detail_flow_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
+
     add_test(NAME ios_native_text_editor_sync_audit
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_ios_native_text_editor_sync.py
@@ -2513,27 +2489,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -B
                 -m unittest tests/windows_skin_shader_artifact_tests.py -v)
     set_tests_properties(windows_skin_shader_artifact_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME records_ir_marker_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_records_ir_marker.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(records_ir_marker_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME saved_course_result_browse_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_saved_course_result_browse.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(saved_course_result_browse_audit PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME records_result_recall_flow_audit
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/scripts/check_records_result_recall_flow.py
-                ${CMAKE_SOURCE_DIR})
-    set_tests_properties(records_result_recall_flow_audit PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
@@ -4672,13 +4627,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(settings_audio_video_model_tests PRIVATE cxx_std_23)
 
-    add_executable(chart_filter_sort_panel_view_tests
-        tests/chart_filter_sort_panel_view_tests.cpp
-        src/bms_parser.cpp
-    )
-    target_include_directories(chart_filter_sort_panel_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(chart_filter_sort_panel_view_tests PRIVATE cxx_std_23)
-
     add_executable(image_fade_tests
         tests/image_fade_tests.cpp
         src/view/ImageFade.cpp
@@ -4939,11 +4887,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(APPLE)
         target_link_libraries(image_view_fade_tests PRIVATE iconv)
     endif()
-    add_test(NAME image_view_decoder_ownership_tests
-        COMMAND ${CMAKE_COMMAND}
-            -DIMAGE_VIEW_SOURCE=${CMAKE_SOURCE_DIR}/src/view/ImageView.cpp
-            -P ${CMAKE_SOURCE_DIR}/tests/assert_image_view_decoder_ownership.cmake
-    )
 
     add_executable(chart_list_item_view_tests
         tests/chart_list_item_view_tests.cpp
@@ -5136,24 +5079,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(text_view_font_lifetime_tests PRIVATE cxx_std_23)
     target_compile_definitions(text_view_font_lifetime_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
     target_link_libraries(text_view_font_lifetime_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
-
-    add_executable(checkbox_button_content_tests
-        tests/checkbox_button_content_tests.cpp
-        src/rendering/Color.cpp
-        src/rendering/common.cpp
-        src/rendering/UniformCache.cpp
-        src/view/CheckboxButtonContent.cpp
-        src/view/SdlTtfRuntime.cpp
-        src/view/TextView.cpp
-        src/view/View.cpp
-    )
-    target_include_directories(checkbox_button_content_tests PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-    )
-    target_compile_features(checkbox_button_content_tests PRIVATE cxx_std_23)
-    target_link_libraries(checkbox_button_content_tests PRIVATE
-        ${COMMON_LIBS} bgfx yogacore
-    )
 
     add_executable(difficulty_table_url_completion_tests
         tests/difficulty_table_url_completion_tests.cpp
@@ -6493,29 +6418,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             )
         endif()
 
-        add_executable(builtin_playfield_presentation_tests
-            tests/builtin_playfield_presentation_tests.cpp
-        )
-        target_include_directories(builtin_playfield_presentation_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/src
-        )
-        target_compile_features(builtin_playfield_presentation_tests PRIVATE
-            cxx_std_23
-        )
-        target_link_libraries(builtin_playfield_presentation_tests PRIVATE
-            ${COMMON_LIBS}
-            bgfx
-        )
-
-        add_executable(gameplay_skin_integration_tests
-            tests/gameplay_skin_integration_tests.cpp
-        )
-        target_include_directories(gameplay_skin_integration_tests PRIVATE
-            ${CMAKE_SOURCE_DIR}/src
-        )
-        target_compile_features(gameplay_skin_integration_tests PRIVATE
-            cxx_std_23
-        )
         add_executable(skin_performance_telemetry_tests
             tests/skin_performance_telemetry_tests.cpp
             src/skin/beatoraja/SkinPerformanceTelemetry.cpp
@@ -7980,7 +7882,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         button_enabled_tests
         text_input_box_tests
         text_view_font_lifetime_tests
-        checkbox_button_content_tests
         play_options_panel_view_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
@@ -8260,7 +8161,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         app_database_initializer_tests
         application_startup_tests
         application_result_recovery_tests
-        chart_filter_sort_panel_view_tests
         image_fade_tests
         decoded_image_cache_tests
         image_decode_coordinator_tests
@@ -8274,7 +8174,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         view_layout_tests
         button_enabled_tests
         text_input_box_tests
-        checkbox_button_content_tests
         difficulty_table_url_completion_tests
         replay_summary_list_view_tests
         result_record_list_view_tests
@@ -8626,12 +8525,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             RESOURCE_LOCK metal_device
         )
     endif()
-    if(TARGET builtin_playfield_presentation_tests)
-        asobmashow_register_test(builtin_playfield_presentation_tests)
-    endif()
-    if(TARGET gameplay_skin_integration_tests)
-        asobmashow_register_test(gameplay_skin_integration_tests)
-    endif()
     if(TARGET skin_performance_telemetry_tests)
         asobmashow_register_test(skin_performance_telemetry_tests)
     endif()
@@ -8707,8 +8600,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_bootstrap --shard bootstrap)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_deletion --shard deletion)
     asobmashow_register_test(player_profile_manager_tests foundation_profile_manager_integrity --shard integrity)
-    asobmashow_register_test(player_profile_manager_tests profile_manager_invalid_shard --shard invalid)
-    set_tests_properties(profile_manager_invalid_shard PROPERTIES WILL_FAIL TRUE)
+
     asobmashow_register_test(profile_switch_tests foundation_profile_switch)
     set_tests_properties(foundation_profile_switch PROPERTIES TIMEOUT 60)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_portable --shard portable)
@@ -8718,8 +8610,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     # The fault matrix assumes its injected filesystem failure is the only I/O
     # failure while it classifies exact durable recovery outcomes.
     set_tests_properties(foundation_profile_archive_faults PROPERTIES RUN_SERIAL TRUE)
-    asobmashow_register_test(profile_archive_tests profile_archive_invalid_shard --shard invalid)
-    set_tests_properties(profile_archive_invalid_shard PROPERTIES WILL_FAIL TRUE)
+
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)

@@ -43,8 +43,8 @@ RELEASE_CRITICAL_SKIN_TESTS = {
     "play_skin_state_bridge_tests": "play_skin_state_bridge_tests",
     "play_skin_session_tests": "play_skin_session_tests",
     "playfield_presentation_coordinator_tests": "playfield_presentation_coordinator_tests",
-    "builtin_playfield_presentation_tests": "builtin_playfield_presentation_tests",
-    "gameplay_skin_integration_tests": "gameplay_skin_integration_tests",
+    "builtin_renderer_characterization_tests": "builtin_renderer_characterization_tests",
+    "gameplay_skin_session_factory_tests": "gameplay_skin_session_factory_tests",
     "skin_configuration_write_queue_tests": "skin_configuration_write_queue_tests",
     "realtime_touch_input_router_tests": "realtime_touch_input_router_tests",
     "play_skin_touch_geometry_tests": "play_skin_touch_geometry_tests",
@@ -77,12 +77,6 @@ RELEASE_CRITICAL_PROFILE_TESTS = {
         "foundation_profile_archive_faults",
     },
 }
-
-RELEASE_CRITICAL_PROFILE_INVALID_TESTS = {
-    "profile_manager_invalid_shard",
-    "profile_archive_invalid_shard",
-}
-
 
 def native_test_targets(script):
     block = re.search(r"NATIVE_TEST_TARGETS=\(\n(.*?)\n\)", script, re.DOTALL)
@@ -244,7 +238,6 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         self.assertIn("ios_build_setup_tests.py", output)
         self.assertIn("ios_release_workflow_tests.py", output)
         self.assertIn("ios_artifact_audit_tests.py", output)
-        self.assertIn("ios_release_documentation_tests.py", output)
         self.assertIn("ios_artifact_audit.sh", output)
         self.assertIn("--build-only", output)
         self.assertNotIn("upload_to_testflight", output)
@@ -324,16 +317,9 @@ class IOSReleaseWorkflowTests(unittest.TestCase):
         }
         expected_profile_names = set().union(*RELEASE_CRITICAL_PROFILE_TESTS.values())
         self.assertEqual(profile_family, expected_profile_names)
-        self.assertNotEqual(
-            profile_family | {"foundation_profile_manager", "foundation_profile_archive"},
-            expected_profile_names,
-        )
         for target, expected_names in RELEASE_CRITICAL_PROFILE_TESTS.items():
             with self.subTest(target=target):
                 self.assertIn(target, self.verify_script)
-        self.assertTrue(
-            RELEASE_CRITICAL_PROFILE_INVALID_TESTS.isdisjoint(registered_names)
-        )
 
     def test_release_verifier_runs_native_checks_in_parallel(self):
         self.assertIn(

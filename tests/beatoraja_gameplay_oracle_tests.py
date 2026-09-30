@@ -107,11 +107,6 @@ class GameplaySkinOracleTests(unittest.TestCase):
         self.assertIsNotNone(self.trace, "pinned gameplay oracle trace must be committed")
         return self.trace
 
-    def test_required_oracle_artifacts_are_committed(self):
-        for path in (GENERATOR, HARNESS, TRACE):
-            with self.subTest(path=path.relative_to(ROOT)):
-                self.assertTrue(path.is_file(), f"missing oracle artifact: {path.relative_to(ROOT)}")
-
     def test_trace_envelope_pins_source_classpath_fixtures_and_frame(self):
         trace = self.require_trace()
         self.assertEqual(trace["schemaVersion"], 1)

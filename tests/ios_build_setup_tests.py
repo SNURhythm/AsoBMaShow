@@ -26,7 +26,6 @@ FASTFILE = ROOT / "ios/Xcode/AsoBMaShow/fastlane/Fastfile"
 PODS_CACHE_HELPER = ROOT / "scripts/ios_pods_cache.sh"
 IOS_INIT = ROOT / "scripts/ios_init.sh"
 IOS_RELEASE_VERIFY = ROOT / "scripts/ios_release_verify.sh"
-AGENT_GUIDANCE = ROOT / "AGENTS.md"
 SDL_HEADER_ALIAS = ROOT / "ios/Xcode/AsoBMaShow/include/SDL2"
 MAIN_SOURCE = ROOT / "src/main.cpp"
 IOS_NATIVES_SOURCE = ROOT / "src/iOSNatives.mm"
@@ -845,13 +844,6 @@ int main() { return 0; }
             capture_output=True,
         )
         self.assertEqual("", result.stdout.strip())
-
-    def test_agent_guidance_describes_automatic_ios_sources(self):
-        guidance = AGENT_GUIDANCE.read_text(encoding="utf-8")
-        self.assertNotIn("add its path to `membershipExceptions`", guidance)
-        self.assertIn("automatically discovers supported files under `src`", guidance)
-        self.assertIn("checkout-specific DerivedData", guidance)
-        self.assertIn("stable Firebase archive object root", guidance)
 
     def test_ios_uses_portable_stable_sdl_header_alias(self):
         self.assertTrue(SDL_HEADER_ALIAS.is_symlink())

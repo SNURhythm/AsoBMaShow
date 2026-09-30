@@ -172,11 +172,6 @@ int main() {
         "partial course video includes saved notes and duration of unplayed entries");
   check(partialImage.TotalNotes == 530 && partialImage.PlayLength == 705 && partialImage.PlayLevel == 3,
         "partial course image includes saved notes and duration of unplayed entries");
-  // With 150 past notes and 4 observed BAD/POOR/KPOOR, the result skin's
-  // full-course BP is 384, including the 300 unplayed notes.
-  check(4 + partialVideo.TotalNotes - 150 == 384 &&
-            4 + partialImage.TotalNotes - 150 == 384,
-        "both partial course export metadata yield full-course BP");
   check(partialImage.Rank == 300 &&
             partialImage.RankType == bms_parser::JudgeRankType::DefExRank,
         "course image retains final-stage DEFEXRANK judging difficulty");

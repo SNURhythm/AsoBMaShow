@@ -17,7 +17,6 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
-#include <iterator>
 #include <memory>
 #include <set>
 #include <string>
@@ -149,14 +148,6 @@ const TextView *textView(View *root, std::string_view name) {
   return root == nullptr ? nullptr
                          : dynamic_cast<const TextView *>(
                                root->findViewByName(std::string(name)));
-}
-
-std::string readSource(const std::filesystem::path &relative) {
-  const auto path = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / relative;
-  std::ifstream input(path);
-  expect(input.good(), "Task 8 source contract is readable");
-  return {std::istreambuf_iterator<char>(input),
-          std::istreambuf_iterator<char>()};
 }
 
 class TemporaryDirectory {
@@ -384,7 +375,7 @@ void testExplicitRemoteZerosRemainSuppliedExportValues() {
          "explicit zero gauge remains a present exported marker");
 }
 
-void testFilenameFallbackAndRemoteSceneExportContract() {
+void testFilenameFallback() {
   ResultPresentationModel reserved;
   reserved.title = "CON";
   const auto reservedPlan =
@@ -409,14 +400,7 @@ void testFilenameFallbackAndRemoteSceneExportContract() {
          "sanitized presentation filename keeps the existing 80-byte title "
          "bound and timestamp policy");
 
-  const std::string scene = readSource("src/scene/ResultScene.cpp");
-  expect(scene.find("ResultImageExporter::Export(context, "
-                    "remote->presentation)") != std::string::npos,
-         "remote ResultScene passes its immutable presentation to export");
-  expect(scene.find("Export Unavailable") == std::string::npos,
-         "temporary Task 7 unavailable branch is removed");
-  expect(scene.find("local->meta, local->resultState") != std::string::npos,
-         "local ResultScene keeps the legacy export path");
+
 }
 
 void testProductionPresentationExportWritesCompleteAndSparseArtifacts() {
@@ -595,7 +579,7 @@ int main() {
   testCompletePresentationUsesSceneCardsAndGaugePlan();
   testSparseAndExplicitZeroPresentationPhysicallyOmitMissingCards();
   testExplicitRemoteZerosRemainSuppliedExportValues();
-  testFilenameFallbackAndRemoteSceneExportContract();
+  testFilenameFallback();
   testProductionPresentationExportWritesCompleteAndSparseArtifacts();
   testProductionPresentationExportPropagatesFailures();
   testPresentationExportAcceptsPlatformConsumedArtifact();

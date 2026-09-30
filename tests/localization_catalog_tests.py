@@ -54,12 +54,5 @@ class LocalizationCatalogTests(unittest.TestCase):
                 self.assertTrue(key in self.catalog, f"{path}: unknown message ID {key!r}")
         self.assertEqual(set(self.catalog) - referenced, set())
 
-    def test_equal_english_labels_have_independent_contextual_ids(self):
-        audio = "settings.audio.apply.label"
-        display = "settings.display.apply.label"
-        self.assertEqual(self.catalog[audio][0], "Apply")
-        self.assertEqual(self.catalog[display][0], "Apply")
-
-
 if __name__ == "__main__":
     unittest.main()

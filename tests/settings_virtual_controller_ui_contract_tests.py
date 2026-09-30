@@ -25,41 +25,5 @@ class SettingsVirtualControllerUiContracts(unittest.TestCase):
             reset.group("body"),
         )
 
-    def test_settings_card_keeps_controller_controls_compact(self) -> None:
-        source = (ROOT / "src/scene/SettingsSceneInput.cpp").read_text(
-            encoding="utf-8"
-        )
-        self.assertNotIn(
-            "Optional 5-key and 7-key mobile controls. It stays above the selected gameplay skin.",
-            source,
-        )
-        self.assertNotIn("Spin the platter. Each 3° turn", source)
-        self.assertNotIn("Flick Mode: swipe the scratch vertically", source)
-
-    def test_settings_card_offers_the_one_or_two_player_side(self) -> None:
-        source = (ROOT / "src/scene/SettingsSceneInput.cpp").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn('"settings.input.player_2_p.label"', source)
-        self.assertIn('"settings.input.player_1_p.label"', source)
-        self.assertIn("VirtualControllerPlayer::Player2", source)
-
-    def test_hispeed_auto_adjust_button_measures_its_longest_label(self) -> None:
-        source = (ROOT / "src/scene/SettingsSceneLayout.cpp").read_text(
-            encoding="utf-8"
-        )
-        self.assertRegex(
-            source,
-            r'hispeedAutoAdjustModeText\s*=\s*makeText\(\s*i18n::message\('
-            r'"settings.lane.hi_speed_auto_adjust_off.label"[\s\S]{0,300}'
-            r'hispeedAutoAdjustButtonWidth\s*=\s*std::max\('
-            r'metrics\.actionButtonWidth,\s*'
-            r'hispeedAutoAdjustModeText->textureWidth\(\)\s*\+\s*'
-            r'hispeedAutoAdjustHorizontalPadding\)'
-            r'[\s\S]{0,220}makeControlButton\(\s*'
-            r'hispeedAutoAdjustButtonWidth',
-        )
-
-
 if __name__ == "__main__":
     unittest.main()

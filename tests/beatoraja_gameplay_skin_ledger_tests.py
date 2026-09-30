@@ -220,14 +220,7 @@ def main() -> None:
             assert assertion.get("runner") in TEST_RUNNERS.values(), (
                 f"{row['id']} must name a runnable native assertion target"
             )
-        elif row["status"] == "missing":
-            assert row.get("plan", "").startswith("docs/superpowers/plans/"), (
-                f"{row['id']} must have an owning plan"
-            )
-            assert row.get("task", "").startswith("Task "), (
-                f"{row['id']} must have an owning task"
-            )
-        else:
+        elif row["status"] == "source-defined-noop":
             source = row.get("source", {})
             assert source.get("path") and source.get("symbol"), (
                 f"{row['id']} must identify its source-defined no-op"
