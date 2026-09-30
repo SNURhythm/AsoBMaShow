@@ -2631,8 +2631,15 @@ void BMSRenderer::drawGhostNoteOutline(float y, const ReplayGhostEvent &event) {
 
 void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
   y = compensatedLaneY(y);
-  const float noteHeight = compensatedNoteHeight(y);
-  if (y + noteHeight < lowerBound || y > upperBound) {
+  const auto visible = image_alpha::trimBottomUp(
+      {laneToX(marker.lane), y, noteRenderWidth, compensatedNoteHeight(y)},
+      sheetForLane(marker.lane).noteVisibleBounds);
+  const float x = static_cast<float>(visible.x);
+  y = static_cast<float>(visible.y);
+  const float noteWidth = static_cast<float>(visible.width);
+  const float noteHeight = static_cast<float>(visible.height);
+  if (noteWidth <= 0.0f || noteHeight <= 0.0f ||
+      y + noteHeight < lowerBound || y > upperBound) {
     return;
   }
 
@@ -2643,10 +2650,10 @@ void BMSRenderer::drawMissMarkerX(float y, const ReplayMissMarker &marker) {
           gameplay_chart_entity_render_budget::kReplayMissMarkerCost)) {
     return;
   }
-  const float x = laneToX(marker.lane);
+  const float minimumExtent = std::min(noteWidth, noteHeight);
   const float block =
-      std::max(0.018f, std::min(noteRenderWidth, noteHeight) * 0.22f);
-  const float maxX = std::max(0.0f, noteRenderWidth - block);
+      std::min(std::max(0.018f, minimumExtent * 0.22f), minimumExtent);
+  const float maxX = std::max(0.0f, noteWidth - block);
   const float maxY = std::max(0.0f, noteHeight - block);
   const uint32_t color = Color(255, 42, 42, 236).toABGR();
 
