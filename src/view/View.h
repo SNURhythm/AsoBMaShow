@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_set>
 #include <utility>
@@ -578,6 +579,12 @@ public:
     return this;
   }
   [[nodiscard]] float getRotationDegrees() const { return rotationDegrees; }
+  // Descendant text keeps its intrinsic size for layout, then fits its drawing
+  // into the allocated content frames. Manually owned roots can opt in too.
+  View *setAutoFitText(bool enabled) {
+    autoFitText = enabled;
+    return this;
+  }
   View *setShadow(const Color &color, int offsetX, int offsetY, int spread);
   View *setShadow(const Color &color, const ui_theme::ShadowSpec &shadow);
   View *setThemedShadow(ThemeColorProvider provider, int offsetX, int offsetY,
@@ -617,6 +624,7 @@ public:
   }
 
 protected:
+  [[nodiscard]] std::optional<RenderBounds> textFitBounds() const;
   [[nodiscard]] virtual RenderBounds renderingBounds() const {
     return {.x = static_cast<float>(getX()),
             .y = static_cast<float>(getY()),
@@ -778,6 +786,7 @@ private:
   bool hasGradientBackground = false;
   bool hasBorder = false;
   bool hasShadow = false;
+  bool autoFitText = false;
   int borderWidth = 0;
   int paddingLeft = 0;
   int paddingTop = 0;

@@ -399,12 +399,15 @@ void TextView::renderImpl(RenderContext &context) {
   }
 
   SDL_Rect drawRect = resolvedTextRect();
+  if (drawRect.w <= 0 || drawRect.h <= 0) {
+    return;
+  }
   const float rotationDegrees = getRotationDegrees();
   const bool clip =
       overflow != TextOverflow::Visible && getContentWidth() > 0 &&
       getContentHeight() > 0;
   if (rotationDegrees == 0.0f && overflow == TextOverflow::Marquee &&
-      !wrapEnabled &&
+      !wrapEnabled && !textFitBounds().has_value() &&
       rect.w > getContentWidth()) {
     drawRect.x = getContentX() - static_cast<int>(
                                    std::round(marqueeOffset(getContentWidth())));
@@ -444,17 +447,30 @@ void TextView::renderImpl(RenderContext &context) {
 SDL_Rect TextView::resolvedTextRect() const {
   const int contentHeight = rect.h > 0 ? rect.h : textLineHeight();
   SDL_Rect drawRect = {getContentX(), getContentY(), rect.w, contentHeight};
-  const int width = getContentWidth();
-  const int height = getContentHeight();
+  int width = getContentWidth();
+  int height = getContentHeight();
+  if (const auto bounds = textFitBounds()) {
+    drawRect.x = static_cast<int>(bounds->x);
+    drawRect.y = static_cast<int>(bounds->y);
+    width = static_cast<int>(bounds->width);
+    height = static_cast<int>(bounds->height);
+    if (drawRect.w > 0 && drawRect.h > 0) {
+      const float scale = std::min(
+          {1.0f, static_cast<float>(width) / drawRect.w,
+           static_cast<float>(height) / drawRect.h});
+      drawRect.w = static_cast<int>(std::floor(drawRect.w * scale));
+      drawRect.h = static_cast<int>(std::floor(drawRect.h * scale));
+    }
+  }
 
   switch (align) {
   case TextAlign::LEFT:
     break;
   case TextAlign::CENTER:
-    drawRect.x += (width - rect.w) / 2;
+    drawRect.x += (width - drawRect.w) / 2;
     break;
   case TextAlign::RIGHT:
-    drawRect.x += width - rect.w;
+    drawRect.x += width - drawRect.w;
     break;
   }
 
@@ -462,10 +478,10 @@ SDL_Rect TextView::resolvedTextRect() const {
   case TextVAlign::TOP:
     break;
   case TextVAlign::MIDDLE:
-    drawRect.y += (height - contentHeight) / 2;
+    drawRect.y += (height - drawRect.h) / 2;
     break;
   case TextVAlign::BOTTOM:
-    drawRect.y += height - contentHeight;
+    drawRect.y += height - drawRect.h;
     break;
   }
 
