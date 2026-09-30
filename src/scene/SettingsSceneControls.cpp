@@ -148,31 +148,6 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 }
 } // namespace
 
-View *SettingsScene::buildAccelerationCompensationControls(
-    const LayoutMetrics &metrics) {
-  auto *compensationControls = new View();
-  compensationControls->setFlexDirection(FlexDirection::Row);
-  compensationControls->setAlignItems(YGAlignFlexStart);
-  auto *label = makeText(
-      context.settings.accelerationCompensation ? i18n::tr("settings.controls.on.label") : i18n::tr("settings.controls.off.label"),
-      metrics.bodyTextSize + 4, ui_theme::textPrimary(), TextView::CENTER,
-      TextView::MIDDLE);
-  auto *compensationButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, label);
-  applySemanticButtonStyle(compensationButton, label,
-                           context.settings.accelerationCompensation
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Info);
-  compensationButton->setOnClickListener([this]() {
-    context.settings.accelerationCompensation =
-        !context.settings.accelerationCompensation;
-    persistSettings();
-    lastLayoutWidth = -1;
-  });
-  compensationControls->addView(compensationButton);
-  return compensationControls;
-}
-
 void SettingsScene::refreshSettingsText() {
   const int offsetMs = context.settings.audioOffsetMs;
   const int visualOffsetMs = context.settings.visualOffsetMs;

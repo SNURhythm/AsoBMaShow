@@ -22,7 +22,6 @@
 #include "GameplayChartEntityRenderBudget.h"
 #include "GameplayGaugeRules.h"
 #include "GameplayNoteSubmissionOrder.h"
-#include "LanePerspectiveCompensation.h"
 #include "BuiltInPlayfieldPresentation.h"
 #include "StartLaneIndicatorGeometry.h"
 #include <bx/math.h>
@@ -91,7 +90,6 @@ struct NoteSheet {
   bgfx::TextureHandle hellChargeDamageTexture = BGFX_INVALID_HANDLE;
   NoteUvRegion note;
   image_alpha::Bounds noteVisibleBounds;
-  image_alpha::Bounds mineVisibleBounds;
   NoteUvRegion longHead;
   NoteUvRegion longBodyOff;
   NoteUvRegion longBodyOn;
@@ -325,7 +323,6 @@ private:
       terminalScrollAnchor;
   struct LongNoteLookahead {
     float headY = 0.0F;
-    bool headAtLowerBound = false;
     gameplay_note_submission_order::LongNoteOrder order;
     bool renderBudgetReserved = false;
   };
@@ -380,14 +377,6 @@ private:
   float currentGaugeBorder = 80.0f;
   float currentGaugeReducedDamageZone = 0.0f;
   bool renderLaneBeams = true;
-  bool accelerationCompensation = false;
-  gameplay_scroll_geometry::LanePerspectiveCompensation
-  lanePerspectiveCompensation(float laneTop) const;
-  float compensatedLaneY(float linearY) const;
-  float compensatedNoteHeight(float worldY) const;
-  image_alpha::Rect compensatedNoteRectangle(
-      float x, float worldY, image_alpha::Bounds visibleBounds) const;
-  float linearLaneY(float worldY) const;
   float laneCoverHispeedFactor = 1.0F;
   std::uint64_t touchLayoutRevision_ = 1;
   std::uint64_t touchHitRegionsRevision_ = 1;
@@ -454,7 +443,7 @@ private:
   void drawLongNote(
       float headY, float tailY, bms_parser::LongNote *const &head,
       gameplay_note_submission_order::LongNoteOrder order,
-      bool renderBudgetReserved, bool headAtLowerBound);
+      bool renderBudgetReserved);
   void drawNormalNote(float y, bms_parser::Note *const &note,
                       uint32_t submitDepth);
   void drawInvisibleNote(float y, bms_parser::Note *const &note,

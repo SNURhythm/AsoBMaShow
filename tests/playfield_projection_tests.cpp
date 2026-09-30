@@ -1843,7 +1843,6 @@ int main() {
       builtInPlanResult.builtInPlan.entries[3].descriptorIndex != 2U ||
       builtInPlanResult.builtInPlan.entries[4].kind !=
           BuiltInRendererPlanEntryKind::LongNote ||
-      !builtInPlanResult.builtInPlan.entries[4].headAtLowerBound ||
       !builtInPlanResult.builtInPlan.entries[4].tailAtUpperBound ||
       builtInPlanResult.builtInPlan.entries[4].renderY != -1.0F ||
       builtInPlanResult.builtInPlan.entries[4].tailRenderY != 1.5F ||

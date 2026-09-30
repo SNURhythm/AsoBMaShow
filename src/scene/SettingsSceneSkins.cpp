@@ -803,26 +803,6 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
         body->addView(row);
       };
 
-  body->addView(makeGameplaySkinChoiceRow(
-      metrics, i18n::tr("settings.skins.acceleration_compensation.label"), true,
-      {{.label = i18n::tr("settings.skins.builtin_trait.off.label"),
-        .selected = !context.settings.accelerationCompensation,
-        .action = [this]() {
-          context.settings.accelerationCompensation = false;
-          persistSettings();
-          lastLayoutWidth = -1;
-        }},
-       {.label = i18n::tr("settings.skins.builtin_trait.on.label"),
-        .selected = context.settings.accelerationCompensation,
-        .action = [this]() {
-          context.settings.accelerationCompensation = true;
-          persistSettings();
-          lastLayoutWidth = -1;
-        }}}));
-  body->addView(makeWrappedText(
-      i18n::tr("settings.skins.perspective_compensation.description"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
-
   appendNumeric(i18n::tr("settings.skins.lane_angle_deg.label"),
                 formatFloatValue(context.settings.laneAngleDegrees, 1),
                 [this](const std::string &text) {

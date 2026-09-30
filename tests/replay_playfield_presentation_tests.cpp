@@ -410,7 +410,6 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.visibleTimeUseMilliseconds = true;
   settings.notesDisplayTimingMilliseconds = -37;
   settings.laneBeamLengthPercent = 71;
-  settings.accelerationCompensation = true;
   settings.noteStartPositionPercent = 40;
   settings.showInvisibleNotes = true;
   settings.showPastNotes = true;
@@ -471,7 +470,6 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.hispeedFixMode == AppSettings::HiSpeedFixMode::Off &&
              configuration.playAreaWidth == 9.5F &&
              configuration.laneBeamLengthPercent == 71 &&
-             configuration.accelerationCompensation &&
              configuration.noteStartPositionPercent == 40 &&
              configuration.showInvisibleNotes &&
              configuration.showPastNotes &&

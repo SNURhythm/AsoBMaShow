@@ -20,7 +20,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -380,9 +379,7 @@ RenderTarget createRenderTarget() {
   return target;
 }
 
-void configureGeometryAndViews(
-    bgfx::FrameBufferHandle framebuffer,
-    float laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees) {
+void configureGeometryAndViews(bgfx::FrameBufferHandle framebuffer) {
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
   rendering::widthScale = 1.0F;
   rendering::heightScale = 1.0F;
@@ -412,7 +409,7 @@ void configureGeometryAndViews(
 
   constexpr float cameraDepth = 2.1F;
   constexpr float laneLookAtY = AppSettings::kDefaultLaneLength * 0.25F;
-  const float laneAngle = bx::toRad(laneAngleDegrees);
+  const float laneAngle = bx::toRad(AppSettings::kDefaultLaneAngleDegrees);
   const bx::Vec3 at = {gameplay_geometry::kPlayAreaCenterX, laneLookAtY, 0.0F};
   const bx::Vec3 eye = {gameplay_geometry::kPlayAreaCenterX,
                         laneLookAtY - std::tan(laneAngle) * cameraDepth,
@@ -690,17 +687,11 @@ ScenarioResult renderScenario(
     long long visualTimeMicros = kRenderMicros,
     std::uint64_t frameSerial = 0,
     bool seedPastInvisibleProbe = false,
-    bool primeRendererTraversal = false,
-    bool accelerationCompensation = false,
-    std::function<void(SyntheticChartFixture &)> configureFixture = {},
-    float laneAngleDegrees = AppSettings::kDefaultLaneAngleDegrees) {
-  configureGeometryAndViews(target.framebuffer, laneAngleDegrees);
+    bool primeRendererTraversal = false) {
+  configureGeometryAndViews(target.framebuffer);
   bgfx::touch(rendering::clear_view);
 
   SyntheticChartFixture fixture;
-  if (configureFixture) {
-    configureFixture(fixture);
-  }
   if (seedPastInvisibleProbe) {
     fixture.invisibleProbeNote->IsDead = false;
     fixture.invisibleProbeNote->IsPlayed = true;
@@ -713,8 +704,7 @@ ScenarioResult renderScenario(
   result.coverPercent = coverPercent;
   result.chart = chartJson(model);
 
-  auto configuration = presentationConfig(coverPercent);
-  configuration.accelerationCompensation = accelerationCompensation;
+  const auto configuration = presentationConfig(coverPercent);
   const auto authority = authorityFor(*fixture.chart, coverPercent);
   store.setConfiguration(configuration);
   store.applyAuthorityUpdate(authority);
@@ -846,17 +836,8 @@ ScenarioResult renderScenario(
       const float laneHeight = frame.upperBound - frame.judgeY;
       const float targetY =
           frame.judgeY + laneHeight * (1.0F - kDraggedCoverPercent / 100.0F);
-      bx::Vec3 targetScreen = rendering::game_camera.project(
+      const bx::Vec3 targetScreen = rendering::game_camera.project(
           {handleCenterX, targetY, 0.0F});
-      if (accelerationCompensation) {
-        const auto bottom = rendering::game_camera.project(
-            {handleCenterX, frame.judgeY, 0.0F});
-        const auto top = rendering::game_camera.project(
-            {handleCenterX, frame.upperBound, 0.0F});
-        const float fraction = 1.0F - kDraggedCoverPercent / 100.0F;
-        targetScreen = {bottom.x + fraction * (top.x - bottom.x),
-                        bottom.y + fraction * (top.y - bottom.y), 0.0F};
-      }
       result.dragRenderX = targetScreen.x;
       result.dragRenderY = targetScreen.y;
       result.draggedCoverPercent = renderer.dragLaneCoverHandleTo(
@@ -1716,276 +1697,6 @@ bool hasSubmission(const ScenarioResult &scenario,
       [kind](const auto &submission) { return submission.kind == kind; });
 }
 
-void verifyAccelerationCompensation(const RenderTarget &target) {
-  const auto baseline = renderScenario(target, kAfterCoverPercent, false);
-  const auto compensated = renderScenario(
-      target, kAfterCoverPercent, true, ScenarioRenderPath::Legacy,
-      kRenderMicros, 0, false, false, true);
-  const auto captured = renderScenario(
-      target, kAfterCoverPercent, true, ScenarioRenderPath::Captured,
-      kRenderMicros, 0, false, false, true);
-  const auto &frame = baseline.recorder.frames.back();
-  int checked = 0;
-  for (const auto &original : baseline.recorder.submissions) {
-    using enum characterization::SubmissionKind;
-    if (original.kind != NormalNote && original.kind != Mine &&
-        original.kind != LongHead && original.kind != LongTail &&
-        original.kind != LongBody && original.kind != MeasureLine &&
-        original.kind != InvisiblePrimitive) {
-      continue;
-    }
-    if (original.rect.y < frame.judgeY || original.rect.y > frame.upperBound ||
-        original.primitiveOrdinal != 0) {
-      continue;
-    }
-    for (const auto *result : {&compensated, &captured}) {
-      const auto found = std::ranges::find_if(result->recorder.submissions,
-          [&](const auto &draw) {
-            return draw.kind == original.kind &&
-                   draw.timelineOrdinal == original.timelineOrdinal &&
-                   draw.lane == original.lane &&
-                   draw.primitiveOrdinal == original.primitiveOrdinal;
-          });
-      expect(found != result->recorder.submissions.end(),
-             "compensated paths retain visible chart entities");
-      if (found == result->recorder.submissions.end()) {
-        continue;
-      }
-      const auto bottom = rendering::game_camera.project(
-          {original.rect.x, frame.judgeY, 0.0F});
-      const auto top = rendering::game_camera.project(
-          {original.rect.x, frame.upperBound, 0.0F});
-      const float fraction = (original.rect.y - frame.judgeY) /
-                             (frame.upperBound - frame.judgeY);
-      const auto actual = rendering::game_camera.project(
-          {found->rect.x, found->rect.y, 0.0F});
-      expect(std::abs(actual.y - (bottom.y + fraction * (top.y - bottom.y))) <
-                 0.02F,
-             "note and measure positions follow linear screen-space travel");
-      if (original.kind == LongBody &&
-          original.rect.y + original.rect.height <= frame.upperBound) {
-        const float tailFraction =
-            (original.rect.y + original.rect.height - frame.judgeY) /
-            (frame.upperBound - frame.judgeY);
-        const auto bodyEnd = rendering::game_camera.project(
-            {found->rect.x, found->rect.y + found->rect.height, 0.0F});
-        expect(std::abs(bodyEnd.y -
-                        (bottom.y + tailFraction * (top.y - bottom.y))) < 0.02F,
-               "long-note bodies connect compensated endpoints");
-      }
-      ++checked;
-    }
-  }
-  expect(checked > 10, "compensation checks exercise the real renderer");
-  expect(!compensated.rgba.empty() &&
-             compensated.rgba.size() == captured.rgba.size(),
-         "both compensated render paths produce comparable frames");
-  if (compensated.rgba.size() == captured.rgba.size()) {
-    bool matching = true;
-    for (std::size_t i = 0; i < compensated.rgba.size(); ++i) {
-      matching &= std::abs(static_cast<int>(compensated.rgba[i]) -
-                           static_cast<int>(captured.rgba[i])) <= 2;
-    }
-    expect(matching, "compensated captured and parser frames agree");
-  }
-  for (const auto *result : {&compensated, &captured}) {
-    const auto &actualFrame = result->recorder.frames.back();
-    const auto bottom = rendering::game_camera.project({4, frame.judgeY, 0});
-    const auto top = rendering::game_camera.project({4, frame.upperBound, 0});
-    const auto cover = rendering::game_camera.project(
-        {4, actualFrame.noteVisibleUpperBound, 0});
-    expect(std::abs((cover.y - bottom.y) / (top.y - bottom.y) -
-                    (1.0F - kAfterCoverPercent / 100.0F)) < 0.0001F,
-           "compensated lane cover preserves the visible travel fraction");
-    expect(result->draggedCoverPercent == kDraggedCoverPercent,
-           "compensated lane cover dragging inverts the projection");
-  }
-}
-
-void verifyCompensatedNoteGaps(const RenderTarget &target) {
-  std::vector<unsigned char> sprite;
-  unsigned spriteWidth = 0;
-  unsigned spriteHeight = 0;
-  expect(lodepng::decode(sprite, spriteWidth, spriteHeight,
-                         "assets/img/simple_gray.png") == 0,
-         "gap regression loads the actual built-in note sprite");
-  const auto visibleBounds = image_alpha::visibleBounds(
-      sprite, spriteWidth, spriteHeight, 0, 0, 128, 40);
-  for (const auto [path, laneAngleDegrees] : {
-           std::pair{ScenarioRenderPath::Legacy,
-                     AppSettings::kDefaultLaneAngleDegrees},
-           std::pair{ScenarioRenderPath::Captured,
-                     AppSettings::kDefaultLaneAngleDegrees},
-           std::pair{ScenarioRenderPath::Legacy,
-                     AppSettings::kMaxLaneAngleDegrees},
-           std::pair{ScenarioRenderPath::Captured,
-                     AppSettings::kMaxLaneAngleDegrees}}) {
-    std::optional<float> previousGap;
-    std::optional<float> previousHeight;
-    std::vector<int> pixelHeights;
-    std::vector<int> pixelGaps;
-    for (const auto time : {1'650'000LL, 1'790'000LL}) {
-      const auto result = renderScenario(
-          target, 0, true, path, time, 3, false, false, true,
-          [](SyntheticChartFixture &fixture) {
-            auto *measure = fixture.chart->Measures.front();
-            for (const auto noteTime : {1'800'000LL, 2'000'000LL, 2'200'000LL}) {
-              auto found = std::ranges::find_if(measure->TimeLines,
-                  [noteTime](const auto *timeline) {
-                    return timeline->Timing == noteTime;
-                  });
-              bms_parser::TimeLine *timeline = nullptr;
-              if (found != measure->TimeLines.end()) {
-                timeline = *found;
-              } else {
-                timeline = new bms_parser::TimeLine(16, false);
-                timeline->Timing = noteTime;
-                timeline->BeatPosition = noteTime / 500'000.0;
-                timeline->Bpm = 120.0;
-                timeline->Scroll = 1.0;
-                measure->TimeLines.push_back(timeline);
-              }
-              timeline->SetNote(2, new bms_parser::Note(bms_parser::Parser::NoWav));
-            }
-            std::ranges::sort(measure->TimeLines, {},
-                              &bms_parser::TimeLine::Timing);
-            fixture.chart->Meta.TotalNotes += 3;
-          }, laneAngleDegrees);
-      std::vector<characterization::Submission> notes;
-      for (const auto &draw : result.recorder.submissions) {
-        if (draw.kind == characterization::SubmissionKind::NormalNote &&
-            draw.lane == 2 && draw.timelineMicros >= 1'800'000) {
-          notes.push_back(draw);
-        }
-      }
-      std::ranges::sort(notes, {}, &characterization::Submission::timelineMicros);
-      expect(notes.size() == 3, "equal-time gap probe renders all three notes");
-      std::vector<std::pair<int, int>> pixelExtents;
-      for (const auto &note : notes) {
-        const auto &rect = note.rect;
-        const auto visible = image_alpha::trimBottomUp(
-            {rect.x, rect.y, rect.width, rect.height}, visibleBounds);
-        const float height = rendering::game_camera.project(
-                                 {float(visible.x), float(visible.y), 0}).y -
-                             rendering::game_camera.project(
-                                 {float(visible.x),
-                                  float(visible.y + visible.height), 0}).y;
-        if (previousHeight) {
-          expect(std::abs(height - *previousHeight) < 0.02F,
-                 "visible note pixels retain constant projected height");
-        }
-        previousHeight = height;
-
-        const auto bottom = rendering::game_camera.project(
-            {rect.x + rect.width * 0.5F, rect.y, 0});
-        const auto top = rendering::game_camera.project(
-            {rect.x + rect.width * 0.5F, rect.y + rect.height, 0});
-        int firstPixel = kDrawableHeight;
-        int lastPixel = -1;
-        for (int y = std::max(0, int(std::floor(top.y)));
-             y <= std::min(int(kDrawableHeight) - 1, int(std::ceil(bottom.y)));
-             ++y) {
-          const float fraction = (y + 0.5F - top.y) / (bottom.y - top.y);
-          const int x = std::clamp(int(top.x + fraction * (bottom.x - top.x)),
-                                   0, int(kDrawableWidth) - 1);
-          const auto offset = (y * kDrawableWidth + x) * 4;
-          const int r = result.rgba[offset];
-          const int g = result.rgba[offset + 1];
-          const int b = result.rgba[offset + 2];
-          // The center of the real gray note is RGB 204. Ignore the dark
-          // lane and colored HUD; include the antialiased opaque edge.
-          if (r >= 160 && r <= 224 && std::abs(r - g) <= 2 &&
-              std::abs(r - b) <= 2) {
-            firstPixel = std::min(firstPixel, y);
-            lastPixel = std::max(lastPixel, y);
-          }
-        }
-        expect(lastPixel >= firstPixel,
-               "pixel readback contains the visible gray note strip");
-        if (lastPixel >= firstPixel) {
-          pixelExtents.emplace_back(firstPixel, lastPixel);
-          pixelHeights.push_back(lastPixel - firstPixel + 1);
-          expect(std::abs((lastPixel - firstPixel + 1) - height) <= 1.0F,
-                 "Metal readback matches the alpha-bound projected height");
-        }
-      }
-      for (std::size_t i = 1; i < pixelExtents.size(); ++i) {
-        pixelGaps.push_back(pixelExtents[i - 1].first -
-                           pixelExtents[i].second - 1);
-      }
-      for (std::size_t i = 1; i < notes.size(); ++i) {
-        const auto &nearRect = notes[i - 1].rect;
-        const auto &farRect = notes[i].rect;
-        const auto near = image_alpha::trimBottomUp(
-            {nearRect.x, nearRect.y, nearRect.width, nearRect.height},
-            visibleBounds);
-        const auto far = image_alpha::trimBottomUp(
-            {farRect.x, farRect.y, farRect.width, farRect.height},
-            visibleBounds);
-        const float gap = rendering::game_camera.project(
-                              {float(near.x), float(near.y + near.height), 0}).y -
-                          rendering::game_camera.project(
-                              {float(far.x), float(far.y), 0}).y;
-        expect(gap > 0.0F, "gap probe notes remain visually separated");
-        if (previousGap) {
-          expect(std::abs(gap - *previousGap) < 0.02F,
-                 "equal-time notes preserve edge-to-edge screen gaps along "
-                 "the lane and while approaching judgement");
-        }
-        previousGap = gap;
-      }
-    }
-    if (!pixelHeights.empty() && !pixelGaps.empty()) {
-      const auto [minHeight, maxHeight] = std::ranges::minmax(pixelHeights);
-      const auto [minGap, maxGap] = std::ranges::minmax(pixelGaps);
-      expect(maxHeight - minHeight <= 1,
-             "visible pixel heights vary by at most one rasterization pixel");
-      expect(maxGap - minGap <= 2,
-             "visible pixel gaps stay equal within edge rasterization rounding");
-    }
-  }
-}
-
-void verifyCompensatedMissedLongNotes(const RenderTarget &target) {
-  for (const bool held : {false, true}) {
-    for (const auto time : {1'750'000LL, 2'125'000LL, 2'625'000LL, 3'250'000LL}) {
-      for (const auto path : {ScenarioRenderPath::Legacy,
-                              ScenarioRenderPath::Captured}) {
-        const auto result = renderScenario(
-            target, kAfterCoverPercent, false, path, time, 3, false, true, true,
-            [held](SyntheticChartFixture &fixture) {
-              for (auto *note : chartVisualNoteSources(*fixture.chart)) {
-                auto *longNote = dynamic_cast<bms_parser::LongNote *>(note);
-                if (longNote == nullptr || longNote->IsTail()) {
-                  continue;
-                }
-                longNote->IsDead = !held;
-                longNote->IsPlayed = held;
-                longNote->IsHolding = held;
-                longNote->Tail->IsHolding = held;
-              }
-            });
-        const auto &frame = result.recorder.frames.back();
-        int bodies = 0;
-        for (const auto &draw : result.recorder.submissions) {
-          if (draw.kind != characterization::SubmissionKind::LongBody) {
-            continue;
-          }
-          ++bodies;
-          expect(std::abs(draw.rect.y -
-                          (held ? frame.judgeY : frame.lowerBound)) < 0.0001F,
-                 held ? "held compensated long notes stay at judgement"
-                      : "missed compensated long notes extend to the world "
-                        "clipping boundary, not toward judgement");
-          expect(draw.rect.height > 0.0F,
-                 "remaining long-note body stays visible before its tail");
-        }
-        expect(bodies == 3, "LN, CN, and HCN bodies survive after the head");
-      }
-    }
-  }
-}
-
 void verifyBehavioralCoverage(const ScenarioResult &before,
                               const ScenarioResult &after) {
   expect(after.chart.at("laneOrder") == Json::array({7, 0, 1, 2, 3, 4, 5, 6}),
@@ -2257,9 +1968,6 @@ int main() {
 
   if (failures == 0) {
     try {
-      verifyAccelerationCompensation(target);
-      verifyCompensatedNoteGaps(target);
-      verifyCompensatedMissedLongNotes(target);
       verifyPreparedPresentationIsOneShot(target);
       verifyRenderDoesNotRewindPreparedTraversal(target);
       verifySerialOrderingAndReset();
