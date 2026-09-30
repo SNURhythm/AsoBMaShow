@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -113,6 +114,53 @@ void testEmptyInputHasNoClearHitTarget() {
   expect(input.getSelected(),
          "empty input trailing edge remains part of the text field");
   input.onUnselected();
+}
+
+void testEmptyInputKeepsItsVisibleFrame() {
+  struct RecordingBackend final : rendering::UiBatchBackend {
+    std::vector<rendering::PosColorVertex> vertices;
+
+    bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+      vertices.insert(vertices.end(), submission.colorVertices.begin(),
+                      submission.colorVertices.end());
+      return true;
+    }
+  } backend;
+  rendering::UiBatchRenderer renderer(backend);
+  RenderContext context(renderer);
+  context.pushScissor(0, 0, 300, 100);
+
+  TextInputBox input("assets/fonts/notosanscjkjp.ttf", 18);
+  input.setSize(240, 52);
+  input.setBackgroundColor(Color(20, 30, 40, 255));
+  input.setBorderColor(Color(80, 90, 100, 255));
+  input.setBorderWidth(1);
+  input.applyYogaLayout();
+
+  for (const char *value : {"", "query", ""}) {
+    input.setEditingText(value);
+    renderer.begin();
+    backend.vertices.clear();
+    input.render(context);
+    renderer.end();
+
+    bool paintedBackground = false;
+    bool paintedBorder = false;
+    for (const auto &vertex : backend.vertices) {
+      paintedBackground |= vertex.abgr == Color(20, 30, 40, 255).toABGR();
+      paintedBorder |= vertex.abgr == Color(80, 90, 100, 255).toABGR();
+    }
+    expect(paintedBackground && paintedBorder,
+           "input paints its background and border before typing and after "
+           "clearing");
+    expect(input.getWidth() == 240 && input.getHeight() == 52,
+           "clearing text preserves the input layout frame");
+  }
+
+  click(input, 120, 26);
+  expect(input.getSelected(), "cleared input remains clickable");
+  input.onUnselected();
+  context.popScissor();
 }
 
 void testFocusedInputConsumesItsInitiatingTouch() {
@@ -224,12 +272,14 @@ int main() {
   testDefaultHorizontalPadding();
   testClearButtonVisibilityAndCallback();
   testEmptyInputHasNoClearHitTarget();
+  testEmptyInputKeepsItsVisibleFrame();
   testFocusedInputConsumesItsInitiatingTouch();
   testBeginEditingUsesTheLatestDeclaredInputFrame();
   testDeferredTextKeepsRasterizedLineHeight();
   testDeferredWrappedTextKeepsRasterizedLineHeight();
 
   TextInputBox::releaseCachedCursors();
+  rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   return 0;

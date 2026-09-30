@@ -93,7 +93,7 @@ public:
   static constexpr float kMinBgaBlurStrength = 0.0f;
   static constexpr float kMaxBgaBlurStrength = 8.0f;
   static constexpr float kDefaultBgaBlurStrength = 2.0f;
-  static constexpr float kMinLaneAngleDegrees = 4.0f;
+  static constexpr float kMinLaneAngleDegrees = 0.0f;
   static constexpr float kMaxLaneAngleDegrees = 28.0f;
   static constexpr float kDefaultLaneAngleDegrees = 13.4f;
   static constexpr float kMinLaneLength = 5.0f;

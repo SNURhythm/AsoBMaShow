@@ -456,11 +456,17 @@ SDL_Rect TextView::resolvedTextRect() const {
 }
 
 View::RenderBounds TextView::renderingBounds() const {
+  const RenderBounds frame = View::renderingBounds();
   const SDL_Rect drawRect = resolvedTextRect();
-  return {.x = static_cast<float>(drawRect.x),
-          .y = static_cast<float>(drawRect.y),
-          .width = static_cast<float>(drawRect.w),
-          .height = static_cast<float>(drawRect.h)};
+  // Decorations and input carets still paint when there are no glyphs.
+  // Include overflowing text as well as the view's own frame when culling.
+  const float left = std::min(frame.x, static_cast<float>(drawRect.x));
+  const float top = std::min(frame.y, static_cast<float>(drawRect.y));
+  const float right = std::max(frame.x + frame.width,
+                               static_cast<float>(drawRect.x + drawRect.w));
+  const float bottom = std::max(frame.y + frame.height,
+                                static_cast<float>(drawRect.y + drawRect.h));
+  return {.x = left, .y = top, .width = right - left, .height = bottom - top};
 }
 
 int TextView::textLineHeight() const {
