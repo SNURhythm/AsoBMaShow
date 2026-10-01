@@ -1418,6 +1418,53 @@ void testSuspendFreezesAutomaticDeadlinesUntilResume() {
   worker.stop();
 }
 
+template <typename Worker> bool requestSuspension(Worker &worker) {
+  if constexpr (requires { worker.requestSuspend(); }) {
+    return worker.requestSuspend();
+  }
+  return false;
+}
+
+void testProducerSuspensionProtectsHeldNotesDuringMainThreadStall() {
+  FakeClock clock;
+  FakeAudio audio;
+  gameplay::RealtimeGameplayWorker worker(makeScratchLongDefinition(),
+                                           makeConfig(clock, audio));
+  require(worker.start(), "interruption suspension fixture starts");
+  clock.nowMicros = 1'000'000;
+  require(worker.enqueueInput({.epoch = 7,
+      .type = gameplay::RealtimeGameplayInputType::Press, .lane = 7,
+      .steadyTimestampMicros = 1'000'000}), "long head enters worker");
+  require(waitUntil([&] {
+    return worker.acquireLatestSnapshot()->noteStates.front().holding;
+  }), "head holds before native interruption");
+  require(requestSuspension(worker),
+          "native producer can request suspension without waiting for the main thread");
+  clock.nowMicros = 4'000'000;
+  std::this_thread::sleep_for(30ms);
+  require(worker.suspend() && worker.suspend(),
+          "main thread joins an existing suspension request idempotently");
+  {
+    const auto snapshot = worker.acquireLatestSnapshot();
+    require(snapshot->noteStates.front().holding &&
+                !snapshot->noteStates.back().played &&
+                snapshot->attempt.judgeCounts[Poor] == 0,
+            "a stalled main thread cannot release held notes or advance automatic misses after interruption");
+  }
+  clock.nowMicros = 1'000'000;
+  require(worker.resume(), "explicit resume returns to the frozen chart clock");
+  require(worker.enqueueInput({.epoch = 7,
+      .type = gameplay::RealtimeGameplayInputType::Release, .lane = 7,
+      .backSpin = true, .steadyTimestampMicros = 2'000'000}),
+      "post-resume release is accepted");
+  require(waitUntil([&] {
+    return worker.acquireLatestSnapshot()->noteStates.back().played;
+  }), "the same attempt completes the held note after resume");
+  require(worker.fault() == gameplay::RealtimeGameplayFault::None,
+          "recoverable suspension keeps scoring and replay authority valid");
+  worker.stop();
+}
+
 void testActivationGateAllowsPreparationFeedbackButNoGameplay() {
   FakeClock clock;
   FakeAudio audio;
@@ -1845,6 +1892,7 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
 } // namespace
 
 int main() {
+  testProducerSuspensionProtectsHeldNotesDuringMainThreadStall();
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   testWorkerRecordsMeasuredIngressAndSoundStages();
 #endif

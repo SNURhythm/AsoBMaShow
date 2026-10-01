@@ -20,7 +20,7 @@ void require(bool value, const char *message) {
 
 class Backend final : public IInputBackend {
 public:
-  explicit Backend(input::InputBackendSink sink) : IInputBackend(std::move(sink)) {}
+  explicit Backend(input::InputBackendSink sink) : IInputBackend(sink), retainedSink(std::move(sink)) {}
   bool start(std::string &) override { return true; }
   void stop() override {}
   void pump() override {}
@@ -32,14 +32,34 @@ public:
   void sendDevice() {
     publishDevice({.stableId = "keyboard", .deviceClass = input::DeviceClass::Keyboard});
   }
+  template <typename Sink> static void interrupt(Sink &sink, bool ready) {
+    if constexpr (requires { sink.enqueueInterruption; }) {
+      sink.enqueueInterruption({input::DeviceClass::Keyboard, 1234, ready});
+    }
+  }
+  void sendInterruption(bool ready = false) { interrupt(retainedSink, ready); }
+  input::InputBackendSink retainedSink;
   void setRealtimeInputClaimed(input::DeviceClass deviceClass, bool claimed) override {
     claims.emplace_back(deviceClass, claimed);
     if (claimed && failClaim == deviceClass) throw std::runtime_error("backend activation failed");
+    if (claimed && interruptDuringClaim) {
+      sendInterruption();
+      sendInterruption(true);
+    }
     if (!claimed) sendInput();
   }
+  bool interruptDuringClaim = false;
   std::vector<std::pair<input::DeviceClass, bool>> claims;
   std::optional<input::DeviceClass> failClaim;
 };
+
+template <typename Configuration, typename Callback>
+void setInterruptionCallback(Configuration &configuration, Callback callback) {
+  if constexpr (requires { configuration.onInterruption; }) {
+    configuration.onInterruption = std::move(callback);
+  }
+}
+
 
 struct Fixture {
   Backend *backend = nullptr;
@@ -79,6 +99,50 @@ struct Fixture {
     return result;
   }
 };
+
+void testInterruptionArrivesBeforeReleaseAndDetachesWithRegistration() {
+  Fixture fixture;
+  std::vector<int> order;
+  auto config = fixture.configuration();
+  setInterruptionCallback(config, [&](const auto &event) {
+    require(event.deviceClass == input::DeviceClass::Keyboard &&
+                event.timestampMicros == 1234,
+            "interruption keeps its originating device class and measured time");
+    order.push_back(event.fallbackReady ? 3 : 1);
+  });
+  config.onInput = [&](const auto &) { order.push_back(2); };
+  gameplay::RealtimeGameplayInputRegistration registration(
+      fixture.registry, fixture.accepting, std::move(config));
+  fixture.backend->sendInterruption();
+  require(order.empty(), "unactivated gameplay ignores backend interruption");
+  require(registration.activate(), "interruption fixture activates");
+  fixture.backend->sendInterruption();
+  fixture.backend->sendInput();
+  fixture.backend->sendInterruption(true);
+  require(order == std::vector<int>({1, 2, 3}),
+          "producer interruption gates gameplay before held releases and announces fallback readiness");
+  registration.close();
+  registration.close();
+  fixture.accepting = true;
+  fixture.backend->sendInterruption();
+  require(order == std::vector<int>({1, 2, 3}),
+          "closed registration never retains an interruption callback");
+}
+
+void testFailureDuringClaimReachesNewGameplayOwner() {
+  Fixture fixture;
+  int interruptions = 0;
+  auto config = fixture.configuration();
+  setInterruptionCallback(config, [&](const auto &) { ++interruptions; });
+  gameplay::RealtimeGameplayInputRegistration registration(
+      fixture.registry, fixture.accepting, std::move(config));
+  fixture.backend->sendInterruption();
+  fixture.backend->sendInterruption(true);
+  require(interruptions == 0, "source loss in menus does not pause unactivated gameplay");
+  fixture.backend->interruptDuringClaim = true;
+  require(registration.activate() && interruptions == 2,
+          "a backend detecting unresolved source loss during claim reaches the new owner immediately");
+}
 
 void testRegistrationActivationAndClosePreserveRouting() {
   Fixture fixture;
@@ -206,6 +270,7 @@ void testCloseWaitsForInFlightCallback(int source) {
   };
   config.onInput = [&](const auto &) { if (source == 0) callback(); };
   config.onDevice = [&](const auto &) { if (source == 1) callback(); };
+  setInterruptionCallback(config, [&](const auto &) { if (source == 3) callback(); });
   fixture.onWatch = [&] { if (source == 2) callback(); };
   gameplay::RealtimeGameplayInputRegistration registration(
       fixture.registry, fixture.accepting, std::move(config));
@@ -213,7 +278,8 @@ void testCloseWaitsForInFlightCallback(int source) {
   const auto emit = [&] {
     if (source == 0) fixture.backend->sendInput();
     else if (source == 1) fixture.backend->sendDevice();
-    else fixture.pushEvent();
+    else if (source == 2) fixture.pushEvent();
+    else fixture.backend->sendInterruption();
   };
   auto producer = std::async(std::launch::async, emit);
   {
@@ -243,6 +309,8 @@ void testCloseWaitsForInFlightCallback(int source) {
 int main() {
   if (SDL_Init(SDL_INIT_EVENTS) != 0) return 1;
   try {
+    testInterruptionArrivesBeforeReleaseAndDetachesWithRegistration();
+    testFailureDuringClaimReachesNewGameplayOwner();
     testRegistrationActivationAndClosePreserveRouting();
     testDestructionAndUnactivatedCloseReleaseRegistrations();
     testPartialStartupRollsBackBeforeRethrowing();
@@ -250,6 +318,7 @@ int main() {
     testCloseWaitsForInFlightCallback(0);
     testCloseWaitsForInFlightCallback(1);
     testCloseWaitsForInFlightCallback(2);
+    testCloseWaitsForInFlightCallback(3);
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     SDL_Quit();

@@ -100,6 +100,8 @@ private:
       std::optional<long long> cancelPresentationAtSteadyMicros =
           std::nullopt);
   void drainRealtimeInputCommands();
+  bool drainRealtimeInputInterruption();
+  bool inputInterruptionPause = false;
   void drainRealtimeStartSelectInputs();
   void refreshRealtimeTouchLayout();
   void refreshGameplayPresentationGeometry();

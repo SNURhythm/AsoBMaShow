@@ -25,6 +25,7 @@ def main():
     signatures = [
         "void GamePlayScene::showPauseMenu(",
         "void GamePlayScene::closePauseMenu()",
+        "bool GamePlayScene::drainRealtimeInputInterruption()",
         "void GamePlayScene::togglePauseMenuFromInput()",
         "void GamePlayScene::restartCurrentPattern()",
         "void GamePlayScene::update(float dt)",
@@ -63,6 +64,8 @@ def main():
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
     methods += "\n\n".join(extract(source, signature) for signature in signatures)
+    interruption = extract(source, "  void interruptInput(const input::InputInterruption &interruption)")
+    methods += "\n" + interruption.replace("  void interruptInput(", "void FixtureRealtimeSession::interruptInput(", 1)
     reset_boundary = extract(source, "bool GamePlayScene::reset()")
     reset_boundary = reset_boundary[reset_boundary.index("{") + 1:
                                     reset_boundary.index("  ownedState.reset();")]

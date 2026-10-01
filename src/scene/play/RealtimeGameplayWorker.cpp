@@ -132,19 +132,28 @@ void RealtimeGameplayWorker::stop() {
   started_.store(false, std::memory_order_release);
 }
 
-bool RealtimeGameplayWorker::suspend() {
+bool RealtimeGameplayWorker::requestSuspend() noexcept {
   if (!running()) {
     return false;
   }
-  if (suspendRequested_.exchange(true, std::memory_order_acq_rel)) {
-    return suspended_.load(std::memory_order_acquire);
+  if (!suspendRequested_.load(std::memory_order_acquire)) {
+    // An idempotent waiter can observe suspended_ just before its wake token
+    // is published. Retire that completed cycle before requesting another.
+    (void)suspendAcknowledged_.try_acquire();
   }
-  signal();
+  if (!suspendRequested_.exchange(true, std::memory_order_acq_rel)) signal();
+  return true;
+}
+
+bool RealtimeGameplayWorker::suspend() {
+  if (!requestSuspend()) return false;
   using namespace std::chrono_literals;
   while (running()) {
-    if (suspendAcknowledged_.try_acquire_for(10ms)) {
-      return suspended_.load(std::memory_order_acquire);
+    if (suspended_.load(std::memory_order_acquire)) {
+      (void)suspendAcknowledged_.try_acquire();
+      return true;
     }
+    (void)suspendAcknowledged_.try_acquire_for(10ms);
   }
   return false;
 }
@@ -291,7 +300,8 @@ void RealtimeGameplayWorker::run() {
       break;
     }
 
-    while (ingress_.tryPop(input)) {
+    while (!suspendRequested_.load(std::memory_order_acquire) &&
+           ingress_.tryPop(input)) {
       processInput(input);
       publishSnapshot();
       if (fault() != RealtimeGameplayFault::None) {
@@ -666,11 +676,13 @@ bool RealtimeGameplayWorker::commitAutomaticTransactions(
 }
 
 bool RealtimeGameplayWorker::advanceAutomatic() {
-  if (config_.clock.currentSongTime == nullptr) {
+  if (config_.clock.currentSongTime == nullptr ||
+      suspendRequested_.load(std::memory_order_acquire)) {
     return false;
   }
   const auto songTime =
       config_.clock.currentSongTime(config_.clock.context);
+  if (suspendRequested_.load(std::memory_order_acquire)) return false;
   if (!songTime.has_value()) {
     latchFault(RealtimeGameplayFault::ClockUnavailable);
     return true;

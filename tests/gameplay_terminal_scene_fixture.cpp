@@ -6,6 +6,7 @@
 #include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/RealtimeGameplayWorker.h"
 #include "scene/play/RealtimeGameplayInputRegistration.h"
+#include "input/RealtimePhysicalInputRouter.h"
 #include "scene/play/PlayfieldPresentationEvents.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
@@ -45,10 +46,12 @@ void require(bool condition, std::string_view message) {
 struct FixtureJukebox {
   long long time = 0;
   bool paused = false;
+  std::function<void()> beforeResume;
   long long getTimeMicros() const { return time; }
   void stop() {}
   void pause() { paused = true; }
-  void resume() { paused = false; }
+  void pauseClock() { paused = true; }
+  void resume() { if (beforeResume) beforeResume(); paused = false; }
   bool isPaused() const { return paused; }
   void playKeySound(int) { require(false, "Watch must not request live keysounds"); }
 };
@@ -77,6 +80,7 @@ struct FixtureWorker {
   }
   std::function<void()> beforeStop;
   bool suspend() { return native ? native->suspend() : true; }
+  bool requestSuspend() { return native ? native->requestSuspend() : true; }
   bool resume() { return native ? native->resume() : true; }
   void stop() {
     if (beforeStop) beforeStop();
@@ -89,6 +93,14 @@ struct FixtureWorker {
 };
 
 struct FixtureRealtimeSession {
+  std::mutex inputInterruptionMutex;
+  FixtureJukebox *audio = nullptr;
+  std::unique_ptr<input::RealtimePhysicalInputRouter> physicalInputRouter;
+  std::atomic_bool inputInterrupted{false};
+  std::atomic_bool inputFallbackReady{false};
+  std::atomic_bool inputInterruptionAcknowledged{false};
+  gameplay::BoundedMpscQueue<input::LogicalInputTransition, 16> inputCommands;
+  void interruptInput(const input::InputInterruption &interruption);
   std::mutex touchRouterMutex;
   std::unique_ptr<FixtureTouchRouter> touchRouter;
   std::atomic_bool acceptingTouch{false};
@@ -134,7 +146,11 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
-    struct { void resetGyroscopeTurntableSession() {} } inputDeviceRegistry;
+    struct {
+      int fallbackCompletions = 0;
+      void resetGyroscopeTurntableSession() {}
+      void completeRealtimeInputFallback() { ++fallbackCompletions; }
+    } inputDeviceRegistry;
   } context;
   FixtureInput *inputHandler = nullptr;
   std::unique_ptr<FixtureRealtimeSession> realtimeGameplaySession;
@@ -208,7 +224,9 @@ public:
 
   void update(float dt);
   void showPauseMenu(bool pausePlayback);
+  bool inputInterruptionPause = false;
   void closePauseMenu();
+  bool drainRealtimeInputInterruption();
   void togglePauseMenuFromInput();
   void restartCurrentPattern();
   void resetAttemptBoundaryForTest();
@@ -237,6 +255,13 @@ public:
   std::function<void()> onTouchDrain;
   void setRealtimeGameplayIngressEnabled(bool enabled) {
     if (!enabled && onIngressClosed) onIngressClosed();
+    if (realtimeGameplaySession) {
+      const std::lock_guard lock(realtimeGameplaySession->inputInterruptionMutex);
+      if (realtimeGameplaySession->physicalInputRouter &&
+          (!enabled || !realtimeGameplaySession->inputInterrupted.load())) {
+        realtimeGameplaySession->physicalInputRouter->setGameplayEnabled(enabled, clock);
+      }
+    }
   }
   void drainRealtimeTouchSamples() { if (onTouchDrain) onTouchDrain(); }
   long long nowMicros() const { return clock; }
@@ -1382,6 +1407,120 @@ void testStoppedWorkerAbortWatch(bool pastChartEnd = false) {
           "T2-R3: ordinary non-abort survival playback still terminates on its first failure");
 }
 
+void testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume() {
+  TerminalWorkerClock clock;
+  GamePlayScene scene;
+  scene.context.jukebox.time = 2'050'000;
+  scene.clock = 2'050'000;
+  scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  auto &session = *scene.realtimeGameplaySession;
+  session.audio = &scene.context.jukebox;
+  session.notes = buildRealtimeGameplayNoteLookup(*scene.chart);
+  const auto policy = buildGameplayRulesetPolicyAtPlayStart(
+      scene.options, scene.chart->Meta, AppSettings::NotePriorityMode::Lowest);
+  require(policy.built(), policy.diagnostic);
+  session.worker = std::make_unique<FixtureWorker>();
+  session.worker->native = std::make_unique<gameplay::RealtimeGameplayWorker>(
+      gameplay::buildGameplayDefinition(*scene.chart, 1),
+      gameplay::RealtimeGameplayWorkerConfig{
+          .epoch = 17,
+          .simulation = {.judge = policy.policy->judge, .gaugeRules = policy.policy->gauge,
+                         .attempt = {.replayCapacity = 128, .automaticResultCapacity = 128,
+                                     .gaugeHistoryCapacity = 128}},
+          .clock = {.context = &clock, .mapSteadyToSong = &TerminalWorkerClock::map,
+                    .currentSongTime = &TerminalWorkerClock::now},
+          .inputTriggeredKeysounds = false});
+  auto &worker = *session.worker->native;
+  InputProfile profile;
+  profile.bindings.push_back({
+      .id = "interrupted-key", .scope = {.player = 1, .keyMode = 7},
+      .action = {.kind = input::LogicalActionKind::Lane, .lane = 0},
+      .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key, .index = SDL_SCANCODE_S}});
+  session.physicalInputRouter = std::make_unique<input::RealtimePhysicalInputRouter>(
+      profile, makeGameplayInputScopes(7), [&](const auto &transition) {
+        return worker.enqueueInput({.epoch = 17,
+            .type = transition.type == input::RealtimePhysicalInputTransitionType::Press
+                ? gameplay::RealtimeGameplayInputType::Press : gameplay::RealtimeGameplayInputType::Release,
+            .source = gameplay::RealtimeGameplayInputSource::Physical,
+            .lane = transition.lane, .steadyTimestampMicros = transition.steadyTimestampMicros,
+            .hasReplayControl = transition.hasReplayControl,
+            .replayControl = transition.replayControl});
+      });
+  require(worker.start(), "interruption worker starts");
+  scene.setRealtimeGameplayIngressEnabled(true);
+  input::PhysicalInputEvent key{
+      .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
+                  .kind = input::ControlKind::Key, .index = SDL_SCANCODE_S},
+      .rawValue = 1.0, .normalizedValue = 1.0f};
+  session.physicalInputRouter->consume(key, 2'000'000);
+  requireWorkerState([&] { return worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1; });
+  const auto accepted = worker.acquireLatestSnapshot()->transactionSequence;
+  session.interruptInput({input::DeviceClass::Keyboard, 2'050'000, false});
+  require(scene.context.jukebox.isPaused(), "actual interruption handler freezes audio immediately");
+  key.rawValue = key.normalizedValue = 0;
+  session.physicalInputRouter->consume(key, 2'050'000);
+  scene.closePauseMenu();
+  require(scene.context.jukebox.isPaused(), "resume cannot race an incomplete fallback handoff");
+  session.interruptInput({input::DeviceClass::Keyboard, 2'050'000, true});
+  clock.songTimeMicros = 10'000'000;
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  // A fresh fallback press/release while the main thread is stalled is tracked
+  // by the real router but cannot enter scoring or become a delayed new hit.
+  key.rawValue = key.normalizedValue = 1;
+  session.physicalInputRouter->consume(key, 2'060'000);
+  key.rawValue = key.normalizedValue = 0;
+  session.physicalInputRouter->consume(key, 2'070'000);
+  scene.update(0);
+  require(scene.inputInterruptionPause && scene.context.jukebox.isPaused() &&
+              scene.context.inputDeviceRegistry.fallbackCompletions == 1,
+          "main recovery completes fallback once and leaves the same attempt paused");
+  const auto paused = worker.acquireLatestSnapshot();
+  require(paused->transactionSequence == accepted && paused->attempt.judgeCounts[PGreat] == 1 &&
+              paused->attempt.judgeCounts[Poor] == 0 && !paused->noteStates.back().played,
+          "native release and fresh paused fallback input do not judge or lose an existing score");
+  clock.songTimeMicros = 2'050'000;
+  scene.closePauseMenu();
+  require(!scene.context.jukebox.isPaused() && !session.inputInterrupted,
+          "explicit resume reopens gameplay without replacing the attempt");
+  requireWorkerState([&] { return worker.acquireLatestSnapshot()->transactionSequence > accepted; });
+  require(worker.acquireLatestSnapshot()->attempt.judgeCounts[PGreat] == 1 &&
+              worker.fault() == gameplay::RealtimeGameplayFault::None,
+          "held release reconciliation keeps the score and authority valid");
+  worker.stop();
+}
+
+void testNativeFailureRacingOrdinaryPauseResumeIsNotCleared() {
+  GamePlayScene scene;
+  scene.realtimeGameplaySession = std::make_unique<FixtureRealtimeSession>();
+  auto &session = *scene.realtimeGameplaySession;
+  session.audio = &scene.context.jukebox;
+  session.worker = std::make_unique<FixtureWorker>();
+  scene.context.jukebox.paused = true;
+  std::atomic_bool failureStarted{false};
+  std::thread native;
+  scene.context.jukebox.beforeResume = [&] {
+    native = std::thread([&] {
+      failureStarted.store(true, std::memory_order_release);
+      session.interruptInput({input::DeviceClass::Keyboard, 1'000'000, false});
+      session.interruptInput({input::DeviceClass::Keyboard, 1'000'000, true});
+    });
+    while (!failureStarted.load(std::memory_order_acquire)) std::this_thread::yield();
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  };
+  scene.closePauseMenu();
+  native.join();
+  scene.context.jukebox.beforeResume = {};
+  require(session.inputInterrupted && session.inputFallbackReady &&
+              scene.context.jukebox.isPaused(),
+          "failure concurrent with normal resume retains its pause and ready notification");
+  require(scene.drainRealtimeInputInterruption() && scene.inputInterruptionPause,
+          "the raced interruption still reaches the main-thread pause UI");
+  scene.closePauseMenu();
+  require(!session.inputInterrupted && !scene.context.jukebox.isPaused(),
+          "only a later explicit resume clears the recovered interruption");
+}
+
 #include "course_preparation_scene_fixture.h"
 #include "chart_preparation_scene_fixture.h"
 
@@ -1391,6 +1530,22 @@ PREPARATION_IMPLEMENTATIONS
 FLIP_IMPLEMENTATIONS
 
 int main(int argc, char **argv) {
+  testNativeFailureRacingOrdinaryPauseResumeIsNotCleared();
+  testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume();
+  {
+    GamePlayScene scene;
+    scene.options.courseSession = std::make_shared<CoursePlaySession>();
+    scene.context.jukebox.time = 2'500'000;
+    scene.inputInterruptionPause = true;
+    scene.showPauseMenu(true);
+    require(scene.attemptProvenance.eligibility == ScoreEligibility::Modified &&
+                scene.state->lightAssistClearMark &&
+                scene.recordedReplay.provenance == scene.attemptProvenance,
+            "a forced mid-stage course pause records the same assisted provenance as a real playback pause");
+    scene.closePauseMenu();
+    require(!scene.context.jukebox.isPaused(),
+            "an explicit resume also resumes a course paused by native input failure");
+  }
   if (argc > 1 && std::string_view(argv[1]) == "pause-penalty") {
     testPausePenaltyAndFreshAttemptBoundary();
     testPauseAfterEarlyJudgmentDisqualifiesIr();

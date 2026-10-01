@@ -144,4 +144,13 @@ struct InputDeviceSnapshot {
   int hats = 0;
 };
 
+// Runtime source loss has an explicit handoff boundary. Begin is delivered
+// before synthetic held-key releases; ready follows those releases and the
+// fallback request. Startup unavailability does not interrupt gameplay.
+struct InputInterruption {
+  DeviceClass deviceClass = DeviceClass::Keyboard;
+  std::uint64_t timestampMicros = 0;
+  bool fallbackReady = false;
+};
+
 } // namespace input

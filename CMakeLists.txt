@@ -6696,7 +6696,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(gameplay_terminal_scene_tests PRIVATE cxx_std_23)
     target_sources(gameplay_terminal_scene_tests PRIVATE
-        src/scene/play/RealtimeGameplayInputRegistration.cpp)
+        src/scene/play/RealtimeGameplayInputRegistration.cpp
+        src/input/LogicalGameplayInputAdapter.cpp
+        src/input/InputBindingResolver.cpp
+        src/input/InputDefaults.cpp
+        src/input/InputNormalizer.cpp
+        src/input/RealtimePhysicalInputRouter.cpp)
     target_link_libraries(gameplay_terminal_scene_tests PRIVATE ${COMMON_LIBS}
         input_registry_test_support)
     if(APPLE)

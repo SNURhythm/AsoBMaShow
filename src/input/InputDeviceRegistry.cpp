@@ -79,12 +79,31 @@ struct InputDeviceRegistry::QueueState {
     DeviceListener listener;
   };
 
+  struct RealtimeInterruptionSubscriptionState {
+    explicit RealtimeInterruptionSubscriptionState(InterruptionListener callback)
+        : listener(std::move(callback)) {}
+    InterruptionListener listener;
+  };
+
   void enqueue(QueuedPayload payload) {
     const std::lock_guard lock(mutex);
     if (!accepting) {
       return;
     }
     const std::uint64_t sequence = nextSequence++;
+    if (const auto *interruption = std::get_if<input::InputInterruption>(&payload)) {
+      const auto lastToken = realtimeInterruptionListeners.empty()
+          ? 0 : realtimeInterruptionListeners.rbegin()->first;
+      std::uint64_t previousToken = 0;
+      while (previousToken < lastToken) {
+        const auto listener = realtimeInterruptionListeners.upper_bound(previousToken);
+        if (listener == realtimeInterruptionListeners.end() || listener->first > lastToken) break;
+        previousToken = listener->first;
+        const auto retained = listener->second;
+        retained->listener(*interruption);
+      }
+      return;
+    }
     if (const auto *event =
             std::get_if<input::PhysicalInputEvent>(&payload)) {
       const std::uint64_t lastEligibleToken =
@@ -166,6 +185,7 @@ struct InputDeviceRegistry::QueueState {
     const std::lock_guard lock(mutex);
     realtimeInputListeners.erase(token);
     realtimeDeviceListeners.erase(token);
+    realtimeInterruptionListeners.erase(token);
   }
 
   void subscribeRealtimeDevices(std::uint64_t token,
@@ -175,6 +195,15 @@ struct InputDeviceRegistry::QueueState {
       realtimeDeviceListeners.emplace(
           token, std::make_shared<RealtimeDeviceSubscriptionState>(
                      std::move(listener)));
+    }
+  }
+
+  void subscribeRealtimeInterruptions(std::uint64_t token,
+                                      InterruptionListener listener) {
+    const std::lock_guard lock(mutex);
+    if (accepting) {
+      realtimeInterruptionListeners.emplace(
+          token, std::make_shared<RealtimeInterruptionSubscriptionState>(std::move(listener)));
     }
   }
 
@@ -204,6 +233,7 @@ struct InputDeviceRegistry::QueueState {
     queue.clear();
     realtimeInputListeners.clear();
     realtimeDeviceListeners.clear();
+    realtimeInterruptionListeners.clear();
   }
 
   std::recursive_mutex mutex;
@@ -212,6 +242,8 @@ struct InputDeviceRegistry::QueueState {
       realtimeInputListeners;
   std::map<std::uint64_t, std::shared_ptr<RealtimeDeviceSubscriptionState>>
       realtimeDeviceListeners;
+  std::map<std::uint64_t, std::shared_ptr<RealtimeInterruptionSubscriptionState>>
+      realtimeInterruptionListeners;
   std::array<bool, 6> realtimeInputClaimed{};
   std::uint64_t nextSequence = 1;
   bool accepting = true;
@@ -280,6 +312,10 @@ InputDeviceRegistry::InputDeviceRegistry(
         .enqueueDevice =
             [sinkGate](input::InputDeviceSnapshot device) {
               sinkGate->enqueue(QueuedPayload(std::move(device)));
+            },
+        .enqueueInterruption =
+            [sinkGate](input::InputInterruption interruption) {
+              sinkGate->enqueue(QueuedPayload(interruption));
             }};
     auto backend = factory(sink);
     if (!backend) {
@@ -367,6 +403,10 @@ void InputDeviceRegistry::handleSdlEventAndDispatch(const SDL_Event &event) {
 
 void InputDeviceRegistry::pump() { pumpInternal(true); }
 
+void InputDeviceRegistry::completeRealtimeInputFallback() {
+  if (sdlInputBackend_ != nullptr) sdlInputBackend_->pump();
+}
+
 void InputDeviceRegistry::configureGyroscopeTurntable(
     input::GyroscopeTurntableConfig config) {
   for (const auto &backend : backends_) {
@@ -384,6 +424,11 @@ void InputDeviceRegistry::resetGyroscopeTurntableSession() {
 
 void InputDeviceRegistry::setRealtimeInputClaimed(
     input::DeviceClass deviceClass, bool claimed) {
+  if (claimed && deviceClass == input::DeviceClass::Keyboard) {
+    // A source can fail in menus before the next backend pump. Finish that
+    // unclaimed handoff before newly admitted gameplay can receive input.
+    completeRealtimeInputFallback();
+  }
   if (claimed) {
     queueState_->setRealtimeClaimed(deviceClass, true);
   }
@@ -504,6 +549,13 @@ std::uint64_t
 InputDeviceRegistry::subscribeRealtimeDevices(DeviceListener listener) {
   const std::uint64_t token = nextSubscriptionToken_++;
   queueState_->subscribeRealtimeDevices(token, std::move(listener));
+  return token;
+}
+
+std::uint64_t InputDeviceRegistry::subscribeRealtimeInterruptions(
+    InterruptionListener listener) {
+  const std::uint64_t token = nextSubscriptionToken_++;
+  queueState_->subscribeRealtimeInterruptions(token, std::move(listener));
   return token;
 }
 

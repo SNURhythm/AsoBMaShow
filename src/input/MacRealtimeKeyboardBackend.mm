@@ -76,7 +76,7 @@ public:
     running_.store(false, std::memory_order_release);
     if (runLoop_ != nullptr) CFRunLoopWakeUp(runLoop_);
     if (thread_.joinable()) thread_.join();
-    keys_.setEnabled(false, input::apple::steadyNowMicros());
+    keys_.setClaimed(false, input::apple::steadyNowMicros());
     if (source_ != nullptr) { CFRelease(source_); source_ = nullptr; }
     if (tap_ != nullptr) { CFMachPortInvalidate(tap_); CFRelease(tap_); tap_ = nullptr; }
     if (runLoop_ != nullptr) { CFRelease(runLoop_); runLoop_ = nullptr; }
@@ -89,7 +89,15 @@ public:
     const std::lock_guard lock(lifecycleMutex_);
     claimed_.store(claimed, std::memory_order_release);
     claimTimestampMicros_ = input::apple::steadyNowMicros();
-    keys_.setEnabled(claimed && available_.load(std::memory_order_acquire),
+    if (claimed && !available_.load(std::memory_order_acquire) &&
+        map_->keyboardRealtimeAvailable()) {
+      // Failure raced the registry's pre-claim handoff. The lifecycle lock
+      // guarantees its fallback request is ready before this new owner starts.
+      const auto timestamp = static_cast<std::uint64_t>(claimTimestampMicros_);
+      publishInterruption({input::DeviceClass::Keyboard, timestamp, false});
+      publishInterruption({input::DeviceClass::Keyboard, timestamp, true});
+    }
+    keys_.setClaimed(claimed && available_.load(std::memory_order_acquire),
                      claimTimestampMicros_);
   }
 
@@ -97,7 +105,7 @@ public:
     if (event.type == SDL_WINDOWEVENT &&
         event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
       const std::lock_guard lock(lifecycleMutex_);
-      keys_.setEnabled(false, input::apple::steadyNowMicros());
+      keys_.setFocused(false, input::apple::steadyNowMicros());
     }
   }
 
@@ -107,10 +115,14 @@ private:
     auto &self = *static_cast<MacRealtimeKeyboardBackend *>(context);
     const std::lock_guard lock(self.lifecycleMutex_);
     if (type == kCGEventTapDisabledByTimeout || type == kCGEventTapDisabledByUserInput) {
-      self.available_.store(false, std::memory_order_release);
-      self.keys_.setEnabled(false, input::apple::steadyNowMicros());
+      if (!self.available_.exchange(false, std::memory_order_acq_rel)) return event;
+      const auto timestamp = static_cast<std::uint64_t>(input::apple::steadyNowMicros());
+      const bool interrupt = self.claimed_.load(std::memory_order_acquire);
+      if (interrupt) self.publishInterruption({input::DeviceClass::Keyboard, timestamp, false});
+      self.keys_.setClaimed(false, timestamp);
       self.map_->requestKeyboardRealtimeFallback();
-      SDL_Log("Native keyboard tap disabled; continuing with SDL input");
+      if (interrupt) self.publishInterruption({input::DeviceClass::Keyboard, timestamp, true});
+      SDL_Log("Native keyboard tap disabled; SDL fallback requested");
       return event;
     }
     if (!self.claimed_.load(std::memory_order_acquire) ||
@@ -155,7 +167,7 @@ private:
 #endif
     // The OS routes this per-process tap only to our application, including
     // events delivered before SDL has pumped a focus-gained notification.
-    self.keys_.setEnabled(true, timestamp);
+    self.keys_.setFocused(true, timestamp);
     self.keys_.consume(0, scancode, pressed, timestamp);
     return event;
   }

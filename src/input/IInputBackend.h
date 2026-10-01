@@ -14,6 +14,7 @@ namespace input {
 struct InputBackendSink {
   std::function<void(PhysicalInputEvent)> enqueueInput;
   std::function<void(InputDeviceSnapshot)> enqueueDevice;
+  std::function<void(InputInterruption)> enqueueInterruption;
 };
 
 } // namespace input
@@ -49,6 +50,12 @@ protected:
   void publishDevice(input::InputDeviceSnapshot device) const {
     if (sink_.enqueueDevice) {
       sink_.enqueueDevice(std::move(device));
+    }
+  }
+
+  void publishInterruption(input::InputInterruption interruption) const {
+    if (sink_.enqueueInterruption) {
+      sink_.enqueueInterruption(interruption);
     }
   }
 

@@ -3078,10 +3078,15 @@ void testNativePresentationHistoryUsesRateAndPauseTimelineResets() {
   control->timingCallback({.outputSteadyMicros = 5'000'000,
                           .outputTimestampKnown = true}, control->timingUserData);
   control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  wrapper.pauseClock();
+  require(wrapper.isClockPaused() && wrapper.getTimeMicros() == 1'010'000,
+          "a stopped rate transition begins at the explicit frozen audible position");
   std::string error;
   require(wrapper.stopSounds().success &&
               wrapper.setPlaybackRate({.percent = 200}, error) &&
               wrapper.startDevice().success, "native clock fixture changes rate while stopped");
+  wrapper.resumeClock();
+  require(!wrapper.isClockPaused(), "rate transition and resume clear the frozen override");
   control->timingCallback({.outputSteadyMicros = 9'000'000,
                           .outputTimestampKnown = true}, control->timingUserData);
   control->renderCallback(output.data(), 441, 2, control->renderUserData);
@@ -3122,6 +3127,48 @@ void testNativePresentationHistoryReadersSeeCompleteSegments() {
   done.store(true, std::memory_order_release);
   require(reader.get(), "concurrent native history readers never observe a partial segment");
   stopwatch.pause();
+}
+
+void testNativePauseStaysFrozenWhileCallbacksContinue() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::atomic_bool done{false};
+  std::atomic<unsigned> callbacks{0};
+  auto renderer = std::async(std::launch::async, [&] {
+    std::array<short, 882> output{};
+    while (!done.load(std::memory_order_acquire)) {
+      const auto wall = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      control->timingCallback({.outputSteadyMicros = wall + 100'000,
+                              .outputTimestampKnown = true}, control->timingUserData);
+      control->renderCallback(output.data(), 441, 2, control->renderUserData);
+      callbacks.fetch_add(1, std::memory_order_release);
+    }
+  });
+  bool frozen = true;
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    wrapper.pauseClock();
+    const auto position = wrapper.getTimeMicros();
+    const auto target = callbacks.load(std::memory_order_acquire) + 10;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (callbacks.load(std::memory_order_acquire) < target &&
+           std::chrono::steady_clock::now() < deadline) {
+      frozen = frozen && wrapper.getTimeMicros() == position;
+      std::this_thread::yield();
+    }
+    frozen = frozen && callbacks.load(std::memory_order_acquire) >= target &&
+             wrapper.getTimeMicros() == position;
+    wrapper.resumeClock();
+  }
+  done.store(true, std::memory_order_release);
+  renderer.get();
+  require(frozen,
+          "in-flight and paused callbacks cannot change the explicitly frozen UI position");
+  wrapper.pauseClock();
 }
 
 void testOversizedCallbacksUseBoundedScratchAndPreserveScheduledOnsets() {
@@ -3166,6 +3213,7 @@ int main() {
     testNativePresentationHistoryResetsBeforeBackendRestart();
     testNativePresentationHistoryUsesRateAndPauseTimelineResets();
     testNativePresentationHistoryReadersSeeCompleteSegments();
+    testNativePauseStaysFrozenWhileCallbacksContinue();
     testNativePresentationHistoryPreservesInputAcrossOutputGaps();
     testNativePresentationClockDoesNotRewindDuringAnOutputGap();
     testNativePresentationHistoryIsBoundedAndInvalidatesUnknownTiming();

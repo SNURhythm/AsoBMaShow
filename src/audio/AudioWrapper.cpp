@@ -764,10 +764,18 @@ AudioWrapper::~AudioWrapper() {
 }
 
 long long AudioWrapper::getTimeMicros() const {
+  if (audioClockFrozen.load(std::memory_order_acquire)) {
+    return audioClockFrozenMicros.load(std::memory_order_relaxed);
+  }
   const auto wallNow = nowMicros();
   const AudioClockAnchor anchor = readAudioClockAnchor(userData, wallNow);
+  const bool clockRunning = stopwatch->isRunning();
 
-  if (anchor.wallMicros <= 0 || !stopwatch->isRunning()) {
+  if (audioClockFrozen.load(std::memory_order_acquire)) {
+    return audioClockFrozenMicros.load(std::memory_order_relaxed);
+  }
+
+  if (anchor.wallMicros <= 0 || !clockRunning) {
     audioClockPublishedMicros.store(anchor.micros, std::memory_order_release);
     return anchor.micros;
   }
@@ -813,6 +821,23 @@ std::optional<long long> AudioWrapper::songTimeMicrosAtSteadyMicros(
   return interpolatedMicros;
 }
 
+void AudioWrapper::pauseClock() {
+  std::lock_guard<std::mutex> lock(audioCommandMutex);
+  if (audioClockFrozen.load(std::memory_order_acquire)) return;
+  const auto position = getTimeMicros();
+  audioClockFrozenMicros.store(position, std::memory_order_relaxed);
+  audioClockFrozen.store(true, std::memory_order_release);
+  stopwatch->pause();
+  // PCM and scheduled events have already advanced to the generated cursor.
+  // Keep that cursor and the timestamps of audio still queued for output.
+}
+
+void AudioWrapper::resumeClock() {
+  std::lock_guard<std::mutex> lock(audioCommandMutex);
+  stopwatch->resume();
+  audioClockFrozen.store(false, std::memory_order_release);
+}
+
 void AudioWrapper::seekClock(long long micros) {
   std::lock_guard<std::mutex> lock(audioCommandMutex);
   const long long wallMicros = nowMicros();
@@ -828,6 +853,7 @@ void AudioWrapper::seekClock(long long micros) {
       true);
   userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_release);
   audioClockPublishedMicros.store(micros, std::memory_order_release);
+  audioClockFrozen.store(false, std::memory_order_release);
 }
 
 bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
@@ -864,7 +890,7 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
 
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
   const long long rebasedMicros =
-      stopwatch->isRunning()
+      stopwatch->isRunning() || audioClockFrozen.load(std::memory_order_acquire)
           ? getTimeMicros()
           : audioClockPublishedMicros.load(std::memory_order_acquire);
   const long long wallMicros = nowMicros();
@@ -880,6 +906,7 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
                           true);
   userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_release);
   audioClockPublishedMicros.store(rebasedMicros, std::memory_order_release);
+  audioClockFrozen.store(false, std::memory_order_release);
   return true;
 }
 

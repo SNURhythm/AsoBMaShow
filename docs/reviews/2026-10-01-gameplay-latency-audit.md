@@ -310,8 +310,9 @@ input/audio/display alignment wait is added.
 - **Input:** macOS MIDI routes directly to gameplay. macOS uses a per-process
   native keyboard tap only with existing permission; Linux uses timestamped
   evdev input when devices are readable and X11 focus is reliable. Wayland,
-  missing permission, device/stream changes, and unsupported configurations use
-  SDL fallback. No elevated input access or permission prompt is requested.
+  missing permission, and unsupported configurations use SDL fallback. Runtime
+  source loss pauses gameplay before handing control to SDL and requires an
+  explicit resume. No elevated input access or permission prompt is requested.
   Known source timestamps survive legacy logical transitions. Ownership tracks
   focus, stale claim epochs, disconnects, and native-to-SDL backlog handover.
 - **Audio work and reporting:** the pending schedule uses circular storage;
@@ -354,12 +355,12 @@ Physical iOS, Windows, and Linux latency, iOS 60/120 Hz behavior, and dense-char
 playback under real output routes still require device measurement; no acoustic
 or input-to-photon improvement number is claimed here.
 
-Final verification on this checkout:
+Final verification, repeated after the branch review fixes below:
 
 - `cmake --build cmake-build-debug -j 6`: passed, including the desktop app
   and all test targets.
 - `ctest --test-dir cmake-build-debug --output-on-failure -j 6`: **404/404
-  passed**, 261.19 seconds, against the rebuilt binaries.
+  passed**, 131.98 seconds, against the rebuilt binaries.
 - `IOS_RELEASE_BUILD_JOBS=6 scripts/ios_release_verify.sh`: passed **66/66
   native checks**, **85 Python contract checks**, the unsigned arm64 iOS Release
   build, and the resulting app's artifact audit. No distribution was performed.
@@ -372,3 +373,43 @@ Final verification on this checkout:
   restart callbacks, zero/oversized callbacks, fractional sample boundaries,
   native/SDL handover, stale input ownership, journal overrun, leased snapshot
   recovery, selected-skin note storage reuse, and HCN activity transitions.
+
+## Branch review follow-up
+
+The full branch review found a pause/resume regression in the new native output
+clock: rebasing the generated cursor to the audible position could misalign PCM
+that was already generated with future scheduled sounds. Pause now freezes the
+visible clock while preserving the generated cursor, PCM positions, and output
+timestamp history. Resume continues that timeline. Regression tests cover
+queued and completed output, repeated pauses, BGM and manual keysound tails,
+scheduled onsets, concurrent callbacks, paused seek, and rate changes.
+
+The input review also found that Linux focus-loss releases used the old claim
+timestamp and that delayed macOS events could reopen a previous focus epoch.
+Claim ownership and focus now have separate transitions, with releases stamped
+at the observed focus boundary and stale events rejected. Linux's native worker
+owns focus transitions so delayed SDL focus notices cannot clear newer input.
+
+The native-to-SDL handoff previously flushed all buffered keyboard events while
+gameplay continued. Since SDL does not retain the native event identity, this
+could drop a fresh press along with duplicates. Runtime source loss now gates
+input, freezes the audio clock, and requests worker suspension before held-key
+releases. The main thread completes fallback with gameplay paused; the player
+explicitly resumes the same attempt. Startup configurations that cannot use
+native input continue to select SDL directly. Linux conservatively treats
+changes in `/dev/input` as a source change.
+
+Follow-up review covered failure during initial claim, ordinary pause-menu
+resume, and ingress reopening. Claim handoff completion and a narrow session
+interlock prevent those races from erasing an interruption or leaving a held
+lane unreconciled. Forced course pauses resume correctly and use the existing
+assisted/Modified eligibility rules when they occur during play. New tests
+exercise interruption ordering, callback teardown, a stalled main thread,
+held-note preservation and reconciliation, resume concurrency, and course
+provenance.
+
+The follow-up source reviews found no remaining actionable issues. The full
+desktop build and 404 tests, 66 release-critical native checks, 85 Python
+contract checks, unsigned iOS Release build, and artifact audit all passed
+again after these fixes. The final Linux keyboard source also passed syntax
+checks with and without X11 support. Hardware timing limitations above remain.

@@ -17,17 +17,17 @@ public:
       std::function<void(input::PhysicalInputEvent)> emit)
       : emit_(std::move(emit)) {}
 
-  void setEnabled(bool enabled, std::uint64_t timestampMicros) {
+  void setClaimed(bool claimed, std::uint64_t timestampMicros) {
     const std::lock_guard lock(mutex_);
-    if (enabled_ == enabled) return;
-    if (!enabled) {
-      for (int key = 1; key < SDL_NUM_SCANCODES; ++key) {
-        if (held(key)) emit(key, false, timestampMicros);
-      }
-      for (auto &device : devices_) device.reset();
-    }
-    enabled_ = enabled;
-    enabledSinceMicros_ = timestampMicros;
+    claimed_ = claimed;
+    setEnabledLocked(claimed && focused_, timestampMicros);
+  }
+
+  void setFocused(bool focused, std::uint64_t timestampMicros) {
+    const std::lock_guard lock(mutex_);
+    if (timestampMicros < enabledSinceMicros_ || focused_ == focused) return;
+    focused_ = focused;
+    setEnabledLocked(claimed_ && focused, timestampMicros);
   }
 
   void consume(std::size_t device, int key, bool pressed,
@@ -52,6 +52,21 @@ public:
   }
 
 private:
+  void setEnabledLocked(bool enabled, std::uint64_t timestampMicros) {
+    // A delayed per-process event must not reopen an earlier focus epoch.
+    if (enabled && timestampMicros < enabledSinceMicros_) return;
+    if (!enabled) enabledSinceMicros_ = timestampMicros;
+    if (enabled_ == enabled) return;
+    if (!enabled) {
+      for (int key = 1; key < SDL_NUM_SCANCODES; ++key) {
+        if (held(key)) emit(key, false, timestampMicros);
+      }
+      for (auto &device : devices_) device.reset();
+    }
+    enabled_ = enabled;
+    enabledSinceMicros_ = timestampMicros;
+  }
+
   bool held(int key) const {
     for (const auto &device : devices_) {
       if (device[key]) return true;
@@ -71,6 +86,8 @@ private:
 
   std::mutex mutex_;
   bool enabled_ = false;
+  bool claimed_ = false;
+  bool focused_ = true;
   std::uint64_t enabledSinceMicros_ = 0;
   std::array<std::bitset<SDL_NUM_SCANCODES>, kMaxDevices> devices_{};
   std::function<void(input::PhysicalInputEvent)> emit_;

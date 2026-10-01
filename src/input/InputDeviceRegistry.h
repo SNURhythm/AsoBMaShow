@@ -27,6 +27,8 @@ public:
       std::function<void(const input::PhysicalInputEvent &event)>;
   using DeviceListener =
       std::function<void(const input::InputDeviceSnapshot &device)>;
+  using InterruptionListener =
+      std::function<void(const input::InputInterruption &interruption)>;
 
   InputDeviceRegistry();
   explicit InputDeviceRegistry(std::vector<BackendFactory> backendFactories);
@@ -39,6 +41,8 @@ public:
   // Dispatches this SDL event before returning without polling async backends.
   void handleSdlEventAndDispatch(const SDL_Event &event);
   void pump();
+  // Main thread only, after a ready interruption has gated gameplay input.
+  void completeRealtimeInputFallback();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
   void resetGyroscopeTurntableSession();
   // Claimed classes are delivered to realtime listeners but omitted from the
@@ -58,6 +62,7 @@ public:
   // for ordinary frame dispatch. Unsubscribe waits for an active callback.
   std::uint64_t subscribeRealtimeInput(InputListener listener);
   std::uint64_t subscribeRealtimeDevices(DeviceListener listener);
+  std::uint64_t subscribeRealtimeInterruptions(InterruptionListener listener);
   std::uint64_t subscribeDevices(DeviceListener listener);
   // Removing a subscription cancels any events not yet delivered to that
   // listener.
@@ -71,7 +76,8 @@ public:
 
 private:
   using QueuedPayload =
-      std::variant<input::PhysicalInputEvent, input::InputDeviceSnapshot>;
+      std::variant<input::PhysicalInputEvent, input::InputDeviceSnapshot,
+                   input::InputInterruption>;
   struct QueuedEvent {
     std::uint64_t sequence = 0;
     QueuedPayload payload;

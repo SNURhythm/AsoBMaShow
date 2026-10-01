@@ -1060,6 +1060,10 @@ struct GamePlayScene::RealtimeGameplaySession {
   std::uint64_t epoch = 0;
   std::atomic_bool acceptingTouch{false};
   std::atomic_bool acceptingNativeInput{false};
+  std::mutex inputInterruptionMutex;
+  std::atomic_bool inputInterrupted{false};
+  std::atomic_bool inputFallbackReady{false};
+  std::atomic_bool inputInterruptionAcknowledged{false};
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   input::apple::HostToSteadyTimestampSession touchTimestampSession;
 #endif
@@ -1187,7 +1191,30 @@ struct GamePlayScene::RealtimeGameplaySession {
   }
 
   static std::optional<std::int64_t> currentSongTime(void *context) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (session.audio != nullptr && session.audio->isClockPaused()) {
+      return session.audio->getTimeMicros() + session.audioOffsetMicros;
+    }
     return mapSteadyToSong(context, nowMicros());
+  }
+
+  void interruptInput(const input::InputInterruption &interruption) {
+    const std::lock_guard lock(inputInterruptionMutex);
+    if (interruption.fallbackReady) {
+      if (inputInterrupted.load(std::memory_order_acquire)) {
+        inputFallbackReady.store(true, std::memory_order_release);
+      }
+      return;
+    }
+    if (inputInterrupted.exchange(true, std::memory_order_acq_rel)) return;
+    if (physicalInputRouter != nullptr) {
+      physicalInputRouter->setGameplayEnabled(false, interruption.timestampMicros);
+    }
+    // Freeze at detection, before a stalled main thread can lose more time.
+    // Native held-key releases still update the disabled router's desired
+    // state; they do not judge a long-note tail until an explicit resume.
+    if (audio != nullptr) audio->pauseClock();
+    if (worker != nullptr) (void)worker->requestSuspend();
   }
 
   static bool
@@ -1268,6 +1295,7 @@ struct GamePlayScene::RealtimeGameplaySession {
   static bool emitLegacyInput(void *context,
                               const gameplay::RealtimeGameplayInput &input) {
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (session.inputInterrupted.load(std::memory_order_acquire)) return true;
     return session.worker != nullptr && session.worker->enqueueInput(input);
   }
 
@@ -1351,12 +1379,17 @@ struct GamePlayScene::RealtimeGameplaySession {
     auto &session = *static_cast<RealtimeGameplaySession *>(context);
     if (transition.type ==
         input::RealtimePhysicalInputTransitionType::Command) {
+      if (session.inputInterrupted.load(std::memory_order_acquire) &&
+          !session.inputInterruptionAcknowledged.load(std::memory_order_acquire)) {
+        return true;
+      }
       if (!session.inputCommands.tryPush(transition.command)) {
         session.inputCommandOverflow.store(true, std::memory_order_release);
         return false;
       }
       return true;
     }
+    if (session.inputInterrupted.load(std::memory_order_acquire)) return false;
     if (session.worker == nullptr) {
       return false;
     }
@@ -2170,6 +2203,9 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
               .onDevice = [session = &activeSession](const auto &device) {
                 RealtimeGameplaySession::registryRealtimeDevice(session, device);
               },
+              .onInterruption = [session = &activeSession](const auto &interruption) {
+                session->interruptInput(interruption);
+              },
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
               .sdlWatch = &RealtimeGameplaySession::sdlInputWatch,
               .sdlWatchContext = &activeSession,
@@ -2191,8 +2227,12 @@ void GamePlayScene::setRealtimeGameplayIngressEnabled(bool enabled) {
   }
   auto &session = *realtimeGameplaySession;
   const auto timestampMicros = nowMicros();
-  if (session.physicalInputRouter != nullptr) {
-    session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
+  {
+    const std::lock_guard lock(session.inputInterruptionMutex);
+    if (enabled && session.inputInterrupted.load(std::memory_order_acquire)) return;
+    if (session.physicalInputRouter != nullptr) {
+      session.physicalInputRouter->setGameplayEnabled(enabled, timestampMicros);
+    }
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   session.touchIngressDesired = enabled;
@@ -2419,6 +2459,26 @@ void GamePlayScene::drainRealtimeTouchSamples(
     session.presentationTouches.cancelAll(
         eventMicros.value_or(*cancelPresentationAtSteadyMicros));
   }
+}
+
+bool GamePlayScene::drainRealtimeInputInterruption() {
+  if (!realtimeGameplayAuthorityActive()) return false;
+  auto &session = *realtimeGameplaySession;
+  if (!session.inputInterrupted.load(std::memory_order_acquire)) return false;
+  if (session.inputInterruptionAcknowledged.load(std::memory_order_acquire)) return false;
+  if (!session.inputFallbackReady.load(std::memory_order_acquire)) return true;
+  // The native producer has gated judging and completed held-key releases.
+  // Drain duplicate SDL backlog while that gate remains closed, then allow
+  // fresh fallback input to maintain the router's paused desired state.
+  context.inputDeviceRegistry.completeRealtimeInputFallback();
+  input::LogicalInputTransition ignoredCommand;
+  while (session.inputCommands.tryPop(ignoredCommand)) {}
+  inputInterruptionPause = true;
+  showPauseMenu(true);
+  session.inputInterruptionAcknowledged.store(true, std::memory_order_release);
+  SDL_LogWarn(SDL_LOG_CATEGORY_INPUT,
+              "Native keyboard interrupted; gameplay paused for SDL fallback. Resume when ready.");
+  return true;
 }
 
 void GamePlayScene::drainRealtimeInputCommands() {
@@ -3424,6 +3484,7 @@ void GamePlayScene::init() {
 
 bool GamePlayScene::reset() {
   stopRealtimeGameplayAuthority(false);
+  inputInterruptionPause = false;
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
   context.inputDeviceRegistry.resetGyroscopeTurntableSession();
@@ -3810,7 +3871,7 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
         }
       }
     }
-    if (!isCoursePlayback() && !isReplayPlayback() && state != nullptr &&
+    if ((!isCoursePlayback() || inputInterruptionPause) && !isReplayPlayback() && state != nullptr &&
         state->isPlaying && !state->isEnding && chart != nullptr &&
         (handledNotes < chart->Meta.TotalNotes || remainingEffect) &&
         (handledNotes > 0 ||
@@ -3849,7 +3910,16 @@ void GamePlayScene::showPauseMenu(bool pausePlayback) {
 }
 
 void GamePlayScene::closePauseMenu() {
-  if (!isCoursePlayback() && context.jukebox.isPaused()) {
+  std::unique_lock<std::mutex> interruptionLock;
+  if (realtimeGameplayAuthorityActive()) {
+    interruptionLock = std::unique_lock(realtimeGameplaySession->inputInterruptionMutex);
+  }
+  if (realtimeGameplayAuthorityActive() &&
+      realtimeGameplaySession->inputInterrupted.load(std::memory_order_acquire) &&
+      !realtimeGameplaySession->inputInterruptionAcknowledged.load(std::memory_order_acquire)) {
+    return;
+  }
+  if ((!isCoursePlayback() || inputInterruptionPause) && context.jukebox.isPaused()) {
     context.jukebox.resume();
   }
   if (realtimeGameplayAuthorityActive() &&
@@ -3858,6 +3928,15 @@ void GamePlayScene::closePauseMenu() {
                  "Realtime gameplay worker failed to resume");
     return;
   }
+  if (realtimeGameplayAuthorityActive() && inputInterruptionPause) {
+    realtimeGameplaySession->inputInterrupted.store(false, std::memory_order_release);
+    realtimeGameplaySession->inputInterruptionAcknowledged.store(false, std::memory_order_release);
+    realtimeGameplaySession->inputFallbackReady.store(false, std::memory_order_release);
+  }
+  inputInterruptionPause = false;
+  // Native failure may now start a new interruption. The ingress and sink
+  // gates below respect it, without holding this lock across UI/geometry work.
+  if (interruptionLock.owns_lock()) interruptionLock.unlock();
   if (pauseLayout != nullptr) {
     pauseLayout->setVisible(false);
   }
@@ -5902,12 +5981,14 @@ void GamePlayScene::update(float dt) {
     inputHandler->pumpPendingTouchEvents();
   }
   if (realtimeAtFrameStart) {
+    if (drainRealtimeInputInterruption()) return;
     drainRealtimeInputCommands();
     drainRealtimeStartSelectInputs();
     drainRealtimeTouchSamples();
     if (!realtimeGameplayAuthorityActive()) {
       return;
     }
+    if (realtimeGameplaySession->inputInterrupted.load(std::memory_order_acquire)) return;
     bool spinScratchAdvanced = true;
     {
       std::lock_guard lock(realtimeGameplaySession->touchRouterMutex);

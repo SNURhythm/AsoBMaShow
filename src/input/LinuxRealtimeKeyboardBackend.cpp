@@ -99,7 +99,7 @@ public:
     if (thread_.joinable()) thread_.join();
     const std::lock_guard lock(lifecycleMutex_);
     available_.store(false, std::memory_order_release);
-    keys_.setEnabled(false, steadyMicros());
+    keys_.setClaimed(false, steadyMicros());
     map_->setKeyboardRealtimeAvailable(false);
 #if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
     closeDevices();
@@ -112,18 +112,21 @@ public:
     const std::lock_guard lock(lifecycleMutex_);
     claimed_ = claimed;
     claimTimestampMicros_ = steadyMicros();
+    if (claimed && !available_.load(std::memory_order_acquire) &&
+        map_->keyboardRealtimeAvailable()) {
+      publishInterruption({input::DeviceClass::Keyboard, claimTimestampMicros_, false});
+      publishInterruption({input::DeviceClass::Keyboard, claimTimestampMicros_, true});
+    }
     // Do not inherit keys held before gameplay obtained ownership.
-    keys_.setEnabled(false, steadyMicros());
+    keys_.setClaimed(claimed && available_.load(std::memory_order_acquire), claimTimestampMicros_);
   }
 
   void handleSdlEvent(const SDL_Event &event) override {
 #if defined(ASOBMASHOW_HAVE_X11) && defined(SDL_VIDEO_DRIVER_X11)
     if (event.type == SDL_WINDOWEVENT) {
       if (event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) captureWindow();
-      if (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
-        const std::lock_guard lock(lifecycleMutex_);
-        keys_.setEnabled(false, steadyMicros());
-      }
+      // X11 focus on the worker is authoritative. A delayed SDL focus-loss
+      // notice must not clear keys pressed after the window regained focus.
     }
 #else
     (void)event;
@@ -192,10 +195,18 @@ private:
 
   void fallback() {
     const std::lock_guard lock(lifecycleMutex_);
-    keys_.setEnabled(false, steadyMicros());
-    available_.store(false, std::memory_order_release);
+    fallbackLocked();
+  }
+
+  void fallbackLocked() {
+    if (!available_.exchange(false, std::memory_order_acq_rel)) return;
+    const auto timestamp = steadyMicros();
+    const bool interrupt = claimed_;
+    if (interrupt) publishInterruption({input::DeviceClass::Keyboard, timestamp, false});
+    keys_.setClaimed(false, timestamp);
     map_->requestKeyboardRealtimeFallback();
-    SDL_Log("Native keyboard device stream changed; continuing with SDL input");
+    if (interrupt) publishInterruption({input::DeviceClass::Keyboard, timestamp, true});
+    SDL_Log("Native keyboard device stream changed; SDL fallback requested");
   }
 
   void run(Display *display, input::TimestampEpochMapping mapping) {
@@ -211,12 +222,12 @@ private:
       XGetInputFocus(display, &focus, &revert);
       const bool focused = focus == window_.load(std::memory_order_acquire);
       const std::lock_guard lock(lifecycleMutex_);
-      keys_.setEnabled(claimed_ && focused, claimTimestampMicros_);
+      // Only a focus boundary changes the timestamp cutoff. An unchanged
+      // poll must retain legitimate input already queued after activation.
+      keys_.setFocused(focused, steadyMicros());
       for (std::size_t device = 0; device < fds_.size(); ++device) {
         if ((polls[device].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
-          keys_.setEnabled(false, steadyMicros());
-          available_.store(false, std::memory_order_release);
-          map_->requestKeyboardRealtimeFallback();
+          fallbackLocked();
           return;
         }
         input_event events[64];
@@ -226,11 +237,8 @@ private:
             const auto &event = events[i];
             if (event.type == EV_SYN && event.code == SYN_DROPPED) {
               // Lost edges cannot be reconstructed with original timing.
-              // Release ownership and let SDL's independently maintained state
-              // continue, rather than inventing replacement key timestamps.
-              keys_.setEnabled(false, steadyMicros());
-              available_.store(false, std::memory_order_release);
-              map_->requestKeyboardRealtimeFallback();
+              // Pause gameplay before releasing native ownership.
+              fallbackLocked();
               return;
             }
             if (event.type != EV_KEY || event.value == 2 ||
@@ -249,9 +257,7 @@ private:
           }
         }
         if (bytes < 0 && errno != EAGAIN && errno != EINTR) {
-          keys_.setEnabled(false, steadyMicros());
-          available_.store(false, std::memory_order_release);
-          map_->requestKeyboardRealtimeFallback();
+          fallbackLocked();
           return;
         }
       }

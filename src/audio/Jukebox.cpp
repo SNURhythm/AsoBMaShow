@@ -4000,13 +4000,11 @@ long long Jukebox::getTimeMicros() {
 }
 void Jukebox::pause() {
   SDL_Log("Pausing");
-  audio.seekClock(audio.getTimeMicros());
-  stopwatch->pause();
+  audio.pauseClock();
   wakeScheduler();
 }
 void Jukebox::resume() {
-  audio.seekClock(audio.getTimeMicros());
-  stopwatch->resume();
+  audio.resumeClock();
   wakeScheduler();
 }
 bool Jukebox::isPaused() { return !stopwatch->isRunning(); }

@@ -214,6 +214,11 @@ public:
   long long getTimeMicros() const;
   [[nodiscard]] std::optional<long long>
   songTimeMicrosAtSteadyMicros(long long steadyMicros) const noexcept;
+  void pauseClock();
+  void resumeClock();
+  [[nodiscard]] bool isClockPaused() const noexcept {
+    return audioClockFrozen.load(std::memory_order_acquire);
+  }
   void seekClock(long long micros);
   bool setPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
   [[nodiscard]] audio::PlaybackRate playbackRate() const;
@@ -285,6 +290,8 @@ private:
   std::atomic<std::uint64_t> audioClockAnchorSequence{0};
   std::atomic_flag audioClockAnchorWriter = ATOMIC_FLAG_INIT;
   mutable std::atomic<long long> audioClockPublishedMicros{0};
+  std::atomic<long long> audioClockFrozenMicros{0};
+  std::atomic_bool audioClockFrozen{false};
   std::atomic<int> playbackRatePercent{100};
   std::atomic<float> bgmGain{1.0f};
   std::atomic<float> keysoundGain{1.0f};

@@ -227,6 +227,9 @@ public:
 
   bool start();
   void stop();
+  // Producer-safe request; the main thread must join it with suspend() before
+  // calling resume(). A request cannot be cancelled before acknowledgment.
+  bool requestSuspend() noexcept;
   bool suspend();
   bool resume();
   bool enqueueInput(const RealtimeGameplayInput &input) noexcept;
