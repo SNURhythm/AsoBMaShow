@@ -1,3 +1,4 @@
+#include "scene/play/GuidedAccessInstructionView.h"
 #include "rendering/UniformCache.h"
 #include "view/TextInputBox.h"
 #include "view/TextView.h"
@@ -6,6 +7,10 @@
 #include "view/DropdownView.h"
 #include "view/ScrollView.h"
 #include "i18n/Localization.h"
+#include "view/IconText.h"
+#include "view/UiTheme.h"
+#include "scene/play/GuidedAccessReminder.h"
+#include "scene/play/GuidedAccessButtonCue.h"
 
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
@@ -34,6 +39,33 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+ipad_hardware::ButtonLocation testButtonLocation;
+ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() { return testButtonLocation; }
+struct TestSafeInsets { float top = 0, right = 0, bottom = 0, left = 0; };
+TestSafeInsets GetIOSSafeAreaInsetsNormalized() { return {}; }
+constexpr uint32_t kIconLock = 0xf023;
+constexpr uint32_t kIconLockOpen = 0xf3c1;
+struct ReminderUIFixture {
+  View root;
+  gameplay::GuidedAccessReminder guidedAccessReminder;
+  struct { bool guidedAccessReminderSkipped = false; } options;
+  View *guidedAccessReminderLayout = nullptr;
+  TextView *guidedAccessReminderTitle = nullptr;
+  TextView *guidedAccessReminderWhy = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderHelp = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderDisableHelp = nullptr;
+  TextView *guidedAccessReminderIcon = nullptr;
+  View *guidedAccessButtonMarker = nullptr;
+  TextView *guidedAccessButtonHint = nullptr;
+  TextView *guidedAccessButtonCheck = nullptr;
+  View *pauseButton = nullptr, *practiceRestartButton = nullptr, *practiceHudText = nullptr;
+  View *skinResetLayoutButton = nullptr, *pauseLayout = nullptr;
+  void addView(View *view) { root.addView(view); }
+  void returnFromGuidedAccessReminder() {}
+  void showGuidedAccessReminder();
+};
+#include "guided_access_reminder_ui.inc"
 
 int clearCompositionCalls = 0;
 SDL_Rect nativeInputRect{};
@@ -311,6 +343,309 @@ void testLanguageRefreshReachesPortalOverlay() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+class MultilineTextProbe final : public TextView {
+public:
+  using TextView::TextView;
+  int lineHeight() const { return rasterTextLineHeight(); }
+  int rasterWidth(const std::string &value) { return measureRasterTextWidth(value); }
+  SDL_Surface *rasterizeRun(const std::string &value) {
+    return renderFontSourceTextSurface(selectFont(static_cast<Uint32>(value.front())), value);
+  }
+  SDL_Surface *rasterizeLines(int wrapWidth = 0) {
+    int width = 0;
+    int height = 0;
+    return renderFallbackTextSurface(wrapWidth, width, height);
+  }
+};
+
+std::uint64_t alphaCoverage(SDL_Surface *surface) {
+  expect(surface != nullptr, "descender text rasterizes");
+  std::uint64_t coverage = 0;
+  for (int y = 0; y < surface->h; ++y) {
+    const auto *row = reinterpret_cast<const Uint32 *>(
+        static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
+    for (int x = 0; x < surface->w; ++x) {
+      Uint8 r, g, b, alpha;
+      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      coverage += alpha;
+    }
+  }
+  return coverage;
+}
+
+void testComposedTextPreservesDescenders() {
+  for (const auto *fontPath : {"assets/fonts/notosanscjkjp.ttf", "assets/fonts/arial.ttf",
+                               "assets/fonts/fa-solid-900.ttf"}) {
+    for (const int size : {18, 22, 32}) {
+      for (const auto *text : {"y", "gjpqy", "Ready to play", "Accessibility"}) {
+        // Font Awesome's uppercase letters are icons, so use lowercase-only
+        // samples when comparing its fallback against one reference font run.
+        if (std::string(fontPath) == "assets/fonts/fa-solid-900.ttf" &&
+            text[0] >= 'A' && text[0] <= 'Z') continue;
+        MultilineTextProbe view(fontPath, size);
+        view.setDeferredTextureMaterialization(true);
+        view.setColor({255, 255, 255, 255});
+        view.setAlign(TextView::CENTER);
+        view.setText(text);
+        SDL_Surface *run = view.rasterizeRun(text);
+        SDL_Surface *composed = view.rasterizeLines();
+        if (alphaCoverage(run) != alphaCoverage(composed)) {
+          std::cerr << "Descender clipping: " << text << " font=" << fontPath << " size=" << size
+                    << " run=" << run->w << 'x' << run->h
+                    << " composed=" << composed->w << 'x' << composed->h << '\n';
+        }
+        expect(alphaCoverage(run) == alphaCoverage(composed),
+               "line composition must preserve every descender pixel from the font renderer");
+        SDL_FreeSurface(composed);
+        view.setText(std::string(text) + "\n" + text);
+        SDL_Surface *multiline = view.rasterizeLines();
+        expect(alphaCoverage(multiline) == 2 * alphaCoverage(run),
+               "every explicit line must retain its descenders without overlapping the next line");
+        expect(view.textureHeight() == (multiline->h + 1) / 2,
+               "deferred layout height must match the complete multiline raster");
+        SDL_FreeSurface(multiline);
+
+        const int logicalWidth = (view.rasterWidth(text) + 1) / 2;
+        view.setWidth(logicalWidth);
+        view.setWrap(true);
+        view.setText(std::string(text) + " " + text);
+        view.applyYogaLayout();
+        SDL_Surface *wrapped = view.rasterizeLines(logicalWidth * 2);
+        expect(alphaCoverage(wrapped) == 2 * alphaCoverage(run),
+               "automatic wrapping must preserve all descender pixels");
+        expect(view.textureHeight() == (wrapped->h + 1) / 2,
+               "wrapped layout height must match the complete glyph raster");
+        SDL_FreeSurface(wrapped);
+        SDL_FreeSurface(run);
+      }
+    }
+  }
+}
+
+int firstInkX(SDL_Surface *surface, int top, int bottom) {
+  expect(surface != nullptr, "multiline text rasterizes");
+  int first = surface->w;
+  for (int y = top; y < std::min(bottom, surface->h); ++y) {
+    const auto *row = reinterpret_cast<const Uint32 *>(
+        static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
+    for (int x = 0; x < surface->w; ++x) {
+      Uint8 r, g, b, alpha;
+      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      if (alpha != 0) first = std::min(first, x);
+    }
+  }
+  expect(first < surface->w, "each text line contains visible glyphs");
+  return first;
+}
+
+void testMultilineAlignmentAcrossFonts() {
+  for (const auto &glyph : {std::string("M"), std::string("あ"), std::string("가")}) {
+    MultilineTextProbe view("assets/fonts/notosanscjkjp.ttf", 22);
+    view.setDeferredTextureMaterialization(true);
+    view.setColor({255, 255, 255, 255});
+    const std::string longLine = glyph + glyph + glyph + glyph + glyph + glyph;
+    view.setText(longLine + "\n" + glyph);
+    SDL_Surface *left = view.rasterizeLines();
+    const int leftX = firstInkX(left, view.lineHeight(), view.lineHeight() * 2);
+    SDL_FreeSurface(left);
+    const int spare = view.rasterWidth(longLine) - view.rasterWidth(glyph);
+    view.setDeferredTextureMaterialization(false);
+    expect(bgfx::isValid(view.textureHandle()), "left-aligned texture is materialized");
+    view.setDeferredTextureMaterialization(true);
+    for (const auto alignment : {TextView::CENTER, TextView::RIGHT}) {
+      view.setAlign(alignment);
+      expect(!bgfx::isValid(view.textureHandle()),
+             "changing multiline alignment invalidates the previously rasterized texture");
+      SDL_Surface *aligned = view.rasterizeLines();
+      const int alignedX = firstInkX(aligned, view.lineHeight(), view.lineHeight() * 2);
+      SDL_FreeSurface(aligned);
+      expect(alignedX - leftX == (alignment == TextView::CENTER ? spare / 2 : spare),
+             "alignment positions each primary or fallback text line independently");
+    }
+  }
+}
+
+std::string instructionText(GuidedAccessInstructionView &view) {
+  std::string result;
+  for (auto *row : view.getChildren()) {
+    if (!result.empty()) result += '\n';
+    for (auto *child : row->getChildren()) {
+      auto *run = static_cast<TextView *>(child);
+      result += run->getText();
+      expect(run->getText().find("**") == std::string::npos,
+             "formatting markers are never displayed");
+      expect(run->getX() >= view.getContentX() &&
+             run->getX() + run->getWidth() <= view.getContentX() + view.getContentWidth() &&
+             run->getY() >= view.getContentY() &&
+             run->getY() + run->getHeight() <= view.getContentY() + view.getContentHeight() &&
+             run->textureHeight() <= run->getContentHeight(),
+             "styled instructions fit their paragraph without clipping");
+      const auto color = run->currentColor();
+      const auto expected = run->fontWeight() == TextView::FontWeight::Bold
+          ? ui_theme::cyan() : ui_theme::textSecondary();
+      expect(color.r == expected.r && color.g == expected.g && color.b == expected.b,
+             "setting targets use accent color and surrounding text stays secondary");
+    }
+  }
+  return result;
+}
+
+std::string withoutEmphasis(std::string text) {
+  for (auto marker = text.find("**"); marker != std::string::npos; marker = text.find("**")) {
+    text.erase(marker, 2);
+  }
+  return text;
+}
+
+void testReminderDescriptionPreservesLineBreaks() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    ReminderUIFixture fixture;
+    fixture.root.setSize(rendering::window_width, rendering::window_height);
+    fixture.showGuidedAccessReminder();
+    fixture.root.applyYogaLayout();
+    const auto *why = fixture.guidedAccessReminderWhy;
+    const auto *title = fixture.guidedAccessReminderTitle;
+    expect(title->pointSize() > why->pointSize() &&
+           title->fontWeight() == TextView::FontWeight::Bold &&
+           title->textureHeight() <= title->getContentHeight(),
+           "larger bold title fits above the explanation");
+    auto *help = fixture.guidedAccessReminderHelp;
+    auto *disableHelp = fixture.guidedAccessReminderDisableHelp;
+    expect(why->pointSize() > 22 && why->fontWeight() == TextView::FontWeight::Bold,
+           "explanation is larger and bold");
+    expect(why->textureWidth() <= why->getContentWidth() &&
+           why->textureHeight() <= why->getContentHeight(),
+           "separate explanation and instructions fit in the production layout");
+    expect(help->getY() - (why->getY() + why->getHeight()) >= 24,
+           "explanation has a clear paragraph gap before the setup steps");
+    expect(disableHelp->getY() - (help->getY() + help->getHeight()) >= 24,
+           "disable reminder note is spaced separately from setup steps");
+    expect(why->currentColor().r == ui_theme::cyan().r &&
+           why->currentColor().g == ui_theme::cyan().g &&
+           why->currentColor().b == ui_theme::cyan().b,
+           "explanation uses the theme accent color");
+    expect(help->getChildren().size() == 2, "setup keeps its two instruction lines");
+    expect(instructionText(*disableHelp) == withoutEmphasis(
+               i18n::tr("gameplay.ipad_gesture_reminder.disable_help")),
+           "disable note preserves its localized wording");
+    int emphasizedRuns = 0;
+    for (auto *paragraph : {help, disableHelp}) {
+      for (auto *row : paragraph->getChildren()) {
+        for (auto *child : row->getChildren()) {
+          emphasizedRuns += static_cast<TextView *>(child)->fontWeight() == TextView::FontWeight::Bold;
+        }
+      }
+    }
+    expect(emphasizedRuns == 4, "setup path, both setting names, and disable path are bold");
+    // Button identity remains known even when a partial window suppresses the edge cue.
+    for (const auto &entry : {
+             std::pair{"iPad7,5", "gameplay.ipad_gesture_reminder.button.home"},
+             std::pair{"iPad16,3", "gameplay.ipad_gesture_reminder.button.top"},
+             std::pair{"unknown", "gameplay.ipad_gesture_reminder.button.unknown"}}) {
+      testButtonLocation = ipad_hardware::locateButton(
+          ipad_hardware::modelForIdentifier(entry.first),
+          ipad_hardware::Orientation::Unknown, false);
+      fixture.showGuidedAccessReminder();
+      fixture.root.applyYogaLayout();
+      const std::string expectedHelp = i18n::message(
+          "gameplay.ipad_gesture_reminder.help",
+          {{"button", i18n::message(entry.second)}}).resolve();
+      const auto renderedHelp = instructionText(*help);
+      expect(renderedHelp == withoutEmphasis(expectedHelp) &&
+             renderedHelp.find("{button}") == std::string::npos,
+             "instruction names the model's button or uses the unknown-model fallback");
+    }
+    testButtonLocation = {};
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testHardwareButtonCueTextFits() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const auto key : {"gameplay.ipad_gesture_reminder.home_button",
+                           "gameplay.ipad_gesture_reminder.top_button",
+                           "gameplay.ipad_gesture_reminder.enabled"}) {
+      TextView view("assets/fonts/notosanscjkjp.ttf", 22);
+      view.setDeferredTextureMaterialization(true);
+      view.setSize(360, 112);
+      view.setPadding(Edge::All, 8);
+      if (std::string(key) == "gameplay.ipad_gesture_reminder.enabled") {
+        view.setPadding(Edge::Left, 48); // Space for the separate Font Awesome check.
+      }
+      view.setWrap(true);
+      view.setAlign(TextView::CENTER);
+      view.setLocalizedText(i18n::message(key));
+      view.applyYogaLayout();
+      expect(view.textureWidth() <= view.getContentWidth() &&
+             view.textureHeight() <= view.getContentHeight(),
+             "localized hardware cue fits inside its padded label");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testHardwareCueUsesRealViewHierarchy() {
+  using namespace ipad_hardware;
+  testButtonLocation = locateButton(modelForIdentifier("iPad16,3"), Orientation::LandscapeRight, true);
+  ReminderUIFixture fixture;
+  fixture.root.setSize(rendering::window_width, rendering::window_height);
+  fixture.showGuidedAccessReminder();
+  fixture.root.applyYogaLayout();
+  expect(fixture.guidedAccessButtonHint->getVisible(), "idle cue is visible");
+  expect(!fixture.guidedAccessButtonCheck->getVisible(), "idle cue has no success check");
+  fixture.guidedAccessReminder.update(true, true, 1000);
+  fixture.showGuidedAccessReminder();
+  fixture.root.applyYogaLayout();
+  expect(fixture.guidedAccessButtonCheck->getVisible(), "confirmation displays its check");
+  expect(!fixture.guidedAccessReminderWhy->getVisible() &&
+         !fixture.guidedAccessReminderDisableHelp->getVisible(),
+         "confirmation hides the setup explanation and disable note");
+  expect(fixture.guidedAccessButtonCheck->primaryFontPath() == ui_icons::kFontAwesomeSolidPath,
+         "confirmation uses the Font Awesome face");
+  expect(fixture.guidedAccessButtonCheck->getText() == ui_icons::textForCodepoint(0xf00c),
+         "confirmation uses Font Awesome's check glyph");
+  for (const auto orientation : {Orientation::Portrait, Orientation::PortraitUpsideDown,
+                                 Orientation::LandscapeLeft, Orientation::LandscapeRight}) {
+    testButtonLocation = locateButton(modelForIdentifier("iPad16,3"), orientation, true);
+    fixture.showGuidedAccessReminder();
+    fixture.root.applyYogaLayout();
+    const auto *hint = fixture.guidedAccessButtonHint;
+    const auto *check = fixture.guidedAccessButtonCheck;
+    const int textLeft = hint->getContentX() +
+        (hint->getContentWidth() - hint->textureWidth()) / 2;
+    expect(check->getX() >= hint->getX() &&
+           check->getY() >= hint->getY() &&
+           check->getY() + check->getHeight() <= hint->getY() + hint->getHeight() &&
+           check->getX() + check->getWidth() <= textLeft - 4,
+           "Font Awesome check stays inside the capsule and clear of its text after rotation");
+  }
+  for (const auto tick : {1600, 1795, 1800, 2000, 2999}) {
+    fixture.guidedAccessReminder.update(true, true, tick);
+    fixture.showGuidedAccessReminder();
+    expect(fixture.guidedAccessButtonHint->getVisible() &&
+           fixture.guidedAccessButtonMarker->getVisible() &&
+           fixture.guidedAccessButtonCheck->getVisible(), "success cue remains visible until playback");
+    expect(fixture.guidedAccessButtonCheck->currentColor().a == ui_theme::lime().a &&
+           fixture.guidedAccessButtonHint->currentColor().a == ui_theme::textPrimary().a,
+           "success text and Font Awesome check stay fully opaque");
+    expect(!fixture.guidedAccessReminder.completed(), "cue does not shorten the startup delay");
+  }
+  fixture.guidedAccessReminder.reset();
+  fixture.showGuidedAccessReminder();
+  expect(fixture.guidedAccessButtonHint->getVisible() &&
+         fixture.guidedAccessButtonHint->currentColor().a == ui_theme::textPrimary().a &&
+         !fixture.guidedAccessButtonCheck->getVisible(), "interruption restores the idle cue");
+  testButtonLocation = {};
+  fixture.guidedAccessReminder.update(true, true, 2000);
+  fixture.showGuidedAccessReminder();
+  expect(!fixture.guidedAccessButtonHint->getVisible() &&
+         !fixture.guidedAccessButtonCheck->getVisible(), "unknown location has no floating success icon");
+}
+
 void testDeferredTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -375,6 +710,11 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testMultilineAlignmentAcrossFonts();
+  testComposedTextPreservesDescenders();
+  testReminderDescriptionPreservesLineBreaks();
+  testHardwareButtonCueTextFits();
+  testHardwareCueUsesRealViewHierarchy();
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();

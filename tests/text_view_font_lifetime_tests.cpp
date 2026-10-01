@@ -5,7 +5,10 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
+#include <fstream>
+#include <sstream>
 #include <memory>
 #include <new>
 #include <string>
@@ -31,6 +34,7 @@ int ui_view_height = design_height;
 class FontProbeView : public TextView {
 public:
   using TextView::TextView;
+  TTF_Font *fontForGlyph(Uint32 codepoint) { return selectFont(codepoint).font; }
   TTF_Font *primaryFont() const {
     assert(!fontFaces.empty());
     return fontFaces.front().font;
@@ -77,6 +81,72 @@ void testConstructorRollback(const std::string &path) {
   assert(text_runtime::activeReferencesForTesting() == 0);
 }
 
+void testFullStaticFonts() {
+  const std::string root = ASOBMASHOW_SOURCE_DIR "/assets/fonts/";
+  FontProbeView regular(root + "notosanscjkjp.ttf", 22);
+  FontProbeView bold(root + "notosanscjkjp.ttf", 22, TextView::FontWeight::Bold);
+  FontProbeView sharedBold(root + "notosanscjkjp.ttf", 22, TextView::FontWeight::Bold);
+  assert(regular.primaryFont() != bold.primaryFont());
+  assert(bold.primaryFont() == sharedBold.primaryFont());
+  assert(regular.primaryFontPath() == root + "notosanscjkjp.ttf");
+  assert(bold.primaryFontPath() == root + "notosanscjkjp-bold.otf");
+  assert(std::string(TTF_FontFaceStyleName(regular.primaryFont())) == "Regular");
+  assert(std::string(TTF_FontFaceStyleName(bold.primaryFont())) == "Bold");
+
+  // Preserve the complete legacy coverage, including dynamic chart text.
+  std::ifstream coverage(ASOBMASHOW_SOURCE_DIR "/tests/fixtures/ui_font_legacy_coverage.txt");
+  assert(coverage.is_open());
+  std::string line;
+  size_t legacyCharacters = 0;
+  while (std::getline(coverage, line)) {
+    if (line.empty() || line[0] == '#') continue;
+    std::istringstream ranges(line);
+    std::string range;
+    while (ranges >> range) {
+      const auto dash = range.find('-');
+      const auto first = std::stoul(range.substr(0, dash), nullptr, 16);
+      const auto last = std::stoul(range.substr(dash + 1), nullptr, 16);
+      for (Uint32 codepoint = first; codepoint <= last; ++codepoint) {
+        assert(TTF_GlyphIsProvided32(regular.primaryFont(), codepoint));
+        assert(TTF_GlyphIsProvided32(bold.primaryFont(), codepoint));
+        ++legacyCharacters;
+      }
+    }
+  }
+  assert(legacyCharacters == 28926);
+  size_t mappedCharacters = 0;
+  for (Uint32 codepoint = 32; codepoint <= 0x10ffff; ++codepoint) {
+    const bool hasRegular = TTF_GlyphIsProvided32(regular.primaryFont(), codepoint) != 0;
+    const bool hasBold = TTF_GlyphIsProvided32(bold.primaryFont(), codepoint) != 0;
+    assert(hasRegular == hasBold);
+    mappedCharacters += hasRegular;
+  }
+  assert(mappedCharacters == 44811);
+  for (const auto &entry : {std::pair{&regular, "notosanscjkjp.ttf"},
+                            std::pair{&bold, "notosanscjkjp-bold.otf"}}) {
+    TTF_Font *reference = TTF_OpenFont((root + entry.second).c_str(), 44);
+    assert(reference);
+    for (const auto glyph : {U'A', U'힣', U'ア', U'龘', U'𠮷', U'≒'}) {
+      assert(entry.first->fontForGlyph(glyph) == entry.first->primaryFont());
+      assert(TTF_GlyphIsProvided32(entry.first->primaryFont(), glyph));
+    }
+    for (const char *text : {"Guided Access", "사용법 유도 힣", "アクセスガイド 龘𠮷≒"}) {
+      SDL_Surface *actual = TTF_RenderUTF8_Blended(
+          entry.first->primaryFont(), text, {255, 255, 255, 255});
+      SDL_Surface *expected = TTF_RenderUTF8_Blended(reference, text, {255, 255, 255, 255});
+      assert(actual && expected && actual->w == expected->w && actual->h == expected->h);
+      for (int y = 0; y < actual->h; ++y) {
+        assert(std::memcmp(static_cast<char *>(actual->pixels) + y * actual->pitch,
+                           static_cast<char *>(expected->pixels) + y * expected->pitch,
+                           actual->w * actual->format->BytesPerPixel) == 0);
+      }
+      SDL_FreeSurface(actual);
+      SDL_FreeSurface(expected);
+    }
+    TTF_CloseFont(reference);
+  }
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -110,6 +180,8 @@ int main() {
   }
   assert(text_runtime::activeReferencesForTesting() == 0);
   assert(TTF_WasInit() == 0);
+  testFullStaticFonts();
+  assert(text_runtime::activeReferencesForTesting() == 0);
   testConstructorRollback(path);
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();

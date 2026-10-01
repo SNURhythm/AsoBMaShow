@@ -147,6 +147,7 @@ void testActualChartPreparationOrdering(std::string_view pathToTest) {
         auto initial = parsePreparationFixture(path);
         applyEffectiveLongNoteModeToChart(*initial, selectedMode);
         PreparedGamePlayScene pausedAttempt(context, initial.get(), options);
+        pausedAttempt.options.guidedAccessReminderSkipped = true;
         pausedAttempt.attemptProvenance.assistOption = assist_options::kAssisted;
         pausedAttempt.attemptProvenance.eligibility = ScoreEligibility::Modified;
         std::unique_ptr<bms_parser::Chart> retry;
@@ -155,6 +156,8 @@ void testActualChartPreparationOrdering(std::string_view pathToTest) {
         require(prepareRetryChart(initial->Meta, pausedAttempt.options, retry,
                                   retryOptions, cancelled),
                 "COR05 actual in-game retry helper prepares a new pattern");
+        require(retryOptions.guidedAccessReminderSkipped,
+                "in-game new-pattern retry retains the session reminder choice");
         PreparedGamePlayScene scene(context, std::move(retry), retryOptions);
         requirePreparedPolicy(scene, 3);
         require(scene.attemptProvenance.assistOption == assist_options::kOff &&

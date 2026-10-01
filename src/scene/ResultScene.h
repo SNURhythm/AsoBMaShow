@@ -219,6 +219,7 @@ struct LocalResultSource {
   bool replayResult = false;
   bool retrySameAllowed = true;
   bool autoPlayResult = false;
+  bool guidedAccessReminderSkipped = false;
   bool previousBestLoaded = false;
   bool persistenceContinueChosen = false;
   bool courseTransitionStarted = false;
@@ -289,7 +290,8 @@ public:
       bool retrySameAllowed = true, ResultTableContext tableContext = {},
       SkinGameplayGraphState gameplayGraph = {},
       std::optional<std::int64_t> currentScorePlayedAtUnixMillis =
-          std::nullopt);
+          std::nullopt,
+      bool guidedAccessReminderSkipped = false);
   ResultScene(ApplicationContext &context, ResultRemoteOptions remote);
   ~ResultScene() override;
 

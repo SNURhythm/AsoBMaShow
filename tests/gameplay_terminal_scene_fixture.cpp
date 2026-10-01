@@ -2,6 +2,7 @@
 #include "ir/tachi/TachiEligibility.h"
 #include "scene/play/GamePlayStartOptions.h"
 #include "scene/play/GamePlayTiming.h"
+#include "scene/play/GuidedAccessReminder.h"
 #include "scene/play/PracticeNoteFinalizer.h"
 #include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/RealtimeGameplayWorker.h"
@@ -21,6 +22,9 @@
 #include "replay/CourseReplayConsumer.h"
 #include "skin/beatoraja/GameplaySkinEndAnimation.h"
 #include <SDL2/SDL_log.h>
+#include "../SDL/include/SDL_uikit_rawtouch.h"
+#include <array>
+#include <deque>
 #include <yoga/Yoga.h>
 
 #include <atomic>
@@ -56,7 +60,20 @@ struct FixtureJukebox {
   void playKeySound(int) { require(false, "Watch must not request live keysounds"); }
 };
 
+std::deque<IOSRawTouchEvent> reminderTouches;
+std::uint64_t reminderTicks = 0;
+bool IsIOSPad() { return true; }
+extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity) {
+  size_t count = 0;
+  while (count < capacity && !reminderTouches.empty()) {
+    buffer[count++] = reminderTouches.front();
+    reminderTouches.pop_front();
+  }
+  return count;
+}
+
 struct FixtureInput {
+  void stopListen() {}
   void pumpPendingTouchEvents() {}
   void discardPendingTouchEvents() {}
 };
@@ -138,6 +155,12 @@ struct FixturePauseView {
   bool getVisible() const { return visible; }
 };
 
+struct ReminderSceneManager {
+  std::unordered_set<Scene *> backgroundScenes;
+  int returns = 0;
+  template <typename Destination> void changeScene(Destination, bool) { ++returns; }
+};
+
 class GamePlayScene {
 public:
   bms_parser::Chart ownedChart;
@@ -146,6 +169,9 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
+    struct { bool ipadGestureReminderEnabled = false; } settings;
+    ReminderSceneManager reminderSceneManager;
+    ReminderSceneManager *sceneManager = &reminderSceneManager;
     struct {
       int fallbackCompletions = 0;
       void resetGyroscopeTurntableSession() {}
@@ -184,6 +210,48 @@ public:
   FixturePauseView *practiceRestartButton = nullptr;
   bool realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   bool playbackInitializationFailed = false;
+  gameplay::GuidedAccessReminder guidedAccessReminder;
+  bool guidedAccessReminderPending = false;
+  bool guidedAccessReminderExiting = false;
+  bool guidedAccessReminderBackground = false;
+  bool guidedAccessEnabled = false;
+  bool isGuidedAccessEnabled() const { return guidedAccessEnabled; }
+  FixturePauseView reminderLayout;
+  FixturePauseView *guidedAccessReminderLayout = &reminderLayout;
+  void discardGuidedAccessReminderTouches();
+  void showGuidedAccessReminder() { reminderLayout.setVisible(true); }
+  void onApplicationBackgroundChanged(bool background);
+  void returnFromGuidedAccessReminder();
+  int chimePlays = 0;
+  int chimeStops = 0;
+  int chimeReleases = 0;
+  void playGuidedAccessChime() { ++chimePlays; }
+  void stopGuidedAccessChime(bool release = false) {
+    ++chimeStops;
+    if (release) ++chimeReleases;
+  }
+  int attemptStarts = 0;
+  bool nativeBackground = false;
+  bool startedWhileNativeBackground = false;
+  bool startPreparedAttempt() {
+    stopGuidedAccessChime(true);
+    ++attemptStarts;
+    startedWhileNativeBackground |= nativeBackground;
+    state->isPlaying = true;
+    return true;
+  }
+  bool queueDeferred = false;
+  unsigned frame = 0;
+  std::vector<std::pair<unsigned, std::function<bool()>>> deferred;
+  void finishFrame() {
+    auto callbacks = std::move(deferred);
+    deferred.clear();
+    for (auto &entry : callbacks) {
+      if (entry.first <= frame) entry.second();
+      else deferred.push_back(std::move(entry));
+    }
+    ++frame;
+  }
   bool useProductionResetBoundary = false;
   int transitions = 0;
   int resets = 0;
@@ -232,7 +300,10 @@ public:
   void resetAttemptBoundaryForTest();
   void resetCoursePauseHold() {}
   void updateSkinResetLayoutVisibility() {}
-  template <typename Callback> void defer(Callback callback, int, bool) { callback(); }
+  template <typename Callback> void defer(Callback callback, int, bool waitFrame) {
+    if (queueDeferred) deferred.emplace_back(frame + (waitFrame ? 1 : 0), callback);
+    else callback();
+  }
   void completePracticeSection(bool realtimeRangeFinalized);
   void finalizePracticeRangeMisses();
   void completePracticeAttempt();
@@ -1529,7 +1600,177 @@ PREPARATION_IMPLEMENTATIONS
 
 FLIP_IMPLEMENTATIONS
 
+void queueReminderSwipe() {
+  for (auto phase : {IOSRawTouchPhaseBegan, IOSRawTouchPhaseMoved, IOSRawTouchPhaseEnded}) {
+    for (int i = 0; i < 4; ++i) {
+      reminderTouches.push_back({.fingerId = i, .normalizedX = .2F + .1F * i,
+          .normalizedY = phase == IOSRawTouchPhaseBegan ? .8F : .765F, .phase = phase});
+    }
+  }
+}
+
+void testReminderSwipesDoNotStart() {
+  GamePlayScene scene;
+  scene.guidedAccessReminderPending = true;
+  scene.state->isPlaying = false;
+  reminderTouches.clear();
+  reminderTicks = 1000;
+  queueReminderSwipe();
+  scene.update(0);
+  reminderTicks += 2000;
+  scene.update(0);
+  require(scene.attemptStarts == 0 && scene.guidedAccessReminderPending &&
+              !scene.state->isPlaying && scene.recordedReplay.events.empty() &&
+              !scene.modernReplayInputRecorder && reminderTouches.empty(),
+          "four-finger swipes must be discarded without starting gameplay or replay capture");
+}
+
+void testGuidedAccessReminderStartup(std::string_view scenario) {
+  GamePlayScene scene;
+  scene.queueDeferred = true;
+  scene.guidedAccessReminderPending = true;
+  scene.state->isPlaying = false;
+  reminderTouches.clear();
+  reminderTicks = 1000;
+  scene.update(0);
+  require(scene.attemptStarts == 0 && scene.guidedAccessReminderPending,
+          "inactive Guided Access must leave the reminder waiting");
+
+  require(scene.chimePlays == 0, "inactive reminder must be silent");
+  if (scenario == "dismiss" || scenario == "dismiss-background") {
+    queueReminderSwipe();
+    scene.options.guidedAccessReminderSkipped = true;
+    if (scenario == "dismiss-background") {
+      scene.onApplicationBackgroundChanged(true);
+      scene.update(0);
+      require(scene.attemptStarts == 0, "dismissal must respect background state");
+      scene.onApplicationBackgroundChanged(false);
+    }
+    scene.update(0);
+    require(scene.attemptStarts == 1 && !scene.guidedAccessReminderPending &&
+                reminderTouches.empty(),
+            "Skip this session starts immediately and discards all reminder touches");
+    require(scene.chimePlays == 0, "Skip must not play the confirmation chime");
+    scene.resetAttemptBoundaryForTest();
+    require(scene.options.guidedAccessReminderSkipped,
+            "Skip must survive retries in the same gameplay session");
+    return;
+  }
+
+  scene.guidedAccessEnabled = true; // Polled status or notification starts a session.
+  scene.update(0);
+  require(scene.attemptStarts == 0 && scene.guidedAccessReminderPending &&
+              scene.guidedAccessReminder.confirming(),
+          "Guided Access begins confirmation without starting playback");
+  reminderTicks += 500;
+  scene.update(0);
+  require(scene.chimePlays == 1, "activation plays once across repeated updates");
+  if (scenario == "back") {
+    scene.returnFromGuidedAccessReminder();
+    require(scene.chimeReleases == 1, "Back releases the confirmation sound");
+    reminderTicks += 2000;
+    scene.update(0);
+    scene.finishFrame();
+    scene.finishFrame();
+    require(scene.attemptStarts == 0 && scene.context.sceneManager->returns == 1,
+            "Back during confirmation must cancel startup and return once");
+    return;
+  }
+  if (scenario == "ended") {
+    scene.guidedAccessEnabled = false;
+    scene.update(0);
+    reminderTicks += 2000;
+    scene.update(0);
+    require(scene.attemptStarts == 0 && !scene.guidedAccessReminder.confirming(),
+            "ending Guided Access during confirmation must cancel startup");
+    require(scene.chimeStops > 0, "ending Guided Access stops the chime");
+    scene.guidedAccessEnabled = true;
+    scene.update(0); // A new session needs its own animation and settling second.
+  } else if (scenario == "background" || scenario == "native-background") {
+    // UIKit can change lifecycle state after update, before deferred callbacks.
+    scene.nativeBackground = true;
+    scene.finishFrame();
+    require(!scene.startedWhileNativeBackground,
+            "confirmation must never start playback from deferred callbacks");
+    scene.onApplicationBackgroundChanged(true);
+    require(scene.chimeStops > 0, "backgrounding stops the chime");
+    reminderTicks += 2000;
+    scene.update(0);
+    require(scene.attemptStarts == 0 && scene.recordedReplay.events.empty() &&
+                !scene.modernReplayInputRecorder,
+            "background time must not start gameplay or replay capture");
+    scene.nativeBackground = false;
+    scene.onApplicationBackgroundChanged(false);
+    scene.update(0); // Restart the animation and settling delay after foregrounding.
+  } else {
+    reminderTicks -= 500; // Remaining checks are relative to the original start.
+  }
+  require(scene.chimePlays == (scenario == "ended" ? 2 : 1),
+          "only a fresh activation replays the chime, not a foreground return");
+  reminderTicks += 999;
+  scene.update(0);
+  require(scene.attemptStarts == 0 && !scene.state->isPlaying &&
+              scene.recordedReplay.events.empty() && !scene.modernReplayInputRecorder,
+          "audio and replay capture must remain stopped throughout confirmation");
+  reminderTicks += 1;
+  scene.update(0);
+  require(scene.attemptStarts == 0 && scene.guidedAccessReminder.progress() == 1,
+          "finishing the lock animation must leave a full extra second before playback");
+  reminderTicks += 999;
+  scene.update(0);
+  require(scene.attemptStarts == 0 && !scene.state->isPlaying &&
+              scene.recordedReplay.events.empty() && !scene.modernReplayInputRecorder,
+          "audio and replay capture must remain stopped during the settling second");
+  reminderTicks += 1;
+  scene.update(0);
+  require(scene.attemptStarts == 1 && scene.state->isPlaying &&
+              !scene.guidedAccessReminderPending && !scene.reminderLayout.visible,
+          "confirmation completes after animation plus one extra foreground second");
+  scene.finishFrame();
+  scene.guidedAccessEnabled = false;
+  scene.update(0);
+  require(scene.attemptStarts == 1 && !scene.guidedAccessReminderPending,
+          "ending Guided Access during gameplay must not restart the reminder");
+}
+
+void testReminderSkipSession() {
+  for (const int mode : {0, 1, 2}) {
+    const bool practice = mode != 0;
+    GamePlayScene scene;
+    scene.context.settings.ipadGestureReminderEnabled = true;
+    scene.options.practiceMode = practice;
+    if (mode == 2) {
+      scene.options.practiceSession =
+          std::make_shared<practice::Session>(practice::Configuration{});
+    }
+    scene.resetAttemptBoundaryForTest();
+    require(scene.guidedAccessReminderPending, "fresh normal/practice session prompts");
+    scene.options.guidedAccessReminderSkipped = true;
+    scene.resetAttemptBoundaryForTest();
+    require(!scene.guidedAccessReminderPending,
+            "normal/practice retry must keep the session's Skip choice");
+    scene.resetAttemptBoundaryForTest();
+    require(!scene.guidedAccessReminderPending, "repeated retry remains skipped");
+    GamePlayScene reopened;
+    reopened.context.settings.ipadGestureReminderEnabled = true;
+    reopened.options.practiceMode = practice;
+    reopened.resetAttemptBoundaryForTest();
+    require(reopened.guidedAccessReminderPending,
+            "leaving and reopening normal/practice starts a fresh reminder session");
+  }
+}
+
 int main(int argc, char **argv) {
+  if (argc > 2 && std::string_view(argv[1]) == "guided-access") {
+    testGuidedAccessReminderStartup(argv[2]);
+    return 0;
+  }
+  testReminderSkipSession();
+  testReminderSwipesDoNotStart();
+  for (const auto scenario : {"started", "background", "native-background", "ended",
+                              "back", "dismiss", "dismiss-background"}) {
+    testGuidedAccessReminderStartup(scenario);
+  }
   testNativeFailureRacingOrdinaryPauseResumeIsNotCleared();
   testNativeFailurePausesBeforeHeldReleaseAndWaitsForExplicitResume();
   {

@@ -8,6 +8,7 @@
 #include "../../ReplayData.h"
 #include "../../ThreadCompat.h"
 #include "../../audio/PlaybackRate.h"
+#include "../../audio/AudioWrapper.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "BeatorajaHiSpeed.h"
@@ -19,6 +20,8 @@
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "StartSelectControl.h"
+#include "GuidedAccessReminder.h"
+#include "GuidedAccessInstructionView.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../ReplayRecordTask.h"
@@ -31,6 +34,7 @@
 #include "../../skin/SkinPresentationTypes.h"
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -68,6 +72,7 @@ public:
   bool pausesBackgroundTasksForPerformance() const override { return true; }
   void init() override;
   void update(float dt) override;
+  void onApplicationBackgroundChanged(bool background) override;
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
@@ -93,6 +98,28 @@ private:
     replay::ReplayTimeBounds timeBounds;
   };
   bool reset();
+  bool startPreparedAttempt();
+  bool isGuidedAccessEnabled() const;
+  void showGuidedAccessReminder();
+  void discardGuidedAccessReminderTouches();
+  void returnFromGuidedAccessReminder();
+  void prepareGuidedAccessChime();
+  void playGuidedAccessChime();
+  void stopGuidedAccessChime(bool release = false);
+  std::optional<audio::SkinSoundHandle> guidedAccessChime;
+  gameplay::GuidedAccessReminder guidedAccessReminder;
+  bool guidedAccessReminderPending = false;
+  bool guidedAccessReminderExiting = false;
+  bool guidedAccessReminderBackground = false;
+  View *guidedAccessReminderLayout = nullptr;
+  TextView *guidedAccessReminderIcon = nullptr;
+  TextView *guidedAccessReminderTitle = nullptr;
+  TextView *guidedAccessReminderWhy = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderHelp = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderDisableHelp = nullptr;
+  View *guidedAccessButtonMarker = nullptr;
+  TextView *guidedAccessButtonHint = nullptr;
+  TextView *guidedAccessButtonCheck = nullptr;
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);

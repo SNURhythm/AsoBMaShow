@@ -510,6 +510,7 @@ json settingsToJson(const AppSettings &settings) {
       {"hispeedFixMode", static_cast<int>(settings.hispeedFixMode)},
       {"inputKeysoundEnabled", settings.inputKeysoundEnabled},
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
+      {"ipadGestureReminderEnabled", settings.ipadGestureReminderEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
       {"showPastNotes", settings.showPastNotes},
@@ -672,6 +673,10 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
             diagnostics);
+  // Existing profiles predate the reminder; enable it by default only for newcomers.
+  settings.ipadGestureReminderEnabled = false;
+  readValue(document, "ipadGestureReminderEnabled",
+            settings.ipadGestureReminderEnabled, diagnostics);
   readValue(document, "startLaneIndicatorsEnabled",
             settings.startLaneIndicatorsEnabled, diagnostics);
   readValue(document, "showInvisibleNotes", settings.showInvisibleNotes,
@@ -1093,6 +1098,7 @@ AppSettingsStore::LoadLegacyCfg(const std::filesystem::path &settingsCfg) {
     return result;
   }
   AppSettings parsed;
+  parsed.ipadGestureReminderEnabled = false;
   parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::loadLegacyCfg(settingsCfg, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;
@@ -1118,6 +1124,7 @@ AppSettingsLoadResult
 AppSettingsStore::LoadLegacyCfgStreamForTesting(std::istream &input) {
   AppSettingsLoadResult result;
   AppSettings parsed;
+  parsed.ipadGestureReminderEnabled = false;
   parsed.selectedGaugeAutoShiftMode = "none";
   if (!AppSettings::parseLegacyCfg(input, parsed, &result.diagnostics)) {
     result.status = AppSettingsLoadStatus::Invalid;

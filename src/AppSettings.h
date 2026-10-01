@@ -151,6 +151,7 @@ public:
   HiSpeedFixMode hispeedFixMode = HiSpeedFixMode::Main;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
+  bool ipadGestureReminderEnabled = true;
   bool startLaneIndicatorsEnabled = true;
   bool showInvisibleNotes = false;
   // PlayerConfig.showpastnote. Its narrow LaneRenderer condition is applied

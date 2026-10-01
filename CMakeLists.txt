@@ -5092,8 +5092,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
     target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/guided_access_reminder_ui_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
+        DEPENDS tests/guided_access_reminder_ui_extract.py
+            tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
         src/rendering/Color.cpp
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
@@ -5107,6 +5118,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(text_input_box_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
     )
     target_compile_features(text_input_box_tests PRIVATE cxx_std_23)
     target_compile_definitions(text_input_box_tests PRIVATE
@@ -5661,6 +5673,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
     set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
     if(APPLE AND NOT IOS)
+        add_test(NAME ios_guided_access_status_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/ios_guided_access_status_tests.py)
+        add_test(NAME ios_hardware_button_tests
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/ios_hardware_button_tests.py)
         add_test(NAME unzip_marker_io_tests
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
         set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)
@@ -7339,6 +7357,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
     endif()
 
+    add_executable(guided_access_reminder_tests tests/guided_access_reminder_tests.cpp)
+    target_compile_features(guided_access_reminder_tests PRIVATE cxx_std_23)
+
+    add_executable(ipad_hardware_button_tests tests/ipad_hardware_button_tests.cpp)
+    target_compile_features(ipad_hardware_button_tests PRIVATE cxx_std_23)
+
     add_executable(start_select_control_tests
         tests/start_select_control_tests.cpp
     )
@@ -8682,6 +8706,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(realtime_gameplay_input_registration_tests)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
+    asobmashow_register_test(guided_access_reminder_tests)
+    asobmashow_register_test(ipad_hardware_button_tests)
     asobmashow_register_test(start_select_control_tests)
     asobmashow_register_test(beatoraja_hispeed_tests)
     asobmashow_register_test(settings_scene_preview_authority_tests)

@@ -164,6 +164,7 @@ void testLegacyFixtureLoadsEverySetting() {
       AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg"));
   AppSettings expected = makeDistinctSettings();
   expected.audioVideo = player_settings::defaultAudioVideoSettingsForPlatform();
+  expected.ipadGestureReminderEnabled = false;
   expected.findBmsSkipUnarchivingForNonSolidArchives = false;
   expected.showPastNotes = false;
   expected.notesDisplayTimingMilliseconds = 0;
@@ -1105,6 +1106,35 @@ void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
   }
 }
 
+void testIpadGestureReminderRoundTrip() {
+  TempDirectory temp;
+  expect(AppSettings{}.ipadGestureReminderEnabled,
+         "iPad gesture reminder defaults on for newcomers");
+  const auto path = temp.path() / "gesture-reminder.json";
+  expect(AppSettingsStore::Load(path).settings.ipadGestureReminderEnabled,
+         "a fresh profile starts with the reminder enabled");
+  writeFile(path, R"({"schemaVersion":4})");
+  expect(!AppSettingsStore::Load(path).settings.ipadGestureReminderEnabled,
+         "existing profiles without the reminder remain off");
+  expect(!AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg"))
+              .settings.ipadGestureReminderEnabled,
+         "legacy profiles keep the reminder off during migration");
+  writeFile(path, R"({"schemaVersion":4,"ipadGestureReminderEnabled":true})");
+  const auto loaded = AppSettingsStore::Load(path);
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error),
+         "gesture reminder settings save: " + error);
+  const auto document = nlohmann::json::parse(readFile(path));
+  expect(document.value("ipadGestureReminderEnabled", false),
+         "enabled iPad reminder survives settings restart");
+  auto disabled = loaded.settings;
+  disabled.ipadGestureReminderEnabled = false;
+  expect(AppSettingsStore::Save(path, disabled, error),
+         "disabled gesture reminder settings save: " + error);
+  expect(!AppSettingsStore::Load(path).settings.ipadGestureReminderEnabled,
+         "explicitly disabling the reminder survives settings restart");
+}
+
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   AppSettings defaults;
   expect(!defaults.findBmsSkipUnarchivingForNonSolidArchives,
@@ -1454,6 +1484,7 @@ void testVersionFixturesAndNoRewrite() {
   expect(v0.status == AppSettingsLoadStatus::Loaded,
          "missing schema version migrates from v0");
   AppSettings expectedV0 = makeDistinctSettings();
+  expectedV0.ipadGestureReminderEnabled = false;
   expectedV0.findBmsSkipUnarchivingForNonSolidArchives = false;
   expectedV0.skinBgaMode = 2;
   expectedV0.hispeedAutoAdjust = false;
@@ -1770,6 +1801,7 @@ int main() {
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
+  testIpadGestureReminderRoundTrip();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();

@@ -9,6 +9,7 @@
 #include "../../BeatorajaScoreMetrics.h"
 #include "GameplayBmsResourceAvailability.h"
 #include "GamePlayStartup.h"
+#include "GuidedAccessButtonCue.h"
 #include "GamePlayTiming.h"
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
@@ -90,6 +91,9 @@
 #endif
 
 namespace {
+constexpr uint32_t kIconBack = 0xf060;
+constexpr uint32_t kIconLockOpen = 0xf3c1;
+constexpr uint32_t kIconLock = 0xf023;
 constexpr uint32_t kIconPause = 0xf04c;
 constexpr uint32_t kIconRestart = 0xf2f9;
 constexpr long long kReplayTouchMoveMinIntervalMicros = 8000LL;
@@ -1962,8 +1966,8 @@ void GamePlayScene::updateSkinResetLayoutVisibility() {
 }
 
 bool GamePlayScene::startRealtimeGameplayAuthority() {
-  if (realtimeGameplayAuthorityActive() || chart == nullptr ||
-      state == nullptr || presentation == nullptr) {
+  if (guidedAccessReminderPending || realtimeGameplayAuthorityActive() ||
+      chart == nullptr || state == nullptr || presentation == nullptr) {
     return false;
   }
 
@@ -3222,10 +3226,12 @@ void GamePlayScene::init() {
       return handleTouchInput(fingerIndex, action, normalizedLocation);
     });
     inputHandler->discardPendingTouchEvents();
-    inputHandler->startListenSDL();
+    if (!guidedAccessReminderPending) {
+      inputHandler->startListenSDL();
 #if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
-    inputHandler->startListenTouch();
+      inputHandler->startListenTouch();
 #endif
+    }
   }
 
   for (const auto &lane : chart->Meta.GetTotalLaneIndices()) {
@@ -3479,11 +3485,30 @@ void GamePlayScene::init() {
   }
   updateSkinResetLayoutVisibility();
   refreshRealtimeTouchLayout();
-  setRealtimeGameplayIngressEnabled(true);
+  setRealtimeGameplayIngressEnabled(!guidedAccessReminderPending);
 }
 
 bool GamePlayScene::reset() {
+  stopGuidedAccessChime(true);
+  guidedAccessReminderExiting = false;
+  guidedAccessReminder.reset();
+  guidedAccessReminderPending = false;
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  guidedAccessReminderPending = !options.guidedAccessReminderSkipped &&
+      gameplay::GuidedAccessReminder::required(
+      context.settings.ipadGestureReminderEnabled, IsIOSPad(),
+      isReplayPlayback(), options.autoPlay,
+      options.courseSession != nullptr ? options.courseSession->currentIndex : 0,
+      isGuidedAccessEnabled());
+#endif
+  if (guidedAccessReminderLayout != nullptr) {
+    guidedAccessReminderLayout->setVisible(false);
+  }
   stopRealtimeGameplayAuthority(false);
+  if (guidedAccessReminderPending && inputHandler != nullptr) {
+    inputHandler->stopListen();
+    inputHandler->discardPendingTouchEvents();
+  }
   inputInterruptionPause = false;
   realtimeGameplayAuthorityWaitingForSkinGeometry = false;
   playbackInitializationFailed = false;
@@ -3657,7 +3682,7 @@ bool GamePlayScene::reset() {
   updatePacemakerStatus();
   resetHellChargeGaugeTracking(
       getGameplayTimeMicros(context.jukebox.getTimeMicros()));
-  state->isPlaying = true;
+  state->isPlaying = !guidedAccessReminderPending;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   const long long initialRawSongTimeMicros = context.jukebox.getTimeMicros();
   const long long initialGameplayTimeMicros =
@@ -3673,6 +3698,285 @@ bool GamePlayScene::reset() {
   }
   updateSkinResetLayoutVisibility();
 #endif
+  if (guidedAccessReminderPending) {
+    prepareGuidedAccessChime();
+    showGuidedAccessReminder();
+    return true;
+  }
+  return startPreparedAttempt();
+}
+
+void GamePlayScene::prepareGuidedAccessChime() {
+  std::atomic<bool> cancelled{false};
+  guidedAccessChime = context.jukebox.audioRuntime().loadSkinSound(
+      fspath_to_path_t(std::filesystem::path("assets/guided-access-enabled.wav")),
+      cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max()).handle;
+}
+
+void GamePlayScene::playGuidedAccessChime() {
+  if (guidedAccessChime) {
+    context.jukebox.audioRuntime().playSkinSound(*guidedAccessChime, 1.0F, false);
+  }
+}
+
+void GamePlayScene::stopGuidedAccessChime(bool release) {
+  if (!guidedAccessChime) return;
+  auto &audio = context.jukebox.audioRuntime();
+  audio.stopSkinSound(*guidedAccessChime);
+  if (release) {
+    audio.disposeSkinSound(*guidedAccessChime);
+    guidedAccessChime.reset();
+  }
+}
+
+bool GamePlayScene::isGuidedAccessEnabled() const {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  return IsIOSGuidedAccessEnabled();
+#else
+  return false;
+#endif
+}
+
+void GamePlayScene::onApplicationBackgroundChanged(bool background) {
+  guidedAccessReminderBackground = background;
+  if (guidedAccessReminderPending) {
+    guidedAccessReminder.interrupt();
+    if (background) stopGuidedAccessChime();
+    if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+  }
+}
+
+void GamePlayScene::returnFromGuidedAccessReminder() {
+  if (guidedAccessReminderExiting) return;
+  guidedAccessReminderExiting = true;
+  stopGuidedAccessChime(true);
+  guidedAccessReminder.reset();
+  defer([this]() {
+    if (options.returnScene != nullptr &&
+        context.sceneManager->backgroundScenes.contains(options.returnScene)) {
+      context.sceneManager->changeScene(options.returnScene, false);
+    } else {
+      context.sceneManager->changeScene("MainMenu", false);
+    }
+    return false;
+  }, 0, true);
+}
+
+void GamePlayScene::discardGuidedAccessReminderTouches() {
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  std::array<IOSRawTouchEvent, 64> events{};
+  while (IOSPopRawTouchEvents(events.data(), events.size()) != 0) {
+    // Reminder touches must never reach gameplay or replay capture.
+  }
+#endif
+}
+
+void GamePlayScene::showGuidedAccessReminder() {
+  if (guidedAccessReminderLayout == nullptr) {
+    auto *overlay = new View();
+    guidedAccessReminderLayout = overlay;
+    addView(overlay);
+    overlay->setThemedBackgroundColor(ui_theme::backdrop);
+    overlay->setFlexDirection(FlexDirection::Column);
+    overlay->setAlignItems(YGAlignCenter);
+    overlay->setJustifyContent(YGJustifyCenter);
+    overlay->setGap(18);
+    overlay->setPadding(Edge::All, 32);
+    auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 40, TextView::FontWeight::Bold);
+    guidedAccessReminderTitle = title;
+    title->setWidthPercent(100);
+    title->setHeight(72);
+    title->setWrap(true);
+    title->setAlign(TextView::CENTER);
+    title->setVAlign(TextView::MIDDLE);
+    title->setThemedColor(ui_theme::textPrimary);
+    overlay->addView(title);
+    auto *guide = new View();
+    guide->setSize(300, 200);
+    overlay->addView(guide);
+    auto *lock = new TextView(ui_icons::kFontAwesomeSolidPath, 112);
+    guidedAccessReminderIcon = lock;
+    lock->setAlign(TextView::CENTER);
+    lock->setVAlign(TextView::MIDDLE);
+    lock->setThemedColor(ui_theme::textPrimary);
+    lock->setSize(180, 160);
+    lock->setPosition(60, 32, YGPositionTypeAbsolute);
+    guide->addView(lock);
+    auto *why = new TextView("assets/fonts/notosanscjkjp.ttf", 26, TextView::FontWeight::Bold);
+    guidedAccessReminderWhy = why;
+    why->setWidthPercent(100);
+    why->setHeight(60);
+    why->setWrap(true);
+    why->setAlign(TextView::CENTER);
+    why->setVAlign(TextView::MIDDLE);
+    why->setThemedColor(ui_theme::cyan);
+    why->setMargin(Edge::Bottom, 6);
+    overlay->addView(why);
+    auto *help = new GuidedAccessInstructionView();
+    guidedAccessReminderHelp = help;
+    help->setWidthPercent(100);
+    help->setHeight(140);
+    overlay->addView(help);
+    auto *disableHelp = new GuidedAccessInstructionView();
+    guidedAccessReminderDisableHelp = disableHelp;
+    disableHelp->setWidthPercent(100);
+    disableHelp->setHeight(60);
+    disableHelp->setMargin(Edge::Top, 6);
+    overlay->addView(disableHelp);
+    auto *controls = new View();
+    controls->setFlexDirection(FlexDirection::Row);
+    controls->setGap(20);
+    overlay->addView(controls);
+    auto *back = new Button();
+    auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    label->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.back"));
+    label->setAlign(TextView::CENTER);
+    label->setVAlign(TextView::MIDDLE);
+    label->setThemedColor(ui_theme::textPrimary);
+    back->setContentView(label);
+    back->setSize(300, 64);
+    back->setCornerRadius(ui_theme::controlRadius());
+    back->setThemedBackgroundColors(
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
+    back->setOnClickListener([this]() { returnFromGuidedAccessReminder(); });
+    controls->addView(back);
+    auto *dismiss = new Button();
+    auto *dismissLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    dismissLabel->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.dismiss"));
+    dismissLabel->setAlign(TextView::CENTER);
+    dismissLabel->setVAlign(TextView::MIDDLE);
+    dismissLabel->setThemedColor(ui_theme::textPrimary);
+    dismiss->setContentView(dismissLabel);
+    dismiss->setSize(300, 64);
+    dismiss->setCornerRadius(ui_theme::controlRadius());
+    dismiss->setThemedBackgroundColors(
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
+        []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
+    dismiss->setOnClickListener([this]() { options.guidedAccessReminderSkipped = true; });
+    controls->addView(dismiss);
+    guidedAccessButtonMarker = new View();
+    guidedAccessButtonMarker->setPosition(0, 0, YGPositionTypeAbsolute);
+    guidedAccessButtonMarker->setCornerRadius(3);
+    overlay->addView(guidedAccessButtonMarker);
+    guidedAccessButtonHint = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    guidedAccessButtonHint->setPosition(0, 0, YGPositionTypeAbsolute);
+    guidedAccessButtonHint->setAlign(TextView::CENTER);
+    guidedAccessButtonHint->setVAlign(TextView::MIDDLE);
+    guidedAccessButtonHint->setWrap(true);
+    guidedAccessButtonHint->setPadding(Edge::All, 8);
+    guidedAccessButtonHint->setThemedColor(ui_theme::textPrimary);
+    guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
+    guidedAccessButtonHint->setCornerRadius(ui_theme::controlRadius());
+    overlay->addView(guidedAccessButtonHint);
+    guidedAccessButtonCheck = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+    guidedAccessButtonCheck->setText(ui_icons::textForCodepoint(0xf00c));
+    guidedAccessButtonCheck->setSize(28, 40);
+    guidedAccessButtonCheck->setPosition(0, 0, YGPositionTypeAbsolute);
+    guidedAccessButtonCheck->setAlign(TextView::CENTER);
+    guidedAccessButtonCheck->setVAlign(TextView::MIDDLE);
+    // TextView is a measured Yoga leaf; the icon must be an overlay sibling.
+    overlay->addView(guidedAccessButtonCheck);
+  }
+  guidedAccessReminderLayout->setSize(rendering::window_width,
+                                     rendering::window_height);
+  guidedAccessReminderLayout->setVisible(true);
+  const bool confirming = guidedAccessReminder.confirming();
+  ipad_hardware::ButtonLocation buttonLocation;
+  gameplay::ButtonCueInsets cueInsets;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  buttonLocation = GetIOSHardwareButtonLocation();
+  const auto safeInsets = GetIOSSafeAreaInsetsNormalized();
+  cueInsets = {static_cast<int>(safeInsets.top * rendering::window_height),
+               static_cast<int>(safeInsets.right * rendering::window_width),
+               static_cast<int>(safeInsets.bottom * rendering::window_height),
+               static_cast<int>(safeInsets.left * rendering::window_width)};
+#endif
+  const float progress = guidedAccessReminder.progress();
+  auto cue = gameplay::layoutButtonCue(buttonLocation, rendering::window_width,
+                                       rendering::window_height, cueInsets);
+  if (confirming) {
+    cue = gameplay::confirmButtonCue(cue, buttonLocation.edge,
+        rendering::window_width, rendering::window_height, progress);
+  }
+  guidedAccessButtonMarker->setVisible(cue.marker.width > 0);
+  guidedAccessButtonMarker->setSize(cue.marker.width, cue.marker.height);
+  guidedAccessButtonMarker->setPositionNoLayout(cue.marker.x, cue.marker.y);
+  // Three gentle pulses suggest triple-clicking, followed by a pause.
+  const float pulseTime = static_cast<float>(SDL_GetTicks64() % 1800);
+  const float pulse = pulseTime < 900 ? std::sin(3.14159265F * pulseTime / 300) : 0;
+  guidedAccessButtonMarker->setBackgroundColor(
+      ui_theme::withAlpha(ui_theme::lime(), confirming
+          ? 255 : 150 + static_cast<int>(105 * pulse * pulse)));
+  guidedAccessButtonHint->setSize(cue.label.width, cue.label.height);
+  guidedAccessButtonHint->setPositionNoLayout(cue.label.x, cue.label.y);
+  guidedAccessButtonHint->setPadding(Edge::Left, confirming ? 48 : 8);
+  guidedAccessButtonHint->setLocalizedText(i18n::message(
+      confirming ? "gameplay.ipad_gesture_reminder.enabled"
+      : buttonLocation.button == ipad_hardware::Button::Home
+          ? "gameplay.ipad_gesture_reminder.home_button"
+          : "gameplay.ipad_gesture_reminder.top_button"));
+  guidedAccessButtonHint->setThemedColor(ui_theme::textPrimary);
+  guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
+  guidedAccessButtonCheck->setThemedColor(ui_theme::lime);
+  guidedAccessButtonHint->setVisible(cue.label.width > 0);
+  guidedAccessButtonCheck->setVisible(confirming && guidedAccessButtonHint->getVisible());
+  if (confirming && cue.label.width > 0) {
+    const int textWidth = guidedAccessButtonHint->measureTextWidth(guidedAccessButtonHint->getText());
+    guidedAccessButtonCheck->setPositionNoLayout(
+        cue.label.x + (cue.label.width - textWidth) / 2 - 16,
+        cue.label.y + (cue.label.height - 40) / 2);
+  }
+  const bool locked = confirming && progress >= 0.18F;
+  guidedAccessReminderIcon->setText(
+      ui_icons::textForCodepoint(locked ? kIconLock : kIconLockOpen));
+  // Close the lock near the top of the first hop, then settle with a smaller bounce.
+  constexpr float pi = 3.14159265F;
+  const float bounce = progress < 0.60F
+      ? 32.0F * std::sin(pi * progress / 0.60F)
+      : progress < 0.82F ? 7.0F * std::sin(pi * (progress - 0.60F) / 0.22F) : 0.0F;
+  guidedAccessReminderIcon->setPositionNoLayout(60, 32 - std::lround(bounce));
+  guidedAccessReminderIcon->setColor(
+      ui_theme::sdl(locked ? ui_theme::lime() : ui_theme::textPrimary()));
+  guidedAccessReminderTitle->setLocalizedText(i18n::message(confirming
+      ? "gameplay.ipad_gesture_reminder.ready_title"
+      : "gameplay.ipad_gesture_reminder.title"));
+  guidedAccessReminderWhy->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.why"));
+  guidedAccessReminderWhy->setVisible(!confirming);
+  guidedAccessReminderDisableHelp->setLocalizedText(
+      i18n::message("gameplay.ipad_gesture_reminder.disable_help"));
+  guidedAccessReminderDisableHelp->setVisible(!confirming);
+  const char *buttonNameKey = buttonLocation.button == ipad_hardware::Button::Home
+      ? "gameplay.ipad_gesture_reminder.button.home"
+      : buttonLocation.button == ipad_hardware::Button::Top
+          ? "gameplay.ipad_gesture_reminder.button.top"
+          : "gameplay.ipad_gesture_reminder.button.unknown";
+  guidedAccessReminderHelp->setLocalizedText(confirming
+      ? i18n::message("gameplay.ipad_gesture_reminder.ready_help")
+      : i18n::message("gameplay.ipad_gesture_reminder.help",
+                     {{"button", i18n::message(buttonNameKey)}}));
+  if (pauseButton != nullptr) pauseButton->setVisible(false);
+  if (practiceRestartButton != nullptr) practiceRestartButton->setVisible(false);
+  if (practiceHudText != nullptr) practiceHudText->setVisible(false);
+  if (skinResetLayoutButton != nullptr) skinResetLayoutButton->setVisible(false);
+  if (pauseLayout != nullptr) pauseLayout->setVisible(false);
+}
+
+bool GamePlayScene::startPreparedAttempt() {
+  stopGuidedAccessChime(true);
+  state->isPlaying = true;
+  if (pauseButton != nullptr) pauseButton->setVisible(true);
+  if (practiceRestartButton != nullptr) practiceRestartButton->setVisible(true);
+  if (practiceHudText != nullptr) practiceHudText->setVisible(true);
+  if (inputHandler != nullptr) {
+    inputHandler->discardPendingTouchEvents();
+    inputHandler->startListenSDL();
+#if !(TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR)
+    inputHandler->startListenTouch();
+#endif
+  }
   const auto playbackStarted =
       context.jukebox.play(preparationPlan.playbackStartTimeMicros);
   if (!playbackStarted.success) {
@@ -3710,6 +4014,10 @@ bool GamePlayScene::reset() {
 
 void GamePlayScene::showPlaybackInitializationFailure(
     const std::string &message) {
+  guidedAccessReminderPending = false;
+  if (guidedAccessReminderLayout != nullptr) {
+    guidedAccessReminderLayout->setVisible(false);
+  }
   playbackInitializationFailed = true;
   escapeHandledByInputPipeline = true;
   if (state != nullptr) {
@@ -4581,6 +4889,7 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
   StartOptions nextOptions =
       makeCourseReplayStageStartOptions(session, stageReplay);
   nextOptions.returnScene = options.returnScene;
+  nextOptions.guidedAccessReminderSkipped = options.guidedAccessReminderSkipped;
   nextOptions.pacemakerTarget = options.pacemakerTarget;
   nextOptions.tableName = options.tableName;
   nextOptions.tableLevel = options.tableLevel;
@@ -4681,6 +4990,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     nextOptions.ownsChart = true;
   }
   nextOptions.returnScene = options.returnScene;
+  nextOptions.guidedAccessReminderSkipped = options.guidedAccessReminderSkipped;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -5923,7 +6233,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 true,
                 ResultTableContext{.tableName = options.tableName,
                                    .tableLevel = options.tableLevel},
-                resultGameplayGraph),
+                resultGameplayGraph, std::nullopt,
+                options.guidedAccessReminderSkipped),
             false);
         return false;
       },
@@ -5974,6 +6285,29 @@ bool GamePlayScene::finishIfGaugeFailed() {
 }
 
 void GamePlayScene::update(float dt) {
+  if (guidedAccessReminderPending) {
+    if (guidedAccessReminderExiting) return;
+    discardGuidedAccessReminderTouches();
+    const bool wasConfirming = guidedAccessReminder.confirming();
+    if (guidedAccessReminder.update(isGuidedAccessEnabled(),
+                                   !guidedAccessReminderBackground, SDL_GetTicks64())) {
+      if (!options.guidedAccessReminderSkipped) playGuidedAccessChime();
+    } else if (wasConfirming && !guidedAccessReminder.confirming()) {
+      stopGuidedAccessChime();
+    }
+    showGuidedAccessReminder();
+    if (!guidedAccessReminderBackground &&
+        (options.guidedAccessReminderSkipped || guidedAccessReminder.completed())) {
+      // Start after lifecycle event dispatch. Only explicit dismissal skips the delay.
+      guidedAccessReminderPending = false;
+      guidedAccessReminderLayout->setVisible(false);
+      if (startPreparedAttempt()) {
+        refreshRealtimeTouchLayout();
+        setRealtimeGameplayIngressEnabled(true);
+      }
+    }
+    return;
+  }
   (void)dt;
   applyPendingBestReplay();
   const bool realtimeAtFrameStart = realtimeGameplayAuthorityActive();
@@ -6167,7 +6501,7 @@ void GamePlayScene::update(float dt) {
 }
 
 void GamePlayScene::renderScene() {
-  if (playbackInitializationFailed) {
+  if (playbackInitializationFailed || guidedAccessReminderPending) {
     return;
   }
   RenderContext renderContext(context.uiBatchRenderer);
@@ -6278,7 +6612,8 @@ void GamePlayScene::renderScene() {
 bool GamePlayScene::renderViewBeforeScene(const View *view) const {
   return view != pauseLayout && view != pauseButton &&
          view != practiceRestartButton && view != skinResetLayoutButton &&
-         view != practiceHudText && view != playbackFailureLayout;
+         view != practiceHudText && view != playbackFailureLayout &&
+         view != guidedAccessReminderLayout;
 }
 
 bool GamePlayScene::handleSkinTextInputEvent(SDL_Event &event) {
@@ -6570,6 +6905,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 }
 
 void GamePlayScene::cleanupScene() {
+  stopGuidedAccessChime(true);
   SDL_Log("Cleaning up GamePlayScene");
   cancelGameplaySkinPreparation();
   stopBestReplayLoad();
@@ -6603,6 +6939,16 @@ void GamePlayScene::cleanupScene() {
   ownedChart.reset();
   chart = nullptr;
   playbackFailureLayout = nullptr;
+  guidedAccessReminderLayout = nullptr;
+  guidedAccessReminderIcon = nullptr;
+  guidedAccessReminderTitle = nullptr;
+  guidedAccessReminderWhy = nullptr;
+  guidedAccessReminderHelp = nullptr;
+  guidedAccessReminderDisableHelp = nullptr;
+  guidedAccessButtonMarker = nullptr;
+  guidedAccessButtonHint = nullptr;
+  guidedAccessButtonCheck = nullptr;
+  guidedAccessReminderPending = false;
   skinResetLayoutButton = nullptr;
   SDL_Log("Cleaned up GamePlayScene");
 }
@@ -7742,6 +8088,30 @@ JudgeResult GamePlayScene::releaseNote(bms_parser::Note *Note,
 }
 
 EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
+  if (guidedAccessReminderPending) {
+    if (event.type == SDL_WINDOWEVENT &&
+        event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+      guidedAccessReminderBackground = true;
+      guidedAccessReminder.interrupt();
+      stopGuidedAccessChime();
+      if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+    }
+    if (event.type == SDL_WINDOWEVENT &&
+        event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
+      guidedAccessReminderBackground = false;
+      guidedAccessReminder.interrupt();
+      if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
+    }
+    if (!guidedAccessReminderBackground) {
+      if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
+        returnFromGuidedAccessReminder();
+      }
+      if (guidedAccessReminderLayout != nullptr) {
+        guidedAccessReminderLayout->handleEvents(event);
+      }
+    }
+    return {};
+  }
   if (playbackInitializationFailed) {
     Scene::handleEvents(event);
     return {};

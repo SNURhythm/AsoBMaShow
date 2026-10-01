@@ -8,6 +8,9 @@
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "play/BMSRenderer.h"
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#include "../iOSNatives.hpp"
+#endif
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
 #endif
@@ -88,6 +91,7 @@ void SettingsScene::resetViewState() {
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
   startLaneIndicatorsModeText = nullptr;
+  ipadGestureReminderModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   markProcessedNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;
@@ -116,6 +120,7 @@ void SettingsScene::resetViewState() {
   startLaneIndicatorsModeButton = nullptr;
   showInvisibleNotesModeButton = nullptr;
   markProcessedNotesModeButton = nullptr;
+  ipadGestureReminderModeButton = nullptr;
   touchVisualizationModeButton = nullptr;
   hispeedAutoAdjustModeButton = nullptr;
   archiveChartPreviewModeButton = nullptr;
@@ -1580,6 +1585,28 @@ View *SettingsScene::buildVisualTab(const LayoutMetrics &metrics) {
       metrics, i18n::message("settings.visual.mark_processed_notes.label"),
       i18n::message("settings.visual.processed_notes.description"),
       processedNoteControls, metrics.modeCardHeight, metrics.cardsWidth));
+
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+  if (IsIOSPad()) {
+    auto *controls = new View();
+    ipadGestureReminderModeText =
+        makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+                 TextView::CENTER, TextView::MIDDLE);
+    ipadGestureReminderModeButton = makeControlButton(metrics.actionButtonWidth,
+                                                     metrics.actionButtonHeight,
+                                                     ipadGestureReminderModeText);
+    ipadGestureReminderModeButton->setOnClickListener([this]() {
+      context.settings.ipadGestureReminderEnabled =
+          !context.settings.ipadGestureReminderEnabled;
+      persistSettings();
+    });
+    controls->addView(ipadGestureReminderModeButton);
+    cardsColumn->addView(makeCard(
+        metrics, i18n::message("settings.visual.ipad_gesture_reminder.label"),
+        i18n::message("settings.visual.ipad_gesture_reminder.description"),
+        controls, metrics.modeCardHeight, metrics.cardsWidth));
+  }
+#endif
 
   auto *startLaneIndicatorControls = new View();
   startLaneIndicatorControls->setFlexDirection(FlexDirection::Column);

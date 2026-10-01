@@ -1,6 +1,7 @@
 #pragma once
 #include "targets.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "platform/IPadHardwareButton.h"
 #include <SDL2/SDL.h>
 #include <atomic>
 #include <cstddef>
@@ -136,6 +137,11 @@ void *StartIOSSecurityScopedResource(const std::string &path,
                                       std::string &resolvedPath,
                                       std::string &errorMessage);
 void StopIOSSecurityScopedResource(void *resource);
+bool IsIOSPad();
+// Call on the main thread. Reads current status and observes session changes for logging.
+bool IsIOSGuidedAccessEnabled();
+// Main-thread query; returns no edge for unknown orientation or a partial window.
+ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation();
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int logicalWidth, int logicalHeight,
