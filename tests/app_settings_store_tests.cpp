@@ -1105,6 +1105,24 @@ void testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues() {
   }
 }
 
+void testIpadGestureReminderRoundTrip() {
+  TempDirectory temp;
+  expect(!AppSettings{}.ipadGestureReminderEnabled,
+         "iPad gesture reminder defaults off");
+  const auto path = temp.path() / "gesture-reminder.json";
+  writeFile(path, R"({"schemaVersion":4})");
+  expect(!AppSettingsStore::Load(path).settings.ipadGestureReminderEnabled,
+         "existing profiles without the reminder remain off");
+  writeFile(path, R"({"schemaVersion":4,"ipadGestureReminderEnabled":true})");
+  const auto loaded = AppSettingsStore::Load(path);
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error),
+         "gesture reminder settings save: " + error);
+  const auto document = nlohmann::json::parse(readFile(path));
+  expect(document.value("ipadGestureReminderEnabled", false),
+         "enabled iPad reminder survives settings restart");
+}
+
 void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
   AppSettings defaults;
   expect(!defaults.findBmsSkipUnarchivingForNonSolidArchives,
@@ -1770,6 +1788,7 @@ int main() {
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
+  testIpadGestureReminderRoundTrip();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();

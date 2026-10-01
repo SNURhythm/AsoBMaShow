@@ -510,6 +510,7 @@ json settingsToJson(const AppSettings &settings) {
       {"hispeedFixMode", static_cast<int>(settings.hispeedFixMode)},
       {"inputKeysoundEnabled", settings.inputKeysoundEnabled},
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
+      {"ipadGestureReminderEnabled", settings.ipadGestureReminderEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
       {"showPastNotes", settings.showPastNotes},
@@ -672,6 +673,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
             diagnostics);
+  readValue(document, "ipadGestureReminderEnabled",
+            settings.ipadGestureReminderEnabled, diagnostics);
   readValue(document, "startLaneIndicatorsEnabled",
             settings.startLaneIndicatorsEnabled, diagnostics);
   readValue(document, "showInvisibleNotes", settings.showInvisibleNotes,

@@ -136,6 +136,7 @@ void *StartIOSSecurityScopedResource(const std::string &path,
                                       std::string &resolvedPath,
                                       std::string &errorMessage);
 void StopIOSSecurityScopedResource(void *resource);
+bool IsIOSPad();
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized();
 bool GetIOSPreferredFullscreenDrawableSize(int currentWidth, int currentHeight,
                                            int logicalWidth, int logicalHeight,

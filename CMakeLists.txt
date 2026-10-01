@@ -7339,6 +7339,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(logical_gameplay_input_tests PRIVATE SDL2)
     endif()
 
+    add_executable(ipad_gesture_reminder_tests tests/ipad_gesture_reminder_tests.cpp)
+    target_compile_features(ipad_gesture_reminder_tests PRIVATE cxx_std_23)
+
     add_executable(start_select_control_tests
         tests/start_select_control_tests.cpp
     )
@@ -8682,6 +8685,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(input_device_registry_tests foundation_input_registry)
     asobmashow_register_test(realtime_gameplay_input_registration_tests)
     asobmashow_register_test(logical_gameplay_input_tests foundation_input_gameplay)
+    asobmashow_register_test(ipad_gesture_reminder_tests)
     asobmashow_register_test(start_select_control_tests)
     asobmashow_register_test(beatoraja_hispeed_tests)
     asobmashow_register_test(settings_scene_preview_authority_tests)

@@ -136,6 +136,7 @@ private:
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *prepMetronomeModeText = nullptr;
+  TextView *ipadGestureReminderModeText = nullptr;
   TextView *startLaneIndicatorsModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
   TextView *markProcessedNotesModeText = nullptr;

@@ -358,6 +358,12 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   if (markProcessedNotesModeText != nullptr) {
     markProcessedNotesModeText->setLocalizedText(markProcessedNotesLabel);
   }
+  if (ipadGestureReminderModeText != nullptr) {
+    ipadGestureReminderModeText->setLocalizedText(i18n::message(
+        context.settings.ipadGestureReminderEnabled
+            ? "settings.visual.ipad_gesture_reminder.on"
+            : "settings.visual.ipad_gesture_reminder.off"));
+  }
   if (startLaneIndicatorsModeText != nullptr) {
     startLaneIndicatorsModeText->setLocalizedText(startLaneIndicatorsLabel);
   }

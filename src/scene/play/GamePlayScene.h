@@ -19,6 +19,7 @@
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "StartSelectControl.h"
+#include "IpadGestureReminder.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../ReplayRecordTask.h"
@@ -31,6 +32,7 @@
 #include "../../skin/SkinPresentationTypes.h"
 #include "../../view/TextView.h"
 #include "../ResultScene.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -68,6 +70,7 @@ public:
   bool pausesBackgroundTasksForPerformance() const override { return true; }
   void init() override;
   void update(float dt) override;
+  void onApplicationBackgroundChanged(bool background) override;
   bool renderViewBeforeScene(const View *view) const override;
   void renderScene() override;
   void cleanupScene() override;
@@ -93,6 +96,15 @@ private:
     replay::ReplayTimeBounds timeBounds;
   };
   bool reset();
+  bool startPreparedAttempt();
+  void showIpadGestureReminder();
+  void pumpIpadGestureReminderTouches();
+  void returnFromIpadGestureReminder();
+  gameplay::IpadGestureReminder ipadGestureReminder;
+  bool ipadGestureReminderPending = false;
+  bool ipadGestureReminderBackground = false;
+  View *ipadGestureReminderLayout = nullptr;
+  std::array<View *, 4> ipadGestureFingerMarkers{};
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);

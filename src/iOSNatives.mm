@@ -5492,6 +5492,10 @@ void WaitIOSMainRunLoopForMicros(long long waitMicros) {
   }
 }
 
+bool IsIOSPad() {
+  return UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad;
+}
+
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {
   IOSNormalizedSafeAreaInsets insets;
   UIWindow *window = FindActiveWindow();
