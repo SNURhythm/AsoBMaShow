@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../PlatformDocumentHandoff.h"
+#include "../i18n/Localization.h"
 #include "../skin/SkinCommitCoordinator.h"
 #include "../skin/beatoraja/SkinDiagnosticHistory.h"
 #include "../skin/package/SkinPackageOperationService.h"
@@ -72,7 +73,7 @@ struct GameplaySkinSettingsSnapshot {
 struct ControllerActionResult {
   bool accepted = false;
   bool asynchronous = false;
-  std::string message;
+  i18n::Text message;
   std::vector<SkinDiagnostic> diagnostics;
 };
 

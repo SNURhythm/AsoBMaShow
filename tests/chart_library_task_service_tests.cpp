@@ -1,6 +1,7 @@
 #include "library/ChartLibraryTaskTypes.h"
 #include "library/ChartLibraryTaskService.h"
 #include "support/AllocationFailure.h"
+#include "i18n/Localization.h"
 
 #include <atomic>
 #include <chrono>
@@ -47,6 +48,40 @@ bool waitUntil(Predicate predicate) {
     std::this_thread::yield();
   }
   return predicate();
+}
+
+void testTaskTitlesRetainMessagesAcrossLanguageChanges() {
+  using namespace chart_library_tasks;
+  ChartLibraryTaskService service([](const auto &, const auto &, auto, auto) {
+    return TaskRunResult{};
+  });
+  service.setGameplayPaused(true);
+  i18n::setLanguage(i18n::Language::English);
+  const auto first = service.enqueue({.title = i18n::message("music_select.update_folder.label")});
+  const auto reserved = service.reserve(i18n::message("menu.import_archive.label"), "copying");
+  expect(service.enqueueReserved(reserved, {.title = i18n::message("music_select.update_difficulty_table.label")}),
+         "reserved task retains the replacement message");
+  const auto literal = service.enqueue({.title = "User task 日本語"});
+  const auto folder = service.enqueue({.title = i18n::message("library.tasks.add_folder.message",
+      {{"name", std::string("My 日本語 folder")}})});
+  expect(service.beginAndroidImport("localized", true), "Android import reserves a title");
+  const auto snapshot = service.snapshot();
+  for (auto language : {i18n::Language::English, i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    expect(taskFor(snapshot, first)->title.resolve() == i18n::tr("music_select.update_folder.label"),
+           "queued snapshot resolves the current language");
+    expect(taskFor(snapshot, reserved)->title.resolve() == i18n::tr("music_select.update_difficulty_table.label"),
+           "reserved snapshot resolves the current language");
+    expect(taskFor(snapshot, literal)->title.resolve() == "User task 日本語",
+           "raw task titles remain literal");
+    expect(taskFor(snapshot, folder)->title.resolve() ==
+               i18n::format("library.tasks.add_folder.message", {{"name", "My 日本語 folder"}}),
+           "named task titles own raw path arguments while retaining the translated wrapper");
+    expect(snapshot.tasks.back().title.resolve() == i18n::tr("menu.import_folder.label"),
+           "Android reservation resolves the current language");
+  }
+  service.shutdown();
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testSnapshotCarriesQueueAndProgressAsValues() {
@@ -303,7 +338,7 @@ void testWorkerRunsQueuedTasksOnceInOrder() {
       [&](const auto &request, const auto &, auto, auto) {
         {
           std::lock_guard lock(mutex);
-          titles.push_back(request.title);
+          titles.push_back(request.title.resolve());
         }
         changed.notify_all();
         return chart_library_tasks::TaskRunResult{};
@@ -406,7 +441,7 @@ void testGameplayPauseBlocksCurrentAndQueuedTasksUntilResume() {
         }
         {
           std::lock_guard lock(mutex);
-          completed.push_back(request.title);
+          completed.push_back(request.title.resolve());
         }
         changed.notify_all();
         return chart_library_tasks::TaskRunResult{};
@@ -721,6 +756,7 @@ void testAndroidCopyCheckpointsFollowPauseAndLifecycle() {
 } // namespace
 
 int main() {
+  testTaskTitlesRetainMessagesAcrossLanguageChanges();
   testSnapshotCarriesQueueAndProgressAsValues();
   testQueueAdmissionFailuresPreserveWorkOwnership();
   testAndroidAdmissionFailuresPreserveImportOwnership();

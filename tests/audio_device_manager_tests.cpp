@@ -176,6 +176,12 @@ void testRejectsUnsupportedRequestBeforeSuspension() {
 
   require(result.status == audio::ApplyStatus::Unsupported,
           "unknown device is rejected as unsupported");
+  for (auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    require(result.message.resolve() == i18n::tr("settings.audio_video.audio.device_unavailable"),
+            "manager-owned validation retains language identity");
+  }
+  i18n::setLanguage(i18n::Language::English);
   require(playback.suspendCount == 0,
           "unsupported request is rejected before playback suspension");
   auto expectedWorking = baseSettings();
@@ -287,6 +293,10 @@ void testOpenFailureRollsBackAndResumesPreviousPlayback() {
 
   require(result.status == audio::ApplyStatus::FailedRolledBack,
           "failed open reports successful rollback");
+  i18n::setLanguage(i18n::Language::Japanese);
+  require(result.message.resolve() == "candidate open failed",
+          "external stream diagnostics remain verbatim after language changes");
+  i18n::setLanguage(i18n::Language::English);
   require(events == std::vector<std::string>{"suspend", "restart",
                                              "restore-runtime",
                                              "restore-playback"},

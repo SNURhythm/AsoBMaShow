@@ -134,7 +134,7 @@ std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
   return id;
 }
 
-std::uint64_t ChartLibraryTaskService::reserve(std::string title,
+std::uint64_t ChartLibraryTaskService::reserve(i18n::Text title,
                                                std::string detail) {
   std::lock_guard lock(stateMutex_);
   const std::uint64_t id = nextTaskId_++;
@@ -195,7 +195,7 @@ bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
   const std::uint64_t id = nextTaskId_;
   tasks_.push_back(TaskInfo{
       .id = id,
-      .title = folder ? "Import Folder" : "Import Archive",
+      .title = i18n::message(folder ? "menu.import_folder.label" : "menu.import_archive.label"),
       .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Running,
       .detail = gameplayPaused_ ? "Paused" : "Copying selected charts",
   });
@@ -254,7 +254,7 @@ bool ChartLibraryTaskService::finishAndroidImport(
     }
     queued = enqueueReservedLocked(
         id, {.kind = TaskKind::AndroidImport,
-             .title = folder ? "Import Folder" : "Import Archive",
+             .title = i18n::message(folder ? "menu.import_folder.label" : "menu.import_archive.label"),
              .androidImportPath = path,
              .androidImportFolder = folder});
     androidImports_.erase(found);

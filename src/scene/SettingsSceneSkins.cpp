@@ -218,7 +218,7 @@ bool SettingsScene::handleGameplaySkinActionResult(
       (!result.accepted || !result.asynchronous)) {
     gameplaySkinUiMessage = result.message;
   } else if (result.accepted && result.asynchronous) {
-    gameplaySkinUiMessage.clear();
+    gameplaySkinUiMessage = {};
   }
   if (result.accepted && !result.asynchronous) {
     lastLayoutWidth = -1;
@@ -318,7 +318,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   }
   gameplaySkinSettingsProfileId = profileId->opaque;
   gameplaySkinSettingsLayoutKey.clear();
-  gameplaySkinUiMessage.clear();
+  gameplaySkinUiMessage = {};
   gameplaySkinSafetyDropdownOpen = false;
   gameplaySkinConfigurationDropdownOpenKey.clear();
   gameplaySkinReplaceConfirmationArmed = false;
@@ -342,9 +342,9 @@ void SettingsScene::applyPendingSoundSetFolderPick() {
   if (skinSelectSoundSetInput != nullptr) {
     skinSelectSoundSetInput->setEditingText(pick->path);
   }
-  gameplaySkinUiMessage = i18n::tr("settings.skins.sound_set.sound_set_folder_updated.prefix") + pick->path;
+  gameplaySkinUiMessage = i18n::message("settings.skins.sound_set.folder_updated.message", {{"path", pick->path}});
   if (gameplaySkinUiMessageText != nullptr) {
-    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+    gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage);
   }
   persistSettings();
 }
@@ -422,9 +422,9 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
     gameplaySkinStatusText->setText(snapshot.statusMessage);
   }
   if (gameplaySkinUiMessageText != nullptr) {
-    gameplaySkinUiMessageText->setText(gameplaySkinUiMessage ==
+    gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage.resolve() ==
                                                snapshot.statusMessage
-                                           ? std::string{}
+                                           ? i18n::Text{}
                                            : gameplaySkinUiMessage);
   }
   if (gameplaySkinConfigurationDigestText != nullptr) {
@@ -873,8 +873,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           metrics, i18n::message("settings.skins.retry_startup.label"), true, [this]() {
             const bool recovered = context.retryGameplaySkinServices();
             gameplaySkinUiMessage = recovered
-                                      ? i18n::tr("settings.skins.gameplay_skin_services_restarted.message")
-                                      : i18n::tr("settings.skins.gameplay_skin_services_remain_unavailable.message");
+                                      ? i18n::message("settings.skins.gameplay_skin_services_restarted.message")
+                                      : i18n::message("settings.skins.gameplay_skin_services_remain_unavailable.message");
             ensureGameplaySkinSettingsController();
             lastLayoutWidth = -1;
           }));
@@ -913,8 +913,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
       snapshot.statusMessage, metrics.smallTextSize, ui_theme::textSecondary());
   overview->addView(gameplaySkinStatusText);
   gameplaySkinUiMessageText = makeWrappedText(
-      gameplaySkinUiMessage != snapshot.statusMessage ? gameplaySkinUiMessage
-                                                       : std::string{},
+      gameplaySkinUiMessage.resolve() != snapshot.statusMessage ? gameplaySkinUiMessage
+                                                       : i18n::Text{},
       metrics.smallTextSize, ui_theme::textSecondary());
   overview->addView(gameplaySkinUiMessageText);
   MusicSelectToolbarMode toolbarMode;
@@ -932,10 +932,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     std::string diagnostic;
     if (!context.saveApplicationUiState(&diagnostic)) {
       gameplaySkinUiMessage = diagnostic.empty()
-                                  ? i18n::tr("settings.skins.toolbar_visibility_failed_saved.message")
-                                  : diagnostic;
+                                  ? i18n::message("settings.skins.toolbar_visibility_failed_saved.message")
+                                  : i18n::Text(diagnostic);
       if (gameplaySkinUiMessageText != nullptr) {
-        gameplaySkinUiMessageText->setText(gameplaySkinUiMessage);
+        gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage);
       }
     }
   };
@@ -1112,7 +1112,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           if (collision && !gameplaySkinReplaceConfirmationArmed) {
             gameplaySkinReplaceConfirmationArmed = true;
             gameplaySkinUiMessage =
-                i18n::tr("settings.skins.tap_confirm_replace_replace_installed_package.message");
+                i18n::message("settings.skins.tap_confirm_replace_replace_installed_package.message");
             lastLayoutWidth = -1;
             return;
           }
@@ -1700,7 +1700,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
           if (!confirmingRemoval) {
             gameplaySkinRemovalConfirmationKey = package.collisionKey;
             gameplaySkinUiMessage =
-                i18n::tr("settings.skins.tap_confirm_remove_uninstall_package.message");
+                i18n::message("settings.skins.tap_confirm_remove_uninstall_package.message");
             lastLayoutWidth = -1;
             return;
           }
@@ -1805,7 +1805,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
             if (!confirmingRemoval) {
               gameplaySkinRemovalConfirmationKey = package.collisionKey;
               gameplaySkinUiMessage =
-                  i18n::tr("settings.skins.tap_confirm_remove_uninstall_package.message");
+                  i18n::message("settings.skins.tap_confirm_remove_uninstall_package.message");
               lastLayoutWidth = -1;
               return;
             }

@@ -365,6 +365,11 @@ void PracticePanelView::setPresetMessage(std::string message, bool error) {
     size_t split = message.rfind(' ', 40);
     if (split == std::string::npos || split < 20) {
       split = 40;
+      // A byte budget can land inside a multibyte UTF-8 character.
+      while (split > 0 &&
+             (static_cast<unsigned char>(message[split]) & 0xc0) == 0x80) {
+        --split;
+      }
     }
     secondLine = message.substr(split + (message[split] == ' ' ? 1 : 0));
     message.erase(split);

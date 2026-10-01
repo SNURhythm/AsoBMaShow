@@ -721,7 +721,7 @@ public:
       if (chartLibraryTasks) {
         chartLibraryTasks->enqueue(
             {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
-             .title = "Rebuild Library",
+             .title = i18n::message("menu.rebuild_library.label"),
              .rebuildLibraryMetadata = true});
       }
     };
@@ -877,7 +877,7 @@ public:
                   "Saved audio settings were not fully applied: %s",
                   audioStartupApplyResult.message.empty()
                       ? "audio runtime remained on its effective working state"
-                      : audioStartupApplyResult.message.c_str());
+                      : audioStartupApplyResult.message.resolve().c_str());
     }
     ui_theme::setActiveMode(settings.uiThemeMode ==
                                     AppSettings::UiThemeMode::Light

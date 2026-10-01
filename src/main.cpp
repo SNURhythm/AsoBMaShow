@@ -781,7 +781,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     context.chartLibraryTasks->start();
     context.chartLibraryTasks->enqueue(
         {.kind = chart_library_tasks::TaskKind::RefreshLibrary,
-         .title = "Refresh Library"});
+         .title = i18n::message("menu.refresh_library.label")});
   }
   // Use depth-sorted main view for stable layering without sequential mode.
   bgfx::setViewMode(rendering::main_view, bgfx::ViewMode::DepthAscending);
@@ -923,7 +923,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   const auto startupDisplayResult =
       context.displaySettingsManager->applySafeStartupIntent();
   if (!startupDisplayResult.message.empty()) {
-    SDL_Log("%s", startupDisplayResult.message.c_str());
+    SDL_Log("%s", startupDisplayResult.message.resolve().c_str());
   }
   context.framePacer.reset(lastFrameTime);
   bool pacingExportActive =
@@ -940,7 +940,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (const auto rollbackResult =
               context.displaySettingsManager->onFocusLost();
           rollbackResult.has_value() && !rollbackResult->message.empty()) {
-        SDL_Log("%s", rollbackResult->message.c_str());
+        SDL_Log("%s", rollbackResult->message.resolve().c_str());
       }
     }
     const bool previous =
@@ -985,7 +985,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (const auto previewResult =
               context.displaySettingsManager->tick(currentFrameTime)) {
         if (!previewResult->message.empty()) {
-          SDL_Log("%s", previewResult->message.c_str());
+          SDL_Log("%s", previewResult->message.resolve().c_str());
         }
       }
     }
@@ -1528,7 +1528,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   if (context.displaySettingsManager) {
     const auto shutdownResult = context.displaySettingsManager->shutdown();
     if (!shutdownResult.message.empty()) {
-      SDL_Log("%s", shutdownResult.message.c_str());
+      SDL_Log("%s", shutdownResult.message.resolve().c_str());
     }
   }
   context.displaySettingsManager.reset();

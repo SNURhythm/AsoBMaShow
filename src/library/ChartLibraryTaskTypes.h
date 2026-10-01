@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ChartLibraryScanner.h"
+#include "../i18n/Localization.h"
 #include "../scene/MainMenuLibrary.h"
 
 #include <cstdint>
@@ -24,7 +25,7 @@ enum class TaskKind {
 struct TaskRequest {
   std::uint64_t id = 0;
   TaskKind kind = TaskKind::RefreshLibrary;
-  std::string title;
+  i18n::Text title;
   std::filesystem::path folderToAdd;
   std::string iosBookmark;
   std::filesystem::path refreshPath;
@@ -41,7 +42,7 @@ struct TaskRequest {
 
 struct TaskInfo {
   std::uint64_t id = 0;
-  std::string title;
+  i18n::Text title;
   TaskStatus status = TaskStatus::Queued;
   double fraction = 0.0;
   int current = 0;

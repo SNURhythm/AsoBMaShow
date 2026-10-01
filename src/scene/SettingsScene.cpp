@@ -319,7 +319,7 @@ void SettingsScene::cleanupScene() {
   }
   gameplaySkinSettingsProfileId.clear();
   gameplaySkinSettingsLayoutKey.clear();
-  gameplaySkinUiMessage.clear();
+  gameplaySkinUiMessage = {};
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
 #endif
@@ -327,7 +327,7 @@ void SettingsScene::cleanupScene() {
   if (audioVideoSession != nullptr) {
     const auto result = audioVideoSession->cleanup();
     if (!result.message.empty()) {
-      SDL_Log("%s", result.message.c_str());
+      SDL_Log("%s", result.message.resolve().c_str());
     }
     audioVideoSession.reset();
   }

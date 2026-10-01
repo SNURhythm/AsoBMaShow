@@ -442,7 +442,10 @@ struct Fixture {
             .clientId = commits.createClient(),
             .requestRescan = [&] { ++rescanRequests; },
             .cancelRescan = [&] { ++rescanCancellations; },
-            .rescanProgress = [&] { return rescanProgress; },
+            .rescanProgress = [&] {
+              if (failRescanProgress) throw std::runtime_error("injected progress failure");
+              return rescanProgress;
+            },
             .requestRevalidation =
                 [&](const SkinEntryId &) { ++revalidationRequests; },
             .catalogSnapshot =
@@ -495,6 +498,7 @@ struct Fixture {
   int rescanRequests = 0;
   int rescanCancellations = 0;
   SkinRescanProgress rescanProgress;
+  bool failRescanProgress = false;
   int revalidationRequests = 0;
   int catalogSnapshotCalls = 0;
   std::shared_ptr<const SkinPackageCatalogSnapshot> catalogOverride;
@@ -593,6 +597,11 @@ void testFallbackPackageIdentityIsStableAcrossLanguages() {
                controller->snapshot().preparedName->suggestedPackageName ==
                    installed.directoryName,
            "language changes preserve package identity and replacement collision");
+    const auto renamed = controller->setSuggestedPackageName("Renamed Skin");
+    expect(renamed.accepted, "collision source name can be changed");
+    i18n::setLanguage(i18n::Language::English);
+    expect(renamed.message.resolve() == "Package name updated.",
+           "package name confirmation follows language changes");
     controller->profileChanged(fixture.profileA, fixture.commits.createClient());
   }
   i18n::setLanguage(i18n::Language::English);
@@ -603,10 +612,12 @@ void testOperationMessagesFollowLanguage() {
   auto controller = fixture.makeController();
   i18n::setLanguage(i18n::Language::Korean);
   const auto requested = controller->requestRescan();
-  expect(requested.accepted && requested.message == "게임플레이 스킨 재검색을 요청했습니다." &&
+  expect(requested.accepted && requested.message.resolve() == "게임플레이 스킨 재검색을 요청했습니다." &&
              controller->snapshot().statusMessage == "스킨 검색 준비 중…",
          "rescan action and busy status are localized in Korean");
   i18n::setLanguage(i18n::Language::Japanese);
+  expect(requested.message.resolve() == i18n::tr("settings.skins.rescan_requested.message"),
+         "retained action feedback follows language changes");
   controller->poll();
   expect(controller->snapshot().statusMessage == "スキンのスキャンを準備中…",
          "an existing busy status follows a language change");
@@ -618,8 +629,16 @@ void testOperationMessagesFollowLanguage() {
   expect(controller->snapshot().statusMessage == "스킨 검색을 취소했습니다.",
          "a completed status follows a language change");
   controller->close();
-  expect(controller->requestRescan().message == "현재 게임플레이 스킨을 재검색할 수 없습니다.",
+  expect(controller->requestRescan().message.resolve() == "현재 게임플레이 스킨을 재검색할 수 없습니다.",
          "operation rejection is localized");
+  i18n::setLanguage(i18n::Language::English);
+  auto failing = fixture.makeController();
+  fixture.failRescanProgress = true;
+  const auto rejected = failing->requestRescan();
+  expect(!rejected.accepted, "progress provider failure rejects the action");
+  i18n::setLanguage(i18n::Language::Japanese);
+  expect(rejected.message.resolve() == i18n::tr("settings.skins.gameplay_skin_rescan_failed_observed.message"),
+         "rejected action preserves the controller status message identity");
   i18n::setLanguage(i18n::Language::English);
 }
 

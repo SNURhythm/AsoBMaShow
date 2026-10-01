@@ -34,7 +34,7 @@ public:
   void shutdown() noexcept;
   void setGameplayPaused(bool paused);
   std::uint64_t enqueue(TaskRequest request);
-  std::uint64_t reserve(std::string title, std::string detail);
+  std::uint64_t reserve(i18n::Text title, std::string detail);
   bool enqueueReserved(std::uint64_t id, TaskRequest request);
   bool failReserved(std::uint64_t id, std::string detail);
   bool beginAndroidImport(const std::string &token, bool folder);

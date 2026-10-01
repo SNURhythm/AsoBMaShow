@@ -408,7 +408,7 @@ private:
   void startLibraryRefresh();
   void startLibraryRebuild();
   void enqueueLibraryRefreshTask(
-      const std::string &title,
+      const i18n::Text &title,
       const std::filesystem::path &folderToAdd = std::filesystem::path(),
       const std::string &iosBookmark = "",
       bool rebuildLibraryMetadata = false);

@@ -302,7 +302,7 @@ private:
       gameplaySkinSettingsController;
   std::string gameplaySkinSettingsProfileId;
   std::string gameplaySkinSettingsLayoutKey;
-  std::string gameplaySkinUiMessage;
+  i18n::Text gameplaySkinUiMessage;
   int gameplaySkinActiveTraitSkinType = 0;
   bool gameplaySkinTraitDropdownOpen = false;
   bool gameplaySkinSafetyDropdownOpen = false;

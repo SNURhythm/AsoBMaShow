@@ -21,6 +21,8 @@ class SettingsSoundSetLifecycleTests(unittest.TestCase):
                                 (layout, "void SettingsScene::ensureLayoutUpToDate()"),
                                 (skins, "void SettingsScene::applyPendingSoundSetFolderPick()")))
         fixture = (ROOT / "tests/settings_sound_set_lifecycle_fixture.cpp").read_text()
+        field = re.search(r"^  [^\n]+ gameplaySkinUiMessage;", (ROOT / "src/scene/SettingsScene.h").read_text(), re.M).group(0)
+        fixture = fixture.replace("STATUS_FIELD", field)
         fixture = (fixture.replace("VIEW_FIELDS", "\n".join(
             f"View *{name} = nullptr;" for name in pointers))
                    .replace("SCENE_METHODS", methods))

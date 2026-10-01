@@ -1066,7 +1066,7 @@ void MainMenuScene::applyThemeChange() {
 }
 
 void MainMenuScene::enqueueLibraryRefreshTask(
-    const std::string &title, const std::filesystem::path &folderToAdd,
+    const i18n::Text &title, const std::filesystem::path &folderToAdd,
     const std::string &iosBookmark, bool rebuildLibraryMetadata) {
   if (!context.chartLibraryTasks) {
     return;
@@ -1090,7 +1090,7 @@ void MainMenuScene::enqueueDownloadedPathIndexTask(
   }
   context.chartLibraryTasks->enqueue({
       .kind = chart_library_tasks::TaskKind::IndexDownloadedPath,
-      .title = i18n::tr("menu.index_downloaded_bms.label"),
+      .title = i18n::message("menu.index_downloaded_bms.label"),
       .downloadedPath = path,
       .downloadedRemovedPaths = std::move(removedPaths),
       .downloadedTargetIdentity = targetIdentity,
@@ -4753,14 +4753,14 @@ void MainMenuScene::startLibraryRefresh() {
   if (willStart.load() || replayExportJob_.inProgress()) {
     return;
   }
-  enqueueLibraryRefreshTask(i18n::tr("menu.refresh_library.label"));
+  enqueueLibraryRefreshTask(i18n::message("menu.refresh_library.label"));
 }
 
 void MainMenuScene::startLibraryRebuild() {
   if (willStart.load() || replayExportJob_.inProgress()) {
     return;
   }
-  enqueueLibraryRefreshTask(i18n::tr("menu.rebuild_library.label"), std::filesystem::path(), "",
+  enqueueLibraryRefreshTask(i18n::message("menu.rebuild_library.label"), std::filesystem::path(), "",
                             true);
   tasksModalOpenRequested.store(true);
 }
@@ -5698,7 +5698,7 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
       break;
     }
 
-    text << task.title << "\n";
+    text << task.title.resolve() << "\n";
     text << statusText;
     if (task.status == LibraryTaskStatus::Running) {
       if (progressSnapshot.valid && progressSnapshot.taskId == task.id) {

@@ -1,5 +1,6 @@
 #include "video/DisplaySettingsManager.h"
 #include "video/FramePacer.h"
+#include "i18n/Localization.h"
 
 #include <chrono>
 #include <stdexcept>
@@ -135,6 +136,13 @@ void testPreviewConfirmation() {
   require(result.status == display::ApplyStatus::PreviewPending,
           "display changes start a preview");
   require(result.effective == candidate, "preview reports candidate state");
+  const i18n::Text retainedMessage = result.message;
+  for (auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    require(retainedMessage.resolve() == i18n::tr("settings.audio_video.confirm_within_15_seconds.message"),
+            "real preview feedback follows language changes without reapplying");
+  }
+  i18n::setLanguage(i18n::Language::English);
   require(manager.hasPendingPreview(), "preview is pending");
   require(backend.applyCalls == 1 && backend.restoreCalls == 0,
           "preview applies once without restoring");
@@ -220,6 +228,15 @@ void testApplyFailureRollsBackAndReportsRestoreFailure() {
       brokenRestoreManager.beginPreview(previewSettings(), Clock::time_point{});
   require(unrecoverable.status == display::ApplyStatus::FailedUnrecoverable,
           "double failure is reported as unrecoverable");
+  for (auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    require(unrecoverable.message.resolve() ==
+                std::string("injected apply failure ") +
+                i18n::tr("settings.audio_video.display.restore_failed") +
+                " injected restore failure",
+            "rollback feedback translates its summary and preserves backend details");
+  }
+  i18n::setLanguage(i18n::Language::English);
   require(!unrecoverable.message.empty(),
           "double failure retains a diagnostic");
 }

@@ -3216,7 +3216,7 @@ void MusicSelectScene::executeEvent(
       if (tableId && context.chartLibraryTasks) {
         context.chartLibraryTasks->enqueue({
             .kind = chart_library_tasks::TaskKind::UpdateDifficultyTable,
-            .title = i18n::tr("music_select.update_difficulty_table.label"),
+            .title = i18n::message("music_select.update_difficulty_table.label"),
             .tableId = *tableId,
         });
         break;
@@ -3228,7 +3228,7 @@ void MusicSelectScene::executeEvent(
       if (path && context.chartLibraryTasks) {
         context.chartLibraryTasks->enqueue({
             .kind = chart_library_tasks::TaskKind::RefreshPath,
-            .title = i18n::tr("music_select.update_folder.label"),
+            .title = i18n::message("music_select.update_folder.label"),
             .refreshPath = *path,
         });
       }
@@ -3622,7 +3622,7 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
     case chart_library_tasks::TaskStatus::Failed: status = i18n::tr("music_select.failed.label"); break;
     case chart_library_tasks::TaskStatus::Paused: status = i18n::tr("music_select.paused.label"); break;
     }
-    text << task.title << "\n" << status;
+    text << task.title.resolve() << "\n" << status;
     if (task.status == chart_library_tasks::TaskStatus::Running) {
       if (progress.valid && progress.taskId == task.id) {
         text << " - " << (progress.basisPoints / 100) << "%";

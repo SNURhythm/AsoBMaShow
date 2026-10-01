@@ -4610,7 +4610,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(visual_catch_up_tests PRIVATE cxx_std_23)
     target_compile_definitions(visual_catch_up_tests PRIVATE
         ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-    target_link_libraries(visual_catch_up_tests PRIVATE ${COMMON_LIBS} bgfx)
+    target_link_libraries(visual_catch_up_tests PRIVATE ${COMMON_LIBS} bgfx asobmashow_localization)
     if(APPLE)
         target_link_libraries(visual_catch_up_tests PRIVATE iconv)
     endif()
@@ -5500,6 +5500,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(scene_language_lifecycle_tests ${scene_language_lifecycle_source})
     target_include_directories(scene_language_lifecycle_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(scene_language_lifecycle_tests PRIVATE cxx_std_23)
+    add_test(NAME practice_panel_message_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/practice_panel_message_tests.py)
+    set_tests_properties(practice_panel_message_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME localization_catalog_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
 

@@ -114,18 +114,17 @@ bool cleanupProfileImportTemporaryDocument(
   return false;
 }
 
-std::string joinWarnings(const std::vector<std::string> &warnings) {
-  std::ostringstream message;
+i18n::Text joinWarnings(const std::vector<i18n::Text> &warnings) {
+  i18n::Text message;
   for (const auto &warning : warnings) {
     if (warning.empty()) {
       continue;
     }
-    if (message.tellp() > 0) {
-      message << ' ';
-    }
-    message << warning;
+    message = message.empty() ? warning
+        : i18n::message("settings.audio_video.status_detail",
+                        {{"status", message}, {"detail", warning}});
   }
-  return message.str();
+  return message;
 }
 } // namespace
 
@@ -499,7 +498,7 @@ void SettingsScene::activateProfile(std::string_view profileId) {
              context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
            },
        .applyMetadata =
-           [this]() {
+           [this]() -> i18n::Text {
              std::string error;
              if (native_music_player::SetMetadataVisibility(
                      {.showTitle = context.settings.systemPlaybackShowTitle,
@@ -509,18 +508,20 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                return std::string{};
              }
              return error.empty()
-                        ? i18n::tr("settings.profiles.system_media_metadata_preference_not_applied.message")
-                        : i18n::tr("settings.profiles.system_media_metadata.prefix") + error;
+                        ? i18n::message("settings.profiles.system_media_metadata_preference_not_applied.message")
+                        : i18n::message("settings.profiles.controller.joined_detail",
+                            {{"prefix", i18n::message("settings.profiles.system_media_metadata.prefix")},
+                             {"detail", error}});
            },
        .applyAudio =
-           [this]() {
+           [this]() -> i18n::Text {
              const audio::ApplyResult result = context.audioDeviceManager.apply(
                  context.settings.audioVideo.audio);
              setAudioStatus(
                  result.message.empty()
                      ? (result.status == audio::ApplyStatus::Applied
-                            ? i18n::tr("settings.profiles.profile_audio_settings_applied.message")
-                            : i18n::tr("settings.profiles.profile_audio_settings_need_attention.message"))
+                            ? i18n::message("settings.profiles.profile_audio_settings_applied.message")
+                            : i18n::message("settings.profiles.profile_audio_settings_need_attention.message"))
                      : result.message,
                  result.status == audio::ApplyStatus::Applied
                      ? SDL_Color{157, 220, 176, 255}
@@ -529,8 +530,10 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                return std::string{};
              }
              return result.message.empty()
-                        ? i18n::tr("settings.profiles.saved_audio_runtime_failed_fully_applied.message")
-                        : i18n::tr("settings.profiles.audio.prefix") + result.message;
+                        ? i18n::message("settings.profiles.saved_audio_runtime_failed_fully_applied.message")
+                        : i18n::message("settings.profiles.controller.joined_detail",
+                            {{"prefix", i18n::message("settings.profiles.audio.prefix")},
+                             {"detail", result.message}});
            },
        .refreshDrafts =
            [this]() {
@@ -542,7 +545,7 @@ void SettingsScene::activateProfile(std::string_view profileId) {
              if (audioVideoSession == nullptr) {
                return ProfileDisplayRuntimeResult{
                    .outcome = ProfileDisplayRuntimeOutcome::Failed,
-                   .message = i18n::tr("settings.profiles.display_runtime_not_initialized_yet.message")};
+                   .message = i18n::message("settings.profiles.display_runtime_not_initialized_yet.message")};
              }
              const display::ApplyResult result =
                  audioVideoSession->beginDisplayPreview(
@@ -552,8 +555,8 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                  result.status == display::ApplyStatus::PreviewPending;
              setDisplayStatus(result.message.empty()
                                   ? (accepted
-                                         ? i18n::tr("settings.profiles.profile_display_settings_applied.message")
-                                         : i18n::tr("settings.profiles.profile_display_settings_need_attention.message"))
+                                         ? i18n::message("settings.profiles.profile_display_settings_applied.message")
+                                         : i18n::message("settings.profiles.profile_display_settings_need_attention.message"))
                                   : result.message,
                               accepted ? SDL_Color{157, 220, 176, 255}
                                        : SDL_Color{255, 177, 170, 255});
@@ -570,10 +573,10 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                  .message =
                      accepted || !result.message.empty()
                          ? result.message
-                         : i18n::tr("settings.profiles.saved_display_runtime_failed_fully_applied.message")};
+                         : i18n::message("settings.profiles.saved_display_runtime_failed_fully_applied.message")};
            }});
 
-  const std::string warningText = joinWarnings(runtime.warnings);
+  const i18n::Text warningText = joinWarnings(runtime.warnings);
   if (runtime.profileCommitted && !warningText.empty()) {
     profileController->recordWarning(
         i18n::message("settings.profiles.controller.joined_detail",

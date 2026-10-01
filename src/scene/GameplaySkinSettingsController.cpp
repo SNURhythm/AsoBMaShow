@@ -25,13 +25,13 @@ bool endsWithZipAsciiCaseInsensitive(std::string_view value) {
 }
 
 ControllerActionResult rejected(i18n::Text message) {
-  return {.message = message.resolve()};
+  return {.message = std::move(message)};
 }
 
 ControllerActionResult accepted(i18n::Text message, bool asynchronous = true) {
   return {.accepted = true,
           .asynchronous = asynchronous,
-          .message = message.resolve()};
+          .message = std::move(message)};
 }
 
 i18n::Text firstDiagnosticMessage(const std::vector<SkinDiagnostic> &values,
@@ -539,7 +539,7 @@ struct GameplaySkinSettingsController::Impl {
     }
     if (handle.ticket == 0) {
       rejectPrepareSubmission(std::move(handle));
-      return rejected(projected.statusMessage);
+      return rejected(statusText);
     }
     pickedSource.reset();
     operationTicket = handle.ticket;
@@ -856,16 +856,16 @@ struct GameplaySkinSettingsController::Impl {
     } catch (const std::exception &exception) {
       releaseDisposalReservation();
       setError(exception.what());
-      return rejected(projected.statusMessage);
+      return rejected(statusText);
     } catch (...) {
       releaseDisposalReservation();
       setError(i18n::message("settings.skins.document_picker_failed_started.message"));
-      return rejected(projected.statusMessage);
+      return rejected(statusText);
     }
     if (!handoff) {
       releaseDisposalReservation();
       setError(i18n::message("settings.skins.document_picker_unavailable.message"));
-      return rejected(projected.statusMessage);
+      return rejected(statusText);
     }
     setBusy(archive
                 ? i18n::message("settings.skins.selecting_skin_archive.progress")
@@ -889,8 +889,8 @@ struct GameplaySkinSettingsController::Impl {
     refreshCachedPresentationKey();
     return {.accepted = normalized.package.has_value(),
             .message = normalized.package
-                           ? i18n::tr("settings.skins.package_name_updated.message")
-                           : projected.preparedName->validationError};
+                           ? i18n::message("settings.skins.package_name_updated.message")
+                           : i18n::Text(projected.preparedName->validationError)};
   }
 
   ControllerActionResult
@@ -1117,7 +1117,7 @@ ControllerActionResult GameplaySkinSettingsController::requestRescan() {
     impl_->projected.rescanProgress = impl_->dependencies.rescanProgress();
   } catch (...) {
     impl_->setError(i18n::message("settings.skins.gameplay_skin_rescan_failed_observed.message"));
-    return rejected(impl_->projected.statusMessage);
+    return rejected(impl_->statusText);
   }
   impl_->setBusy(i18n::message("settings.skins.preparing_scan.progress"));
   return accepted(i18n::message("settings.skins.rescan_requested.message"));
@@ -1345,7 +1345,7 @@ GameplaySkinSettingsController::requestRemoval(const SkinPackageId &package) {
   i18n::Text error;
   if (!impl_->beginRemovalInventory(package, error)) {
     impl_->setError(std::move(error));
-    return rejected(impl_->projected.statusMessage);
+    return rejected(impl_->statusText);
   }
   return accepted(i18n::message("settings.skins.checking_selections_before_removal.message"));
 }

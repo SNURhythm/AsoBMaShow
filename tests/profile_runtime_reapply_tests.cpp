@@ -77,8 +77,8 @@ void testRuntimeFailuresWarnWithoutUndoingCommittedProfile() {
                                               "metadata", "audio", "drafts",
                                               "display"}));
   REQUIRE(result.warnings.size() == 2);
-  REQUIRE(result.warnings[0] == "audio restart failed");
-  REQUIRE(result.warnings[1] == "display apply failed");
+  REQUIRE(i18n::Text(result.warnings[0]).resolve() == "audio restart failed");
+  REQUIRE(i18n::Text(result.warnings[1]).resolve() == "display apply failed");
 }
 
 void testPreviewPendingIsAccepted() {
@@ -97,14 +97,16 @@ void testOwnedRuntimeFailuresLocalizeAndKeepBackendDetailsLiteral() {
   auto result = ReapplyProfileRuntimeAfterSwitch(
       {}, callbacks(events, {}, {.outcome = ProfileDisplayRuntimeOutcome::Failed}));
   REQUIRE(result.warnings.size() == 1);
-  REQUIRE(result.warnings[0] == "디스플레이 재적용에 실패했습니다.");
+  REQUIRE(i18n::Text(result.warnings[0]).resolve() == "디스플레이 재적용에 실패했습니다.");
   auto throwing = callbacks(events);
   throwing.sanitize = [] { throw std::runtime_error("Theme reapplication"); };
   i18n::setLanguage(i18n::Language::Japanese);
   result = ReapplyProfileRuntimeAfterSwitch({}, throwing);
   REQUIRE(result.warnings.size() == 1);
-  REQUIRE(result.warnings[0] == "設定の検証に失敗しました: Theme reapplication");
+  REQUIRE(i18n::Text(result.warnings[0]).resolve() == "設定の検証に失敗しました: Theme reapplication");
   i18n::setLanguage(i18n::Language::English);
+  REQUIRE(i18n::Text(result.warnings[0]).resolve() ==
+          "Settings sanitization failed: Theme reapplication");
 }
 } // namespace
 

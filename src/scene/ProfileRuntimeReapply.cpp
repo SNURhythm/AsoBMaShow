@@ -10,19 +10,19 @@ struct FailureMessage {
   const char *message;
   const char *detail;
 };
-void appendException(std::vector<std::string> &warnings,
+void appendException(std::vector<i18n::Text> &warnings,
                      FailureMessage operation,
                      const std::exception *error = nullptr) {
   if (error != nullptr && error->what()[0] != '\0') {
-    warnings.push_back(i18n::format(operation.detail, {{"detail", error->what()}}));
+    warnings.push_back(i18n::message(operation.detail, {{"detail", error->what()}}));
   } else {
-    warnings.push_back(i18n::tr(operation.message));
+    warnings.push_back(i18n::message(operation.message));
   }
 }
 
 template <typename Callback>
 void invokeVoid(const Callback &callback, FailureMessage operation,
-                std::vector<std::string> &warnings) {
+                std::vector<i18n::Text> &warnings) {
   if (!callback) {
     appendException(warnings, operation);
     return;
@@ -38,13 +38,13 @@ void invokeVoid(const Callback &callback, FailureMessage operation,
 
 template <typename Callback>
 void invokeWarning(const Callback &callback, FailureMessage operation,
-                   std::vector<std::string> &warnings) {
+                   std::vector<i18n::Text> &warnings) {
   if (!callback) {
     appendException(warnings, operation);
     return;
   }
   try {
-    std::string warning = callback();
+    i18n::Text warning = callback();
     if (!warning.empty()) {
       warnings.push_back(std::move(warning));
     }
@@ -82,7 +82,7 @@ ProfileRuntimeReapplyResult ReapplyProfileRuntimeAfterSwitch(
     const ProfileDisplayRuntimeResult display = callbacks.applyDisplay();
     if (display.outcome == ProfileDisplayRuntimeOutcome::Failed) {
       result.warnings.push_back(display.message.empty()
-                                    ? i18n::tr("settings.profiles.runtime.display_failed")
+                                    ? i18n::message("settings.profiles.runtime.display_failed")
                                     : display.message);
     }
   } catch (const std::exception &error) {

@@ -88,8 +88,8 @@ void testApplyStatusesAndRawDiagnosticsKeepTheirIdentity() {
   displayResult.message = diagnostic;
   scene.setAudioStatus(audioApplyMessage(audioResult), {});
   scene.setDisplayStatus(displayApplyMessage(displayResult), {});
-  audioResult.message.clear();
-  displayResult.message.clear();
+  audioResult.message = {};
+  displayResult.message = {};
   i18n::setLanguage(i18n::Language::Korean);
   require(scene.audio.text.resolve() == diagnostic && scene.preview.text.resolve() == diagnostic,
           "provider diagnostics remain owned verbatim text");

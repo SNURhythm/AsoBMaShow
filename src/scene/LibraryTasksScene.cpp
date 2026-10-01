@@ -115,7 +115,7 @@ void LibraryTasksScene::refreshTasks() {
           ->setThemedBorderColor(ui_theme::hairline)
           ->setBorderWidth(1)
           ->setCornerRadius(ui_theme::panelRadius());
-      auto *taskTitle = makeText(task.title, 21, ui_theme::textPrimary);
+      auto *taskTitle = makeText(task.title.resolve(), 21, ui_theme::textPrimary);
       taskTitle->setHeight(30);
       row->addView(taskTitle);
       auto *taskDetail =
