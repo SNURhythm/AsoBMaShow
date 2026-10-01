@@ -20,6 +20,7 @@
 #include "PlayfieldVisualState.h"
 #include "StartSelectControl.h"
 #include "GuidedAccessReminder.h"
+#include "GuidedAccessInstructionView.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../ReplayRecordTask.h"
@@ -110,8 +111,8 @@ private:
   TextView *guidedAccessReminderIcon = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;
   TextView *guidedAccessReminderWhy = nullptr;
-  TextView *guidedAccessReminderHelp = nullptr;
-  TextView *guidedAccessReminderDisableHelp = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderHelp = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderDisableHelp = nullptr;
   View *guidedAccessButtonMarker = nullptr;
   TextView *guidedAccessButtonHint = nullptr;
   TextView *guidedAccessButtonCheck = nullptr;

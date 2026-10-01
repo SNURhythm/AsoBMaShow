@@ -1,3 +1,4 @@
+#include "scene/play/GuidedAccessInstructionView.h"
 #include "rendering/UniformCache.h"
 #include "view/TextInputBox.h"
 #include "view/TextView.h"
@@ -52,8 +53,8 @@ struct ReminderUIFixture {
   View *guidedAccessReminderLayout = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;
   TextView *guidedAccessReminderWhy = nullptr;
-  TextView *guidedAccessReminderHelp = nullptr;
-  TextView *guidedAccessReminderDisableHelp = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderHelp = nullptr;
+  GuidedAccessInstructionView *guidedAccessReminderDisableHelp = nullptr;
   TextView *guidedAccessReminderIcon = nullptr;
   View *guidedAccessButtonMarker = nullptr;
   TextView *guidedAccessButtonHint = nullptr;
@@ -464,37 +465,58 @@ void testMultilineAlignmentAcrossFonts() {
   }
 }
 
+std::string instructionText(GuidedAccessInstructionView &view) {
+  std::string result;
+  for (auto *row : view.getChildren()) {
+    if (!result.empty()) result += '\n';
+    for (auto *child : row->getChildren()) {
+      auto *run = static_cast<TextView *>(child);
+      result += run->getText();
+      expect(run->getText().find("**") == std::string::npos,
+             "formatting markers are never displayed");
+      expect(run->getX() >= view.getContentX() &&
+             run->getX() + run->getWidth() <= view.getContentX() + view.getContentWidth() &&
+             run->getY() >= view.getContentY() &&
+             run->getY() + run->getHeight() <= view.getContentY() + view.getContentHeight() &&
+             run->textureHeight() <= run->getContentHeight(),
+             "styled instructions fit their paragraph without clipping");
+      const auto color = run->currentColor();
+      const auto expected = run->fontWeight() == TextView::FontWeight::Bold
+          ? ui_theme::cyan() : ui_theme::textSecondary();
+      expect(color.r == expected.r && color.g == expected.g && color.b == expected.b,
+             "setting targets use accent color and surrounding text stays secondary");
+    }
+  }
+  return result;
+}
+
+std::string withoutEmphasis(std::string text) {
+  for (auto marker = text.find("**"); marker != std::string::npos; marker = text.find("**")) {
+    text.erase(marker, 2);
+  }
+  return text;
+}
+
 void testReminderDescriptionPreservesLineBreaks() {
   for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
                               i18n::Language::Korean}) {
     i18n::setLanguage(language);
-    MultilineTextProbe view("assets/fonts/notosanscjkjp.ttf", 22);
-    view.setDeferredTextureMaterialization(true);
-    view.setSize(1800, 140);
-    view.setAlign(TextView::CENTER);
-    view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help",
-        {{"button", i18n::message("gameplay.ipad_gesture_reminder.button.unknown")}}));
-    const int unwrappedHeight = view.textureHeight();
-    expect(unwrappedHeight >= (view.lineHeight() * 2 + 1) / 2,
-           "reminder description keeps its two setup paragraphs in every language");
-    view.setWrap(true);
-    view.applyYogaLayout();
-    expect(view.textureHeight() == unwrappedHeight,
-           "centered wrapping preserves the reminder's explicit paragraph breaks");
-    expect(view.textureHeight() <= view.getContentHeight(),
-           "the setup instructions fit without clipping");
     ReminderUIFixture fixture;
     fixture.root.setSize(rendering::window_width, rendering::window_height);
     fixture.showGuidedAccessReminder();
     fixture.root.applyYogaLayout();
     const auto *why = fixture.guidedAccessReminderWhy;
-    const auto *help = fixture.guidedAccessReminderHelp;
-    const auto *disableHelp = fixture.guidedAccessReminderDisableHelp;
-    expect(why->pointSize() > help->pointSize(), "explanation is larger than setup instructions");
+    const auto *title = fixture.guidedAccessReminderTitle;
+    expect(title->pointSize() > why->pointSize() &&
+           title->fontWeight() == TextView::FontWeight::Bold &&
+           title->textureHeight() <= title->getContentHeight(),
+           "larger bold title fits above the explanation");
+    auto *help = fixture.guidedAccessReminderHelp;
+    auto *disableHelp = fixture.guidedAccessReminderDisableHelp;
+    expect(why->pointSize() > 22 && why->fontWeight() == TextView::FontWeight::Bold,
+           "explanation is larger and bold");
     expect(why->textureWidth() <= why->getContentWidth() &&
-           why->textureHeight() <= why->getContentHeight() &&
-           help->textureHeight() <= help->getContentHeight() &&
-           disableHelp->textureHeight() <= disableHelp->getContentHeight(),
+           why->textureHeight() <= why->getContentHeight(),
            "separate explanation and instructions fit in the production layout");
     expect(help->getY() - (why->getY() + why->getHeight()) >= 24,
            "explanation has a clear paragraph gap before the setup steps");
@@ -504,6 +526,19 @@ void testReminderDescriptionPreservesLineBreaks() {
            why->currentColor().g == ui_theme::cyan().g &&
            why->currentColor().b == ui_theme::cyan().b,
            "explanation uses the theme accent color");
+    expect(help->getChildren().size() == 2, "setup keeps its two instruction lines");
+    expect(instructionText(*disableHelp) == withoutEmphasis(
+               i18n::tr("gameplay.ipad_gesture_reminder.disable_help")),
+           "disable note preserves its localized wording");
+    int emphasizedRuns = 0;
+    for (auto *paragraph : {help, disableHelp}) {
+      for (auto *row : paragraph->getChildren()) {
+        for (auto *child : row->getChildren()) {
+          emphasizedRuns += static_cast<TextView *>(child)->fontWeight() == TextView::FontWeight::Bold;
+        }
+      }
+    }
+    expect(emphasizedRuns == 3, "setup path, settings, and disable path are bold");
     // Button identity remains known even when a partial window suppresses the edge cue.
     for (const auto &entry : {
              std::pair{"iPad7,5", "gameplay.ipad_gesture_reminder.button.home"},
@@ -517,11 +552,10 @@ void testReminderDescriptionPreservesLineBreaks() {
       const std::string expectedHelp = i18n::message(
           "gameplay.ipad_gesture_reminder.help",
           {{"button", i18n::message(entry.second)}}).resolve();
-      expect(help->getText() == expectedHelp &&
-             help->getText().find("{button}") == std::string::npos,
+      const auto renderedHelp = instructionText(*help);
+      expect(renderedHelp == withoutEmphasis(expectedHelp) &&
+             renderedHelp.find("{button}") == std::string::npos,
              "instruction names the model's button or uses the unknown-model fallback");
-      expect(help->textureHeight() <= help->getContentHeight(),
-             "localized device-specific instructions fit the help area");
     }
     testButtonLocation = {};
   }
