@@ -3777,6 +3777,7 @@ void GamePlayScene::showIpadGestureReminder() {
     title->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.title"));
     title->setWidthPercent(100);
     title->setHeight(90);
+    title->setWrap(true);
     title->setAlign(TextView::CENTER);
     title->setVAlign(TextView::MIDDLE);
     title->setThemedColor(ui_theme::textPrimary);
@@ -3804,6 +3805,7 @@ void GamePlayScene::showIpadGestureReminder() {
     help->setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
     help->setWidthPercent(100);
     help->setHeight(160);
+    help->setWrap(true);
     help->setAlign(TextView::CENTER);
     help->setVAlign(TextView::MIDDLE);
     help->setThemedColor(ui_theme::textSecondary);

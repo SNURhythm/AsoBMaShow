@@ -866,7 +866,9 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
       runs.back().text += token.bytes;
     }
 
-    int x = 0;
+    const int spareWidth = targetWidth - measureRasterTextWidth(line);
+    int x = align == TextAlign::CENTER ? spareWidth / 2
+            : align == TextAlign::RIGHT ? spareWidth : 0;
     const int lineTop = metrics.height * static_cast<int>(lineIndex);
     for (const auto &run : runs) {
       if (!hasFontSource(run.source) || run.text.empty()) {
@@ -1030,7 +1032,10 @@ void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
     rect.h = 0;
     return;
   }
-  const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
+  // Compose explicit lines and aligned wrapping consistently across font sources.
+  const bool usePrimaryFont =
+      font != nullptr && text.find_first_of("\r\n") == std::string::npos &&
+      (!wrapEnabled || align == TextAlign::LEFT) && primaryFontSupportsText(text);
   const auto lines = rasterWrapWidth > 0 ? wrappedTextLines(rasterWrapWidth)
                                          : wrappedTextLines(0);
   int rasterWidth = 0;
@@ -1072,7 +1077,10 @@ void TextView::createTexture() {
   SurfacePtr surface(nullptr);
   int fallbackSurfaceWidth = 0;
   int fallbackSurfaceHeight = 0;
-  const bool usePrimaryFont = font != nullptr && primaryFontSupportsText(text);
+  // Compose explicit lines and aligned wrapping consistently across font sources.
+  const bool usePrimaryFont =
+      font != nullptr && text.find_first_of("\r\n") == std::string::npos &&
+      (!wrapEnabled || align == TextAlign::LEFT) && primaryFontSupportsText(text);
   if (usePrimaryFont && wrapEnabled && rasterWrapWidth > 0) {
     surface.reset(TTF_RenderUTF8_Blended_Wrapped(font, text.c_str(), color,
                                                  rasterWrapWidth));
@@ -1118,7 +1126,15 @@ YGSize TextView::measureFunc(YGNodeConstRef node, float width,
   return {measuredWidth, static_cast<float>(view->rect.h)};
 }
 
-void TextView::setAlign(TextAlign newAlign) { this->align = newAlign; }
+void TextView::setAlign(TextAlign newAlign) {
+  if (align == newAlign) return;
+  align = newAlign;
+  if (!wrapEnabled && text.find_first_of("\r\n") == std::string::npos) return;
+  metricsDirty = true;
+  invalidateTexture();
+  updateTextMetrics();
+  if (!deferTextureMaterialization) createTexture();
+}
 
 void TextView::setVAlign(TextVAlign newVAlign) { this->valign = newVAlign; }
 

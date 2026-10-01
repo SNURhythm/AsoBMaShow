@@ -311,6 +311,80 @@ void testLanguageRefreshReachesPortalOverlay() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+class MultilineTextProbe final : public TextView {
+public:
+  using TextView::TextView;
+  int lineHeight() const { return rasterTextLineHeight(); }
+  int rasterWidth(const std::string &value) { return measureRasterTextWidth(value); }
+  SDL_Surface *rasterizeLines() {
+    int width = 0;
+    int height = 0;
+    return renderFallbackTextSurface(0, width, height);
+  }
+};
+
+int firstInkX(SDL_Surface *surface, int top, int bottom) {
+  expect(surface != nullptr, "multiline text rasterizes");
+  int first = surface->w;
+  for (int y = top; y < std::min(bottom, surface->h); ++y) {
+    const auto *row = reinterpret_cast<const Uint32 *>(
+        static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
+    for (int x = 0; x < surface->w; ++x) {
+      Uint8 r, g, b, alpha;
+      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      if (alpha != 0) first = std::min(first, x);
+    }
+  }
+  expect(first < surface->w, "each text line contains visible glyphs");
+  return first;
+}
+
+void testMultilineAlignmentAcrossFonts() {
+  for (const auto &glyph : {std::string("M"), std::string("あ"), std::string("가")}) {
+    MultilineTextProbe view("assets/fonts/notosanscjkjp.ttf", 22);
+    view.setDeferredTextureMaterialization(true);
+    view.setColor({255, 255, 255, 255});
+    const std::string longLine = glyph + glyph + glyph + glyph + glyph + glyph;
+    view.setText(longLine + "\n" + glyph);
+    SDL_Surface *left = view.rasterizeLines();
+    const int leftX = firstInkX(left, view.lineHeight(), view.lineHeight() * 2);
+    SDL_FreeSurface(left);
+    const int spare = view.rasterWidth(longLine) - view.rasterWidth(glyph);
+    view.setDeferredTextureMaterialization(false);
+    expect(bgfx::isValid(view.textureHandle()), "left-aligned texture is materialized");
+    view.setDeferredTextureMaterialization(true);
+    for (const auto alignment : {TextView::CENTER, TextView::RIGHT}) {
+      view.setAlign(alignment);
+      expect(!bgfx::isValid(view.textureHandle()),
+             "changing multiline alignment invalidates the previously rasterized texture");
+      SDL_Surface *aligned = view.rasterizeLines();
+      const int alignedX = firstInkX(aligned, view.lineHeight(), view.lineHeight() * 2);
+      SDL_FreeSurface(aligned);
+      expect(alignedX - leftX == (alignment == TextView::CENTER ? spare / 2 : spare),
+             "alignment positions each primary or fallback text line independently");
+    }
+  }
+}
+
+void testReminderDescriptionPreservesLineBreaks() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    MultilineTextProbe view("assets/fonts/notosanscjkjp.ttf", 22);
+    view.setDeferredTextureMaterialization(true);
+    view.setSize(1800, 200);
+    view.setAlign(TextView::CENTER);
+    view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
+    expect(view.textureHeight() == (view.lineHeight() * 3 + 1) / 2,
+           "reminder description keeps all three explicit lines in every language");
+    view.setWrap(true);
+    view.applyYogaLayout();
+    expect(view.textureHeight() == (view.lineHeight() * 3 + 1) / 2,
+           "centered wrapping preserves the reminder's explicit paragraph breaks");
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testDeferredTextKeepsRasterizedLineHeight() {
   constexpr int logicalSize = 20;
   constexpr int rasterScale = 2;
@@ -375,6 +449,8 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testMultilineAlignmentAcrossFonts();
+  testReminderDescriptionPreservesLineBreaks();
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();

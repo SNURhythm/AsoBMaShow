@@ -20,6 +20,7 @@ public:
     releasing_ = false;
     valid_ = false;
     completed_ = false;
+    startedWithTooFewFingers_ = false;
   }
   void down(std::int64_t id, float x, float y) {
     completed_ = false;
@@ -30,13 +31,20 @@ public:
     if (auto it = fingers_.find(id); it != fingers_.end()) {
       it->second.x = x;
       it->second.y = y;
+      // Touchdowns arrive separately; allow jitter, but require four fingers
+      // before the swipe starts. A late finger cannot rescue this attempt.
+      if (fingers_.size() < 4 &&
+          (std::abs(x - it->second.startX) >= 0.01F ||
+           std::abs(y - it->second.startY) >= 0.01F)) {
+        startedWithTooFewFingers_ = true;
+      }
     }
   }
   void up(std::int64_t id) {
     if (!fingers_.contains(id)) return;
     if (!releasing_) {
       releasing_ = true;
-      valid_ = fingers_.size() >= 4;
+      valid_ = fingers_.size() >= 4 && !startedWithTooFewFingers_;
       for (const auto &[fingerId, finger] : fingers_) {
         const float upward = finger.startY - finger.y;
         valid_ = valid_ && upward >= 0.03F &&
@@ -48,6 +56,7 @@ public:
       completed_ = valid_;
       releasing_ = false;
       valid_ = false;
+      startedWithTooFewFingers_ = false;
     }
   }
   [[nodiscard]] bool completed() const { return completed_; }
@@ -60,5 +69,6 @@ private:
   bool releasing_ = false;
   bool valid_ = false;
   bool completed_ = false;
+  bool startedWithTooFewFingers_ = false;
 };
 } // namespace gameplay

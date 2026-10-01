@@ -40,6 +40,35 @@ int main() {
 
   gesture.reset();
   fingersDown(gesture, 3);
+  swipe(gesture, 0.3F, 0.55F, 3);
+  gesture.down(3, 0.6F, 0.55F); // Adding a fourth finger midway cannot qualify.
+  swipe(gesture, 0.3F, 0.45F);
+  lift(gesture);
+  assert(!gesture.completed());
+  fingersDown(gesture);
+  swipe(gesture, 0.3F, 0.665F);
+  lift(gesture);
+  assert(gesture.completed()); // Retry is allowed after every finger lifts.
+
+  gesture.reset();
+  fingersDown(gesture, 3);
+  swipe(gesture, 0.3F, 0.685F, 3); // Reject even a short premature swipe.
+  swipe(gesture, 0.3F, 0.7F, 3); // Returning to the origin cannot undo it.
+  gesture.down(3, 0.6F, 0.7F);
+  swipe(gesture, 0.3F, 0.665F);
+  lift(gesture);
+  assert(!gesture.completed());
+
+  gesture.reset();
+  fingersDown(gesture, 3);
+  swipe(gesture, 0.3F, 0.695F, 3); // Allow small jitter during touchdown.
+  gesture.down(3, 0.6F, 0.7F);
+  swipe(gesture, 0.3F, 0.665F);
+  lift(gesture);
+  assert(gesture.completed());
+
+  gesture.reset();
+  fingersDown(gesture, 3);
   swipe(gesture, 0.3F, 0.45F, 3);
   lift(gesture, 3);
   assert(!gesture.completed());

@@ -1602,6 +1602,28 @@ void testReminderSceneStartup(std::string_view scenario) {
   scene.ipadGestureReminderPending = true;
   scene.state->isPlaying = false;
   reminderTouches.clear();
+  if (scenario == "late-finger") {
+    for (auto phase : {IOSRawTouchPhaseBegan, IOSRawTouchPhaseMoved}) {
+      for (int i = 0; i < 3; ++i) {
+        reminderTouches.push_back({.fingerId = i, .normalizedX = .2F + .1F * i,
+            .normalizedY = phase == IOSRawTouchPhaseBegan ? .8F : .7F, .phase = phase});
+      }
+    }
+    reminderTouches.push_back({.fingerId = 3, .normalizedX = .5F,
+        .normalizedY = .7F, .phase = IOSRawTouchPhaseBegan});
+    for (auto phase : {IOSRawTouchPhaseMoved, IOSRawTouchPhaseEnded}) {
+      for (int i = 0; i < 4; ++i) {
+        reminderTouches.push_back({.fingerId = i, .normalizedX = .2F + .1F * i,
+            .normalizedY = .6F, .phase = phase});
+      }
+    }
+    scene.update(0);
+    scene.finishFrame();
+    scene.update(0);
+    require(scene.attemptStarts == 0 && scene.ipadGestureReminderPending &&
+                scene.recordedReplay.events.empty() && !scene.modernReplayInputRecorder,
+            "a fourth finger added during a three-finger swipe must not start gameplay");
+  }
   queueReminderSwipe();
   scene.update(0);
   require(scene.attemptStarts == 0 && !scene.state->isPlaying &&
@@ -1658,7 +1680,7 @@ int main(int argc, char **argv) {
     testReminderSceneStartup(argv[2]);
     return 0;
   }
-  for (const auto scenario : {"back", "native-background", "cancel", "native-cancel", "cancel-then-swipe", "success"}) {
+  for (const auto scenario : {"back", "native-background", "cancel", "native-cancel", "cancel-then-swipe", "late-finger", "success"}) {
     testReminderSceneStartup(scenario);
   }
   testNativeFailureRacingOrdinaryPauseResumeIsNotCleared();
