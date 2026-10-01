@@ -24,7 +24,7 @@ def main():
     source = (args.root / "src/scene/play/GamePlayScene.cpp").read_text()
     signatures = [
         "void GamePlayScene::onApplicationBackgroundChanged(",
-        "void GamePlayScene::returnFromIpadGestureReminder()",
+        "void GamePlayScene::returnFromGuidedAccessReminder()",
         "void GamePlayScene::showPauseMenu(",
         "void GamePlayScene::closePauseMenu()",
         "bool GamePlayScene::drainRealtimeInputInterruption()",
@@ -65,8 +65,11 @@ def main():
         "std::vector<bms_parser::Note *>\nbuildRealtimeGameplayNoteLookup(",
     ]
     methods = "\n\n".join(extract(source, signature) for signature in helpers) + "\n"
-    methods += "\n\n".join(extract(source, signature) for signature in signatures)
-    native_reminder_pump = extract(source, "void GamePlayScene::pumpIpadGestureReminderTouches()")
+    methods += "\n\n".join(
+        extract(source, signature).replace("SDL_GetTicks64()", "reminderTicks")
+        if signature == "void GamePlayScene::update(float dt)" else extract(source, signature)
+        for signature in signatures)
+    native_reminder_pump = extract(source, "void GamePlayScene::discardGuidedAccessReminderTouches()")
     # Exercise the native iPad queue on the host without enabling iOS-only reset setup.
     methods += "\n" + native_reminder_pump.replace(
         "#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR", "#if 1", 1)

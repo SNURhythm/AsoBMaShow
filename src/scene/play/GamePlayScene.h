@@ -19,7 +19,7 @@
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
 #include "StartSelectControl.h"
-#include "IpadGestureReminder.h"
+#include "GuidedAccessReminder.h"
 #include "RhythmState.h"
 #include "../Scene.h"
 #include "../ReplayRecordTask.h"
@@ -98,16 +98,18 @@ private:
   bool reset();
   bool startPreparedAttempt();
   bool isGuidedAccessEnabled() const;
-  void showIpadGestureReminder();
-  void pumpIpadGestureReminderTouches();
-  void returnFromIpadGestureReminder();
-  gameplay::IpadGestureReminder ipadGestureReminder;
-  bool ipadGestureReminderPending = false;
-  bool ipadGestureReminderReady = false;
-  bool ipadGestureReminderExiting = false;
-  bool ipadGestureReminderBackground = false;
-  View *ipadGestureReminderLayout = nullptr;
-  std::array<View *, 4> ipadGestureFingerMarkers{};
+  void showGuidedAccessReminder();
+  void discardGuidedAccessReminderTouches();
+  void returnFromGuidedAccessReminder();
+  gameplay::GuidedAccessReminder guidedAccessReminder;
+  bool guidedAccessReminderPending = false;
+  bool guidedAccessReminderDismissed = false;
+  bool guidedAccessReminderExiting = false;
+  bool guidedAccessReminderBackground = false;
+  View *guidedAccessReminderLayout = nullptr;
+  TextView *guidedAccessReminderIcon = nullptr;
+  TextView *guidedAccessReminderTitle = nullptr;
+  TextView *guidedAccessReminderHelp = nullptr;
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);
