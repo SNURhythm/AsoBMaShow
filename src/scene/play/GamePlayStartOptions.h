@@ -115,6 +115,8 @@ struct StartOptions {
   GameplayRuleset ruleset = kDefaultGameplayRuleset;
   std::optional<RulesetDescriptor> requiredRulesetDescriptor;
   std::optional<ScoreStageProvenance> replayRulesetOverride;
+  // In-memory only: inherited by retries, defaulted for a fresh launch.
+  bool guidedAccessReminderSkipped = false;
 };
 
 [[nodiscard]] inline std::optional<long long>

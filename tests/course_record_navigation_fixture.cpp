@@ -25,6 +25,7 @@ struct StartOptions {
   std::shared_ptr<CoursePlaySession> courseSession;
   void *returnScene = nullptr;
   std::string pacemakerTarget = "OFF", tableName, tableLevel;
+  bool guidedAccessReminderSkipped = false;
 };
 StartOptions makeCourseReplayStageStartOptions(std::shared_ptr<CoursePlaySession> session,
                                                std::shared_ptr<ReplayData>) {
@@ -61,7 +62,8 @@ struct Context {
 struct ResultScene {
   Context &context;
   struct Local { struct { void *returnScene = nullptr; } practiceOptions;
-    std::string pacemakerTarget = "AAA"; } local;
+    std::string pacemakerTarget = "AAA";
+    bool guidedAccessReminderSkipped = false; } local;
   struct Remote { void *returnScene = nullptr; } remote;
   bool isRemote = false;
   const Local *localSource() const { return isRemote ? nullptr : &local; }
@@ -80,9 +82,11 @@ int main() {
   auto session = std::make_shared<CoursePlaySession>();
   GamePlayScene stage(context, {}, {.courseSession = session, .returnScene = &owner,
                                     .pacemakerTarget = "AAA", .tableName = "Table", .tableLevel = "12"});
+  stage.options.guidedAccessReminderSkipped = true;
   assert(stage.startCourseReplayChartAtCurrentIndex());
   const auto &next = context.manager.gameplay->options;
   assert(next.returnScene == &owner && next.pacemakerTarget == "AAA");
+  assert(next.guidedAccessReminderSkipped);
   assert(next.tableName == "Table" && next.tableLevel == "12");
   assert(next.courseSession == session && session->currentIndex == 1);
 
@@ -100,9 +104,11 @@ int main() {
   ResultScene result{watchContext};
   result.local.practiceOptions.returnScene = &owner;
   session->prepared = true;
+  result.local.guidedAccessReminderSkipped = true;
   result.startCourseReplayStage(session);
   assert(watchContext.manager.gameplay->options.pacemakerTarget == "AAA");
   assert(watchContext.manager.gameplay->options.returnScene == &owner);
+  assert(watchContext.manager.gameplay->options.guidedAccessReminderSkipped);
   for (bool explicitOwner : {false, true}) {
     Context remoteContext;
     ResultScene remote{remoteContext};

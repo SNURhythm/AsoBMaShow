@@ -109,7 +109,6 @@ private:
   std::optional<audio::SkinSoundHandle> guidedAccessChime;
   gameplay::GuidedAccessReminder guidedAccessReminder;
   bool guidedAccessReminderPending = false;
-  bool guidedAccessReminderDismissed = false;
   bool guidedAccessReminderExiting = false;
   bool guidedAccessReminderBackground = false;
   View *guidedAccessReminderLayout = nullptr;

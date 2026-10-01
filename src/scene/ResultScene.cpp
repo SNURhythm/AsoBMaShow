@@ -530,7 +530,8 @@ ResultScene::ResultScene(
     const ReplayData *analyticsSource,
     std::optional<std::string> modernReplayAttemptId, bool retrySameAllowed,
     ResultTableContext tableContext, SkinGameplayGraphState gameplayGraph,
-    std::optional<std::int64_t> currentScorePlayedAtUnixMillis)
+    std::optional<std::int64_t> currentScorePlayedAtUnixMillis,
+    bool guidedAccessReminderSkipped)
     : Scene(context),
       source(LocalResultSource{
           .meta = meta,
@@ -576,6 +577,7 @@ ResultScene::ResultScene(
           .retrySameAllowed = retrySameAllowed,
           .autoPlayResult = autoPlayResult ||
               (retrySource != nullptr && retrySource->autoPlay),
+          .guidedAccessReminderSkipped = guidedAccessReminderSkipped,
       }) {
   auto &local = *localSource();
   local.replayResult = local.replayResult && !local.practiceOptions.enabled &&
@@ -3123,6 +3125,7 @@ void ResultScene::continueCourse() {
     nextOptions.ownsChart = true;
   }
   nextOptions.returnScene = local->practiceOptions.returnScene;
+  nextOptions.guidedAccessReminderSkipped = local->guidedAccessReminderSkipped;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -3181,7 +3184,8 @@ void ResultScene::showSavedCourseStage() {
                               .savedResultBrowsing = true},
           std::string{}, std::unique_ptr<bms_parser::Chart>{}, replayChart,
           std::nullopt, stageReplay, std::nullopt, true, ResultTableContext{},
-          result.gameplayGraph, session->modernCoursePlayedAtUnixMillis),
+          result.gameplayGraph, session->modernCoursePlayedAtUnixMillis,
+          local->guidedAccessReminderSkipped),
       false);
 }
 
@@ -3212,7 +3216,8 @@ void ResultScene::showCourseResult() {
           std::string{}, std::unique_ptr<bms_parser::Chart>{}, nullptr,
           std::nullopt, nullptr, std::nullopt, true, ResultTableContext{},
           courseGameplayGraphForSession(*session, courseState),
-          session->modernCoursePlayedAtUnixMillis),
+          session->modernCoursePlayedAtUnixMillis,
+          local->guidedAccessReminderSkipped),
       false);
 }
 
@@ -3327,6 +3332,7 @@ void ResultScene::startRetry(bool samePattern) {
         options.playback = retryPlayback;
         options.ownsChart = true;
         options.returnScene = local->practiceOptions.returnScene;
+        options.guidedAccessReminderSkipped = local->guidedAccessReminderSkipped;
         options.requiredRulesetDescriptor = local->attemptProvenance.ruleset;
         if (const auto completedRuleset =
                 gameplayRulesetFromId(local->attemptProvenance.ruleset.id)) {
@@ -3743,6 +3749,7 @@ void ResultScene::startCourseReplayStage(
       makeCourseReplayStageStartOptions(session, stageReplay);
   if (const auto *local = localSource(); local != nullptr) {
     options.returnScene = local->practiceOptions.returnScene;
+    options.guidedAccessReminderSkipped = local->guidedAccessReminderSkipped;
     options.pacemakerTarget = local->pacemakerTarget;
   }
 
@@ -3810,6 +3817,7 @@ void ResultScene::startModernCourseRetrySameStage(
       makeCourseRetrySameStageStartOptions(session, *setup);
   if (const auto *local = localSource(); local != nullptr) {
     options.returnScene = local->practiceOptions.returnScene;
+    options.guidedAccessReminderSkipped = local->guidedAccessReminderSkipped;
   }
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(chart),

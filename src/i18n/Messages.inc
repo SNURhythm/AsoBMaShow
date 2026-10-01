@@ -88,7 +88,7 @@
 {"gameplay.ipad_gesture_reminder.button.top", "top button", "상단 버튼", "トップボタン"},
 {"gameplay.ipad_gesture_reminder.button.unknown", "top or Home button", "상단 또는 홈 버튼", "トップボタンかホームボタン"},
 {"gameplay.ipad_gesture_reminder.disable_help", "Turn this reminder off in **Settings > Visual > Guided Access Reminder**.", "이 알림은 **설정 > 화면 효과 > 사용법 유도 알림**에서 끌 수 있습니다.", "この確認は**「設定」>「表示」>「アクセスガイドの確認」**でオフにできます。"},
-{"gameplay.ipad_gesture_reminder.dismiss", "Skip this time", "이번에는 건너뛰기", "今回はスキップ"},
+{"gameplay.ipad_gesture_reminder.dismiss", "Skip this session", "이번 플레이는 건너뛰기", "このプレイ中はスキップ"},
 {"gameplay.ipad_gesture_reminder.enabled", "Enabled", "켜짐", "オン"},
 {"gameplay.ipad_gesture_reminder.help", "In **iPad Settings > Accessibility > Guided Access**, turn on **Guided Access and Accessibility Shortcut**.\nReturn here, triple-click the {button}, choose Guided Access if asked, then tap Start.", "**iPad 설정 > 손쉬운 사용 > 사용법 유도**에서 **사용법 유도와 손쉬운 사용 단축키**를 켜세요.\n앱으로 돌아와 {button}을 세 번 누르고, 필요하면 사용법 유도를 선택한 뒤 시작을 누르세요.", "**iPadの「設定」>「アクセシビリティ」>「アクセスガイド」**で、**アクセスガイドとショートカット**をオンにしてください。\nアプリに戻り、{button}を3回押し、必要なら「アクセスガイド」を選んで「開始」をタップしてください。"},
 {"gameplay.ipad_gesture_reminder.home_button", "Triple-click the\nHome button", "홈 버튼을\n세 번 누르세요", "ホームボタンを\n3回押してください"},

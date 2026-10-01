@@ -78,6 +78,7 @@ def main():
     reset_boundary = extract(source, "bool GamePlayScene::reset()")
     reset_boundary = reset_boundary[reset_boundary.index("{") + 1:
                                     reset_boundary.index("  ownedState.reset();")]
+    reset_boundary = reset_boundary.replace("#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR", "#if 1", 1)
     methods += "\nvoid GamePlayScene::resetAttemptBoundaryForTest() {\n" + reset_boundary + "\n}\n"
     sync_method = extract(source, "void GamePlayScene::syncRealtimeGameplaySnapshot()")
     methods += "\n" + sync_method.replace("syncRealtimeGameplaySnapshot()",
@@ -246,12 +247,16 @@ void prepareMainMenuDpCourse(bms_parser::Chart &chart, const std::shared_ptr<Cou
         retry_start = flip_start
     retry_end = retry_method.index('        context.jukebox.stop();', retry_start)
     option_lines = '\n'.join(line for line in retry_method.splitlines()
-                             if 'options.doublePlayFlip = ' in line)
+                             if 'options.doublePlayFlip = ' in line or
+                                'options.guidedAccessReminderSkipped = ' in line)
     flip_methods += '''
 bool prepareResultDpRetry(bms_parser::Chart &chart, const ReplayData &retrySource,
     const ScoreProvenance &provenance, bool samePattern, bool reuseCurrentPattern,
-    bool sessionBackedPracticeRetry, StartOptions &options) {
-  struct { ScoreProvenance attemptProvenance; } fixture{provenance};
+    bool sessionBackedPracticeRetry, StartOptions &options, bool skipped) {
+  struct {
+    ScoreProvenance attemptProvenance;
+    bool guidedAccessReminderSkipped;
+  } fixture{provenance, skipped};
   const auto *local = &fixture;
   auto *retryChart = &chart;
 ''' + option_lines + '\n' + retry_method[retry_start:retry_end].replace('return true;', 'return false;') + '\nreturn true;\n}\n'

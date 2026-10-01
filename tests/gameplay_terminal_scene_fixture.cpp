@@ -62,6 +62,7 @@ struct FixtureJukebox {
 
 std::deque<IOSRawTouchEvent> reminderTouches;
 std::uint64_t reminderTicks = 0;
+bool IsIOSPad() { return true; }
 extern "C" size_t IOSPopRawTouchEvents(IOSRawTouchEvent *buffer, size_t capacity) {
   size_t count = 0;
   while (count < capacity && !reminderTouches.empty()) {
@@ -168,6 +169,7 @@ public:
   StartOptions options;
   struct {
     FixtureJukebox jukebox;
+    struct { bool ipadGestureReminderEnabled = false; } settings;
     ReminderSceneManager reminderSceneManager;
     ReminderSceneManager *sceneManager = &reminderSceneManager;
     struct {
@@ -210,7 +212,6 @@ public:
   bool playbackInitializationFailed = false;
   gameplay::GuidedAccessReminder guidedAccessReminder;
   bool guidedAccessReminderPending = false;
-  bool guidedAccessReminderDismissed = false;
   bool guidedAccessReminderExiting = false;
   bool guidedAccessReminderBackground = false;
   bool guidedAccessEnabled = false;
@@ -1638,7 +1639,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
   require(scene.chimePlays == 0, "inactive reminder must be silent");
   if (scenario == "dismiss" || scenario == "dismiss-background") {
     queueReminderSwipe();
-    scene.guidedAccessReminderDismissed = true;
+    scene.options.guidedAccessReminderSkipped = true;
     if (scenario == "dismiss-background") {
       scene.onApplicationBackgroundChanged(true);
       scene.update(0);
@@ -1648,11 +1649,11 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
     scene.update(0);
     require(scene.attemptStarts == 1 && !scene.guidedAccessReminderPending &&
                 reminderTouches.empty(),
-            "Skip this time starts immediately and discards all reminder touches");
+            "Skip this session starts immediately and discards all reminder touches");
     require(scene.chimePlays == 0, "Skip must not play the confirmation chime");
     scene.resetAttemptBoundaryForTest();
-    require(!scene.guidedAccessReminderDismissed,
-            "one-time dismissal must not carry into another attempt");
+    require(scene.options.guidedAccessReminderSkipped,
+            "Skip must survive retries in the same gameplay session");
     return;
   }
 
@@ -1732,11 +1733,39 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
           "ending Guided Access during gameplay must not restart the reminder");
 }
 
+void testReminderSkipSession() {
+  for (const int mode : {0, 1, 2}) {
+    const bool practice = mode != 0;
+    GamePlayScene scene;
+    scene.context.settings.ipadGestureReminderEnabled = true;
+    scene.options.practiceMode = practice;
+    if (mode == 2) {
+      scene.options.practiceSession =
+          std::make_shared<practice::Session>(practice::Configuration{});
+    }
+    scene.resetAttemptBoundaryForTest();
+    require(scene.guidedAccessReminderPending, "fresh normal/practice session prompts");
+    scene.options.guidedAccessReminderSkipped = true;
+    scene.resetAttemptBoundaryForTest();
+    require(!scene.guidedAccessReminderPending,
+            "normal/practice retry must keep the session's Skip choice");
+    scene.resetAttemptBoundaryForTest();
+    require(!scene.guidedAccessReminderPending, "repeated retry remains skipped");
+    GamePlayScene reopened;
+    reopened.context.settings.ipadGestureReminderEnabled = true;
+    reopened.options.practiceMode = practice;
+    reopened.resetAttemptBoundaryForTest();
+    require(reopened.guidedAccessReminderPending,
+            "leaving and reopening normal/practice starts a fresh reminder session");
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc > 2 && std::string_view(argv[1]) == "guided-access") {
     testGuidedAccessReminderStartup(argv[2]);
     return 0;
   }
+  testReminderSkipSession();
   testReminderSwipesDoNotStart();
   for (const auto scenario : {"started", "background", "native-background", "ended",
                               "back", "dismiss", "dismiss-background"}) {

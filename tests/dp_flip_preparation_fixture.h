@@ -11,7 +11,7 @@ std::unique_ptr<bms_parser::Chart> prepareNextDpCourse(
     const std::shared_ptr<CoursePlaySession> &, const StartOptions &, bool);
 void prepareMainMenuDpCourse(bms_parser::Chart &, const std::shared_ptr<CoursePlaySession> &);
 bool prepareResultDpRetry(bms_parser::Chart &, const ReplayData &, const ScoreProvenance &,
-                          bool, bool, bool, StartOptions &);
+                          bool, bool, bool, StartOptions &, bool skipped = false);
 
 class PreparedSelectorFixture {
 public:
@@ -41,6 +41,7 @@ public:
       bool savedResultBrowsing = false;
     } courseOptions;
     bool courseTransitionStarted = false;
+    bool guidedAccessReminderSkipped = false;
     RhythmState resultState{nullptr, false};
     struct { std::nullptr_t returnScene = nullptr; } practiceOptions;
   } local;
@@ -398,8 +399,10 @@ void testActualDoublePlayFlipPreparation(std::string_view pathToTest) {
             }
             StartOptions retryOptions;
             require(prepareResultDpRetry(*retry, retrySource, provenance, samePattern,
-                                         reuse, false, retryOptions),
+                                         reuse, false, retryOptions, samePattern),
                     "GAME02 actual result retry option preparation succeeds");
+            require(retryOptions.guidedAccessReminderSkipped == samePattern,
+                    "result retries preserve the session reminder choice");
             require(retryOptions.doublePlayFlip == flip &&
                         preparedLaneFacts(*retry) == expectedDpLanes(originalFacts, flip, mirror),
                     "GAME02 actual result new/same/reused retry preserves DP flag and geometry");
@@ -408,7 +411,8 @@ void testActualDoublePlayFlipPreparation(std::string_view pathToTest) {
         auto pristine = parsePreparationFixture(path);
         StartOptions deferredOptions;
         require(prepareResultDpRetry(*pristine, retrySource, provenance, true, false,
-                                     true, deferredOptions) &&
+                                     true, deferredOptions, true) &&
+                    deferredOptions.guidedAccessReminderSkipped &&
                     deferredOptions.doublePlayFlip == flip &&
                     preparedLaneFacts(*pristine) == originalFacts,
                 "GAME02 session-backed result retry defers geometry to the practice menu");

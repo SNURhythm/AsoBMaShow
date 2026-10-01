@@ -56,7 +56,7 @@ The normalized mappings from portrait `(x, y)` are `(1-y, x)` for LandscapeLeft,
 
 A location is shown only when the app fills the built-in screen. Unknown
 orientation, external displays, and partial windows use the existing centered
-instructions without a duplicate floating label. Back and Skip this time are
+instructions without a duplicate floating label. Back and Skip this session are
 large text buttons in the central controls, leaving all screen edges free.
 The cue is recalculated while the reminder is visible, and confirms alongside
 the central lock when Guided Access activates: a green
@@ -65,3 +65,8 @@ Enabled text. The spring settles in place and the success cue remains fully
 visible until gameplay starts. This adds no time to the existing two-second
 startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.
+
+Skipping is kept only for the current gameplay session, including in-game and
+result-screen retries, practice restarts, and course continuation. Returning to
+song selection and starting again creates a fresh reminder session. The choice
+is not saved in profile settings or replay data.

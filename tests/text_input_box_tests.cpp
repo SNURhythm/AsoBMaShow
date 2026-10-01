@@ -49,7 +49,7 @@ constexpr uint32_t kIconLockOpen = 0xf3c1;
 struct ReminderUIFixture {
   View root;
   gameplay::GuidedAccessReminder guidedAccessReminder;
-  bool guidedAccessReminderDismissed = false;
+  struct { bool guidedAccessReminderSkipped = false; } options;
   View *guidedAccessReminderLayout = nullptr;
   TextView *guidedAccessReminderTitle = nullptr;
   TextView *guidedAccessReminderWhy = nullptr;

@@ -3493,9 +3493,9 @@ bool GamePlayScene::reset() {
   guidedAccessReminderExiting = false;
   guidedAccessReminder.reset();
   guidedAccessReminderPending = false;
-  guidedAccessReminderDismissed = false;
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
-  guidedAccessReminderPending = gameplay::GuidedAccessReminder::required(
+  guidedAccessReminderPending = !options.guidedAccessReminderSkipped &&
+      gameplay::GuidedAccessReminder::required(
       context.settings.ipadGestureReminderEnabled, IsIOSPad(),
       isReplayPlayback(), options.autoPlay,
       options.courseSession != nullptr ? options.courseSession->currentIndex : 0,
@@ -3855,7 +3855,7 @@ void GamePlayScene::showGuidedAccessReminder() {
         []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 12); },
         []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 26); },
         []() { return ui_theme::withAlpha(ui_theme::textPrimary(), 38); });
-    dismiss->setOnClickListener([this]() { guidedAccessReminderDismissed = true; });
+    dismiss->setOnClickListener([this]() { options.guidedAccessReminderSkipped = true; });
     controls->addView(dismiss);
     guidedAccessButtonMarker = new View();
     guidedAccessButtonMarker->setPosition(0, 0, YGPositionTypeAbsolute);
@@ -4889,6 +4889,7 @@ bool GamePlayScene::startCourseReplayChartAtCurrentIndex() {
   StartOptions nextOptions =
       makeCourseReplayStageStartOptions(session, stageReplay);
   nextOptions.returnScene = options.returnScene;
+  nextOptions.guidedAccessReminderSkipped = options.guidedAccessReminderSkipped;
   nextOptions.pacemakerTarget = options.pacemakerTarget;
   nextOptions.tableName = options.tableName;
   nextOptions.tableLevel = options.tableLevel;
@@ -4989,6 +4990,7 @@ bool GamePlayScene::startCourseChartAtCurrentIndex() {
     nextOptions.ownsChart = true;
   }
   nextOptions.returnScene = options.returnScene;
+  nextOptions.guidedAccessReminderSkipped = options.guidedAccessReminderSkipped;
 
   context.sceneManager->changeScene(
       std::make_unique<GamePlayScene>(context, std::move(nextChart),
@@ -6231,7 +6233,8 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
                 true,
                 ResultTableContext{.tableName = options.tableName,
                                    .tableLevel = options.tableLevel},
-                resultGameplayGraph),
+                resultGameplayGraph, std::nullopt,
+                options.guidedAccessReminderSkipped),
             false);
         return false;
       },
@@ -6288,13 +6291,13 @@ void GamePlayScene::update(float dt) {
     const bool wasConfirming = guidedAccessReminder.confirming();
     if (guidedAccessReminder.update(isGuidedAccessEnabled(),
                                    !guidedAccessReminderBackground, SDL_GetTicks64())) {
-      if (!guidedAccessReminderDismissed) playGuidedAccessChime();
+      if (!options.guidedAccessReminderSkipped) playGuidedAccessChime();
     } else if (wasConfirming && !guidedAccessReminder.confirming()) {
       stopGuidedAccessChime();
     }
     showGuidedAccessReminder();
     if (!guidedAccessReminderBackground &&
-        (guidedAccessReminderDismissed || guidedAccessReminder.completed())) {
+        (options.guidedAccessReminderSkipped || guidedAccessReminder.completed())) {
       // Start after lifecycle event dispatch. Only explicit dismissal skips the delay.
       guidedAccessReminderPending = false;
       guidedAccessReminderLayout->setVisible(false);
