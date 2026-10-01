@@ -6,6 +6,10 @@
 #include "view/DropdownView.h"
 #include "view/ScrollView.h"
 #include "i18n/Localization.h"
+#include "view/IconText.h"
+#include "view/UiTheme.h"
+#include "scene/play/GuidedAccessReminder.h"
+#include "scene/play/GuidedAccessButtonCue.h"
 
 #include <SDL2/SDL.h>
 #include <SDL_ttf.h>
@@ -34,6 +38,31 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+ipad_hardware::ButtonLocation testButtonLocation;
+ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() { return testButtonLocation; }
+struct TestSafeInsets { float top = 0, right = 0, bottom = 0, left = 0; };
+TestSafeInsets GetIOSSafeAreaInsetsNormalized() { return {}; }
+constexpr uint32_t kIconLock = 0xf023;
+constexpr uint32_t kIconLockOpen = 0xf3c1;
+struct ReminderUIFixture {
+  View root;
+  gameplay::GuidedAccessReminder guidedAccessReminder;
+  bool guidedAccessReminderDismissed = false;
+  View *guidedAccessReminderLayout = nullptr;
+  TextView *guidedAccessReminderTitle = nullptr;
+  TextView *guidedAccessReminderHelp = nullptr;
+  TextView *guidedAccessReminderIcon = nullptr;
+  View *guidedAccessButtonMarker = nullptr;
+  TextView *guidedAccessButtonHint = nullptr;
+  TextView *guidedAccessButtonCheck = nullptr;
+  View *pauseButton = nullptr, *practiceRestartButton = nullptr, *practiceHudText = nullptr;
+  View *skinResetLayoutButton = nullptr, *pauseLayout = nullptr;
+  void addView(View *view) { root.addView(view); }
+  void returnFromGuidedAccessReminder() {}
+  void showGuidedAccessReminder();
+};
+#include "guided_access_reminder_ui.inc"
 
 int clearCompositionCalls = 0;
 SDL_Rect nativeInputRect{};
@@ -458,11 +487,15 @@ void testHardwareButtonCueTextFits() {
                               i18n::Language::Korean}) {
     i18n::setLanguage(language);
     for (const auto key : {"gameplay.ipad_gesture_reminder.home_button",
-                           "gameplay.ipad_gesture_reminder.top_button"}) {
+                           "gameplay.ipad_gesture_reminder.top_button",
+                           "gameplay.ipad_gesture_reminder.enabled"}) {
       TextView view("assets/fonts/notosanscjkjp.ttf", 22);
       view.setDeferredTextureMaterialization(true);
       view.setSize(360, 112);
       view.setPadding(Edge::All, 8);
+      if (std::string(key) == "gameplay.ipad_gesture_reminder.enabled") {
+        view.setPadding(Edge::Left, 48); // Space for the separate Font Awesome check.
+      }
       view.setWrap(true);
       view.setAlign(TextView::CENTER);
       view.setLocalizedText(i18n::message(key));
@@ -473,6 +506,66 @@ void testHardwareButtonCueTextFits() {
     }
   }
   i18n::setLanguage(i18n::Language::English);
+}
+
+void testHardwareCueUsesRealViewHierarchy() {
+  using namespace ipad_hardware;
+  testButtonLocation = locateButton(modelForIdentifier("iPad16,3"), Orientation::LandscapeRight, true);
+  ReminderUIFixture fixture;
+  fixture.root.setSize(rendering::window_width, rendering::window_height);
+  fixture.showGuidedAccessReminder();
+  fixture.root.applyYogaLayout();
+  expect(fixture.guidedAccessButtonHint->getVisible(), "idle cue is visible");
+  expect(!fixture.guidedAccessButtonCheck->getVisible(), "idle cue has no success check");
+  fixture.guidedAccessReminder.update(true, true, 1000);
+  fixture.showGuidedAccessReminder();
+  fixture.root.applyYogaLayout();
+  expect(fixture.guidedAccessButtonCheck->getVisible(), "confirmation displays its check");
+  expect(fixture.guidedAccessButtonCheck->primaryFontPath() == ui_icons::kFontAwesomeSolidPath,
+         "confirmation uses the Font Awesome face");
+  expect(fixture.guidedAccessButtonCheck->getText() == ui_icons::textForCodepoint(0xf00c),
+         "confirmation uses Font Awesome's check glyph");
+  for (const auto orientation : {Orientation::Portrait, Orientation::PortraitUpsideDown,
+                                 Orientation::LandscapeLeft, Orientation::LandscapeRight}) {
+    testButtonLocation = locateButton(modelForIdentifier("iPad16,3"), orientation, true);
+    fixture.showGuidedAccessReminder();
+    fixture.root.applyYogaLayout();
+    const auto *hint = fixture.guidedAccessButtonHint;
+    const auto *check = fixture.guidedAccessButtonCheck;
+    const int textLeft = hint->getContentX() +
+        (hint->getContentWidth() - hint->textureWidth()) / 2;
+    expect(check->getX() >= hint->getX() &&
+           check->getY() >= hint->getY() &&
+           check->getY() + check->getHeight() <= hint->getY() + hint->getHeight() &&
+           check->getX() + check->getWidth() <= textLeft - 4,
+           "Font Awesome check stays inside the capsule and clear of its text after rotation");
+  }
+  fixture.guidedAccessReminder.update(true, true, 1600);
+  fixture.showGuidedAccessReminder();
+  expect(fixture.guidedAccessButtonCheck->currentColor().a > 0 &&
+         fixture.guidedAccessButtonCheck->currentColor().a < 255, "check fades with its cue");
+  fixture.guidedAccessReminder.update(true, true, 1795);
+  fixture.showGuidedAccessReminder();
+  // SDL_ttf interprets an input alpha of zero as opaque, so rounded-zero text
+  // must be hidden before the fade's exact endpoint to prevent a final flash.
+  expect(!fixture.guidedAccessButtonHint->getVisible() &&
+         !fixture.guidedAccessButtonCheck->getVisible(), "rounded-zero text is hidden before the fade ends");
+  fixture.guidedAccessReminder.update(true, true, 1800);
+  fixture.showGuidedAccessReminder();
+  expect(!fixture.guidedAccessButtonHint->getVisible() &&
+         !fixture.guidedAccessButtonMarker->getVisible() &&
+         !fixture.guidedAccessButtonCheck->getVisible(), "all cue parts disappear together");
+  expect(!fixture.guidedAccessReminder.completed(), "cue does not shorten the startup delay");
+  fixture.guidedAccessReminder.reset();
+  fixture.showGuidedAccessReminder();
+  expect(fixture.guidedAccessButtonHint->getVisible() &&
+         fixture.guidedAccessButtonHint->currentColor().a == ui_theme::textPrimary().a &&
+         !fixture.guidedAccessButtonCheck->getVisible(), "interruption restores the idle cue");
+  testButtonLocation = {};
+  fixture.guidedAccessReminder.update(true, true, 2000);
+  fixture.showGuidedAccessReminder();
+  expect(!fixture.guidedAccessButtonHint->getVisible() &&
+         !fixture.guidedAccessButtonCheck->getVisible(), "unknown location has no floating success icon");
 }
 
 void testDeferredTextKeepsRasterizedLineHeight() {
@@ -543,6 +636,7 @@ int main() {
   testComposedTextPreservesDescenders();
   testReminderDescriptionPreservesLineBreaks();
   testHardwareButtonCueTextFits();
+  testHardwareCueUsesRealViewHierarchy();
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();
   testLanguageRefreshKeepsOpenDropdownScrollAndSelection();

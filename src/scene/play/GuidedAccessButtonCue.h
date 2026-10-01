@@ -10,6 +10,42 @@ struct ButtonCueLayout {
   ButtonCueRect marker;
   ButtonCueRect label;
 };
+struct ButtonCueConfirmation {
+  ButtonCueLayout layout;
+  float opacity = 1.0F;
+};
+inline ButtonCueConfirmation confirmButtonCue(ButtonCueLayout layout,
+    ipad_hardware::Edge edge, int width, int height, float progress) {
+  using ipad_hardware::Edge;
+  if (edge == Edge::Unknown || width <= 0 || height <= 0) return {{}, 0};
+  const float t = std::clamp(progress, 0.0F, 0.8F);
+  const float fade = std::clamp((t - 0.30F) / 0.50F, 0.0F, 1.0F);
+  const float opacity = 1.0F - fade * fade * (3.0F - 2.0F * fade);
+  const float spring = std::exp(-10.0F * t) * std::sin(18.0F * t);
+  const float travel = std::clamp((t - 0.18F) / 0.62F, 0.0F, 1.0F);
+  const float drift = 24.0F * (1.0F - std::pow(1.0F - travel, 3.0F));
+  const int dx = edge == Edge::Left ? 1 : edge == Edge::Right ? -1 : 0;
+  const int dy = edge == Edge::Top ? 1 : edge == Edge::Bottom ? -1 : 0;
+  const auto animateRect = [&](ButtonCueRect rect, float scaleX, float scaleY,
+                                float inward) {
+    const int w = std::clamp(static_cast<int>(std::lround(rect.width * scaleX)), 0, width);
+    const int h = std::clamp(static_cast<int>(std::lround(rect.height * scaleY)), 0, height);
+    return ButtonCueRect{
+        std::clamp(rect.x + (rect.width - w) / 2 + static_cast<int>(std::lround(dx * inward)),
+                   0, width - w),
+        std::clamp(rect.y + (rect.height - h) / 2 + static_cast<int>(std::lround(dy * inward)),
+                   0, height - h), w, h};
+  };
+  const bool horizontal = edge == Edge::Top || edge == Edge::Bottom;
+  const float stretch = 1.0F + 1.4F * spring;
+  const float thickness = 1.0F + 0.45F * spring;
+  layout.marker = animateRect(layout.marker, horizontal ? stretch : thickness,
+                             horizontal ? thickness : stretch, drift);
+  // Pop the success capsule inward, rebound, then drift away with the marker.
+  layout.label = animateRect(layout.label, 1.0F + 0.10F * spring,
+                            1.0F + 0.10F * spring, drift + 18.0F * spring);
+  return {layout, opacity};
+}
 inline ButtonCueLayout layoutButtonCue(ipad_hardware::ButtonLocation location,
                                        int width, int height, ButtonCueInsets insets = {}) {
   using ipad_hardware::Edge;

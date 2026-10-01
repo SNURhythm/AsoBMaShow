@@ -112,6 +112,7 @@ private:
   TextView *guidedAccessReminderHelp = nullptr;
   View *guidedAccessButtonMarker = nullptr;
   TextView *guidedAccessButtonHint = nullptr;
+  TextView *guidedAccessButtonCheck = nullptr;
   bool startRealtimeGameplayAuthority();
   void stopRealtimeGameplayAuthority(bool transferReplay);
   void setRealtimeGameplayIngressEnabled(bool enabled);

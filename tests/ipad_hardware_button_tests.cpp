@@ -92,5 +92,38 @@ int main() {
   // The existing central help supplies text-only fallback. A second floating
   // label would cover the centered title in a short, wide partial window.
   assert(layout.marker.width == 0 && layout.label.width == 0);
+  const auto top = locateButton(pro, Orientation::Portrait, true);
+  const auto topLayout = gameplay::layoutButtonCue(top, 1920, 2560);
+  auto confirmation = gameplay::confirmButtonCue(topLayout, top.edge, 1920, 2560, 0.8F);
+  assert(confirmation.opacity == 0); // Ends inside the existing one-second animation.
+  confirmation = gameplay::confirmButtonCue(topLayout, top.edge, 1920, 2560, 0);
+  assert(confirmation.opacity == 1 && confirmation.layout.marker.width == 54);
+  confirmation = gameplay::confirmButtonCue(topLayout, top.edge, 1920, 2560, 0.08F);
+  assert(confirmation.layout.marker.width > 54); // Initial spring stretch.
+  confirmation = gameplay::confirmButtonCue(topLayout, top.edge, 1920, 2560, 0.24F);
+  assert(confirmation.layout.marker.width < 54); // Rebound past its resting length.
+  confirmation = gameplay::confirmButtonCue(topLayout, top.edge, 1920, 2560, 0.6F);
+  assert(confirmation.opacity > 0 && confirmation.opacity < 1);
+  assert(confirmation.layout.marker.y > topLayout.marker.y);
+  assert(confirmation.layout.label.y > topLayout.label.y);
+  for (const auto orientation : {Orientation::Portrait, Orientation::PortraitUpsideDown,
+                                 Orientation::LandscapeLeft, Orientation::LandscapeRight}) {
+    const auto location = locateButton(pro, orientation, true);
+    const auto base = gameplay::layoutButtonCue(location, 320, 480);
+    confirmation = gameplay::confirmButtonCue(base, location.edge, 320, 480, 0.6F);
+    if (location.edge == Edge::Bottom) assert(confirmation.layout.marker.y < base.marker.y);
+    if (location.edge == Edge::Left) assert(confirmation.layout.marker.x > base.marker.x);
+    if (location.edge == Edge::Right) assert(confirmation.layout.marker.x < base.marker.x);
+    for (int tick = 0; tick <= 100; ++tick) {
+      confirmation = gameplay::confirmButtonCue(base, location.edge, 320, 480, tick / 100.0F);
+      assert(confirmation.opacity >= 0 && confirmation.opacity <= 1);
+      for (const auto rect : {confirmation.layout.marker, confirmation.layout.label}) {
+        assert(rect.x >= 0 && rect.y >= 0);
+        assert(rect.x + rect.width <= 320 && rect.y + rect.height <= 480);
+      }
+    }
+  }
+  confirmation = gameplay::confirmButtonCue({}, Edge::Unknown, 1920, 720, 0.1F);
+  assert(confirmation.layout.marker.width == 0 && confirmation.layout.label.width == 0);
   std::cout << "iPad hardware button models and orientation tests passed\n";
 }

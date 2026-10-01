@@ -5092,8 +5092,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
     target_link_libraries(button_enabled_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
 
+    add_custom_command(
+        OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/tests/guided_access_reminder_ui_extract.py
+            --root ${CMAKE_SOURCE_DIR}
+            --output ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
+        DEPENDS tests/guided_access_reminder_ui_extract.py
+            tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
+        VERBATIM
+    )
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
+        ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
         src/rendering/Color.cpp
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
@@ -5107,6 +5118,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(text_input_box_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_BINARY_DIR}
     )
     target_compile_features(text_input_box_tests PRIVATE cxx_std_23)
     target_compile_definitions(text_input_box_tests PRIVATE

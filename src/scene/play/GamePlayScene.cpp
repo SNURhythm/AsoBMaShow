@@ -3832,6 +3832,14 @@ void GamePlayScene::showGuidedAccessReminder() {
     guidedAccessButtonHint->setThemedBackgroundColor(ui_theme::panelStrong);
     guidedAccessButtonHint->setCornerRadius(ui_theme::controlRadius());
     overlay->addView(guidedAccessButtonHint);
+    guidedAccessButtonCheck = new TextView(ui_icons::kFontAwesomeSolidPath, 24);
+    guidedAccessButtonCheck->setText(ui_icons::textForCodepoint(0xf00c));
+    guidedAccessButtonCheck->setSize(28, 40);
+    guidedAccessButtonCheck->setPosition(0, 0, YGPositionTypeAbsolute);
+    guidedAccessButtonCheck->setAlign(TextView::CENTER);
+    guidedAccessButtonCheck->setVAlign(TextView::MIDDLE);
+    // TextView is a measured Yoga leaf; the icon must be an overlay sibling.
+    overlay->addView(guidedAccessButtonCheck);
   }
   guidedAccessReminderLayout->setSize(rendering::window_width,
                                      rendering::window_height);
@@ -3847,24 +3855,51 @@ void GamePlayScene::showGuidedAccessReminder() {
                static_cast<int>(safeInsets.bottom * rendering::window_height),
                static_cast<int>(safeInsets.left * rendering::window_width)};
 #endif
-  const auto cue = gameplay::layoutButtonCue(buttonLocation, rendering::window_width,
-                                            rendering::window_height, cueInsets);
-  guidedAccessButtonMarker->setVisible(!confirming && cue.marker.width > 0);
+  const float progress = guidedAccessReminder.progress();
+  auto cue = gameplay::layoutButtonCue(buttonLocation, rendering::window_width,
+                                       rendering::window_height, cueInsets);
+  float cueOpacity = 1.0F;
+  if (confirming) {
+    const auto animation = gameplay::confirmButtonCue(cue, buttonLocation.edge,
+        rendering::window_width, rendering::window_height, progress);
+    cue = animation.layout;
+    cueOpacity = animation.opacity;
+  }
+  guidedAccessButtonMarker->setVisible(cueOpacity > 0 && cue.marker.width > 0);
   guidedAccessButtonMarker->setSize(cue.marker.width, cue.marker.height);
   guidedAccessButtonMarker->setPositionNoLayout(cue.marker.x, cue.marker.y);
   // Three gentle pulses suggest triple-clicking, followed by a pause.
   const float pulseTime = static_cast<float>(SDL_GetTicks64() % 1800);
   const float pulse = pulseTime < 900 ? std::sin(3.14159265F * pulseTime / 300) : 0;
   guidedAccessButtonMarker->setBackgroundColor(
-      ui_theme::withAlpha(ui_theme::lime(), 150 + static_cast<int>(105 * pulse * pulse)));
-  guidedAccessButtonHint->setVisible(!confirming && cue.label.width > 0);
+      ui_theme::withAlpha(ui_theme::lime(), confirming
+          ? static_cast<int>(255 * cueOpacity) : 150 + static_cast<int>(105 * pulse * pulse)));
   guidedAccessButtonHint->setSize(cue.label.width, cue.label.height);
   guidedAccessButtonHint->setPositionNoLayout(cue.label.x, cue.label.y);
+  guidedAccessButtonHint->setPadding(Edge::Left, confirming ? 48 : 8);
   guidedAccessButtonHint->setLocalizedText(i18n::message(
-      buttonLocation.button == ipad_hardware::Button::Home
+      confirming ? "gameplay.ipad_gesture_reminder.enabled"
+      : buttonLocation.button == ipad_hardware::Button::Home
           ? "gameplay.ipad_gesture_reminder.home_button"
           : "gameplay.ipad_gesture_reminder.top_button"));
-  const float progress = guidedAccessReminder.progress();
+  const auto fadedCueColor = [cueOpacity](Color color) {
+    color.a = static_cast<uint8_t>(std::lround(color.a * cueOpacity));
+    return color;
+  };
+  guidedAccessButtonHint->setColor(ui_theme::sdl(fadedCueColor(ui_theme::textPrimary())));
+  guidedAccessButtonHint->setBackgroundColor(fadedCueColor(ui_theme::panelStrong()));
+  guidedAccessButtonCheck->setColor(ui_theme::sdl(fadedCueColor(ui_theme::lime())));
+  // SDL_ttf treats zero input alpha as opaque; hide text once rounding reaches zero.
+  guidedAccessButtonHint->setVisible(cue.label.width > 0 &&
+                                     guidedAccessButtonHint->currentColor().a > 0);
+  guidedAccessButtonCheck->setVisible(confirming && guidedAccessButtonHint->getVisible() &&
+                                      guidedAccessButtonCheck->currentColor().a > 0);
+  if (confirming && cue.label.width > 0) {
+    const int textWidth = guidedAccessButtonHint->measureTextWidth(guidedAccessButtonHint->getText());
+    guidedAccessButtonCheck->setPositionNoLayout(
+        cue.label.x + (cue.label.width - textWidth) / 2 - 16,
+        cue.label.y + (cue.label.height - 40) / 2);
+  }
   const bool locked = confirming && progress >= 0.18F;
   guidedAccessReminderIcon->setText(
       ui_icons::textForCodepoint(locked ? kIconLock : kIconLockOpen));
@@ -6860,6 +6895,7 @@ void GamePlayScene::cleanupScene() {
   guidedAccessReminderHelp = nullptr;
   guidedAccessButtonMarker = nullptr;
   guidedAccessButtonHint = nullptr;
+  guidedAccessButtonCheck = nullptr;
   guidedAccessReminderPending = false;
   skinResetLayoutButton = nullptr;
   SDL_Log("Cleaned up GamePlayScene");

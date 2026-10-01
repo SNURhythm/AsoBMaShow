@@ -85,6 +85,7 @@
 {"gameplay.input.integrity_failure_notice", "Realtime input integrity failed. This attempt was invalidated; return and retry.", "실시간 입력 검증에 실패하여 이번 플레이가 무효 처리되었습니다. 돌아가서 다시 시도하세요.", "リアルタイム入力の整合性検証に失敗したため、今回のプレイは無効になりました。戻って再試行してください。"},
 {"gameplay.ipad_gesture_reminder.back", "Back", "뒤로", "戻る"},
 {"gameplay.ipad_gesture_reminder.dismiss", "Skip this time", "이번에는 건너뛰기", "今回はスキップ"},
+{"gameplay.ipad_gesture_reminder.enabled", "Enabled", "켜짐", "オン"},
 {"gameplay.ipad_gesture_reminder.help", "Turn on Guided Access in iPad Settings > Accessibility > Guided Access.\nSet up triple-click in iPad Settings > Accessibility > Accessibility Shortcut.\nReturn here, triple-click the top or Home button, choose Guided Access if asked, then tap Start.\nTurn this reminder off in Settings > Visual > Guided Access Reminder.", "iPad 설정 > 손쉬운 사용 > 사용법 유도에서 사용법 유도를 켜세요.\n삼중 클릭은 iPad 설정 > 손쉬운 사용 > 손쉬운 사용 단축키에서 설정하세요.\n앱으로 돌아와 상단 또는 홈 버튼을 세 번 누르고, 필요하면 사용법 유도를 선택한 뒤 시작을 누르세요.\n이 알림은 설정 > 화면 효과 > 사용법 유도 알림에서 끌 수 있습니다.", "iPadの「設定」>「アクセシビリティ」>「アクセスガイド」でオンにしてください。\nトリプルクリックは「設定」>「アクセシビリティ」>「ショートカット」で設定できます。\nアプリに戻り、トップボタンかホームボタンを3回押し、必要なら「アクセスガイド」を選んで「開始」をタップしてください。\nこの確認は「設定」>「表示」>「アクセスガイドの確認」でオフにできます。"},
 {"gameplay.ipad_gesture_reminder.home_button", "Triple-click the\nHome button", "홈 버튼을\n세 번 누르세요", "ホームボタンを\n3回押してください"},
 {"gameplay.ipad_gesture_reminder.ready_help", "Guided Access is on. Starting playback shortly…", "사용법 유도가 켜졌습니다. 곧 플레이를 시작합니다…", "アクセスガイドがオンになりました。まもなくプレイを開始します…"},
