@@ -3150,7 +3150,7 @@ void BMSRenderer::renderFrame(
   drawRect(playAreaWidth, upperBound - judgeY, playAreaLeftX,
            judgeY, Color(20, 20, 20, 122));
   // judge line
-  drawRect(playAreaWidth, noteRenderHeight, playAreaLeftX, judgeY,
+  drawRect(playAreaWidth, noteRenderHeight * 0.5f, playAreaLeftX, judgeY,
            Color(255, 255, 255, 255));
   const BuiltInRendererTraversal builtInTraversal =
       builtInProjectionTraversal();
@@ -3208,7 +3208,7 @@ void BMSRenderer::renderFrame(
         {.x = playAreaLeftX,
          .y = judgeY,
          .width = playAreaWidth,
-         .height = noteRenderHeight});
+         .height = noteRenderHeight * 0.5f});
   }
 #endif
   if (projection != nullptr) {
