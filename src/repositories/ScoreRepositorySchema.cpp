@@ -54,6 +54,9 @@ constexpr const char *kScoreMigrationChartSchema = "score_migration_chart";
 constexpr const char *kLegacyProvenanceJson =
     "{\"schemaVersion\":1,\"ruleset\":{\"version\":0},\"stages\":[],"
     "\"eligibility\":\"legacy-unverified\"}";
+constexpr const char *kCourseScoreIdentityIndexSql =
+    "CREATE INDEX IF NOT EXISTS idx_course_scores_key_ln_mode_clear_type ON "
+    "course_scores(course_key, ln_mode, clear_type)";
 
 using asobmshow::bms_metadata::normalizedHash;
 using asobmshow::chart_sql::boundNormalizedHashMatchCondition;
@@ -76,7 +79,7 @@ bool scoreImportedIrSchemaIsExact(sqlite3 *db);
 bool courseScoreProjectionSchemaIsExact(sqlite3 *db);
 bool currentScoreSchemaIsValid(sqlite3 *db);
 bool ensureScorePlayDurationColumn(sqlite3 *db);
-bool ensureScorePlayDurationInvariant(sqlite3 *db);
+bool ensureScorePlayDurationInvariant(sqlite3 *db, bool repairExistingRows);
 bool ensureScoreSelectorMetricColumns(sqlite3 *db);
 bool backfillScoreSelectorMetrics(sqlite3 *db);
 bool attachChartDatabaseForScoreMigration(
@@ -389,10 +392,7 @@ bool migrateScoreDatabaseToVersion6(sqlite3 *db) {
     sqlite3_clear_bindings(updateStmt.get());
   }
 
-  if (!execSql(db,
-               "CREATE INDEX IF NOT EXISTS "
-               "idx_course_scores_key_ln_mode_clear_type ON "
-               "course_scores(course_key, ln_mode, clear_type)",
+  if (!execSql(db, kCourseScoreIdentityIndexSql,
                "creating course score identity index") ||
       !setDatabaseUserVersion(db, kScoreCourseIdentitySchemaVersion)) {
     return false;
@@ -1361,7 +1361,15 @@ bool sqliteTableExists(sqlite3 *db, const char *tableName, bool &exists,
   return true;
 }
 
-std::string createScoreTableSql(std::string_view tableName) {
+std::string currentScoreProvenanceColumns() {
+  return "ruleset_version INTEGER NOT NULL DEFAULT 0,"
+         "eligibility INTEGER NOT NULL DEFAULT 2,"
+         "provenance_json TEXT NOT NULL DEFAULT '" +
+         std::string(kLegacyProvenanceJson) + "',attempt_id TEXT";
+}
+
+std::string createScoreTableSql(std::string_view tableName,
+                               bool currentSchema = false) {
   return "CREATE TABLE IF NOT EXISTS " + std::string(tableName) +
          " ("
          "id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -1396,7 +1404,8 @@ std::string createScoreTableSql(std::string_view tableName) {
          "source_server_origin TEXT,"
          "source_remote_score_id TEXT,"
          "source_sync_generation INTEGER,"
-         "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+         "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+         (currentSchema ? "," + currentScoreProvenanceColumns() : "") +
          ")";
 }
 
@@ -1456,6 +1465,53 @@ bool ensureScoreSelectorMetricColumns(sqlite3 *db) {
              "adding score average-judge column", logSqlErrorText);
 }
 
+constexpr const char *kScoreDataRepairStateSql =
+    "CREATE TABLE score_data_repair_state("
+    "completed INTEGER NOT NULL PRIMARY KEY CHECK(completed=1)) WITHOUT ROWID";
+
+// Keep this independent of user_version: a chart-metadata rescan can defer
+// duration backfill at v12, but must not repeat these completed full-table repairs.
+bool scoreDataRepairsComplete(sqlite3 *db, bool &complete) {
+  complete = false;
+  SqliteStatementHandle schema;
+  if (!prepareSqliteStatementLogged(
+          db, "SELECT type,sql FROM sqlite_master WHERE "
+              "name='score_data_repair_state'",
+          schema, "reading score data repair schema", logSqlErrorText)) {
+    return false;
+  }
+  int rc = sqlite3_step(schema.get());
+  if (rc == SQLITE_DONE) return true;
+  if (rc != SQLITE_ROW || sqliteColumnString(schema.get(), 0) != "table" ||
+      sqliteColumnString(schema.get(), 1) != kScoreDataRepairStateSql ||
+      sqlite3_step(schema.get()) != SQLITE_DONE) {
+    return false;
+  }
+  SqliteStatementHandle state;
+  if (!prepareSqliteStatementLogged(
+          db, "SELECT completed FROM score_data_repair_state", state,
+          "reading score data repair completion", logSqlErrorText)) {
+    return false;
+  }
+  rc = sqlite3_step(state.get());
+  if (rc == SQLITE_DONE) return true;
+  complete = rc == SQLITE_ROW &&
+             sqlite3_column_type(state.get(), 0) == SQLITE_INTEGER &&
+             sqlite3_column_int(state.get(), 0) == 1 &&
+             sqlite3_step(state.get()) == SQLITE_DONE;
+  return complete;
+}
+
+bool recordScoreDataRepairs(sqlite3 *db) {
+  bool exists = false;
+  return sqliteTableExists(db, "score_data_repair_state", exists,
+                           "checking score data repair state") &&
+         (exists || execSql(db, kScoreDataRepairStateSql,
+                             "creating score data repair state")) &&
+         execSql(db, "INSERT INTO score_data_repair_state VALUES(1)",
+                 "recording score data repair completion");
+}
+
 bool backfillScoreSelectorMetrics(sqlite3 *db) {
   if (!execSql(db,
                "UPDATE scores SET bad_points = bad + poor + kpoor "
@@ -1469,15 +1525,15 @@ bool backfillScoreSelectorMetrics(sqlite3 *db) {
   return true;
 }
 
-bool ensureScorePlayDurationInvariant(sqlite3 *db) {
+bool ensureScorePlayDurationInvariant(sqlite3 *db, bool repairExistingRows) {
   const std::string maximum =
       std::to_string(ScoreStageProvenance::kMaximumPlayDurationSeconds);
   const std::string normalize =
       "UPDATE scores SET play_duration_seconds = 0 WHERE "
       "play_duration_seconds < 0 OR play_duration_seconds > " +
       maximum;
-  if (!execSql(db, normalize.c_str(),
-               "normalizing invalid score play durations")) {
+  if (repairExistingRows &&
+      !execSql(db, normalize.c_str(), "normalizing invalid score play durations")) {
     return false;
   }
   const std::string insertTrigger =
@@ -2093,6 +2149,129 @@ bool migrateScoreDatabaseSchema(
       sizeof(kMigrationPasses) / sizeof(kMigrationPasses[0]),
       kLegacyScoreDatabaseSchemaVersion, chartDatabasePath);
 }
+bool createScoreIndexes(sqlite3 *db) {
+  const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256 ON "
+      "scores(chart_sha256)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5 ON scores(chart_md5)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_path ON scores(chart_path)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256_clear_type ON "
+      "scores(chart_sha256, clear_type)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5_clear_type ON "
+      "scores(chart_md5, clear_type)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_path_clear_type ON "
+      "scores(chart_path, clear_type)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256_ln_mode ON "
+      "scores(chart_sha256, ln_mode)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5_ln_mode ON "
+      "scores(chart_md5, ln_mode)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_chart_path_ln_mode ON "
+      "scores(chart_path, ln_mode)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_identity_ln_mode ON "
+      "scores(chart_sha256, chart_md5, chart_path, ln_mode)",
+      "CREATE INDEX IF NOT EXISTS idx_scores_created_at ON scores(created_at)",
+  };
+  for (const auto *indexQuery : indexes) {
+    if (!execSql(db, indexQuery, "creating score index")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool createCourseScoreTable(sqlite3 *db, bool currentSchema) {
+  if (db == nullptr || rejectFutureScoreDatabase(db)) {
+    return false;
+  }
+  const std::string query = "CREATE TABLE IF NOT EXISTS course_scores ("
+                      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                      "course_id INTEGER,"
+                      "course_key TEXT,"
+                      "legacy_course_key TEXT NOT NULL DEFAULT '',"
+                      "ln_mode INTEGER NOT NULL DEFAULT -1,"
+                      "course_name TEXT,"
+                      "course_group_name TEXT,"
+                      "constraint_json TEXT,"
+                      "gauge_type INTEGER NOT NULL,"
+                      "gauge_profile INTEGER NOT NULL,"
+                      "gauge_auto_shift INTEGER NOT NULL,"
+                      "play_option TEXT,"
+                      "assist_option TEXT,"
+                      "completed_charts INTEGER NOT NULL,"
+                      "total_charts INTEGER NOT NULL,"
+                      "score INTEGER NOT NULL,"
+                      "max_score INTEGER NOT NULL,"
+                      "max_combo INTEGER NOT NULL,"
+                      "combo_break INTEGER NOT NULL,"
+                      "pgreat INTEGER NOT NULL,"
+                      "great INTEGER NOT NULL,"
+                      "good INTEGER NOT NULL,"
+                      "bad INTEGER NOT NULL,"
+                      "poor INTEGER NOT NULL,"
+                      "kpoor INTEGER NOT NULL,"
+                      "bad_points INTEGER CHECK(bad_points>=0),"
+                      "fast INTEGER NOT NULL,"
+                      "slow INTEGER NOT NULL,"
+                      "final_gauge REAL NOT NULL,"
+                      "clear_type INTEGER NOT NULL,"
+                      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP" +
+                      (currentSchema
+                           ? "," + currentScoreProvenanceColumns() +
+                                 ",modern_result_id INTEGER,result_fingerprint TEXT"
+                           : "") + ")";
+  if (!execSql(db, query.c_str(), "creating course score table")) {
+    return false;
+  }
+
+  const char *indexes[] = {
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id ON "
+      "course_scores(course_id)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id_clear_type ON "
+      "course_scores(course_id, clear_type)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_key ON "
+      "course_scores(course_key)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_clear_type ON "
+      "course_scores(clear_type)",
+      "CREATE INDEX IF NOT EXISTS idx_course_scores_created_at ON "
+      "course_scores(created_at)",
+  };
+  for (const auto *indexQuery : indexes) {
+    if (!execSql(db, indexQuery, "creating course score index")) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool createCurrentScoreSchema(sqlite3 *db) {
+  const auto scoreSql = createScoreTableSql("scores", true);
+  if (!execSql(db, scoreSql.c_str(), "creating current score table") ||
+      !createCourseScoreTable(db, true) || !createScoreIndexes(db) ||
+      !ensureScoreImportedIrColumns(db)) {
+    return false;
+  }
+  const char *indexes[] = {
+      kCourseScoreIdentityIndexSql,
+      "CREATE UNIQUE INDEX idx_scores_attempt_id ON scores(attempt_id) WHERE "
+      "attempt_id IS NOT NULL",
+      "CREATE UNIQUE INDEX idx_course_scores_attempt_id ON "
+      "course_scores(attempt_id) WHERE attempt_id IS NOT NULL",
+      "CREATE UNIQUE INDEX idx_course_scores_modern_result_id ON "
+      "course_scores(modern_result_id) WHERE modern_result_id IS NOT NULL",
+  };
+  for (const char *sql : indexes) {
+    if (!execSql(db, sql, "creating current score identity index")) return false;
+  }
+  if (const auto error = score_cache_queries::ensureScoreSummarySchema(db)) {
+    logSqlErrorText("creating current score summaries", *error);
+    return false;
+  }
+  return ensureScorePlayDurationInvariant(db, false) &&
+         recordScoreDataRepairs(db) &&
+         setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion) &&
+         currentScoreSchemaIsValid(db);
+}
+
 } // namespace
 bool score_repository_detail::CreateScoreTableOnConnection(
     sqlite3 *db, const std::filesystem::path &chartDatabasePath) {
@@ -2121,10 +2300,6 @@ bool score_repository_detail::CreateScoreTableOnConnection(
       !ensureScoreImportedIrColumns(db)) {
     return false;
   }
-  if (!backfillScoreSelectorMetrics(db)) {
-    return false;
-  }
-
   if (existingScoreTable) {
     if (!migrateScoreDatabaseSchema(db, chartDatabasePath)) {
       return false;
@@ -2133,32 +2308,16 @@ bool score_repository_detail::CreateScoreTableOnConnection(
   if (!ensureScoreSha256Required(db)) {
     return false;
   }
+  // The oldest nullable-SHA schema is rebuilt above. Repair the final table
+  // before recording completion so that rebuild cannot discard the BP values.
+  bool repairsComplete = false;
+  if (!scoreDataRepairsComplete(db, repairsComplete) ||
+      (!repairsComplete && !backfillScoreSelectorMetrics(db))) {
+    return false;
+  }
 
-  const char *indexes[] = {
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256 ON "
-      "scores(chart_sha256)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5 ON scores(chart_md5)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_path ON scores(chart_path)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256_clear_type ON "
-      "scores(chart_sha256, clear_type)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5_clear_type ON "
-      "scores(chart_md5, clear_type)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_path_clear_type ON "
-      "scores(chart_path, clear_type)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_sha256_ln_mode ON "
-      "scores(chart_sha256, ln_mode)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_md5_ln_mode ON "
-      "scores(chart_md5, ln_mode)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_chart_path_ln_mode ON "
-      "scores(chart_path, ln_mode)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_identity_ln_mode ON "
-      "scores(chart_sha256, chart_md5, chart_path, ln_mode)",
-      "CREATE INDEX IF NOT EXISTS idx_scores_created_at ON scores(created_at)",
-  };
-  for (const auto *indexQuery : indexes) {
-    if (!execSql(db, indexQuery, "creating score index")) {
-      return false;
-    }
+  if (!createScoreIndexes(db)) {
+    return false;
   }
   bool ensureCurrentSummarySchema = !existingScoreTable;
   if (existingScoreTable) {
@@ -2204,64 +2363,7 @@ bool score_repository_detail::CreateScoreTableOnConnection(
 }
 
 bool score_repository_detail::CreateCourseScoreTableOnConnection(sqlite3 *db) {
-  if (db == nullptr || rejectFutureScoreDatabase(db)) {
-    return false;
-  }
-  const char *query = "CREATE TABLE IF NOT EXISTS course_scores ("
-                      "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-                      "course_id INTEGER,"
-                      "course_key TEXT,"
-                      "legacy_course_key TEXT NOT NULL DEFAULT '',"
-                      "ln_mode INTEGER NOT NULL DEFAULT -1,"
-                      "course_name TEXT,"
-                      "course_group_name TEXT,"
-                      "constraint_json TEXT,"
-                      "gauge_type INTEGER NOT NULL,"
-                      "gauge_profile INTEGER NOT NULL,"
-                      "gauge_auto_shift INTEGER NOT NULL,"
-                      "play_option TEXT,"
-                      "assist_option TEXT,"
-                      "completed_charts INTEGER NOT NULL,"
-                      "total_charts INTEGER NOT NULL,"
-                      "score INTEGER NOT NULL,"
-                      "max_score INTEGER NOT NULL,"
-                      "max_combo INTEGER NOT NULL,"
-                      "combo_break INTEGER NOT NULL,"
-                      "pgreat INTEGER NOT NULL,"
-                      "great INTEGER NOT NULL,"
-                      "good INTEGER NOT NULL,"
-                      "bad INTEGER NOT NULL,"
-                      "poor INTEGER NOT NULL,"
-                      "kpoor INTEGER NOT NULL,"
-                      "bad_points INTEGER CHECK(bad_points>=0),"
-                      "fast INTEGER NOT NULL,"
-                      "slow INTEGER NOT NULL,"
-                      "final_gauge REAL NOT NULL,"
-                      "clear_type INTEGER NOT NULL,"
-                      "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
-                      ")";
-  if (!execSql(db, query, "creating course score table")) {
-    return false;
-  }
-
-  const char *indexes[] = {
-      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id ON "
-      "course_scores(course_id)",
-      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_id_clear_type ON "
-      "course_scores(course_id, clear_type)",
-      "CREATE INDEX IF NOT EXISTS idx_course_scores_course_key ON "
-      "course_scores(course_key)",
-      "CREATE INDEX IF NOT EXISTS idx_course_scores_clear_type ON "
-      "course_scores(clear_type)",
-      "CREATE INDEX IF NOT EXISTS idx_course_scores_created_at ON "
-      "course_scores(created_at)",
-  };
-  for (const auto *indexQuery : indexes) {
-    if (!execSql(db, indexQuery, "creating course score index")) {
-      return false;
-    }
-  }
-  return true;
+  return createCourseScoreTable(db, false);
 }
 
 bool score_repository_detail::EnsureSchemaOnConnection(
@@ -2288,6 +2390,21 @@ bool score_repository_detail::EnsureSchemaOnConnection(
     logSqlErrorText("starting score schema ensure", transactionError);
     return false;
   }
+  std::string versionError;
+  const auto version = readSqliteUserVersion(db, versionError);
+  SqliteStatementHandle schema;
+  if (!version ||
+      !prepareSqliteStatementLogged(
+          db, "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1",
+          schema, "checking for a fresh score database", logSqlErrorText)) {
+    return false;
+  }
+  const int schemaResult = sqlite3_step(schema.get());
+  if (schemaResult != SQLITE_ROW && schemaResult != SQLITE_DONE) return false;
+  schema.reset();
+  if (*version == 0 && schemaResult == SQLITE_DONE) {
+    return createCurrentScoreSchema(db) && transaction.commit(transactionError);
+  }
   if (!CreateScoreTableOnConnection(db, chartDatabasePath) ||
       !CreateCourseScoreTableOnConnection(db)) {
     return false;
@@ -2301,8 +2418,13 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion11(db) ||
       !migrateScoreDatabaseToVersion12(db, chartDatabasePath) ||
       !migrateScoreDatabaseToVersion13(db, chartDatabasePath) ||
-      !migrateScoreDatabaseToVersion14(db) ||
-      !ensureScorePlayDurationInvariant(db)) {
+      !migrateScoreDatabaseToVersion14(db)) {
+    return false;
+  }
+  bool repairsComplete = false;
+  if (!scoreDataRepairsComplete(db, repairsComplete) ||
+      !ensureScorePlayDurationInvariant(db, !repairsComplete) ||
+      (!repairsComplete && !recordScoreDataRepairs(db))) {
     return false;
   }
   if (!transaction.commit(transactionError)) {

@@ -1,3 +1,4 @@
+#include "support/SqliteInitializationTrace.h"
 #include "../src/CourseIdentity.h"
 #include "../src/CourseConstraintUtils.h"
 #include "../src/CoursePlaySession.h"
@@ -558,13 +559,15 @@ void withLiveWalWriter(const std::filesystem::path &path, int userVersion,
 }
 #endif
 
-void createVersion4ScoreFixture(const std::filesystem::path &path) {
+void createVersion4ScoreFixture(const std::filesystem::path &path,
+                                bool nullableSha256 = false) {
   auto db = openDatabase(path);
   execOrAbort(
       db.get(),
       "CREATE TABLE scores ("
       "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-      "chart_path TEXT, chart_md5 TEXT, chart_sha256 TEXT NOT NULL,"
+      "chart_path TEXT, chart_md5 TEXT, chart_sha256 TEXT" +
+      std::string(nullableSha256 ? "," : " NOT NULL,") +
       "ln_mode INTEGER NOT NULL DEFAULT 0, chart_title TEXT,"
       "chart_artist TEXT, score INTEGER NOT NULL, max_score INTEGER NOT NULL,"
       "max_combo INTEGER NOT NULL, combo_break INTEGER NOT NULL,"
@@ -629,6 +632,108 @@ void createVersion5ScoreFixture(const std::filesystem::path &path) {
   execOrAbort(db.get(), "PRAGMA user_version = 5");
 }
 
+void testFreshScoreInitializationSkipsHistoricalRewrites(
+    const std::filesystem::path &root) {
+  auto db = openDatabase(root / "fresh-score.db");
+  const auto emptySchema = schemaSnapshot(db.get());
+  sqlite3_commit_hook(db.get(), [](void *) { return 1; }, nullptr);
+  assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  sqlite3_commit_hook(db.get(), nullptr, nullptr);
+  assert(schemaSnapshot(db.get()) == emptySchema);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 0);
+  SqliteInitializationTrace trace(db.get());
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(score_repository_detail::CurrentSchemaIsValid(db.get()));
+  assert(!trace.contains("ALTER TABLE"));
+  assert(!trace.contains("DROP TABLE"));
+  assert(!trace.contains("UPDATE scores"));
+}
+
+void testCurrentScoreReopenSkipsCompletedRepairs(
+    const std::filesystem::path &root) {
+  const auto path = root / "current-score-reopen.db";
+  {
+    auto db = openDatabase(path);
+    assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  }
+  auto db = openDatabase(path);
+  SqliteInitializationTrace trace(db.get());
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(!trace.contains("UPDATE scores SET bad_points"));
+  assert(!trace.contains("UPDATE scores SET play_duration_seconds"));
+}
+
+void testExistingScoreRepairsCommitOnceAndRollbackTogether(
+    const std::filesystem::path &root) {
+  auto db = openDatabase(root / "existing-score-repairs.db");
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  // Simulate a pre-marker v14 database with legacy local BP and duration data.
+  execOrAbort(db.get(), "DROP TABLE score_data_repair_state");
+  execOrAbort(db.get(), "DROP TRIGGER scores_play_duration_insert_guard");
+  execOrAbort(db.get(), "DROP TRIGGER scores_play_duration_update_guard");
+  execOrAbort(db.get(), "PRAGMA ignore_check_constraints=ON");
+  execOrAbort(db.get(),
+      "INSERT INTO scores(chart_sha256,score,max_score,max_combo,combo_break,"
+      "pgreat,great,good,bad,poor,kpoor,fast,slow,final_gauge,clear_type,"
+      "score_source,play_duration_seconds) VALUES"
+      "('local',1,2,1,0,1,0,0,3,4,5,0,0,50,0,0,-7),"
+      "('remote',1,2,1,0,1,0,0,3,4,5,0,0,50,0,1,12)");
+  execOrAbort(db.get(), "PRAGMA ignore_check_constraints=OFF");
+  const auto before = schemaSnapshot(db.get());
+  sqlite3_commit_hook(db.get(), [](void *) { return 1; }, nullptr);
+  assert(!score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  sqlite3_commit_hook(db.get(), nullptr, nullptr);
+  assert(schemaSnapshot(db.get()) == before);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM scores WHERE bad_points IS NULL") == 2);
+  assert(queryInt(db.get(), "SELECT play_duration_seconds FROM scores WHERE score_source=0") == -7);
+
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(queryInt(db.get(), "SELECT bad_points FROM scores WHERE score_source=0") == 12);
+  assert(queryInt(db.get(), "SELECT play_duration_seconds FROM scores WHERE score_source=0") == 0);
+  assert(queryInt(db.get(), "SELECT bad_points IS NULL FROM scores WHERE score_source=1") == 1);
+  assert(queryInt(db.get(), "SELECT play_duration_seconds FROM scores WHERE score_source=1") == 12);
+  assert(queryInt(db.get(), "SELECT completed FROM score_data_repair_state") == 1);
+  assert(execFailsConstraint(db.get(), "UPDATE scores SET play_duration_seconds=-1"));
+  SqliteInitializationTrace trace(db.get());
+  assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+  assert(!trace.contains("UPDATE scores SET bad_points"));
+  assert(!trace.contains("UPDATE scores SET play_duration_seconds"));
+}
+
+void testFreshScoreSchemaMatchesUpgradedColumnsAndIndexes(
+    const std::filesystem::path &root) {
+  const auto legacyPath = root / "schema-parity-legacy.db";
+  createVersion4ScoreFixture(legacyPath);
+  auto legacy = openDatabase(legacyPath);
+  auto fresh = openDatabase(root / "schema-parity-fresh.db");
+  assert(score_repository_detail::EnsureSchemaOnConnection(legacy.get(), {}));
+  assert(score_repository_detail::EnsureSchemaOnConnection(fresh.get(), {}));
+  for (const std::string table : {"scores", "course_scores"}) {
+    const auto shape = "SELECT group_concat(shape,';') FROM (SELECT "
+        "name||':'||type||':'||\"notnull\"||':'||COALESCE(dflt_value,'NULL')||':'||pk "
+        "AS shape FROM pragma_table_info('" + table + "') ORDER BY name)";
+    assert(queryText(fresh.get(), shape) == queryText(legacy.get(), shape));
+    const auto indexes = "SELECT group_concat(shape,';') FROM (SELECT "
+        "name||':'||\"unique\"||':'||partial AS shape FROM pragma_index_list('" +
+        table + "') ORDER BY name)";
+    assert(queryText(fresh.get(), indexes) == queryText(legacy.get(), indexes));
+  }
+}
+
+void testNullableLegacyScoreRepairSurvivesRebuild(
+    const std::filesystem::path &root) {
+  const auto path = root / "nullable-sha-repair.db";
+  createVersion4ScoreFixture(path, true);
+  for (int reopen = 0; reopen < 2; ++reopen) {
+    auto db = openDatabase(path);
+    assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
+    assert(queryInt(db.get(), "SELECT bad_points IS NOT NULL FROM scores") == 1);
+    assert(queryInt(db.get(), "SELECT bad_points FROM scores") == 12);
+    assert(queryInt(db.get(), "SELECT completed FROM score_data_repair_state") == 1);
+  }
+}
+
 void testLegacyScoreUpgradeReusesChartAttachment(
     const std::filesystem::path &root) {
   for (const int version : {0, 1, -1}) {
@@ -688,7 +793,7 @@ void testLegacyScoreUpgradeReusesChartAttachment(
                ScoreRepository::kCurrentSchemaVersion);
         assert(queryInt(scores.get(),
                         "SELECT COUNT(*) FROM pragma_database_list "
-                        "WHERE name='score_migration_chart'") == 1);
+                        "WHERE name='score_migration_chart'") == (version >= 0 ? 1 : 0));
         execOrAbort(scores.get(), "ROLLBACK");
         assert(queryInt(scores.get(), "PRAGMA user_version") ==
                (version == 1 ? 1 : 0));
@@ -4012,6 +4117,11 @@ int main() {
   std::filesystem::remove_all(root);
   std::filesystem::create_directories(root);
 
+  testNullableLegacyScoreRepairSurvivesRebuild(root);
+  testFreshScoreSchemaMatchesUpgradedColumnsAndIndexes(root);
+  testExistingScoreRepairsCommitOnceAndRollbackTogether(root);
+  testCurrentScoreReopenSkipsCompletedRepairs(root);
+  testFreshScoreInitializationSkipsHistoricalRewrites(root);
   testLegacyScoreUpgradeReusesChartAttachment(root);
   testVersion8MigrationAddsCurrentScoreIdentity(root);
   testStaleVersionRecognizesAppliedAttemptIdentity(root);

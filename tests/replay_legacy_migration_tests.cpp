@@ -1,3 +1,4 @@
+#include "support/SqliteInitializationTrace.h"
 #include "repositories/ReplayRepository.h"
 #include "repositories/ReplayRepositoryLegacyMigration.h"
 #include "repositories/ReplayRepositoryMigrationTestAccess.h"
@@ -496,6 +497,23 @@ void testVersion10MigrationPreservesLegacyReceiptOwnership() {
                    "SELECT \"table\" FROM pragma_foreign_key_list("
                    "'ir_submission_receipts') WHERE \"from\"='replay_id'") ==
          "legacy_chart_result_summaries");
+}
+
+void testFreshReplayInitializationSkipsHistoricalRewrites() {
+  TemporaryDirectory temporary;
+  auto database = openDatabase(temporary.path / "fresh.db");
+  sqlite3_commit_hook(database.get(), [](void *) { return 1; }, nullptr);
+  assert(!replay_repository_test::RunSchemaMigration(database.get()));
+  sqlite3_commit_hook(database.get(), nullptr, nullptr);
+  assert(queryInt(database.get(), "PRAGMA user_version") == 0);
+  assert(queryInt(database.get(), "SELECT COUNT(*) FROM sqlite_master") == 0);
+  SqliteInitializationTrace trace(database.get());
+  assert(replay_repository_test::RunSchemaMigration(database.get()));
+  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(!trace.contains("CREATE TABLE IF NOT EXISTS replays ("));
+  assert(!trace.contains("ALTER TABLE"));
+  assert(!trace.contains("DROP TABLE"));
+  assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
 }
 
 void testFreshSchemaHasNoRawReplayTables() {
@@ -1741,6 +1759,7 @@ int main(int argc, char **argv) {
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();
+  testFreshReplayInitializationSkipsHistoricalRewrites();
   testFreshSchemaHasNoRawReplayTables();
   testDurableReceiptsAndOutboxWorkSurvive();
   testMalformedProvenanceDoesNotBlockHeaderMigration();
