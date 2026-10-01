@@ -114,9 +114,10 @@ Result recover(ChartRepository::Session &session,
       accessible = false;
       continue;
     }
+    std::string completionFailure = "completion marker is missing or not a regular file";
     const bool complete = std::filesystem::is_regular_file(markerStatus) &&
         archive_file::unzipFolderHasMatchingCompleteMarker(
-            record.outputFolder, record.archivePath, record.archiveKey);
+            record.outputFolder, record.archivePath, record.archiveKey, &completionFailure);
     if (!complete) {
       error.clear();
       if (sourceExists && archive_file::unzipFolderHasMatchingIncompleteMarker(
@@ -128,8 +129,9 @@ Result recover(ChartRepository::Session &session,
           accessible = false;
         }
       } else {
-        logPending(record, sourceExists ? "no matching recovery marker" :
-                                         "incomplete output has no source archive", error);
+        const auto reason = (sourceExists ? "output is unverified: " :
+            "source archive is missing and output is unverified: ") + completionFailure;
+        logPending(record, reason.c_str(), error);
         accessible = false;
       }
       continue;

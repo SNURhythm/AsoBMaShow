@@ -8422,15 +8422,25 @@ bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
                               const char *markerName,
                               const std::filesystem::path &archivePath,
                               const std::string &key,
-                              std::error_code *readError = nullptr) {
+                              std::error_code *readError = nullptr,
+                              std::string *mismatchReason = nullptr) {
   std::error_code localError;
   auto &error = readError != nullptr ? *readError : localError;
   error.clear();
-  if (!std::filesystem::is_directory(std::filesystem::symlink_status(folder, error)) || error)
+  if (mismatchReason) mismatchReason->clear();
+  const auto mismatch = [&](const char *reason) {
+    if (mismatchReason) {
+      *mismatchReason = reason;
+      if (error) *mismatchReason += ": " + error.message() + " (" +
+          error.category().name() + ":" + std::to_string(error.value()) + ")";
+    }
     return false;
+  };
+  if (!std::filesystem::is_directory(std::filesystem::symlink_status(folder, error)) || error)
+    return mismatch("output is not an accessible directory");
   const auto markerPath = folder / markerName;
   if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(markerPath, error)) || error)
-    return false;
+    return mismatch("marker is missing, inaccessible, or not a regular file");
   errno = 0;
   std::unique_ptr<FILE, decltype(&std::fclose)> marker(
 #ifdef _WIN32
@@ -8442,7 +8452,7 @@ bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
   if (!marker) {
     error = errno != 0 ? std::error_code(errno, std::generic_category())
                        : std::make_error_code(std::errc::io_error);
-    return false;
+    return mismatch("could not open marker");
   }
   std::array<char, 64 * 1024> line{};
   const auto readLine = [&] {
@@ -8467,12 +8477,24 @@ bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
       line[length++] = static_cast<char>(character);
     }
   };
-  if (!readLine() || key != line.data()) return false;
-  if (!readLine()) return false;
+  if (!readLine()) return mismatch("could not read marker key");
+  if (key != line.data()) {
+    mismatch("marker key differs from recovery journal");
+    if (mismatchReason) *mismatchReason += " recordedKey=" + std::string(line.data()) +
+        " expectedKey=" + key;
+    return false;
+  }
+  if (!readLine()) return mismatch("could not read marker archive path");
   const auto recordedPath = std::filesystem::absolute(utf8_to_path_t(line.data()), error);
-  if (error) return false;
+  if (error) return mismatch("could not resolve marker archive path");
   const auto sourcePath = std::filesystem::absolute(archivePath, error);
-  return !error && cacheNormalizedPath(recordedPath) == cacheNormalizedPath(sourcePath);
+  if (error) return mismatch("could not resolve recovery archive path");
+  if (cacheNormalizedPath(recordedPath) != cacheNormalizedPath(sourcePath)) {
+    mismatch("marker archive path differs from recovery journal");
+    if (mismatchReason) *mismatchReason += " recorded=" + fspath_to_utf8(recordedPath);
+    return false;
+  }
+  return true;
 }
 
 std::filesystem::path archiveCacheRoot() {
@@ -8491,9 +8513,10 @@ bool unzipFolderHasMatchingIncompleteMarker(
 
 bool unzipFolderHasMatchingCompleteMarker(
     const std::filesystem::path &outputFolder,
-    const std::filesystem::path &archivePath, const std::string &archiveKey) {
+    const std::filesystem::path &archivePath, const std::string &archiveKey,
+    std::string *mismatchReason) {
   return unzipFolderMarkerMatches(outputFolder, ".asobmashow_unzip_complete",
-                                  archivePath, archiveKey);
+                                  archivePath, archiveKey, nullptr, mismatchReason);
 }
 
 bool isArchiveSupportAvailable() {
