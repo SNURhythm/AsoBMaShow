@@ -2062,16 +2062,18 @@ Note::~Note() { Timeline = nullptr; }
 #include <random>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cerrno>
 #include <limits>
+#include <memory>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <regex>
-#include <set>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -2760,7 +2762,13 @@ inline bool Parser::MatchHeader(const std::string_view &str,
     return false;
   }
   for (size_t i = 0; i < size; ++i) {
-    if (std::towupper(str[i]) != headerUpper[i]) {
+    // Most charts already use uppercase ASCII. Keep the locale-sensitive
+    // fallback for lowercase/non-ASCII (notably 'i' in a Turkish locale).
+    if (str[i] == headerUpper[i]) {
+      continue;
+    }
+    if ((str[i] >= 'A' && str[i] <= 'Z') ||
+        std::towupper(str[i]) != headerUpper[i]) {
       return false;
     }
   }
@@ -2816,6 +2824,53 @@ void Parser::Parse(const std::filesystem::path &fpath, Chart **chart,
 void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                    bool addReadyMeasure, bool metaOnly,
                    std::atomic_bool &bCancelled) {
+  ParseInternal(bytes, chart, addReadyMeasure, metaOnly, bCancelled, nullptr);
+}
+
+std::optional<ChartScanResult>
+Parser::Scan(const std::vector<unsigned char> &bytes,
+             std::atomic_bool &bCancelled) {
+  if (bCancelled) return std::nullopt;
+  ChartScanResult result;
+  Chart *raw = nullptr;
+  try {
+    ParseInternal(bytes, &raw, false, false, bCancelled, &result);
+  } catch (...) {
+    delete raw;
+    throw;
+  }
+  std::unique_ptr<Chart> chart(raw);
+  if (bCancelled || chart == nullptr) return std::nullopt;
+  result.Meta = std::move(chart->Meta);
+  result.HasBga = !chart->BmpTable.empty();
+  return result;
+}
+
+std::optional<ChartScanResult>
+Parser::Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled) {
+  if (bCancelled) return std::nullopt;
+  std::ifstream file(path, std::ios::binary | std::ios::ate);
+  if (!file) return std::nullopt;
+  const auto size = file.tellg();
+  if (size < 0) return std::nullopt;
+  std::vector<unsigned char> bytes(static_cast<size_t>(size));
+  file.seekg(0, std::ios::beg);
+  if (!file.read(reinterpret_cast<char *>(bytes.data()), size))
+    return std::nullopt;
+  auto result = Scan(bytes, bCancelled);
+  if (result) {
+    result->Meta.BmsPath = path;
+    result->Meta.Folder = path.parent_path();
+  }
+  return result;
+}
+
+void Parser::ParseInternal(const std::vector<unsigned char> &bytes, Chart **chart,
+                          bool addReadyMeasure, bool metaOnly,
+                          std::atomic_bool &bCancelled, ChartScanResult *scan) {
+  // Scan traverses all full-mode events for identical timing/statistics. Legacy
+  // metaOnly keeps its existing shortcuts; neither mode needs lane-note objects.
+  const bool materialize = !metaOnly && scan == nullptr;
 #if BMS_PARSER_VERBOSE == 1
   auto startTime = std::chrono::high_resolution_clock::now();
 #endif
@@ -3074,13 +3129,10 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       const std::string_view ch = line.substr(4, 2);
       const int channel = ParseInt(ch);
       const std::string_view value = line.substr(7);
-      if (measures.find(measure) == measures.end()) {
-        measures[measure] = std::vector<std::pair<int, std::string_view>>();
-      }
       measures[measure].emplace_back(channel, value);
     } else {
       if (MatchHeader(line, "#WAV")) {
-        if (metaOnly) {
+        if (!materialize) {
           continue;
         }
         if (line.length() < 7) {
@@ -3173,10 +3225,11 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   auto currentSpeed = 1.0;
   auto minBpm = new_chart->Meta.Bpm;
   auto maxBpm = new_chart->Meta.Bpm;
-  auto lastNote = std::vector<Note *>();
-  lastNote.resize(TempKey, nullptr);
-  auto lnStart = std::vector<LongNote *>();
-  lnStart.resize(TempKey, nullptr);
+  std::array<Note *, TempKey> lastNote{};
+  std::array<LongNote *, TempKey> lnStart{};
+  // Metadata parsing needs lane state, not allocated (then deleted) notes.
+  std::array<bool, TempKey> hasLastNote{};
+  std::array<bool, TempKey> hasLnStart{};
   const auto channelLongNoteType = LongNoteTypeFromLnMode(new_chart->Meta.LnMode);
 #if BMS_PARSER_VERBOSE == 1
   midStartTime = std::chrono::high_resolution_clock::now();
@@ -3191,6 +3244,11 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   int saneSignalMeasures = 0;
   int earlyAudibleMeasures = 0;
   OpeningTripleCandidateTracker openingTripleCandidate;
+  // Only the unique count is used. Reuse contiguous scratch storage instead
+  // of allocating a tree node for every distinct position in every measure.
+  std::vector<std::pair<unsigned long long, unsigned long long>> prepTimingPositions;
+  detail::ParserScratchArena timelineNodes;
+  std::deque<TimeLine> scratchTimelines;
   for (auto measureIdx = 0; measureIdx <= lastMeasure; ++measureIdx) {
     if (bCancelled) {
       return;
@@ -3200,16 +3258,39 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
     }
 
     // gcd (int, int)
-    auto measure = new Measure();
+    Measure scratchMeasure;
+    auto measure = materialize ? new Measure() : &scratchMeasure;
     bool explicitSectionRate = false;
     bool measureHasPrepTimingContent = false;
     bool measureHasAudibleContent = false;
-    auto prepTimingPositions =
-        std::set<std::pair<unsigned long long, unsigned long long>>();
-    std::set<double> playableTimelinePositions;
+    prepTimingPositions.clear();
+    // The previous measure's map is already destroyed. Non-retained timelines
+    // live in a deque so their addresses stay stable without one allocation per
+    // object; full charts retain their existing new/delete ownership contract.
+    timelineNodes.reset();
+    scratchTimelines.clear();
 
     // NOTE: this should be an ordered map
-    auto timelines = std::map<double, TimeLine *>();
+    struct TimelineEntry {
+      TimeLine *timeline = nullptr;
+      bool playable = false;
+    };
+    using TimelineAllocator =
+        detail::ParserScratchAllocator<std::pair<const double, TimelineEntry>>;
+    std::map<double, TimelineEntry, std::less<double>, TimelineAllocator>
+        timelines{TimelineAllocator(timelineNodes)};
+    const auto ensureTimeline = [&](double position) {
+      auto result = timelines.try_emplace(position);
+      if (result.second) {
+        if (materialize) {
+          result.first->second.timeline = new TimeLine(TempKey, false);
+        } else {
+          scratchTimelines.emplace_back(TempKey, true);
+          result.first->second.timeline = &scratchTimelines.back();
+        }
+      }
+      return result.first;
+    };
     double bgaPoorTimingExtent = 0.0;
 
     for (auto &pair : measures[measureIdx]) {
@@ -3289,7 +3370,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           if (bCancelled) {
             break;
           }
-          if (data.substr(j * 2, 2) != "00") {
+          if (data[j * 2] != '0' || data[j * 2 + 1] != '0') {
             hasActiveCell = true;
             break;
           }
@@ -3301,13 +3382,13 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           continue;
         }
         BgaPoorSequence sequence;
-        sequence.Frames.reserve(dataCount);
+        if (scan == nullptr) sequence.Frames.reserve(dataCount);
         for (size_t j = 0; j < dataCount; ++j) {
           if (bCancelled) {
             break;
           }
-          const std::string_view value = data.substr(j * 2, 2);
-          if (value != "00") {
+          const std::string_view value(data.data() + j * 2, 2);
+          if (value[0] != '0' || value[1] != '0') {
             const auto g = Gcd(j, dataCount);
             const auto positionNumerator = j / g;
             const auto positionDenominator = dataCount / g;
@@ -3316,9 +3397,10 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
                 static_cast<double>(positionDenominator);
             bgaPoorTimingExtent = std::max(bgaPoorTimingExtent, position);
           } else {
-            sequence.Frames.push_back(BgaSequenceBlank);
+            if (scan == nullptr) sequence.Frames.push_back(BgaSequenceBlank);
             continue;
           }
+          if (scan != nullptr) continue;
           const int bmpId = ParseInt(value);
           if (CheckResourceIdRange(bmpId) &&
               new_chart->BmpTable.find(bmpId) != new_chart->BmpTable.end()) {
@@ -3331,10 +3413,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         if (bCancelled) {
           break;
         }
-        if (timelines.find(0.0) == timelines.end()) {
-          timelines[0.0] = new TimeLine(TempKey, metaOnly);
-        }
-        timelines[0.0]->BgaPoor = std::move(sequence);
+        ensureTimeline(0.0)->second.timeline->BgaPoor = std::move(sequence);
         continue;
       }
       const bool channelCanAnchorPrepTiming =
@@ -3350,15 +3429,15 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         if (bCancelled) {
           break;
         }
-        const std::string_view val = data.substr(j * 2, 2);
-        if (val == "00") {
+        const char *cell = data.data() + j * 2;
+        if (cell[0] == '0' && cell[1] == '0') {
           if (timelines.empty() && j == 0) {
-            auto timeline = new TimeLine(TempKey, metaOnly);
-            timelines[0] = timeline; // add ghost timeline
+            ensureTimeline(0.0); // add ghost timeline
           }
 
           continue;
         }
+        const std::string_view val(cell, 2);
         const auto g = Gcd(j, dataCount);
         // ReSharper disable PossibleLossOfFraction
 
@@ -3370,17 +3449,14 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
 
         if (channelCanAnchorPrepTiming) {
           measureHasPrepTimingContent = true;
-          prepTimingPositions.emplace(positionNumerator, positionDenominator);
+          prepTimingPositions.emplace_back(positionNumerator, positionDenominator);
         }
         if (channelHasAudibleContent) {
           measureHasAudibleContent = true;
         }
 
-        if (timelines.find(position) == timelines.end()) {
-          timelines[position] = new TimeLine(TempKey, metaOnly);
-        }
-
-        auto timeline = timelines[position];
+        auto entry = ensureTimeline(position);
+        auto timeline = entry->second.timeline;
         if (channel == LaneAutoplay || channel == P1InvisibleKeyBase) {
           if (metaOnly) {
             break;
@@ -3388,6 +3464,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         }
         switch (channel) {
         case LaneAutoplay:
+          if (!materialize) break;
           if (val == "**") {
             timeline->AddBackgroundNote(new Note{MetronomeWav});
             break;
@@ -3429,8 +3506,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             // UE_LOG(LogTemp, Warning, TEXT("Invalid BPM id: %s"), *val);
             break;
           }
-          if (BpmTable.find(id) != BpmTable.end()) {
-            timeline->Bpm = BpmTable[id];
+          if (const auto bpm = BpmTable.find(id); bpm != BpmTable.end()) {
+            timeline->Bpm = bpm->second;
           } else {
             timeline->Bpm = 0;
             // std::cout<<"Undefined BPM: "<<id<<std::endl;
@@ -3447,8 +3524,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             break;
           }
           timeline->ScrollChange = true;
-          if (ScrollTable.find(id) != ScrollTable.end()) {
-            timeline->Scroll = ScrollTable[id];
+          if (const auto scroll = ScrollTable.find(id); scroll != ScrollTable.end()) {
+            timeline->Scroll = scroll->second;
           } else {
             timeline->Scroll = 1;
           }
@@ -3471,8 +3548,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             // *val);
             break;
           }
-          if (StopLengthTable.find(id) != StopLengthTable.end()) {
-            timeline->StopLength = StopLengthTable[id];
+          if (const auto stop = StopLengthTable.find(id); stop != StopLengthTable.end()) {
+            timeline->StopLength = stop->second;
           } else {
             timeline->StopLength = 0;
           }
@@ -3480,9 +3557,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           break;
         }
         case P1KeyBase: {
-          playableTimelinePositions.insert(position);
+          entry->second.playable = true;
           const auto ch = ParseInt(val);
-          if (ch == Lnobj && lastNote[laneNumber] != nullptr) {
+          if (ch == Lnobj && hasLastNote[laneNumber]) {
             if (isScratch) {
               ++totalBackSpinNotes;
             } else {
@@ -3491,7 +3568,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
 
             auto last = lastNote[laneNumber];
             lastNote[laneNumber] = nullptr;
-            if (metaOnly) {
+            hasLastNote[laneNumber] = false;
+            if (!materialize) {
               break;
             }
 
@@ -3503,22 +3581,23 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
             lastTimeline->SetNote(laneNumber, ln);
             timeline->SetNote(laneNumber, ln->Tail);
           } else {
-            const int wavId = ToWaveId(new_chart, val, metaOnly);
+            const int wavId = ToWaveId(new_chart, val, !materialize);
             RegisterReferencedWaveId(new_chart, wavId);
-            auto note = new Note{wavId};
-            lastNote[laneNumber] = note;
+            hasLastNote[laneNumber] = true;
             ++totalNotes;
             if (isScratch) {
               ++totalScratchNotes;
             }
-            if (metaOnly) {
-              delete note; // this is intended
+            if (!materialize) {
               break;
             }
+            auto note = new Note{wavId};
+            lastNote[laneNumber] = note;
             timeline->SetNote(laneNumber, note);
           }
         } break;
         case P1InvisibleKeyBase: {
+          if (!materialize) break;
           const int wavId = ToWaveId(new_chart, val, metaOnly);
           RegisterReferencedWaveId(new_chart, wavId);
           auto invNote = new Note{wavId};
@@ -3530,8 +3609,9 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           // Beatoraja's BMS decoder always materializes 5x/6x channels as
           // lane notes. Its effective LN judgement mode is independent of
           // whether these channel objects exist.
-          playableTimelinePositions.insert(position);
-          if (lnStart[laneNumber] == nullptr) {
+          entry->second.playable = true;
+          if (!hasLnStart[laneNumber]) {
+            hasLnStart[laneNumber] = true;
             ++totalNotes;
             if (isScratch) {
               ++totalBackSpinNotes;
@@ -3539,33 +3619,31 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
               ++totalLongNotes;
             }
 
-            const int wavId = ToWaveId(new_chart, val, metaOnly);
+            const int wavId = ToWaveId(new_chart, val, !materialize);
             RegisterReferencedWaveId(new_chart, wavId);
-            auto ln = new LongNote{wavId, channelLongNoteType};
-            lnStart[laneNumber] = ln;
-
-            if (metaOnly) {
-              delete ln; // this is intended
+            if (!materialize) {
               break;
             }
-
+            auto ln = new LongNote{wavId, channelLongNoteType};
+            lnStart[laneNumber] = ln;
             timeline->SetNote(laneNumber, ln);
           } else {
-            if (!metaOnly) {
+            if (materialize) {
               auto tail = new LongNote{NoWav, lnStart[laneNumber]->Type};
               tail->Head = lnStart[laneNumber];
               lnStart[laneNumber]->Tail = tail;
               timeline->SetNote(laneNumber, tail);
             }
             lnStart[laneNumber] = nullptr;
+            hasLnStart[laneNumber] = false;
           }
           break;
         }
         case P1MineKeyBase: {
-          playableTimelinePositions.insert(position);
+          entry->second.playable = true;
           // landmine
           ++totalLandmineNotes;
-          if (metaOnly) {
+          if (!materialize) {
             break;
           }
           const auto damage = static_cast<float>(ParseInt(val, true)) / 2.0f;
@@ -3579,11 +3657,13 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
     }
 
     if (bCancelled) {
-      for (const auto &[position, timeline] : timelines) {
-        (void)position;
-        delete timeline;
+      if (materialize) {
+        for (const auto &[position, entry] : timelines) {
+          (void)position;
+          delete entry.timeline;
+        }
+        delete measure;
       }
-      delete measure;
       delete new_chart;
       *chart = nullptr;
       return;
@@ -3604,7 +3684,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         break;
       }
       const auto position = pair.first;
-      const auto timeline = pair.second;
+      const auto timeline = pair.second.timeline;
 
       // Debug.Log($"measure: {measureIdx}, position: {position}, lastPosition:
       // {lastPosition} bpm: {bpm} scale: {measure.scale} interval: {240 * 1000
@@ -3644,11 +3724,14 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       addDuration(bpmDurations, bpmOrder, timeline->Bpm,
                   static_cast<long long>(std::llround(stopDuration)));
       timePassed += stopDuration;
-      if (playableTimelinePositions.find(position) !=
-          playableTimelinePositions.end()) {
+      if (pair.second.playable) {
         new_chart->Meta.PlayLength = timeline->Timing;
       }
-      if (!metaOnly) {
+      if (scan != nullptr) {
+        scan->HasBpmStop = scan->HasBpmStop || timeline->StopLength > 0;
+        scan->HasScrollChange = scan->HasScrollChange || timeline->Scroll != 1.0;
+      }
+      if (materialize) {
         measure->TimeLines.push_back(timeline);
       }
 
@@ -3665,14 +3748,11 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       lastPosition = bgaPoorTimingExtent;
     }
 
-    if (metaOnly) {
-      for (auto &timeline : timelines) {
-        delete timeline.second;
-      }
+    if (!materialize) {
       timelines.clear();
     }
 
-    if (!metaOnly && measure->TimeLines.empty()) {
+    if (materialize && measure->TimeLines.empty()) {
       auto timeline = new TimeLine(TempKey, metaOnly);
       timeline->Timing = static_cast<long long>(timePassed);
       timeline->BeatPosition = measureBeatPosition;
@@ -3681,7 +3761,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       timeline->Speed = currentSpeed;
       measure->TimeLines.push_back(timeline);
     }
-    if (!metaOnly) {
+    if (materialize) {
       measure->TimeLines[0]->IsFirstInMeasure = true;
     }
     const auto finalInterval =
@@ -3692,6 +3772,10 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
     const int measureBeats = guessedBeatsForScale(measure->Scale);
     const long long measureDuration =
         static_cast<long long>(timePassed) - measure->Timing;
+    std::sort(prepTimingPositions.begin(), prepTimingPositions.end());
+    prepTimingPositions.erase(
+        std::unique(prepTimingPositions.begin(), prepTimingPositions.end()),
+        prepTimingPositions.end());
     if (isSanePrepMeasureTiming(measureBeats, measureDuration)) {
       const bool measureHasBeatGuessSignal =
           explicitSectionRate || measureHasPrepTimingContent;
@@ -3741,10 +3825,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         measureHasPrepTimingContent,
         static_cast<int>(prepTimingPositions.size()));
     measureBeatPosition += measure->Scale;
-    if (!metaOnly) {
+    if (materialize) {
       new_chart->Measures.push_back(measure);
-    } else {
-      delete measure;
     }
   }
 #if BMS_PARSER_VERBOSE == 1
@@ -4163,8 +4245,6 @@ const unsigned int SHA256::sha256_k[64] = // UL = uint32
 
 void SHA256::transform(const unsigned char *message, unsigned int block_nb) {
   uint32 w[64];
-  uint32 wv[8];
-  uint32 t1, t2;
   const unsigned char *sub_block;
   int i;
   int j;
@@ -4176,25 +4256,31 @@ void SHA256::transform(const unsigned char *message, unsigned int block_nb) {
     for (j = 16; j < 64; j++) {
       w[j] = SHA256_F4(w[j - 2]) + w[j - 7] + SHA256_F3(w[j - 15]) + w[j - 16];
     }
-    for (j = 0; j < 8; j++) {
-      wv[j] = m_h[j];
+    uint32 a = m_h[0], b = m_h[1], c = m_h[2], d = m_h[3];
+    uint32 e = m_h[4], f = m_h[5], g = m_h[6], h = m_h[7];
+    const auto round = [](uint32 a, uint32 b, uint32 c, uint32 &d,
+                          uint32 e, uint32 f, uint32 g, uint32 &h,
+                          uint32 word) {
+      const uint32 t1 = h + SHA256_F2(e) + SHA2_CH(e, f, g) + word;
+      const uint32 t2 = SHA256_F1(a) + SHA2_MAJ(a, b, c);
+      d += t1;
+      h = t1 + t2;
+    };
+    // Rotate the argument roles instead of shifting an eight-word array every
+    // round. After eight rounds the working variables are in their original
+    // roles again. All arithmetic remains modulo 2^32.
+    for (j = 0; j < 64; j += 8) {
+      round(a, b, c, d, e, f, g, h, sha256_k[j] + w[j]);
+      round(h, a, b, c, d, e, f, g, sha256_k[j + 1] + w[j + 1]);
+      round(g, h, a, b, c, d, e, f, sha256_k[j + 2] + w[j + 2]);
+      round(f, g, h, a, b, c, d, e, sha256_k[j + 3] + w[j + 3]);
+      round(e, f, g, h, a, b, c, d, sha256_k[j + 4] + w[j + 4]);
+      round(d, e, f, g, h, a, b, c, sha256_k[j + 5] + w[j + 5]);
+      round(c, d, e, f, g, h, a, b, sha256_k[j + 6] + w[j + 6]);
+      round(b, c, d, e, f, g, h, a, sha256_k[j + 7] + w[j + 7]);
     }
-    for (j = 0; j < 64; j++) {
-      t1 = wv[7] + SHA256_F2(wv[4]) + SHA2_CH(wv[4], wv[5], wv[6]) +
-           sha256_k[j] + w[j];
-      t2 = SHA256_F1(wv[0]) + SHA2_MAJ(wv[0], wv[1], wv[2]);
-      wv[7] = wv[6];
-      wv[6] = wv[5];
-      wv[5] = wv[4];
-      wv[4] = wv[3] + t1;
-      wv[3] = wv[2];
-      wv[2] = wv[1];
-      wv[1] = wv[0];
-      wv[0] = t1 + t2;
-    }
-    for (j = 0; j < 8; j++) {
-      m_h[j] += wv[j];
-    }
+    m_h[0] += a; m_h[1] += b; m_h[2] += c; m_h[3] += d;
+    m_h[4] += e; m_h[5] += f; m_h[6] += g; m_h[7] += h;
   }
 }
 
@@ -4262,8 +4348,10 @@ std::string sha256(const std::vector<unsigned char> &bytes) {
 
   char buf[2 * SHA256::DIGEST_SIZE + 1];
   buf[2 * SHA256::DIGEST_SIZE] = 0;
+  constexpr char hex[] = "0123456789abcdef";
   for (unsigned int i = 0; i < SHA256::DIGEST_SIZE; i++) {
-    snprintf(buf + i * 2, 3, "%02x", digest[i]);
+    buf[i * 2] = hex[digest[i] >> 4];
+    buf[i * 2 + 1] = hex[digest[i] & 15];
   }
   return buf;
 }
@@ -4738,8 +4826,11 @@ std::string MD5::hexdigest() const {
     return "";
 
   char buf[33];
-  for (int i = 0; i < 16; i++)
-    snprintf(buf + i * 2, 3, "%02x", digest[i]);
+  constexpr char hex[] = "0123456789abcdef";
+  for (int i = 0; i < 16; i++) {
+    buf[i * 2] = hex[digest[i] >> 4];
+    buf[i * 2 + 1] = hex[digest[i] & 15];
+  }
   buf[32] = 0;
 
   return buf;

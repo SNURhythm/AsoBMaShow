@@ -165,21 +165,13 @@ struct ParsedChartMetadata {
   ChartSequenceFeatures sequenceFeatures;
 };
 
-ChartSequenceFeatures sequenceFeatures(const bms_parser::Chart &chart) {
+ChartSequenceFeatures sequenceFeatures(const bms_parser::ChartScanResult &chart) {
   ChartSequenceFeatures result;
-  // SongData#setBMSModel uses BMSModel#getBgaList, which the pinned decoder
-  // fills from declared #BMP resources rather than from BGA timeline use.
-  result.hasBga = !chart.BmpTable.empty();
-  for (const auto *measure : chart.Measures) {
-    if (measure == nullptr) continue;
-    for (const auto *timeline : measure->TimeLines) {
-      if (timeline == nullptr) continue;
-      // SongData.setBMSModel at the pinned commit checks these exact values.
-      result.hasBpmStop = result.hasBpmStop || timeline->StopLength > 0;
-      result.hasScrollChange =
-          result.hasScrollChange || timeline->Scroll != 1.0;
-    }
-  }
+  // Scan computes the same declared-BMP and effective-timeline flags as the
+  // full chart traversal, without retaining playable notes or timelines.
+  result.hasBga = chart.HasBga;
+  result.hasBpmStop = chart.HasBpmStop;
+  result.hasScrollChange = chart.HasScrollChange;
   return result;
 }
 
@@ -783,41 +775,50 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
       -> std::optional<ParsedChartMetadata> {
     const std::string chartText = fspath_to_utf8(path);
     bms_parser::Parser parser;
-    bms_parser::Chart *rawChart = nullptr;
-    std::unique_ptr<bms_parser::Chart> chart;
+    std::optional<bms_parser::ChartScanResult> chart;
     std::atomic_bool cancelled(false);
     try {
+      const bool inputWasFile = bytes == nullptr;
+      std::filesystem::path archivePath;
+      std::filesystem::path innerPath;
+      const bool isArchive =
+          archive_file::splitVirtualPath(path, archivePath, innerPath);
+      bool bufferedRead = isArchive;
+#if TARGET_OS_ANDROID
+      bufferedRead = bufferedRead || IsAndroidTreePath(path);
+#endif
+      std::vector<unsigned char> fileBytes;
+      if (inputWasFile && bufferedRead) {
+        std::string error;
+        if (!archive_file::readFile(path, fileBytes, &error)) {
+          SDL_Log("Failed to read chart %s: %s", chartText.c_str(), error.c_str());
+          archive_file::appendDebugLogLine("DB read failed: " + chartText + ": " + error);
+          return std::nullopt;
+        }
+        bytes = &fileBytes;
+      }
       if (bytes != nullptr) {
-        parser.Parse(*bytes, &rawChart, false, false, cancelled);
-        chart.reset(rawChart);
-        rawChart = nullptr;
-        if (chart != nullptr) {
+        chart = parser.Scan(*bytes, cancelled);
+        if (chart) {
           chart->Meta.BmsPath = path;
-          std::filesystem::path archivePath;
-          std::filesystem::path innerPath;
-          if (archive_file::splitVirtualPath(path, archivePath, innerPath)) {
+          if (isArchive) {
             chart->Meta.Folder = archive_file::makeVirtualPath(
                 archivePath, innerPath.parent_path());
+          } else if (inputWasFile) {
+            chart->Meta.Folder = path.parent_path();
           }
         }
       } else {
-        archive_file::parseChart(parser, path, &rawChart, false, false,
-                                 cancelled);
-        chart.reset(rawChart);
-        rawChart = nullptr;
+        chart = parser.Scan(path, cancelled);
       }
     } catch (const std::exception &e) {
-      if (chart == nullptr && rawChart != nullptr) {
-        chart.reset(rawChart);
-        rawChart = nullptr;
-      }
       SDL_Log("Error parsing %s: %s", chartText.c_str(), e.what());
       archive_file::appendDebugLogLine("DB parse failed: " + chartText + ": " +
                                        e.what());
       return std::nullopt;
     }
 
-    if (chart == nullptr) {
+    if (!chart) {
       archive_file::appendDebugLogLine("DB parse returned null: " + chartText);
       return std::nullopt;
     }

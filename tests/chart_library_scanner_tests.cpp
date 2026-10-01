@@ -479,6 +479,62 @@ void testSequenceFeaturesMatchBeatorajaSongData() {
   assert(!records.records.back().hasBga);
 }
 
+void testScanMetadataMatchesFullParsingForFilesAndArchives() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  const std::string events =
+      "#BPM 137\n#BPM01 173\n#BMP00 poor.png\n#STOP01 48\n"
+      "#STOP02 -24\n#SCROLL01 -0.5\n#SCROLL02 1\n"
+      "#00209:01\n#00209:02\n#002SC:01\n#002SC:02\n"
+      "#00302:0.75\n#00301:010101010101010101010101\n"
+      "#00431:010101010101\n#00408:0001\n#00506:000000ZZ\n";
+  const std::string ordinaryText = chartText("Scan ordinary") + events;
+  const std::string archiveText = chartText("Scan archive") + events;
+  const auto ordinary = root / "ordinary.bms";
+  { std::ofstream file(ordinary); file << ordinaryText; }
+  const auto archive = writeZip(root / "charts.zip", {{"song/chart.bms", archiveText}});
+  const auto archived = archive_file::makeVirtualPath(archive, "song/chart.bms");
+
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartLibraryScanner scanner;
+  const auto scan = scanner.ScanWithResult(*session, {root});
+  assert(scan.completed && scan.committed);
+  assert(session->CountAllChartMeta() == 2);
+  const std::array paths{ordinary, archived};
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.status == ChartMetaPathBatchReadStatus::Loaded);
+  assert(records.records.size() == 2);
+  for (size_t index = 0; index < paths.size(); ++index) {
+    const auto &text = index == 0 ? ordinaryText : archiveText;
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(std::vector<unsigned char>(text.begin(), text.end()), &raw,
+                 false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> full(raw);
+    const auto &record = records.records[index];
+    assert(record.meta.Title == full->Meta.Title);
+    assert(record.meta.MD5 == full->Meta.MD5);
+    assert(record.meta.SHA256 == full->Meta.SHA256);
+    assert(record.meta.TotalNotes == full->Meta.TotalNotes);
+    assert(record.meta.PlayLength == full->Meta.PlayLength);
+    assert(record.meta.MostPrevalentBpm == full->Meta.MostPrevalentBpm);
+    assert(record.meta.Bpm == full->Meta.Bpm);
+    assert(record.meta.MinBpm == full->Meta.MinBpm);
+    assert(record.meta.MaxBpm == full->Meta.MaxBpm);
+    assert(record.meta.BmsPath == paths[index]);
+    assert(record.meta.Folder == (index == 0 ? root :
+                                 archive_file::makeVirtualPath(archive, "song")));
+    assert(record.hasBga);
+    assert(!record.hasBpmStop);
+    assert(!record.hasScrollChange);
+  }
+}
+
 void testFolderPreviewFallbackMatchesBeatorajaPerFolderScan() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -2883,6 +2939,7 @@ int main() {
   testBasicNoOpAndDeleteScan();
   testUpgradedSolidSevenZipReplacesPlayableCachedChart();
   testSequenceFeaturesMatchBeatorajaSongData();
+  testScanMetadataMatchesFullParsingForFilesAndArchives();
   testFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testArchiveFolderPreviewFallbackMatchesBeatorajaPerFolderScan();
   testScopedRefreshUpdatesSameArchivePathAndPreview();
