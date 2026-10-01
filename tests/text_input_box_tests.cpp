@@ -468,16 +468,18 @@ void testReminderDescriptionPreservesLineBreaks() {
     i18n::setLanguage(language);
     MultilineTextProbe view("assets/fonts/notosanscjkjp.ttf", 22);
     view.setDeferredTextureMaterialization(true);
-    view.setSize(1800, 200);
+    view.setSize(1800, 220);
     view.setAlign(TextView::CENTER);
     view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
     const int unwrappedHeight = view.textureHeight();
-    expect(unwrappedHeight >= (view.lineHeight() * 4 + 1) / 2,
-           "reminder description keeps all four explicit lines in every language");
+    expect(unwrappedHeight >= (view.lineHeight() * 5 + 1) / 2,
+           "reminder description keeps its explanation and setup paragraphs in every language");
     view.setWrap(true);
     view.applyYogaLayout();
     expect(view.textureHeight() == unwrappedHeight,
            "centered wrapping preserves the reminder's explicit paragraph breaks");
+    expect(view.textureHeight() <= view.getContentHeight(),
+           "the explanation and setup instructions fit without clipping");
   }
   i18n::setLanguage(i18n::Language::English);
 }
