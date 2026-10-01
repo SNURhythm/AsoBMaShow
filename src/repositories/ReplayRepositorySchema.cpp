@@ -2404,13 +2404,58 @@ bool hasReplayUserSchema(sqlite3 *database, bool &hasSchema) {
   SqliteStatementHandle statement;
   if (prepareSqliteStatement(
           database,
-          "SELECT 1 FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' LIMIT 1",
+          "SELECT 1 FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' LIMIT 1",
           statement) != SQLITE_OK) {
     return false;
   }
   const int rc = sqlite3_step(statement.get());
   hasSchema = rc == SQLITE_ROW;
   return rc == SQLITE_ROW || rc == SQLITE_DONE;
+}
+
+bool createCurrentReplaySchema(sqlite3 *database) {
+  const char *objects[] = {
+      kModernChartResultsTableSql,
+      kModernCourseResultsTableSql,
+      kModernCourseStagesTableSql,
+      kModernCourseEntriesTableSql,
+      kModernReplayFilesTableSql,
+      kModernReplayFileReservationsTableSql,
+      kModernReplayStemSequencesTableSql,
+      kIrSubmissionSnapshotsTableSql,
+      kModernPendingChartScoresTableSql,
+      kModernPendingCourseScoresTableSql,
+      kModernChartScoreMetricsTableSql,
+      kModernChartShaIndexSql,
+      kModernCourseKeyIndexSql,
+      kModernReplayResultIndexSql,
+      kModernReplayCourseResultIndexSql,
+      kModernReservationIndexSql,
+      kModernSnapshotFingerprintIndexSql,
+      kModernPendingRecoveryIndexSql,
+      replay_repository_legacy::kChartSummaryTableSql,
+      replay_repository_legacy::kCourseSummaryTableSql,
+      replay_repository_legacy::kChartShaIndexSql,
+      replay_repository_legacy::kChartMd5IndexSql,
+      replay_repository_legacy::kChartPathIndexSql,
+      replay_repository_legacy::kCourseLookupIndexSql,
+      replay_repository_legacy::kReceiptTableSql,
+      kIrSubmissionReceiptsAttemptIndexSql,
+      kIrSubmissionReceiptsRemoteScoreIndexSql,
+      kIrOutboxTableSql,
+      kIrOutboxDueIndexSql,
+      kIrOutboxAttemptIndexSql,
+      kIrRemoteScoresTableSql,
+      kIrRemoteScoresSha256IndexSql,
+      kIrRemoteScoresChartIdIndexSql,
+  };
+  for (const char *sql : objects) {
+    if (!execSql(database, sql, "creating current replay schema")) {
+      return false;
+    }
+  }
+  return setDatabaseUserVersion(database, kReplayDatabaseSchemaVersion) &&
+         migrateReplayDatabaseSchema(database);
 }
 
 bool copyReplayDatabase(sqlite3 *destination, sqlite3 *source,
@@ -2633,12 +2678,6 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (db == nullptr || rejectFutureReplayDatabase(db)) {
     return false;
   }
-  std::string versionError;
-  const auto existingVersion = readSqliteUserVersion(db, versionError);
-  if (!existingVersion.has_value()) {
-    logSqlErrorText("reading replay schema version", versionError);
-    return false;
-  }
   const bool callerOwnsTransaction = sqlite3_get_autocommit(db) == 0;
   const char *beginQuery = callerOwnsTransaction
                                ? "SAVEPOINT asobmashow_replay_schema_ensure"
@@ -2657,6 +2696,22 @@ bool replay_repository_detail::CreateReplayTablesOnConnection(sqlite3 *db) {
   if (!transaction.active()) {
     logSqlErrorText("starting replay schema ensure", transactionError);
     return false;
+  }
+  std::string versionError;
+  const auto existingVersion = readSqliteUserVersion(db, versionError);
+  if (!existingVersion.has_value()) {
+    logSqlErrorText("reading replay schema version", versionError);
+    return false;
+  }
+  bool hasSchema = false;
+  if (!hasReplayUserSchema(db, hasSchema)) {
+    return false;
+  }
+  // Only an empty, unversioned database is a fresh install. Existing beta
+  // databases must keep the checked migration path, even when they have no rows.
+  if (*existingVersion == 0 && !hasSchema) {
+    return createCurrentReplaySchema(db) &&
+           transaction.commit(transactionError);
   }
   if (*existingVersion < 14) {
     const char *replayQuery =
