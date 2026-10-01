@@ -3489,6 +3489,7 @@ void GamePlayScene::init() {
 }
 
 bool GamePlayScene::reset() {
+  stopGuidedAccessChime(true);
   guidedAccessReminderExiting = false;
   guidedAccessReminder.reset();
   guidedAccessReminderPending = false;
@@ -3698,10 +3699,34 @@ bool GamePlayScene::reset() {
   updateSkinResetLayoutVisibility();
 #endif
   if (guidedAccessReminderPending) {
+    prepareGuidedAccessChime();
     showGuidedAccessReminder();
     return true;
   }
   return startPreparedAttempt();
+}
+
+void GamePlayScene::prepareGuidedAccessChime() {
+  std::atomic<bool> cancelled{false};
+  guidedAccessChime = context.jukebox.audioRuntime().loadSkinSound(
+      fspath_to_path_t(std::filesystem::path("assets/guided-access-enabled.wav")),
+      cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max()).handle;
+}
+
+void GamePlayScene::playGuidedAccessChime() {
+  if (guidedAccessChime) {
+    context.jukebox.audioRuntime().playSkinSound(*guidedAccessChime, 1.0F, false);
+  }
+}
+
+void GamePlayScene::stopGuidedAccessChime(bool release) {
+  if (!guidedAccessChime) return;
+  auto &audio = context.jukebox.audioRuntime();
+  audio.stopSkinSound(*guidedAccessChime);
+  if (release) {
+    audio.disposeSkinSound(*guidedAccessChime);
+    guidedAccessChime.reset();
+  }
 }
 
 bool GamePlayScene::isGuidedAccessEnabled() const {
@@ -3715,7 +3740,8 @@ bool GamePlayScene::isGuidedAccessEnabled() const {
 void GamePlayScene::onApplicationBackgroundChanged(bool background) {
   guidedAccessReminderBackground = background;
   if (guidedAccessReminderPending) {
-    guidedAccessReminder.reset();
+    guidedAccessReminder.interrupt();
+    if (background) stopGuidedAccessChime();
     if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
   }
 }
@@ -3723,6 +3749,7 @@ void GamePlayScene::onApplicationBackgroundChanged(bool background) {
 void GamePlayScene::returnFromGuidedAccessReminder() {
   if (guidedAccessReminderExiting) return;
   guidedAccessReminderExiting = true;
+  stopGuidedAccessChime(true);
   guidedAccessReminder.reset();
   defer([this]() {
     if (options.returnScene != nullptr &&
@@ -3938,6 +3965,7 @@ void GamePlayScene::showGuidedAccessReminder() {
 }
 
 bool GamePlayScene::startPreparedAttempt() {
+  stopGuidedAccessChime(true);
   state->isPlaying = true;
   if (pauseButton != nullptr) pauseButton->setVisible(true);
   if (practiceRestartButton != nullptr) practiceRestartButton->setVisible(true);
@@ -6257,8 +6285,13 @@ void GamePlayScene::update(float dt) {
   if (guidedAccessReminderPending) {
     if (guidedAccessReminderExiting) return;
     discardGuidedAccessReminderTouches();
-    guidedAccessReminder.update(isGuidedAccessEnabled(),
-                               !guidedAccessReminderBackground, SDL_GetTicks64());
+    const bool wasConfirming = guidedAccessReminder.confirming();
+    if (guidedAccessReminder.update(isGuidedAccessEnabled(),
+                                   !guidedAccessReminderBackground, SDL_GetTicks64())) {
+      if (!guidedAccessReminderDismissed) playGuidedAccessChime();
+    } else if (wasConfirming && !guidedAccessReminder.confirming()) {
+      stopGuidedAccessChime();
+    }
     showGuidedAccessReminder();
     if (!guidedAccessReminderBackground &&
         (guidedAccessReminderDismissed || guidedAccessReminder.completed())) {
@@ -6869,6 +6902,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
 }
 
 void GamePlayScene::cleanupScene() {
+  stopGuidedAccessChime(true);
   SDL_Log("Cleaning up GamePlayScene");
   cancelGameplaySkinPreparation();
   stopBestReplayLoad();
@@ -8055,13 +8089,14 @@ EventHandleResult GamePlayScene::handleEvents(SDL_Event &event) {
     if (event.type == SDL_WINDOWEVENT &&
         event.window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
       guidedAccessReminderBackground = true;
-      guidedAccessReminder.reset();
+      guidedAccessReminder.interrupt();
+      stopGuidedAccessChime();
       if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
     }
     if (event.type == SDL_WINDOWEVENT &&
         event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED) {
       guidedAccessReminderBackground = false;
-      guidedAccessReminder.reset();
+      guidedAccessReminder.interrupt();
       if (inputHandler != nullptr) inputHandler->discardPendingTouchEvents();
     }
     if (!guidedAccessReminderBackground) {

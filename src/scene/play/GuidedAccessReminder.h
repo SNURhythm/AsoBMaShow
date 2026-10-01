@@ -16,16 +16,29 @@ public:
   }
 
   void reset() {
+    interrupt();
+    confirmationSoundIssued_ = false;
+  }
+  void interrupt() {
     startedAt_.reset();
     elapsed_ = 0;
   }
-  void update(bool guidedAccessEnabled, bool foreground, std::uint64_t now) {
-    if (!guidedAccessEnabled || !foreground) {
+  // Return a one-shot sound request for each newly enabled session. Focus
+  // interruptions restart the visual delay without replaying the cue.
+  bool update(bool guidedAccessEnabled, bool foreground, std::uint64_t now) {
+    if (!guidedAccessEnabled) {
       reset();
-      return;
+      return false;
+    }
+    if (!foreground) {
+      interrupt();
+      return false;
     }
     if (!startedAt_.has_value()) startedAt_ = now;
     elapsed_ = now >= *startedAt_ ? now - *startedAt_ : 0;
+    const bool playSound = !confirmationSoundIssued_;
+    confirmationSoundIssued_ = true;
+    return playSound;
   }
   [[nodiscard]] bool confirming() const { return startedAt_.has_value(); }
   [[nodiscard]] bool completed() const { return confirming() && elapsed_ >= 2000; }
@@ -36,5 +49,6 @@ public:
 private:
   std::optional<std::uint64_t> startedAt_;
   std::uint64_t elapsed_ = 0;
+  bool confirmationSoundIssued_ = false;
 };
 } // namespace gameplay

@@ -52,5 +52,18 @@ int main() {
   assert(reminder.completed());
   reminder.reset();
   assert(!reminder.confirming() && !reminder.completed());
+  GuidedAccessReminder sound;
+  assert(!sound.update(false, true, 0));
+  assert(!sound.update(true, false, 1));
+  assert(sound.update(true, true, 100));
+  assert(!sound.update(true, true, 101));
+  sound.interrupt();
+  assert(!sound.update(true, true, 200));
+  assert(!sound.update(true, false, 300));
+  assert(!sound.update(true, true, 400));
+  assert(!sound.update(false, true, 500));
+  assert(sound.update(true, true, 600)); // A genuinely new activation chimes again.
+  sound.reset();
+  assert(sound.update(true, true, 700)); // A new attempt has its own cue.
   std::cout << "Guided Access reminder tests passed\n";
 }

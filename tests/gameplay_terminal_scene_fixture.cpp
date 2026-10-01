@@ -221,10 +221,19 @@ public:
   void showGuidedAccessReminder() { reminderLayout.setVisible(true); }
   void onApplicationBackgroundChanged(bool background);
   void returnFromGuidedAccessReminder();
+  int chimePlays = 0;
+  int chimeStops = 0;
+  int chimeReleases = 0;
+  void playGuidedAccessChime() { ++chimePlays; }
+  void stopGuidedAccessChime(bool release = false) {
+    ++chimeStops;
+    if (release) ++chimeReleases;
+  }
   int attemptStarts = 0;
   bool nativeBackground = false;
   bool startedWhileNativeBackground = false;
   bool startPreparedAttempt() {
+    stopGuidedAccessChime(true);
     ++attemptStarts;
     startedWhileNativeBackground |= nativeBackground;
     state->isPlaying = true;
@@ -1626,6 +1635,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
   require(scene.attemptStarts == 0 && scene.guidedAccessReminderPending,
           "inactive Guided Access must leave the reminder waiting");
 
+  require(scene.chimePlays == 0, "inactive reminder must be silent");
   if (scenario == "dismiss" || scenario == "dismiss-background") {
     queueReminderSwipe();
     scene.guidedAccessReminderDismissed = true;
@@ -1639,6 +1649,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
     require(scene.attemptStarts == 1 && !scene.guidedAccessReminderPending &&
                 reminderTouches.empty(),
             "Skip this time starts immediately and discards all reminder touches");
+    require(scene.chimePlays == 0, "Skip must not play the confirmation chime");
     scene.resetAttemptBoundaryForTest();
     require(!scene.guidedAccessReminderDismissed,
             "one-time dismissal must not carry into another attempt");
@@ -1652,8 +1663,10 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
           "Guided Access begins confirmation without starting playback");
   reminderTicks += 500;
   scene.update(0);
+  require(scene.chimePlays == 1, "activation plays once across repeated updates");
   if (scenario == "back") {
     scene.returnFromGuidedAccessReminder();
+    require(scene.chimeReleases == 1, "Back releases the confirmation sound");
     reminderTicks += 2000;
     scene.update(0);
     scene.finishFrame();
@@ -1669,6 +1682,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
     scene.update(0);
     require(scene.attemptStarts == 0 && !scene.guidedAccessReminder.confirming(),
             "ending Guided Access during confirmation must cancel startup");
+    require(scene.chimeStops > 0, "ending Guided Access stops the chime");
     scene.guidedAccessEnabled = true;
     scene.update(0); // A new session needs its own animation and settling second.
   } else if (scenario == "background" || scenario == "native-background") {
@@ -1678,6 +1692,7 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
     require(!scene.startedWhileNativeBackground,
             "confirmation must never start playback from deferred callbacks");
     scene.onApplicationBackgroundChanged(true);
+    require(scene.chimeStops > 0, "backgrounding stops the chime");
     reminderTicks += 2000;
     scene.update(0);
     require(scene.attemptStarts == 0 && scene.recordedReplay.events.empty() &&
@@ -1689,6 +1704,8 @@ void testGuidedAccessReminderStartup(std::string_view scenario) {
   } else {
     reminderTicks -= 500; // Remaining checks are relative to the original start.
   }
+  require(scene.chimePlays == (scenario == "ended" ? 2 : 1),
+          "only a fresh activation replays the chime, not a foreground return");
   reminderTicks += 999;
   scene.update(0);
   require(scene.attemptStarts == 0 && !scene.state->isPlaying &&

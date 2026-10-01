@@ -8,6 +8,7 @@
 #include "../../ReplayData.h"
 #include "../../ThreadCompat.h"
 #include "../../audio/PlaybackRate.h"
+#include "../../audio/AudioWrapper.h"
 #include "../../math/Vector3.h"
 #include "GamePlayStartOptions.h"
 #include "BeatorajaHiSpeed.h"
@@ -102,6 +103,10 @@ private:
   void showGuidedAccessReminder();
   void discardGuidedAccessReminderTouches();
   void returnFromGuidedAccessReminder();
+  void prepareGuidedAccessChime();
+  void playGuidedAccessChime();
+  void stopGuidedAccessChime(bool release = false);
+  std::optional<audio::SkinSoundHandle> guidedAccessChime;
   gameplay::GuidedAccessReminder guidedAccessReminder;
   bool guidedAccessReminderPending = false;
   bool guidedAccessReminderDismissed = false;
