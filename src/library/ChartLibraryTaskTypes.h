@@ -8,6 +8,8 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace chart_library_tasks {
@@ -47,7 +49,7 @@ struct TaskInfo {
   double fraction = 0.0;
   int current = 0;
   int total = 0;
-  std::string detail;
+  i18n::Text detail;
 };
 
 struct ProgressSnapshot {
@@ -73,11 +75,22 @@ struct DownloadedIndexCompletion {
   std::uint64_t selectionGeneration = 0;
 };
 
+// Carry application-owned message identity through the worker exception boundary.
+class TaskError : public std::runtime_error {
+public:
+  explicit TaskError(i18n::Text detail)
+      : std::runtime_error(detail.resolve()), detail_(std::move(detail)) {}
+  const i18n::Text &detail() const noexcept { return detail_; }
+
+private:
+  i18n::Text detail_;
+};
+
 enum class TaskRunDisposition { Complete, Paused, Failed };
 
 struct TaskRunResult {
   TaskRunDisposition disposition = TaskRunDisposition::Complete;
-  std::string detail = "Complete";
+  i18n::Text detail = i18n::message("library.tasks.complete.label");
   std::optional<DownloadedIndexCompletion> downloadedIndex;
   bool rebuildLibraryMetadataCleared = false;
   bool folderRegistrationCompleted = false;

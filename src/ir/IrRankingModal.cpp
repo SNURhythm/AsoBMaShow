@@ -58,6 +58,18 @@ void setFailure(IrRankingModalPresentation &presentation,
 
 } // namespace
 
+i18n::Text formatIrLocalComparison(const IrLocalComparison &comparison) {
+  return i18n::message(
+      "ir.ranking.local_comparison.message",
+      {{"label", comparison.label},
+       {"score", std::to_string(comparison.score)},
+       {"max_score", std::to_string(comparison.maxScore)},
+       {"rate", formatIrRankingRate(comparison.score, comparison.maxScore)},
+       {"lamp", clearTypeRankToLabel(comparison.clearType)},
+       {"bad_points", integerOrMissing(comparison.badPoints)},
+       {"max_combo", integerOrMissing(comparison.maxCombo)}});
+}
+
 std::string formatIrRankingRate(int score, int maxScore) {
   if (maxScore <= 0) {
     return std::string(kMissing);

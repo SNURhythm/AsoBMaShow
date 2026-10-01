@@ -3608,8 +3608,9 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
   if (active.empty()) {
     text << i18n::tr("music_select.no_active_tasks_recent_tasks.label");
   } else {
-    text << active.size()
-         << (active.size() == 1 ? " active task" : " active tasks")
+    text << i18n::format(active.size() == 1 ? "music_select.tasks.active_count.one"
+                                          : "music_select.tasks.active_count.other",
+                            {{"count", std::to_string(active.size())}})
          << "\n\n";
   }
   const auto appendTask = [&text, &progress](
@@ -3636,10 +3637,10 @@ std::string MusicSelectScene::tasksModalTextSnapshot() const {
         if (task.total > 0) {
           text << " (" << task.current << " / " << task.total << ")";
         }
-        if (!task.detail.empty()) text << "\n" << task.detail;
+        if (!task.detail.empty()) text << "\n" << task.detail.resolve();
       }
-    } else if (!task.detail.empty() && task.detail != status) {
-      text << "\n" << task.detail;
+    } else if (!task.detail.empty() && task.detail.resolve() != status) {
+      text << "\n" << task.detail.resolve();
     }
     text << "\n\n";
   };

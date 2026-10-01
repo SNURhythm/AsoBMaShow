@@ -10,7 +10,14 @@ FindBmsDialogPolicy findBmsDialogPolicy(bool running,
           .showNormalResultActions = !pending};
 }
 
+i18n::Text findBmsDownloadFailureMessage(const BmsSearchResult &result) {
+  if (!result.presentationMessage.empty()) {
+    return result.presentationMessage;
+  }
+  return result.message.empty() ? i18n::message("library.find_bms.open_source_try_again.message")
+                                : i18n::Text(result.message);
+}
+
 std::string findBmsDownloadFailureDetail(const BmsSearchResult &result) {
-  return result.message.empty() ? i18n::tr("library.find_bms.open_source_try_again.message")
-                                : result.message;
+  return findBmsDownloadFailureMessage(result).resolve();
 }

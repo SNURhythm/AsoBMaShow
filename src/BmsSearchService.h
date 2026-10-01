@@ -1,5 +1,7 @@
 #pragma once
 
+#include "i18n/Localization.h"
+
 #include <atomic>
 #include <filesystem>
 #include <functional>
@@ -71,6 +73,8 @@ struct BmsSearchResult {
   std::vector<std::filesystem::path> removedPaths;
   std::vector<BmsSearchCandidate> candidates;
   std::optional<BmsSearchPendingArtifact> pendingArtifact;
+  // App-owned presentation retains its identity; transport diagnostics stay raw.
+  i18n::Text presentationMessage;
 };
 
 class BmsSearchService {

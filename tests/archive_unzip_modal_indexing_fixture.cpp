@@ -1,3 +1,4 @@
+#include "REPOSITORY_ROOT/src/scene/ArchiveUnzipPresentation.h"
 #include <cassert>
 #include <algorithm>
 #include <cstdint>

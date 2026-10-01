@@ -325,21 +325,6 @@ private:
   TextView *time_ = nullptr;
 };
 
-std::string comparisonText(const IrLocalComparison &comparison) {
-  std::string result =
-      comparison.label.resolve() + "   EX " + std::to_string(comparison.score) + " / " +
-      std::to_string(comparison.maxScore) + "   " +
-      formatIrRankingRate(comparison.score, comparison.maxScore) + "   " +
-      clearTypeRankToLabel(comparison.clearType);
-  result +=
-      "   BP " + (comparison.badPoints ? std::to_string(*comparison.badPoints)
-                                       : "\xE2\x80\x94");
-  result +=
-      "   Combo " + (comparison.maxCombo ? std::to_string(*comparison.maxCombo)
-                                         : "\xE2\x80\x94");
-  return result;
-}
-
 } // namespace
 
 struct IrRankingModal::Impl {
@@ -840,15 +825,17 @@ struct IrRankingModal::Impl {
   void refreshPresentation() {
     const auto &presentation = model.presentation();
     chartTitle->setText(presentation.chartTitle);
-    fetchedAt->setText(presentation.fetchedAtText.empty()
-                           ? ""
-                           : "Fetched " + presentation.fetchedAtText);
+    fetchedAt->setLocalizedText(
+        presentation.fetchedAtText.empty()
+            ? i18n::Text{}
+            : i18n::message("ir.ranking.fetched_at.message",
+                            {{"timestamp", presentation.fetchedAtText}}));
     refreshButton->setEnabled(presentation.canRefresh);
     comparisonCard->setVisible(presentation.comparison.has_value());
     comparisonCard->setDisplay(presentation.comparison ? YGDisplayFlex
                                                        : YGDisplayNone);
     if (presentation.comparison) {
-      comparison->setText(comparisonText(*presentation.comparison));
+      comparison->setLocalizedText(formatIrLocalComparison(*presentation.comparison));
     }
 
     const bool showList = presentation.state == IrRankingModalState::Success;

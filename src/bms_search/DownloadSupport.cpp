@@ -557,6 +557,7 @@ bool downloadAndExtractArchive(
     BmsSearchResult &result, const std::string &suggestedArchiveName,
     const std::string &storageIdentity,
     bool *downloadedArchive) {
+  result.presentationMessage = {};
   if (downloadedArchive != nullptr) {
     *downloadedArchive = false;
   }
@@ -593,6 +594,9 @@ bool downloadAndExtractArchive(
     result.message = stagingError.empty()
                          ? "Could not prepare the archive download."
                          : stagingError;
+    if (stagingError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.prepare_failed");
+    }
     return false;
   }
   auto attemptCleanup = makeScopeExit([root = attempt->root] {
@@ -622,6 +626,9 @@ bool downloadAndExtractArchive(
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         downloadError.empty() ? "Download failed." : downloadError;
+    if (downloadError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.download_failed");
+    }
     return false;
   }
   if (downloadedArchive != nullptr) {
@@ -637,6 +644,9 @@ bool downloadAndExtractArchive(
     result.message =
         driveWarningError.empty() ? "Google Drive download failed."
                                   : driveWarningError;
+    if (driveWarningError.empty()) {
+      result.presentationMessage = i18n::message("library.find_bms.result.drive_failed");
+    }
     return false;
   }
 
@@ -645,6 +655,7 @@ bool downloadAndExtractArchive(
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message =
         "Downloaded response was an HTML page instead of an archive.";
+    result.presentationMessage = i18n::message("library.find_bms.result.html_response");
     return false;
   }
 

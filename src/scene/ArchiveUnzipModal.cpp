@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "ArchiveUnzipModal.h"
+#include "ArchiveUnzipPresentation.h"
 
 #include "FindBmsProgressPresentation.h"
 #include "../rendering/common.h"
@@ -242,21 +243,8 @@ void ArchiveUnzipModal::update() {
       cancelButton_->setEnabled(false);
       cancelText_->setLocalizedText(i18n::message("library.archive.indexing.progress"));
     }
-    auto message = progress->message;
-    if (batchMode_ && !progress->indexing) {
-      message.clear();
-      const auto visibleArchives = std::min<std::size_t>(3, progress->activeArchives.size());
-      for (std::size_t index = 0; index < visibleArchives; ++index) {
-        if (!message.empty()) message += '\n';
-        message += progress->activeArchives[index];
-      }
-      if (progress->activeArchives.size() > visibleArchives) {
-        message += "\n+ " + std::to_string(progress->activeArchives.size() - visibleArchives) + " other active archives";
-      }
-    }
-    const i18n::Text progressMessage = batchMode_ && !progress->indexing && message.empty()
-        ? i18n::message("library.archive.finishing_archive_extraction.label")
-        : i18n::Text(message);
+    const auto progressMessage = archive_unzip_presentation::progressMessage(
+        *progress, batchMode_);
     updateProgress(progress->fraction, progressMessage,
                    progress->current, progress->total);
   }
@@ -405,12 +393,8 @@ void ArchiveUnzipModal::updateProgress(double fraction,
                                    static_cast<float>(fraction)));
   std::ostringstream text;
   text << std::fixed << std::setprecision(0) << (fraction * 100.0) << "%";
-  if (total > 0) {
-    text << " (" << current << "/" << total;
-    if (batchMode_ && !indexing_) text << " archives completed";
-    text << ")";
-  }
-  percent_->setText(text.str());
+  percent_->setLocalizedText(archive_unzip_presentation::progressCount(
+      text.str(), current, total, batchMode_ && !indexing_));
   i18n::Text detail = batchMode_ ? i18n::message("library.archive.processing_archives_concurrently_within_device_budget.message")
                                  : total > 0 ? i18n::message("library.archive.processing_files.label") : i18n::message("library.archive.working_on_archive.label");
   if (indexing_) {

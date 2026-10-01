@@ -111,6 +111,30 @@ ir::IrRankingSnapshot snapshot(ir::IrRankingSnapshotState state,
           .diagnostic = "safe detail"};
 }
 
+void testLocalComparisonRetainsLocalizedLabelsAndRawMetrics() {
+  i18n::setLanguage(i18n::Language::English);
+  auto comparison = *request().localComparison;
+  comparison.label = i18n::message("menu.local_pb.label");
+  const auto text = ir::formatIrLocalComparison(comparison);
+  REQUIRE(text.resolve() ==
+          "Local PB   EX 1700 / 2000   85.00%   HARD CLEAR   BP 15   Combo 731");
+  i18n::setLanguage(i18n::Language::Korean);
+  REQUIRE(text.resolve() ==
+          "개인 최고 기록   EX 1700 / 2000   85.00%   HARD CLEAR   BP 15   콤보 731");
+  i18n::setLanguage(i18n::Language::Japanese);
+  REQUIRE(text.resolve() ==
+          "ローカル自己ベスト   EX 1700 / 2000   85.00%   HARD CLEAR   BP 15   コンボ 731");
+  comparison.label = "Raw {label} / Local PB";
+  comparison.badPoints.reset();
+  comparison.maxCombo.reset();
+  const auto missing = ir::formatIrLocalComparison(comparison);
+  REQUIRE(missing.resolve() ==
+          "Raw {label} / Local PB   EX 1700 / 2000   85.00%   HARD CLEAR   BP —   コンボ —");
+  i18n::setLanguage(i18n::Language::English);
+  REQUIRE(missing.resolve() ==
+          "Raw {label} / Local PB   EX 1700 / 2000   85.00%   HARD CLEAR   BP —   Combo —");
+}
+
 void testModalStateMappingAndActions() {
   struct Expectation {
     ir::IrRankingSnapshotState snapshotState;
@@ -557,6 +581,7 @@ void testBokutachiEligibilityRequiresSupportedModeNotesAndSha256() {
 } // namespace
 
 int main() {
+  testLocalComparisonRetainsLocalizedLabelsAndRawMetrics();
   testLanguageChangeRefreshesAcceptedSnapshotWithoutNewRequest();
   testRecyclerLanguageRefreshKeepsBoundRowsAndSelection();
   testModalStateMappingAndActions();

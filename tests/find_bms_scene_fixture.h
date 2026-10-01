@@ -245,6 +245,23 @@ void testSceneCancellationKeepsPendingArtifactVisible() {
   assert(scene.modal.visible && scene.indexed.empty());
 }
 
+std::string resolveCandidateLabel(const std::string &text) { return text; }
+std::string resolveCandidateLabel(const i18n::Text &text) { return text.resolve(); }
+
+void testCandidateDownloadLabelRetainsLanguageAndMetadata() {
+  i18n::setLanguage(i18n::Language::English);
+  BmsSearchCandidate candidate{.name = "raw.zip", .title = "{title} Settings",
+                               .artist = "Download"};
+  const auto label = findBmsCandidateLabel(candidate, 2);
+  i18n::setLanguage(i18n::Language::Korean);
+  assert(resolveCandidateLabel(label) == "3. 다운로드 [Download] {title} Settings");
+  i18n::setLanguage(i18n::Language::Japanese);
+  assert(resolveCandidateLabel(label) == "3. ダウンロード [Download] {title} Settings");
+  const auto fallback = findBmsCandidateLabel({}, 0);
+  assert(resolveCandidateLabel(fallback) == "1. ダウンロード Horie アーカイブ");
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testSceneCandidateAndPendingArtifactDecisions() {
   ServiceCalls calls;
   serviceCalls = &calls;

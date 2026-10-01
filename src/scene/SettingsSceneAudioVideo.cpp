@@ -632,8 +632,10 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
     std::ostringstream text;
     text << i18n::tr("settings.audio.output.prefix") << audioModel.effectiveDeviceLabel << "\n";
     if (audioModel.effectiveSampleRate > 0) {
-      text << i18n::tr("settings.audio.format.prefix") << audioModel.effectiveSampleRate << " Hz · "
-           << audioModel.effectiveBufferFrames << " frames\n";
+      text << i18n::format("settings.audio.format.message",
+                           {{"rate", std::to_string(audioModel.effectiveSampleRate)},
+                            {"frames", std::to_string(audioModel.effectiveBufferFrames)}})
+           << "\n";
       text << std::fixed << std::setprecision(2)
            << i18n::tr("settings.audio.latency.prefix") << audioModel.effectiveLatencyMs << " ms";
     } else {

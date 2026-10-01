@@ -331,6 +331,12 @@ void testArchiveCommitAndResolution() {
   assert(result.removedPaths ==
          std::vector<std::filesystem::path>{extractedAlternate});
   assert(readText(artifact.destinationPath) == "archive bytes");
+  const auto keptMessage = findBmsDownloadFailureMessage(result);
+  i18n::setLanguage(i18n::Language::Korean);
+  assert(keptMessage.resolve() == "일치하지 않는 파일을 보관했습니다.");
+  i18n::setLanguage(i18n::Language::Japanese);
+  assert(keptMessage.resolve() == "一致しないファイルを保持しました。");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testArchiveCommitRemovesExtractedAlternate() {
@@ -875,6 +881,14 @@ void testWorkflowStagesDirectArchiveMismatch() {
          downloadRoot / "package");
   assert(result.message.find("Keep Files or Delete Files") !=
          std::string::npos);
+  const auto mismatchMessage = findBmsDownloadFailureMessage(result);
+  i18n::setLanguage(i18n::Language::Korean);
+  assert(mismatchMessage.resolve() ==
+         "다운로드한 아카이브에 선택한 BMS 채보가 없습니다. 파일 보관 또는 파일 삭제를 선택하세요.");
+  i18n::setLanguage(i18n::Language::Japanese);
+  assert(mismatchMessage.resolve() ==
+         "ダウンロードしたアーカイブに選択したBMS譜面がありません。ファイルを保持するか削除するか選んでください。");
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testWorkflowCommitsFallbackExtractionMatch() {
@@ -1176,6 +1190,11 @@ void testDownloadFailureDetailPreservesCause() {
   result.message = "Could not install downloaded files: permission denied.";
   assert(findBmsDownloadFailureDetail(result) == result.message);
 
+  result.message = "Download failed.";
+  const auto rawDiagnostic = findBmsDownloadFailureMessage(result);
+  i18n::setLanguage(i18n::Language::Korean);
+  assert(rawDiagnostic.resolve() == "Download failed.");
+  i18n::setLanguage(i18n::Language::English);
   result.message.clear();
   assert(findBmsDownloadFailureDetail(result) ==
          "Open the source or try again.");
@@ -1198,6 +1217,30 @@ void testExtractionProgressLocalizesWithoutChangingFilenames() {
     const std::string diagnostic = "Cannot read 音楽/Settings.wav";
     assert(findBmsProgressDisplayText(diagnostic, 12, 40, true) == diagnostic);
   }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testActualSourceProgressLocalizesWithoutChangingMetadata() {
+  struct Expected { const char *raw; const char *korean; const char *japanese; };
+  for (const auto &entry : {
+           Expected{"Searching Horie archive", "Horie 아카이브 검색 중", "Horieアーカイブを検索中"},
+           Expected{"Preparing Horie archive download", "Horie 아카이브 다운로드 준비 중", "Horieアーカイブのダウンロードを準備中"},
+           Expected{"Confirming Google Drive download", "Google Drive 다운로드 확인 중", "Google Driveのダウンロードを確認中"},
+           Expected{"Searching mirror {source} package source", "mirror {source} 패키지 소스 검색 중", "mirror {source}のパッケージソースを検索中"},
+           Expected{"Preparing mirror {source} package download", "mirror {source} 패키지 다운로드 준비 중", "mirror {source}のパッケージのダウンロードを準備中"},
+           Expected{"Inspecting downloaded archive", "다운로드한 아카이브 검사 중", "ダウンロードしたアーカイブを確認中"},
+           Expected{"Validating archive contents", "아카이브 내용 검증 중", "アーカイブの内容を検証中"},
+           Expected{"Saving downloaded archive", "다운로드한 아카이브 저장 중", "ダウンロードしたアーカイブを保存中"},
+           Expected{"Unarchiving archive", "아카이브 압축 해제 중", "アーカイブを展開中"}}) {
+    i18n::setLanguage(i18n::Language::English);
+    const auto progress = findBmsProgressDisplayMessage(entry.raw, 0, 0, true);
+    i18n::setLanguage(i18n::Language::Korean);
+    assert(progress.resolve() == entry.korean);
+    i18n::setLanguage(i18n::Language::Japanese);
+    assert(progress.resolve() == entry.japanese);
+  }
+  const std::string diagnostic = "mirror: timeout (file {source}.zip)";
+  assert(findBmsProgressDisplayText(diagnostic, 0, 0, true) == diagnostic);
   i18n::setLanguage(i18n::Language::English);
 }
 
@@ -1268,6 +1311,7 @@ int main(int argc, char **argv) {
   testPublicDownloadApiAcceptsOptions();
   testPendingMismatchCannotDismiss();
   testDownloadFailureDetailPreservesCause();
+  testActualSourceProgressLocalizesWithoutChangingMetadata();
   testFindBmsDownloadProgressDisplaysSizes();
   testExtractionProgressLocalizesWithoutChangingFilenames();
   return 0;

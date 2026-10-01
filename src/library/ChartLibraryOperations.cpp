@@ -3,6 +3,7 @@
 #include "ArchiveUnzipRecovery.h"
 
 #include "../ArchiveFile.h"
+#include "../scene/ArchiveUnzipPresentation.h"
 #include "../Utils.h"
 #include "../path.h"
 #include "../targets.h"
@@ -86,7 +87,7 @@ TaskRunResult ChartLibraryOperations::run(
   case TaskKind::AndroidImport:
     return runAndroidImport(request, stopToken, progress, waitForResume);
   }
-  throw std::runtime_error("Unknown library task");
+  throw TaskError(i18n::message("library.tasks.unknown_task"));
 }
 
 TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
@@ -94,17 +95,17 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
     const TaskProgressCallback &progress,
     const TaskPauseCallback &waitForResume) {
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
   auto session = dependencies_.repository.OpenSession();
   if (!session.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
+    throw TaskError(i18n::message("library.tasks.database_open_failed"));
   }
   session->EnsureSchema();
   progress({.current = 0,
             .total = 1,
             .stage = ChartScanProgressStage::Preparing},
-           "Updating difficulty table");
+           i18n::message("library.tasks.updating_table"));
   std::atomic_bool interrupted = false;
   const DifficultyTableImportCheckpoint checkpoint = [&] {
     // Non-blocking pause probe: abort to Paused when gameplay pauses instead
@@ -125,18 +126,18 @@ TaskRunResult ChartLibraryOperations::runDifficultyTableUpdate(
           pauseRequested)) {
     if (interrupted.load(std::memory_order_acquire) ||
         stopToken.stop_requested()) {
-      return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+      return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
     }
-    throw std::runtime_error(errorMessage.empty()
-                                 ? "Failed to update difficulty table"
+    throw TaskError(errorMessage.empty()
+                                 ? i18n::message("library.tasks.table_update_failed")
                                  : errorMessage);
   }
   if (interrupted.load(std::memory_order_acquire) ||
       stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
   if (dependencies_.requestReload) dependencies_.requestReload(false);
-  return {.detail = "Complete"};
+  return {.detail = i18n::message("library.tasks.complete.label")};
 }
 
 TaskRunResult ChartLibraryOperations::runPathRefresh(
@@ -144,12 +145,12 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
     const TaskProgressCallback &progress,
     const TaskPauseCallback &waitForResume) {
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
 
   auto session = dependencies_.repository.OpenSession();
   if (!session.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
+    throw TaskError(i18n::message("library.tasks.database_open_failed"));
   }
   session->EnsureSchema();
 
@@ -177,15 +178,15 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
 
   if (stopToken.stop_requested() ||
       checkpointPaused.load(std::memory_order_relaxed)) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
   if (!result.completed) {
-    throw std::runtime_error("Failed to refresh chart folder");
+    throw TaskError(i18n::message("library.tasks.folder_refresh_failed"));
   }
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
-  return {.detail = "Complete"};
+  return {.detail = i18n::message("library.tasks.complete.label")};
 }
 
 TaskRunResult ChartLibraryOperations::runRefresh(
@@ -193,18 +194,18 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     const TaskProgressCallback &progress,
     const TaskPauseCallback &waitForResume) {
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
 
   auto session = dependencies_.repository.OpenSession();
   if (!session.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
+    throw TaskError(i18n::message("library.tasks.database_open_failed"));
   }
   session->EnsureSchema();
 
   TaskRunResult pausedResult{
       .disposition = TaskRunDisposition::Paused,
-      .detail = "Paused",
+      .detail = i18n::message("library.tasks.paused.label"),
       .folderRegistrationCompleted = request.folderRegistrationCompleted};
   std::vector<ChartEntry> entries;
   if (!request.folderToAdd.empty()) {
@@ -212,9 +213,9 @@ TaskRunResult ChartLibraryOperations::runRefresh(
       progress({.current = 1,
                 .total = 100,
                 .stage = ChartScanProgressStage::Preparing},
-               "Adding folder");
+               i18n::message("library.tasks.adding_folder"));
       if (!session->InsertEntry(request.folderToAdd, request.iosBookmark)) {
-        throw std::runtime_error("Failed to add folder");
+        throw TaskError(i18n::message("library.tasks.add_folder_failed"));
       }
       pausedResult.folderRegistrationCompleted = true;
       if (dependencies_.requestReload) {
@@ -233,7 +234,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
   const auto recovery = archive_unzip_recovery::recover(
       *session, stopToken,
       [&](const ChartScanProgress &value) {
-        progress(value, "Recovering interrupted unzip");
+        progress(value, i18n::message("library.tasks.recovering_unzip"));
       },
       [&] {
         const bool resumed = !stopToken.stop_requested() &&
@@ -245,12 +246,12 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     dependencies_.requestReload(true);
   }
   if (stopToken.stop_requested() || recoveryPaused.load(std::memory_order_relaxed)) return pausedResult;
-  const auto recoveryDetail = "Unzip recovery is pending; restore folder access and retry Refresh Library.";
+  const auto recoveryDetail = i18n::message("library.tasks.recovery_pending");
 
   progress({.current = 2,
             .total = 100,
             .stage = ChartScanProgressStage::Preparing},
-           "Importing difficulty tables");
+           i18n::message("library.tasks.importing_tables"));
   if (!waitForResume() || stopToken.stop_requested()) {
     return pausedResult;
   }
@@ -291,7 +292,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
     const auto selected = dependencies_.selectInitialFolder();
     if (selected && !selected->empty()) {
       if (!session->InsertEntry(*selected)) {
-        throw std::runtime_error("Failed to add selected library folder");
+        throw TaskError(i18n::message("library.tasks.add_selected_folder_failed"));
       }
       entries = session->SelectEffectiveEntries();
     }
@@ -307,18 +308,18 @@ TaskRunResult ChartLibraryOperations::runRefresh(
 
   if (entries.empty()) {
     return {.disposition = recovery.completed ? TaskRunDisposition::Complete : TaskRunDisposition::Failed,
-            .detail = recovery.completed ? "Complete" : recoveryDetail};
+            .detail = recovery.completed ? i18n::message("library.tasks.complete.label") : recoveryDetail};
   }
 
   if (request.rebuildLibraryMetadata) {
     progress({.current = 8,
               .total = 100,
               .stage = ChartScanProgressStage::Preparing},
-             "Clearing library caches");
+             i18n::message("library.tasks.clearing_caches"));
     archive_file::appendDebugLogLine(
         "Manual library rebuild requested; clearing chart metadata caches.");
     if (!session->ClearChartMeta()) {
-      throw std::runtime_error("Failed to clear chart metadata cache");
+      throw TaskError(i18n::message("library.tasks.clear_cache_failed"));
     }
     pausedResult.rebuildLibraryMetadataCleared = true;
   }
@@ -374,13 +375,13 @@ TaskRunResult ChartLibraryOperations::runRefresh(
         std::to_string(result.changedCount) + " stop=" +
         std::to_string(stopToken.stop_requested()) + " pause=" +
         std::to_string(scanPaused));
-    throw std::runtime_error("Failed to refresh chart library");
+    throw TaskError(i18n::message("library.tasks.refresh_failed"));
   }
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
   return {.disposition = recovery.completed ? TaskRunDisposition::Complete : TaskRunDisposition::Failed,
-          .detail = recovery.completed ? "Complete" : recoveryDetail,
+          .detail = recovery.completed ? i18n::message("library.tasks.complete.label") : recoveryDetail,
           .rebuildLibraryMetadataCleared = pausedResult.rebuildLibraryMetadataCleared,
           .folderRegistrationCompleted = pausedResult.folderRegistrationCompleted};
 }
@@ -423,7 +424,7 @@ bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
     progress({.current = i,
               .total = totalTables,
               .stage = ChartScanProgressStage::Preparing},
-             "Adding default difficulty tables");
+             i18n::message("library.tasks.adding_default_tables"));
     std::string errorMessage;
     const bool ok = dependencies_.importDifficultyTableFromUrl(
         session, url, &errorMessage,
@@ -435,7 +436,7 @@ bool ChartLibraryOperations::seedDefaultDifficultyTablesIfNeeded(
           progress({.current = i + (value.current > 0 ? 1 : 0),
                     .total = totalTables,
                     .stage = ChartScanProgressStage::Preparing},
-                   "Adding default table: " + detail);
+                   i18n::message("library.tasks.adding_default_table", {{"name", detail}}));
         },
         checkpoint, pauseRequested);
     if (interrupted || stopToken.stop_requested()) {
@@ -471,13 +472,13 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
     const TaskPauseCallback &waitForResume) {
   auto session = dependencies_.repository.OpenSession();
   if (!session.has_value()) {
-    throw std::runtime_error("Failed to open chart database");
+    throw TaskError(i18n::message("library.tasks.database_open_failed"));
   }
   if (!session->EnsureSchema()) {
-    throw std::runtime_error("Failed to prepare chart database");
+    throw TaskError(i18n::message("library.tasks.database_prepare_failed"));
   }
   if (!waitForResume() || stopToken.stop_requested()) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
 
   for (const auto &removedPath : request.downloadedRemovedPaths) {
@@ -485,14 +486,14 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
       if (dependencies_.requestReload) {
         dependencies_.requestReload(true);
       }
-      throw std::runtime_error("Failed to reconcile replaced Find BMS files");
+      throw TaskError(i18n::message("library.tasks.reconcile_failed"));
     }
   }
 
   const auto entries =
       main_menu_library::downloadedPathScanEntries(request.downloadedPath);
   if (entries.empty()) {
-    throw std::runtime_error("Downloaded chart path is empty");
+    throw TaskError(i18n::message("library.tasks.download_empty"));
   }
   std::vector<std::filesystem::path> roots;
   roots.reserve(entries.size());
@@ -520,13 +521,13 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
       *session, roots, &stopToken, publishScanProgress, checkpoint);
   if (stopToken.stop_requested() ||
       checkpointPaused.load(std::memory_order_relaxed)) {
-    return {.disposition = TaskRunDisposition::Paused, .detail = "Paused"};
+    return {.disposition = TaskRunDisposition::Paused, .detail = i18n::message("library.tasks.paused.label")};
   }
   if (!scanResult.completed) {
     if (dependencies_.requestReload) {
       dependencies_.requestReload(true);
     }
-    throw std::runtime_error("Failed to index downloaded BMS charts");
+    throw TaskError(i18n::message("library.tasks.download_index_failed"));
   }
 
   std::optional<std::filesystem::path> chartPath;
@@ -542,10 +543,10 @@ TaskRunResult ChartLibraryOperations::runDownloadedIndex(
     if (dependencies_.requestReload) {
       dependencies_.requestReload(true);
     }
-    throw std::runtime_error("Downloaded BMS target was not parsed and indexed");
+    throw TaskError(i18n::message("library.tasks.download_target_failed"));
   }
 
-  TaskRunResult result{.detail = "Complete"};
+  TaskRunResult result{.detail = i18n::message("library.tasks.complete.label")};
   if (chartPath.has_value()) {
     result.downloadedIndex = DownloadedIndexCompletion{
         .chartPath = *chartPath,
@@ -566,7 +567,7 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
 #if TARGET_OS_ANDROID
   const std::filesystem::path importPath = request.androidImportPath;
   if (importPath.empty()) {
-    throw std::runtime_error("Import failed: selected path is empty.");
+    throw TaskError(i18n::message("library.tasks.import_empty"));
   }
 
   std::error_code importPathError;
@@ -576,36 +577,36 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
   const std::string importType = importingFolder ? "folder" : "archive";
   const std::filesystem::path outputRoot =
       ChartRepository::DefaultBmsFolderPath();
-  progress({.stage = ChartScanProgressStage::Preparing}, "Preparing import");
+  progress({.stage = ChartScanProgressStage::Preparing}, i18n::message("library.tasks.preparing_import"));
   archive_file::appendDebugLogLine(
       "Android import task requested: " + fspath_to_utf8(importPath) +
       " outputRoot=" + fspath_to_utf8(outputRoot));
 
-  auto postImportProgress = [&](double fraction, const std::string &message) {
+  auto postImportProgress = [&](double fraction, const i18n::Text &message) {
     progress({.current = static_cast<int>(
                   std::clamp(fraction, 0.0, 1.0) * 10000.0),
               .total = 10000,
               .stage = ChartScanProgressStage::Preparing},
              message.empty()
-                 ? (importingFolder ? "Importing folder" : "Importing archive")
+                 ? (importingFolder ? i18n::message("library.tasks.importing_folder") : i18n::message("library.tasks.importing_archive"))
                  : message);
   };
 
   std::string errorMessage;
   std::error_code fsError;
   if (!Utils::EnsureDirectoryExists(outputRoot, fsError)) {
-    throw std::runtime_error("Import failed: could not create BMS import "
-                             "folder: " +
-                             fsError.message());
+    throw TaskError(i18n::message("library.tasks.import_directory_failed",
+                                  {{"detail", fsError.message()}}));
   }
 
   std::filesystem::path outputFolder;
   if (importingFolder) {
     outputFolder = importPath;
-    postImportProgress(0.90, "Refreshing library");
+    postImportProgress(0.90, i18n::message("library.tasks.refreshing_library"));
   } else {
     auto postUnzipProgress = [&](const archive_file::UnzipProgress &value) {
-      postImportProgress(value.fraction * 0.90, value.message);
+      postImportProgress(value.fraction * 0.90,
+                         archive_unzip_presentation::status(value.message));
     };
     const auto unzippedArchive = archive_file::unzipArchiveFully(
         importPath, outputRoot, &errorMessage, &stopToken, postUnzipProgress,
@@ -616,26 +617,27 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
   }
 
   if (outputFolder.empty()) {
-    throw std::runtime_error(
+    throw TaskError(
         stopToken.stop_requested()
-            ? "Import cancelled"
-            : (errorMessage.empty() ? "Import failed"
-                                    : "Import failed: " + errorMessage));
+            ? i18n::message("library.tasks.import_cancel")
+            : (errorMessage.empty() ? i18n::message("library.tasks.import_failed")
+                                    : i18n::message("library.tasks.import_error", {{"detail", errorMessage}})));
   }
   if (stopToken.stop_requested()) {
-    throw std::runtime_error("Import cancelled");
+    throw TaskError(i18n::message("library.tasks.import_cancel"));
   }
 
   auto session = dependencies_.repository.OpenSession();
   if (!session.has_value()) {
-    throw std::runtime_error("Imported " + importType +
-                             ". Failed to refresh library.");
+    throw TaskError(i18n::message(importingFolder
+        ? "library.tasks.import_folder_refresh_failed"
+        : "library.tasks.import_archive_refresh_failed"));
   }
   session->EnsureSchema();
   session->InsertEntry(outputRoot);
 
   std::vector<std::filesystem::path> roots{outputFolder};
-  postImportProgress(0.92, "Refreshing library");
+  postImportProgress(0.92, i18n::message("library.tasks.refreshing_library"));
   auto scanProgress = [&](const ChartScanProgress &value) {
     const int total = std::max(0, value.total);
     const int current = total > 0 ? std::clamp(value.current, 0, total)
@@ -652,11 +654,12 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
   const auto scanResult = scanner.ScanWithResult(
       *session, roots, &stopToken, scanProgress, waitForResume);
   if (stopToken.stop_requested()) {
-    throw std::runtime_error("Import cancelled");
+    throw TaskError(i18n::message("library.tasks.import_cancel"));
   }
   if (!scanResult.completed) {
-    throw std::runtime_error("Imported " + importType +
-                             ". Failed to refresh library.");
+    throw TaskError(i18n::message(importingFolder
+        ? "library.tasks.import_folder_refresh_failed"
+        : "library.tasks.import_archive_refresh_failed"));
   }
 
   if (!importingFolder) {
@@ -671,35 +674,35 @@ TaskRunResult ChartLibraryOperations::runAndroidImport(
           : "Imported " + importType + ". Library already current.";
   SDL_Log("Android import task result: %s", message.c_str());
   archive_file::appendDebugLogLine(message);
-  return {.detail = "Complete"};
+  return {.detail = i18n::message("library.tasks.complete.label")};
 #else
   (void)request;
   (void)stopToken;
   (void)progress;
   (void)waitForResume;
-  throw std::runtime_error("Android import task is unavailable.");
+  throw TaskError(i18n::message("library.tasks.android_unavailable"));
 #endif
 }
 
-const char *ChartLibraryOperations::progressStageText(
-    ChartScanProgressStage stage) noexcept {
+i18n::Text ChartLibraryOperations::progressStageText(
+    ChartScanProgressStage stage) {
   switch (stage) {
   case ChartScanProgressStage::Preparing:
-    return "Preparing library scan";
+    return i18n::message("library.tasks.preparing_scan");
   case ChartScanProgressStage::ScanningRoots:
-    return "Scanning folders";
+    return i18n::message("library.tasks.scanning_folders");
   case ChartScanProgressStage::IndexingArchives:
-    return "Indexing archives";
+    return i18n::message("library.tasks.indexing_archives");
   case ChartScanProgressStage::PreparingUpdates:
-    return "Preparing chart updates";
+    return i18n::message("library.tasks.preparing_updates");
   case ChartScanProgressStage::RemovingDeleted:
-    return "Removing deleted charts";
+    return i18n::message("library.tasks.removing_deleted");
   case ChartScanProgressStage::ParsingCharts:
-    return "Parsing charts";
+    return i18n::message("library.tasks.parsing_charts");
   case ChartScanProgressStage::ReadingArchive:
-    return "Reading archive entries";
+    return i18n::message("library.tasks.reading_archive");
   }
-  return "Refreshing library";
+  return i18n::message("library.tasks.refreshing_library");
 }
 
 } // namespace chart_library_tasks

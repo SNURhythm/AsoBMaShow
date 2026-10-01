@@ -247,18 +247,22 @@ std::string findBmsTitleSearchQuery(const ChartMetaRecord &record) {
   return query;
 }
 
-std::string findBmsCandidateLabel(const BmsSearchCandidate &candidate,
+i18n::Text findBmsCandidateLabel(const BmsSearchCandidate &candidate,
                                   size_t index) {
-  std::string label = std::to_string(index + 1) + ". Download ";
+  i18n::Text name;
   if (!candidate.artist.empty() || !candidate.title.empty()) {
+    std::string metadata;
     if (!candidate.artist.empty()) {
-      label += "[" + candidate.artist + "] ";
+      metadata = "[" + candidate.artist + "] ";
     }
-    label += candidate.title.empty() ? candidate.name : candidate.title;
+    metadata += candidate.title.empty() ? candidate.name : candidate.title;
+    name = std::move(metadata);
   } else {
-    label += candidate.name.empty() ? i18n::tr("library.find_bms.horie_archive.label") : candidate.name;
+    name = candidate.name.empty() ? i18n::message("library.find_bms.horie_archive.label")
+                                  : i18n::Text(candidate.name);
   }
-  return label;
+  return i18n::message("library.find_bms.candidate.download",
+      {{"number", std::to_string(index + 1)}, {"name", name}});
 }
 
 class FindBmsCandidateItemView : public View {
@@ -283,7 +287,7 @@ public:
   void setCandidate(const BmsSearchCandidate &candidate, size_t index,
                     bool selected) {
     if (label != nullptr) {
-      label->setText(findBmsCandidateLabel(candidate, index));
+      label->setLocalizedText(findBmsCandidateLabel(candidate, index));
     }
     if (selected) {
       onSelected();
@@ -786,7 +790,8 @@ std::string musicPlaylistTextSnapshot(
     text << "\n" << (i + 1) << ". " << musicTrackDisplayName(&tracks[i]);
   }
   if (tracks.size() > visibleCount) {
-    text << "\n+" << (tracks.size() - visibleCount) << " more";
+    text << "\n" << i18n::format("menu.music_player.playlist.more",
+        {{"count", std::to_string(tracks.size() - visibleCount)}});
   }
   return text.str();
 }
@@ -4738,10 +4743,10 @@ void MainMenuScene::buildUnzipProgressModal() {
       pendingSelectChartPath = result.chartPath;
     }
     if (replayStatusText != nullptr) {
-      replayStatusText->setText(result.message);
+      replayStatusText->setLocalizedText(result.message);
     }
     archive_file::appendDebugLogLine(
-        result.message + (result.chartPath.empty()
+        result.message.resolve() + (result.chartPath.empty()
                               ? ""
                               : ": " + fspath_to_utf8(result.chartPath)));
   };
@@ -5235,7 +5240,8 @@ void MainMenuScene::refreshMusicModal() {
   }
   const std::size_t libraryTrackCount = context.musicPlayer.LibraryTrackCount();
   if (libraryTrackCount > 0) {
-    status += "  Library tracks: " + std::to_string(libraryTrackCount);
+    status += "  " + i18n::format("menu.music_player.library_tracks.count",
+        {{"count", std::to_string(libraryTrackCount)}});
   }
   musicStatusText->setText(status);
   musicPlaylistText->setText(
@@ -5673,8 +5679,9 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
   if (activeTasks.empty()) {
     text << i18n::tr("menu.no_active_tasks_recent_tasks.label");
   } else {
-    text << activeTasks.size()
-         << (activeTasks.size() == 1 ? " active task" : " active tasks")
+    text << i18n::format(activeTasks.size() == 1 ? "menu.tasks.active_count.one"
+                                                : "menu.tasks.active_count.other",
+                            {{"count", std::to_string(activeTasks.size())}})
          << "\n\n";
   }
 
@@ -5715,11 +5722,11 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
           text << " (" << task.current << " / " << task.total << ")";
         }
         if (!task.detail.empty()) {
-          text << "\n" << task.detail;
+          text << "\n" << task.detail.resolve();
         }
       }
-    } else if (!task.detail.empty() && task.detail != statusText) {
-      text << "\n" << task.detail;
+    } else if (!task.detail.empty() && task.detail.resolve() != statusText) {
+      text << "\n" << task.detail.resolve();
     }
     text << "\n\n";
   };
@@ -5932,7 +5939,7 @@ void MainMenuScene::showFindBmsModal(const ChartMetaRecord &record) {
     findBmsResult.fallbackUrl =
         BmsSearchService::searchUrlForText(findBmsTitleSearchQuery(record));
   }
-  findBmsProgressMessage = i18n::tr("library.find_bms.preparing_lookup.label");
+  findBmsProgressMessage = "Preparing lookup";
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.02;
@@ -5972,7 +5979,7 @@ void MainMenuScene::startFindBmsCandidateDownload(size_t candidateIndex) {
   findBmsResult = {};
   findBmsResult.candidates = {candidate};
   findBmsPendingDecision.reset();
-  findBmsProgressMessage = i18n::tr("library.find_bms.preparing_horie_archive_download.label");
+  findBmsProgressMessage = "Preparing Horie archive download";
   findBmsProgressCurrent = 0;
   findBmsProgressTotal = 0;
   findBmsProgressFraction = 0.09;
@@ -6035,44 +6042,44 @@ void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
     findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
   }
 
-  std::string statusText;
+  i18n::Text statusText;
   if (running) {
     if (findBmsPendingDecision) {
       statusText = *findBmsPendingDecision ==
                            BmsSearchPendingArtifactDecision::Keep
-                       ? i18n::tr("library.find_bms.keeping_files.label")
-                       : i18n::tr("library.find_bms.deleting_files.label");
+                       ? i18n::message("library.find_bms.keeping_files.label")
+                       : i18n::message("library.find_bms.deleting_files.label");
     } else {
-      statusText = findBmsProgressDisplayText(findBmsProgressMessage,
+      statusText = findBmsProgressDisplayMessage(findBmsProgressMessage,
                                               findBmsProgressCurrent,
                                               findBmsProgressTotal, true);
     }
   } else {
     switch (findBmsResult.status) {
     case BmsSearchResult::Status::Downloaded:
-      statusText = i18n::tr("library.find_bms.download_complete.label");
+      statusText = i18n::message("library.find_bms.download_complete.label");
       break;
     case BmsSearchResult::Status::NoDownloadLink:
     case BmsSearchResult::Status::UnsupportedLink:
-      statusText = i18n::tr("library.find_bms.manual_download_needed.label");
+      statusText = i18n::message("library.find_bms.manual_download_needed.label");
       break;
     case BmsSearchResult::Status::NotFound:
-      statusText = i18n::tr("library.find_bms.not_found.label");
+      statusText = i18n::message("library.find_bms.not_found.label");
       break;
     case BmsSearchResult::Status::AmbiguousCandidates:
-      statusText = i18n::tr("library.find_bms.choose_match.label");
+      statusText = i18n::message("library.find_bms.choose_match.label");
       break;
     case BmsSearchResult::Status::HashMismatch:
-      statusText = findBmsResult.pendingArtifact ? i18n::tr("library.find_bms.chart_mismatch.label")
-                                                 : i18n::tr("library.find_bms.decision_complete.label");
+      statusText = findBmsResult.pendingArtifact ? i18n::message("library.find_bms.chart_mismatch.label")
+                                                 : i18n::message("library.find_bms.decision_complete.label");
       break;
     case BmsSearchResult::Status::DownloadFailed:
-      statusText = i18n::tr("library.find_bms.download_failed.label");
+      statusText = i18n::message("library.find_bms.download_failed.label");
       break;
     }
   }
   if (findBmsStatusText != nullptr) {
-    findBmsStatusText->setText(statusText);
+    findBmsStatusText->setLocalizedText(statusText);
     const bool failed =
         !running &&
         (findBmsResult.status == BmsSearchResult::Status::DownloadFailed ||
@@ -6087,44 +6094,45 @@ void MainMenuScene::refreshFindBmsModal(bool refreshCandidates) {
       findBmsResult.status == BmsSearchResult::Status::AmbiguousCandidates &&
       !findBmsResult.candidates.empty();
 
-  std::string detail;
-  if (!findBmsModalChart.meta.Title.empty()) {
-    detail += findBmsModalChart.meta.Title + "\n";
-  }
+  i18n::Text detail;
   if (running && findBmsPendingDecision) {
-    detail += i18n::tr("library.find_bms.resolving_downloaded_files_dialog_unable_close_yet.message");
+    detail = i18n::message("library.find_bms.resolving_downloaded_files_dialog_unable_close_yet.message");
   } else if (!running && findBmsResult.pendingArtifact) {
-    detail += findBmsResult.message.empty()
-                  ? i18n::tr("library.find_bms.choose_keep_files_delete_files_continue.message")
-                  : findBmsResult.message;
+    detail = findBmsResult.message.empty()
+                  ? i18n::message("library.find_bms.choose_keep_files_delete_files_continue.message")
+                  : findBmsDownloadFailureMessage(findBmsResult);
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::Downloaded) {
-    detail += i18n::tr("library.find_bms.adding_downloaded_charts_library.message");
+    detail = i18n::message("library.find_bms.adding_downloaded_charts_library.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NoDownloadLink) {
-    detail += i18n::tr("library.find_bms.download_from_source_then_refresh.message");
+    detail = i18n::message("library.find_bms.download_from_source_then_refresh.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::UnsupportedLink) {
-    detail += i18n::tr("library.find_bms.download_from_source_then_refresh.message");
+    detail = i18n::message("library.find_bms.download_from_source_then_refresh.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::NotFound) {
-    detail += i18n::tr("library.find_bms.try_searching_by_title.message");
+    detail = i18n::message("library.find_bms.try_searching_by_title.message");
   } else if (!running && findBmsResult.status ==
                              BmsSearchResult::Status::AmbiguousCandidates) {
-    detail += i18n::tr("library.find_bms.choose_archive_below.message");
+    detail = i18n::message("library.find_bms.choose_archive_below.message");
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::HashMismatch) {
-    detail += findBmsResult.message.empty()
-                  ? i18n::tr("library.find_bms.downloaded_archive_does_not_match_chart.message")
-                  : findBmsResult.message;
+    detail = findBmsResult.message.empty()
+                  ? i18n::message("library.find_bms.downloaded_archive_does_not_match_chart.message")
+                  : findBmsDownloadFailureMessage(findBmsResult);
   } else if (!running &&
              findBmsResult.status == BmsSearchResult::Status::DownloadFailed) {
-    detail += findBmsDownloadFailureDetail(findBmsResult);
+    detail = findBmsDownloadFailureMessage(findBmsResult);
   } else {
-    detail += i18n::tr("library.find_bms.searching_available_sources.progress");
+    detail = i18n::message("library.find_bms.searching_available_sources.progress");
+  }
+  if (!findBmsModalChart.meta.Title.empty()) {
+    detail = i18n::message("library.find_bms.chart_detail",
+        {{"title", findBmsModalChart.meta.Title}, {"detail", detail}});
   }
   if (findBmsDetailText != nullptr) {
-    findBmsDetailText->setText(detail);
+    findBmsDetailText->setLocalizedText(detail);
   }
 
   if (refreshCandidates && findBmsCandidateRecyclerView != nullptr) {

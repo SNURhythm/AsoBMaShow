@@ -26,6 +26,17 @@
 
 namespace {
 
+void assertRetainedTranslation(const i18n::Text &message) {
+  const auto english = message.resolve();
+  for (auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    assert(message.resolve() != english);
+  }
+  i18n::setLanguage(i18n::Language::English);
+  assert(message.resolve() == english);
+}
+
+
 std::filesystem::path testExecutable;
 
 class Fixture {
@@ -141,7 +152,7 @@ ArchiveDeleteResult waitForDeleteResult(ArchiveUnzipOperation &operation) {
 bool deleteArchiveAndWait(ArchiveUnzipOperation &operation, std::string &message) {
   if (!operation.startDeleteArchive()) return false;
   const auto result = waitForDeleteResult(operation);
-  message = result.message;
+  message = result.message.resolve();
   return result.deleted;
 }
 
@@ -357,7 +368,7 @@ void forgedEncryptionDeleteChild(const std::filesystem::path &root) {
   const auto result = runAll(repository, true);
   assert(std::filesystem::exists(path));
   assert(!result.success && !result.cancelled && result.deletedCount == 0);
-  assert(result.message.find("encrypted") != std::string::npos);
+  assert(result.message.resolve().find("encrypted") != std::string::npos);
   assert(archive_source_identity::KeyForPath(path) == identity);
   assert(!std::filesystem::exists(root / "mixed/.asobmashow_unzip_complete"));
 }
@@ -527,7 +538,7 @@ void singleSuccessfulIndexAcknowledgesRecovery(bool failAcknowledgement) {
   assert(std::filesystem::exists(record.meta.BmsPath));
   assert(session->LoadUnzipRecovery()->size() == (failAcknowledgement ? 1 : 0));
   if (failAcknowledgement) {
-    assert(result.message.find("recovery") != std::string::npos);
+    assert(result.message.resolve().find("recovery") != std::string::npos);
     executeSql(fixture.root / "library.db", "DROP TRIGGER reject_ack");
     assert(archive_unzip_recovery::recover(*session).completed);
     assert(session->LoadUnzipRecovery()->empty());
@@ -547,7 +558,7 @@ void singleJournalFailurePreventsOutputCreation() {
   assert(!std::filesystem::exists(fixture.root / "song"));
   assert(!result.success && !result.cancelled && !result.scanCommitted);
   assert(!result.libraryChanged && result.outputFolder.empty());
-  assert(result.message.find("recovery") != std::string::npos);
+  assert(result.message.resolve().find("recovery") != std::string::npos);
   assert(std::filesystem::exists(record.meta.BmsPath));
   auto session = fixture.repository.OpenSession();
   assert(session->LoadUnzipRecovery()->empty());
@@ -831,8 +842,9 @@ void reusedCompletedOutputNeverAuthorizesDeletion(const std::string &mediaState)
   assert(!operation.canDeleteArchive());
   assert(!operation.startDeleteArchive());
   assert(!operation.inProgress() && !operation.takeDeleteResult());
-  assert(reused.message.find("Original archive kept") != std::string::npos);
-  assert(reused.message.find("not verified") != std::string::npos);
+  assert(reused.message.resolve().find("Original archive kept") != std::string::npos);
+  assert(reused.message.resolve().find("not verified") != std::string::npos);
+  assertRetainedTranslation(reused.message);
   assert(std::filesystem::exists(record.meta.BmsPath));
   assert(std::filesystem::exists(reused.chartPath));
   assert(fixture.repository.OpenSession()->CountSolidArchives() == 1);
@@ -850,7 +862,7 @@ void reusedCompletedOutputNeverAuthorizesDeletion(const std::string &mediaState)
   const auto kept = runAll(fixture.repository, false);
   assert(kept.success && kept.scanCommitted && kept.reusedCompletedFolder);
   assert(kept.deletedCount == 0 && std::filesystem::exists(record.meta.BmsPath));
-  assert(kept.message.find("not verified") != std::string::npos);
+  assert(kept.message.resolve().find("not verified") != std::string::npos);
   const auto fresh = runAll(fixture.repository, true);
   assert(fresh.success && !fresh.reusedCompletedFolder &&
          fresh.deletedCount == 1 && fresh.deletionFailedCount == 0);
@@ -1392,7 +1404,7 @@ void parallelBatchJoinsWorkersAfterProgressCallbackFailure() {
         throw std::runtime_error("progress callback failed");
       });
   assert(!result.success && !result.cancelled && result.deletedCount == 0);
-  assert(result.message.find("progress callback failed") != std::string::npos);
+  assert(result.message.resolve().find("progress callback failed") != std::string::npos);
   assert(std::filesystem::exists(fixture.root / "a.zip"));
   assert(std::filesystem::exists(fixture.root / "b.zip"));
 }
@@ -1446,7 +1458,7 @@ void parallelBatchCannotOverspendItsSharedByteBudget() {
       fixture.repository, false, {}, nullptr, {.maximumTotalBytes = 100});
   assert(!result.success && !result.cancelled);
   assert(result.succeededCount <= 1 && result.failedCount > 0);
-  assert(result.message.find("expanded-byte limit") != std::string::npos);
+  assert(result.message.resolve().find("expanded-byte limit") != std::string::npos);
   std::uint64_t written = 0;
   for (const auto *name : {"a", "b", "c", "d"}) {
     const auto path = fixture.root / name / "song" / "chart0.bms";
@@ -1482,7 +1494,7 @@ void batchBudgetStopsBeforeNextArchiveAndIndexesCompletedWork(bool deleteOrigina
   assert(result.succeededCount == 1 && result.failedCount == 1);
   assert(result.completedCount == 2 && result.archiveCount == 3);
   assert(result.scanCommitted && result.libraryChanged);
-  assert(result.message.find("expanded-byte limit") != std::string::npos);
+  assert(result.message.resolve().find("expanded-byte limit") != std::string::npos);
   assert(std::filesystem::exists(first.meta.BmsPath) == !deleteOriginals);
   assert(std::filesystem::exists(second.meta.BmsPath));
   assert(std::filesystem::exists(third.meta.BmsPath));
@@ -1502,7 +1514,7 @@ void batchReservedSpaceRejectsExtractionWithoutDeletingOriginals() {
       {.reservedFreeBytes = std::numeric_limits<std::uint64_t>::max()});
   assert(!result.success && result.failedCount == 1);
   assert(result.succeededCount == 0 && result.deletedCount == 0);
-  assert(result.message.find("free-space") != std::string::npos);
+  assert(result.message.resolve().find("free-space") != std::string::npos);
   assert(std::filesystem::exists(record.meta.BmsPath));
   auto session = fixture.repository.OpenSession();
   const auto recovery = session->LoadUnzipRecovery();
@@ -1519,8 +1531,8 @@ void batchBudgetFailureRemainsVisibleWhenFinalIndexAlsoFails() {
       {.maximumArchiveBytes = 100, .maximumTotalBytes = 100, .maximumConcurrentArchives = 1, .maximumWorkers = 1});
   assert(!result.success && !result.scanCommitted);
   assert(result.succeededCount == 1 && result.failedCount == 1);
-  assert(result.message.find("expanded-byte limit") != std::string::npos);
-  assert(result.message.find("Failed to index extracted folders") != std::string::npos);
+  assert(result.message.resolve().find("expanded-byte limit") != std::string::npos);
+  assert(result.message.resolve().find("Failed to index extracted folders") != std::string::npos);
   assert(std::filesystem::exists(second.meta.BmsPath));
 }
 
@@ -1548,7 +1560,7 @@ void batchChargesPartialFailedWritesAgainstLaterArchives() {
   assert(blockedSecondFile && !result.success && !result.cancelled);
   assert(result.succeededCount == 1 && result.failedCount == 2);
   assert(result.deletedCount == 1 && result.scanCommitted);
-  assert(result.message.find("expanded-byte limit") != std::string::npos);
+  assert(result.message.resolve().find("expanded-byte limit") != std::string::npos);
   assert(std::filesystem::exists(first.meta.BmsPath));
   assert(!std::filesystem::exists(second.meta.BmsPath));
   assert(std::filesystem::exists(third.meta.BmsPath));
@@ -1609,7 +1621,7 @@ void batchFailedFinalScanReportsFailureAndPreservesExtractedFiles() {
   assert(result.completedCount == 2 && result.failedCount == 0);
   assert(result.succeededCount == 2 && result.deletedCount == 2);
   assert(!result.scanCommitted);
-  assert(result.message.find("Failed to index extracted folders") != std::string::npos);
+  assert(result.message.resolve().find("Failed to index extracted folders") != std::string::npos);
   assert(!std::filesystem::exists(first.meta.BmsPath));
   assert(!std::filesystem::exists(second.meta.BmsPath));
   assert(std::filesystem::exists(fixture.root / "a" / "song" / "chart0.bms"));
@@ -1708,7 +1720,7 @@ void batchCleanupFailureRollsBackArchiveRecordsAndStillIndexesOutputs() {
   assert(result.deletedCount == 2 && result.deletionFailedCount == 2);
   assert(!std::filesystem::exists(first.meta.BmsPath));
   assert(!std::filesystem::exists(second.meta.BmsPath));
-  assert(result.message.find("Failed to remove deleted archive records") != std::string::npos);
+  assert(result.message.resolve().find("Failed to remove deleted archive records") != std::string::npos);
   auto session = fixture.repository.OpenSession();
   assert(session->CountSolidArchives() == 2);
   assert(session->CountAllChartMeta() == 2);
@@ -1851,7 +1863,8 @@ void singleDeleteKeepsMutationNotification(bool failCleanup, bool shutdown) {
   } else {
     const auto deleted = waitForDeleteResult(operation);
     assert(deleted.deleted && !deleted.canRetry);
-    assert((deleted.message.find("Failed to refresh library") != std::string::npos) == failCleanup);
+    assertRetainedTranslation(deleted.message);
+    assert((deleted.message.resolve().find("Failed to refresh library") != std::string::npos) == failCleanup);
   }
   assert(!operation.inProgress() && !operation.canDeleteArchive());
   assert(!operation.takeResult() && !operation.takeDeleteResult());

@@ -163,6 +163,7 @@ void testDestructionCancelsAndJoinsBeforeReleasingWorkCaptures() {
 #include "find_bms_scene_fixture.h"
 
 int main() {
+  testCandidateDownloadLabelRetainsLanguageAndMetadata();
   testProgressRetainsLast160EventsInOrderAndResultIsTakenOnce();
   testCancellationReturnsImmediatelyAndStillDeliversServiceResult();
   testStopJoinsArtifactResolutionAndReplacementDiscardsOldData();

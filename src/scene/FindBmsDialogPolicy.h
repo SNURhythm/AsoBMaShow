@@ -15,3 +15,5 @@ FindBmsDialogPolicy findBmsDialogPolicy(bool running,
                                         const BmsSearchResult &result);
 
 std::string findBmsDownloadFailureDetail(const BmsSearchResult &result);
+
+i18n::Text findBmsDownloadFailureMessage(const BmsSearchResult &result);

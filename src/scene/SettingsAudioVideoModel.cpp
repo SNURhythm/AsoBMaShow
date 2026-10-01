@@ -66,7 +66,7 @@ ChoiceControlModel
 buildUnsignedChoices(std::uint32_t selected,
                      const std::vector<std::uint32_t> &available, bool enabled,
                      i18n::Text explanation, const i18n::Text &automaticLabel,
-                     const char *suffix) {
+                     const char *valueMessageKey) {
   ChoiceControlModel control{.selectedValue = std::to_string(selected),
                              .enabled = enabled,
                              .explanation = std::move(explanation)};
@@ -78,14 +78,16 @@ buildUnsignedChoices(std::uint32_t selected,
         control,
         {.persistedValue = std::to_string(selected),
          .label = i18n::message("settings.audio_video.option.unavailable",
-                                {{"value", std::to_string(selected) + suffix}}),
+                                {{"value", i18n::message(valueMessageKey,
+                                    {{"value", std::to_string(selected)}})}}),
          .available = false},
         true);
   }
   addChoiceIfMissing(control, {.persistedValue = "0", .label = automaticLabel});
   for (const auto value : available) {
     addChoiceIfMissing(control, {.persistedValue = std::to_string(value),
-                                 .label = std::to_string(value) + suffix});
+                                 .label = i18n::message(valueMessageKey,
+                                     {{"value", std::to_string(value)}})});
   }
   return control;
 }
@@ -174,7 +176,8 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   }
   model.sampleRates = buildUnsignedChoices(
       intent.requestedSampleRate, sampleRates, sampleRateEnabled,
-      std::move(sampleRateExplanation), i18n::message("settings.audio_video.automatic.label"), " Hz");
+      std::move(sampleRateExplanation), i18n::message("settings.audio_video.automatic.label"),
+      "settings.audio_video.sample_rate.value");
 
   i18n::Text bufferExplanation;
   bool bufferEnabled = capabilities.canSelectBufferFrames;
@@ -186,7 +189,8 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
   }
   model.bufferFrames = buildUnsignedChoices(
       intent.requestedBufferFrames, bufferFrames, bufferEnabled,
-      std::move(bufferExplanation), i18n::message("settings.audio_video.automatic.label"), " frames");
+      std::move(bufferExplanation), i18n::message("settings.audio_video.automatic.label"),
+      "settings.audio_video.buffer_frames.value");
 
   model.masterVolume.value = intent.masterVolume;
   model.bgmVolume.value = intent.bgmVolume;

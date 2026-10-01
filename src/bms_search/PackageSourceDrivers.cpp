@@ -150,6 +150,7 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     if (cancelled.load()) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = "Lookup cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
       return true;
     }
 
@@ -161,6 +162,7 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     if (cancelled.load()) {
       result.status = BmsSearchResult::Status::DownloadFailed;
       result.message = "Lookup cancelled.";
+      result.presentationMessage = i18n::message("library.find_bms.result.cancelled");
       return true;
     }
     if (!lookup.candidate || !lookup.candidate->supported) {
@@ -196,6 +198,10 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
 
     if (!attempt.message.empty()) {
       attempt.message = lookup.sourceName + ": " + attempt.message;
+      if (!attempt.presentationMessage.empty()) {
+        attempt.presentationMessage = i18n::message("library.find_bms.result.source_detail",
+            {{"source", lookup.sourceName}, {"detail", attempt.presentationMessage}});
+      }
     }
     lastDownloadFailure = std::move(attempt);
   }

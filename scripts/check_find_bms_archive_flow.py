@@ -142,7 +142,7 @@ require(
 )
 require(
     "findBmsIndexTaskSucceeded(" in library_operations_source
-    and "Downloaded BMS target was not parsed and indexed"
+    and "library.tasks.download_target_failed"
     in library_operations_source,
     "validated Find BMS tasks must fail without their committed target upsert",
 )

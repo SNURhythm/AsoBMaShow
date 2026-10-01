@@ -105,7 +105,7 @@ void LibraryTasksScene::refreshTasks() {
         detail << " · " << std::fixed << std::setprecision(0)
                << task.fraction * 100.0 << '%';
       }
-      if (!task.detail.empty()) detail << " · " << task.detail;
+      if (!task.detail.empty()) detail << " · " << task.detail.resolve();
       auto *row = new View();
       row->setMinHeight(74)
           ->setFlexDirection(FlexDirection::Column)

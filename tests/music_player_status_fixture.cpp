@@ -77,11 +77,12 @@ struct Player {
     long long positionMicros = 2000000, durationMicros = 10000000; };
   bool failClear = false;
   int clears = 0;
+  std::size_t libraryTrackCount = 0, playlistTrackCount = 1;
   std::optional<music_playlist::MusicTrack> CurrentTrackSnapshot() { return music_playlist::MusicTrack{}; }
   Playback PlaybackState() { return {}; }
   std::optional<Playlist> DefaultPlaylistSnapshot() { return Playlist{}; }
-  std::size_t LibraryTrackCount() { return 0; }
-  std::vector<music_playlist::MusicTrack> DefaultPlaylistTracksSnapshot() { return {music_playlist::MusicTrack{}}; }
+  std::size_t LibraryTrackCount() { return libraryTrackCount; }
+  std::vector<music_playlist::MusicTrack> DefaultPlaylistTracksSnapshot() { return std::vector<music_playlist::MusicTrack>(playlistTrackCount); }
   bool ClearDefaultPlaylist(std::string &error) {
     ++clears;
     if (failClear) error = "Cleared My Playlist.";
@@ -145,6 +146,19 @@ int main() {
          "chart metadata matching English UI copy stays raw");
   expect(menu.status.text.find("Cleared My Playlist.: 3") != std::string::npos,
          "playlist names matching English UI copy stay raw");
+  menu.context.musicPlayer.libraryTrackCount = 42;
+  menu.context.musicPlayer.playlistTrackCount = 8;
+  menu.refreshMusicModal();
+  expect(menu.status.text.find("라이브러리 곡: 42") != std::string::npos,
+         "music summary localizes the library count in Korean");
+  expect(menu.playlist.text.ends_with("+3곡 더") &&
+             menu.playlist.text.find("Cleared My Playlist. / Raw artist") != std::string::npos,
+         "playlist overflow localizes the hidden count while preserving track metadata");
+  i18n::setLanguage(i18n::Language::Japanese);
+  menu.refreshMusicModal();
+  expect(menu.status.text.find("ライブラリの曲: 42") != std::string::npos &&
+             menu.playlist.text.ends_with("ほか3曲"),
+         "music summaries follow a later language change without changing tracks");
   menu.context.musicPlayer.failClear = true;
   menu.clearSavedMusicPlaylist();
   i18n::setLanguage(i18n::Language::Japanese);

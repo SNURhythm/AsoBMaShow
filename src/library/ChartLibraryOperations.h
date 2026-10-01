@@ -65,7 +65,7 @@ private:
   bool seedDefaultDifficultyTablesIfNeeded(
       ChartRepository::Session &, const std::stop_token &,
       const TaskProgressCallback &, const TaskPauseCallback &);
-  static const char *progressStageText(ChartScanProgressStage) noexcept;
+  static i18n::Text progressStageText(ChartScanProgressStage);
 
   ChartLibraryOperationsDependencies dependencies_;
 };

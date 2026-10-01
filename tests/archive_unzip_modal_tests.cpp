@@ -1,4 +1,5 @@
 #include "scene/ArchiveUnzipModal.h"
+#include "scene/ArchiveUnzipPresentation.h"
 #include "ArchiveRAII.h"
 #include "rendering/common.h"
 #include "rendering/UniformCache.h"
@@ -214,6 +215,19 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     assert(!modal->inProgress());
     assert(changed == 1 && finished == 1);
     assertDescriptionsFit(*modal);
+    auto *summary = dynamic_cast<TextView *>(modal->root()->getChildren().front()->getChildren()[1]);
+    assert(summary != nullptr);
+    const auto englishSummary = summary->getText();
+    for (auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+      i18n::setLanguage(language);
+      modal->root()->propagateLanguageChange();
+      assert(summary->getText() != englishSummary &&
+             "completed batch feedback must re-resolve without restarting extraction");
+      assert(summary->getText().find("2/2") != std::string::npos);
+    }
+    i18n::setLanguage(i18n::Language::English);
+    modal->root()->propagateLanguageChange();
+    assert(summary->getText() == englishSummary);
     assert(std::filesystem::exists(archivePath) == !deleteAfter);
     assert(std::filesystem::exists(secondArchivePath) == !deleteAfter);
     assert(findButton(modal->root(), "Close"));
@@ -369,7 +383,42 @@ void singleDeleteDoesNotBlockInputWhileLibraryIsBusy() {
 
 }
 
+void retainedProgressTracksLanguageAndPreservesFilenames() {
+  i18n::setLanguage(i18n::Language::English);
+  archive_file::UnzipProgress progress;
+  progress.activeArchives = {"Reading archive index.zip (1/5) - Preparing unzip",
+                            "日本語.zip (2/5) - Reading archive index",
+                            "한글.zip (3/5) - Writing unzipped files",
+                            "four.zip (4/5) - Unzipping archive",
+                            "five.zip (5/5) - Unzipping archive"};
+  const auto retained = archive_unzip_presentation::progressMessage(progress, true);
+  const auto english = retained.resolve();
+  const auto count = archive_unzip_presentation::progressCount("40%", 2, 5, true);
+  assert(count.resolve() == "40% (2/5 archives completed)");
+  assert(english.find("+ 2 other active archives") != std::string::npos);
+  for (auto language : {i18n::Language::Korean, i18n::Language::Japanese}) {
+    i18n::setLanguage(language);
+    const auto localized = retained.resolve();
+    assert(localized != english);
+    assert(count.resolve().find("2/5") != std::string::npos);
+    assert(count.resolve().find("40%") != std::string::npos);
+    assert(count.resolve().find("archives completed") == std::string::npos);
+    assert(localized.find("Reading archive index.zip (1/5)") != std::string::npos);
+    assert(localized.find("日本語.zip (2/5)") != std::string::npos);
+    assert(localized.find("한글.zip (3/5)") != std::string::npos);
+    assert(localized.find("other active archives") == std::string::npos);
+    assert(localized.find("Preparing unzip") == std::string::npos);
+    assert(archive_unzip_presentation::status("external diagnostic").resolve() ==
+           "external diagnostic");
+    assert(archive_unzip_presentation::status("Preparing unzip.zip").resolve() ==
+           "Preparing unzip.zip");
+  }
+  i18n::setLanguage(i18n::Language::English);
+  assert(retained.resolve() == english);
+}
+
 int main() {
+  retainedProgressTracksLanguageAndPreservesFilenames();
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;

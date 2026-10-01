@@ -261,14 +261,30 @@ void testKoreanDeviceChoicesPreserveDeviceNamesAndIds() {
   capabilities.outputDevices[0].name = "Settings";
   i18n::setLanguage(i18n::Language::Korean);
   const auto model = BuildAudioControlModel({}, capabilities, {});
+  player_settings::AudioSettings unavailableIntent;
+  unavailableIntent.requestedBufferFrames = 999;
+  const auto unavailable = BuildAudioControlModel(unavailableIntent, capabilities, {});
+  require(findOption(unavailable.bufferFrames, "999")->label.resolve() ==
+              "999 프레임 (사용 불가)",
+          "unavailable buffer choices retain the translated unit and wrapper");
+  require(unavailable.bufferFrames.selectedValue == "999" &&
+              !findOption(unavailable.bufferFrames, "999")->available,
+          "translated labels preserve unavailable persisted buffer intent");
   require(findOption(model.devices, "")->label.resolve() == "시스템 기본값",
           "application labels use the Korean catalog");
   require(findOption(model.devices, "builtin:output")->label.resolve() == "Settings",
           "device-provided names remain verbatim");
+  require(findOption(model.bufferFrames, "128")->label.resolve() == "128 프레임",
+          "selectable buffer sizes use translated units");
   i18n::setLanguage(i18n::Language::Japanese);
   require(findOption(model.devices, "")->label.resolve() ==
               i18n::tr("settings.audio_video.system_default.label"),
           "retained device choices resolve the current language");
+  require(findOption(unavailable.bufferFrames, "999")->label.resolve() ==
+              "999 フレーム（利用不可）",
+          "unavailable nested values also follow a language change");
+  require(findOption(model.bufferFrames, "128")->label.resolve() == "128 フレーム",
+          "retained buffer-size units follow language changes");
   require(findOption(model.devices, "builtin:output")->label.resolve() == "Settings" &&
               model.devices.selectedValue.empty(),
           "changing language preserves device names and selected stable IDs");

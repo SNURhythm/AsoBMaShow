@@ -268,7 +268,8 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
                             for signature in ("void ArchiveUnzipModal::update()",
                                               "void ArchiveUnzipModal::cancelOrClose()"))
         fixture = (ROOT / "tests/archive_unzip_modal_indexing_fixture.cpp").read_text()
-        self.compile_and_run(fixture.replace("MODAL_METHODS", methods))
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                            .replace("MODAL_METHODS", methods))
 
     def test_main_menu_unzip_all_uses_preflight_instead_of_single_start(self):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
