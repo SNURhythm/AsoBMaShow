@@ -20,6 +20,8 @@
 #include <unordered_map>
 #elif TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
+#else
+#include "../tinyfiledialogs.h"
 #endif
 
 namespace chart_library_platform {
@@ -230,6 +232,23 @@ void FolderActionService::requestAddFolder() {
     }
   } else {
     impl_->requestImport(true);
+  }
+#else
+  if (impl_->pickerActive.exchange(true)) return;
+  try {
+    if (impl_->pickerThread.joinable()) impl_->pickerThread.join();
+    impl_->pickerThread = std::jthread(
+        [state = impl_.get()](const std::stop_token &stopToken) {
+          ScopeExit reset([state] { state->pickerActive.store(false); });
+          const auto title = i18n::tr("menu.add_folder.label");
+          const char *folder = tinyfd_selectFolderDialog(title, nullptr);
+          if (folder && *folder && !stopToken.stop_requested()) {
+            state->enqueueFolder(std::filesystem::path(utf8_to_path_t(folder)), "");
+          }
+        });
+  } catch (...) {
+    impl_->pickerActive.store(false, std::memory_order_release);
+    throw;
   }
 #endif
 }

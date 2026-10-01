@@ -725,7 +725,6 @@ public:
              .rebuildLibraryMetadata = true});
       }
     };
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
     chartLibraryFolderActions =
         std::make_unique<chart_library_platform::FolderActionService>(
             chartRepository, *chartLibraryTasks);
@@ -734,7 +733,6 @@ public:
         chartLibraryFolderActions->requestAddFolder();
       }
     };
-#endif
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
     initializeGameplaySkinServices();
 #endif

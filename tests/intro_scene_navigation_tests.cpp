@@ -76,6 +76,16 @@ void testConfiguredNavigationAndStartArePointerIndependent() {
 } // namespace
 
 int main() {
+  {
+    IntroSceneNavigation navigation(MusicSelectKeyLayout::Beat7K);
+    auto down = logicalInput(MusicSelectKeyLayout::Beat7K);
+    down.controlHeld.insert(MusicSelectControlKey::Down);
+    (void)navigation.process(down, 1000);
+    (void)navigation.process(logicalInput(MusicSelectKeyLayout::Beat7K), 2000);
+    (void)navigation.process(down, 2001);
+    require(navigation.choice() == IntroSceneChoice::Tutorial,
+            "keyboard navigation must reach the replayable tutorial button");
+  }
   testKeyboardNavigationAndEnterActivateSettings();
   testConfiguredNavigationAndStartArePointerIndependent();
   return 0;

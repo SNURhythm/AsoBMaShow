@@ -1,5 +1,6 @@
 #include "../i18n/Localization.h"
 #include "MainMenuScene.h"
+#include "NewcomerTutorialView.h"
 #include "ResultRecordsLoader.h"
 #include "ChartRecordActions.h"
 #include "RecordsIrActions.h"
@@ -842,6 +843,10 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  if (tutorial_ != nullptr && tutorial_->getVisible()) {
+    (void)tutorial_->handleEvents(event);
+    return {};
+  }
   if (archiveUnzipModal_ != nullptr &&
       !archiveUnzipModal_->handleEvents(event)) {
     return {};
@@ -860,7 +865,8 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   return Scene::handleEvents(event);
 }
 
-MainMenuScene::MainMenuScene(ApplicationContext &context) : Scene(context) {}
+MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
+    : Scene(context), showTutorial_(showTutorial) {}
 
 MainMenuScene::~MainMenuScene() {
   stopReplayAndPreviewWork();
@@ -907,6 +913,9 @@ void MainMenuScene::init() {
     replayIrObservedRevisions.clear();
   };
   initView(context);
+  if (showTutorial_ || !context.applicationUiState.newcomerTutorialCompleted) {
+    buildTutorial();
+  }
   SDL_Log("Main Menu Scene Initialized");
 }
 
@@ -1135,6 +1144,10 @@ void MainMenuScene::refreshTasksButton() {
 }
 
 void MainMenuScene::initView(ApplicationContext &context) {
+  tutorial_ = nullptr;
+  addFolderButton_ = nullptr;
+  tutorialRightScroll_ = nullptr;
+  findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
   // Initialize the view
   revealContextMenu.reset();
@@ -1632,7 +1645,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   nav->setThemedBorderColor(ui_theme::hairline);
   nav->setBorderWidth(1);
 
-  bool showAddFolderButton = false;
+  bool showAddFolderButton = true;
   i18n::Text addFolderButtonLabel = i18n::message("menu.add_folder.label");
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   showAddFolderButton = true;
@@ -1644,6 +1657,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
 #endif
   if (showAddFolderButton) {
     auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, 50);
+    addFolderButton_ = addFolderButton;
     auto *addFolderText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
     addFolderText->setLocalizedText(addFolderButtonLabel);
     addFolderText->setAlign(TextView::CENTER);
@@ -1891,6 +1905,7 @@ overlayPortal = new OverlayPortal(0, 0, rendering::window_width,
   right->setPadding(Edge::Bottom, 16);
 
   auto *rightScroll = new ScrollView();
+  tutorialRightScroll_ = rightScroll;
   rightScroll->setWidth(280);
   rightScroll->setFlex(1);
   rightScroll->setFlexShrink(1);
@@ -4771,6 +4786,9 @@ void MainMenuScene::startLibraryRebuild() {
 }
 
 void MainMenuScene::setFindBmsButtonVisible(bool visible) {
+  findBmsAvailableWithoutTutorial_ = visible;
+  visible = visible || (tutorial_ && tutorial_->getVisible() &&
+                       tutorial_->step() == NewcomerTutorialStep::Download);
   if (findBmsButtonSlot == nullptr) {
     return;
   }
@@ -7818,9 +7836,15 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Bottom, safe.bottom + kRootPadding);
     rootLayout->applyYogaLayout();
   }
+  if (tutorial_ && tutorial_->getVisible()) {
+    tutorial_->updateLayout(rendering::window_width, rendering::window_height);
+  }
 }
 
 void MainMenuScene::cleanupScene() {
+  tutorial_ = nullptr;
+  addFolderButton_ = nullptr;
+  tutorialRightScroll_ = nullptr;
   // Cleanup resources when exiting the scene
   revealContextMenu.reset();
   rankingsModal.reset();

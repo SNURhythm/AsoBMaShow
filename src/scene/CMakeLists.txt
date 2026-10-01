@@ -20,6 +20,8 @@ target_sources(main PRIVATE
     MainMenuPlayOptionsModal.cpp
     MainMenuPreviewController.cpp
     MainMenuScene.cpp
+    MainMenuTutorial.cpp
+    NewcomerTutorialView.cpp
     MusicPlayerScene.cpp
     MusicSelectScene.cpp
     MusicSelectToolbarView.cpp

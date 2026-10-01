@@ -28,6 +28,8 @@
 
 namespace {
 
+std::string desktopPickerResult;
+
 int failures = 0;
 
 void expect(bool condition, std::string_view message) {
@@ -1061,7 +1063,45 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 
 } // namespace
 
+extern "C" char *tinyfd_selectFolderDialog(const char *, const char *) {
+  return desktopPickerResult.empty() ? nullptr : desktopPickerResult.data();
+}
+
+void testDesktopFolderPickingRegistersAndQueuesScan() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  expect(repository.EnsureReady(), "desktop picker repository is ready");
+  chart_library_tasks::ChartLibraryTaskService tasks(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  desktopPickerResult = (temp.path() / "BMS songs").string();
+  std::filesystem::create_directory(desktopPickerResult);
+  {
+    chart_library_platform::FolderActionService picker(repository, tasks);
+    picker.requestAddFolder();
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (picker.active() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(!picker.active(), "desktop picker finishes");
+    auto session = repository.OpenSession();
+    const auto entries = session->SelectEffectiveEntries();
+    expect(std::ranges::any_of(entries, [](const ChartEntry &entry) {
+      return std::filesystem::path(entry.path) == std::filesystem::path(desktopPickerResult);
+    }), "selected desktop folder is registered in the library");
+    expect(tasks.snapshot().tasks.size() == 1, "folder selection queues a scan");
+    desktopPickerResult.clear();
+    picker.requestAddFolder();
+    while (picker.active() && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(tasks.snapshot().tasks.size() == 1, "cancelling the picker adds no scan");
+  }
+}
+
 int main() {
+  testDesktopFolderPickingRegistersAndQueuesScan();
   testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput();
   testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();
   testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal();

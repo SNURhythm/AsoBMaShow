@@ -5574,6 +5574,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
 
+    add_executable(newcomer_tutorial_view_tests
+        tests/newcomer_tutorial_view_tests.cpp
+        src/scene/NewcomerTutorialView.cpp
+        src/view/Button.cpp
+        src/view/SdlTtfRuntime.cpp
+        src/view/TextView.cpp
+        src/view/View.cpp
+        src/rendering/Color.cpp
+        src/rendering/common.cpp
+        src/rendering/SimpleBatchRenderer.cpp
+        src/rendering/UiBatchRenderer.cpp
+        src/rendering/UniformCache.cpp
+    )
+    target_include_directories(newcomer_tutorial_view_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+    )
+    target_compile_features(newcomer_tutorial_view_tests PRIVATE cxx_std_23)
+    target_link_libraries(newcomer_tutorial_view_tests PRIVATE
+        ${COMMON_LIBS} bgfx yogacore
+    )
+
     add_executable(scene_return_target_tests
         tests/scene_return_target_tests.cpp
     )
@@ -8653,6 +8674,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(image_alpha_bounds_tests)
     asobmashow_register_test(localization_tests)
     asobmashow_register_test(scene_language_lifecycle_tests)
+    asobmashow_register_test(newcomer_tutorial_view_tests)
+    set_tests_properties(newcomer_tutorial_view_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     asobmashow_register_test(application_ui_state_store_tests)
     asobmashow_register_test(profile_settings_persistence_tests foundation_profile_settings_persistence)
     asobmashow_register_test(ir_credential_store_tests ir_credential_store_tests)

@@ -27,6 +27,7 @@ public:
 
 private:
   void start();
+  void startTutorial();
   void openSettings();
   void buildView();
   void startInputListening();
@@ -37,6 +38,7 @@ private:
   View *rootLayout_ = nullptr;
   Button *startButton_ = nullptr;
   Button *settingsButton_ = nullptr;
+  Button *tutorialButton_ = nullptr;
   IntroSceneNavigation navigation_;
   std::unique_ptr<MusicSelectInputBindingAdapter> inputBindingAdapter_;
   std::uint64_t inputSubscription_ = 0;

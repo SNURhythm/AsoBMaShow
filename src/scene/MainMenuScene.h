@@ -61,6 +61,7 @@ class BlockingOverlayView;
 class DecideLoadingOverlay;
 class MainMenuPreviewController;
 class PlayOptionsPanelView;
+class NewcomerTutorialView;
 class ScrollView;
 struct CoursePlaySession;
 struct StartOptions;
@@ -73,7 +74,7 @@ struct MainMenuParseLogRow {
 
 class MainMenuScene : public Scene {
 public:
-  explicit MainMenuScene(ApplicationContext &context);
+  explicit MainMenuScene(ApplicationContext &context, bool showTutorial = false);
   ~MainMenuScene() override;
   void init() override;
   void onPause() override;
@@ -87,6 +88,12 @@ public:
   void cleanupScene() override;
 
 private:
+  bool showTutorial_ = false;
+  bool findBmsAvailableWithoutTutorial_ = false;
+  NewcomerTutorialView *tutorial_ = nullptr;
+  Button *addFolderButton_ = nullptr;
+  ScrollView *tutorialRightScroll_ = nullptr;
+  void buildTutorial();
   std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
   std::unique_ptr<bms_parser::Chart> selectedChart;

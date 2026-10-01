@@ -17,6 +17,7 @@ struct ApplicationUiState {
   static constexpr int kSchemaVersion = 1;
   MusicSelectToolbarState musicSelectToolbar;
   std::string language = "system";
+  bool newcomerTutorialCompleted = false;
 
   bool operator==(const ApplicationUiState &) const = default;
 };
