@@ -5527,6 +5527,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/scene_language_lifecycle_extract.py
                 --root ${CMAKE_SOURCE_DIR} --output ${scene_language_lifecycle_source}
         DEPENDS tests/scene_language_lifecycle_extract.py tests/scene_language_lifecycle_fixture.cpp
+                tests/gameplay_terminal_scene_extract.py src/scene/IntroScene.cpp
                 src/scene/Scene.h src/scene/SceneManager.h src/scene/SceneManager.cpp
         VERBATIM
     )

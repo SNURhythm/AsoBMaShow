@@ -125,8 +125,11 @@ void IntroScene::openSettings() {
 }
 
 void IntroScene::startTutorial() {
-  context.sceneManager->changeScene(
-      std::make_unique<MainMenuScene>(context, true));
+  // Gameplay and other menu screens return to the registered MainMenu.
+  // Register the tutorial instance so those returns resume its retained state.
+  context.sceneManager->registerScene(
+      "MainMenu", std::make_unique<MainMenuScene>(context, true));
+  context.sceneManager->changeScene("MainMenu");
 }
 
 EventHandleResult IntroScene::handleEvents(SDL_Event &event) {

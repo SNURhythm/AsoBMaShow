@@ -915,6 +915,7 @@ void MainMenuScene::init() {
   initView(context);
   if (showTutorial_ || !context.applicationUiState.newcomerTutorialCompleted) {
     buildTutorial();
+    showTutorial_ = false;
   }
   SDL_Log("Main Menu Scene Initialized");
 }

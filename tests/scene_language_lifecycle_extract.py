@@ -2,6 +2,8 @@
 import argparse
 from pathlib import Path
 
+from gameplay_terminal_scene_extract import extract
+
 
 def without_includes(source):
     return "\n".join(
@@ -22,6 +24,9 @@ def main():
         ("PRODUCTION_MANAGER_METHODS", "src/scene/SceneManager.cpp"),
     ):
         fixture = fixture.replace(marker, without_includes((args.root / filename).read_text()))
+    fixture = fixture.replace("PRODUCTION_TUTORIAL_LAUNCH", extract(
+        (args.root / "src/scene/IntroScene.cpp").read_text(),
+        "void IntroScene::startTutorial()"))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)
 

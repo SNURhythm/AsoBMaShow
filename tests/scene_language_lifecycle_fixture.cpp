@@ -65,7 +65,9 @@ PRODUCTION_MANAGER_HEADER
 PRODUCTION_MANAGER_METHODS
 
 struct ObservedScene final : Scene {
-  explicit ObservedScene(ApplicationContext &context) : Scene(context) {}
+  explicit ObservedScene(ApplicationContext &context, bool tutorial = false)
+      : Scene(context), tutorial(tutorial) {}
+  bool tutorial = false;
   int initializations = 0;
   int cleanups = 0;
   int resumes = 0;
@@ -117,7 +119,40 @@ void assertRetainedState(const ObservedScene &scene, const View *originalLabel) 
   assert(scene.playing && scene.activeTask == 42);
 }
 
+using MainMenuScene = ObservedScene;
+struct IntroScene {
+  ApplicationContext &context;
+  void startTutorial();
+};
+PRODUCTION_TUTORIAL_LAUNCH
+
+void testTutorialMenuReturnsWithState() {
+  ApplicationContext context;
+  SceneManager manager(context);
+  manager.registerScene("MainMenu", std::make_unique<MainMenuScene>(context));
+  IntroScene intro{context};
+  for (int visit = 0; visit < 2; ++visit) {
+    intro.startTutorial();
+    auto *menu = static_cast<MainMenuScene *>(manager.currentScene);
+    assert(menu->tutorial);
+    menu->unsavedInput = "Settings";
+    menu->scrollOffset = 73.5f;
+    menu->playing = true;
+    menu->activeTask = 42;
+    auto *label = menu->label;
+    manager.changeScene(std::make_unique<ObservedScene>(context), true);
+    assert(manager.hasBackgroundScene(menu));
+    manager.changeScene("MainMenu");
+    assert(manager.currentScene == menu && "gameplay must return to the tutorial menu instance");
+    assertRetainedState(*menu, label);
+    assert(menu->resumes == 1);
+    // Returning to Intro releases the menu before replaying the tutorial.
+    manager.changeScene(std::make_unique<ObservedScene>(context));
+  }
+}
+
 int main() {
+  testTutorialMenuReturnsWithState();
   i18n::setLanguage(i18n::Language::English);
   ApplicationContext context;
   BackgroundTasks tasks;
