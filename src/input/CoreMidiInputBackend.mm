@@ -4,6 +4,7 @@
 
 #include "../StableHash.h"
 #include "AppleInputTimestamp.h"
+#include "../perf/LatencyTelemetry.h"
 #include "InputLifecycle.h"
 #include "LiveMidiDeviceIdAllocator.h"
 #include "NativeCallbackLifetime.h"
@@ -288,6 +289,12 @@ public:
         timestampMicros =
             midiTimestampMicros(packet->timeStamp, timestampSession_);
       }
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+      const auto receipt = perf::latency::nowMicros();
+      if (packet->timeStamp != 0 && receipt >= static_cast<std::int64_t>(timestampMicros)) {
+        perf::latency::record(perf::latency::Stage::InputDelivery, receipt - timestampMicros);
+      }
+#endif
       publishPacketImmediately(
           connection.stableId,
           std::span<const std::uint8_t>(packet->data, packet->length),

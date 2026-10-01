@@ -605,6 +605,32 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   const auto stateFor = [&state](ChartVisualId id) {
     return state.noteState(id);
   };
+  const auto longActivity = [&](const ChartVisualNote &head,
+                                const NotePresentationState *headState,
+                                const NotePresentationState *tailState) {
+    LongNoteLaneActivity activity{
+        .active = (headState != nullptr && headState->longActive) ||
+                  (tailState != nullptr && tailState->longActive),
+        .damaged = (headState != nullptr && headState->longDamaged) ||
+                   (tailState != nullptr && tailState->longDamaged),
+        .reactive = (headState != nullptr && headState->longReactive) ||
+                    (tailState != nullptr && tailState->longReactive)};
+    if (!state.realtimeLongNoteLanes ||
+        head.longNoteMode != ChartLongNoteMode::HCN) {
+      return activity;
+    }
+    const auto timeline = timelines.find(head.timelineId);
+    const bool reached =
+        (headState != nullptr && (headState->judged || headState->dead)) ||
+        (timeline != timelines.end() && timeline->second->timeMicros <= timeMicros);
+    const auto lane = std::ranges::find(*state.realtimeLongNoteLanes, head.lane,
+                                       &LongNoteLaneActivity::lane);
+    activity.reactive = reached &&
+        lane != state.realtimeLongNoteLanes->end() && lane->pressed;
+    activity.active = activity.active || activity.reactive;
+    activity.damaged = reached && !activity.active;
+    return activity;
+  };
   const auto isBeforeVisibleNoteStart =
       [&notes, &request, &timelines](const ChartVisualNote *note) {
         if (!request.minimumVisibleNoteTimeMicros || note == nullptr) {
@@ -1017,6 +1043,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
                     rowDepthIt->second.longOrder.has_value()
                       ? *rowDepthIt->second.longOrder
                       : gameplay_note_submission_order::LongNoteOrder{};
+        const auto activity = longActivity(*note, noteState, tailState);
         result.longNotes.push_back(
             {.headId = note->id,
              .tailId = tail->id,
@@ -1038,12 +1065,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
              .tailAuthoredOrdinal = tail->authoredOrdinal,
              .headRetainedOrdinal = timeline->retainedOrdinal,
              .tailRetainedOrdinal = tailTimeline->retainedOrdinal,
-             .active = (noteState != nullptr && noteState->longActive) ||
-                       (tailState != nullptr && tailState->longActive),
-             .damaged = (noteState != nullptr && noteState->longDamaged) ||
-                        (tailState != nullptr && tailState->longDamaged),
-             .reactive = (noteState != nullptr && noteState->longReactive) ||
-                         (tailState != nullptr && tailState->longReactive),
+             .active = activity.active,
+             .damaged = activity.damaged,
+             .reactive = activity.reactive,
              .headPlayed = noteState != nullptr && noteState->judged,
              .tailPlayed = tailState != nullptr && tailState->judged,
              .headJudged =
@@ -1382,6 +1406,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         : depth != builtInDepths.end() && depth->second.longOrder.has_value()
             ? *depth->second.longOrder
             : gameplay_note_submission_order::LongNoteOrder{};
+    const auto activity = longActivity(*head, headState, tailState);
     builtInPlan.longNotes.push_back(
         {.headId = head->id,
          .tailId = tail->id,
@@ -1401,12 +1426,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
          .tailAuthoredOrdinal = tail->authoredOrdinal,
          .headRetainedOrdinal = headTimeline->retainedOrdinal,
          .tailRetainedOrdinal = tailTimeline->retainedOrdinal,
-         .active = (headState != nullptr && headState->longActive) ||
-                   (tailState != nullptr && tailState->longActive),
-         .damaged = (headState != nullptr && headState->longDamaged) ||
-                    (tailState != nullptr && tailState->longDamaged),
-         .reactive = (headState != nullptr && headState->longReactive) ||
-                     (tailState != nullptr && tailState->longReactive),
+         .active = activity.active,
+         .damaged = activity.damaged,
+         .reactive = activity.reactive,
          .headPlayed = headState != nullptr && headState->judged,
          .tailPlayed = tailState != nullptr && tailState->judged,
          .headJudged =

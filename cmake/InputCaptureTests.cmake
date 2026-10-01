@@ -15,7 +15,7 @@ add_executable(input_capture_controller_tests
 )
 asobmashow_add_midi_backend(input_capture_controller_tests)
 asobmashow_add_gyroscope_backend(input_capture_controller_tests)
-asobmashow_add_windows_realtime_input_backend(input_capture_controller_tests)
+asobmashow_add_native_realtime_input_backend(input_capture_controller_tests)
 
 # This executable supplies a failing registry boundary and retains the real
 # controller, resolver, profile, and configuration implementations.

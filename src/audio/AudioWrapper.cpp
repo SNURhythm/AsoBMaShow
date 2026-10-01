@@ -314,6 +314,9 @@ struct AudioClockAnchor {
   long long wallMicros;
   long long endMicros;
   int ratePercent;
+  long long baseMicros = 0;
+  bool nativeHistory = false;
+  std::optional<long long> presentationMicros;
 };
 
 bool acquireAudioClockAnchorWriter(UserData *userData, bool mayWait) {
@@ -331,8 +334,17 @@ bool acquireAudioClockAnchorWriter(UserData *userData, bool mayWait) {
 }
 
 void publishAudioClockAnchor(UserData *userData, AudioClockAnchor anchor,
-                             bool mayWait) {
+                             bool mayWait,
+                             std::optional<long long> nativeWallEndMicros = {},
+                             std::optional<std::uint64_t> timelineGeneration = {}) {
   if (!acquireAudioClockAnchorWriter(userData, mayWait)) {
+    return;
+  }
+  if (timelineGeneration &&
+      ((*timelineGeneration & 1U) != 0 ||
+       *timelineGeneration != userData->audioClockTimelineGeneration.load(
+                                  std::memory_order_acquire))) {
+    userData->audioClockAnchorWriter->clear(std::memory_order_release);
     return;
   }
 
@@ -347,20 +359,38 @@ void publishAudioClockAnchor(UserData *userData, AudioClockAnchor anchor,
                                              std::memory_order_relaxed);
   userData->audioClockAnchorRatePercent->store(anchor.ratePercent,
                                                std::memory_order_relaxed);
+  if (nativeWallEndMicros) {
+    const auto count = userData->audioPresentationSegmentCount.load(
+        std::memory_order_relaxed);
+    auto &segment = userData->audioPresentationHistory[
+        count % kAudioPresentationHistoryCapacity];
+    segment.micros.store(anchor.micros, std::memory_order_relaxed);
+    segment.wallMicros.store(anchor.wallMicros, std::memory_order_relaxed);
+    segment.endMicros.store(anchor.endMicros, std::memory_order_relaxed);
+    segment.wallEndMicros.store(*nativeWallEndMicros, std::memory_order_relaxed);
+    segment.ratePercent.store(anchor.ratePercent, std::memory_order_relaxed);
+    userData->audioPresentationSegmentCount.store(count + 1,
+                                                  std::memory_order_relaxed);
+  } else {
+    userData->audioPresentationSegmentCount.store(0, std::memory_order_relaxed);
+  }
   userData->audioClockAnchorSequence->fetch_add(1, std::memory_order_release);
   userData->audioClockAnchorWriter->clear(std::memory_order_release);
 }
 
-AudioClockAnchor readAudioClockAnchor(const UserData &userData) {
+AudioClockAnchor readAudioClockAnchor(
+    const UserData &userData, std::optional<long long> steadyMicros = {}) {
   for (;;) {
+    const auto timelineBefore = userData.audioClockTimelineGeneration.load(
+        std::memory_order_acquire);
     const std::uint64_t generationBefore =
         userData.audioClockAnchorSequence->load(std::memory_order_acquire);
-    if ((generationBefore & 1U) != 0) {
+    if ((generationBefore & 1U) != 0 || (timelineBefore & 1U) != 0) {
       std::this_thread::yield();
       continue;
     }
 
-    const AudioClockAnchor anchor{
+    AudioClockAnchor anchor{
         .micros =
             userData.audioClockAnchorMicros->load(std::memory_order_relaxed),
         .wallMicros = userData.audioClockAnchorWallMicros->load(
@@ -369,10 +399,43 @@ AudioClockAnchor readAudioClockAnchor(const UserData &userData) {
             userData.audioClockAnchorEndMicros->load(std::memory_order_relaxed),
         .ratePercent = userData.audioClockAnchorRatePercent->load(
             std::memory_order_relaxed),
+        .baseMicros = userData.audioClockBaseMicros->load(std::memory_order_relaxed),
     };
+    const auto count = userData.audioPresentationSegmentCount.load(
+        std::memory_order_relaxed);
+    anchor.nativeHistory = count > 0;
+    if (steadyMicros && count > 0) {
+      const auto retained = std::min<std::uint64_t>(
+          count, kAudioPresentationHistoryCapacity);
+      for (std::uint64_t offset = 0; offset < retained; ++offset) {
+        const auto &segment = userData.audioPresentationHistory[
+            (count - 1 - offset) % kAudioPresentationHistoryCapacity];
+        const auto wall = segment.wallMicros.load(std::memory_order_relaxed);
+        // Before the first native segment, preserve the age of startup input.
+        // Once history wraps, older input has no trustworthy retained mapping.
+        if (*steadyMicros < wall &&
+            !(offset + 1 == count && count <= kAudioPresentationHistoryCapacity)) {
+          continue;
+        }
+        const auto end = segment.endMicros.load(std::memory_order_relaxed);
+        if (*steadyMicros >= segment.wallEndMicros.load(std::memory_order_relaxed)) {
+          anchor.presentationMicros = end;
+        } else {
+          const audio::PlaybackRate rate{
+              .percent = segment.ratePercent.load(std::memory_order_relaxed)};
+          anchor.presentationMicros = std::min(end, addMicrosClamped(
+              segment.micros.load(std::memory_order_relaxed),
+              rate.chartMicrosFromReal(*steadyMicros - wall)));
+        }
+        break;
+      }
+    }
+    std::atomic_thread_fence(std::memory_order_acquire);
     const std::uint64_t generationAfter =
         userData.audioClockAnchorSequence->load(std::memory_order_acquire);
-    if (generationBefore == generationAfter) {
+    if (generationBefore == generationAfter &&
+        timelineBefore == userData.audioClockTimelineGeneration.load(
+                              std::memory_order_acquire)) {
       return anchor;
     }
   }
@@ -380,6 +443,8 @@ AudioClockAnchor readAudioClockAnchor(const UserData &userData) {
 
 long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
                                 int sampleRate, int playbackRatePercent) {
+  const auto timelineGeneration = userData->audioClockTimelineGeneration.load(
+      std::memory_order_acquire);
   const int64_t startFrame = userData->audioClockFrameCursor->fetch_add(
       frameCount, std::memory_order_acq_rel);
   const long long baseMicros =
@@ -391,12 +456,20 @@ long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
       baseMicros, framesToChartMicros(startFrame + frameCount, sampleRate,
                                       playbackRatePercent));
 
+  const bool nativeTiming = userData->pendingRenderTiming.outputTimestampKnown &&
+                            userData->pendingRenderTiming.outputSteadyMicros > 0;
+  const auto wallMicros = nativeTiming
+      ? userData->pendingRenderTiming.outputSteadyMicros : nowMicros();
   publishAudioClockAnchor(userData,
                           {.micros = bufferStartMicros,
-                           .wallMicros = nowMicros(),
+                           .wallMicros = wallMicros,
                            .endMicros = bufferEndMicros,
                            .ratePercent = playbackRatePercent},
-                          false);
+                          false,
+                          nativeTiming ? std::optional<long long>(addMicrosClamped(
+                              wallMicros, framesToChartMicros(frameCount, sampleRate, 100)))
+                                       : std::nullopt,
+                          timelineGeneration);
   return bufferStartMicros;
 }
 
@@ -411,8 +484,13 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     return;
   }
 
+  const audio::RenderTiming timing = userData->pendingRenderTiming;
+  userData->pendingRenderTiming = {};
+  if (frameCount == 0 || outputChannels != 2 || pOutput == nullptr) {
+    return;
+  }
   AudioCallbackState &state = *userData->callbackState;
-  audio::playback::DrainRealtimeCommands(state);
+  audio::playback::DrainRealtimeCommands(state, true);
   audio::playback::DrainCommands(state);
 
   const bool clockRunning = userData->stopwatch->isRunning();
@@ -435,68 +513,77 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
       clockRunning ? audio::playback::MixScope::AllBuses
                    : audio::playback::MixScope::SystemOnly;
   if (clockRunning) {
+    userData->pendingRenderTiming = timing;
     bufferStartMicros = beginAudioClockBuffer(
         userData, frameCount, sampleRate, playbackRatePercent);
-    audio::playback::ActivateScheduledSounds(state, bufferStartMicros,
-                                             sampleRate, frameCount,
-                                             playbackRatePercent);
+    userData->pendingRenderTiming = {};
   }
 
-  if (state.playingSoundCount == 0) {
+  // Scratch storage is allocated before stream startup. Even a native route
+  // with an unusually large callback is rendered completely in bounded chunks.
+  const auto scratchFrames = static_cast<ma_uint32>(userData->mixBuffer->size() / 2);
+  if (scratchFrames == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
     return;
   }
+  for (ma_uint32 offset = 0; offset < frameCount;) {
+    const ma_uint32 chunkFrames = std::min(scratchFrames, frameCount - offset);
+    if (clockRunning) {
+      audio::playback::ActivateScheduledSounds(state, bufferStartMicros,
+          sampleRate, chunkFrames, playbackRatePercent, offset);
+    }
+    if (state.playingSoundCount == 0) {
+      fillSilence(static_cast<ma_int16 *>(pOutput) +
+                      static_cast<size_t>(offset) * outputChannels,
+                  chunkFrames, outputChannels);
+      offset += chunkFrames;
+      continue;
+    }
+    const size_t requiredSamples = static_cast<size_t>(chunkFrames) * outputChannels;
+    float *mixBuffer = userData->mixBuffer->data();
+    std::fill_n(mixBuffer, requiredSamples, 0.0f);
 
-  // Resize mix buffer if necessary
-  size_t requiredSamples = frameCount * outputChannels;
-  if (userData->mixBuffer->size() < requiredSamples) {
-    userData->mixBuffer->resize(requiredSamples);
-  }
+    const float bgmGain = userData->bgmGain
+                              ? userData->bgmGain->load(std::memory_order_acquire)
+                              : 1.0f;
+    const float keysoundGain =
+        userData->keysoundGain
+            ? userData->keysoundGain->load(std::memory_order_acquire)
+            : 1.0f;
+    audio::playback::MixActiveSounds(
+        state, std::span<float>(mixBuffer, requiredSamples), chunkFrames,
+        outputChannels, bgmGain, keysoundGain, playbackRatePercent, mixScope);
 
-  // Clear mix buffer
-  std::fill(userData->mixBuffer->begin(),
-            userData->mixBuffer->begin() + requiredSamples, 0.0f);
-  float *mixBuffer = userData->mixBuffer->data();
+    // Apply Effects
+    if (userData->bassFilter) {
+      userData->bassFilter->processStereo(mixBuffer, chunkFrames);
+    }
+    if (userData->trebleFilter) {
+      userData->trebleFilter->processStereo(mixBuffer, chunkFrames);
+    }
 
-  const float bgmGain = userData->bgmGain
-                            ? userData->bgmGain->load(std::memory_order_acquire)
-                            : 1.0f;
-  const float keysoundGain =
-      userData->keysoundGain
-          ? userData->keysoundGain->load(std::memory_order_acquire)
-          : 1.0f;
-  audio::playback::MixActiveSounds(
-      state, std::span<float>(mixBuffer, requiredSamples), frameCount,
-      outputChannels, bgmGain, keysoundGain, playbackRatePercent, mixScope);
+    if (userData->reverb && userData->reverb->initialized) {
+      userData->reverb->processStereo(mixBuffer, chunkFrames);
+    }
 
-  // Apply Effects
-  if (userData->bassFilter) {
-    userData->bassFilter->processStereo(mixBuffer, frameCount);
-  }
-  if (userData->trebleFilter) {
-    userData->trebleFilter->processStereo(mixBuffer, frameCount);
-  }
+    if (userData->compressor && userData->compressor->enabled) {
+      userData->compressor->processStereo(mixBuffer, chunkFrames);
+    }
 
-  if (userData->reverb && userData->reverb->initialized) {
-    userData->reverb->processStereo(mixBuffer, frameCount);
-  }
+    // Convert back to int16
+    ma_int16 *outPtr = (ma_int16 *)pOutput + static_cast<size_t>(offset) * outputChannels;
+    for (size_t i = 0; i < requiredSamples; ++i) {
+      float sample = mixBuffer[i];
 
-  if (userData->compressor && userData->compressor->enabled) {
-    userData->compressor->processStereo(mixBuffer, frameCount);
-  }
+      // Hard clip
+      if (sample > 1.0f)
+        sample = 1.0f;
+      if (sample < -1.0f)
+        sample = -1.0f;
 
-  // Convert back to int16
-  ma_int16 *outPtr = (ma_int16 *)pOutput;
-  for (size_t i = 0; i < requiredSamples; ++i) {
-    float sample = mixBuffer[i];
-
-    // Hard clip
-    if (sample > 1.0f)
-      sample = 1.0f;
-    if (sample < -1.0f)
-      sample = -1.0f;
-
-    outPtr[i] = (ma_int16)(sample * 32767.0f);
+      outPtr[i] = (ma_int16)(sample * 32767.0f);
+    }
+    offset += chunkFrames;
   }
 }
 
@@ -549,9 +636,14 @@ void configurableBackendRender(void *output, std::uint32_t frameCount,
            static_cast<UserData *>(userData));
 }
 
+void configurableBackendTiming(audio::RenderTiming timing, void *userData) {
+  static_cast<UserData *>(userData)->pendingRenderTiming = timing;
+}
+
 // AudioWrapper Implementation
 
 void AudioWrapper::initializeUserData() {
+  mixBuffer.resize(4096 * 2);
   userData.callbackState = &callbackState;
   userData.sampleRate = &currentSampleRate;
   userData.audioClockBaseMicros = &audioClockBaseMicros;
@@ -571,6 +663,23 @@ void AudioWrapper::initializeUserData() {
   userData.trebleFilter = &trebleFilter;
   userData.reverb = &reverb;
   userData.compressor = &compressor;
+}
+
+void AudioWrapper::invalidateNativePresentationHistory() {
+  // Called only with the backend confirmed stopped, before restarting it.
+  if (userData.audioPresentationSegmentCount.load(std::memory_order_acquire) == 0) {
+    return;
+  }
+  const auto position = getTimeMicros();
+  userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_acq_rel);
+  publishAudioClockAnchor(&userData,
+                          {.micros = position,
+                           .wallMicros = 0,
+                           .endMicros = position,
+                           .ratePercent = playbackRatePercent.load(std::memory_order_acquire)},
+                          true);
+  userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_release);
+  audioClockPublishedMicros.store(position, std::memory_order_release);
 }
 
 void AudioWrapper::startBackendAfterConstruction() {
@@ -600,6 +709,7 @@ AudioWrapper::AudioWrapper(
                                  ? "Failed to initialize audio backend"
                                  : std::move(openError));
   }
+  opened->setRenderTimingCallback(configurableBackendTiming, &userData);
   runtimeState_ = opened->runtimeState();
   backend =
       std::make_unique<ConfigurableBackendLifecycle>(std::move(opened));
@@ -654,23 +764,34 @@ AudioWrapper::~AudioWrapper() {
 }
 
 long long AudioWrapper::getTimeMicros() const {
-  const AudioClockAnchor anchor = readAudioClockAnchor(userData);
+  if (audioClockFrozen.load(std::memory_order_acquire)) {
+    return audioClockFrozenMicros.load(std::memory_order_relaxed);
+  }
+  const auto wallNow = nowMicros();
+  const AudioClockAnchor anchor = readAudioClockAnchor(userData, wallNow);
+  const bool clockRunning = stopwatch->isRunning();
 
-  if (anchor.wallMicros <= 0 || !stopwatch->isRunning()) {
+  if (audioClockFrozen.load(std::memory_order_acquire)) {
+    return audioClockFrozenMicros.load(std::memory_order_relaxed);
+  }
+
+  if (anchor.wallMicros <= 0 || !clockRunning) {
     audioClockPublishedMicros.store(anchor.micros, std::memory_order_release);
     return anchor.micros;
   }
 
   const audio::PlaybackRate rate{.percent = anchor.ratePercent};
-  const long long wallDeltaMicros = nowMicros() - anchor.wallMicros;
-  long long interpolatedMicros = addMicrosClamped(
-      anchor.micros, rate.chartMicrosFromReal(wallDeltaMicros));
+  const long long wallDeltaMicros = wallNow - anchor.wallMicros;
+  long long interpolatedMicros = anchor.nativeHistory
+      ? anchor.presentationMicros.value_or(
+            audioClockPublishedMicros.load(std::memory_order_acquire))
+      : addMicrosClamped(anchor.micros, rate.chartMicrosFromReal(wallDeltaMicros));
   if (anchor.endMicros >= anchor.micros &&
       interpolatedMicros > anchor.endMicros) {
     interpolatedMicros = anchor.endMicros;
   }
-  if (interpolatedMicros < anchor.micros) {
-    interpolatedMicros = anchor.micros;
+  if (interpolatedMicros < anchor.baseMicros) {
+    interpolatedMicros = anchor.baseMicros;
   }
   audioClockPublishedMicros.store(interpolatedMicros,
                                   std::memory_order_release);
@@ -679,7 +800,10 @@ long long AudioWrapper::getTimeMicros() const {
 
 std::optional<long long> AudioWrapper::songTimeMicrosAtSteadyMicros(
     long long steadyMicros) const noexcept {
-  const AudioClockAnchor anchor = readAudioClockAnchor(userData);
+  const AudioClockAnchor anchor = readAudioClockAnchor(userData, steadyMicros);
+  if (anchor.nativeHistory) {
+    return anchor.presentationMicros;
+  }
   if (anchor.wallMicros <= 0 || anchor.ratePercent <= 0) {
     return std::nullopt;
   }
@@ -697,9 +821,27 @@ std::optional<long long> AudioWrapper::songTimeMicrosAtSteadyMicros(
   return interpolatedMicros;
 }
 
+void AudioWrapper::pauseClock() {
+  std::lock_guard<std::mutex> lock(audioCommandMutex);
+  if (audioClockFrozen.load(std::memory_order_acquire)) return;
+  const auto position = getTimeMicros();
+  audioClockFrozenMicros.store(position, std::memory_order_relaxed);
+  audioClockFrozen.store(true, std::memory_order_release);
+  stopwatch->pause();
+  // PCM and scheduled events have already advanced to the generated cursor.
+  // Keep that cursor and the timestamps of audio still queued for output.
+}
+
+void AudioWrapper::resumeClock() {
+  std::lock_guard<std::mutex> lock(audioCommandMutex);
+  stopwatch->resume();
+  audioClockFrozen.store(false, std::memory_order_release);
+}
+
 void AudioWrapper::seekClock(long long micros) {
   std::lock_guard<std::mutex> lock(audioCommandMutex);
   const long long wallMicros = nowMicros();
+  userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_acq_rel);
   audioClockBaseMicros.store(micros, std::memory_order_release);
   audioClockFrameCursor.store(0, std::memory_order_release);
   publishAudioClockAnchor(
@@ -709,7 +851,9 @@ void AudioWrapper::seekClock(long long micros) {
        .endMicros = micros,
        .ratePercent = playbackRatePercent.load(std::memory_order_acquire)},
       true);
+  userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_release);
   audioClockPublishedMicros.store(micros, std::memory_order_release);
+  audioClockFrozen.store(false, std::memory_order_release);
 }
 
 bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
@@ -746,10 +890,11 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
 
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
   const long long rebasedMicros =
-      stopwatch->isRunning()
+      stopwatch->isRunning() || audioClockFrozen.load(std::memory_order_acquire)
           ? getTimeMicros()
           : audioClockPublishedMicros.load(std::memory_order_acquire);
   const long long wallMicros = nowMicros();
+  userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_acq_rel);
   audioClockBaseMicros.store(rebasedMicros, std::memory_order_release);
   audioClockFrameCursor.store(0, std::memory_order_release);
   playbackRatePercent.store(rate.percent, std::memory_order_release);
@@ -759,7 +904,9 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
                            .endMicros = rebasedMicros,
                            .ratePercent = rate.percent},
                           true);
+  userData.audioClockTimelineGeneration.fetch_add(1, std::memory_order_release);
   audioClockPublishedMicros.store(rebasedMicros, std::memory_order_release);
+  audioClockFrozen.store(false, std::memory_order_release);
   return true;
 }
 
@@ -1570,6 +1717,9 @@ AudioWrapper::startDeviceWithLifecycleAndSoundLocked() {
 
   closeRealtimeSoundGateAndWait();
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  if (observed.state == audio::playback::BackendRunState::Stopped) {
+    invalidateNativePresentationHistory();
+  }
   std::vector<SoundData *> sounds;
   sounds.reserve(soundDataList.size());
   for (const auto &soundData : soundDataList) {
@@ -1741,6 +1891,9 @@ audio::Capabilities AudioWrapper::capabilities() const {
 
 audio::RuntimeState AudioWrapper::runtimeState() const {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
+  if (const auto *configurable = dynamic_cast<const ConfigurableBackendLifecycle *>(backend.get())) {
+    return configurable->runtimeState();
+  }
   return runtimeState_;
 }
 
@@ -1772,6 +1925,7 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
     }
     return false;
   }
+  candidate->setRenderTimingCallback(configurableBackendTiming, &userData);
   const audio::RuntimeState candidateState = candidate->runtimeState();
   const int targetSampleRate =
       candidateState.effectiveSampleRate == 0
@@ -1780,6 +1934,7 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
 
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  invalidateNativePresentationHistory();
   std::vector<SoundData *> sounds;
   sounds.reserve(soundDataList.size());
   for (const auto &soundData : soundDataList) {
@@ -1810,15 +1965,6 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
     }
   }
 
-  if (!candidate->start(errorMessage)) {
-    if (errorMessage.empty()) {
-      errorMessage = "Audio backend could not start the requested stream";
-    }
-    backendState.store(audio::playback::BackendRunState::Stopped,
-                       std::memory_order_release);
-    return false;
-  }
-
   if (transition.has_value()) {
     audio::playback::CommitOutputRateTransition(std::move(*transition),
                                                 callbackState);
@@ -1836,6 +1982,18 @@ bool AudioWrapper::restart(const audio::StreamRequest &request,
           std::memory_order_release);
     }
     currentSampleRate.store(targetSampleRate, std::memory_order_release);
+  }
+
+  // start() may invoke the first render callback before returning. Commit
+  // callback-owned PCM, the cursor and its rate while the stream is stopped.
+  // A failed start keeps this committed format so restore can resample it.
+  if (!candidate->start(errorMessage)) {
+    if (errorMessage.empty()) {
+      errorMessage = "Audio backend could not start the requested stream";
+    }
+    backendState.store(audio::playback::BackendRunState::Stopped,
+                       std::memory_order_release);
+    return false;
   }
 
   runtimeState_ = candidate->runtimeState();

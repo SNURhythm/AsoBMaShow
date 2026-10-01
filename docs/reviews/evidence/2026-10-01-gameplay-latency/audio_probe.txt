@@ -1,0 +1,10 @@
+before paHostApiInitializers[0].
+after paHostApiInitializers[0].
+TerminateHostApis in
+TerminateHostApis out
+device=MacBook Pro Speakers sampleRate=48000 defaultLow=18.708ms
+requested=0 callbacks=758 actualFrames=64..64 reported=18.708ms DAClead_p50=4.305ms DAClead_p99=4.318ms flagged=0
+requested=64 callbacks=758 actualFrames=64..64 reported=18.708ms DAClead_p50=4.309ms DAClead_p99=4.318ms flagged=0
+requested=128 callbacks=377 actualFrames=128..128 reported=20.042ms DAClead_p50=5.633ms DAClead_p99=5.654ms flagged=0
+requested=256 callbacks=189 actualFrames=256..256 reported=22.708ms DAClead_p50=8.287ms DAClead_p99=8.313ms flagged=0
+requested=512 callbacks=95 actualFrames=512..512 reported=28.042ms DAClead_p50=13.567ms DAClead_p99=13.616ms flagged=0

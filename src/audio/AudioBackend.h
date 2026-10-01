@@ -40,10 +40,24 @@ struct RuntimeState {
   std::uint32_t effectiveSampleRate = 0;
   std::uint32_t effectiveBufferFrames = 0;
   double effectiveLatencyMs = 0.0;
+  std::uint32_t effectiveCallbackSampleRate = 0;
+  bool outputUnderflowKnown = false;
+  bool outputTimestampKnown = false;
+  std::uint64_t callbackCount = 0;
+  std::uint64_t outputUnderflowCount = 0;
+  std::uint32_t maxCallbackDurationMicros = 0;
+  std::uint32_t lastCallbackIntervalMicros = 0;
   bool operator==(const RuntimeState &) const = default;
 };
 
 using RenderCallback = void (*)(void *, std::uint32_t, int, void *);
+// Timestamp of the first output frame, supplied by the native audio API.
+// A missing timestamp is not replaced with a latency estimate.
+struct RenderTiming {
+  std::int64_t outputSteadyMicros = 0;
+  bool outputTimestampKnown = false;
+};
+using RenderTimingCallback = void (*)(RenderTiming, void *);
 struct NativeBufferFrameLimits {
   std::uint32_t minimum = 0;
   std::uint32_t maximum = 0;
@@ -60,6 +74,7 @@ SelectPortAudioBufferFrameOptions(
 class IBackend {
 public:
   virtual ~IBackend() = default;
+  virtual void setRenderTimingCallback(RenderTimingCallback, void *) {}
   virtual bool start(std::string &errorMessage) = 0;
   virtual bool stop(std::string &errorMessage) = 0;
   [[nodiscard]] virtual bool isStarted() const = 0;

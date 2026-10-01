@@ -1,4 +1,5 @@
 #include "AudioMix.h"
+#include "../perf/LatencyTelemetry.h"
 #include "../settings/AudioVideoSettings.h"
 
 #include <algorithm>
@@ -8,7 +9,7 @@
 
 AudioCallbackState::AudioCallbackState()
     : playingSounds(std::make_unique<PlayingSound[]>(kMaxActiveSounds)),
-      scheduledSounds(std::make_unique<ScheduledSound[]>(kInitialScheduledSoundCapacity)),
+      scheduledSounds(kInitialScheduledSoundCapacity),
       commandQueue(
           std::make_unique<AudioCommand[]>(kCombinedAudioCommandQueueSize)),
       realtimeCommandQueue(
@@ -549,9 +550,10 @@ bool PrepareScheduledSoundCapacity(AudioCallbackState &state,
                                    : state.scheduledSoundCapacity * 2;
   const size_t capacity = std::max(requiredCapacity, grownCapacity);
   try {
-    auto replacement = std::make_unique<ScheduledSound[]>(capacity);
-    std::copy_n(state.scheduledSounds.get(), state.scheduledSoundCount,
-                replacement.get());
+    ScheduledSoundBuffer replacement(capacity);
+    for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
+      replacement[index] = state.scheduledSounds[index];
+    }
     state.scheduledSounds = std::move(replacement);
     state.scheduledSoundCapacity = capacity;
     return true;
@@ -612,6 +614,9 @@ void ClearCallbackSounds(AudioCallbackState &state, bool preserveSystemSounds) {
     }
   }
   state.scheduledSoundCount = retained;
+  if (retained == 0) {
+    state.scheduledSounds.reset();
+  }
   state.activeNonSystemVoices.store(0, std::memory_order_release);
   state.scheduledNonSystemSounds.store(0, std::memory_order_release);
 }
@@ -744,12 +749,19 @@ bool CommitRealtimeCommand(
   }
   state.realtimeCommandQueue[writeCursor % kRealtimeAudioCommandQueueSize] =
       command;
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  state.realtimeCommandQueue[writeCursor % kRealtimeAudioCommandQueueSize]
+      .submittedSteadyMicros = perf::latency::nowMicros();
+#endif
   state.realtimeCommandWriteCursor.store(writeCursor + 1,
                                          std::memory_order_release);
   return true;
 }
 
-void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
+void DrainRealtimeCommands(AudioCallbackState &state, bool rendering) noexcept {
+#if !ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  (void)rendering;
+#endif
   std::uint32_t readCursor =
       state.realtimeCommandReadCursor.load(std::memory_order_relaxed);
   const std::uint32_t writeCursor =
@@ -757,6 +769,13 @@ void DrainRealtimeCommands(AudioCallbackState &state) noexcept {
   while (readCursor != writeCursor) {
     const AudioCommand &command = state.realtimeCommandQueue[
         readCursor % kRealtimeAudioCommandQueueSize];
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+    if (rendering && command.submittedSteadyMicros > 0) {
+      const auto age = perf::latency::nowMicros() - command.submittedSteadyMicros;
+      if (age >= 0) perf::latency::record(
+          perf::latency::Stage::SoundCommandToCallback, static_cast<std::uint64_t>(age));
+    }
+#endif
     switch (command.type) {
     case AudioCommandType::PlayNow:
       AppendRealtimeActiveSound(state, command.soundData, command.bus,
@@ -854,16 +873,22 @@ void DrainCommands(AudioCallbackState &state,
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount,
-                             int playbackRatePercent) {
+                             int playbackRatePercent,
+                             std::uint32_t bufferOffsetFrames) {
+  if (frameCount > std::numeric_limits<std::uint32_t>::max() - bufferOffsetFrames) {
+    return;
+  }
   size_t scheduledSoundsToRemove = 0;
   for (; scheduledSoundsToRemove < state.scheduledSoundCount;
        ++scheduledSoundsToRemove) {
     const ScheduledSound &scheduledSound =
         state.scheduledSounds[scheduledSoundsToRemove];
     bool isDue = false;
-    const std::uint32_t outputOffsetFrames = outputOffsetForStartMicros(
-        scheduledSound.startMicros, bufferStartMicros, sampleRate, frameCount,
-        playbackRatePercent, isDue);
+    // Keep one rounding origin for the whole callback, even when scratch
+    // storage requires mixing it in multiple chunks.
+    const std::uint32_t absoluteOffsetFrames = outputOffsetForStartMicros(
+        scheduledSound.startMicros, bufferStartMicros, sampleRate,
+        frameCount + bufferOffsetFrames, playbackRatePercent, isDue);
     if (!isDue) {
       break;
     }
@@ -872,6 +897,9 @@ void ActivateScheduledSounds(AudioCallbackState &state,
       // active append succeeds (a dropped note still leaves the schedule).
       state.scheduledNonSystemSounds.fetch_sub(1, std::memory_order_release);
     }
+    const std::uint32_t outputOffsetFrames =
+        absoluteOffsetFrames > bufferOffsetFrames
+            ? absoluteOffsetFrames - bufferOffsetFrames : 0;
     AppendActiveSound(state, scheduledSound.soundData, scheduledSound.bus,
                       outputOffsetFrames, scheduledSound.startFrame,
                       scheduledSound.gain, scheduledSound.loop);
@@ -880,13 +908,8 @@ void ActivateScheduledSounds(AudioCallbackState &state,
   if (scheduledSoundsToRemove == 0) {
     return;
   }
-  const size_t remainingSounds =
-      state.scheduledSoundCount - scheduledSoundsToRemove;
-  for (size_t index = 0; index < remainingSounds; ++index) {
-    state.scheduledSounds[index] =
-        state.scheduledSounds[index + scheduledSoundsToRemove];
-  }
-  state.scheduledSoundCount = remainingSounds;
+  state.scheduledSounds.consume(scheduledSoundsToRemove);
+  state.scheduledSoundCount -= scheduledSoundsToRemove;
 }
 
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,

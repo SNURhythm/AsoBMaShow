@@ -1279,10 +1279,152 @@ void testClearCallbackSoundsPreservesSystemVoicesAndSchedules() {
           "ordinary clear still removes every bus");
 }
 
+
+void testChunkedScheduleRoundsAgainstTheOriginalCallbackOrigin() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200};
+  sound.outputFrameCount = 2;
+  AudioCallbackState state;
+  require(audio::playback::InsertScheduledSound(
+              state, {.soundData = &sound, .startMicros = 92'891}),
+          "fractional chunk-boundary event is staged");
+  audio::playback::ActivateScheduledSounds(state, 0, 44100, 4096, 100);
+  require(state.playingSoundCount == 0 && state.scheduledSoundCount == 1,
+          "an event on the next chunk boundary remains scheduled");
+  audio::playback::ActivateScheduledSounds(state, 0, 44100, 4096, 100, 4096);
+  require(state.playingSoundCount == 1 &&
+              state.playingSounds[0].outputOffsetFrames == 0,
+          "fractional callback origins cannot shift a boundary event by one sample");
+}
+
+void testScheduleActivationLeavesFutureEventsInPlace() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200};
+  sound.outputFrameCount = 2;
+  AudioCallbackState state;
+  for (size_t index = 0; index < 4096; ++index) {
+    require(audio::playback::InsertScheduledSound(
+                state, {.soundData = &sound,
+                        .startMicros = static_cast<long long>(index) * 1000}),
+            "stable schedule fixture inserts every event");
+  }
+  const auto *next = &state.scheduledSounds[1];
+  const auto *tail = &state.scheduledSounds[4095];
+  audio::playback::ActivateScheduledSounds(state, 0, 1000, 1, 100);
+  require(state.scheduledSoundCount == 4095 &&
+              state.scheduledSounds[0].startMicros == 1000 &&
+              &state.scheduledSounds[0] == next &&
+              &state.scheduledSounds[4094] == tail,
+          "activating a due event must not relocate any future event");
+  require(state.scheduledNonSystemSounds.load() == 4095 &&
+              state.activeNonSystemVoices.load() == 1,
+          "activation transfers exactly one scheduled owner to active playback");
+}
+
+void testPartiallyConsumedScheduleSupportsWrapInsertionRemovalAndGrowth() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200};
+  sound.outputFrameCount = 2;
+  SoundData removed;
+  AudioCallbackState state;
+  const auto capacity = state.scheduledSoundCapacity;
+  const auto *storage = state.scheduledSounds.get();
+  for (size_t index = 0; index < capacity; ++index) {
+    require(audio::playback::InsertScheduledSound(
+                state, {.soundData = index == 2 ? &removed : &sound,
+                        .startMicros = static_cast<long long>(index) * 1000,
+                        .sequence = 10}),
+            "wrapped schedule fixture fills prepared capacity");
+  }
+  audio::playback::ActivateScheduledSounds(state, 0, 1000, 2, 100);
+  require(audio::playback::InsertScheduledSound(
+              state, {.soundData = &sound, .startMicros = 5000, .sequence = 5}) &&
+              audio::playback::InsertScheduledSound(
+                  state, {.soundData = &sound, .startMicros = 100'000'000}),
+          "consumed slots support sorted insertion and append without growth");
+  require(state.scheduledSounds.get() == storage &&
+              state.scheduledSoundCount == capacity &&
+              state.scheduledSounds[3].startMicros == 5000 &&
+              state.scheduledSounds[3].sequence == 5 &&
+              state.scheduledSounds[4].sequence == 10 &&
+              state.scheduledSounds[capacity - 1].startMicros == 100'000'000 &&
+              state.scheduledNonSystemSounds.load() == capacity,
+          "wrapped insertion preserves timestamp and sequence ordering and ownership");
+  require(!audio::playback::InsertScheduledSound(
+              state, {.soundData = &sound, .startMicros = 200'000'000}),
+          "wrapped storage still rejects unprepared capacity exhaustion");
+  audio::playback::RemoveSound(state, &removed);
+  require(state.scheduledSoundCount == capacity - 1 &&
+              state.scheduledNonSystemSounds.load() == capacity - 1 &&
+              state.scheduledSounds[0].startMicros == 3000,
+          "owner removal ignores consumed slots and retains wrapped events");
+  require(audio::playback::PrepareScheduledSoundCapacity(state, capacity + 1),
+          "stopped schedule growth accepts wrapped pending events");
+  require(state.scheduledSounds[0].startMicros == 3000 &&
+              state.scheduledSounds[2].sequence == 5 &&
+              state.scheduledSounds[3].sequence == 10 &&
+              state.scheduledSounds[capacity - 2].startMicros == 100'000'000 &&
+              state.scheduledNonSystemSounds.load() == capacity - 1,
+          "growth copies only pending events in logical order");
+  audio::playback::ActivateScheduledSounds(state, 3000, 1000, 1, 100);
+  require(state.scheduledSounds[0].startMicros == 4000 &&
+              state.scheduledNonSystemSounds.load() == capacity - 2,
+          "activation resumes from the pending head after growth");
+}
+
+void testPartialScheduleClearRetirementAndRestart() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.outputData = {100, 200};
+  sound.outputFrameCount = 2;
+  SoundData retired;
+  retired.retired.store(true);
+  AudioCallbackState state;
+  require(audio::playback::InsertScheduledSound(
+              state, {.soundData = &sound, .startMicros = 0}) &&
+              audio::playback::InsertScheduledSound(
+                  state, {.soundData = &retired, .startMicros = 1000}) &&
+              audio::playback::InsertScheduledSound(
+                  state, {.soundData = &sound, .bus = audio::Bus::System,
+                          .startMicros = 2000}) &&
+              audio::playback::InsertScheduledSound(
+                  state, {.soundData = &sound, .startMicros = 3000}),
+          "partial clear fixture stages retired, System and chart events");
+  audio::playback::ActivateScheduledSounds(state, 0, 1000, 2, 100);
+  require(state.playingSoundCount == 1 && state.scheduledSoundCount == 2 &&
+              state.scheduledNonSystemSounds.load() == 1,
+          "retired due sounds leave scheduling ownership without becoming active");
+  audio::playback::ClearCallbackSounds(state, true);
+  require(state.scheduledSoundCount == 1 &&
+              state.scheduledSounds[0].bus == audio::Bus::System &&
+              state.scheduledSounds[0].startMicros == 2000 &&
+              state.scheduledNonSystemSounds.load() == 0,
+          "partial clear preserves only pending System schedules");
+  audio::playback::ClearCallbackSounds(state);
+  require(audio::playback::InsertScheduledSound(
+              state, {.soundData = &sound, .startMicros = -1000}),
+          "seek can stage an earlier schedule after clear");
+  audio::playback::ActivateScheduledSounds(state, -1000, 1000, 1, 100);
+  require(state.scheduledSoundCount == 0 && state.playingSoundCount == 1 &&
+              state.scheduledNonSystemSounds.load() == 0,
+          "restart drains the new schedule without replaying consumed entries");
+  audio::playback::RemoveSound(state, &sound);
+  require(state.activeNonSystemVoices.load() == 0 &&
+              state.scheduledNonSystemSounds.load() == 0,
+          "owner removal after a complete drain cannot decrement consumed entries twice");
+}
+
 } // namespace
 
 int main() {
   try {
+    testChunkedScheduleRoundsAgainstTheOriginalCallbackOrigin();
+    testScheduleActivationLeavesFutureEventsInPlace();
+    testPartiallyConsumedScheduleSupportsWrapInsertionRemovalAndGrowth();
+    testPartialScheduleClearRetirementAndRestart();
     {
       AudioCallbackState state;
       SoundData sound;

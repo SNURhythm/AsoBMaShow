@@ -44,6 +44,8 @@ struct AudioControlModel {
   std::string effectiveDeviceLabel;
   std::uint32_t effectiveSampleRate = 0;
   std::uint32_t effectiveBufferFrames = 0;
+  double effectiveCallbackPeriodMs = 0.0;
+  // Zero means the backend did not report a usable output-latency estimate.
   double effectiveLatencyMs = 0.0;
   bool operator==(const AudioControlModel &) const = default;
 };

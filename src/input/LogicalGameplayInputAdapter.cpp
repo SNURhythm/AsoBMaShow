@@ -1,4 +1,9 @@
 #include "LogicalGameplayInputAdapter.h"
+#include "InputTimestamp.h"
+
+#include <SDL2/SDL_timer.h>
+#include <chrono>
+#include <limits>
 
 #include <SDL2/SDL_scancode.h>
 
@@ -84,7 +89,19 @@ void LogicalGameplayInputAdapter::applyOwned(
     OwnerKind ownerKind) {
   latestPressedNote_ = nullptr;
   for (std::size_t index = 0; index < transitions.size(); ++index) {
-    const auto &transition = transitions[index];
+    auto transition = transitions[index];
+    const auto receipt = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (transition.timestampMicros == 0) {
+      transition.timestampMicros = receipt;
+    } else if (transition.timestampDomain == input::InputTimestampDomain::SdlMilliseconds) {
+      transition.timestampMicros = input::rebaseWrappingTimestampMillis(
+          static_cast<std::uint32_t>(transition.timestampMicros / 1000),
+          SDL_GetTicks(), receipt);
+    }
+    transition.timestampMicros = std::min<std::uint64_t>(
+        transition.timestampMicros, std::numeric_limits<std::int64_t>::max());
+    transition.timestampDomain = input::InputTimestampDomain::SteadyClock;
     switch (transition.action.kind) {
     case input::LogicalActionKind::Lane:
       applyLane(transition, ownerKind);
@@ -183,16 +200,17 @@ bool LogicalGameplayInputAdapter::isLaneHeld(int lane) const {
           scratch->second.activeDirection.has_value());
 }
 
-bms_parser::Note *LogicalGameplayInputAdapter::pressPhysicalLane(int lane) {
+bms_parser::Note *LogicalGameplayInputAdapter::pressPhysicalLane(int lane, std::uint64_t timestampMicros) {
   ++pendingPhysicalEdges_[lane];
-  latestPressedNote_ = control_.pressLane(lane);
+  latestPressedNote_ = control_.pressLaneAt(lane, timestampMicros);
   return latestPressedNote_;
 }
 
 void LogicalGameplayInputAdapter::releasePhysicalLane(int lane,
-                                                      bool backSpin) {
+                                                      bool backSpin,
+                                                      std::uint64_t timestampMicros) {
   ++pendingPhysicalEdges_[lane];
-  control_.releaseLane(lane, 0.0, backSpin);
+  control_.releaseLaneAt(lane, timestampMicros, backSpin);
 }
 
 void LogicalGameplayInputAdapter::applyLane(
@@ -210,7 +228,7 @@ void LogicalGameplayInputAdapter::applyLane(
     const bool inserted = heldLaneOwners_[lane].insert(owner).second;
     if (inserted) {
       if (!wasHeld) {
-        pressPhysicalLane(lane);
+        pressPhysicalLane(lane, transition.timestampMicros);
       }
       if (digitalScratch) {
         synchronizeScratchReplayControl(transition, lane);
@@ -229,7 +247,7 @@ void LogicalGameplayInputAdapter::applyLane(
   }
   const bool releasedPhysicalLane = !isLaneHeld(lane);
   if (releasedPhysicalLane) {
-    releasePhysicalLane(lane, false);
+    releasePhysicalLane(lane, false, transition.timestampMicros);
     if (!digitalScratch) {
       notifyApplied(transition, lane, logicalControl, false);
     }
@@ -273,8 +291,8 @@ void LogicalGameplayInputAdapter::applyScratch(
       if (oppositeReleasedInBatch) {
         return;
       }
-      releasePhysicalLane(lane, true);
-      pressPhysicalLane(lane);
+      releasePhysicalLane(lane, true, transition.timestampMicros);
+      pressPhysicalLane(lane, transition.timestampMicros);
       synchronizeScratchReplayControl(transition, lane);
       return;
     }
@@ -282,9 +300,9 @@ void LogicalGameplayInputAdapter::applyScratch(
     state.activeDirection.reset();
     const bool digitalLaneHeld = heldLaneOwners_.contains(lane);
     if (reversing || !digitalLaneHeld) {
-      releasePhysicalLane(lane, reversing);
+      releasePhysicalLane(lane, reversing, transition.timestampMicros);
       if (reversing && digitalLaneHeld) {
-        pressPhysicalLane(lane);
+        pressPhysicalLane(lane, transition.timestampMicros);
       }
     }
     scratchLaneStates_.erase(found);
@@ -301,15 +319,15 @@ void LogicalGameplayInputAdapter::applyScratch(
     return;
   }
   if (state.activeDirection.has_value()) {
-    releasePhysicalLane(lane, true);
-    pressPhysicalLane(lane);
+    releasePhysicalLane(lane, true, transition.timestampMicros);
+    pressPhysicalLane(lane, transition.timestampMicros);
     state.activeDirection = direction;
     synchronizeScratchReplayControl(transition, lane);
     return;
   }
   state.activeDirection = direction;
   if (!wasHeld) {
-    pressPhysicalLane(lane);
+    pressPhysicalLane(lane, transition.timestampMicros);
   }
   synchronizeScratchReplayControl(transition, lane);
 }

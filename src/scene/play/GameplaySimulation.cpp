@@ -444,6 +444,7 @@ void GameplaySimulation::markMissed(NoteId id, std::int64_t judgeTimeMicros,
   }
   markIdentityResolved(id);
   auto &state = noteStates_[id];
+  noteChanges_.record(id);
   state.played = true;
   state.dead = dead;
   state.playedTimeMicros = judgeTimeMicros;
@@ -454,10 +455,16 @@ void GameplaySimulation::clearPairHolding(NoteId id) {
   if (id == kInvalidNoteId || id >= noteStates_.size()) {
     return;
   }
-  noteStates_[id].holding = false;
+  if (noteStates_[id].holding) {
+    noteChanges_.record(id);
+    noteStates_[id].holding = false;
+  }
   const NoteId pairId = definition_.note(id).pairId;
   if (pairId != kInvalidNoteId && pairId < noteStates_.size()) {
-    noteStates_[pairId].holding = false;
+    if (noteStates_[pairId].holding) {
+      noteChanges_.record(pairId);
+      noteStates_[pairId].holding = false;
+    }
   }
 }
 
@@ -508,6 +515,7 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
   auto &tailState = noteStates_[tailId];
   const auto &headState = noteStates_[tail.pairId];
   markIdentityResolved(tailId);
+  noteChanges_.record(tailId);
   tailState.played = true;
   tailState.playedTimeMicros = songTimeMicros;
   const std::int64_t releaseTime = releaseJudge
@@ -587,6 +595,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
 
   if (note.kind == NoteKind::Landmine) {
     markIdentityResolved(id);
+    noteChanges_.record(id);
     state.dead = true;
     state.playedTimeMicros = songTimeMicros;
     if (!lanePressed(note.lane)) {
@@ -630,12 +639,14 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   }
 
   markIdentityResolved(id);
+  noteChanges_.record(id);
   state.played = true;
   state.playedTimeMicros = songTimeMicros;
   if (note.kind == NoteKind::LongHead) {
     state.acceptedHeadJudge = JudgeResult(PGreat, 0);
     state.holding = true;
     if (note.pairId != kInvalidNoteId) {
+      noteChanges_.record(note.pairId);
       noteStates_[note.pairId].holding = true;
       if (auto *lane = findLane(note.lane)) {
         lane->heldTailId = note.pairId;
@@ -1557,6 +1568,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
       continue;
     }
     markIdentityResolved(multiBadId);
+    noteChanges_.record(multiBadId);
     multiBadState.played = true;
     multiBadState.playedTimeMicros = judgedTime;
     if (multiBadNote.kind == NoteKind::LongHead &&
@@ -1605,6 +1617,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
                        judgedTime, context.laneBeamTimeMicros, judge};
 
   if (judge.judgement != None) {
+    noteChanges_.record(selected);
     if (judge.isNotePlayed() &&
         (judge.judgement != Bad || config_.judge.rules().vanishBad)) {
       markIdentityResolved(selected);
@@ -1614,6 +1627,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
         state.acceptedHeadJudge = judge;
         state.holding = true;
         if (note.pairId != kInvalidNoteId) {
+          noteChanges_.record(note.pairId);
           noteStates_[note.pairId].holding = true;
           if (auto *lane = findLane(note.lane)) {
             lane->heldTailId = note.pairId;
@@ -1755,6 +1769,8 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
 
   auto &headState = noteStates_[tail.pairId];
   markIdentityResolved(selected);
+  noteChanges_.record(selected);
+  noteChanges_.record(tail.pairId);
   tailState.played = true;
   tailState.playedTimeMicros = judgedTime;
   tailState.releaseTimeMicros = judgedTime;

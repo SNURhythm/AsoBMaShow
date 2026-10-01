@@ -1,12 +1,19 @@
 #include "AudioBackend.h"
 #include "../StableHash.h"
+#include "../perf/LatencyTelemetry.h"
 
 #include "../targets.h"
 
 #include <miniaudio.h>
+#if TARGET_OS_IPHONE
+#include "../input/AppleInputTimestamp.h"
+#endif
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <limits>
@@ -92,6 +99,68 @@ namespace {
 
 constexpr int kOutputChannels = 2;
 
+std::int64_t steadyMicros() noexcept {
+  return std::chrono::duration_cast<std::chrono::microseconds>(
+             std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+void recordNativeOutputLead(RenderTiming timing) noexcept {
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  if (timing.outputTimestampKnown) {
+    const auto lead = timing.outputSteadyMicros - steadyMicros();
+    perf::latency::record(lead >= 0 ? perf::latency::Stage::NativeOutputLead
+                                  : perf::latency::Stage::NativeOutputLateness,
+                          static_cast<std::uint64_t>(lead >= 0 ? lead : -lead));
+  }
+#else
+  (void)timing;
+#endif
+}
+
+// Single callback writer, bounded lock-free counters; readers never stop audio.
+struct CallbackTelemetry {
+  std::atomic<std::uint32_t> frames{0}, callbackSampleRate{0}, maximumDuration{0}, interval{0};
+  std::atomic<std::uint64_t> count{0}, underflows{0};
+  std::atomic<bool> timestampKnown{false};
+  std::int64_t previousBegin = 0;
+
+  std::int64_t begin(std::uint32_t frameCount, std::uint32_t sampleRate,
+                     bool known, bool underflow = false) noexcept {
+    const auto now = steadyMicros();
+    frames.store(frameCount, std::memory_order_relaxed);
+    callbackSampleRate.store(sampleRate, std::memory_order_relaxed);
+    if (previousBegin > 0) {
+      const auto elapsed = std::clamp<std::int64_t>(now - previousBegin, 0, UINT32_MAX);
+      interval.store(static_cast<std::uint32_t>(elapsed), std::memory_order_relaxed);
+      perf::latency::record(perf::latency::Stage::CallbackInterval, elapsed);
+    }
+    previousBegin = now;
+    timestampKnown.store(known, std::memory_order_relaxed);
+    count.fetch_add(1, std::memory_order_relaxed);
+    if (underflow) underflows.fetch_add(1, std::memory_order_relaxed);
+    return now;
+  }
+
+  void end(std::int64_t begin) noexcept {
+    const auto duration = static_cast<std::uint32_t>(std::clamp<std::int64_t>(
+        steadyMicros() - begin, 0, UINT32_MAX));
+    perf::latency::record(perf::latency::Stage::CallbackDuration, duration);
+    if (duration > maximumDuration.load(std::memory_order_relaxed))
+      maximumDuration.store(duration, std::memory_order_relaxed);
+  }
+
+  RuntimeState read(RuntimeState state) const noexcept {
+    state.effectiveBufferFrames = frames.load(std::memory_order_relaxed);
+    state.effectiveCallbackSampleRate = callbackSampleRate.load(std::memory_order_relaxed);
+    state.outputTimestampKnown = timestampKnown.load(std::memory_order_relaxed);
+    state.callbackCount = count.load(std::memory_order_relaxed);
+    state.outputUnderflowCount = underflows.load(std::memory_order_relaxed);
+    state.maxCallbackDurationMicros = maximumDuration.load(std::memory_order_relaxed);
+    state.lastCallbackIntervalMicros = interval.load(std::memory_order_relaxed);
+    return state;
+  }
+};
+
 void fillSilence(void *output, std::uint32_t frameCount, int channels) {
   if (output == nullptr || channels <= 0) {
     return;
@@ -112,6 +181,11 @@ public:
     config.playback.format = ma_format_s16;
     config.playback.channels = kOutputChannels;
     config.sampleRate = 0;
+#if TARGET_OS_IPHONE
+    config.periodSizeInFrames = request.bufferFrames == 0 ? 128 : request.bufferFrames;
+    // Preserve the AudioUnit callback's first-frame timestamp through conversion.
+    config.noFixedSizedCallback = MA_TRUE;
+#endif
     config.dataCallback = &MiniaudioStream::dataCallback;
     config.pUserData = this;
 
@@ -137,13 +211,15 @@ public:
       return;
     }
     initialized_ = true;
+#if TARGET_OS_IPHONE
+    if (device_.pContext->backend == ma_backend_coreaudio) {
+      device_.coreaudio.outputBoundaryCallback = &MiniaudioStream::outputBoundary;
+    }
+#endif
     state_.request = request_;
     state_.effectiveSampleRate = device_.sampleRate;
-    state_.effectiveBufferFrames = device_.playback.internalPeriodSizeInFrames;
-    if (state_.effectiveSampleRate != 0) {
-      state_.effectiveLatencyMs =
-          1000.0 * state_.effectiveBufferFrames / state_.effectiveSampleRate;
-    }
+    // Callback period is observed at render time. CoreAudio does not expose a
+    // complete output-latency estimate here; leave it explicitly unknown.
   }
 
   ~MiniaudioStream() override {
@@ -167,6 +243,7 @@ public:
       errorMessage = observed.diagnostic;
       return false;
     }
+    telemetry_.previousBegin = 0;
     const ma_result result = ma_device_start(&device_);
     if (result != MA_SUCCESS) {
       errorMessage = std::string("Miniaudio start failed: ") +
@@ -218,9 +295,27 @@ public:
     }
   }
 
-  [[nodiscard]] RuntimeState runtimeState() const override { return state_; }
+  void setRenderTimingCallback(RenderTimingCallback callback, void *userData) override {
+    timingCallback_ = callback;
+    timingUserData_ = userData;
+  }
+
+  [[nodiscard]] RuntimeState runtimeState() const override { return telemetry_.read(state_); }
 
 private:
+#if TARGET_OS_IPHONE
+  static void outputBoundary(ma_device *device, ma_bool32 begin,
+                              ma_uint32 frameCount) {
+    auto *self = static_cast<MiniaudioStream *>(device->pUserData);
+    if (begin) {
+      const bool known = device->coreaudio.outputHostTimeValid &&
+          device->sampleRate == device->playback.internalSampleRate;
+      self->nativeCallbackBegin_ = self->telemetry_.begin(frameCount, device->playback.internalSampleRate, known);
+    } else {
+      self->telemetry_.end(self->nativeCallbackBegin_);
+    }
+  }
+#endif
   static void dataCallback(ma_device *device, void *output, const void *,
                            ma_uint32 frameCount) {
     auto *self = static_cast<MiniaudioStream *>(device->pUserData);
@@ -229,14 +324,40 @@ private:
                   static_cast<int>(device->playback.channels));
       return;
     }
+    RenderTiming timing;
+    bool nativeBoundary = false;
+#if TARGET_OS_IPHONE
+    nativeBoundary = device->pContext->backend == ma_backend_coreaudio;
+    if (nativeBoundary && device->coreaudio.outputHostTimeValid && device->sampleRate > 0 &&
+        device->sampleRate == device->playback.internalSampleRate) {
+      timing.outputSteadyMicros = self->hostTimestampSession_.toSteadyMicros(
+          input::apple::hostTicksToMicros(device->coreaudio.outputHostTime)) +
+          static_cast<std::int64_t>(device->coreaudio.outputAppFramesRendered *
+                                    1000000ULL / device->sampleRate);
+      timing.outputTimestampKnown = true;
+    }
+    if (nativeBoundary) device->coreaudio.outputAppFramesRendered += frameCount;
+#endif
+    const auto begin = nativeBoundary ? 0 : self->telemetry_.begin(
+        frameCount, device->sampleRate, timing.outputTimestampKnown);
+    recordNativeOutputLead(timing);
+    if (self->timingCallback_) self->timingCallback_(timing, self->timingUserData_);
     self->renderCallback_(output, frameCount,
                           static_cast<int>(device->playback.channels),
                           self->renderUserData_);
+    if (!nativeBoundary) self->telemetry_.end(begin);
   }
 
   StreamRequest request_;
   RenderCallback renderCallback_ = nullptr;
   void *renderUserData_ = nullptr;
+  RenderTimingCallback timingCallback_ = nullptr;
+  void *timingUserData_ = nullptr;
+  CallbackTelemetry telemetry_;
+#if TARGET_OS_IPHONE
+  input::apple::HostToSteadyTimestampSession hostTimestampSession_;
+  std::int64_t nativeCallbackBegin_ = 0;
+#endif
   ma_device device_{};
   RuntimeState state_;
   bool initialized_ = false;
@@ -245,7 +366,13 @@ private:
 class MiniaudioFactory final : public IBackendFactory {
 public:
   [[nodiscard]] Capabilities capabilities() const override {
+#if TARGET_OS_IPHONE
+    return {.canSelectBufferFrames = true,
+            .outputDevices = {{.name = "System Output", .isDefault = true,
+                               .bufferFrames = {0, 64, 128, 256, 512, 1024}}}};
+#else
     return {.outputDevices = {{.name = "System Output", .isDefault = true}}};
+#endif
   }
 
   std::unique_ptr<IBackend> open(const StreamRequest &request,
@@ -253,8 +380,15 @@ public:
                                  void *renderUserData,
                                  std::string &errorMessage) override {
     errorMessage.clear();
-    if (!request.deviceId.empty() || request.sampleRate != 0 ||
-        request.bufferFrames != 0) {
+    const bool supportedBuffer =
+#if TARGET_OS_IPHONE
+        request.bufferFrames == 0 || request.bufferFrames == 64 ||
+        request.bufferFrames == 128 || request.bufferFrames == 256 ||
+        request.bufferFrames == 512 || request.bufferFrames == 1024;
+#else
+        request.bufferFrames == 0;
+#endif
+    if (!request.deviceId.empty() || request.sampleRate != 0 || !supportedBuffer) {
       errorMessage =
           "This platform uses the system-managed audio device and latency";
       return nullptr;
@@ -366,6 +500,9 @@ public:
     const double sampleRate = request.sampleRate == 0
                                   ? device.defaultSampleRate
                                   : static_cast<double>(request.sampleRate);
+    if (request.bufferFrames != 0 && sampleRate > 0.0) {
+      parameters.suggestedLatency = request.bufferFrames / sampleRate;
+    }
     const unsigned long frames = request.bufferFrames == 0
                                      ? paFramesPerBufferUnspecified
                                      : request.bufferFrames;
@@ -379,20 +516,13 @@ public:
       return;
     }
     state_.request = request;
+    state_.outputUnderflowKnown = true;
     state_.effectiveSampleRate = static_cast<std::uint32_t>(sampleRate + 0.5);
     state_.effectiveBufferFrames = request.bufferFrames;
     if (const PaStreamInfo *info = Pa_GetStreamInfo(stream_); info != nullptr) {
       state_.effectiveSampleRate =
           static_cast<std::uint32_t>(info->sampleRate + 0.5);
       state_.effectiveLatencyMs = info->outputLatency * 1000.0;
-      if (state_.effectiveBufferFrames == 0 && info->outputLatency > 0.0) {
-        const double latencyFrames = info->outputLatency * info->sampleRate;
-        if (latencyFrames <=
-            static_cast<double>(std::numeric_limits<std::uint32_t>::max())) {
-          state_.effectiveBufferFrames =
-              static_cast<std::uint32_t>(latencyFrames + 0.5);
-        }
-      }
     }
   }
 
@@ -420,6 +550,15 @@ public:
       errorMessage = observed.diagnostic;
       return false;
     }
+    // Calibrate API clock epochs outside the callback. DAC time itself comes
+    // from PortAudio; outputLatency is never added to the playback clock.
+    const auto before = steadyMicros();
+    const double nativeNow = Pa_GetStreamTime(stream_);
+    const auto after = steadyMicros();
+    nativeEpochSeconds_ = nativeNow;
+    steadyEpochMicros_ = before + (after - before) / 2;
+    nativeEpochValid_ = std::isfinite(nativeNow) && nativeNow > 0.0;
+    telemetry_.previousBegin = 0;
     const PaError result = Pa_StartStream(stream_);
     if (result != paNoError) {
       errorMessage =
@@ -467,11 +606,16 @@ public:
                          : std::string{});
   }
 
-  [[nodiscard]] RuntimeState runtimeState() const override { return state_; }
+  void setRenderTimingCallback(RenderTimingCallback callback, void *userData) override {
+    timingCallback_ = callback;
+    timingUserData_ = userData;
+  }
+
+  [[nodiscard]] RuntimeState runtimeState() const override { return telemetry_.read(state_); }
 
 private:
   static int callback(const void *, void *output, unsigned long frameCount,
-                      const PaStreamCallbackTimeInfo *, PaStreamCallbackFlags,
+                      const PaStreamCallbackTimeInfo *timeInfo, PaStreamCallbackFlags flags,
                       void *userData) {
     auto *self = static_cast<PortAudioStream *>(userData);
     if (self == nullptr || self->renderCallback_ == nullptr ||
@@ -482,13 +626,35 @@ private:
                   kOutputChannels);
       return paContinue;
     }
+    RenderTiming timing;
+    if (self->nativeEpochValid_ && timeInfo != nullptr &&
+        std::isfinite(timeInfo->outputBufferDacTime) && timeInfo->outputBufferDacTime > 0.0) {
+      const double deltaMicros = (timeInfo->outputBufferDacTime -
+                                  self->nativeEpochSeconds_) * 1000000.0;
+      if (std::isfinite(deltaMicros) && std::abs(deltaMicros) < 1.0e15) {
+        timing.outputSteadyMicros = self->steadyEpochMicros_ +
+                                    static_cast<std::int64_t>(deltaMicros);
+        timing.outputTimestampKnown = true;
+      }
+    }
+    const auto begin = self->telemetry_.begin(static_cast<std::uint32_t>(frameCount),
+        self->state_.effectiveSampleRate, timing.outputTimestampKnown, (flags & paOutputUnderflow) != 0);
+    recordNativeOutputLead(timing);
+    if (self->timingCallback_) self->timingCallback_(timing, self->timingUserData_);
     self->renderCallback_(output, static_cast<std::uint32_t>(frameCount),
                           kOutputChannels, self->renderUserData_);
+    self->telemetry_.end(begin);
     return paContinue;
   }
 
   RenderCallback renderCallback_ = nullptr;
   void *renderUserData_ = nullptr;
+  RenderTimingCallback timingCallback_ = nullptr;
+  void *timingUserData_ = nullptr;
+  CallbackTelemetry telemetry_;
+  double nativeEpochSeconds_ = 0.0;
+  std::int64_t steadyEpochMicros_ = 0;
+  bool nativeEpochValid_ = false;
   PaStream *stream_ = nullptr;
   RuntimeState state_;
 };

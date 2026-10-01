@@ -199,11 +199,16 @@ BuildAudioControlModel(const player_settings::AudioSettings &intent,
       deviceLabel(capabilities, effective.request.deviceId);
   model.effectiveSampleRate = effective.effectiveSampleRate;
   model.effectiveBufferFrames = effective.effectiveBufferFrames;
-  if (effective.effectiveSampleRate > 0 &&
-      effective.effectiveBufferFrames > 0) {
-    model.effectiveLatencyMs =
+  const auto callbackSampleRate = effective.effectiveCallbackSampleRate > 0
+      ? effective.effectiveCallbackSampleRate : effective.effectiveSampleRate;
+  if (callbackSampleRate > 0 && effective.effectiveBufferFrames > 0) {
+    model.effectiveCallbackPeriodMs =
         1000.0 * static_cast<double>(effective.effectiveBufferFrames) /
-        static_cast<double>(effective.effectiveSampleRate);
+        static_cast<double>(callbackSampleRate);
+  }
+  if (std::isfinite(effective.effectiveLatencyMs) &&
+      effective.effectiveLatencyMs > 0.0) {
+    model.effectiveLatencyMs = effective.effectiveLatencyMs;
   }
   return model;
 }

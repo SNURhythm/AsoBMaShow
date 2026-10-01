@@ -1,0 +1,63 @@
+Sparse gameplay snapshot comparison — 2026-10-01
+
+Before: production worker/simulation at 6f08f5cb797cf6564a117100fdf843bd6b3501e7
+before snapshot edits.
+After: bounded note journal, per-buffer catch-up, preinitialized buffers,
+unchanged graph revision checks, pending-publication retry.
+Same retained worker_probe.cpp workload and build_worker_probe.py -O2 -DNDEBUG
+production dependencies. 50 warmups and 400 retained alternating preparation
+press/release transitions per chart size; fake song clock zero, active-yield
+snapshot reader, fake sound sink. Initialization is excluded from timing.
+Three alternating before/after runs, serialized with the shared build lock.
+An earlier exploratory sequence overlapped an unrelated actions-runner Android
+build and was excluded. No compiler process was active when this retained
+sequence started; ordinary system scheduling and other applications remained.
+
+Median of the three per-run p50 and p99 values (microseconds):
+Notes       Before p50/p99   After p50/p99
+1,000       5 / 6            2 / 3
+10,000      30 / 40          2 / 5
+50,000      140 / 154        2 / 3
+100,000     293 / 424        2 / 3
+
+This isolates preparation publication work, not live note judgement, render
+application, audio output, or input-to-photon latency. One retained after run
+has a substantial scheduling outlier at 1,000 notes; raw results below retain
+it. The microsecond-resolution measurement cannot establish sub-microsecond
+costs or device latency guarantees. Correctness tests additionally assert zero
+note visits for unchanged 100,000-note snapshots, sparse long-note updates
+across skipped generations/pinned buffers, full recovery after 4,200 changes,
+exact-capacity boundaries, and publication retry after readers release buffers.
+Full note state remains available for stopped-worker/practice consumers;
+startup and journal overrun intentionally resynchronize full note state.
+
+before run 1
+notes=1000 enqueue_to_snapshot_p50=5.0us p99=6.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=10000 enqueue_to_snapshot_p50=29.0us p99=42.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=50000 enqueue_to_snapshot_p50=140.0us p99=152.0us enqueue_to_fake_audio_p50=1.0us p99=2.0us
+notes=100000 enqueue_to_snapshot_p50=293.0us p99=1655.0us enqueue_to_fake_audio_p50=3.0us p99=360.0us
+after run 1
+notes=1000 enqueue_to_snapshot_p50=12.0us p99=1042.0us enqueue_to_fake_audio_p50=4.0us p99=651.0us
+notes=10000 enqueue_to_snapshot_p50=3.0us p99=5.0us enqueue_to_fake_audio_p50=2.0us p99=2.0us
+notes=50000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=2.0us
+notes=100000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=16.0us
+before run 2
+notes=1000 enqueue_to_snapshot_p50=5.0us p99=6.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=10000 enqueue_to_snapshot_p50=30.0us p99=34.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=50000 enqueue_to_snapshot_p50=140.0us p99=154.0us enqueue_to_fake_audio_p50=1.0us p99=2.0us
+notes=100000 enqueue_to_snapshot_p50=283.0us p99=305.0us enqueue_to_fake_audio_p50=3.0us p99=4.0us
+after run 2
+notes=1000 enqueue_to_snapshot_p50=1.0us p99=2.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=10000 enqueue_to_snapshot_p50=2.0us p99=13.0us enqueue_to_fake_audio_p50=1.0us p99=2.0us
+notes=50000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=100000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+before run 3
+notes=1000 enqueue_to_snapshot_p50=5.0us p99=6.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=10000 enqueue_to_snapshot_p50=31.0us p99=40.0us enqueue_to_fake_audio_p50=1.0us p99=2.0us
+notes=50000 enqueue_to_snapshot_p50=145.0us p99=206.0us enqueue_to_fake_audio_p50=1.0us p99=4.0us
+notes=100000 enqueue_to_snapshot_p50=293.0us p99=424.0us enqueue_to_fake_audio_p50=3.0us p99=6.0us
+after run 3
+notes=1000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=2.0us
+notes=10000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=50000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us
+notes=100000 enqueue_to_snapshot_p50=2.0us p99=3.0us enqueue_to_fake_audio_p50=1.0us p99=1.0us

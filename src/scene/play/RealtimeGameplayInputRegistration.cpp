@@ -21,6 +21,14 @@ RealtimeGameplayInputRegistration::RealtimeGameplayInputRegistration(
         configuration_.onDevice(device);
       }
     });
+    interruptionSubscription_ = registry_.subscribeRealtimeInterruptions([this](const auto &interruption) {
+      const auto index = static_cast<std::size_t>(interruption.deviceClass);
+      if (acceptingNativeInput_.load(std::memory_order_acquire) &&
+          index < configuration_.claimedClasses.size() &&
+          configuration_.claimedClasses[index] && configuration_.onInterruption) {
+        configuration_.onInterruption(interruption);
+      }
+    });
     for (std::size_t index = 0; index < configuration_.claimedClasses.size(); ++index) {
       if (configuration_.claimedClasses[index]) {
         disabledLegacyClasses_[index] = true;
@@ -78,6 +86,9 @@ void RealtimeGameplayInputRegistration::close() {
   }
   if (deviceSubscription_ != 0) {
     registry_.unsubscribe(std::exchange(deviceSubscription_, 0));
+  }
+  if (interruptionSubscription_ != 0) {
+    registry_.unsubscribe(std::exchange(interruptionSubscription_, 0));
   }
   for (std::size_t index = 0; index < disabledLegacyClasses_.size(); ++index) {
     if (disabledLegacyClasses_[index]) {

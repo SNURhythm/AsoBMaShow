@@ -22,6 +22,7 @@ public:
     std::function<void(input::DeviceClass, bool)> setLegacyClassEnabled;
     InputDeviceRegistry::InputListener onInput;
     InputDeviceRegistry::DeviceListener onDevice;
+    InputDeviceRegistry::InterruptionListener onInterruption;
     SDL_EventFilter sdlWatch = nullptr;
     void *sdlWatchContext = nullptr;
   };
@@ -51,6 +52,7 @@ private:
   DeviceClasses disabledLegacyClasses_{};
   std::uint64_t inputSubscription_ = 0;
   std::uint64_t deviceSubscription_ = 0;
+  std::uint64_t interruptionSubscription_ = 0;
   bool watchingSdl_ = false;
   bool activated_ = false;
   bool closed_ = false;

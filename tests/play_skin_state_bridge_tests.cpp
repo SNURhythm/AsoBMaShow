@@ -1685,6 +1685,26 @@ void testExtendedPlayerOneLaneTimersUsePinnedSkinOffsets() {
          "extended 1P key-off and HCN-damage timers retain the pinned "
          "independent inactive and damage states");
   bridge.discardFrame();
+
+  state.clock.serial = 216;
+  state.notes.clear();
+  state.realtimeLongNoteLanes = std::vector<LongNoteLaneActivity>{
+      {.lane = 9, .pressed = true, .active = true, .reactive = true}};
+  bridge.beginFrame(state, projectionAt(216));
+  expect(bridge.timerProperty({1210}) == 8'000'000 &&
+             bridge.timerProperty({1810}) == 8'000'000 &&
+             bridge.timerProperty({2010}) == kPlayfieldTimestampOff,
+         "realtime lane summaries drive hold and HCN timers without scanning note DTOs");
+  bridge.discardFrame();
+  state.clock.serial = 217;
+  state.realtimeLongNoteLanes = std::vector<LongNoteLaneActivity>{
+      {.lane = 9, .damaged = true}};
+  bridge.beginFrame(state, projectionAt(217));
+  expect(bridge.timerProperty({1210}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({1810}) == kPlayfieldTimestampOff &&
+             bridge.timerProperty({2010}) == 8'000'000,
+         "realtime lane release turns off hold and activity while retaining damage");
+  bridge.discardFrame();
 }
 
 void testPomyuTimersFollowPinnedDefaultProcessorCycles() {

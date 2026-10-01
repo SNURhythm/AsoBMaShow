@@ -2,6 +2,7 @@
 
 #include "GameplaySimulation.h"
 #include "../../replay/ReplayPlayback.h"
+#include "../../perf/LatencyTelemetry.h"
 
 #include <array>
 #include <atomic>
@@ -46,6 +47,9 @@ struct RealtimeGameplayInput {
   bool hasReplayControl = false;
   replay::LogicalControl replayControl;
   bool replayOnly = false;
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  std::int64_t ingressTimestampMicros = 0;
+#endif
 };
 
 struct RealtimeGameplayAudioReservation {
@@ -96,8 +100,14 @@ struct RealtimeGameplayTransaction {
 
 struct RealtimeGameplaySnapshot {
   std::uint64_t generation = 0;
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  std::int64_t publishedSteadyMicros = 0;
+#endif
   std::uint64_t transactionSequence = 0;
+  // Complete compatibility state; publication and presentation use the journal
+  // to update only changed identities while readers keep independent cursors.
   std::vector<NoteRuntimeState> noteStates;
+  NoteStateChanges noteChanges;
   std::vector<bool> lanePressed;
   std::vector<bool> longNoteHoldingByLane;
   GameplayAttemptSnapshot attempt;
@@ -217,6 +227,9 @@ public:
 
   bool start();
   void stop();
+  // Producer-safe request; the main thread must join it with suspend() before
+  // calling resume(). A request cannot be cancelled before acknowledgment.
+  bool requestSuspend() noexcept;
   bool suspend();
   bool resume();
   bool enqueueInput(const RealtimeGameplayInput &input) noexcept;
@@ -253,6 +266,7 @@ private:
 
   struct SnapshotBuffer {
     RealtimeGameplaySnapshot snapshot;
+    std::vector<std::size_t> holdingNoteCountsByLane;
     mutable std::atomic<std::uint32_t> readers{0};
   };
 
@@ -283,6 +297,10 @@ private:
   std::array<SnapshotBuffer, 3> snapshots_{};
   mutable std::atomic<std::size_t> latestSnapshot_{0};
   std::uint64_t snapshotGeneration_ = 0;
+  bool snapshotPending_ = false;
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+  std::int64_t processingStartedMicros_ = 0;
+#endif
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
   std::vector<replay::InputTransition> acceptedReplayInput_;

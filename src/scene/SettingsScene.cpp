@@ -205,6 +205,7 @@ void SettingsScene::update(float dt) {
   applyPendingSoundSetFolderPick();
 #endif
   if (audioVideoSession != nullptr) {
+    refreshAudioDiagnostics();
     const bool hadPreview = audioVideoSession->hasDisplayPreview();
     const auto previewResult =
         audioVideoSession->tick(std::chrono::steady_clock::now());

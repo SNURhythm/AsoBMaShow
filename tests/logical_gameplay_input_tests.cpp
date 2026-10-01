@@ -8,6 +8,7 @@
 #include <SDL2/SDL_scancode.h>
 
 #include <limits>
+#include <chrono>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -52,6 +53,16 @@ public:
   }
 
   std::vector<ControlCall> calls;
+  bms_parser::Note *pressLaneAt(int lane, std::int64_t timestamp) override {
+    timestamps.push_back(timestamp);
+    return pressLane(lane, 0.0);
+  }
+  bms_parser::Note *releaseLaneAt(int lane, std::int64_t timestamp,
+                                  bool backSpin) override {
+    timestamps.push_back(timestamp);
+    return releaseLane(lane, 0.0, backSpin);
+  }
+  std::vector<std::int64_t> timestamps;
 };
 
 void require(bool condition, std::string_view message) {
@@ -331,6 +342,39 @@ input::PhysicalInputEvent controlEvent(const input::PhysicalControl &control,
   return {.control = control,
           .rawValue = pressed ? 1.0 : 0.0,
           .normalizedValue = pressed ? 1.0F : 0.0F};
+}
+
+void testLegacyPipelinePreservesSourceEventAge() {
+  RecordingControl control;
+  LogicalGameplayInputPipeline pipeline(control, makeDefaultInputProfile(),
+                                         makeGameplayInputScopes(7));
+  auto press = keyEvent(SDL_SCANCODE_S, true);
+  const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  press.timestampMicros = now - 100000;
+  auto release = keyEvent(SDL_SCANCODE_S, false);
+  release.timestampMicros = now - 50000;
+  pipeline.consumeRegistryEvent(press);
+  pipeline.consumeRegistryEvent(release);
+  require(control.timestamps == std::vector<std::int64_t>{now - 100000, now - 50000},
+          "legacy press and release retain source age after delayed dispatch");
+}
+
+void testLegacyScratchAndReplayKeepTheTriggerTimestamp() {
+  RecordingControl control;
+  std::vector<std::uint64_t> replayTimes;
+  LogicalGameplayInputAdapter adapter(control, {}, [&](const auto &applied) {
+    replayTimes.push_back(applied.source.timestampMicros);
+  });
+  auto clockwise = transition({1, 7}, input::LogicalActionKind::ScratchClockwise, true);
+  clockwise.timestampMicros = 111111;
+  auto reverse = transition({1, 7}, input::LogicalActionKind::ScratchCounterClockwise, true);
+  reverse.timestampMicros = 222222;
+  adapter.apply(std::vector{clockwise, reverse});
+  require(control.timestamps == std::vector<std::int64_t>{111111, 222222, 222222},
+          "scratch reversal release and press use the same source timestamp");
+  require(replayTimes == std::vector<std::uint64_t>{111111, 222222, 222222},
+          "replay captures the input timestamp rather than main-thread dispatch time");
 }
 
 void testDefaultProfileRoutesThroughResolverAndAdapter() {
@@ -1382,6 +1426,8 @@ void testPlaybackClearPolicyCapsEverySuccessfulClearPath() {
 } // namespace
 
 int main() {
+  testLegacyPipelinePreservesSourceEventAge();
+  testLegacyScratchAndReplayKeepTheTriggerTimestamp();
   testLaneTransitionsPreserveDpLaneNumbers();
   testGameplayScopesEnableBothPlayersOnlyForDp();
   testScratchReversalAndLateReleaseOrdering();

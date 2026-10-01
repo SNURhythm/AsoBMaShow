@@ -98,6 +98,7 @@ struct AudioCommand {
   std::atomic_bool *acknowledgement = nullptr;
   std::uint64_t submissionSequence = 0;
   AudioCommandAdmission admission = AudioCommandAdmission::Ordinary;
+  std::int64_t submittedSteadyMicros = 0;
 };
 
 constexpr size_t kMaxActiveSounds = 512;
@@ -112,12 +113,44 @@ struct RealtimeAudioCommandReservation {
   std::uint32_t cursor = 0;
 };
 
+// Indexing is relative to the first pending event, even after the storage wraps.
+// Advancing the schedule never relocates future events or allocates memory.
+class ScheduledSoundBuffer {
+public:
+  explicit ScheduledSoundBuffer(size_t capacity)
+      : storage_(std::make_unique<ScheduledSound[]>(capacity)),
+        capacity_(capacity) {}
+
+  ScheduledSound &operator[](size_t index) noexcept {
+    return storage_[physicalIndex(index)];
+  }
+  const ScheduledSound &operator[](size_t index) const noexcept {
+    return storage_[physicalIndex(index)];
+  }
+
+  // Allocation identity only; pending events are not necessarily contiguous.
+  const ScheduledSound *get() const noexcept { return storage_.get(); }
+
+  void consume(size_t count) noexcept { readCursor_ = physicalIndex(count); }
+  void reset() noexcept { readCursor_ = 0; }
+
+private:
+  size_t physicalIndex(size_t index) const noexcept {
+    const size_t position = readCursor_ + index;
+    return position < capacity_ ? position : position - capacity_;
+  }
+
+  std::unique_ptr<ScheduledSound[]> storage_;
+  size_t capacity_;
+  size_t readCursor_ = 0;
+};
+
 struct AudioCallbackState {
   AudioCallbackState();
 
   std::unique_ptr<PlayingSound[]> playingSounds;
   size_t playingSoundCount = 0;
-  std::unique_ptr<ScheduledSound[]> scheduledSounds;
+  ScheduledSoundBuffer scheduledSounds;
   size_t scheduledSoundCapacity = kInitialScheduledSoundCapacity;
   size_t scheduledSoundCount = 0;
   std::unique_ptr<AudioCommand[]> commandQueue;
@@ -230,14 +263,15 @@ TryReserveRealtimeCommand(const AudioCallbackState &state) noexcept;
 bool CommitRealtimeCommand(
     AudioCallbackState &state, RealtimeAudioCommandReservation reservation,
     const AudioCommand &command) noexcept;
-void DrainRealtimeCommands(AudioCallbackState &state) noexcept;
+void DrainRealtimeCommands(AudioCallbackState &state, bool rendering = false) noexcept;
 using CommandDrainSnapshotHook = void (*)(void *context);
 void DrainCommands(AudioCallbackState &state,
                    CommandDrainSnapshotHook afterSnapshot = nullptr,
                    void *hookContext = nullptr);
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
-                             std::uint32_t frameCount, int playbackRatePercent);
+                             std::uint32_t frameCount, int playbackRatePercent,
+                             std::uint32_t bufferOffsetFrames = 0);
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,

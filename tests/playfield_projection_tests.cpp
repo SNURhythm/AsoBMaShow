@@ -911,9 +911,46 @@ bool testReplayProjectionDoesNotRescanOffscreenChartRowsEachFrame() {
   return true;
 }
 
+bool testRealtimeHcnProjectionDerivesActivityFromClockAndLane() {
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  model.timelines = {
+      {.id = 1, .timeMicros = 100, .scrollPosition = 1.0, .retainedForProjection = true},
+      {.id = 2, .timeMicros = 200, .scrollPosition = 2.0, .retainedForProjection = true}};
+  model.notes = {
+      {.id = 10, .timelineId = 1, .pairId = 11, .lane = 0,
+       .kind = ChartVisualNoteKind::LongHead, .longNoteMode = ChartLongNoteMode::HCN},
+      {.id = 11, .timelineId = 2, .pairId = 10, .lane = 0,
+       .kind = ChartVisualNoteKind::LongTail, .longNoteMode = ChartLongNoteMode::HCN}};
+  PlayfieldVisualState state;
+  state.clock = {.serial = 1, .visualTimeMicros = 99};
+  state.notes = {{.id = 10}, {.id = 11}};
+  state.realtimeLongNoteLanes = std::vector<LongNoteLaneActivity>{{.lane = 0, .pressed = true}};
+  PlayfieldProjection projection;
+  const auto check = [&](long long displayTime, bool active, bool reactive, bool damaged) {
+    const auto result = projection.project(model, state,
+        {.noteDisplayTimeMicros = displayTime,
+         .visibleScrollBefore = 10.0, .visibleScrollAfter = 10.0});
+    return result.longNotes.size() == 1 && result.longNotes.front().active == active &&
+        result.longNotes.front().reactive == reactive && result.longNotes.front().damaged == damaged;
+  };
+  if (!check(99, false, false, false) || !check(100, true, true, false)) return false;
+  state.realtimeLongNoteLanes->front().pressed = false;
+  if (!check(100, false, false, true) || !check(99, false, false, false)) return false;
+  state.notes.front().judged = true;
+  state.notes.front().longActive = true;
+  if (!check(99, true, false, false)) return false;
+  state.notes.front().longActive = false;
+  return check(99, false, false, true);
+}
+
 } // namespace
 
 int main() {
+  if (!testRealtimeHcnProjectionDerivesActivityFromClockAndLane()) {
+    std::cerr << "realtime HCN activity must track display time, lane state and early resolution\n";
+    return EXIT_FAILURE;
+  }
   if (!testPassedNormalNotesDoNotRemainInTheSkinProjection()) {
     std::cerr << "passed normal notes must not remain in the default skin "
                  "projection, while mines retain their Mine visual kind\n";

@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -383,6 +384,14 @@ struct NotePresentationState {
   bool operator==(const NotePresentationState &) const = default;
 };
 
+struct LongNoteLaneActivity {
+  int lane = 0;
+  bool pressed = false;
+  bool active = false;
+  bool damaged = false;
+  bool reactive = false;
+};
+
 struct PresentationTouchPoint {
   long long fingerId = 0;
   ReplayTouchAction action = ReplayTouchAction::Move;
@@ -413,6 +422,10 @@ struct PlayfieldVisualState {
   std::shared_ptr<const std::vector<NotePresentationState>> noteSnapshot;
   std::shared_ptr<const std::unordered_map<ChartVisualId, std::size_t>>
       noteSnapshotIndices;
+  // When present, note longActive contains authoritative holding state.
+  // Projection derives HCN reactions from the frame clock and these lanes;
+  // skin timers consume the already aggregated lane activity.
+  std::optional<std::vector<LongNoteLaneActivity>> realtimeLongNoteLanes;
   std::vector<PresentationTouchPoint> touches;
   SkinGameplayGraphState skinGameplayGraph;
   JudgeResult lastJudge = JudgeResult(None, 0);
@@ -506,7 +519,9 @@ public:
   // Rendering consumes this value before the next gameplay update. It keeps a
   // stable copy-on-write note snapshot, avoiding a chart-sized copy per frame.
   [[nodiscard]] PlayfieldVisualState
-  captureForPresentation(PlayfieldFrameClock clock) const;
+  captureForPresentation(
+      PlayfieldFrameClock clock,
+      std::optional<long long> realtimeNoteDisplayMicros = std::nullopt) const;
 
   void onLanePressed(int lane, JudgeResult judge,
                      long long eventMicros) override;
@@ -528,6 +543,21 @@ private:
   void advanceReplayTouches(long long replayTouchTimeMicros) const;
   void captureTouches(long long replayTouchTimeMicros) const;
   void detachNoteSnapshot();
+
+  struct LongNoteSource {
+    std::size_t laneIndex = 0;
+    long long timeMicros = 0;
+    bool hcn = false;
+  };
+  struct LongNoteLaneIndex {
+    std::size_t holding = 0;
+    std::multiset<long long> hcnReachTimes;
+    std::multiset<long long> unheldHcnReachTimes;
+  };
+  void updateLongNoteActivity(const NotePresentationState &before,
+                              const NotePresentationState &after);
+  std::unordered_map<ChartVisualId, LongNoteSource> longNoteSources_;
+  std::vector<LongNoteLaneIndex> longNoteLanes_;
 
   std::vector<int> laneOrder_;
   std::unordered_map<int, std::size_t> laneIndices_;

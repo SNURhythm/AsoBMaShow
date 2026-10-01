@@ -137,7 +137,7 @@ void InputBindingResolver::consume(const input::PhysicalInputEvent &event) {
     evaluations.push_back(
         {.bindingIndex = index, .active = active, .value = value});
   }
-  applyEvaluations(evaluations);
+  applyEvaluations(evaluations, event.timestampMicros, event.timestampDomain);
 }
 
 void InputBindingResolver::disconnectDevice(std::string_view stableId) {
@@ -179,7 +179,8 @@ bool InputBindingResolver::scopeIsActive(input::InputScope scope) const {
 }
 
 void InputBindingResolver::applyEvaluations(
-    std::span<const BindingEvaluation> evaluations) {
+    std::span<const BindingEvaluation> evaluations,
+    std::uint64_t timestampMicros, input::InputTimestampDomain timestampDomain) {
   std::vector<LogicalStateKey> affectedKeys;
   std::map<LogicalStateKey, std::size_t> previousCounts;
   std::map<LogicalStateKey, float> pressValues;
@@ -229,7 +230,9 @@ void InputBindingResolver::applyEvaluations(
       transitions.push_back({.scope = key.scope,
                              .action = key.action,
                              .pressed = false,
-                             .value = 0.0f});
+                             .value = 0.0f,
+                             .timestampMicros = timestampMicros,
+                             .timestampDomain = timestampDomain});
     }
   }
   for (const auto &key : affectedKeys) {
@@ -241,7 +244,9 @@ void InputBindingResolver::applyEvaluations(
       transitions.push_back({.scope = key.scope,
                              .action = key.action,
                              .pressed = true,
-                             .value = pressValues.at(key)});
+                             .value = pressValues.at(key),
+                             .timestampMicros = timestampMicros,
+                             .timestampDomain = timestampDomain});
     }
   }
 

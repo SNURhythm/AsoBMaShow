@@ -125,6 +125,27 @@ void PlayfieldVisualStateStore::resetModel(
     notes_->push_back({.id = note.id});
   }
   noteIndices_ = std::move(noteIndices);
+  longNoteSources_.clear();
+  longNoteLanes_.clear();
+  longNoteLanes_.resize(laneOrder_.size());
+  std::unordered_map<ChartVisualId, long long> timelineTimes;
+  for (const auto &timeline : model.timelines) {
+    timelineTimes.emplace(timeline.id, timeline.timeMicros);
+  }
+  for (const auto &note : model.notes) {
+    const auto lane = laneIndices_.find(note.lane);
+    const auto time = timelineTimes.find(note.timelineId);
+    if (note.kind != ChartVisualNoteKind::LongHead ||
+        lane == laneIndices_.end() || time == timelineTimes.end()) {
+      continue;
+    }
+    const bool hcn = note.longNoteMode == ChartLongNoteMode::HCN;
+    longNoteSources_.emplace(note.id, LongNoteSource{lane->second, time->second, hcn});
+    if (hcn) {
+      longNoteLanes_[lane->second].hcnReachTimes.insert(time->second);
+      longNoteLanes_[lane->second].unheldHcnReachTimes.insert(time->second);
+    }
+  }
   skinGameplayChartGraph_ =
       std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
   SkinGameplayGraphAccumulator initialGraph(
@@ -175,8 +196,45 @@ void PlayfieldVisualStateStore::setNoteState(NotePresentationState state) {
   if (it == noteIndices_->end()) {
     return;
   }
+  if ((*notes_)[it->second] == state) {
+    return;
+  }
   detachNoteSnapshot();
+  updateLongNoteActivity((*notes_)[it->second], state);
   (*notes_)[it->second] = state;
+}
+
+void PlayfieldVisualStateStore::updateLongNoteActivity(
+    const NotePresentationState &before, const NotePresentationState &after) {
+  const auto found = longNoteSources_.find(after.id);
+  if (found == longNoteSources_.end()) {
+    return;
+  }
+  const auto &source = found->second;
+  auto &lane = longNoteLanes_[source.laneIndex];
+  if (before.longActive) --lane.holding;
+  if (after.longActive) ++lane.holding;
+  if (!source.hcn) {
+    return;
+  }
+  const auto reachTime = [&](const NotePresentationState &state) {
+    return state.judged || state.dead
+        ? std::numeric_limits<long long>::min() : source.timeMicros;
+  };
+  const auto previousTime = reachTime(before);
+  const auto nextTime = reachTime(after);
+  if (previousTime != nextTime) {
+    lane.hcnReachTimes.erase(lane.hcnReachTimes.find(previousTime));
+    lane.hcnReachTimes.insert(nextTime);
+  }
+  if (previousTime != nextTime || before.longActive != after.longActive) {
+    if (!before.longActive) {
+      lane.unheldHcnReachTimes.erase(lane.unheldHcnReachTimes.find(previousTime));
+    }
+    if (!after.longActive) {
+      lane.unheldHcnReachTimes.insert(nextTime);
+    }
+  }
 }
 
 void PlayfieldVisualStateStore::setNoteStates(
@@ -348,10 +406,25 @@ PlayfieldVisualStateStore::capture(PlayfieldFrameClock clock,
 }
 
 PlayfieldVisualState PlayfieldVisualStateStore::captureForPresentation(
-    PlayfieldFrameClock clock) const {
+    PlayfieldFrameClock clock,
+    std::optional<long long> realtimeNoteDisplayMicros) const {
   PlayfieldVisualState result = capture(clock, false);
   result.noteSnapshot = notes_;
   result.noteSnapshotIndices = noteIndices_;
+  if (realtimeNoteDisplayMicros) {
+    auto &activity = result.realtimeLongNoteLanes.emplace();
+    activity.reserve(laneOrder_.size());
+    for (std::size_t index = 0; index < laneOrder_.size(); ++index) {
+      const auto &lane = longNoteLanes_[index];
+      const bool pressed = lanes_[index].pressed;
+      const bool reactive = pressed && !lane.hcnReachTimes.empty() &&
+          *lane.hcnReachTimes.begin() <= *realtimeNoteDisplayMicros;
+      const bool damaged = !pressed && !lane.unheldHcnReachTimes.empty() &&
+          *lane.unheldHcnReachTimes.begin() <= *realtimeNoteDisplayMicros;
+      activity.push_back({laneOrder_[index], pressed,
+                          lane.holding != 0 || reactive, damaged, reactive});
+    }
+  }
   return result;
 }
 

@@ -258,8 +258,11 @@ struct FactoryControl {
   int liveStreams = 0;
   std::optional<audio::playback::BackendRunState> authoritativeState;
   std::optional<std::uint32_t> authoritativeSampleRate;
+  audio::RenderTimingCallback timingCallback = nullptr;
+  void *timingUserData = nullptr;
   audio::RenderCallback renderCallback = nullptr;
   void *renderUserData = nullptr;
+  std::function<void()> renderDuringStart;
 };
 
 class FakeConfigurableStream final : public audio::IBackend {
@@ -276,6 +279,12 @@ public:
 
   ~FakeConfigurableStream() override { --control_->liveStreams; }
 
+  void setRenderTimingCallback(audio::RenderTimingCallback callback,
+                               void *userData) override {
+    control_->timingCallback = callback;
+    control_->timingUserData = userData;
+  }
+
   bool start(std::string &errorMessage) override {
     control_->events.push_back("start:" + state_.request.deviceId);
     if (!pop(control_->startResults, true)) {
@@ -283,6 +292,7 @@ public:
       return false;
     }
     started_ = true;
+    if (control_->renderDuringStart) control_->renderDuringStart();
     if (control_->authoritativeState.has_value()) {
       control_->authoritativeState = audio::playback::BackendRunState::Running;
     }
@@ -1694,6 +1704,42 @@ void testCancellationDuringResamplingDoesNotPublish() {
           "cancellation during conversion prevents publication");
 }
 
+void testRestartCommitsRateBeforeSynchronousFirstCallback() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("synchronous-restart-callback");
+  require(wrapper.loadGeneratedSound(sound, std::vector<short>(44100, 16000),
+                                     1, 44100), "restart callback fixture retains source PCM");
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::array<short, 882> initial{};
+  control->timingCallback({.outputSteadyMicros = 5'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(initial.data(), 441, 2, control->renderUserData);
+  require(wrapper.stopSounds().success &&
+              wrapper.stageScheduledSound(sound, audio::Bus::Bgm, 1'015'000),
+          "stopped restart retains a five-millisecond scheduled onset");
+  std::array<short, 960> first{};
+  control->renderDuringStart = [&] {
+    control->timingCallback({.outputSteadyMicros = 9'000'000,
+                            .outputTimestampKnown = true}, control->timingUserData);
+    control->renderCallback(first.data(), 480, 2, control->renderUserData);
+  };
+  std::string error;
+  require(wrapper.restart({.sampleRate = 48000}, error),
+          "the backend may render synchronously before start returns");
+  require(first[239 * 2] == 0 && first[240 * 2] != 0,
+          "the very first callback uses the new rate and preserves sample-accurate onset");
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  require(data->audioClockFrameCursor->load() == 960 &&
+              wrapper.songTimeMicrosAtSteadyMicros(9'011'000) == 1'020'000,
+          "first native segment uses the remapped cursor and new-rate duration");
+  control->renderDuringStart = {};
+  stopwatch.pause();
+}
+
 void testConfigurableWrapperRestartsAndRestoresRetainedPcm() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -1792,8 +1838,8 @@ void testPlaybackRateRequiresStoppedPitchShiftAndScalesChartClock() {
     stopwatch.start();
     std::vector<std::int16_t> output(48'000 * 2);
     control->renderCallback(output.data(), 48'000, 2, control->renderUserData);
-    std::array<std::int16_t, 1> emptyOutput{};
-    control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
+    std::array<std::int16_t, 2> nextOutput{};
+    control->renderCallback(nextOutput.data(), 1, 2, control->renderUserData);
     stopwatch.pause();
 
     require(
@@ -2885,8 +2931,294 @@ void testLongChartScheduleStartsAndAcceptsRealtimeKeysounds() {
           "the tail after one hour remains playable");
 }
 
+void testNativeOutputTimestampAnchorsPresentationWithoutMovingSchedule() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  require(control->timingCallback != nullptr,
+          "native timing is connected before starting the stream");
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::vector<short> output(882);
+  control->timingCallback({.outputSteadyMicros = 5'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(data->audioClockAnchorWallMicros->load() == 5'000'000 &&
+              data->audioClockAnchorMicros->load() == 1'000'000 &&
+              data->audioClockFrameCursor->load() == 441,
+          "native presentation time anchors the unchanged generated frame cursor");
+  require(wrapper.songTimeMicrosAtSteadyMicros(4'995'000) == 995'000,
+          "input before DAC presentation retains its real age");
+  control->renderCallback(output.data(), 0, 2, control->renderUserData);
+  require(data->audioClockAnchorWallMicros->load() == 5'000'000,
+          "an empty callback does not replace the presentation anchor");
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(data->audioClockAnchorWallMicros->load() != 5'000'000 &&
+              data->audioClockAnchorMicros->load() == 1'010'000,
+          "missing native timing uses receipt time, never stale timing or an offset");
+  stopwatch.pause();
+}
+
+void testNativePresentationHistoryPreservesInputAcrossOutputGaps() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::array<short, 882> output{};
+  for (const long long wall : {5'000'000LL, 5'030'000LL, 5'040'000LL}) {
+    control->timingCallback({.outputSteadyMicros = wall,
+                            .outputTimestampKnown = true}, control->timingUserData);
+    control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  }
+  require(wrapper.songTimeMicrosAtSteadyMicros(5'005'000) == 1'005'000,
+          "older input uses the actual rendered segment despite later callback jitter");
+  require(wrapper.songTimeMicrosAtSteadyMicros(5'020'000) == 1'010'000,
+          "a native output gap holds the previous segment end instead of rewinding");
+  require(wrapper.songTimeMicrosAtSteadyMicros(5'032'000) == 1'012'000 &&
+              wrapper.songTimeMicrosAtSteadyMicros(5'045'000) == 1'025'000 &&
+              wrapper.songTimeMicrosAtSteadyMicros(6'000'000) == 1'030'000,
+          "multiple queued native segments retain their own presentation intervals");
+  wrapper.seekClock(2'000'000);
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  require(wrapper.songTimeMicrosAtSteadyMicros(
+              data->audioClockAnchorWallMicros->load()) == 2'000'000,
+          "seek invalidates every native segment from the previous timeline");
+  stopwatch.pause();
+}
+
+void testNativePresentationClockDoesNotRewindDuringAnOutputGap() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::array<short, 882> output{};
+  const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  control->timingCallback({.outputSteadyMicros = now - 20'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(wrapper.getTimeMicros() == 1'010'000,
+          "the first native segment has already reached its output end");
+  control->timingCallback({.outputSteadyMicros = now + 1'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(wrapper.getTimeMicros() == 1'010'000,
+          "a future native segment cannot rewind the currently audible clock");
+  stopwatch.pause();
+}
+
+void testNativePresentationHistoryIsBoundedAndInvalidatesUnknownTiming() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(0);
+  stopwatch.start();
+  std::array<short, 882> output{};
+  for (int index = 0; index < 1100; ++index) {
+    control->timingCallback({.outputSteadyMicros = 5'000'000 + index * 10'000LL,
+                            .outputTimestampKnown = true}, control->timingUserData);
+    control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  }
+  require(!wrapper.songTimeMicrosAtSteadyMicros(5'005'000).has_value(),
+          "input older than retained native history reports unavailable mapping");
+  require(wrapper.songTimeMicrosAtSteadyMicros(7'005'000) == 2'005'000,
+          "native history wrap preserves recent segments without moving or allocating them");
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  require(wrapper.songTimeMicrosAtSteadyMicros(
+              data->audioClockAnchorWallMicros->load() + 5000) == 11'005'000,
+          "an untimestamped callback invalidates native history and uses its receipt anchor");
+  stopwatch.pause();
+}
+
+void testNativePresentationHistoryResetsBeforeBackendRestart() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::array<short, 882> output{};
+  control->timingCallback({.outputSteadyMicros = 5'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(wrapper.stopSounds().success && wrapper.startDevice().success,
+          "native history fixture stops and restarts its backend");
+  require(!wrapper.songTimeMicrosAtSteadyMicros(5'005'000).has_value() &&
+              wrapper.getTimeMicros() == 1'010'000,
+          "restarting invalidates old output timestamps while preserving the stopped position");
+  control->timingCallback({.outputSteadyMicros = 9'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(wrapper.songTimeMicrosAtSteadyMicros(9'005'000) == 1'015'000,
+          "the restarted native clock maps its first newly rendered segment");
+  require(wrapper.stopSounds().success, "reconfiguration fixture stops audio");
+  std::string error;
+  require(wrapper.restart({.sampleRate = 44100}, error) &&
+              !wrapper.songTimeMicrosAtSteadyMicros(9'005'000).has_value(),
+          "a replacement stream cannot reuse the previous stream's native timestamps");
+  stopwatch.pause();
+}
+
+void testNativePresentationHistoryUsesRateAndPauseTimelineResets() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::array<short, 882> output{};
+  control->timingCallback({.outputSteadyMicros = 5'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  wrapper.pauseClock();
+  require(wrapper.isClockPaused() && wrapper.getTimeMicros() == 1'010'000,
+          "a stopped rate transition begins at the explicit frozen audible position");
+  std::string error;
+  require(wrapper.stopSounds().success &&
+              wrapper.setPlaybackRate({.percent = 200}, error) &&
+              wrapper.startDevice().success, "native clock fixture changes rate while stopped");
+  wrapper.resumeClock();
+  require(!wrapper.isClockPaused(), "rate transition and resume clear the frozen override");
+  control->timingCallback({.outputSteadyMicros = 9'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(wrapper.songTimeMicrosAtSteadyMicros(9'005'000) == 1'020'000,
+          "new native segments use the rebased two-times chart rate");
+  wrapper.seekClock(wrapper.getTimeMicros());
+  stopwatch.pause();
+  control->timingCallback({.outputSteadyMicros = 10'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  require(wrapper.getTimeMicros() == 1'030'000,
+          "a paused callback cannot add a new native gameplay segment");
+}
+
+void testNativePresentationHistoryReadersSeeCompleteSegments() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::array<short, 882> output{};
+  control->timingCallback({.outputSteadyMicros = 5'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
+  control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  std::atomic<bool> done{false};
+  auto reader = std::async(std::launch::async, [&] {
+    do {
+      if (wrapper.songTimeMicrosAtSteadyMicros(5'005'000) != 1'005'000) return false;
+    } while (!done.load(std::memory_order_acquire));
+    return true;
+  });
+  for (int index = 1; index < 300; ++index) {
+    control->timingCallback({.outputSteadyMicros = 5'000'000 + index * 11'000LL,
+                            .outputTimestampKnown = true}, control->timingUserData);
+    control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  }
+  done.store(true, std::memory_order_release);
+  require(reader.get(), "concurrent native history readers never observe a partial segment");
+  stopwatch.pause();
+}
+
+void testNativePauseStaysFrozenWhileCallbacksContinue() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  wrapper.seekClock(1'000'000);
+  stopwatch.start();
+  std::atomic_bool done{false};
+  std::atomic<unsigned> callbacks{0};
+  auto renderer = std::async(std::launch::async, [&] {
+    std::array<short, 882> output{};
+    while (!done.load(std::memory_order_acquire)) {
+      const auto wall = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      control->timingCallback({.outputSteadyMicros = wall + 100'000,
+                              .outputTimestampKnown = true}, control->timingUserData);
+      control->renderCallback(output.data(), 441, 2, control->renderUserData);
+      callbacks.fetch_add(1, std::memory_order_release);
+    }
+  });
+  bool frozen = true;
+  for (int cycle = 0; cycle < 100; ++cycle) {
+    wrapper.pauseClock();
+    const auto position = wrapper.getTimeMicros();
+    const auto target = callbacks.load(std::memory_order_acquire) + 10;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (callbacks.load(std::memory_order_acquire) < target &&
+           std::chrono::steady_clock::now() < deadline) {
+      frozen = frozen && wrapper.getTimeMicros() == position;
+      std::this_thread::yield();
+    }
+    frozen = frozen && callbacks.load(std::memory_order_acquire) >= target &&
+             wrapper.getTimeMicros() == position;
+    wrapper.resumeClock();
+  }
+  done.store(true, std::memory_order_release);
+  renderer.get();
+  require(frozen,
+          "in-flight and paused callbacks cannot change the explicitly frozen UI position");
+  wrapper.pauseClock();
+}
+
+void testOversizedCallbacksUseBoundedScratchAndPreserveScheduledOnsets() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  auto *data = static_cast<UserData *>(control->renderUserData);
+  const auto capacity = data->mixBuffer->capacity();
+  require(capacity > 0, "scratch storage is allocated before stream startup");
+  const path_t path = path_t("bounded-scratch.wav");
+  require(wrapper.loadGeneratedSound(path, std::vector<short>(44100 * 2, 16000),
+                                     2, 44100), "large scratch fixture loads");
+  require(wrapper.stopSounds().success &&
+              wrapper.stageScheduledSound(path, audio::Bus::Bgm, 200'000) &&
+              wrapper.startDevice().success, "onset is staged in a later scratch chunk");
+  wrapper.seekClock(0);
+  stopwatch.start();
+  std::vector<short> output(44100 * 2);
+  control->renderCallback(output.data(), 44100, 2, control->renderUserData);
+  require(data->mixBuffer->capacity() == capacity,
+          "oversized callbacks never grow realtime scratch storage");
+  require(output[8819 * 2] == 0 && output[8820 * 2] != 0 && output.back() != 0,
+          "chunked mixing preserves exact scheduled onset and the complete tail");
+  require(data->audioClockFrameCursor->load() == 44100,
+          "one oversized callback advances the clock by its complete frame count");
+  stopwatch.pause();
+  require(wrapper.stopSounds().success &&
+              wrapper.stageScheduledSound(path, audio::Bus::Bgm, 92'891) &&
+              wrapper.startDevice().success, "fractional scratch-boundary onset is staged");
+  wrapper.seekClock(0);
+  stopwatch.start();
+  control->renderCallback(output.data(), 44100, 2, control->renderUserData);
+  require(output[4095 * 2] == 0 && output[4096 * 2] != 0,
+          "scratch chunks round scheduled onset once against the original callback origin");
+  stopwatch.pause();
+}
+
 int main() {
   try {
+    testRestartCommitsRateBeforeSynchronousFirstCallback();
+    testNativePresentationHistoryResetsBeforeBackendRestart();
+    testNativePresentationHistoryUsesRateAndPauseTimelineResets();
+    testNativePresentationHistoryReadersSeeCompleteSegments();
+    testNativePauseStaysFrozenWhileCallbacksContinue();
+    testNativePresentationHistoryPreservesInputAcrossOutputGaps();
+    testNativePresentationClockDoesNotRewindDuringAnOutputGap();
+    testNativePresentationHistoryIsBoundedAndInvalidatesUnknownTiming();
+    testNativeOutputTimestampAnchorsPresentationWithoutMovingSchedule();
+    testOversizedCallbacksUseBoundedScratchAndPreserveScheduledOnsets();
     testLongChartScheduleStartsAndAcceptsRealtimeKeysounds();
     testResamplingDoesNotBlockPublishedSoundsOrOtherLoads();
     testResamplingRetriesAcrossOutputRateChanges();

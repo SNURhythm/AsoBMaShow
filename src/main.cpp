@@ -1,3 +1,4 @@
+#include "perf/LatencyTelemetry.h"
 #include "targets.h"
 #include "AppDatabaseInitializer.h"
 #include "ApplicationResultRecovery.h"
@@ -187,7 +188,8 @@ uint32_t resolveResetFlags() {
   uint32_t flags = parseMsaaFlag(msaaSamples);
 
   if (TARGET_PLATFORM == iOS) {
-    flags |= BGFX_RESET_VSYNC;
+    // Single-threaded Metal must submit the freshly encoded frame now.
+    flags |= BGFX_RESET_VSYNC | BGFX_RESET_FLIP_AFTER_RENDER;
   }
   if (TARGET_PLATFORM == Android) {
     flags |= BGFX_RESET_VSYNC;
@@ -709,6 +711,9 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
+#if !TARGET_OS_IPHONE && !TARGET_OS_ANDROID
+  bgfx_init.resolution.maxFrameLatency = 2;
+#endif
   bgfx_init.platformData = pd;
   rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
 #if TARGET_OS_IPHONE
@@ -1365,7 +1370,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         bgfx::touch(rendering::ui_view);
         context.uiBatchRenderer.beginFrame();
         sceneManager.render();
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+        const auto submitStarted = perf::latency::nowMicros();
+#endif
         bgfx::frame();
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+        perf::latency::record(perf::latency::Stage::FrameSubmit,
+                              perf::latency::nowMicros() - submitStarted);
+#endif
         context.replayVideoExportUiFrameSerial.fetch_add(
             1, std::memory_order_release);
         context.replayVideoExportUiFrameRequested.store(
@@ -1418,7 +1430,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                   : static_cast<float>(context.settings.bgaBrightnessPercent) /
                         100.0f);
         }
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+        const auto submitStarted = perf::latency::nowMicros();
+#endif
         bgfx::frame();
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+        perf::latency::record(perf::latency::Stage::FrameSubmit,
+                              perf::latency::nowMicros() - submitStarted);
+#endif
         renderedFrame = true;
       }
     }
@@ -1452,7 +1471,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
         const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
         SDL_Log(
-            "FPS %.1f | Avg %.1f | 1%% Low %.1f | Audio %.2f us (%.2f Hz) | "
+            "FPS %.1f | Avg %.1f | 1%% Low %.1f | Scheduler %.2f us (%.2f Hz) | "
             "Events raw %llu proc %llu coalesced M/F/R %llu/%llu/%llu",
             currentFps, avgFps, low1Fps, avgDeltaTime, freq,
             static_cast<unsigned long long>(rawEventsInWindow),
@@ -1460,6 +1479,21 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             static_cast<unsigned long long>(coalescedMouseMotionInWindow),
             static_cast<unsigned long long>(coalescedFingerMotionInWindow),
             static_cast<unsigned long long>(coalescedResizeInWindow));
+        const auto audioState = context.jukebox.audioRuntime().runtimeState();
+        SDL_Log("Audio native callback %u frames at %u Hz | output timestamp %s | "
+                "underflow reporting %s (%llu) | physical display presentation unknown",
+                audioState.effectiveBufferFrames, audioState.effectiveCallbackSampleRate,
+                audioState.outputTimestampKnown ? "available" : "unknown",
+                audioState.outputUnderflowKnown ? "available" : "unknown",
+                static_cast<unsigned long long>(audioState.outputUnderflowCount));
+        for (unsigned stage = 0; stage < static_cast<unsigned>(perf::latency::Stage::Count); ++stage) {
+          const auto summary = perf::latency::snapshot(static_cast<perf::latency::Stage>(stage));
+          if (summary.count == 0) continue;
+          SDL_Log("Latency stage %s | n %llu | p50/p95/p99 <= %llu/%llu/%llu us | max %llu us",
+                  perf::latency::names[stage], static_cast<unsigned long long>(summary.count),
+                  static_cast<unsigned long long>(summary.p50), static_cast<unsigned long long>(summary.p95),
+                  static_cast<unsigned long long>(summary.p99), static_cast<unsigned long long>(summary.maximum));
+        }
         rawEventsInWindow = 0;
         processedEventsInWindow = 0;
         coalescedMouseMotionInWindow = 0;
@@ -1504,8 +1538,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (renderedFrame) {
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
-      const auto waitDuration =
-          context.framePacer.remaining(std::chrono::steady_clock::now());
+      const auto waitStartedAt = std::chrono::steady_clock::now();
+      const auto waitDuration = context.framePacer.remaining(waitStartedAt);
       if (waitDuration > std::chrono::steady_clock::duration::zero()) {
 #if TARGET_OS_IPHONE
         const auto waitMicros = std::max<long long>(
@@ -1513,8 +1547,30 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             std::chrono::duration_cast<std::chrono::microseconds>(waitDuration)
                 .count());
         WaitIOSMainRunLoopForMicros(waitMicros);
-#else
+#elif TARGET_OS_ANDROID
         std::this_thread::sleep_for(waitDuration);
+#else
+        // Keep the existing frame deadline while servicing input between
+        // frames. Native realtime sources can also arrive during these waits.
+        const auto waitDeadline = waitStartedAt + waitDuration;
+        while (!context.quitFlag &&
+               !context.appInBackground.load(std::memory_order_acquire)) {
+          while (SDL_PollEvent(&e)) {
+            if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
+              ++rawEventsInWindow;
+            }
+            context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
+            processEvent(e);
+          }
+          context.inputDeviceRegistry.pump();
+          const auto remaining = waitDeadline - std::chrono::steady_clock::now();
+          if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            break;
+          }
+          std::this_thread::sleep_for(std::min(
+              remaining, std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                             std::chrono::milliseconds(1))));
+        }
 #endif
       }
     } else {

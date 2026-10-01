@@ -774,14 +774,25 @@ void PlaySkinStateBridge::updatePinnedPlayTimers() {
 
   // JudgeManager switches each LaneState.timerHold while a classic long note
   // is processing or an HCN is actively increasing. NotePresentationState
-  // already carries that active truth for every gameplay surface. Aggregate
-  // it once per frame, then use LaneProperty's source offset table above.
+  // carries that active truth for legacy surfaces. Realtime gameplay provides
+  // lane aggregates so this frame does not rescan every chart note.
   std::array<bool, 100> playerOneLongHeld{};
   std::array<bool, 100> playerOneHcnActive{};
   std::array<bool, 100> playerOneHcnDamaged{};
   const std::span<const NotePresentationState> noteStates =
       snapshot->noteStates();
-  if (noteStates.size() == context_.chartModel.notes.size()) {
+  if (snapshot->realtimeLongNoteLanes) {
+    for (const auto &lane : *snapshot->realtimeLongNoteLanes) {
+      const auto offset = beatorajaPlayerOneSkinLaneOffset(context_.chartModel, lane.lane);
+      if (!offset || *offset < 0 || static_cast<std::size_t>(*offset) >= playerOneLongHeld.size()) {
+        continue;
+      }
+      const auto index = static_cast<std::size_t>(*offset);
+      playerOneLongHeld[index] = lane.active;
+      playerOneHcnActive[index] = lane.reactive;
+      playerOneHcnDamaged[index] = lane.damaged;
+    }
+  } else if (noteStates.size() == context_.chartModel.notes.size()) {
     for (std::size_t index = 0; index < noteStates.size(); ++index) {
       const auto &note = context_.chartModel.notes[index];
       if (note.kind != ChartVisualNoteKind::LongHead &&

@@ -9,6 +9,7 @@
 #include <bgfx/bgfx.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <ctime>
@@ -61,6 +62,8 @@ struct BackendControl {
   unsigned int startCalls = 0;
   audio::RenderCallback renderCallback = nullptr;
   void *renderUserData = nullptr;
+  audio::RenderTimingCallback timingCallback = nullptr;
+  void *timingUserData = nullptr;
 };
 
 class TestStream final : public audio::IBackend {
@@ -91,6 +94,12 @@ public:
       control_->failAfterStart->emplace();
     }
     return true;
+  }
+
+  void setRenderTimingCallback(audio::RenderTimingCallback callback,
+                               void *userData) override {
+    control_->timingCallback = callback;
+    control_->timingUserData = userData;
   }
 
   bool stop(std::string &) override {
@@ -713,6 +722,73 @@ void testManagerRestartAndRollbackRestoreProductionJukeboxVisuals() {
   }
 }
 
+void testNativePauseKeepsPcmAndScheduleOnTheGeneratedTimeline(
+    bool queuedOutput, audio::Bus rampBus) {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  auto &audio = jukebox.audioRuntime();
+  const path_t rampPath = PATH("pause-timeline-ramp");
+  const path_t pulsePath = PATH("pause-timeline-pulse");
+  std::vector<short> ramp(44100);
+  for (size_t frame = 0; frame < ramp.size(); ++frame) {
+    ramp[frame] = static_cast<short>(frame % 16000);
+  }
+  require(audio.loadGeneratedSound(rampPath, std::move(ramp), 1, 44100) &&
+              audio.loadGeneratedSound(pulsePath, {16000}, 1, 44100),
+          "native pause fixture loads a PCM ramp and a scheduled pulse");
+  require(jukebox.play(0).success &&
+              (rampBus == audio::Bus::Keysound
+                   ? audio.playSound(rampPath, rampBus)
+                   : audio.scheduleSound(rampPath, rampBus, 0)) &&
+              audio.scheduleSound(pulsePath, audio::Bus::Bgm, 35'000),
+          "native pause fixture starts its production Jukebox schedule");
+
+  const auto firstDac = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count() +
+      (queuedOutput ? 1'000'000 : -1'000'000);
+  std::array<short, 441 * 2> output{};
+  const auto renderAt = [&](long long dac) {
+    control->timingCallback({.outputSteadyMicros = dac,
+                            .outputTimestampKnown = true}, control->timingUserData);
+    control->renderCallback(output.data(), 441, 2, control->renderUserData);
+  };
+  for (int buffer = 0; buffer < 3; ++buffer) {
+    renderAt(firstDac + buffer * 10'000);
+  }
+
+  for (int cycle = 0; cycle < 3; ++cycle) {
+    jukebox.pause();
+    const auto paused = jukebox.getTimeMicros();
+    jukebox.pause();
+    renderAt(firstDac + 100'000 + cycle * 100'000);
+    require(jukebox.getTimeMicros() == paused &&
+                std::all_of(output.begin(), output.end(), [](short value) { return value == 0; }),
+            "paused callbacks preserve the frozen position and do not advance BGM");
+    jukebox.resume();
+    jukebox.resume();
+    const auto resumedDac = firstDac + 150'000 + cycle * 100'000;
+    renderAt(resumedDac);
+    const auto expectedChart = 30'000 + cycle * 10'000;
+    require(audio.songTimeMicrosAtSteadyMicros(resumedDac) == expectedChart,
+            "resume preserves the generated chart position instead of relabeling advanced PCM");
+    // Source frames 1323, 1764, 2205, with the mixer's 0.9 headroom.
+    constexpr std::array expectedSamples{1190, 1587, 1984};
+    require(std::abs(static_cast<int>(output[0]) - expectedSamples[cycle]) <= 1,
+            "resumed PCM continues at the frame named by the native presentation clock");
+    if (cycle == 0) {
+      require(output[220 * 2] < 2000 && output[221 * 2] > 15000 &&
+                  output[222 * 2] < 2000,
+              "the 35 ms scheduled pulse stays aligned with the continuing BGM after pause");
+    }
+    require(audio.songTimeMicrosAtSteadyMicros(firstDac + 5'000) == 5'000,
+            "ordinary pause preserves valid presentation history for queued audio");
+  }
+  jukebox.pause();
+  require(jukebox.seek(2'000'000).success && jukebox.getTimeMicros() == 2'000'000,
+          "an explicit paused seek replaces the old frozen position");
+}
+
 void testRateScaledSnapshotRestoresBgaTimeline() {
   const std::filesystem::path imageFolder =
       std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "SDL" / "test";
@@ -734,13 +810,17 @@ void testRateScaledSnapshotRestoresBgaTimeline() {
   require(!jukebox.hasActiveVisuals(),
           "the future BGA is inactive at chart time zero");
   require(control->renderCallback != nullptr &&
-              control->renderUserData != nullptr,
+              control->renderUserData != nullptr && control->timingCallback != nullptr,
           "Jukebox backend exposes the production render callback");
 
+  // Model a completed native output interval. No zero-frame callback is needed
+  // to move the presentation anchor to the end of the rendered half-second.
+  const auto wallNow = std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
+  control->timingCallback({.outputSteadyMicros = wallNow - 1'000'000,
+                          .outputTimestampKnown = true}, control->timingUserData);
   std::vector<std::int16_t> output(22'050 * 2);
   control->renderCallback(output.data(), 22'050, 2, control->renderUserData);
-  std::array<std::int16_t, 1> emptyOutput{};
-  control->renderCallback(emptyOutput.data(), 0, 2, control->renderUserData);
   jukebox.pause();
   require(jukebox.getTimeMicros() == 1'000'000,
           "half a real second publishes one chart second at 200 percent");
@@ -964,6 +1044,11 @@ int main() {
       testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(sevenZip);
       for (const bool replaceFile : {false, true}) {
         testArchivedChartReloadsPreservedMetadataReplacement(sevenZip, replaceFile);
+      }
+    }
+    for (const bool queuedOutput : {true, false}) {
+      for (const auto bus : {audio::Bus::Bgm, audio::Bus::Keysound}) {
+        testNativePauseKeepsPcmAndScheduleOnTheGeneratedTimeline(queuedOutput, bus);
       }
     }
     testRateScaledSnapshotRestoresBgaTimeline();

@@ -150,6 +150,8 @@ int main() { return 0; }
                     "AndroidNatives.cpp",
                     "ChartScanWorkScheduler.md",
                     "MsvcCliDiagnostics.cpp",
+                    "input/LinuxRealtimeKeyboardBackend.cpp",
+                    "input/MacRealtimeKeyboardBackend.mm",
                     *cmake_files,
                 ]
             ),
