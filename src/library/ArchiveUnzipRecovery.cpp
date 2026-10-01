@@ -91,12 +91,25 @@ Result recover(ChartRepository::Session &session,
       continue;
     }
     const bool sourceExists = std::filesystem::exists(source);
+    const auto deferOrAcknowledge = [&](const char *reason, const std::error_code &failure) {
+      if (sourceExists) {
+        logPending(record, reason, failure);
+        accessible = false;
+      } else {
+        // The source is confirmed missing on accessible storage. Preserve the
+        // output for the ordinary library scan instead of retaining stale work.
+        archive_file::appendDebugLogLine(
+            "Unzip recovery: source archive is missing; acknowledging journal and preserving output"
+            " archive=" + fspath_to_utf8(record.archivePath) +
+            " output=" + fspath_to_utf8(record.outputFolder));
+        acknowledged.push_back(record.outputFolder);
+      }
+    };
     error.clear();
     const auto output = std::filesystem::symlink_status(record.outputFolder, error);
     if ((error && error != std::errc::no_such_file_or_directory) ||
         std::filesystem::is_symlink(output)) {
-      logPending(record, "output is inaccessible or a symbolic link", error);
-      accessible = false;
+      deferOrAcknowledge("output is inaccessible or a symbolic link", error);
       continue;
     }
     if (!std::filesystem::exists(output)) {
@@ -110,8 +123,7 @@ Result recover(ChartRepository::Session &session,
     const auto markerPath = record.outputFolder / ".asobmashow_unzip_complete";
     const auto markerStatus = std::filesystem::symlink_status(markerPath, error);
     if (error && error != std::errc::no_such_file_or_directory) {
-      logPending(record, "could not inspect completion marker", error);
-      accessible = false;
+      deferOrAcknowledge("could not inspect completion marker", error);
       continue;
     }
     std::string completionFailure = "completion marker is missing or not a regular file";
@@ -129,18 +141,15 @@ Result recover(ChartRepository::Session &session,
           accessible = false;
         }
       } else {
-        const auto reason = (sourceExists ? "output is unverified: " :
-            "source archive is missing and output is unverified: ") + completionFailure;
-        logPending(record, reason.c_str(), error);
-        accessible = false;
+        const auto reason = "output is unverified: " + completionFailure;
+        deferOrAcknowledge(reason.c_str(), error);
       }
       continue;
     }
     error.clear();
     std::filesystem::remove(record.outputFolder / ".asobmashow_unzip_incomplete", error);
     if (error) {
-      logPending(record, "could not remove incomplete marker", error);
-      accessible = false;
+      deferOrAcknowledge("could not remove incomplete marker", error);
       continue;
     }
     folders.push_back(record.outputFolder);
