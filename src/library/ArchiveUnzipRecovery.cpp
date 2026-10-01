@@ -7,8 +7,19 @@ namespace archive_unzip_recovery {
 
 namespace {
 
-bool removeIncompleteOutput(const std::filesystem::path &outputFolder) {
-  std::error_code error;
+void logPending(const ArchiveUnzipRecoveryRecord &record, const char *reason,
+                const std::error_code &error = {}) {
+  archive_file::appendDebugLogLine(
+      std::string("Unzip recovery pending: ") + reason +
+      " archive=" + fspath_to_utf8(record.archivePath) +
+      " output=" + fspath_to_utf8(record.outputFolder) +
+      (error ? " error=" + error.message() + " (" +
+                   error.category().name() + ":" + std::to_string(error.value()) + ")"
+             : ""));
+}
+
+bool removeIncompleteOutput(const std::filesystem::path &outputFolder,
+                            std::error_code &error) {
   std::filesystem::directory_iterator entry(outputFolder, error), end;
   while (!error && entry != end) {
     if (entry->path().filename() != ".asobmashow_unzip_incomplete") {
@@ -59,30 +70,52 @@ Result recover(ChartRepository::Session &session,
   auto lock = acquireOperationLock(stopToken, checkpoint);
   if (!lock.owns_lock()) return result;
   const auto pending = session.LoadUnzipRecovery();
-  if (!pending) return result;
+  if (!pending) {
+    archive_file::appendDebugLogLine("Unzip recovery pending: could not load recovery journal");
+    return result;
+  }
   std::vector<std::filesystem::path> folders, deletedArchives, acknowledged;
   bool accessible = true;
   for (const auto &record : *pending) {
     if (stopToken.stop_requested() || (checkpoint && !checkpoint())) return result;
     std::error_code error;
     if (!std::filesystem::is_directory(record.archivePath.parent_path(), error) || error) {
+      logPending(record, "archive parent directory unavailable", error);
       accessible = false;
       continue;
     }
     const auto source = std::filesystem::symlink_status(record.archivePath, error);
     if (error && error != std::errc::no_such_file_or_directory) {
+      logPending(record, "could not inspect archive", error);
       accessible = false;
       continue;
     }
     const bool sourceExists = std::filesystem::exists(source);
+    const auto deferOrAcknowledge = [&](const char *reason, const std::error_code &failure) {
+      if (sourceExists) {
+        logPending(record, reason, failure);
+        accessible = false;
+      } else {
+        // The source is confirmed missing on accessible storage. Preserve the
+        // output for the ordinary library scan instead of retaining stale work.
+        archive_file::appendDebugLogLine(
+            "Unzip recovery: source archive is missing; acknowledging journal and preserving output"
+            " archive=" + fspath_to_utf8(record.archivePath) +
+            " output=" + fspath_to_utf8(record.outputFolder));
+        acknowledged.push_back(record.outputFolder);
+      }
+    };
     error.clear();
     const auto output = std::filesystem::symlink_status(record.outputFolder, error);
     if ((error && error != std::errc::no_such_file_or_directory) ||
         std::filesystem::is_symlink(output)) {
-      accessible = false;
+      deferOrAcknowledge("output is inaccessible or a symbolic link", error);
       continue;
     }
     if (!std::filesystem::exists(output)) {
+      archive_file::appendDebugLogLine(
+          "Unzip recovery: output no longer exists; acknowledging " +
+          fspath_to_utf8(record.outputFolder));
       acknowledged.push_back(record.outputFolder);
       continue;
     }
@@ -90,26 +123,33 @@ Result recover(ChartRepository::Session &session,
     const auto markerPath = record.outputFolder / ".asobmashow_unzip_complete";
     const auto markerStatus = std::filesystem::symlink_status(markerPath, error);
     if (error && error != std::errc::no_such_file_or_directory) {
-      accessible = false;
+      deferOrAcknowledge("could not inspect completion marker", error);
       continue;
     }
+    std::string completionFailure = "completion marker is missing or not a regular file";
     const bool complete = std::filesystem::is_regular_file(markerStatus) &&
         archive_file::unzipFolderHasMatchingCompleteMarker(
-            record.outputFolder, record.archivePath, record.archiveKey);
+            record.outputFolder, record.archivePath, record.archiveKey, &completionFailure);
     if (!complete) {
+      error.clear();
       if (sourceExists && archive_file::unzipFolderHasMatchingIncompleteMarker(
-              record.outputFolder, record.archivePath, record.archiveKey) &&
-          removeIncompleteOutput(record.outputFolder)) {
-        acknowledged.push_back(record.outputFolder);
+              record.outputFolder, record.archivePath, record.archiveKey, &error)) {
+        if (removeIncompleteOutput(record.outputFolder, error)) {
+          acknowledged.push_back(record.outputFolder);
+        } else {
+          logPending(record, "could not remove owned incomplete output", error);
+          accessible = false;
+        }
       } else {
-        accessible = false;
+        const auto reason = "output is unverified: " + completionFailure;
+        deferOrAcknowledge(reason.c_str(), error);
       }
       continue;
     }
     error.clear();
     std::filesystem::remove(record.outputFolder / ".asobmashow_unzip_incomplete", error);
     if (error) {
-      accessible = false;
+      deferOrAcknowledge("could not remove incomplete marker", error);
       continue;
     }
     folders.push_back(record.outputFolder);
@@ -118,6 +158,9 @@ Result recover(ChartRepository::Session &session,
   }
   if (stopToken.stop_requested() || (checkpoint && !checkpoint())) return result;
   const bool cleaned = deleteArchiveRecords(session, deletedArchives);
+  if (!cleaned) {
+    archive_file::appendDebugLogLine("Unzip recovery pending: could not reconcile deleted archive records");
+  }
   result.libraryChanged = cleaned && !deletedArchives.empty();
   bool indexed = true;
   if (!folders.empty()) {
@@ -125,11 +168,18 @@ Result recover(ChartRepository::Session &session,
     const auto scan = scanner.ScanAddedWithResult(
         session, folders, &stopToken, progress, checkpoint, nullptr, nullptr, true);
     indexed = scan.completed && scan.committed;
+    if (!indexed) {
+      archive_file::appendDebugLogLine("Unzip recovery pending: extracted folder scan did not commit");
+    }
     result.libraryChanged = result.libraryChanged || scan.changedCount > 0;
   }
   if (!cleaned || !indexed || stopToken.stop_requested() ||
       (checkpoint && !checkpoint())) return result;
-  result.completed = session.ClearUnzipRecovery(acknowledged) && accessible;
+  const bool cleared = session.ClearUnzipRecovery(acknowledged);
+  if (!cleared) {
+    archive_file::appendDebugLogLine("Unzip recovery pending: could not acknowledge recovery journal records");
+  }
+  result.completed = cleared && accessible;
   return result;
 }
 

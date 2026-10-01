@@ -527,7 +527,8 @@ std::atomic<std::uint32_t> gSingleFlightWaiterCountForTesting{0};
 #endif
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
-constexpr std::uint8_t kArchiveIndexCacheVersion = 5;
+// Version 6 excludes encrypted ZIP/libarchive entries from browsing indexes.
+constexpr std::uint8_t kArchiveIndexCacheVersion = 6;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
@@ -2993,8 +2994,10 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
                          std::vector<Entry> &entries,
                          std::string *errorMessage,
                          const PauseCallback &pauseCallback,
-                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max()) {
+                         std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
+                         bool *hasEncryptedEntries = nullptr) {
   entries.clear();
+  if (hasEncryptedEntries) *hasEncryptedEntries = false;
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -3006,6 +3009,7 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
 
   archive_entry *entry = nullptr;
   std::uint64_t inspectedEntries = 0;
+  std::size_t entryOrder = 0;
   for (;;) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       entries.clear();
@@ -3036,8 +3040,17 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
       continue;
     }
 
+    const bool encrypted = archive_entry_is_encrypted(entry) > 0;
+    if (encrypted && hasEncryptedEntries) *hasEncryptedEntries = true;
     ArchiveEntryInfo info;
     if (!archiveEntryInfo(entry, entryPathnameUtf8(entry), info)) {
+      archive_read_data_skip(archiveHandle);
+      continue;
+    }
+
+    // Cached-order readers count valid headers, including locked entries.
+    const std::size_t currentOrder = entryOrder++;
+    if (encrypted) {
       archive_read_data_skip(archiveHandle);
       continue;
     }
@@ -3046,7 +3059,7 @@ bool listEntriesUncached(const std::filesystem::path &archivePath,
         .path = info.relativePath,
         .directory = info.directory,
         .size = info.size,
-        .order = entries.size(),
+        .order = currentOrder,
     });
     archive_read_data_skip(archiveHandle);
   }
@@ -3543,7 +3556,8 @@ constexpr mz_uint kZipIndexPauseCheckInterval = 256;
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
                     const PauseCallback &pauseCallback,
-                    std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max());
+                    std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
+                    bool *hasEncryptedEntries = nullptr);
 #endif
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_UNARR
@@ -4036,7 +4050,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   std::string zipError;
   if (hasZipArchiveExtension(archivePath) &&
       listZipEntries(archivePath, loaded->entries, &zipError,
-                     pauseCallback, maximumEntries)) {
+                     pauseCallback, maximumEntries, &loaded->hasEncryptedEntries)) {
     loaded->backend = ArchiveIndexBackend::MinizZip;
     loadedEntries = true;
   } else if (hasZipArchiveExtension(archivePath) && !zipError.empty()) {
@@ -4112,7 +4126,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   std::string libarchiveError;
   if (!loadedEntries &&
       listEntriesUncached(archivePath, loaded->entries, &libarchiveError,
-                          pauseCallback, maximumEntries)) {
+                          pauseCallback, maximumEntries, &loaded->hasEncryptedEntries)) {
     loaded->backend = ArchiveIndexBackend::LibArchive;
     loadedEntries = true;
   } else if (!loadedEntries && !libarchiveError.empty()) {
@@ -4140,6 +4154,10 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     appendDebugLogLineImpl("Skipped system archive entries: " +
                            pathForLog(archivePath) + " count=" +
                            std::to_string(skippedSystemEntries));
+  }
+  if (loaded->hasEncryptedEntries) {
+    appendDebugLogLineImpl("Skipped encrypted archive entries while indexing: " +
+                           pathForLog(archivePath));
   }
   buildIndexLookups(*loaded);
   loaded->liveSourceManifest = true;
@@ -4892,8 +4910,10 @@ bool readZipDirectTarget(RandomAccessFile &archiveFile,
 bool listZipEntries(const std::filesystem::path &archivePath,
                     std::vector<Entry> &entries, std::string *errorMessage,
                     const PauseCallback &pauseCallback,
-                    std::uint64_t maximumEntries) {
+                    std::uint64_t maximumEntries,
+                    bool *hasEncryptedEntries) {
   entries.clear();
+  if (hasEncryptedEntries) *hasEncryptedEntries = false;
   if (!pauseIfNeeded(pauseCallback, errorMessage)) {
     return false;
   }
@@ -4932,6 +4952,11 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     mz_zip_archive_file_stat stat{};
     if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
       return fail("Could not read ZIP central directory entry.");
+    }
+
+    if (stat.m_is_encrypted) {
+      if (hasEncryptedEntries) *hasEncryptedEntries = true;
+      continue;
     }
 
     const auto filename = minizFilename(&archive, fileIndex);
@@ -8397,15 +8422,25 @@ bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
                               const char *markerName,
                               const std::filesystem::path &archivePath,
                               const std::string &key,
-                              std::error_code *readError = nullptr) {
+                              std::error_code *readError = nullptr,
+                              std::string *mismatchReason = nullptr) {
   std::error_code localError;
   auto &error = readError != nullptr ? *readError : localError;
   error.clear();
-  if (!std::filesystem::is_directory(std::filesystem::symlink_status(folder, error)) || error)
+  if (mismatchReason) mismatchReason->clear();
+  const auto mismatch = [&](const char *reason) {
+    if (mismatchReason) {
+      *mismatchReason = reason;
+      if (error) *mismatchReason += ": " + error.message() + " (" +
+          error.category().name() + ":" + std::to_string(error.value()) + ")";
+    }
     return false;
+  };
+  if (!std::filesystem::is_directory(std::filesystem::symlink_status(folder, error)) || error)
+    return mismatch("output is not an accessible directory");
   const auto markerPath = folder / markerName;
   if (!std::filesystem::is_regular_file(std::filesystem::symlink_status(markerPath, error)) || error)
-    return false;
+    return mismatch("marker is missing, inaccessible, or not a regular file");
   errno = 0;
   std::unique_ptr<FILE, decltype(&std::fclose)> marker(
 #ifdef _WIN32
@@ -8417,7 +8452,7 @@ bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
   if (!marker) {
     error = errno != 0 ? std::error_code(errno, std::generic_category())
                        : std::make_error_code(std::errc::io_error);
-    return false;
+    return mismatch("could not open marker");
   }
   std::array<char, 64 * 1024> line{};
   const auto readLine = [&] {
@@ -8442,12 +8477,24 @@ bool unzipFolderMarkerMatches(const std::filesystem::path &folder,
       line[length++] = static_cast<char>(character);
     }
   };
-  if (!readLine() || key != line.data()) return false;
-  if (!readLine()) return false;
+  if (!readLine()) return mismatch("could not read marker key");
+  if (key != line.data()) {
+    mismatch("marker key differs from recovery journal");
+    if (mismatchReason) *mismatchReason += " recordedKey=" + std::string(line.data()) +
+        " expectedKey=" + key;
+    return false;
+  }
+  if (!readLine()) return mismatch("could not read marker archive path");
   const auto recordedPath = std::filesystem::absolute(utf8_to_path_t(line.data()), error);
-  if (error) return false;
+  if (error) return mismatch("could not resolve marker archive path");
   const auto sourcePath = std::filesystem::absolute(archivePath, error);
-  return !error && cacheNormalizedPath(recordedPath) == cacheNormalizedPath(sourcePath);
+  if (error) return mismatch("could not resolve recovery archive path");
+  if (cacheNormalizedPath(recordedPath) != cacheNormalizedPath(sourcePath)) {
+    mismatch("marker archive path differs from recovery journal");
+    if (mismatchReason) *mismatchReason += " recorded=" + fspath_to_utf8(recordedPath);
+    return false;
+  }
+  return true;
 }
 
 std::filesystem::path archiveCacheRoot() {
@@ -8466,9 +8513,10 @@ bool unzipFolderHasMatchingIncompleteMarker(
 
 bool unzipFolderHasMatchingCompleteMarker(
     const std::filesystem::path &outputFolder,
-    const std::filesystem::path &archivePath, const std::string &archiveKey) {
+    const std::filesystem::path &archivePath, const std::string &archiveKey,
+    std::string *mismatchReason) {
   return unzipFolderMarkerMatches(outputFolder, ".asobmashow_unzip_complete",
-                                  archivePath, archiveKey);
+                                  archivePath, archiveKey, nullptr, mismatchReason);
 }
 
 bool isArchiveSupportAvailable() {

@@ -715,7 +715,7 @@ void failedPartialCleanupRetainsRecovery() {
 #endif
 }
 
-void absentSourcePreservesPartialOutputAndRecovery() {
+void absentSourceClearsUnverifiedRecoveryAndPreservesOutput(const std::string &kind) {
   Fixture fixture;
   const auto original = fixture.indexedArchive("a.zip", 4);
   runCrashingChild(fixture.root, "partial");
@@ -723,13 +723,23 @@ void absentSourcePreservesPartialOutputAndRecovery() {
   const auto record = session->LoadUnzipRecovery()->front();
   const auto moved = fixture.root / "original.offline";
   std::filesystem::rename(original.meta.BmsPath, moved);
-  assert(!archive_unzip_recovery::recover(*session).completed);
-  assert(session->LoadUnzipRecovery()->size() == 1);
+  if (kind == "mismatched-marker") {
+    std::ofstream(record.outputFolder / ".asobmashow_unzip_complete")
+        << "other-key\n" << fspath_to_utf8(record.archivePath) << '\n';
+  } else if (kind == "symlink-output") {
+    const auto output = fixture.root / "preserved-output";
+    std::filesystem::rename(record.outputFolder, output);
+    std::filesystem::create_directory_symlink(output, record.outputFolder);
+  }
+  const auto recovered = archive_unzip_recovery::recover(*session);
+  assert(recovered.completed && !recovered.libraryChanged);
+  assert(session->LoadUnzipRecovery()->empty());
   assert(std::filesystem::exists(record.outputFolder / "song/chart0.bms"));
+  assert(std::filesystem::exists(record.outputFolder / ".asobmashow_unzip_incomplete"));
   std::filesystem::rename(moved, original.meta.BmsPath);
   assert(archive_unzip_recovery::recover(*session).completed);
   assert(session->LoadUnzipRecovery()->empty());
-  assert(!std::filesystem::exists(record.outputFolder));
+  assert(std::filesystem::exists(record.outputFolder / "song/chart0.bms"));
 }
 
 void inaccessibleSourcePreservesPartialOutputAndRecovery() {
@@ -1141,7 +1151,7 @@ void disconnectedOutputDuringFinalIndexRemainsQueuedAlongsideHealthyOutputs() {
   assert(session->CountAllChartMeta() == 6);
 }
 
-void invalidCompletedOutputRetainsRecoveryWork() {
+void invalidCompletedOutputWithMissingSourceIsAcknowledged() {
   Fixture fixture;
   fixture.indexedArchive("a.zip");
   fixture.indexedArchive("b.zip");
@@ -1150,15 +1160,15 @@ void invalidCompletedOutputRetainsRecoveryWork() {
   const auto record = session->LoadUnzipRecovery()->front();
   const auto marker = record.outputFolder / ".asobmashow_unzip_complete";
   std::ofstream(marker, std::ios::trunc) << "wrong key\n";
-  assert(!archive_unzip_recovery::recover(*session).completed);
-  assert(session->LoadUnzipRecovery()->size() == 1);
-  assert(session->CountSolidArchives() == 2);
-  std::ofstream(marker, std::ios::trunc) << record.archiveKey << '\n' << fspath_to_utf8(record.archivePath) << '\n';
-  std::ofstream(record.outputFolder / ".asobmashow_unzip_incomplete") << "1\n";
   assert(archive_unzip_recovery::recover(*session).completed);
   assert(session->LoadUnzipRecovery()->empty());
-  assert(session->CountSolidArchives() == 1 && session->CountAllChartMeta() == 1);
-  assert(!std::filesystem::exists(record.outputFolder / ".asobmashow_unzip_incomplete"));
+  assert(session->CountSolidArchives() == 2);
+  ChartLibraryScanner scanner;
+  const auto scan = scanner.ScanAddedWithResult(*session, {record.outputFolder});
+  assert(scan.completed && scan.committed);
+  assert(session->LoadUnzipRecovery()->empty());
+  assert(session->CountAllChartMeta() == 1);
+  assert(std::filesystem::exists(marker));
 }
 
 void batchDeletesEachOriginalBeforeStartingNextArchiveAndIndexesOnce() {
@@ -2077,6 +2087,11 @@ int main(int argc, char **argv) {
     else if (test == "--forged-encryption-delete") forgedEncryptionDeletePreservesOriginal();
     else if (test == "--cleanup-failure") failedPartialCleanupRetainsRecovery();
     else if (test == "--unverified-recovery") unverifiedPartialOutputRetainsRecovery("legacy");
+    else if (test == "--missing-source-recovery") {
+      for (const auto &kind : {"partial", "mismatched-marker", "symlink-output"}) {
+        absentSourceClearsUnverifiedRecoveryAndPreservesOutput(kind);
+      }
+    }
     else if (test == "--delayed-replacement") delayedDeletionRejectsReplacement(false);
     else if (test == "--delayed-symlink") delayedDeletionRejectsReplacement(true);
     else if (test == "--batch-replacement") batchDeletionRejectsReplacement(false);
@@ -2125,7 +2140,9 @@ int main(int argc, char **argv) {
     }
   }
   failedPartialCleanupRetainsRecovery();
-  absentSourcePreservesPartialOutputAndRecovery();
+  for (const auto &kind : {"partial", "mismatched-marker", "symlink-output"}) {
+    absentSourceClearsUnverifiedRecoveryAndPreservesOutput(kind);
+  }
   inaccessibleSourcePreservesPartialOutputAndRecovery();
   for (const auto &kind : {"legacy", "torn", "collision", "missing", "symlink-marker", "symlink-folder"}) {
     unverifiedPartialOutputRetainsRecovery(kind);
@@ -2172,7 +2189,7 @@ int main(int argc, char **argv) {
   }
   recoveryRetriesFailedCleanupIndexAndAcknowledgement();
   journalFailurePreventsExtractionAndDeletion();
-  invalidCompletedOutputRetainsRecoveryWork();
+  invalidCompletedOutputWithMissingSourceIsAcknowledged();
   batchDeletesEachOriginalBeforeStartingNextArchiveAndIndexesOnce();
   batchKeepModeRetainsOriginalsAndIgnoresUnindexedArchives();
   batchFailurePreservesOriginalAndContinues();

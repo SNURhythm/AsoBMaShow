@@ -5,6 +5,7 @@
 #include "LuaSkinRuntime.h"
 #include "SkinHitErrorVisualizerRenderer.h"
 #include "SkinDrawCommand.h"
+#include "SkinTextDecodeCache.h"
 #include "SkinMovieCatalog.h"
 #include "SkinGeneratedTextureRaster.h"
 #include "SyntheticReplayGhostOverlay.h"
@@ -458,6 +459,8 @@ private:
   const ValidatedBeatorajaSkinModel *hitErrorVisualizerModelIdentity_ = nullptr;
   std::map<SkinObjectId, SkinHitErrorVisualizerPresentationState>
       hitErrorVisualizerStates_;
+  std::uint64_t textDecodeCacheSessionSerial_ = 0;
+  SkinTextDecodeCache textDecodeCache_;
   std::uint64_t generatedTextureCacheSessionSerial_ = 0;
   SkinGeneratedTextureCache generatedTextureCache_;
   std::uint64_t externalOwnershipSessionSerial_ = 0;

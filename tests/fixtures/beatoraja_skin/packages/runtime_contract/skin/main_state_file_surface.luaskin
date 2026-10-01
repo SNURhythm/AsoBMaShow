@@ -85,6 +85,22 @@ assert(state.file_clear("modern/deep/utf8.txt") == true)
 assert(state.file_count_lines("modern/deep/utf8.txt") == 0)
 assert(#state.file_read_lines("modern/deep/utf8.txt") == 0)
 
+-- Whole-file validation must reject malformed bytes even after SIMD-sized
+-- prefixes, and preserve embedded NUL, BOM, CRLF, and supplementary scalars.
+for prefix = 0, 128 do
+  for _, malformed in ipairs({string.char(0xc0, 0x80), string.char(0xed, 0xa0, 0x80),
+                             string.char(0xf4, 0x90, 0x80, 0x80), string.char(0xe2, 0x82)}) do
+    assert(state.file_write("modern/invalid.txt", string.rep("a", prefix) .. malformed))
+    assert(state.file_count_lines("modern/invalid.txt") == 0)
+    assert(#state.file_read_lines("modern/invalid.txt") == 0)
+  end
+end
+assert(state.file_write("modern/scalars.txt", "\239\187\191한\0😀\r\n둘\r셋\n"))
+local scalar_lines = state.file_read_lines("modern/scalars.txt")
+assert(#scalar_lines == 3 and scalar_lines[1] == "\239\187\191한\0😀")
+assert(scalar_lines[2] == "둘" and scalar_lines[3] == "셋")
+assert(state.file_count_lines("modern/scalars.txt") == 3)
+
 assert(state.file_mkdir("../../outside-directory") == false)
 assert(state.file_write("../../outside.txt", "denied") == false)
 assert(state.file_append("../../outside.txt", "denied") == false)

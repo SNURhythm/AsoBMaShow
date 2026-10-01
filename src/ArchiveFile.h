@@ -248,7 +248,8 @@ bool unzipFolderHasMatchingIncompleteMarker(
     std::error_code *readError = nullptr);
 bool unzipFolderHasMatchingCompleteMarker(
     const std::filesystem::path &outputFolder,
-    const std::filesystem::path &archivePath, const std::string &archiveKey);
+    const std::filesystem::path &archivePath, const std::string &archiveKey,
+    std::string *mismatchReason = nullptr);
 std::optional<std::filesystem::path>
 findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions);

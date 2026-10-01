@@ -29,7 +29,10 @@ int main(int argc, char **argv) {
   std::error_code error = std::make_error_code(std::errc::permission_denied);
   bool matches;
   if (complete) {
-    matches = unzipFolderHasMatchingCompleteMarker(folder, source, "key");
+    std::string reason;
+    matches = unzipFolderHasMatchingCompleteMarker(folder, source, "key", &reason);
+    std::cout << "completion_reason=" << reason << '\n';
+    if (matches != reason.empty()) return 1;
     error.clear();
   } else {
     matches = unzipFolderHasMatchingIncompleteMarker(folder, source, "key", &error);

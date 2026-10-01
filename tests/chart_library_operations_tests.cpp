@@ -254,6 +254,37 @@ void testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots() {
          "unfinished recovery is reported after healthy roots finish");
 }
 
+void testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  const auto output = root / "extracted";
+  const auto chart = writeChart(output);
+  ChartRepository repository(temporary.path() / "chart.db");
+  auto session = repository.OpenSession();
+  expect(session && session->EnsureSchema(), "recovery repository opens");
+  expect(session->InsertEntry(root), "library folder is registered");
+  const ArchiveUnzipRecoveryRecord record{
+      .archivePath = root / "removed.7z", .outputFolder = output,
+      .archiveKey = "old-key", .deleteOriginal = true};
+  expect(session->SaveUnzipRecovery(record), "missing source has a recovery record");
+  std::ofstream(output / ".asobmashow_unzip_incomplete")
+      << record.archiveKey << '\n' << fspath_to_utf8(record.archivePath) << '\n';
+  std::ofstream(output / ".asobmashow_unzip_complete") << "mismatched-key\n";
+
+  bool reloadRequested = false;
+  chart_library_tasks::ChartLibraryOperations operations(
+      dependencies(repository, temporary.path(), reloadRequested));
+  const auto result = operations.run(
+      {.kind = chart_library_tasks::TaskKind::RefreshLibrary}, {},
+      [](const ChartScanProgress &, const i18n::Text &) {}, [] { return true; });
+  expect(result.disposition == chart_library_tasks::TaskRunDisposition::Complete,
+         "missing source no longer leaves refresh pending");
+  expect(session->LoadUnzipRecovery()->empty(), "missing source journal is cleared");
+  expect(std::filesystem::exists(chart), "extracted chart is preserved");
+  expect(session->CountAllChartMeta() == 1, "ordinary scan indexes the preserved chart");
+  expect(reloadRequested, "preserved chart is published to the library");
+}
+
 void testRefreshScansThroughTheRealRepository() {
   TempDirectory temporary;
   const auto libraryRoot = temporary.path() / "library";
@@ -1031,6 +1062,7 @@ void testDesktopLibraryEntryResolutionPreservesTheStoredPath() {
 } // namespace
 
 int main() {
+  testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput();
   testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();
   testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal();
   testRefreshStopsAtTheExistingPauseCheckpoint();
