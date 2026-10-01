@@ -64,13 +64,15 @@ protected:
   [[nodiscard]] float marqueeOffset(int viewportWidth);
   [[nodiscard]] int textLineHeight() const;
   [[nodiscard]] int rasterTextLineHeight() const;
-  [[nodiscard]] int measureRasterTextWidth(const std::string &utf8);
+  [[nodiscard]] int measureRasterTextWidth(const std::string &utf8,
+                                           int *rasterHeight = nullptr);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
   [[nodiscard]] bool sameFontSource(const SelectedFont &lhs,
                                     const SelectedFont &rhs) const;
   [[nodiscard]] int measureFontSourceTextWidth(const SelectedFont &source,
-                                               const std::string &utf8);
+                                               const std::string &utf8,
+                                               int *rasterHeight = nullptr);
   [[nodiscard]] int fontSourceAscent(const SelectedFont &source);
   [[nodiscard]] SDL_Surface *
   renderFontSourceTextSurface(const SelectedFont &source,

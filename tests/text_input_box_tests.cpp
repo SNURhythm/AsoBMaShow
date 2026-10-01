@@ -316,12 +316,79 @@ public:
   using TextView::TextView;
   int lineHeight() const { return rasterTextLineHeight(); }
   int rasterWidth(const std::string &value) { return measureRasterTextWidth(value); }
-  SDL_Surface *rasterizeLines() {
+  SDL_Surface *rasterizeRun(const std::string &value) {
+    return renderFontSourceTextSurface(selectFont(static_cast<Uint32>(value.front())), value);
+  }
+  SDL_Surface *rasterizeLines(int wrapWidth = 0) {
     int width = 0;
     int height = 0;
-    return renderFallbackTextSurface(0, width, height);
+    return renderFallbackTextSurface(wrapWidth, width, height);
   }
 };
+
+std::uint64_t alphaCoverage(SDL_Surface *surface) {
+  expect(surface != nullptr, "descender text rasterizes");
+  std::uint64_t coverage = 0;
+  for (int y = 0; y < surface->h; ++y) {
+    const auto *row = reinterpret_cast<const Uint32 *>(
+        static_cast<const Uint8 *>(surface->pixels) + y * surface->pitch);
+    for (int x = 0; x < surface->w; ++x) {
+      Uint8 r, g, b, alpha;
+      SDL_GetRGBA(row[x], surface->format, &r, &g, &b, &alpha);
+      coverage += alpha;
+    }
+  }
+  return coverage;
+}
+
+void testComposedTextPreservesDescenders() {
+  for (const auto *fontPath : {"assets/fonts/notosanscjkjp.ttf", "assets/fonts/arial.ttf",
+                               "assets/fonts/fa-solid-900.ttf"}) {
+    for (const int size : {18, 22, 32}) {
+      for (const auto *text : {"y", "gjpqy", "Ready to play", "Accessibility"}) {
+        // Font Awesome's uppercase letters are icons, so use lowercase-only
+        // samples when comparing its fallback against one reference font run.
+        if (std::string(fontPath) == "assets/fonts/fa-solid-900.ttf" &&
+            text[0] >= 'A' && text[0] <= 'Z') continue;
+        MultilineTextProbe view(fontPath, size);
+        view.setDeferredTextureMaterialization(true);
+        view.setColor({255, 255, 255, 255});
+        view.setAlign(TextView::CENTER);
+        view.setText(text);
+        SDL_Surface *run = view.rasterizeRun(text);
+        SDL_Surface *composed = view.rasterizeLines();
+        if (alphaCoverage(run) != alphaCoverage(composed)) {
+          std::cerr << "Descender clipping: " << text << " font=" << fontPath << " size=" << size
+                    << " run=" << run->w << 'x' << run->h
+                    << " composed=" << composed->w << 'x' << composed->h << '\n';
+        }
+        expect(alphaCoverage(run) == alphaCoverage(composed),
+               "line composition must preserve every descender pixel from the font renderer");
+        SDL_FreeSurface(composed);
+        view.setText(std::string(text) + "\n" + text);
+        SDL_Surface *multiline = view.rasterizeLines();
+        expect(alphaCoverage(multiline) == 2 * alphaCoverage(run),
+               "every explicit line must retain its descenders without overlapping the next line");
+        expect(view.textureHeight() == (multiline->h + 1) / 2,
+               "deferred layout height must match the complete multiline raster");
+        SDL_FreeSurface(multiline);
+
+        const int logicalWidth = (view.rasterWidth(text) + 1) / 2;
+        view.setWidth(logicalWidth);
+        view.setWrap(true);
+        view.setText(std::string(text) + " " + text);
+        view.applyYogaLayout();
+        SDL_Surface *wrapped = view.rasterizeLines(logicalWidth * 2);
+        expect(alphaCoverage(wrapped) == 2 * alphaCoverage(run),
+               "automatic wrapping must preserve all descender pixels");
+        expect(view.textureHeight() == (wrapped->h + 1) / 2,
+               "wrapped layout height must match the complete glyph raster");
+        SDL_FreeSurface(wrapped);
+        SDL_FreeSurface(run);
+      }
+    }
+  }
+}
 
 int firstInkX(SDL_Surface *surface, int top, int bottom) {
   expect(surface != nullptr, "multiline text rasterizes");
@@ -375,11 +442,12 @@ void testReminderDescriptionPreservesLineBreaks() {
     view.setSize(1800, 200);
     view.setAlign(TextView::CENTER);
     view.setLocalizedText(i18n::message("gameplay.ipad_gesture_reminder.help"));
-    expect(view.textureHeight() == (view.lineHeight() * 4 + 1) / 2,
+    const int unwrappedHeight = view.textureHeight();
+    expect(unwrappedHeight >= (view.lineHeight() * 4 + 1) / 2,
            "reminder description keeps all four explicit lines in every language");
     view.setWrap(true);
     view.applyYogaLayout();
-    expect(view.textureHeight() == (view.lineHeight() * 4 + 1) / 2,
+    expect(view.textureHeight() == unwrappedHeight,
            "centered wrapping preserves the reminder's explicit paragraph breaks");
   }
   i18n::setLanguage(i18n::Language::English);
@@ -450,6 +518,7 @@ int main() {
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
   testMultilineAlignmentAcrossFonts();
+  testComposedTextPreservesDescenders();
   testReminderDescriptionPreservesLineBreaks();
   testLanguageRefreshPreservesRawTextAndFocusedInput();
   testLanguageRefreshReachesPortalOverlay();

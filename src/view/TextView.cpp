@@ -275,10 +275,6 @@ RasterTextSize sizeUtf8(TTF_Font *font, const std::string &utf8) {
   return size;
 }
 
-int sizeUtf8Width(TTF_Font *font, const std::string &utf8) {
-  return sizeUtf8(font, utf8).width;
-}
-
 int rasterFontSizeFor(int logicalFontSize) {
   return std::max(1, logicalFontSize * kTextRasterScale);
 }
@@ -573,7 +569,9 @@ bool TextView::sameFontSource(const SelectedFont &lhs,
 }
 
 int TextView::measureFontSourceTextWidth(const SelectedFont &source,
-                                         const std::string &utf8) {
+                                         const std::string &utf8,
+                                         int *rasterHeight) {
+  if (rasterHeight != nullptr) *rasterHeight = 0;
   if (utf8.empty()) {
     return 0;
   }
@@ -581,11 +579,14 @@ int TextView::measureFontSourceTextWidth(const SelectedFont &source,
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (source.iosSystemFont) {
     includeIOSSystemFontMetrics();
+    if (rasterHeight != nullptr) *rasterHeight = iosSystemFontLineHeight;
     return MeasureIOSSystemTextWidth(utf8, fontRasterSize);
   }
 #endif
 
-  return sizeUtf8Width(source.font, utf8);
+  const RasterTextSize size = sizeUtf8(source.font, utf8);
+  if (rasterHeight != nullptr) *rasterHeight = size.height;
+  return size.width;
 }
 
 int TextView::fontSourceAscent(const SelectedFont &source) {
@@ -686,14 +687,29 @@ int TextView::measureTextWidth(const std::string &utf8) {
   return logicalLengthFor(measureRasterTextWidth(utf8));
 }
 
-int TextView::measureRasterTextWidth(const std::string &utf8) {
+int TextView::measureRasterTextWidth(const std::string &utf8, int *rasterHeight) {
+  if (rasterHeight != nullptr) *rasterHeight = 0;
   if (utf8.empty() || fontFaces.empty()) {
     return 0;
+  }
+  if (rasterHeight != nullptr) {
+    ensureFontsForText(utf8);
+    *rasterHeight = rasterTextLineHeight();
   }
 
   int totalWidth = 0;
   SelectedFont runSource;
   std::string runText;
+  const auto measureRun = [&]() {
+    int runHeight = 0;
+    totalWidth += measureFontSourceTextWidth(runSource, runText, &runHeight);
+    if (rasterHeight != nullptr) {
+      // Font-wide height/descent can exclude ink below the baseline. Match the
+      // actual SDL_ttf run surface, including its baseline-alignment offset.
+      *rasterHeight = std::max(*rasterHeight,
+          fontAscent - fontSourceAscent(runSource) + runHeight);
+    }
+  };
   size_t index = 0;
   Utf8Token token;
   while (decodeNextUtf8(utf8, index, token)) {
@@ -706,7 +722,7 @@ int TextView::measureRasterTextWidth(const std::string &utf8) {
       continue;
     }
     if (hasFontSource(runSource) && !sameFontSource(tokenSource, runSource)) {
-      totalWidth += measureFontSourceTextWidth(runSource, runText);
+      measureRun();
       runText.clear();
     }
     runSource = tokenSource;
@@ -714,7 +730,7 @@ int TextView::measureRasterTextWidth(const std::string &utf8) {
   }
 
   if (!runText.empty()) {
-    totalWidth += measureFontSourceTextWidth(runSource, runText);
+    measureRun();
   }
   return totalWidth;
 }
@@ -831,13 +847,16 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
   const std::vector<std::string> lines =
       wrapWidth > 0 ? wrappedTextLines(wrapWidth) : wrappedTextLines(0);
   int width = 0;
+  int lineHeight = metrics.height;
   for (const auto &line : lines) {
-    width = std::max(width, measureRasterTextWidth(line));
+    int measuredHeight = 0;
+    width = std::max(width, measureRasterTextWidth(line, &measuredHeight));
+    lineHeight = std::max(lineHeight, measuredHeight);
   }
 
   const int targetWidth = std::max(1, width);
   const int targetHeight =
-      std::max(1, metrics.height * static_cast<int>(lines.size()));
+      std::max(1, lineHeight * static_cast<int>(lines.size()));
   SurfacePtr surface(SDL_CreateRGBSurfaceWithFormat(
       0, targetWidth, targetHeight, 32, SDL_PIXELFORMAT_BGRA32));
   if (surface == nullptr) {
@@ -869,7 +888,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
     const int spareWidth = targetWidth - measureRasterTextWidth(line);
     int x = align == TextAlign::CENTER ? spareWidth / 2
             : align == TextAlign::RIGHT ? spareWidth : 0;
-    const int lineTop = metrics.height * static_cast<int>(lineIndex);
+    const int lineTop = lineHeight * static_cast<int>(lineIndex);
     for (const auto &run : runs) {
       if (!hasFontSource(run.source) || run.text.empty()) {
         continue;
@@ -1039,11 +1058,14 @@ void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
   const auto lines = rasterWrapWidth > 0 ? wrappedTextLines(rasterWrapWidth)
                                          : wrappedTextLines(0);
   int rasterWidth = 0;
+  int lineHeight = metrics.height;
   for (const auto &line : lines) {
-    rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line));
+    int measuredHeight = 0;
+    rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line, &measuredHeight));
+    lineHeight = std::max(lineHeight, measuredHeight);
   }
   int rasterHeight =
-      metrics.height * static_cast<int>(std::max<std::size_t>(1, lines.size()));
+      lineHeight * static_cast<int>(std::max<std::size_t>(1, lines.size()));
   if (usePrimaryFont) {
     if (wrapEnabled && rasterWrapWidth > 0) {
       if (lines.size() > 1) {
