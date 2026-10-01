@@ -4232,9 +4232,10 @@ void ChartViewerScene::applyPendingPracticeLaunchRequest() {
     }
   }
   if (statusText != nullptr) {
-    statusText->setText(replayGhostUnavailable
-                            ? "Section ready / replay ghost unavailable"
-                            : i18n::tr("chart_viewer.section_ready.label"));
+    statusText->setLocalizedText(i18n::message(
+        replayGhostUnavailable
+            ? "chart_viewer.section_ready_ghost_unavailable.label"
+            : "chart_viewer.section_ready.label"));
   }
   updatePracticeGhostReplayButton();
   updateGhostControls();

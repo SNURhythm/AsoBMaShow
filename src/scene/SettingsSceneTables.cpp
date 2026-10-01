@@ -50,7 +50,7 @@ void SettingsScene::loadDifficultyTables() {
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
     difficultyTables.clear();
-    difficultyTableStatusMessage = i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message");
+    difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
     difficultyTableStatusColor = {255, 177, 170, 255};
     return;
   }
@@ -183,12 +183,12 @@ void SettingsScene::applyPendingDifficultyTableUpdates() {
                                      ? SDL_Color{181, 228, 165, 255}
                                      : SDL_Color{255, 177, 170, 255};
     if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
       difficultyTableStatusText->setColor(difficultyTableStatusColor);
     }
   }
   if (pending.folderStatus) {
-    chartFolderStatusMessage = std::move(pending.folderStatus->text);
+    chartFolderStatusMessage = pending.folderStatus->text.resolve();
     chartFolderStatusColor = pending.folderStatus->succeeded
                                 ? SDL_Color{181, 228, 165, 255}
                                 : SDL_Color{255, 177, 170, 255};
@@ -275,7 +275,7 @@ void SettingsScene::refreshDifficultyTableImportModal() {
   }
   if (difficultyTableImportStatusText != nullptr) {
     if (!difficultyTableImportStatusMessage.empty()) {
-      difficultyTableImportStatusText->setText(
+      difficultyTableImportStatusText->setLocalizedText(
           difficultyTableImportStatusMessage);
     } else {
       difficultyTableImportStatusText->setLocalizedText(
@@ -329,10 +329,10 @@ void SettingsScene::addDifficultyTableFromUrl() {
   const std::string url =
       tableUrlInput != nullptr ? tableUrlInput->getText() : tableUrlText;
   if (url.empty()) {
-    difficultyTableStatusMessage = i18n::tr("settings.difficulty_tables.enter_table_webpage_url_first.message");
+    difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.enter_table_webpage_url_first.message");
     difficultyTableStatusColor = {255, 177, 170, 255};
     if (difficultyTableStatusText != nullptr) {
-      difficultyTableStatusText->setText(difficultyTableStatusMessage);
+      difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
       difficultyTableStatusText->setColor(difficultyTableStatusColor);
     }
     return;
@@ -340,7 +340,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
 
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
-  difficultyTableStatusMessage = i18n::tr("settings.difficulty_tables.adding_table.progress");
+  difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.adding_table.progress");
   difficultyTableStatusColor = {239, 244, 251, 255};
   difficultyTableImportModalVisible = true;
   difficultyTableImportFinished = false;
@@ -348,9 +348,9 @@ void SettingsScene::addDifficultyTableFromUrl() {
   difficultyTableImportCurrent = 0;
   difficultyTableImportTotal = 1;
   difficultyTableImportName = url;
-  difficultyTableImportStatusMessage = i18n::tr("settings.difficulty_tables.preparing_import.progress");
+  difficultyTableImportStatusMessage = i18n::message("settings.difficulty_tables.preparing_import.progress");
   if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
   refreshDifficultyTableImportModal();
@@ -362,8 +362,8 @@ void SettingsScene::addDifficultyTableFromUrl() {
     if (!session.has_value()) {
       if (!token.stop_requested()) {
         updates.importProgress({
-            0, 1, url, i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message"), true, false, url});
-        updates.tableStatus(i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message"), false);
+            0, 1, url, i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), true, false, url});
+        updates.tableStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
       }
       return;
     }
@@ -378,7 +378,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
       lastProgress = progress;
       updates.importProgress({
           progress.current, progress.total, progress.tableName,
-          i18n::tr("settings.difficulty_tables.downloading_importing_tables.progress"), false, false, {}});
+          i18n::message("settings.difficulty_tables.downloading_importing_tables.progress"), false, false, {}});
     };
     DifficultyTableImporter importer;
     const bool imported = importer.ImportFromUrl(
@@ -388,9 +388,9 @@ void SettingsScene::addDifficultyTableFromUrl() {
       return;
     }
 
-    const std::string finalMessage =
-        imported ? (errorMessage.empty() ? i18n::tr("settings.difficulty_tables.table_added.message") : errorMessage)
-                 : (errorMessage.empty() ? i18n::tr("settings.difficulty_tables.add_failed.message") : errorMessage);
+    const i18n::Text finalMessage =
+        imported ? (errorMessage.empty() ? i18n::message("settings.difficulty_tables.table_added.message") : i18n::Text(errorMessage))
+                 : (errorMessage.empty() ? i18n::message("settings.difficulty_tables.add_failed.message") : i18n::Text(errorMessage));
     updates.importProgress({
         lastProgress.current, lastProgress.total, lastProgress.tableName,
         finalMessage, true, imported, url});
@@ -405,10 +405,10 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
 
   pendingDeleteDifficultyTableId = 0;
   pendingDeleteChartEntryPath.clear();
-  difficultyTableStatusMessage = i18n::tr("settings.difficulty_tables.updating_table.progress");
+  difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.updating_table.progress");
   difficultyTableStatusColor = {239, 244, 251, 255};
   if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
 
@@ -418,7 +418,7 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        updates.tableStatus(i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message"), false);
+        updates.tableStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
       }
       return;
     }
@@ -433,8 +433,8 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
     }
 
     updates.tableStatus(
-        updated ? i18n::tr("settings.difficulty_tables.table_updated.message")
-                : (errorMessage.empty() ? i18n::tr("settings.difficulty_tables.update_failed.message") : errorMessage),
+        updated ? i18n::message("settings.difficulty_tables.table_updated.message")
+                : (errorMessage.empty() ? i18n::message("settings.difficulty_tables.update_failed.message") : i18n::Text(errorMessage)),
         updated, updated);
   });
 }
@@ -447,17 +447,17 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
   if (pendingDeleteDifficultyTableId != tableId) {
     pendingDeleteDifficultyTableId = tableId;
     pendingDeleteChartEntryPath.clear();
-    difficultyTableStatusMessage = i18n::tr("settings.difficulty_tables.tap_confirm_on_table_delete.message");
+    difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.tap_confirm_on_table_delete.message");
     difficultyTableStatusColor = {255, 213, 151, 255};
     lastLayoutWidth = -1;
     return;
   }
 
   pendingDeleteDifficultyTableId = 0;
-  difficultyTableStatusMessage = i18n::tr("settings.difficulty_tables.deleting_table.progress");
+  difficultyTableStatusMessage = i18n::message("settings.difficulty_tables.deleting_table.progress");
   difficultyTableStatusColor = {239, 244, 251, 255};
   if (difficultyTableStatusText != nullptr) {
-    difficultyTableStatusText->setText(difficultyTableStatusMessage);
+    difficultyTableStatusText->setLocalizedText(difficultyTableStatusMessage);
     difficultyTableStatusText->setColor(difficultyTableStatusColor);
   }
 
@@ -467,7 +467,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
     auto session = repository.OpenSession();
     if (!session.has_value()) {
       if (!token.stop_requested()) {
-        updates.tableStatus(i18n::tr("settings.difficulty_tables.could_not_open_chart_database.message"), false);
+        updates.tableStatus(i18n::message("settings.difficulty_tables.could_not_open_chart_database.message"), false);
       }
       return;
     }
@@ -478,7 +478,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
       return;
     }
 
-    updates.tableStatus(deleted ? i18n::tr("settings.difficulty_tables.table_deleted.message") : i18n::tr("settings.difficulty_tables.delete_failed.message"),
+    updates.tableStatus(deleted ? i18n::message("settings.difficulty_tables.table_deleted.message") : i18n::message("settings.difficulty_tables.delete_failed.message"),
                         deleted, deleted);
   });
 }

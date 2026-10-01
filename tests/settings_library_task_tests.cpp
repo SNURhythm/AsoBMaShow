@@ -138,6 +138,7 @@ void testOwnerDestructionJoinsBeforeWorkCapturesAreReleased() {
 #include "settings_library_scene_fixture.h"
 
 int main() {
+  testSceneTableStatusesSurviveLanguageChanges();
   testExclusiveAdmissionAndProgressHandoff();
   testCompletedUpdatesSurviveAdmissionUntilConsumed();
   testStopJoinsUncancellableWorkAndDiscardsLateAndQueuedUpdates();

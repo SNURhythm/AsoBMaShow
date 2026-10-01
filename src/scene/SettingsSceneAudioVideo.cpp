@@ -114,21 +114,21 @@ bool parseResolution(const std::string &value, int &width, int &height) {
   return true;
 }
 
-std::string audioApplyMessage(const audio::ApplyResult &result) {
+i18n::Text audioApplyMessage(const audio::ApplyResult &result) {
   if (!result.message.empty()) {
     return result.message;
   }
   switch (result.status) {
   case audio::ApplyStatus::Applied:
-    return i18n::tr("settings.audio_video.audio_saved.message");
+    return i18n::message("settings.audio_video.audio_saved.message");
   case audio::ApplyStatus::Unsupported:
-    return i18n::tr("settings.audio_video.audio_option_unavailable.message");
+    return i18n::message("settings.audio_video.audio_option_unavailable.message");
   case audio::ApplyStatus::FailedRolledBack:
-    return i18n::tr("settings.audio_video.could_not_apply_audio_previous_settings_restored.message");
+    return i18n::message("settings.audio_video.could_not_apply_audio_previous_settings_restored.message");
   case audio::ApplyStatus::FailedStopped:
-    return i18n::tr("settings.audio_video.could_not_restore_audio_playback_stopped.message");
+    return i18n::message("settings.audio_video.could_not_restore_audio_playback_stopped.message");
   }
-  return i18n::tr("settings.audio_video.audio_settings_not_applied.message");
+  return i18n::message("settings.audio_video.audio_settings_not_applied.message");
 }
 
 SDL_Color audioApplyColor(audio::ApplyStatus status) {
@@ -136,25 +136,25 @@ SDL_Color audioApplyColor(audio::ApplyStatus status) {
                                                : SDL_Color{255, 177, 170, 255};
 }
 
-std::string displayApplyMessage(const display::ApplyResult &result) {
+i18n::Text displayApplyMessage(const display::ApplyResult &result) {
   if (!result.message.empty()) {
     return result.message;
   }
   switch (result.status) {
   case display::ApplyStatus::Applied:
-    return i18n::tr("settings.audio_video.display_saved.message");
+    return i18n::message("settings.audio_video.display_saved.message");
   case display::ApplyStatus::PreviewPending:
-    return i18n::tr("settings.audio_video.confirm_within_15_seconds.message");
+    return i18n::message("settings.audio_video.confirm_within_15_seconds.message");
   case display::ApplyStatus::Unsupported:
-    return i18n::tr("settings.audio_video.display_option_unavailable.message");
+    return i18n::message("settings.audio_video.display_option_unavailable.message");
   case display::ApplyStatus::FailedRolledBack:
-    return i18n::tr("settings.audio_video.display.apply_failed_restored");
+    return i18n::message("settings.audio_video.display.apply_failed_restored");
   case display::ApplyStatus::RollbackPending:
-    return i18n::tr("settings.audio_video.restoring_previous_display.progress");
+    return i18n::message("settings.audio_video.restoring_previous_display.progress");
   case display::ApplyStatus::FailedUnrecoverable:
-    return i18n::tr("settings.audio_video.could_not_restore_previous_display.message");
+    return i18n::message("settings.audio_video.could_not_restore_previous_display.message");
   }
-  return i18n::tr("settings.audio_video.display_settings_not_applied.message");
+  return i18n::message("settings.audio_video.display_settings_not_applied.message");
 }
 
 SDL_Color displayApplyColor(display::ApplyStatus status) {
@@ -189,8 +189,8 @@ void SettingsScene::ensureAudioVideoSession() {
   displayResolutionDropdownOpen = false;
   displayVsyncDropdownOpen = false;
   displayFrameCapDropdownOpen = false;
-  audioStatusMessage.clear();
-  displayStatusMessage.clear();
+  audioStatusMessage = {};
+  displayStatusMessage = {};
   audioVideoSession = std::make_unique<SettingsAudioVideoSession>(
       context.settings, context.audioDeviceManager,
       *context.displaySettingsManager,
@@ -366,7 +366,7 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   testSoundButton->setOnClickListener([this]() {
     const bool played =
         audioVideoSession != nullptr && audioVideoSession->playTestSound();
-    setAudioStatus(played ? i18n::tr("settings.audio.sound_played.message") : i18n::tr("settings.audio.could_not_play_sound.message"),
+    setAudioStatus(played ? i18n::message("settings.audio.sound_played.message") : i18n::message("settings.audio.could_not_play_sound.message"),
                    played ? SDL_Color{157, 220, 176, 255}
                           : SDL_Color{255, 177, 170, 255});
   });
@@ -645,7 +645,7 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
     syncVolumeInputText(false);
   }
   if (audioStatusText != nullptr) {
-    audioStatusText->setText(audioStatusMessage);
+    audioStatusText->setLocalizedText(audioStatusMessage);
     audioStatusText->setColor(audioStatusColor);
   }
 
@@ -664,7 +664,7 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
                     displayFrameCapDropdownOpen, i18n::message("settings.audio.frame_cap.label"), dropdownWidth);
   }
   if (displayStatusText != nullptr) {
-    displayStatusText->setText(displayStatusMessage);
+    displayStatusText->setLocalizedText(displayStatusMessage);
     displayStatusText->setColor(displayStatusColor);
   }
   if (rootLayout != nullptr) {
@@ -767,26 +767,26 @@ void SettingsScene::cancelDisplayPreviewForTabExit() {
   updateDisplayPreviewUi();
 }
 
-void SettingsScene::setAudioStatus(const std::string &message,
+void SettingsScene::setAudioStatus(const i18n::Text &message,
                                    const SDL_Color &color) {
   audioStatusMessage = message;
   audioStatusColor = color;
   if (audioStatusText != nullptr) {
-    audioStatusText->setText(message);
+    audioStatusText->setLocalizedText(message);
     audioStatusText->setColor(color);
   }
 }
 
-void SettingsScene::setDisplayStatus(const std::string &message,
+void SettingsScene::setDisplayStatus(const i18n::Text &message,
                                      const SDL_Color &color) {
   displayStatusMessage = message;
   displayStatusColor = color;
   if (displayStatusText != nullptr) {
-    displayStatusText->setText(message);
+    displayStatusText->setLocalizedText(message);
     displayStatusText->setColor(color);
   }
   if (displayPreviewStatusText != nullptr && !message.empty()) {
-    displayPreviewStatusText->setText(message);
+    displayPreviewStatusText->setLocalizedText(message);
   }
 }
 

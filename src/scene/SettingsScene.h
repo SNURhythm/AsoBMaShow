@@ -333,7 +333,7 @@ private:
   bool profileExportStagingSwept = false;
   std::string profileCreateNameText;
   settings_scene::ProfileInlineEditorState profileInlineEditor;
-  std::string difficultyTableStatusMessage;
+  i18n::Text difficultyTableStatusMessage;
   SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
   std::string chartFolderStatusMessage;
   SDL_Color chartFolderStatusColor{157, 177, 200, 255};
@@ -346,7 +346,7 @@ private:
   int difficultyTableImportCurrent = 0;
   int difficultyTableImportTotal = 0;
   std::string difficultyTableImportName;
-  std::string difficultyTableImportStatusMessage;
+  i18n::Text difficultyTableImportStatusMessage;
   std::string tableUrlText;
   std::unordered_map<std::string, bool> chartEntryICloudBackupExcluded;
   int pendingDeleteDifficultyTableId = 0;
@@ -362,8 +362,8 @@ private:
   std::unique_ptr<SettingsAudioVideoSession> audioVideoSession;
   player_settings::AudioSettings audioDraft;
   player_settings::VideoSettings displayDraft;
-  std::string audioStatusMessage;
-  std::string displayStatusMessage;
+  i18n::Text audioStatusMessage;
+  i18n::Text displayStatusMessage;
   SDL_Color audioStatusColor{157, 177, 200, 255};
   SDL_Color displayStatusColor{157, 177, 200, 255};
   bool audioDeviceDropdownOpen = false;
@@ -492,8 +492,8 @@ private:
   void keepDisplayPreview();
   void revertDisplayPreview();
   void cancelDisplayPreviewForTabExit();
-  void setAudioStatus(const std::string &message, const SDL_Color &color);
-  void setDisplayStatus(const std::string &message, const SDL_Color &color);
+  void setAudioStatus(const i18n::Text &message, const SDL_Color &color);
+  void setDisplayStatus(const i18n::Text &message, const SDL_Color &color);
   void syncVolumeInputText(bool force = false);
   void commitVolumeInput(TextInputBox *input, int busIndex);
   void adjustVolume(int busIndex, int deltaPercent);

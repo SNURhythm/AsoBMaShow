@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ThreadCompat.h"
+#include "../i18n/Localization.h"
 
 #include <functional>
 #include <mutex>
@@ -13,14 +14,14 @@
 class SettingsLibraryTask final {
 public:
   struct Status {
-    std::string text;
+    i18n::Text text;
     bool succeeded = false;
   };
   struct ImportProgress {
     int current = 0;
     int total = 0;
     std::string tableName;
-    std::string statusText;
+    i18n::Text statusText;
     bool finished = false;
     bool succeeded = false;
     std::string submittedUrl;
@@ -38,7 +39,7 @@ public:
   public:
     Publisher(const Publisher &) = delete;
     Publisher &operator=(const Publisher &) = delete;
-    void tableStatus(std::string text, bool succeeded, bool reload = false) const;
+    void tableStatus(i18n::Text text, bool succeeded, bool reload = false) const;
     void folderStatus(std::string text, bool succeeded, bool reload = false) const;
     void importProgress(ImportProgress progress) const;
 
