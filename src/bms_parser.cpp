@@ -2072,7 +2072,6 @@ Note::~Note() { Timeline = nullptr; }
 #include <iostream>
 #include <regex>
 #include <set>
-#include <sstream>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -2122,7 +2121,8 @@ bool isValidUtf8(const std::vector<unsigned char> &bytes, size_t offset) {
   while (i < bytes.size()) {
     const unsigned char c = bytes[i];
     if (c < 0x80) {
-      ++i;
+      i += bms_parser::detail::asciiPrefixLength(bytes.data() + i,
+                                               bytes.size() - i);
       continue;
     }
     if (c >= 0xc2 && c <= 0xdf) {
@@ -2304,36 +2304,40 @@ std::string normalizeCharsetName(const std::vector<unsigned char> &bytes,
 }
 
 std::string declaredCharset(const std::vector<unsigned char> &bytes) {
-  size_t lineStart = hasUtf8Bom(bytes) ? 3 : 0;
-  while (lineStart < bytes.size()) {
-    size_t lineEnd = lineStart;
-    while (lineEnd < bytes.size() && bytes[lineEnd] != '\n' &&
-           bytes[lineEnd] != '\r') {
-      ++lineEnd;
+  const size_t start = hasUtf8Bom(bytes) ? 3 : 0;
+  size_t searchStart = start;
+  while (searchStart < bytes.size()) {
+    // Search the whole file, including declarations after chart data. Only
+    // examine line endings once a possible declaration has been found.
+    const auto *found = static_cast<const unsigned char *>(std::memchr(
+        bytes.data() + searchStart, '#', bytes.size() - searchStart));
+    if (found == nullptr) {
+      break;
     }
-
-    size_t pos = lineStart;
-    if (pos < lineEnd && bytes[pos] == '#') {
-      ++pos;
+    const size_t lineStart = static_cast<size_t>(found - bytes.data());
+    const size_t pos = lineStart + 1;
+    searchStart = pos;
+    if (lineStart == start || bytes[lineStart - 1] == '\n' ||
+        bytes[lineStart - 1] == '\r') {
       for (std::string_view header : {"CHARSET", "ENCODING"}) {
-        if (!asciiEqualsIgnoreCase(bytes, pos, lineEnd, header)) {
+        if (!asciiEqualsIgnoreCase(bytes, pos, bytes.size(), header)) {
           continue;
         }
         size_t valueStart = pos + header.size();
-        if (valueStart < lineEnd && !asciiWhitespace(bytes[valueStart])) {
+        if (valueStart < bytes.size() && !asciiWhitespace(bytes[valueStart]) &&
+            bytes[valueStart] != '\n' && bytes[valueStart] != '\r') {
           continue;
+        }
+        size_t lineEnd = valueStart;
+        while (lineEnd < bytes.size() && bytes[lineEnd] != '\n' &&
+               bytes[lineEnd] != '\r') {
+          ++lineEnd;
         }
         while (valueStart < lineEnd && asciiWhitespace(bytes[valueStart])) {
           ++valueStart;
         }
         return normalizeCharsetName(bytes, valueStart, lineEnd);
       }
-    }
-
-    lineStart = lineEnd;
-    while (lineStart < bytes.size() &&
-           (bytes[lineStart] == '\n' || bytes[lineStart] == '\r')) {
-      ++lineStart;
     }
   }
   return "";
@@ -2369,29 +2373,33 @@ bool isEucKrTrailByte(unsigned char byte) {
   return byte >= 0xA1 && byte <= 0xFE;
 }
 
-size_t countDbcsPairs(const std::vector<unsigned char> &bytes, size_t offset,
-                      bool (*isLeadByte)(unsigned char),
-                      bool (*isTrailByte)(unsigned char)) {
-  size_t count = 0;
-  size_t index = offset;
-  while (index < bytes.size()) {
-    if (isLeadByte(bytes[index]) && index + 1 < bytes.size() &&
-        isTrailByte(bytes[index + 1])) {
-      ++count;
-      index += 2;
-    } else {
-      ++index;
-    }
-  }
-  return count;
-}
-
 bool shouldDecodeNoBomAsEucKr(const std::vector<unsigned char> &bytes,
                               size_t offset) {
-  const size_t eucKrPairs =
-      countDbcsPairs(bytes, offset, isEucKrLeadByte, isEucKrTrailByte);
-  const size_t shiftJisPairs =
-      countDbcsPairs(bytes, offset, isShiftJisLeadByte, isShiftJisTrailByte);
+  size_t eucKrPairs = 0;
+  size_t shiftJisPairs = 0;
+  size_t nextEucKr = offset;
+  size_t nextShiftJis = offset;
+  size_t index = offset;
+  while (index < bytes.size()) {
+    index += bms_parser::detail::asciiPrefixLength(bytes.data() + index,
+                                                 bytes.size() - index);
+    if (index + 1 >= bytes.size()) {
+      break;
+    }
+    // Each encoding must retain its own pair boundaries. A trail byte consumed
+    // by one encoding can still be a lead byte for the other encoding.
+    if (index >= nextEucKr && isEucKrLeadByte(bytes[index]) &&
+        isEucKrTrailByte(bytes[index + 1])) {
+      ++eucKrPairs;
+      nextEucKr = index + 2;
+    }
+    if (index >= nextShiftJis && isShiftJisLeadByte(bytes[index]) &&
+        isShiftJisTrailByte(bytes[index + 1])) {
+      ++shiftJisPairs;
+      nextShiftJis = index + 2;
+    }
+    ++index;
+  }
   return eucKrPairs > shiftJisPairs;
 }
 
@@ -2823,7 +2831,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   }
 
   auto measures =
-      std::unordered_map<int, std::vector<std::pair<int, std::string>>>();
+      std::unordered_map<int, std::vector<std::pair<int, std::string_view>>>();
 
   // Keep hashing synchronous. Library scans already parallelize at the file
   // level; spawning two extra threads per tiny chart creates heavy thread churn.
@@ -2924,15 +2932,21 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
   // init prng with seed
   std::mt19937_64 Prng(Seed);
 
-  std::string line;
-  std::istringstream stream(content);
+  // Views remain valid until all measures are consumed: content is immutable.
+  const std::string_view text(content);
+  size_t lineStart = 0;
 #if BMS_PARSER_VERBOSE == 1
   midStartTime = std::chrono::high_resolution_clock::now();
 #endif
   auto lastMeasure = -1;
-  while (std::getline(stream, line)) {
+  while (lineStart < text.size()) {
+    const size_t newline = text.find('\n', lineStart);
+    const size_t lineEnd =
+        newline == std::string_view::npos ? text.size() : newline;
+    std::string_view line = text.substr(lineStart, lineEnd - lineStart);
+    lineStart = newline == std::string_view::npos ? text.size() : newline + 1;
     if (!line.empty() && line.back() == '\r') {
-      line.pop_back();
+      line.remove_suffix(1);
     }
     if (bCancelled) {
       return;
@@ -2952,8 +2966,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         continue;
       }
       const int CurrentRandom = parentSkipped ? 0 : RandomStack.back();
-      const int n =
-          static_cast<int>(std::strtol(line.substr(4).c_str(), nullptr, 10));
+      const int n = static_cast<int>(
+          std::strtol(std::string(line.substr(4)).c_str(), nullptr, 10));
       const bool matched = !parentSkipped && CurrentRandom == n;
       ConditionalStack.push_back({parentSkipped, matched,
                                   parentSkipped || !matched,
@@ -2966,8 +2980,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         continue;
       }
       auto &frame = ConditionalStack.back();
-      const int n =
-          static_cast<int>(std::strtol(line.substr(8).c_str(), nullptr, 10));
+      const int n = static_cast<int>(
+          std::strtol(std::string(line.substr(8)).c_str(), nullptr, 10));
       if (frame.parentSkipped || frame.branchMatched || RandomStack.empty()) {
         frame.currentSkipped = true;
         continue;
@@ -3008,8 +3022,8 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         RandomFrames.push_back({false});
         continue;
       }
-      const int n =
-          static_cast<int>(std::strtol(line.substr(7).c_str(), nullptr, 10));
+      const int n = static_cast<int>(
+          std::strtol(std::string(line.substr(7)).c_str(), nullptr, 10));
       if (n <= 0) {
         continue;
       }
@@ -3055,13 +3069,13 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         std::isdigit(static_cast<unsigned char>(line[3])) &&
         line[6] == ':') {
       const int measure =
-          static_cast<int>(std::strtol(line.substr(1, 3).c_str(), nullptr, 10));
+          (line[1] - '0') * 100 + (line[2] - '0') * 10 + (line[3] - '0');
       lastMeasure = std::max(lastMeasure, measure);
-      const std::string ch = line.substr(4, 2);
+      const std::string_view ch = line.substr(4, 2);
       const int channel = ParseInt(ch);
-      const std::string value = line.substr(7);
+      const std::string_view value = line.substr(7);
       if (measures.find(measure) == measures.end()) {
-        measures[measure] = std::vector<std::pair<int, std::string>>();
+        measures[measure] = std::vector<std::pair<int, std::string_view>>();
       }
       measures[measure].emplace_back(channel, value);
     } else {
@@ -3074,7 +3088,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         }
         const auto xx = line.substr(4, 2);
         const auto value = line.substr(7);
-        ParseHeader(new_chart, "WAV", xx, value);
+        ParseHeader(new_chart, "WAV", xx, std::string(value));
       } else if (MatchHeader(line, "#BMP")) {
         if (metaOnly) {
           continue;
@@ -3084,25 +3098,25 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         }
         const auto xx = line.substr(4, 2);
         const auto value = line.substr(7);
-        ParseHeader(new_chart, "BMP", xx, value);
+        ParseHeader(new_chart, "BMP", xx, std::string(value));
       } else if (MatchHeader(line, "#STOP")) {
         if (line.length() < 8) {
           continue;
         }
         const auto xx = line.substr(5, 2);
         const auto value = line.substr(8);
-        ParseHeader(new_chart, "STOP", xx, value);
+        ParseHeader(new_chart, "STOP", xx, std::string(value));
       } else if (MatchHeader(line, "#BPM")) {
         if (line.substr(4).rfind(' ', 0) == 0) {
           const auto value = line.substr(5);
-          ParseHeader(new_chart, "BPM", "", value);
+          ParseHeader(new_chart, "BPM", "", std::string(value));
         } else {
           if (line.length() < 7) {
             continue;
           }
           const auto xx = line.substr(4, 2);
           const auto value = line.substr(7);
-          ParseHeader(new_chart, "BPM", xx, value);
+          ParseHeader(new_chart, "BPM", xx, std::string(value));
         }
       } else if (MatchHeader(line, "#SCROLL")) {
         if (line.length() < 10) {
@@ -3110,18 +3124,18 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         }
         const auto xx = line.substr(7, 2);
         const auto value = line.substr(10);
-        ParseHeader(new_chart, "SCROLL", xx, value);
+        ParseHeader(new_chart, "SCROLL", xx, std::string(value));
       } else if (MatchHeader(line, "#SPEED")) {
         if (line.length() < 9) {
           continue;
         }
         const auto xx = line.substr(6, 2);
         const auto value = line.substr(9);
-        ParseHeader(new_chart, "SPEED", xx, value);
+        ParseHeader(new_chart, "SPEED", xx, std::string(value));
       } else {
-        std::smatch matcher;
+        std::match_results<std::string_view::const_iterator> matcher;
 
-        if (std::regex_search(line, matcher, headerRegex)) {
+        if (std::regex_search(line.begin(), line.end(), matcher, headerRegex)) {
           std::string xx = matcher[2].str();
           std::string value = matcher[3].str();
           if (value.empty()) {
@@ -3144,7 +3158,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
     return;
   }
   if (addReadyMeasure) {
-    measures[0] = std::vector<std::pair<int, std::string>>();
+    measures[0] = std::vector<std::pair<int, std::string_view>>();
     measures[0].emplace_back(LaneAutoplay, "********");
   }
 
@@ -3182,7 +3196,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       return;
     }
     if (measures.find(measureIdx) == measures.end()) {
-      measures[measureIdx] = std::vector<std::pair<int, std::string>>();
+      measures[measureIdx] = std::vector<std::pair<int, std::string_view>>();
     }
 
     // gcd (int, int)
@@ -3205,7 +3219,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
       auto channel = pair.first;
       auto &data = pair.second;
       if (channel == SectionRate) {
-        measure->Scale = std::strtod(data.c_str(), nullptr);
+        measure->Scale = std::strtod(std::string(data).c_str(), nullptr);
         explicitSectionRate = true;
         continue;
       }
@@ -3292,7 +3306,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
           if (bCancelled) {
             break;
           }
-          const std::string value = data.substr(j * 2, 2);
+          const std::string_view value = data.substr(j * 2, 2);
           if (value != "00") {
             const auto g = Gcd(j, dataCount);
             const auto positionNumerator = j / g;
@@ -3336,7 +3350,7 @@ void Parser::Parse(const std::vector<unsigned char> &bytes, Chart **chart,
         if (bCancelled) {
           break;
         }
-        std::string val = data.substr(j * 2, 2);
+        const std::string_view val = data.substr(j * 2, 2);
         if (val == "00") {
           if (timelines.empty() && j == 0) {
             auto timeline = new TimeLine(TempKey, metaOnly);
@@ -4027,9 +4041,24 @@ inline int Parser::ParseHex(std::string_view Str) {
 
 inline int Parser::ParseInt(std::string_view Str, bool forceBase36) const {
   if (forceBase36 || !UseBase62) {
-    auto result = static_cast<int>(std::strtol(Str.data(), nullptr, 36));
-    // std::wcout << "ParseInt36: " << Str << " = " << result << std::endl;
-    return result;
+    // Note cells and resource IDs are normally two ASCII base-36 digits.
+    // Decode within the view; its following bytes may contain more note cells.
+    if (Str.size() == 2) {
+      const auto digit = [](unsigned char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'Z') return c - 'A' + 10;
+        if (c >= 'a' && c <= 'z') return c - 'a' + 10;
+        return -1;
+      };
+      const int first = digit(static_cast<unsigned char>(Str[0]));
+      const int second = digit(static_cast<unsigned char>(Str[1]));
+      if (first >= 0 && second >= 0) {
+        return first * 36 + second;
+      }
+    }
+    // Preserve strtol's existing handling of signs, whitespace, partial values,
+    // and overflow, while providing the terminator that a view does not have.
+    return static_cast<int>(std::strtol(std::string(Str).c_str(), nullptr, 36));
   }
 
   auto result = 0;
@@ -4253,6 +4282,16 @@ void ShiftJISConverter::BytesToUTF8(const unsigned char *input, size_t size,
   size_t indexInput = 0, indexOutput = 0;
 
   while (indexInput < size) {
+    const size_t asciiLength = detail::asciiPrefixLength<true>(
+        input + indexInput, size - indexInput);
+    if (asciiLength != 0) {
+      std::memcpy(result.data() + indexOutput, input + indexInput, asciiLength);
+      indexInput += asciiLength;
+      indexOutput += asciiLength;
+      if (indexInput == size) {
+        break;
+      }
+    }
     char arraySection = (input[indexInput]) >> 4;
 
     size_t arrayOffset;
