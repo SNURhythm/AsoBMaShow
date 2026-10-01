@@ -538,7 +538,7 @@ void testReminderDescriptionPreservesLineBreaks() {
         }
       }
     }
-    expect(emphasizedRuns == 3, "setup path, settings, and disable path are bold");
+    expect(emphasizedRuns == 4, "setup path, both setting names, and disable path are bold");
     // Button identity remains known even when a partial window suppresses the edge cue.
     for (const auto &entry : {
              std::pair{"iPad7,5", "gameplay.ipad_gesture_reminder.button.home"},
